@@ -23,6 +23,8 @@ from typing import Optional
 
 import discord
 
+from messages import DATE_PARSE_REJECT
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,8 +38,10 @@ logger = logging.getLogger(__name__)
 # identical; downstream callers (button rendering, mail `{time}`)
 # treat that as the desired outcome rather than an anomaly.
 
+
 def _slot_labels(
-    event_type: str, guild_id: int,
+    event_type: str,
+    guild_id: int,
     *,
     override_a_idx: int | None = None,
     override_b_idx: int | None = None,
@@ -57,7 +61,8 @@ def _slot_labels(
     `teams` setting requires are non-empty.
     """
     from config import (
-        get_storm_slot_label_by_index, resolve_storm_team_slots,
+        get_storm_slot_label_by_index,
+        resolve_storm_team_slots,
     )
 
     if override_a_idx in (1, 2) or override_b_idx in (1, 2):
@@ -67,7 +72,9 @@ def _slot_labels(
         # so a partial override doesn't blank the other team's label.
         if a_idx is None or b_idx is None:
             resolved_a, resolved_b = resolve_storm_team_slots(
-                guild_id, event_type, event_date,
+                guild_id,
+                event_type,
+                event_date,
             )
             if a_idx is None:
                 a_idx = resolved_a
@@ -75,7 +82,9 @@ def _slot_labels(
                 b_idx = resolved_b
     else:
         a_idx, b_idx = resolve_storm_team_slots(
-            guild_id, event_type, event_date,
+            guild_id,
+            event_type,
+            event_date,
         )
 
     return (
@@ -89,6 +98,7 @@ def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
     to UTC if the guild has no timezone (or hasn't completed setup)."""
     from zoneinfo import ZoneInfo
     from config import get_config
+
     tz_name = ""
     if guild_id:
         cfg = get_config(guild_id)
@@ -100,9 +110,9 @@ def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
     return _dt.datetime.now(tz).date()
 
 
-def _build_registration_embed(event_type: str, event_date_iso: str,
-                              time_a: str, time_b: str,
-                              teams: str = "both") -> discord.Embed:
+def _build_registration_embed(
+    event_type: str, event_date_iso: str, time_a: str, time_b: str, teams: str = "both"
+) -> discord.Embed:
     from storm_date_helpers import format_event_date
 
     # `time_a` / `time_b` / `teams` are accepted on the signature so
@@ -210,13 +220,16 @@ async def post_registration(
     # Resolve final team→slot indices for this event. Overrides win;
     # otherwise the guild default applies.
     resolved_a, resolved_b = config.resolve_storm_team_slots(
-        guild.id, event_type, event_date,
+        guild.id,
+        event_type,
+        event_date,
     )
     final_a_idx = override_a_idx if override_a_idx in (1, 2) else resolved_a
     final_b_idx = override_b_idx if override_b_idx in (1, 2) else resolved_b
 
     time_a, time_b = _slot_labels(
-        event_type, guild.id,
+        event_type,
+        guild.id,
         override_a_idx=final_a_idx,
         override_b_idx=final_b_idx,
         event_date=event_date,
@@ -230,13 +243,19 @@ async def post_registration(
         return {"status": "missing_slot_labels", "channel_id": channel_id}
 
     view = SignupView(
-        guild.id, event_type, event_date,
+        guild.id,
+        event_type,
+        event_date,
         time_a_label=(time_a or ""),
         time_b_label=(time_b or ""),
         teams=teams_setting,
     )
     embed = _build_registration_embed(
-        event_type, event_date, time_a, time_b, teams=teams_setting,
+        event_type,
+        event_date,
+        time_a,
+        time_b,
+        teams=teams_setting,
     )
     try:
         posted = await channel.send(embed=embed, view=view)
@@ -245,12 +264,17 @@ async def post_registration(
     except discord.HTTPException as e:
         logger.warning(
             "[STORM SIGNUP POST] Discord send failed for guild=%s event=%s/%s: %s",
-            guild.id, event_type, event_date, e,
+            guild.id,
+            event_type,
+            event_date,
+            e,
         )
         return {"status": "send_failed", "channel_id": channel_id, "error": str(e)}
 
     config.record_storm_registration_post(
-        guild.id, event_type, event_date,
+        guild.id,
+        event_type,
+        event_date,
         channel_id=channel.id,
         message_id=posted.id,
         time_a_label=(time_a or ""),
@@ -264,11 +288,12 @@ async def post_registration(
     except Exception as e:
         logger.warning(
             "[STORM SIGNUP POST] add_view failed for message=%s: %s",
-            posted.id, e,
+            posted.id,
+            e,
         )
 
     return {
-        "status":     "ok",
+        "status": "ok",
         "channel_id": channel.id,
         "message_id": posted.id,
     }
@@ -293,7 +318,9 @@ async def handle_post_signup(
         ensure_premium_structured,
     )
     from storm_date_helpers import (
-        parse_event_date, next_event_date, format_event_date,
+        parse_event_date,
+        next_event_date,
+        format_event_date,
     )
 
     if not is_leader_or_admin(interaction):
@@ -312,14 +339,18 @@ async def handle_post_signup(
         # No date passed — infer next configured event day, matching
         # the alliance's structured-flow schedule when set.
         date_clean = next_event_date(
-            interaction.guild_id, et, today=today_local,
+            interaction.guild_id,
+            et,
+            today=today_local,
         )
     else:
         parsed = parse_event_date(raw_input, today=today_local)
         if parsed is None:
             await interaction.response.send_message(
-                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                DATE_PARSE_REJECT.format(
+                    raw=event_date,
+                    examples="`May 18`, `5/18`, `2026-05-18`, `Sunday`, or `tomorrow`",
+                ),
                 ephemeral=True,
             )
             return
@@ -329,17 +360,15 @@ async def handle_post_signup(
     if parsed_date < today_local:
         pretty = format_event_date(date_clean)
         await interaction.response.send_message(
-            f"⚠️ Event date {pretty} is in the past. Sign-ups should be "
-            f"posted for upcoming events.",
+            f"⚠️ Event date {pretty} is in the past. Sign-ups should be posted for upcoming events.",
             ephemeral=True,
         )
         return
 
-    feature_label = (
-        f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} post_signup`"
-    )
+    feature_label = f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} post_signup`"
     ok, structured = await ensure_premium_structured(
-        interaction, et,
+        interaction,
+        et,
         bot=bot,
         feature_label=feature_label,
     )
@@ -353,19 +382,24 @@ async def handle_post_signup(
     # picker — there's no point asking "keep or override" when there's
     # no default to keep yet.
     import config as _config
+
     cfg = _config.get_storm_config(interaction.guild_id, et) or {}
     teams_setting = (cfg.get("teams") or "both").strip()
     if teams_setting not in ("both", "A", "B"):
         teams_setting = "both"
     default_a_idx, default_b_idx = _config.resolve_storm_team_slots(
-        interaction.guild_id, et, date_clean,
+        interaction.guild_id,
+        et,
+        date_clean,
     )
     needs_a = teams_setting in ("both", "A")
     needs_b = teams_setting in ("both", "B")
     if (needs_a and default_a_idx not in (1, 2)) or (needs_b and default_b_idx not in (1, 2)):
         await interaction.followup.send(
             _format_post_result_message(
-                et, date_clean, {"status": "missing_slot_labels"},
+                et,
+                date_clean,
+                {"status": "missing_slot_labels"},
             ),
             ephemeral=True,
         )
@@ -375,16 +409,22 @@ async def handle_post_signup(
     # indices to post with (either the defaults or the officer's pick),
     # or None if the officer cancelled / timed out.
     chosen = await _run_post_signup_confirm_flow(
-        interaction, et, date_clean,
+        interaction,
+        et,
+        date_clean,
         teams_setting=teams_setting,
-        default_a_idx=default_a_idx, default_b_idx=default_b_idx,
+        default_a_idx=default_a_idx,
+        default_b_idx=default_b_idx,
     )
     if chosen is None:
         return
     final_a_idx, final_b_idx = chosen
 
     result = await post_registration(
-        bot, interaction.guild, et, date_clean,
+        bot,
+        interaction.guild,
+        et,
+        date_clean,
         structured=structured,
         override_a_idx=final_a_idx,
         override_b_idx=final_b_idx,
@@ -425,6 +465,7 @@ async def _run_post_signup_confirm_flow(
     """
     from config import get_storm_slot_labels
     from storm_date_helpers import format_event_date
+
     try:
         slot_labels = get_storm_slot_labels(event_type, interaction.guild_id)
     except Exception:
@@ -448,9 +489,7 @@ async def _run_post_signup_confirm_flow(
     if needs_b:
         summary_lines.append(f"🅱️ Team B: **{_label_for(default_b_idx)}**")
     summary_lines.append("")
-    summary_lines.append(
-        "Post with these times, or override them for this week only?"
-    )
+    summary_lines.append("Post with these times, or override them for this week only?")
 
     class _ConfirmView(discord.ui.View):
         def __init__(self):
@@ -482,10 +521,21 @@ async def _run_post_signup_confirm_flow(
             self.stop()
 
     confirm_view = _ConfirmView()
-    await interaction.followup.send(
-        "\n".join(summary_lines), view=confirm_view, ephemeral=True,
+    confirm_msg = await interaction.followup.send(
+        "\n".join(summary_lines),
+        view=confirm_view,
+        ephemeral=True,
     )
     timed_out = await confirm_view.wait()
+
+    # Tear down the confirm picker once we have an outcome so it doesn't
+    # sit above whatever ack / picker comes next. The terminal ack ("Posted",
+    # "Cancelled", "Timed out") is then the most-recent visible message.
+    try:
+        await confirm_msg.delete()
+    except discord.HTTPException:
+        pass
+
     if timed_out or confirm_view.outcome in (None, "cancel"):
         if confirm_view.outcome != "cancel":
             await interaction.followup.send(
@@ -509,8 +559,10 @@ async def _run_post_signup_confirm_flow(
                 super().__init__(timeout=180)
                 self.selected: int | None = None
 
-            @discord.ui.button(label=slot_labels[0] if len(slot_labels) > 0 else "Slot 1",
-                                style=discord.ButtonStyle.primary)
+            @discord.ui.button(
+                label=slot_labels[0] if len(slot_labels) > 0 else "Slot 1",
+                style=discord.ButtonStyle.primary,
+            )
             async def s1(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1
                 for item in self.children:
@@ -518,8 +570,10 @@ async def _run_post_signup_confirm_flow(
                 await inter.response.edit_message(view=self)
                 self.stop()
 
-            @discord.ui.button(label=slot_labels[1] if len(slot_labels) > 1 else "Slot 2",
-                                style=discord.ButtonStyle.primary)
+            @discord.ui.button(
+                label=slot_labels[1] if len(slot_labels) > 1 else "Slot 2",
+                style=discord.ButtonStyle.primary,
+            )
             async def s2(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 2
                 for item in self.children:
@@ -536,12 +590,21 @@ async def _run_post_signup_confirm_flow(
                 self.stop()
 
         pick = _SlotPick()
-        await interaction.followup.send(
+        pick_msg = await interaction.followup.send(
             f"Which time slot does **Team {team_letter}** run this week?\n"
             f"Current default: **{_label_for(current_idx)}**",
-            view=pick, ephemeral=True,
+            view=pick,
+            ephemeral=True,
         )
         timed_out = await pick.wait()
+
+        # Tear down each per-team picker as we finish with it so the
+        # final post-result ack is the only thing the officer sees.
+        try:
+            await pick_msg.delete()
+        except discord.HTTPException:
+            pass
+
         if timed_out or pick.selected is None:
             await interaction.followup.send(
                 "⏰ Override timed out. Nothing was posted.",
@@ -567,7 +630,9 @@ async def _run_post_signup_confirm_flow(
 
 
 def _format_post_result_message(
-    event_type: str, event_date: str, result: dict,
+    event_type: str,
+    event_date: str,
+    result: dict,
 ) -> str:
     """Render `post_registration`'s result dict into officer-facing copy.
 
@@ -578,10 +643,13 @@ def _format_post_result_message(
 
     status = result.get("status")
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    setup_cmd = "/setup → ⚔️ Desert Storm" if event_type == "DS" else "/setup → 🏜️ Canyon Storm"
+    from setup_hub import STORM_SETUP_NAV
+
+    setup_cmd = STORM_SETUP_NAV[event_type]
     date_pretty = format_event_date(event_date)
 
     from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
+
     hub_cmd = HUB_COMMAND[event_type]
     if status == "ok":
         cid = result.get("channel_id")
@@ -624,7 +692,5 @@ def _format_post_result_message(
         )
     if status == "send_failed":
         err = (result.get("error") or "unknown error")[:120]
-        return (
-            f"⚠️ Discord refused the sign-up message: `{err}`. See bot logs for details."
-        )
+        return f"⚠️ Discord refused the sign-up message: `{err}`. See bot logs for details."
     return f"⚠️ Sign-up post returned unexpected status `{status}`."

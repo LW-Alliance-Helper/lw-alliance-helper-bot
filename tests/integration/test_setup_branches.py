@@ -17,6 +17,7 @@ Pattern matches the existing test_setup_flows.py — mocked Discord views,
 ask_keep_or_change patched to return scripted text, then assertions on
 the persisted DB state.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,11 +30,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from tests.conftest import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID, make_mock_interaction
 from tests.integration.test_setup_flows import (
-    make_send_handler, patch_keep_or_change,
+    make_send_handler,
+    patch_keep_or_change,
 )
 
 
 # ── /setup_desertstorm + /setup_canyonstorm with participation enabled ────────
+
 
 def _fake_structured_flow_opted_out():
     """Return the dict shape `_run_structured_flow_setup_step` produces
@@ -43,24 +46,24 @@ def _fake_structured_flow_opted_out():
     this stub, the sub-flow runs against an undermocked bot/channel
     and exhausts the test's prepared replies (StopIteration)."""
     return {
-        "structured_flow_enabled":         False,
-        "power_metric_column":             "B",
-        "power_metric_tab":                "",
-        "power_match_column":              "",
-        "sub_mode":                        "pool",
-        "signup_channel_id":               0,
-        "signup_schedule_cron":            "",
-        "signups_tab":                     "",
-        "rosters_tab":                     "",
-        "attendance_tab":                  "",
-        "strategies_tab":                  "",
-        "member_rules_tab":                "",
-        "poll_day_of_week":                -1,
-        "signup_time":                     "",
-        "power_refresh_dm_enabled":        False,
-        "roster_dm_starter_template":      "",
-        "roster_dm_paired_sub_template":   "",
-        "roster_dm_pool_sub_template":     "",
+        "structured_flow_enabled": False,
+        "power_metric_column": "B",
+        "power_metric_tab": "",
+        "power_match_column": "",
+        "sub_mode": "pool",
+        "signup_channel_id": 0,
+        "signup_schedule_cron": "",
+        "signups_tab": "",
+        "rosters_tab": "",
+        "attendance_tab": "",
+        "strategies_tab": "",
+        "member_rules_tab": "",
+        "poll_day_of_week": -1,
+        "signup_time": "",
+        "power_refresh_dm_enabled": False,
+        "roster_dm_starter_template": "",
+        "roster_dm_paired_sub_template": "",
+        "roster_dm_pool_sub_template": "",
     }
 
 
@@ -73,14 +76,16 @@ class TestStormSetupWithParticipation:
         from setup_cog import run_storm_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        log_ch  = MagicMock(id=555111)
+        log_ch = MagicMock(id=555111)
         post_ch = MagicMock(id=555222)
-        ch_iter = iter([
-            MagicMock(confirmed=True, selected_channel=log_ch,  wait=AsyncMock()),
-            MagicMock(confirmed=True, selected_channel=post_ch, wait=AsyncMock()),
-        ])
+        ch_iter = iter(
+            [
+                MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock()),
+                MagicMock(confirmed=True, selected_channel=post_ch, wait=AsyncMock()),
+            ]
+        )
 
         # Build the participation config our test expects, bypassing the
         # interactive sub-flow. The wizard delegates to
@@ -88,15 +93,14 @@ class TestStormSetupWithParticipation:
         # save call without re-implementing every prompt.
         async def fake_participation(*args, **kwargs):
             return {
-                "enabled":          1,
-                "tab_name":         "DS Participation Log",
-                "questions":        [
+                "enabled": 1,
+                "tab_name": "DS Participation Log",
+                "questions": [
                     {"key": "vote_count", "label": "Vote Count", "type": "numeric"},
-                    {"key": "sitting_out", "label": "Sitting Out",
-                     "type": "roster_names"},
+                    {"key": "sitting_out", "label": "Sitting Out", "type": "roster_names"},
                 ],
-                "roster_tab":       "Squad Powers",
-                "roster_name_col":  0,
+                "roster_tab": "Squad Powers",
+                "roster_name_col": 0,
                 "roster_alias_col": -1,
                 "roster_start_row": 2,
             }
@@ -104,12 +108,12 @@ class TestStormSetupWithParticipation:
         async def fake_structured(*args, **kwargs):
             return _fake_structured_flow_opted_out()
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
-             patch("setup_cog._run_storm_participation_step",
-                    side_effect=fake_participation), \
-             patch("setup_cog._run_structured_flow_setup_step",
-                    side_effect=fake_structured), \
-             patch_keep_or_change(["DS Assignments"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("setup_cog._run_storm_participation_step", side_effect=fake_participation),
+            patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
+            patch_keep_or_change(["DS Assignments"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"selected": "A", "outcome": "default"},
@@ -117,11 +121,11 @@ class TestStormSetupWithParticipation:
             await run_storm_setup(interaction, bot, "DS")
 
         pcfg = config.get_participation_config(TEST_GUILD_ID, "DS")
-        assert pcfg["enabled"]          is True
-        assert pcfg["tab_name"]         == "DS Participation Log"
-        assert len(pcfg["questions"])   == 2
+        assert pcfg["enabled"] is True
+        assert pcfg["tab_name"] == "DS Participation Log"
+        assert len(pcfg["questions"]) == 2
         assert pcfg["questions"][0]["type"] == "numeric"
-        assert pcfg["roster_tab"]       == "Squad Powers"
+        assert pcfg["roster_tab"] == "Squad Powers"
 
     @pytest.mark.asyncio
     async def test_cs_setup_participation_disabled_keeps_disabled(self, seeded_db):
@@ -132,22 +136,24 @@ class TestStormSetupWithParticipation:
         from setup_cog import run_storm_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        log_ch  = MagicMock(id=666111)
+        log_ch = MagicMock(id=666111)
         post_ch = MagicMock(id=666222)
-        ch_iter = iter([
-            MagicMock(confirmed=True, selected_channel=log_ch,  wait=AsyncMock()),
-            MagicMock(confirmed=True, selected_channel=post_ch, wait=AsyncMock()),
-        ])
+        ch_iter = iter(
+            [
+                MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock()),
+                MagicMock(confirmed=True, selected_channel=post_ch, wait=AsyncMock()),
+            ]
+        )
 
         async def disabled_participation(*args, **kwargs):
             return {
-                "enabled":          0,
-                "tab_name":         "",
-                "questions":        [],
-                "roster_tab":       "",
-                "roster_name_col":  0,
+                "enabled": 0,
+                "tab_name": "",
+                "questions": [],
+                "roster_tab": "",
+                "roster_name_col": 0,
                 "roster_alias_col": -1,
                 "roster_start_row": 2,
             }
@@ -155,12 +161,12 @@ class TestStormSetupWithParticipation:
         async def fake_structured(*args, **kwargs):
             return _fake_structured_flow_opted_out()
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
-             patch("setup_cog._run_storm_participation_step",
-                    side_effect=disabled_participation), \
-             patch("setup_cog._run_structured_flow_setup_step",
-                    side_effect=fake_structured), \
-             patch_keep_or_change(["CS Assignments"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("setup_cog._run_storm_participation_step", side_effect=disabled_participation),
+            patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
+            patch_keep_or_change(["CS Assignments"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"selected": "B", "outcome": "default"},
@@ -175,6 +181,7 @@ class TestStormSetupWithParticipation:
 
 
 # ── /setup hub: reset flow + view-configuration helper (post-#201) ───────────
+
 
 class TestSetupResetBranches:
     """Both confirm and cancel paths of the reset flow, which is now
@@ -196,9 +203,12 @@ class TestSetupResetBranches:
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = True
-                try: view.stop()
-                except Exception: pass
+                try:
+                    view.stop()
+                except Exception:
+                    pass
             return MagicMock(id=1)
+
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
         await setup_cog._run_reset_flow(interaction)
@@ -210,7 +220,9 @@ class TestSetupResetBranches:
         )
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
-        sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
+        sent_msg = (
+            followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
+        )
         assert "reset" in sent_msg.lower()
 
     @pytest.mark.asyncio
@@ -226,25 +238,31 @@ class TestSetupResetBranches:
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = False
-                try: view.stop()
-                except Exception: pass
+                try:
+                    view.stop()
+                except Exception:
+                    pass
             return MagicMock(id=1)
+
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
         await setup_cog._run_reset_flow(interaction)
 
         cfg_after = config.get_config(TEST_GUILD_ID)
         assert cfg_after.setup_complete == 1
-        assert cfg_after.timezone       == original_tz
+        assert cfg_after.timezone == original_tz
 
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
-        sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
+        sent_msg = (
+            followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
+        )
         assert "cancel" in sent_msg.lower()
         assert "still active" in sent_msg.lower()
 
 
 # ── /setup → 🗂️ View configuration (post-#201) ───────────────────────────────
+
 
 class TestViewConfiguration:
     """Post-#201: the bare `/view_configuration` slash command is gone;
@@ -267,13 +285,8 @@ class TestViewConfiguration:
 
         await _send_view_configuration(interaction, cfg)
 
-        sent = (
-            interaction.response.send_message.call_args
-            or interaction.followup.send.call_args
-        )
-        assert sent is not None, (
-            "_send_view_configuration didn't reply at all"
-        )
+        sent = interaction.response.send_message.call_args or interaction.followup.send.call_args
+        assert sent is not None, "_send_view_configuration didn't reply at all"
 
     @pytest.mark.asyncio
     async def test_setup_hub_view_button_before_setup_says_not_set_up(self, temp_db):
@@ -286,6 +299,7 @@ class TestViewConfiguration:
         import setup_hub
         from unittest.mock import MagicMock as _M
         import config
+
         # Create a row but don't mark setup_complete
         config.get_or_create_config(TEST_GUILD_ID)
 
@@ -303,6 +317,7 @@ class TestViewConfiguration:
 
 
 # ── /setup admin-or-leadership gate (#236) ───────────────────────────────────
+
 
 class TestSetupHubLeadershipGate:
     """The /setup hub used to be admin-only, which blocked alliances
@@ -359,7 +374,10 @@ class TestSetupHubLeadershipGate:
         interaction = make_mock_interaction(is_admin=False)
         interaction.user.roles = [make_mock_role(name="Leadership")]
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            interaction.user.id,
+            is_premium=False,
         )
 
         result = await view.interaction_check(interaction)
@@ -376,7 +394,10 @@ class TestSetupHubLeadershipGate:
         interaction = make_mock_interaction(is_admin=False)
         interaction.user.roles = [make_mock_role(name="Member")]
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            interaction.user.id,
+            is_premium=False,
         )
 
         result = await view.interaction_check(interaction)
@@ -399,8 +420,12 @@ class TestSetupHubReleaseAnnouncementsToggle:
         """A guild with the default `release_announcements_enabled = 1`
         renders the button label as `📢 Release announcements: ON`."""
         import setup_hub
+
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            1,
+            is_premium=False,
         )
         assert view.btn_release_announcements.label.endswith(": ON")
 
@@ -409,9 +434,13 @@ class TestSetupHubReleaseAnnouncementsToggle:
         """After an explicit opt-out, the label renders OFF."""
         import config
         import setup_hub
+
         config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            1,
+            is_premium=False,
         )
         assert view.btn_release_announcements.label.endswith(": OFF")
 
@@ -421,8 +450,12 @@ class TestSetupHubReleaseAnnouncementsToggle:
         OFF confirmation copy."""
         import config
         import setup_hub
+
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            1,
+            is_premium=False,
         )
         interaction = make_mock_interaction()
         await view.btn_release_announcements.callback(interaction)
@@ -439,9 +472,13 @@ class TestSetupHubReleaseAnnouncementsToggle:
         """Clicking again flips back to ON."""
         import config
         import setup_hub
+
         config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
         view = setup_hub._SetupHubView(
-            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+            MagicMock(),
+            TEST_GUILD_ID,
+            1,
+            is_premium=False,
         )
         interaction = make_mock_interaction()
         await view.btn_release_announcements.callback(interaction)

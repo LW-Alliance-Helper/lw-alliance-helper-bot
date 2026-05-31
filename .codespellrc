@@ -1,0 +1,11 @@
+# codespell configuration. Pre-commit runs codespell on staged files only;
+# this config also applies to manual `codespell` runs.
+#
+# Signal note: on this codebase codespell mostly catches FUTURE typos in
+# user-facing copy -- the current tree has none. The ignore list below is all
+# false positives (a test variable, a valid alternate spelling, an
+# intentional misspelling in a UX mockup, and short base64/identifier
+# fragments), not real words we're choosing to misspell.
+[codespell]
+skip = .git,.ruff_cache,htmlcov,node_modules,notes,*.png,*.csv,*.svg,*.lock,*.json,*.html
+ignore-words-list = seh,unparseable,tuseday,nd,te,fo,ot,ue,fro,re-used,re-uses,re-use,pre-selected,pre-emptively,varian,categor,thur

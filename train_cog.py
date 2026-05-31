@@ -18,6 +18,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import get_config
+from messages import SETUP_POINTER_FOOTER, TIER_COMPARISON
+from setup_hub import HUB_BTN_BIRTHDAYS
 from train import (
     ET,
     BIRTHDAY_LOOKAHEAD,
@@ -38,8 +40,7 @@ from train import (
 # ── Default DM bodies (fallbacks when an alliance hasn't customised) ──────────
 
 DEFAULT_BIRTHDAY_DM = (
-    "🎂 Happy birthday, **{name}**! Wishing you a great day "
-    "from everyone at the alliance."
+    "🎂 Happy birthday, **{name}**! Wishing you a great day from everyone at the alliance."
 )
 
 DEFAULT_TRAIN_DM = (
@@ -53,9 +54,11 @@ def _render_dm_body(template: str, *, name: str = "") -> str:
     missing or unknown placeholders so a typo in the configured template
     doesn't crash the entire reminder loop — the typo just renders as
     literal text in the DM."""
+
     class _SafeDict(dict):
         def __missing__(self, key):
             return "{" + key + "}"
+
     try:
         return template.format_map(_SafeDict(name=name or ""))
     except Exception:
@@ -68,6 +71,7 @@ date_cls = date
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
+
 class TrainCog(commands.Cog):
     # /train is a top-level slash-command group containing overview /
     # log / birthdays. `/birthdays` (the standalone member list) and
@@ -79,11 +83,11 @@ class TrainCog(commands.Cog):
     )
 
     def __init__(self, bot):
-        self.bot                = bot
+        self.bot = bot
         # Initialise to today's ET date so the first tick after deploy
         # doesn't trip the "new day, reset reminders_fired" branch.
         self.last_reminder_date = datetime.now(tz=ET).date()
-        self.reminders_fired    = set()  # train-assignment reminders sent today
+        self.reminders_fired = set()  # train-assignment reminders sent today
         # `birthday_population_fired` used to dedup the 22:00 ET train
         # auto-pop via an in-memory set. Railway restarts wiped it, so
         # the auto-pop re-fired and spammed conflict messages on every
@@ -109,10 +113,13 @@ class TrainCog(commands.Cog):
 
         try:
             current_schedule = load_schedule()
-            before_count     = len(current_schedule)
-            updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=interaction.guild_id if hasattr(interaction, "guild_id") else None)
-            after_count      = len(updated_schedule)
-            added            = after_count - before_count
+            before_count = len(current_schedule)
+            updated_schedule, alerts = check_and_add_birthdays(
+                current_schedule,
+                guild_id=interaction.guild_id if hasattr(interaction, "guild_id") else None,
+            )
+            after_count = len(updated_schedule)
+            added = after_count - before_count
 
             if added > 0 or alerts:
                 save_schedule(updated_schedule)
@@ -163,27 +170,26 @@ class TrainCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         from config import get_birthday_config
-        guild_id     = interaction.guild_id if hasattr(interaction, "guild_id") else None
-        bcfg         = get_birthday_config(guild_id) if guild_id else {}
-        tab_name     = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+
+        guild_id = interaction.guild_id if hasattr(interaction, "guild_id") else None
+        bcfg = get_birthday_config(guild_id) if guild_id else {}
+        tab_name = bcfg.get("tab_name") or get_member_tab_name(guild_id)
         # Use the configured lookahead window from /setup → 🎂 Birthdays. Defaults
         # to 14 days when not set so a fresh install still shows something
         # useful out of the box.
-        window_days  = int(bcfg.get("lookahead_days") or 14)
+        window_days = int(bcfg.get("lookahead_days") or 14)
 
         try:
             members = await asyncio.get_event_loop().run_in_executor(
                 None, load_birthdays, tab_name, guild_id
             )
         except Exception as e:
-            await interaction.followup.send(
-                f"⚠️ Could not load birthdays: {e}", ephemeral=True
-            )
+            await interaction.followup.send(f"⚠️ Could not load birthdays: {e}", ephemeral=True)
             return
 
         if not members:
             await interaction.followup.send(
-                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup → 🎂 Birthdays` to verify the tab and column settings.",
+                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup → {HUB_BTN_BIRTHDAYS}` to verify the tab and column settings.",
                 ephemeral=True,
             )
             return
@@ -225,7 +231,9 @@ class TrainCog(commands.Cog):
                 lines.append(f"• **{when:%A, %B} {when.day}** — {name} *({label})*")
             embed.description = "\n".join(lines)
 
-        embed.set_footer(text=f"Source: {tab_name} · Run /setup → 🎂 Birthdays to change settings")
+        embed.set_footer(
+            text=f"Source: {tab_name} · " + SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BIRTHDAYS),
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /train log ─────────────────────────────────────────────────────────────
@@ -264,6 +272,7 @@ class TrainCog(commands.Cog):
         )
 
         from datetime import date as _date
+
         today = _date.today()
 
         if target_date:
@@ -271,11 +280,17 @@ class TrainCog(commands.Cog):
             if not entry:
                 embed.description = f"*No train entry found for {target_date:%B} {target_date.day}, {target_date.year}.*"
             else:
-                embed.add_field(name="Date",   value=f"{target_date:%A, %B} {target_date.day}, {target_date.year}", inline=False)
-                embed.add_field(name="Name",   value=entry.get("name") or "*not set*",               inline=False)
-                embed.add_field(name="Theme",  value=entry.get("theme") or "*not set*",              inline=False)
-                embed.add_field(name="Tone",   value=entry.get("tone")  or "*not set*",              inline=False)
-                embed.add_field(name="Notes",  value=(entry.get("notes") or "*none*")[:1024],        inline=False)
+                embed.add_field(
+                    name="Date",
+                    value=f"{target_date:%A, %B} {target_date.day}, {target_date.year}",
+                    inline=False,
+                )
+                embed.add_field(name="Name", value=entry.get("name") or "*not set*", inline=False)
+                embed.add_field(name="Theme", value=entry.get("theme") or "*not set*", inline=False)
+                embed.add_field(name="Tone", value=entry.get("tone") or "*not set*", inline=False)
+                embed.add_field(
+                    name="Notes", value=(entry.get("notes") or "*none*")[:1024], inline=False
+                )
                 embed.add_field(
                     name="Prompt Retrieved",
                     value="✅ Yes" if entry.get("prompt_retrieved") else "❌ No",
@@ -283,10 +298,16 @@ class TrainCog(commands.Cog):
                 )
         else:
             import premium
-            window_days = await premium.get_limit(
-                "train_log_days", interaction.guild_id,
-                interaction=interaction, bot=interaction.client,
-            ) or 30
+
+            window_days = (
+                await premium.get_limit(
+                    "train_log_days",
+                    interaction.guild_id,
+                    interaction=interaction,
+                    bot=interaction.client,
+                )
+                or 30
+            )
             cutoff = today - timedelta(days=window_days)
             recent = []
             for date_str, entry in schedule.items():
@@ -313,9 +334,16 @@ class TrainCog(commands.Cog):
                     lines.append("• " + " · ".join(bits))
                 embed.description = "\n".join(lines)[:4000]
                 if window_days < 30:
-                    embed.set_footer(text=f"Free tier: {window_days}-day window. Upgrade to Premium for 30 days.")
+                    embed.set_footer(
+                        text=TIER_COMPARISON.format(
+                            free_limit=f"{window_days}-day window",
+                            premium_limit="30 days",
+                        )
+                    )
                 else:
-                    embed.set_footer(text=f"Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter.")
+                    embed.set_footer(
+                        text=f"Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter."
+                    )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -331,6 +359,7 @@ class TrainCog(commands.Cog):
             cancelled = True
         try:
             from storm_log import active_logs
+
             if interaction.user.id in active_logs:
                 active_logs[interaction.user.id].set()
                 cancelled = True
@@ -338,6 +367,7 @@ class TrainCog(commands.Cog):
             pass
         try:
             import wizard_registry
+
             if wizard_registry.cancel_user(interaction.user.id):
                 cancelled = True
         except ImportError:
@@ -360,17 +390,19 @@ class TrainCog(commands.Cog):
             return
 
         from config import get_train_config
+
         train_cfg = get_train_config(interaction.guild_id)
         blurbs_on = bool(train_cfg.get("blurbs_enabled", 1))
 
         await interaction.response.defer()
 
-        schedule  = load_schedule(interaction.guild_id)
+        schedule = load_schedule(interaction.guild_id)
         blurb_log = load_blurb_log(interaction.guild_id)
-        embed     = build_train_view_embed(schedule, blurb_log)
+        embed = build_train_view_embed(schedule, blurb_log)
 
         # Lazy import to avoid the train ⇆ train_ui circular import at load time
         from train_ui import TrainActionView
+
         view = TrainActionView(self.bot, interaction.guild_id, blurbs_on)
 
         await interaction.followup.send(embed=embed, view=view)
@@ -382,13 +414,13 @@ class TrainCog(commands.Cog):
         from config import get_config, get_train_config
         from zoneinfo import ZoneInfo
 
-        now   = datetime.now(tz=ET)
+        now = datetime.now(tz=ET)
         today = now.date()
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
             self.last_reminder_date = today
-            self.reminders_fired    = set()  # train reminders fired today
+            self.reminders_fired = set()  # train reminders fired today
 
         # ── Birthday auto-population and Discord announcements ────────────────
         # Per-guild try/except: a single misconfigured guild (bad perms,
@@ -401,8 +433,8 @@ class TrainCog(commands.Cog):
 
         for guild in self.bot.guilds:
             try:
-                cfg      = get_config(guild.id)
-                bcfg     = get_birthday_config(guild.id)
+                cfg = get_config(guild.id)
+                bcfg = get_birthday_config(guild.id)
                 if not cfg or not cfg.setup_complete or not bcfg.get("enabled"):
                     continue
 
@@ -416,14 +448,12 @@ class TrainCog(commands.Cog):
                 # `guild_birthday_config.last_train_population_date` so
                 # Railway redeploys at 22:00 don't re-fire — the previous
                 # in-memory set was wiped on every restart (#89).
-                if (
-                    bcfg.get("train_integration")
-                    and now.hour == 22 and now.minute == 0
-                ):
+                if bcfg.get("train_integration") and now.hour == 22 and now.minute == 0:
                     from config import (
                         get_birthday_population_last_fired,
                         mark_birthday_population_fired,
                     )
+
                     today_iso = today.isoformat()
                     # Skip the auto-pop block when today's run already
                     # landed (Railway restart at 22:00, second tick
@@ -439,7 +469,8 @@ class TrainCog(commands.Cog):
                             # input would always be equal (the original 1.0.x bug).
                             before = dict(current_schedule)
                             updated_schedule, alerts = check_and_add_birthdays(
-                                current_schedule, guild_id=guild.id,
+                                current_schedule,
+                                guild_id=guild.id,
                             )
                             if updated_schedule != before or alerts:
                                 save_schedule(updated_schedule, guild.id)
@@ -455,6 +486,7 @@ class TrainCog(commands.Cog):
                             mark_birthday_population_fired(guild.id, today_iso)
                         except Exception as e:
                             import traceback
+
                             print(f"[BIRTHDAY] Auto-population failed for guild {guild.id}: {e}")
                             print(traceback.format_exc())
 
@@ -464,36 +496,42 @@ class TrainCog(commands.Cog):
 
                 reminder_time = bcfg.get("reminder_time", "08:00")
                 try:
-                    r_h, r_m  = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
-                    guild_tz  = _ZI(cfg.timezone or "America/New_York")
+                    r_h, r_m = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
+                    guild_tz = _ZI(cfg.timezone or "America/New_York")
                     guild_now = datetime.now(tz=guild_tz)
                     if guild_now.hour != r_h or guild_now.minute != r_m:
                         continue
                 except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
-                    print(f"[BIRTHDAY] Bad reminder_time={reminder_time!r} or "
-                          f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
+                    print(
+                        f"[BIRTHDAY] Bad reminder_time={reminder_time!r} or "
+                        f"timezone={cfg.timezone!r} for guild {guild.id}: {e}"
+                    )
                     continue
 
                 bday_channel_id = bcfg.get("reminder_channel_id", 0)
-                bday_channel    = self.bot.get_channel(bday_channel_id)
+                bday_channel = self.bot.get_channel(bday_channel_id)
                 if not bday_channel:
-                    print(f"[BIRTHDAY] Reminder channel {bday_channel_id} not "
-                          f"resolvable for guild {guild.id} — Discord birthday "
-                          f"announcement skipped")
+                    print(
+                        f"[BIRTHDAY] Reminder channel {bday_channel_id} not "
+                        f"resolvable for guild {guild.id} — Discord birthday "
+                        f"announcement skipped"
+                    )
                     continue
 
                 # Find today's birthdays
-                tab_name     = bcfg.get("tab_name", "Birthdays")
-                members      = load_birthdays(tab_name, guild.id)
+                tab_name = bcfg.get("tab_name", "Birthdays")
+                members = load_birthdays(tab_name, guild.id)
                 from datetime import date as _d2
-                today        = _d2.today()
-                todays_bdays = [m for m in members if m["month"] == today.month and m["day"] == today.day]
+
+                today = _d2.today()
+                todays_bdays = [
+                    m for m in members if m["month"] == today.month and m["day"] == today.day
+                ]
 
                 # Resolve the alliance's configured DM template once per
                 # guild — falling back to the bot's hardcoded default if
                 # /setup → 🎂 Birthdays hasn't been run since dm_message landed.
-                bday_dm_tmpl = (bcfg.get("dm_message") or "").strip() \
-                               or DEFAULT_BIRTHDAY_DM
+                bday_dm_tmpl = (bcfg.get("dm_message") or "").strip() or DEFAULT_BIRTHDAY_DM
 
                 for member in todays_bdays:
                     name = member.get("name", "a member")
@@ -511,25 +549,30 @@ class TrainCog(commands.Cog):
                         # point retrying the remaining members — every
                         # send to this channel will fail the same way.
                         chan_name = getattr(bday_channel, "name", "?")
-                        print(f"[BIRTHDAY] Missing perms to send in channel "
-                              f"{bday_channel_id} (#{chan_name}) for guild "
-                              f"{guild.id} ({guild.name}) — leadership must "
-                              f"grant View Channel + Send Messages or "
-                              f"reconfigure via /setup → 🎂 Birthdays")
+                        print(
+                            f"[BIRTHDAY] Missing perms to send in channel "
+                            f"{bday_channel_id} (#{chan_name}) for guild "
+                            f"{guild.id} ({guild.name}) — leadership must "
+                            f"grant View Channel + Send Messages or "
+                            f"reconfigure via /setup → {HUB_BTN_BIRTHDAYS}"
+                        )
                         break
 
                     # 💎 Premium: also DM the member directly with a personal note.
                     if discord_id:
                         import dm
+
                         await dm.send_dm_to_id(
-                            self.bot, guild.id, discord_id,
+                            self.bot,
+                            guild.id,
+                            discord_id,
                             content=_render_dm_body(bday_dm_tmpl, name=name),
                         )
 
             except Exception as e:
                 import traceback
-                print(f"[BIRTHDAY] Error during birthday check for guild "
-                      f"{guild.id}: {e}")
+
+                print(f"[BIRTHDAY] Error during birthday check for guild {guild.id}: {e}")
                 print(f"[BIRTHDAY] Traceback:\n{traceback.format_exc()}")
 
         # ── Per-guild train reminders ──────────────────────────────────────────
@@ -537,8 +580,8 @@ class TrainCog(commands.Cog):
             if guild.id in self.reminders_fired:
                 continue
 
-            cfg        = get_config(guild.id)
-            train_cfg  = get_train_config(guild.id)
+            cfg = get_config(guild.id)
+            train_cfg = get_train_config(guild.id)
 
             if not cfg or not cfg.setup_complete:
                 continue
@@ -548,47 +591,52 @@ class TrainCog(commands.Cog):
             # Parse reminder time and compare to current time in guild's timezone
             reminder_time = train_cfg.get("reminder_time", "22:00")
             try:
-                r_h, r_m  = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
-                guild_tz  = ZoneInfo(cfg.timezone or "America/New_York")
+                r_h, r_m = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
+                guild_tz = ZoneInfo(cfg.timezone or "America/New_York")
                 guild_now = datetime.now(tz=guild_tz)
                 if guild_now.hour != r_h or guild_now.minute != r_m:
                     continue
             except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
-                print(f"[TRAIN] Bad reminder_time={reminder_time!r} or "
-                      f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
+                print(
+                    f"[TRAIN] Bad reminder_time={reminder_time!r} or "
+                    f"timezone={cfg.timezone!r} for guild {guild.id}: {e}"
+                )
                 continue
 
             # Check if someone is scheduled today
             today_str = today.isoformat()
-            schedule  = load_schedule(guild.id)
+            schedule = load_schedule(guild.id)
             if today_str not in schedule:
                 self.reminders_fired.add(guild.id)
                 continue
 
             entry = schedule[today_str]
-            name  = entry.get("name", "Unknown")
+            name = entry.get("name", "Unknown")
 
             # Get reminder channel — fall back to leadership channel
             channel_id = train_cfg.get("reminder_channel_id") or cfg.leadership_channel_id
-            channel    = self.bot.get_channel(channel_id)
+            channel = self.bot.get_channel(channel_id)
             if channel is None:
                 # Marked fired so we don't retry every minute, but log the
                 # symptom — leadership won't notice "reminder stopped firing"
                 # unless we surface the channel-resolve failure here.
-                print(f"[TRAIN] Reminder channel {channel_id} not resolvable "
-                      f"for guild {guild.id} — daily reminder skipped")
+                print(
+                    f"[TRAIN] Reminder channel {channel_id} not resolvable "
+                    f"for guild {guild.id} — daily reminder skipped"
+                )
                 self.reminders_fired.add(guild.id)
                 continue
 
             # 💎 Premium: replace the name with a Discord mention if the
             # member roster knows them. Free tier sees just the name.
             import dm
+
             display = await dm.mention_or_name(self.bot, guild.id, name)
 
             blurbs_on = train_cfg.get("blurbs_enabled", 1)
             if blurbs_on:
                 view = ReminderView(cog=self, date_str=today_str, name=name)
-                msg  = (
+                msg = (
                     f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
@@ -596,9 +644,7 @@ class TrainCog(commands.Cog):
                 )
                 view.message = await channel.send(msg, view=view)
             else:
-                await channel.send(
-                    f"🚂 **Reset! Today's train is for {display}.**"
-                )
+                await channel.send(f"🚂 **Reset! Today's train is for {display}.**")
 
             self.reminders_fired.add(guild.id)
             print(f"[TRAIN] Reminder sent for guild {guild.id} — {name} on {today_str}")
@@ -606,11 +652,13 @@ class TrainCog(commands.Cog):
             # 💎 Premium: also DM the member assigned to today's train.
             # Body is alliance-configurable via the train setup wizard; falls back
             # to the bot's hardcoded default if not customised.
-            train_dm_tmpl = (train_cfg.get("dm_message") or "").strip() \
-                            or DEFAULT_TRAIN_DM
+            train_dm_tmpl = (train_cfg.get("dm_message") or "").strip() or DEFAULT_TRAIN_DM
             import dm
+
             await dm.send_dm(
-                self.bot, guild.id, name,
+                self.bot,
+                guild.id,
+                name,
                 content=_render_dm_body(train_dm_tmpl, name=name),
             )
 

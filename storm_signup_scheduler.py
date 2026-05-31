@@ -36,6 +36,7 @@ def _guild_today_and_now(tz_name: str | None) -> tuple[_dt.date, _dt.time]:
     or invalid — same convention as `_today_in_guild_tz` in
     storm_signup_post."""
     from zoneinfo import ZoneInfo
+
     try:
         tz = ZoneInfo(tz_name) if tz_name else _dt.timezone.utc
     except Exception:
@@ -52,6 +53,7 @@ def _parse_hhmm(value: str) -> Optional[_dt.time]:
     as a valid time. Returns `None` for empty / garbage.
     """
     from config import parse_storm_signup_time
+
     normalised = parse_storm_signup_time(value)
     if normalised is None:
         return None
@@ -88,6 +90,7 @@ def _scheduled_storm_rows() -> list[dict]:
     `config.get_scheduled_storm_rows()` so the SQL lives next to the
     schema, not next to the consumer."""
     from config import get_scheduled_storm_rows
+
     return get_scheduled_storm_rows()
 
 
@@ -102,7 +105,7 @@ async def _run_one_tick(bot: discord.Client) -> int:
     fired = 0
     rows = _scheduled_storm_rows()
     for row in rows:
-        guild_id  = int(row["guild_id"])
+        guild_id = int(row["guild_id"])
         event_type = row["event_type"]
         if event_type not in _VALID_EVENT_TYPES:
             continue
@@ -117,7 +120,8 @@ async def _run_one_tick(bot: discord.Client) -> int:
             continue
 
         if not _should_fire_now(
-            today=today, now=now,
+            today=today,
+            now=now,
             poll_dow=int(row["poll_day_of_week"]),
             signup_time=signup_time,
         ):
@@ -145,7 +149,8 @@ async def _run_one_tick(bot: discord.Client) -> int:
                 "[STORM SCHEDULER] guild=%s event=%s — skipping auto-post "
                 "because guild is no longer Premium (structured_flow_enabled "
                 "still on disk).",
-                guild_id, event_type,
+                guild_id,
+                event_type,
             )
             continue
 
@@ -153,7 +158,10 @@ async def _run_one_tick(bot: discord.Client) -> int:
         # game-defined event day (DS=Friday, CS=Thursday).
         event_date = next_event_date(guild_id, event_type, today=today)
         result = await post_registration(
-            bot, guild, event_type, event_date,
+            bot,
+            guild,
+            event_type,
+            event_date,
             structured=structured,
         )
         status = result.get("status")
@@ -162,8 +170,11 @@ async def _run_one_tick(bot: discord.Client) -> int:
             logger.info(
                 "[STORM SCHEDULER] auto-posted sign-up for guild=%s event=%s/%s "
                 "channel=%s message=%s",
-                guild_id, event_type, event_date,
-                result.get("channel_id"), result.get("message_id"),
+                guild_id,
+                event_type,
+                event_date,
+                result.get("channel_id"),
+                result.get("message_id"),
             )
         elif status == "already_posted":
             # Idempotence: another tick (or a manual post_signup earlier
@@ -171,9 +182,12 @@ async def _run_one_tick(bot: discord.Client) -> int:
             pass
         else:
             logger.warning(
-                "[STORM SCHEDULER] auto-post for guild=%s event=%s/%s returned %s "
-                "(details=%s)",
-                guild_id, event_type, event_date, status, result,
+                "[STORM SCHEDULER] auto-post for guild=%s event=%s/%s returned %s (details=%s)",
+                guild_id,
+                event_type,
+                event_date,
+                status,
+                result,
             )
     return fired
 

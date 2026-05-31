@@ -35,6 +35,8 @@ import re
 
 import discord
 
+from messages import DENY_NOT_OWNER
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,6 +84,7 @@ def _sibling_zone_names(zones: "list[ZoneRow]", zone_name: str) -> "list[str]":
 # Alliances type "250M", "1.2B", "300,000,000" etc. The roster Sheet
 # values match the same convention. Parsing follows survey.py's
 # magnitude-aware shorthand (#64).
+
 
 def parse_power(raw: str) -> int | None:
     """Parse a power value into an integer. Returns None on garbage.
@@ -157,7 +160,8 @@ def _parse_power_cell(value, *, source: str = "") -> tuple[int, bool]:
             logger.warning(
                 "[STORM STRATEGY] couldn't parse power cell %r at %s — "
                 "treating as 0; alliance should fix the Sheet entry.",
-                value, source,
+                value,
+                source,
             )
         return 0, True
     return parsed, False
@@ -167,6 +171,7 @@ def _parse_power_cell(value, *, source: str = "") -> tuple[int, bool]:
 #
 # A preset is a list of ZoneRow entries plus a name + (CS only) faction.
 # Stored on disk as Sheet rows; buffered in memory during editing.
+
 
 class ZoneRow:
     """One zone in a strategy preset. Same shape for DS and CS. Both
@@ -182,31 +187,44 @@ class ZoneRow:
     """
 
     __slots__ = (
-        "zone", "max_players",
-        "max_phase1", "max_phase2", "max_phase3",
-        "min_power_a", "min_power_b",
+        "zone",
+        "max_players",
+        "max_phase1",
+        "max_phase2",
+        "max_phase3",
+        "min_power_a",
+        "min_power_b",
         "priority",
-        "priority_phase1", "priority_phase2", "priority_phase3",
+        "priority_phase1",
+        "priority_phase2",
+        "priority_phase3",
     )
 
-    def __init__(self, zone: str, max_players: int = 0,
-                 max_phase1: int = 0, max_phase2: int = 0, max_phase3: int = 0,
-                 min_power_a: int = 0, min_power_b: int = 0,
-                 priority: int = 0,
-                 priority_phase1: int = 0,
-                 priority_phase2: int = 0,
-                 priority_phase3: int = 0):
-        self.zone             = zone
-        self.max_players      = _safe_int(max_players)
-        self.max_phase1       = _safe_int(max_phase1)
-        self.max_phase2       = _safe_int(max_phase2)
-        self.max_phase3       = _safe_int(max_phase3)
-        self.min_power_a      = _safe_int(min_power_a)
-        self.min_power_b      = _safe_int(min_power_b)
-        self.priority         = _safe_int(priority)
-        self.priority_phase1  = _safe_int(priority_phase1)
-        self.priority_phase2  = _safe_int(priority_phase2)
-        self.priority_phase3  = _safe_int(priority_phase3)
+    def __init__(
+        self,
+        zone: str,
+        max_players: int = 0,
+        max_phase1: int = 0,
+        max_phase2: int = 0,
+        max_phase3: int = 0,
+        min_power_a: int = 0,
+        min_power_b: int = 0,
+        priority: int = 0,
+        priority_phase1: int = 0,
+        priority_phase2: int = 0,
+        priority_phase3: int = 0,
+    ):
+        self.zone = zone
+        self.max_players = _safe_int(max_players)
+        self.max_phase1 = _safe_int(max_phase1)
+        self.max_phase2 = _safe_int(max_phase2)
+        self.max_phase3 = _safe_int(max_phase3)
+        self.min_power_a = _safe_int(min_power_a)
+        self.min_power_b = _safe_int(min_power_b)
+        self.priority = _safe_int(priority)
+        self.priority_phase1 = _safe_int(priority_phase1)
+        self.priority_phase2 = _safe_int(priority_phase2)
+        self.priority_phase3 = _safe_int(priority_phase3)
 
     def max_for_phase(self, phase: int) -> int:
         """Return the max-player cap for a given phase. Phase 0 (flat)
@@ -238,8 +256,7 @@ class ZoneRow:
             return int(self.priority)
         return int(per_phase) if per_phase else int(self.priority)
 
-    def render_line(self, event_type: str, teams: str = "both",
-                    phase_count: int = 0) -> str:
+    def render_line(self, event_type: str, teams: str = "both", phase_count: int = 0) -> str:
         """Summary for the editor embed. Respects the alliance's
         configured teams (#148 + Rule A / #166) so single-team alliances
         see only their team's minimum.
@@ -256,11 +273,11 @@ class ZoneRow:
             mins = f"Min: {format_power(self.min_power_b)}"
         else:
             mins = (
-                f"Min A: {format_power(self.min_power_a)} · "
-                f"Min B: {format_power(self.min_power_b)}"
+                f"Min A: {format_power(self.min_power_a)} · Min B: {format_power(self.min_power_b)}"
             )
 
         from storm_icons import zone_emoji_prefix
+
         icon = zone_emoji_prefix(self.zone)  # "" until #158 emojis upload
 
         if phase_count >= 2:
@@ -271,16 +288,18 @@ class ZoneRow:
             header = f"• {icon}**{self.zone}**: {mins}"
             phase_lines: list[str] = []
             phase_prios = [
-                self.priority_phase1, self.priority_phase2, self.priority_phase3,
+                self.priority_phase1,
+                self.priority_phase2,
+                self.priority_phase3,
             ][:phase_count]
             phase_caps = [
-                self.max_phase1, self.max_phase2, self.max_phase3,
+                self.max_phase1,
+                self.max_phase2,
+                self.max_phase3,
             ][:phase_count]
             for idx, (cap, prio) in enumerate(zip(phase_caps, phase_prios), start=1):
                 prio_suffix = f" (priority {prio})" if prio else ""
-                phase_lines.append(
-                    f"   └ Stage {idx}: cap {cap}{prio_suffix}"
-                )
+                phase_lines.append(f"   └ Stage {idx}: cap {cap}{prio_suffix}")
             return "\n".join([header] + phase_lines)
 
         # Flat preset — single-line shape unchanged from pre-#172.
@@ -313,24 +332,26 @@ class PresetBuffer:
     # but new presets only ever write 0, 2, or 3.
     _VALID_PHASE_COUNTS = (0, 1, 2, 3)
 
-    def __init__(self, name: str, event_type: str,
-                 zones: list[ZoneRow] | None = None,
-                 faction: str = "Either",
-                 phase_count: int = 0,
-                 uses_phases: bool | None = None):
-        self.name        = name
-        self.event_type  = event_type.upper()
-        self.zones       = list(zones or [])
-        self.faction     = faction       # CS only; ignored for DS
+    def __init__(
+        self,
+        name: str,
+        event_type: str,
+        zones: list[ZoneRow] | None = None,
+        faction: str = "Either",
+        phase_count: int = 0,
+        uses_phases: bool | None = None,
+    ):
+        self.name = name
+        self.event_type = event_type.upper()
+        self.zones = list(zones or [])
+        self.faction = faction  # CS only; ignored for DS
         # Back-compat: pre-3-phase code passed `uses_phases=True` for
         # 2-phase presets. Translate it if the caller didn't also pass
         # an explicit phase_count.
         if uses_phases and not phase_count:
             phase_count = 2
-        self.phase_count = (
-            int(phase_count) if int(phase_count) in self._VALID_PHASE_COUNTS else 0
-        )
-        self.dirty       = False         # tracks unsaved changes for the banner
+        self.phase_count = int(phase_count) if int(phase_count) in self._VALID_PHASE_COUNTS else 0
+        self.dirty = False  # tracks unsaved changes for the banner
 
     @property
     def uses_phases(self) -> bool:
@@ -373,16 +394,16 @@ class PresetBuffer:
         if existing is None:
             self.zones.append(row)
         else:
-            existing.max_players      = row.max_players
-            existing.max_phase1       = row.max_phase1
-            existing.max_phase2       = row.max_phase2
-            existing.max_phase3       = row.max_phase3
-            existing.min_power_a      = row.min_power_a
-            existing.min_power_b      = row.min_power_b
-            existing.priority         = row.priority
-            existing.priority_phase1  = row.priority_phase1
-            existing.priority_phase2  = row.priority_phase2
-            existing.priority_phase3  = row.priority_phase3
+            existing.max_players = row.max_players
+            existing.max_phase1 = row.max_phase1
+            existing.max_phase2 = row.max_phase2
+            existing.max_phase3 = row.max_phase3
+            existing.min_power_a = row.min_power_a
+            existing.min_power_b = row.min_power_b
+            existing.priority = row.priority
+            existing.priority_phase1 = row.priority_phase1
+            existing.priority_phase2 = row.priority_phase2
+            existing.priority_phase3 = row.priority_phase3
         self.dirty = True
 
     def remove_zone(self, zone_name: str) -> bool:
@@ -414,6 +435,7 @@ def canonical_zones_for(event_type: str) -> list[str]:
     pre-#178 entries cleanly.
     """
     import storm
+
     if event_type == "DS":
         return list(storm.DS_ZONE_STRUCTURE)
     # Dedupe by display name, preserving insertion order (Stage 1 entries
@@ -442,9 +464,9 @@ def _legacy_cs_zone_translation() -> dict[str, str]:
     global _LEGACY_CS_ZONE_TRANSLATION
     if _LEGACY_CS_ZONE_TRANSLATION is None:
         import storm
+
         _LEGACY_CS_ZONE_TRANSLATION = {
-            key.lower(): display
-            for _, key, display in storm.CS_ZONE_STRUCTURE
+            key.lower(): display for _, key, display in storm.CS_ZONE_STRUCTURE
         }
     return _LEGACY_CS_ZONE_TRANSLATION
 
@@ -476,18 +498,37 @@ def seed_default_preset(name: str, event_type: str) -> PresetBuffer:
 # ── Sheet I/O ────────────────────────────────────────────────────────────────
 
 
-_DS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Stage 1", "Max Stage 2", "Max Stage 3",
-              "Min Power A", "Min Power B",
-              "Priority",
-              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
-              "Stage Count"]
-_CS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Stage 1", "Max Stage 2", "Max Stage 3",
-              "Min Power A", "Min Power B",
-              "Priority",
-              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
-              "Faction", "Stage Count"]
+_DS_HEADER = [
+    "Preset Name",
+    "Zone",
+    "Max Players",
+    "Max Stage 1",
+    "Max Stage 2",
+    "Max Stage 3",
+    "Min Power A",
+    "Min Power B",
+    "Priority",
+    "Priority Stage 1",
+    "Priority Stage 2",
+    "Priority Stage 3",
+    "Stage Count",
+]
+_CS_HEADER = [
+    "Preset Name",
+    "Zone",
+    "Max Players",
+    "Max Stage 1",
+    "Max Stage 2",
+    "Max Stage 3",
+    "Min Power A",
+    "Min Power B",
+    "Priority",
+    "Priority Stage 1",
+    "Priority Stage 2",
+    "Priority Stage 3",
+    "Faction",
+    "Stage Count",
+]
 
 # Truthy strings the legacy `Use Phases` column might carry. Used only
 # to read pre-3-phase preset data — new writes always use the
@@ -519,6 +560,7 @@ def _parse_uses_phases(raw: object) -> bool:
     count via `_parse_phase_count`."""
     return str(raw or "").strip().lower() in _TRUE_STRINGS
 
+
 # Canonical team size used by the editor's capacity gauge and the
 # Save-time over-capacity guard. DS and CS both run 30-slot teams in
 # the current game version; making this a single constant means
@@ -530,10 +572,9 @@ _TEAM_SIZE_HINT = 30
 
 def _strategies_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     cfg = config.get_structured_storm_config(guild_id, event_type)
-    return cfg.get("strategies_tab") or config.default_structured_tab(
-        event_type, "strategies_tab"
-    )
+    return cfg.get("strategies_tab") or config.default_structured_tab(event_type, "strategies_tab")
 
 
 def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
@@ -541,6 +582,7 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     Returns None if the guild has no Sheet configured (or `gspread`
     raised opening it — unconfigured / bad creds / deleted spreadsheet)."""
     import config
+
     # `config.get_spreadsheet` raises rather than returning None for
     # unconfigured guilds. Catch broadly so the strategy preset surface
     # doesn't die with an unhandled traceback on a guild that hasn't
@@ -550,7 +592,8 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] get_spreadsheet failed for guild=%s: %s",
-            guild_id, e,
+            guild_id,
+            e,
         )
         return None
     if sh is None:
@@ -560,9 +603,13 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
         return None
     header = _DS_HEADER if event_type == "DS" else _CS_HEADER
     import config
+
     return config.get_or_create_worksheet(
-        sh, tab_name, header_row=header,
-        rows=1000, cols=max(8, len(header)),
+        sh,
+        tab_name,
+        header_row=header,
+        rows=1000,
+        cols=max(8, len(header)),
     )
 
 
@@ -575,8 +622,13 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
     try:
         records = ws.get_all_records()
     except Exception as e:
-        logger.warning("[STORM STRATEGY] load_preset failed for guild=%s event=%s name=%s: %s",
-                       guild_id, event_type, name, e)
+        logger.warning(
+            "[STORM STRATEGY] load_preset failed for guild=%s event=%s name=%s: %s",
+            guild_id,
+            event_type,
+            name,
+            e,
+        )
         return None
     rows = [r for r in records if str(r.get("Preset Name", "")).strip().lower() == name.lower()]
     if not rows:
@@ -625,7 +677,9 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             # the new `Min Power A` column is absent so existing
             # alliance sheets keep their saved data.
             if r.get("Min Power A", "") != "":
-                min_a, _ = _parse_power_cell(r.get("Min Power A", ""), source=src + " col=Min Power A")
+                min_a, _ = _parse_power_cell(
+                    r.get("Min Power A", ""), source=src + " col=Min Power A"
+                )
             else:
                 min_a, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
             min_b, _ = _parse_power_cell(r.get("Min Power B", ""), source=src + " col=Min Power B")
@@ -656,20 +710,21 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 zones.append(zr)
             else:
                 existing.max_players = max(existing.max_players, zr.max_players)
-                existing.max_phase1  = max(existing.max_phase1,  zr.max_phase1)
-                existing.max_phase2  = max(existing.max_phase2,  zr.max_phase2)
-                existing.max_phase3  = max(existing.max_phase3,  zr.max_phase3)
+                existing.max_phase1 = max(existing.max_phase1, zr.max_phase1)
+                existing.max_phase2 = max(existing.max_phase2, zr.max_phase2)
+                existing.max_phase3 = max(existing.max_phase3, zr.max_phase3)
                 existing.min_power_a = max(existing.min_power_a, zr.min_power_a)
                 existing.min_power_b = max(existing.min_power_b, zr.min_power_b)
-                existing.priority         = max(existing.priority,         zr.priority)
-                existing.priority_phase1  = max(existing.priority_phase1,  zr.priority_phase1)
-                existing.priority_phase2  = max(existing.priority_phase2,  zr.priority_phase2)
-                existing.priority_phase3  = max(existing.priority_phase3,  zr.priority_phase3)
+                existing.priority = max(existing.priority, zr.priority)
+                existing.priority_phase1 = max(existing.priority_phase1, zr.priority_phase1)
+                existing.priority_phase2 = max(existing.priority_phase2, zr.priority_phase2)
+                existing.priority_phase3 = max(existing.priority_phase3, zr.priority_phase3)
             row_faction = str(r.get("Faction", "")).strip()
             if row_faction:
                 faction = row_faction
-    return PresetBuffer(name=name, event_type=event_type, zones=zones,
-                        faction=faction, phase_count=phase_count)
+    return PresetBuffer(
+        name=name, event_type=event_type, zones=zones, faction=faction, phase_count=phase_count
+    )
 
 
 def list_presets(guild_id: int, event_type: str) -> list[str]:
@@ -680,8 +735,12 @@ def list_presets(guild_id: int, event_type: str) -> list[str]:
     try:
         records = ws.get_all_records()
     except Exception as e:
-        logger.warning("[STORM STRATEGY] list_presets failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM STRATEGY] list_presets failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
         return []
     seen: dict[str, None] = {}
     for r in records:
@@ -704,8 +763,12 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     try:
         all_values = ws.get_all_values()
     except Exception as e:
-        logger.warning("[STORM STRATEGY] save_preset read-back failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM STRATEGY] save_preset read-back failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
         return False
 
     header = _DS_HEADER if event_type == "DS" else _CS_HEADER
@@ -734,17 +797,18 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         out: list[str] = []
         legacy_uses_phases = (
             _parse_uses_phases(row[old_header_idx["Use Phases"]])
-            if "Use Phases" in old_header_idx
-               and old_header_idx["Use Phases"] < len(row)
+            if "Use Phases" in old_header_idx and old_header_idx["Use Phases"] < len(row)
             else False
         )
         for col_name in header:
             if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
                 out.append("2" if legacy_uses_phases else "0")
                 continue
-            if (col_name == "Min Power A"
-                    and "Min Power A" not in old_header_idx
-                    and "Min Power" in old_header_idx):
+            if (
+                col_name == "Min Power A"
+                and "Min Power A" not in old_header_idx
+                and "Min Power" in old_header_idx
+            ):
                 legacy_idx = old_header_idx["Min Power"]
                 if 0 <= legacy_idx < len(row):
                     out.append(str(row[legacy_idx]))
@@ -769,31 +833,54 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     phase_count_cell = str(buf.phase_count)
     for z in buf.zones:
         if event_type == "DS":
-            kept.append([
-                buf.name, z.zone, str(z.max_players),
-                str(z.max_phase1), str(z.max_phase2), str(z.max_phase3),
-                str(z.min_power_a), str(z.min_power_b),
-                str(z.priority),
-                str(z.priority_phase1), str(z.priority_phase2), str(z.priority_phase3),
-                phase_count_cell,
-            ])
+            kept.append(
+                [
+                    buf.name,
+                    z.zone,
+                    str(z.max_players),
+                    str(z.max_phase1),
+                    str(z.max_phase2),
+                    str(z.max_phase3),
+                    str(z.min_power_a),
+                    str(z.min_power_b),
+                    str(z.priority),
+                    str(z.priority_phase1),
+                    str(z.priority_phase2),
+                    str(z.priority_phase3),
+                    phase_count_cell,
+                ]
+            )
         else:
-            kept.append([
-                buf.name, z.zone, str(z.max_players),
-                str(z.max_phase1), str(z.max_phase2), str(z.max_phase3),
-                str(z.min_power_a), str(z.min_power_b),
-                str(z.priority),
-                str(z.priority_phase1), str(z.priority_phase2), str(z.priority_phase3),
-                buf.faction,
-                phase_count_cell,
-            ])
+            kept.append(
+                [
+                    buf.name,
+                    z.zone,
+                    str(z.max_players),
+                    str(z.max_phase1),
+                    str(z.max_phase2),
+                    str(z.max_phase3),
+                    str(z.min_power_a),
+                    str(z.min_power_b),
+                    str(z.priority),
+                    str(z.priority_phase1),
+                    str(z.priority_phase2),
+                    str(z.priority_phase3),
+                    buf.faction,
+                    phase_count_cell,
+                ]
+            )
 
     try:
         ws.clear()
         ws.update("A1", kept, value_input_option="RAW")
     except Exception as e:
-        logger.warning("[STORM STRATEGY] save_preset write failed for guild=%s event=%s name=%s: %s",
-                       guild_id, event_type, buf.name, e)
+        logger.warning(
+            "[STORM STRATEGY] save_preset write failed for guild=%s event=%s name=%s: %s",
+            guild_id,
+            event_type,
+            buf.name,
+            e,
+        )
         return False
     buf.dirty = False
     return True
@@ -808,8 +895,12 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
     try:
         all_values = ws.get_all_values()
     except Exception as e:
-        logger.warning("[STORM STRATEGY] delete_preset read failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM STRATEGY] delete_preset read failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
         return False
 
     header = _DS_HEADER if event_type == "DS" else _CS_HEADER
@@ -828,8 +919,13 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
         ws.clear()
         ws.update("A1", kept, value_input_option="RAW")
     except Exception as e:
-        logger.warning("[STORM STRATEGY] delete_preset write failed for guild=%s event=%s name=%s: %s",
-                       guild_id, event_type, name, e)
+        logger.warning(
+            "[STORM STRATEGY] delete_preset write failed for guild=%s event=%s name=%s: %s",
+            guild_id,
+            event_type,
+            name,
+            e,
+        )
         return False
     return True
 
@@ -846,6 +942,7 @@ def _resolve_storm_teams(guild_id: int, event_type: str) -> str:
     #166."""
     try:
         import config
+
         saved = (config.get_storm_config(int(guild_id), event_type) or {}).get("teams") or "both"
     except Exception:
         return "both"
@@ -857,8 +954,9 @@ def _resolve_ds_teams(guild_id: int) -> str:
     return _resolve_storm_teams(guild_id, "DS")
 
 
-def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT,
-                        *, teams: str = "both") -> discord.Embed:
+def _build_editor_embed(
+    buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT, *, teams: str = "both"
+) -> discord.Embed:
     label = "Desert Storm" if buf.event_type == "DS" else "Canyon Storm"
     title = f"🛡️ Editing Preset: {buf.name}"
     desc_lines = [f"🗺️ Event: {label}"]
@@ -886,10 +984,13 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     if buf.zones:
         desc_lines.append("📋 **Zones:**")
         for z in buf.zones:
-            desc_lines.append(z.render_line(
-                buf.event_type, teams=teams,
-                phase_count=buf.phase_count,
-            ))
+            desc_lines.append(
+                z.render_line(
+                    buf.event_type,
+                    teams=teams,
+                    phase_count=buf.phase_count,
+                )
+            )
     else:
         desc_lines.append("*No zones in this preset yet.*")
     desc_lines.append("")
@@ -947,7 +1048,8 @@ class _ZoneEditModal(discord.ui.Modal):
             label="Max Players",
             placeholder="e.g. 4",
             default=str(existing.max_players or ""),
-            required=False, max_length=4,
+            required=False,
+            max_length=4,
         )
         self.add_item(self.max_input)
 
@@ -955,9 +1057,7 @@ class _ZoneEditModal(discord.ui.Modal):
         # asks for the relevant floors. The parent view snapshotted
         # this at open time; reading from there keeps modal + embed
         # in sync and avoids a second config read per modal open.
-        self._teams = (
-            getattr(view, "teams", "both")
-        )
+        self._teams = getattr(view, "teams", "both")
 
         # Two-team alliances (teams=both) show per-team minimums; the
         # single-team variants (teams=A or teams=B) show one. Applies
@@ -970,14 +1070,16 @@ class _ZoneEditModal(discord.ui.Modal):
                 label="Min Power Team A",
                 placeholder="e.g. 80M",
                 default=format_power(existing.min_power_a) if existing.min_power_a else "",
-                required=False, max_length=12,
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_a_input)
             self.power_b_input = discord.ui.TextInput(
                 label="Min Power Team B",
                 placeholder="e.g. 60M",
                 default=format_power(existing.min_power_b) if existing.min_power_b else "",
-                required=False, max_length=12,
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_b_input)
         elif self._teams == "A":
@@ -985,7 +1087,8 @@ class _ZoneEditModal(discord.ui.Modal):
                 label="Min Power Team A",
                 placeholder="e.g. 80M",
                 default=format_power(existing.min_power_a) if existing.min_power_a else "",
-                required=False, max_length=12,
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_a_input)
         else:  # teams == "B"
@@ -993,7 +1096,8 @@ class _ZoneEditModal(discord.ui.Modal):
                 label="Min Power Team B",
                 placeholder="e.g. 60M",
                 default=format_power(existing.min_power_b) if existing.min_power_b else "",
-                required=False, max_length=12,
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_b_input)
             self.power_a_input = None
@@ -1003,7 +1107,8 @@ class _ZoneEditModal(discord.ui.Modal):
             label="Priority (1 = highest; ties OK)",
             placeholder="e.g. 1; same number across zones is fine",
             default=str(existing.priority or ""),
-            required=False, max_length=3,
+            required=False,
+            max_length=3,
         )
         self.add_item(self.priority_input)
 
@@ -1021,8 +1126,7 @@ class _ZoneEditModal(discord.ui.Modal):
             max_players = int((self.max_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Max Players must be a number. Got `{self.max_input.value}`. "
-                f"Try again.",
+                f"⚠️ Max Players must be a number. Got `{self.max_input.value}`. Try again.",
                 ephemeral=True,
             )
             return
@@ -1056,22 +1160,26 @@ class _ZoneEditModal(discord.ui.Modal):
             priority = int((self.priority_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Priority must be a number. Got `{self.priority_input.value}`. "
-                f"Try again.",
+                f"⚠️ Priority must be a number. Got `{self.priority_input.value}`. Try again.",
                 ephemeral=True,
             )
             return
 
-        self._view.buf.upsert_zone(ZoneRow(
-            zone=self._zone_name,
-            max_players=max_players,
-            max_phase1=max_phase1, max_phase2=max_phase2, max_phase3=max_phase3,
-            min_power_a=min_a, min_power_b=min_b,
-            priority=priority,
-            priority_phase1=priority_phase1,
-            priority_phase2=priority_phase2,
-            priority_phase3=priority_phase3,
-        ))
+        self._view.buf.upsert_zone(
+            ZoneRow(
+                zone=self._zone_name,
+                max_players=max_players,
+                max_phase1=max_phase1,
+                max_phase2=max_phase2,
+                max_phase3=max_phase3,
+                min_power_a=min_a,
+                min_power_b=min_b,
+                priority=priority,
+                priority_phase1=priority_phase1,
+                priority_phase2=priority_phase2,
+                priority_phase3=priority_phase3,
+            )
+        )
         siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
             interaction,
@@ -1090,8 +1198,11 @@ class _ZoneEditModal(discord.ui.Modal):
                     values=ZoneRow(
                         zone=self._zone_name,
                         max_players=max_players,
-                        max_phase1=max_phase1, max_phase2=max_phase2, max_phase3=max_phase3,
-                        min_power_a=min_a, min_power_b=min_b,
+                        max_phase1=max_phase1,
+                        max_phase2=max_phase2,
+                        max_phase3=max_phase3,
+                        min_power_a=min_a,
+                        min_power_b=min_b,
                         priority=priority,
                         priority_phase1=priority_phase1,
                         priority_phase2=priority_phase2,
@@ -1111,7 +1222,9 @@ class _ZoneEditModal(discord.ui.Modal):
                 logger.warning(
                     "[STORM STRATEGY] apply-to-similar follow-up couldn't be "
                     "posted for zone=%s in preset=%s: %s",
-                    self._zone_name, self._view.buf.name, e,
+                    self._zone_name,
+                    self._view.buf.name,
+                    e,
                 )
 
 
@@ -1183,14 +1296,16 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             label="Max Stage 1",
             placeholder="e.g. 4 (leave 0 to skip Stage 1 at this zone)",
             default=str(pending["max_phase1"] or ""),
-            required=False, max_length=4,
+            required=False,
+            max_length=4,
         )
         self.add_item(self.max_phase1_input)
         self.max_phase2_input = discord.ui.TextInput(
             label="Max Stage 2",
             placeholder="e.g. 2 (leave 0 to skip Stage 2 at this zone)",
             default=str(pending["max_phase2"] or ""),
-            required=False, max_length=4,
+            required=False,
+            max_length=4,
         )
         self.add_item(self.max_phase2_input)
         if phase_count >= 3:
@@ -1198,7 +1313,8 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 label="Max Stage 3",
                 placeholder="e.g. 3 (leave 0 to skip Stage 3 at this zone)",
                 default=str(pending["max_phase3"] or ""),
-                required=False, max_length=4,
+                required=False,
+                max_length=4,
             )
             self.add_item(self.max_phase3_input)
         else:
@@ -1210,18 +1326,18 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             self.power_a_input = discord.ui.TextInput(
                 label="Min Power Team A",
                 placeholder="e.g. 80M",
-                default=format_power(pending["min_power_a"])
-                        if pending["min_power_a"] else "",
-                required=False, max_length=12,
+                default=format_power(pending["min_power_a"]) if pending["min_power_a"] else "",
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_a_input)
         if self._teams in ("both", "B"):
             self.power_b_input = discord.ui.TextInput(
                 label="Min Power Team B",
                 placeholder="e.g. 60M",
-                default=format_power(pending["min_power_b"])
-                        if pending["min_power_b"] else "",
-                required=False, max_length=12,
+                default=format_power(pending["min_power_b"]) if pending["min_power_b"] else "",
+                required=False,
+                max_length=12,
             )
             self.add_item(self.power_b_input)
 
@@ -1268,7 +1384,8 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             pending["min_power_b"] = val
 
         view = _ZoneWizardNextView(
-            self._view, self._zone_name,
+            self._view,
+            self._zone_name,
             next_page="priority",
             label="Next → Priority Per Stage",
         )
@@ -1277,11 +1394,10 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 f"✅ Capacities + minimums recorded for **{self._zone_name}**. "
                 f"Click **Next** to set the per-stage auto-fill priorities."
             ),
-            view=view, ephemeral=True,
+            view=view,
+            ephemeral=True,
         )
         view.message = await interaction.original_response()
-
-
 
 
 class _ZonePhasePriorityModal(discord.ui.Modal):
@@ -1300,14 +1416,16 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
             label="Priority Stage 1 (1 = highest)",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase1"] or ""),
-            required=False, max_length=3,
+            required=False,
+            max_length=3,
         )
         self.add_item(self.prio_p1_input)
         self.prio_p2_input = discord.ui.TextInput(
             label="Priority Stage 2",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase2"] or ""),
-            required=False, max_length=3,
+            required=False,
+            max_length=3,
         )
         self.add_item(self.prio_p2_input)
         if phase_count >= 3:
@@ -1315,7 +1433,8 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 label="Priority Stage 3",
                 placeholder="leave blank for no priority",
                 default=str(pending["priority_phase3"] or ""),
-                required=False, max_length=3,
+                required=False,
+                max_length=3,
             )
             self.add_item(self.prio_p3_input)
         else:
@@ -1342,21 +1461,23 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
 
         # Finalise: write the accumulated values to the PresetBuffer.
         existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
-        self._view.buf.upsert_zone(ZoneRow(
-            zone=self._zone_name,
-            # max_players + flat priority preserved from the existing
-            # row so toggling back to flat doesn't lose those values.
-            max_players=existing.max_players,
-            priority=existing.priority,
-            max_phase1=pending["max_phase1"],
-            max_phase2=pending["max_phase2"],
-            max_phase3=pending["max_phase3"],
-            min_power_a=pending["min_power_a"],
-            min_power_b=pending["min_power_b"],
-            priority_phase1=pending["priority_phase1"],
-            priority_phase2=pending["priority_phase2"],
-            priority_phase3=pending["priority_phase3"],
-        ))
+        self._view.buf.upsert_zone(
+            ZoneRow(
+                zone=self._zone_name,
+                # max_players + flat priority preserved from the existing
+                # row so toggling back to flat doesn't lose those values.
+                max_players=existing.max_players,
+                priority=existing.priority,
+                max_phase1=pending["max_phase1"],
+                max_phase2=pending["max_phase2"],
+                max_phase3=pending["max_phase3"],
+                min_power_a=pending["min_power_a"],
+                min_power_b=pending["min_power_b"],
+                priority_phase1=pending["priority_phase1"],
+                priority_phase2=pending["priority_phase2"],
+                priority_phase3=pending["priority_phase3"],
+            )
+        )
         _clear_pending_edit(self._view, self._zone_name)
         siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
@@ -1390,13 +1511,16 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                         f"{', '.join(siblings)}. Would you like to apply the "
                         f"same settings to these as well?"
                     ),
-                    view=apply_view, ephemeral=True,
+                    view=apply_view,
+                    ephemeral=True,
                 )
             except discord.HTTPException as e:
                 logger.warning(
                     "[STORM STRATEGY] apply-to-similar follow-up couldn't be "
                     "posted for zone=%s in preset=%s: %s",
-                    self._zone_name, self._view.buf.name, e,
+                    self._zone_name,
+                    self._view.buf.name,
+                    e,
                 )
 
 
@@ -1405,8 +1529,9 @@ class _ZoneWizardNextView(discord.ui.View):
     next page's modal so the multi-step flow doesn't need an outer
     coordinator object."""
 
-    def __init__(self, editor_view: "_PresetEditorView",
-                 zone_name: str, *, next_page: str, label: str):
+    def __init__(
+        self, editor_view: "_PresetEditorView", zone_name: str, *, next_page: str, label: str
+    ):
         super().__init__(timeout=300)
         self._editor = editor_view
         self._zone_name = zone_name
@@ -1418,14 +1543,12 @@ class _ZoneWizardNextView(discord.ui.View):
         async def _go(inter: discord.Interaction):
             if inter.user.id != editor_view.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can advance the wizard.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             if next_page == "priority":
-                await inter.response.send_modal(
-                    _ZonePhasePriorityModal(editor_view, zone_name)
-                )
+                await inter.response.send_modal(_ZonePhasePriorityModal(editor_view, zone_name))
             else:
                 await inter.response.send_message(
                     f"⚠️ Unknown wizard step `{next_page}`.",
@@ -1455,8 +1578,12 @@ class _ApplyToSimilarView(discord.ui.View):
     and the embed refreshes."""
 
     def __init__(
-        self, *, editor_view: "_PresetEditorView", source_zone: str,
-        sibling_names: list[str], values: "ZoneRow",
+        self,
+        *,
+        editor_view: "_PresetEditorView",
+        source_zone: str,
+        sibling_names: list[str],
+        values: "ZoneRow",
     ):
         super().__init__(timeout=300)
         self._editor = editor_view
@@ -1470,7 +1597,8 @@ class _ApplyToSimilarView(discord.ui.View):
 
         select = discord.ui.Select(
             placeholder="Select zones",
-            min_values=0, max_values=min(len(sibling_names), 25),
+            min_values=0,
+            max_values=min(len(sibling_names), 25),
             options=[
                 discord.SelectOption(label=name[:100], value=name[:100])
                 for name in sibling_names[:25]
@@ -1480,7 +1608,7 @@ class _ApplyToSimilarView(discord.ui.View):
         async def _on_select(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened the editor can pick siblings.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1496,38 +1624,40 @@ class _ApplyToSimilarView(discord.ui.View):
         self.add_item(select)
 
         apply_btn = discord.ui.Button(
-            label="Apply to selected", style=discord.ButtonStyle.success,
+            label="Apply to selected",
+            style=discord.ButtonStyle.success,
         )
 
         async def _apply(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can apply changes.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             if not self._selected:
                 await inter.response.send_message(
-                    "⚠️ Pick at least one sibling from the dropdown first, "
-                    "or use Skip to dismiss.",
+                    "⚠️ Pick at least one sibling from the dropdown first, or use Skip to dismiss.",
                     ephemeral=True,
                 )
                 return
             applied: list[str] = []
             for sibling in self._selected:
-                self._editor.buf.upsert_zone(ZoneRow(
-                    zone=sibling,
-                    max_players=self._values.max_players,
-                    max_phase1=self._values.max_phase1,
-                    max_phase2=self._values.max_phase2,
-                    max_phase3=self._values.max_phase3,
-                    min_power_a=self._values.min_power_a,
-                    min_power_b=self._values.min_power_b,
-                    priority=self._values.priority,
-                    priority_phase1=self._values.priority_phase1,
-                    priority_phase2=self._values.priority_phase2,
-                    priority_phase3=self._values.priority_phase3,
-                ))
+                self._editor.buf.upsert_zone(
+                    ZoneRow(
+                        zone=sibling,
+                        max_players=self._values.max_players,
+                        max_phase1=self._values.max_phase1,
+                        max_phase2=self._values.max_phase2,
+                        max_phase3=self._values.max_phase3,
+                        min_power_a=self._values.min_power_a,
+                        min_power_b=self._values.min_power_b,
+                        priority=self._values.priority,
+                        priority_phase1=self._values.priority_phase1,
+                        priority_phase2=self._values.priority_phase2,
+                        priority_phase3=self._values.priority_phase3,
+                    )
+                )
                 applied.append(sibling)
             for item in self.children:
                 item.disabled = True
@@ -1558,13 +1688,14 @@ class _ApplyToSimilarView(discord.ui.View):
         self.add_item(apply_btn)
 
         skip_btn = discord.ui.Button(
-            label="Skip", style=discord.ButtonStyle.secondary,
+            label="Skip",
+            style=discord.ButtonStyle.secondary,
         )
 
         async def _skip(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can dismiss this prompt.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1601,7 +1732,8 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
         self.new_name = discord.ui.TextInput(
             label="New preset name",
             default=view.buf.name,
-            required=True, max_length=60,
+            required=True,
+            max_length=60,
         )
         self.add_item(self.new_name)
 
@@ -1616,12 +1748,11 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
         # Uniqueness check excluding the current name. gspread off the
         # event loop — `list_presets` reads the whole presets tab.
         all_presets = await asyncio.to_thread(
-            list_presets, self._view.guild_id, self._view.buf.event_type,
+            list_presets,
+            self._view.guild_id,
+            self._view.buf.event_type,
         )
-        existing = [
-            p.lower() for p in all_presets
-            if p.lower() != self._view.buf.name.lower()
-        ]
+        existing = [p.lower() for p in all_presets if p.lower() != self._view.buf.name.lower()]
         if new.lower() in existing:
             await interaction.response.send_message(
                 f"⚠️ A preset named **{new}** already exists. Pick a different name.",
@@ -1640,8 +1771,8 @@ class _PresetEditorView(discord.ui.View):
     def __init__(self, guild_id: int, user_id: int, buf: PresetBuffer):
         super().__init__(timeout=900)  # 15 min — Discord's interaction token max
         self.guild_id = guild_id
-        self.user_id  = user_id
-        self.buf      = buf
+        self.user_id = user_id
+        self.buf = buf
         self.cancelled = False
         self.message: discord.Message | None = None
         # Snapshot the alliance's configured-teams choice (#148 +
@@ -1659,7 +1790,8 @@ class _PresetEditorView(discord.ui.View):
         if self.buf.zones:
             zone_select = discord.ui.Select(
                 placeholder="Edit a zone…",
-                min_values=1, max_values=1,
+                min_values=1,
+                max_values=1,
                 options=[
                     discord.SelectOption(label=z.zone[:100], value=z.zone[:100])
                     for z in self.buf.zones[:25]
@@ -1669,7 +1801,7 @@ class _PresetEditorView(discord.ui.View):
             async def _on_select(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the editor's owner can change this preset.",
+                        DENY_NOT_OWNER,
                         ephemeral=True,
                     )
                     return
@@ -1683,9 +1815,7 @@ class _PresetEditorView(discord.ui.View):
                         _ZonePhaseCapacityAndFloorsModal(self, zone_name)
                     )
                 else:
-                    await inter.response.send_modal(
-                        _ZoneEditModal(self, zone_name)
-                    )
+                    await inter.response.send_modal(_ZoneEditModal(self, zone_name))
 
             zone_select.callback = _on_select
             self.add_item(zone_select)
@@ -1697,7 +1827,8 @@ class _PresetEditorView(discord.ui.View):
         # so an officer can move between modes without losing data.
         phase_mode_select = discord.ui.Select(
             placeholder="🔀 Stage mode",
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
             options=[
                 discord.SelectOption(
                     label="Flat (no stages)",
@@ -1723,7 +1854,7 @@ class _PresetEditorView(discord.ui.View):
         async def _on_phase_mode(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can change this preset.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1756,18 +1887,13 @@ class _PresetEditorView(discord.ui.View):
                 if new_count >= 2 and int(z.max_phase2 or 0) == 0:
                     z.max_phase2 = int(z.max_phase1 or z.max_players or 0)
                     if int(z.priority_phase2 or 0) == 0:
-                        z.priority_phase2 = int(
-                            z.priority_phase1 or z.priority or 0
-                        )
+                        z.priority_phase2 = int(z.priority_phase1 or z.priority or 0)
                     seeded += 1
                 if new_count >= 3 and int(z.max_phase3 or 0) == 0:
-                    z.max_phase3 = int(
-                        z.max_phase2 or z.max_phase1 or z.max_players or 0
-                    )
+                    z.max_phase3 = int(z.max_phase2 or z.max_phase1 or z.max_players or 0)
                     if int(z.priority_phase3 or 0) == 0:
                         z.priority_phase3 = int(
-                            z.priority_phase2 or z.priority_phase1
-                            or z.priority or 0
+                            z.priority_phase2 or z.priority_phase1 or z.priority or 0
                         )
                     seeded += 1
             self.buf.phase_count = new_count
@@ -1776,14 +1902,13 @@ class _PresetEditorView(discord.ui.View):
             seeded_note = (
                 f" Seeded {seeded} per-zone capacity/priority value(s) "
                 f"from prior values; edit any zone to override."
-                if seeded and old_count < new_count else ""
+                if seeded and old_count < new_count
+                else ""
             )
             # Mode-toggle copy reframes the persistence contract from
             # "flip back any time" (vague) to "re-select the same mode"
             # (concrete) per #174 / Decision #13's polish notes.
-            restore_label = (
-                "Flat" if old_count == 0 else f"{old_count}-stage"
-            )
+            restore_label = "Flat" if old_count == 0 else f"{old_count}-stage"
             await self.refresh(
                 inter,
                 message=(
@@ -1802,22 +1927,27 @@ class _PresetEditorView(discord.ui.View):
         # power / priority for the canonical zones only; they don't
         # get to invent new ones.
         rename_btn = discord.ui.Button(label="✏️ Rename preset", style=discord.ButtonStyle.secondary)
-        save_btn  = discord.ui.Button(
+        save_btn = discord.ui.Button(
             label="💾 Save preset",
             style=discord.ButtonStyle.success,
             disabled=not self.buf.dirty,
         )
-        cancel_btn = discord.ui.Button(label="🔙 Abandon this preset", style=discord.ButtonStyle.danger)
+        cancel_btn = discord.ui.Button(
+            label="🔙 Abandon this preset", style=discord.ButtonStyle.danger
+        )
 
         async def _rename(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can change this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+                return
             await inter.response.send_modal(_RenameModal(self))
+
         rename_btn.callback = _rename
 
         async def _save(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can save this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+                return
             # Capacity over the team-size hint is normal — alliances
             # build in flex room. The editor embed already shows the
             # capacity vs. 30 line so officers can see at a glance
@@ -1825,7 +1955,10 @@ class _PresetEditorView(discord.ui.View):
             # block on it.
             await inter.response.defer()
             ok = await asyncio.to_thread(
-                save_preset, self.guild_id, self.buf.event_type, self.buf,
+                save_preset,
+                self.guild_id,
+                self.buf.event_type,
+                self.buf,
             )
             if ok:
                 for item in self.children:
@@ -1853,11 +1986,13 @@ class _PresetEditorView(discord.ui.View):
                     "and that the bot has edit access. See logs for details.",
                     ephemeral=True,
                 )
+
         save_btn.callback = _save
 
         async def _cancel(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can abandon this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+                return
             self.cancelled = True
             for item in self.children:
                 item.disabled = True
@@ -1870,6 +2005,7 @@ class _PresetEditorView(discord.ui.View):
             except discord.HTTPException:
                 pass
             self.stop()
+
         cancel_btn.callback = _cancel
 
         self.add_item(phase_mode_select)
@@ -1898,6 +2034,7 @@ class _PresetEditorView(discord.ui.View):
         'Interaction failed' after timeout."""
         from wizard_registry import expire_view_message
         from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS
+
         hint = f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
         await expire_view_message(self.message, command_hint=hint)
 
@@ -1909,6 +2046,7 @@ async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
     """Return True iff the caller is admin/leadership. Sends the standard
     denial ephemeral on the False branch."""
     from storm_permissions import is_leader_or_admin, deny_non_leader
+
     if is_leader_or_admin(interaction):
         return True
     await deny_non_leader(interaction)
@@ -1926,7 +2064,9 @@ async def _open_editor(interaction: discord.Interaction, event_type: str, buf: P
 
 
 async def open_editor_followup(
-    interaction: discord.Interaction, event_type: str, buf: PresetBuffer,
+    interaction: discord.Interaction,
+    event_type: str,
+    buf: PresetBuffer,
 ):
     """Open the preset editor via the interaction's followup (rather than
     the initial response). Used by the setup wizard's `_offer_inline_create`
@@ -1965,15 +2105,18 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
         if not await _deny_if_not_leader(interaction):
             return
         name = (self.preset_name.value or "").strip()
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         if not name:
             await interaction.response.send_message(
-                "⚠️ Pick a preset name (e.g. `Standard Desert`).", ephemeral=True,
+                "⚠️ Pick a preset name (e.g. `Standard Desert`).",
+                ephemeral=True,
             )
             return
         existing = [
-            p.lower() for p in await asyncio.to_thread(
-                list_presets, interaction.guild_id, self.event_type,
+            p.lower()
+            for p in await asyncio.to_thread(
+                list_presets,
+                interaction.guild_id,
+                self.event_type,
             )
         ]
         if name.lower() in existing:
@@ -2003,7 +2146,7 @@ class _ConfirmDeleteView(discord.ui.View):
     async def yes(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can confirm.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -2017,7 +2160,7 @@ class _ConfirmDeleteView(discord.ui.View):
     async def no(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can cancel.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -2056,11 +2199,15 @@ async def _run_delete_with_confirm(
     )
     if via_followup:
         view.message = await interaction.followup.send(
-            prompt, view=view, ephemeral=True,
+            prompt,
+            view=view,
+            ephemeral=True,
         )
     else:
         await interaction.response.send_message(
-            prompt, view=view, ephemeral=True,
+            prompt,
+            view=view,
+            ephemeral=True,
         )
         try:
             view.message = await interaction.original_response()
@@ -2071,11 +2218,15 @@ async def _run_delete_with_confirm(
         await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)
         return
     ok = await asyncio.to_thread(
-        delete_preset, interaction.guild_id, event_type, name,
+        delete_preset,
+        interaction.guild_id,
+        event_type,
+        name,
     )
     if ok:
         await interaction.followup.send(
-            f"🗑️ Deleted preset **{name}**.", ephemeral=False,
+            f"🗑️ Deleted preset **{name}**.",
+            ephemeral=False,
         )
     else:
         await interaction.followup.send(
@@ -2085,7 +2236,8 @@ async def _run_delete_with_confirm(
 
 
 async def open_strategy_list(
-    interaction: discord.Interaction, event_type: str,
+    interaction: discord.Interaction,
+    event_type: str,
 ) -> None:
     """Public entry point for the strategy-preset list view (#187 hub
     + the legacy `/<event> strategy list` subcommand both call this).
@@ -2094,13 +2246,14 @@ async def open_strategy_list(
     if not await _deny_if_not_leader(interaction):
         return
     names = await asyncio.to_thread(
-        list_presets, interaction.guild_id, event_type,
+        list_presets,
+        interaction.guild_id,
+        event_type,
     )
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     if not names:
         description = (
-            f"*No {label} strategy presets saved yet.* Click **➕ Create** "
-            f"below to make one."
+            f"*No {label} strategy presets saved yet.* Click **➕ Create** below to make one."
         )
     else:
         description = "\n".join(f"• **{n}**" for n in names)
@@ -2146,7 +2299,9 @@ class _StrategyListView(discord.ui.View):
         self.clear_items()
 
         create_btn = discord.ui.Button(
-            label="➕ Create", style=discord.ButtonStyle.primary, row=0,
+            label="➕ Create",
+            style=discord.ButtonStyle.primary,
+            row=0,
         )
 
         async def _on_create(inter: discord.Interaction):
@@ -2158,7 +2313,9 @@ class _StrategyListView(discord.ui.View):
         self.add_item(create_btn)
 
         edit_btn = discord.ui.Button(
-            label="✏️ Edit", style=discord.ButtonStyle.secondary, row=0,
+            label="✏️ Edit",
+            style=discord.ButtonStyle.secondary,
+            row=0,
             disabled=not self.names,
         )
 
@@ -2173,7 +2330,8 @@ class _StrategyListView(discord.ui.View):
             )
             await inter.response.send_message(
                 "✏️ Pick a preset to edit." + picker.overflow_notice,
-                view=picker, ephemeral=True,
+                view=picker,
+                ephemeral=True,
             )
             try:
                 picker.message = await inter.original_response()
@@ -2184,7 +2342,9 @@ class _StrategyListView(discord.ui.View):
         self.add_item(edit_btn)
 
         delete_btn = discord.ui.Button(
-            label="🗑️ Delete", style=discord.ButtonStyle.danger, row=0,
+            label="🗑️ Delete",
+            style=discord.ButtonStyle.danger,
+            row=0,
             disabled=not self.names,
         )
 
@@ -2199,7 +2359,8 @@ class _StrategyListView(discord.ui.View):
             )
             await inter.response.send_message(
                 "🗑️ Pick a preset to delete." + picker.overflow_notice,
-                view=picker, ephemeral=True,
+                view=picker,
+                ephemeral=True,
             )
             try:
                 picker.message = await inter.original_response()
@@ -2212,7 +2373,7 @@ class _StrategyListView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who ran the command can use these buttons.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2252,7 +2413,8 @@ class _PresetPickerView(discord.ui.View):
         self.message: discord.Message | None = None
         self.total_count = len(names)
         self.truncated_count = max(
-            0, self.total_count - _PRESET_PICKER_MAX_OPTIONS,
+            0,
+            self.total_count - _PRESET_PICKER_MAX_OPTIONS,
         )
         self._build_components(names)
 
@@ -2280,18 +2442,19 @@ class _PresetPickerView(discord.ui.View):
     def _build_components(self, names: list[str]):
         sorted_names = sorted(names, key=str.lower)
         capped = sorted_names[:_PRESET_PICKER_MAX_OPTIONS]
-        options = [
-            discord.SelectOption(label=n[:100], value=n[:100]) for n in capped
-        ]
+        options = [discord.SelectOption(label=n[:100], value=n[:100]) for n in capped]
         sel = discord.ui.Select(
             placeholder=f"Pick a preset to {self.action}…",
-            min_values=1, max_values=1, options=options,
+            min_values=1,
+            max_values=1,
+            options=options,
         )
         sel.callback = self._make_pick_callback(sel)
         self.add_item(sel)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
         )
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
@@ -2300,7 +2463,7 @@ class _PresetPickerView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who ran the command can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -2314,7 +2477,10 @@ class _PresetPickerView(discord.ui.View):
                 pass
             if self.action == "edit":
                 buf = await asyncio.to_thread(
-                    load_preset, inter.guild_id, self.event_type, name,
+                    load_preset,
+                    inter.guild_id,
+                    self.event_type,
+                    name,
                 )
                 if buf is None:
                     await inter.followup.send(
@@ -2327,14 +2493,18 @@ class _PresetPickerView(discord.ui.View):
                 await open_editor_followup(inter, self.event_type, buf)
             elif self.action == "delete":
                 await _run_delete_with_confirm(
-                    inter, self.event_type, name, via_followup=True,
+                    inter,
+                    self.event_type,
+                    name,
+                    via_followup=True,
                 )
+
         return _cb
 
     async def _on_cancel(self, inter: discord.Interaction):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who ran the command can cancel.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return

@@ -16,6 +16,7 @@ Safe to invoke manually too:
 Counts displayed chars only — markdown link URLs strip to their visible
 text (`[#34](https://...)` counts as `#34`, not the full URL).
 """
+
 from __future__ import annotations
 
 import re
@@ -50,14 +51,19 @@ def _baseline_lines(path: Path) -> set[str]:
         # root. The hook passes absolute Windows paths which git rejects
         # with "exists on disk, but not in 'HEAD'", so resolve against
         # the repo toplevel before invoking show.
-        toplevel = Path(subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, check=True, text=True,
-        ).stdout.strip()).resolve()
+        toplevel = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout.strip()
+        ).resolve()
         rel = path.resolve().relative_to(toplevel).as_posix()
         result = subprocess.run(
             ["git", "show", f"HEAD:{rel}"],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
         return set(result.stdout.decode("utf-8", errors="replace").splitlines())
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
@@ -71,9 +77,7 @@ def main(path: Path) -> int:
     baseline = _baseline_lines(path)
     violations: list[tuple[int, int, str]] = []
 
-    for line_no, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         # Top-level bullets only — the slim rule applies to changelog
         # entries, not to nested sub-bullets or prose.
         if not line.startswith("- "):
@@ -105,7 +109,9 @@ def main(path: Path) -> int:
     print("", file=sys.stderr)
     print("  - Rationale (the WHY) goes in the commit message or PR description.", file=sys.stderr)
     print("  - Pattern to copy: 1.2.0 / 1.3.0 in CHANGELOG.md (post-slim).", file=sys.stderr)
-    print("  - Memory note: feedback_changelog_brevity.md (4+ corrections so far).", file=sys.stderr)
+    print(
+        "  - Memory note: feedback_changelog_brevity.md (4+ corrections so far).", file=sys.stderr
+    )
 
     # Exit code 2 is the Claude Code hook convention for "block + send
     # stderr back to the model as feedback".
@@ -115,26 +121,26 @@ def main(path: Path) -> int:
 def _resolve_target() -> Path | None:
     """Pick the CHANGELOG path based on how this script was invoked.
 
-      * Explicit CLI arg → use it (manual invocation, tests).
-      * Stdin is a pipe (hook context) → parse the Claude Code tool
-        payload JSON and pull out `tool_input.file_path`. Return None
-        when the edit wasn't to `CHANGELOG.md` so the hook silently
-        skips non-changelog edits.
-      * Otherwise → default to `./CHANGELOG.md`.
+    * Explicit CLI arg → use it (manual invocation, tests).
+    * Stdin is a pipe (hook context) → parse the Claude Code tool
+      payload JSON and pull out `tool_input.file_path`. Return None
+      when the edit wasn't to `CHANGELOG.md` so the hook silently
+      skips non-changelog edits.
+    * Otherwise → default to `./CHANGELOG.md`.
     """
     if len(sys.argv) > 1:
         return Path(sys.argv[1])
 
     if not sys.stdin.isatty():
         import json
+
         try:
             data = json.load(sys.stdin)
         except (json.JSONDecodeError, ValueError):
             return None
-        file_path = (
-            (data.get("tool_input") or {}).get("file_path")
-            or (data.get("tool_response") or {}).get("filePath")
-        )
+        file_path = (data.get("tool_input") or {}).get("file_path") or (
+            data.get("tool_response") or {}
+        ).get("filePath")
         if not file_path or Path(file_path).name != "CHANGELOG.md":
             return None
         return Path(file_path)

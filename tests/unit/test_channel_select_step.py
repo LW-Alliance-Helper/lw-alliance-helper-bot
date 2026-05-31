@@ -40,23 +40,30 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _make_thread(name: str, parent_name: str, parent_id: int, *,
-                 archived: bool = False, locked: bool = False,
-                 thread_id: int = None) -> MagicMock:
+
+def _make_thread(
+    name: str,
+    parent_name: str,
+    parent_id: int,
+    *,
+    archived: bool = False,
+    locked: bool = False,
+    thread_id: int = None,
+) -> MagicMock:
     """Build a Thread-like mock with the attributes ChannelSelectStep
     inspects: name, archived, locked, parent (with .name), parent_id,
     id, and a permissions_for that returns a perm allowing thread post.
     """
     thread = MagicMock(spec=discord.Thread)
-    thread.id        = thread_id or hash(name) & 0x7FFFFFFF
-    thread.name      = name
-    thread.archived  = archived
-    thread.locked    = locked
+    thread.id = thread_id or hash(name) & 0x7FFFFFFF
+    thread.name = name
+    thread.archived = archived
+    thread.locked = locked
     thread.parent_id = parent_id
     parent = MagicMock()
-    parent.name      = parent_name
-    parent.id        = parent_id
-    thread.parent    = parent
+    parent.name = parent_name
+    parent.id = parent_id
+    thread.parent = parent
     perms = MagicMock()
     perms.send_messages_in_threads = True
     thread.permissions_for = MagicMock(return_value=perms)
@@ -71,21 +78,21 @@ def _make_guild(
     """Build a Guild-like mock with .threads, .me, .id, and lookup
     methods (get_channel / get_thread) for the Keep-current path."""
     guild = MagicMock(spec=discord.Guild)
-    guild.id      = guild_id
+    guild.id = guild_id
     guild.threads = threads
-    guild.me      = MagicMock()
+    guild.me = MagicMock()
 
     channels_by_id = {c.id: c for c in (channels or [])}
-    threads_by_id  = {t.id: t for t in threads}
+    threads_by_id = {t.id: t for t in threads}
     guild.get_channel = lambda i: channels_by_id.get(i)
-    guild.get_thread  = lambda i: threads_by_id.get(i)
+    guild.get_thread = lambda i: threads_by_id.get(i)
     return guild
 
 
 def _make_channel(name: str, channel_id: int) -> MagicMock:
     """Build a TextChannel-like mock for Keep-current resolution."""
     ch = MagicMock(spec=discord.TextChannel)
-    ch.id   = channel_id
+    ch.id = channel_id
     ch.name = name
     return ch
 
@@ -112,32 +119,37 @@ def _placeholders(view) -> list[str]:
 
 # ── Initial-state (button choice) tests ───────────────────────────────────────
 
+
 class TestInitialButtonChoice:
     """When include_threads=True AND a guild is passed AND there's at
     least one pickable thread, the view starts with two primary buttons."""
 
     def test_initial_view_has_two_buttons_and_no_selects(self):
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
 
         labels = _labels(view)
         assert "📢 Channel" in labels
         assert "🧵 Thread" in labels
         # No selects yet — buttons only.
-        assert all(not isinstance(c, (discord.ui.ChannelSelect, discord.ui.Select))
-                   for c in view.children)
+        assert all(
+            not isinstance(c, (discord.ui.ChannelSelect, discord.ui.Select)) for c in view.children
+        )
 
     def test_initial_buttons_are_primary_style(self):
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
         for child in view.children:
             if isinstance(child, discord.ui.Button):
                 assert child.style == discord.ButtonStyle.primary
 
 
 # ── Channel-mode (after clicking 📢 Channel) tests ────────────────────────────
+
 
 class TestChannelMode:
     """After the user clicks the Channel button, the view should swap to
@@ -146,19 +158,18 @@ class TestChannelMode:
     @pytest.mark.asyncio
     async def test_clicking_channel_shows_channelselect_and_switch(self):
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
 
         # Find the Channel button and fire its callback.
-        channel_btn = next(c for c in view.children
-                           if getattr(c, "label", "") == "📢 Channel")
+        channel_btn = next(c for c in view.children if getattr(c, "label", "") == "📢 Channel")
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await channel_btn.callback(inter)
 
         # ChannelSelect now present, plus a switch-to-thread button.
-        has_channel_select = any(isinstance(c, discord.ui.ChannelSelect)
-                                 for c in view.children)
+        has_channel_select = any(isinstance(c, discord.ui.ChannelSelect) for c in view.children)
         assert has_channel_select
         assert "🧵 Pick a thread instead" in _labels(view)
 
@@ -168,43 +179,46 @@ class TestChannelMode:
         elsewhere, the ChannelSelect carries text-only types so Discord's
         mixed-type filtering bug doesn't bite."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
-        channel_btn = next(c for c in view.children
-                           if getattr(c, "label", "") == "📢 Channel")
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        channel_btn = next(c for c in view.children if getattr(c, "label", "") == "📢 Channel")
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await channel_btn.callback(inter)
 
-        select = next(c for c in view.children
-                      if isinstance(c, discord.ui.ChannelSelect))
+        select = next(c for c in view.children if isinstance(c, discord.ui.ChannelSelect))
         assert select.channel_types == [discord.ChannelType.text]
 
 
 # ── Thread-mode (after clicking 🧵 Thread) tests ──────────────────────────────
 
-class TestThreadMode:
 
+class TestThreadMode:
     @pytest.mark.asyncio
     async def test_clicking_thread_shows_thread_select_and_switch(self):
         from setup_cog import ChannelSelectStep
-        guild = _make_guild([
-            _make_thread("Inner Alliance Rewards & Train", "r4-chat", 100),
-            _make_thread("DS/CS Mail",                     "r4-chat", 100),
-        ])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
 
-        thread_btn = next(c for c in view.children
-                          if getattr(c, "label", "") == "🧵 Thread")
+        guild = _make_guild(
+            [
+                _make_thread("Inner Alliance Rewards & Train", "r4-chat", 100),
+                _make_thread("DS/CS Mail", "r4-chat", 100),
+            ]
+        )
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+
+        thread_btn = next(c for c in view.children if getattr(c, "label", "") == "🧵 Thread")
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await thread_btn.callback(inter)
 
         # A non-ChannelSelect Select is now present, plus the switch button.
         thread_select = next(
-            (c for c in view.children
-             if isinstance(c, discord.ui.Select)
-             and not isinstance(c, discord.ui.ChannelSelect)),
+            (
+                c
+                for c in view.children
+                if isinstance(c, discord.ui.Select) and not isinstance(c, discord.ui.ChannelSelect)
+            ),
             None,
         )
         assert thread_select is not None
@@ -221,26 +235,26 @@ class TestThreadMode:
     async def test_thread_select_caps_at_25_options(self):
         """Discord's Select component maxes out at 25 options."""
         from setup_cog import ChannelSelectStep
-        many = [_make_thread(f"thread-{i:02d}", "general", 100, thread_id=i)
-                for i in range(40)]
-        guild = _make_guild(many)
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
 
-        thread_btn = next(c for c in view.children
-                          if getattr(c, "label", "") == "🧵 Thread")
+        many = [_make_thread(f"thread-{i:02d}", "general", 100, thread_id=i) for i in range(40)]
+        guild = _make_guild(many)
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+
+        thread_btn = next(c for c in view.children if getattr(c, "label", "") == "🧵 Thread")
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await thread_btn.callback(inter)
 
         thread_select = next(
-            c for c in view.children
-            if isinstance(c, discord.ui.Select)
-            and not isinstance(c, discord.ui.ChannelSelect)
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Select) and not isinstance(c, discord.ui.ChannelSelect)
         )
         assert len(thread_select.options) == 25
 
 
 # ── Switching back and forth ──────────────────────────────────────────────────
+
 
 class TestSwitching:
     """The user can change their mind: pick Channel, then click 'Pick a
@@ -249,25 +263,27 @@ class TestSwitching:
     @pytest.mark.asyncio
     async def test_channel_then_switch_to_thread(self):
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
 
         # Click Channel.
-        ch_btn = next(c for c in view.children
-                      if getattr(c, "label", "") == "📢 Channel")
-        inter1 = MagicMock(); inter1.response.edit_message = AsyncMock()
+        ch_btn = next(c for c in view.children if getattr(c, "label", "") == "📢 Channel")
+        inter1 = MagicMock()
+        inter1.response.edit_message = AsyncMock()
         await ch_btn.callback(inter1)
 
         # Now click the switch button.
-        switch_btn = next(c for c in view.children
-                          if getattr(c, "label", "") == "🧵 Pick a thread instead")
-        inter2 = MagicMock(); inter2.response.edit_message = AsyncMock()
+        switch_btn = next(
+            c for c in view.children if getattr(c, "label", "") == "🧵 Pick a thread instead"
+        )
+        inter2 = MagicMock()
+        inter2.response.edit_message = AsyncMock()
         await switch_btn.callback(inter2)
 
         # Now in thread mode: thread Select + "Pick a channel instead".
         has_thread_select = any(
-            isinstance(c, discord.ui.Select)
-            and not isinstance(c, discord.ui.ChannelSelect)
+            isinstance(c, discord.ui.Select) and not isinstance(c, discord.ui.ChannelSelect)
             for c in view.children
         )
         assert has_thread_select
@@ -278,24 +294,23 @@ class TestSwitching:
 
 # ── Fallback paths (back-compat) ──────────────────────────────────────────────
 
-class TestFallbackPaths:
 
+class TestFallbackPaths:
     def test_no_guild_passes_through_to_single_channelselect(self):
         """Existing test in test_premium.py (test_include_threads_adds_three_thread_types)
         instantiates without a guild — it should still get the legacy
         single-ChannelSelect with thread types in the channel_types list."""
         from setup_cog import ChannelSelectStep
+
         view = ChannelSelectStep("placeholder", include_threads=True)
         # Single ChannelSelect, no buttons.
-        selects = [c for c in view.children
-                   if isinstance(c, discord.ui.ChannelSelect)]
+        selects = [c for c in view.children if isinstance(c, discord.ui.ChannelSelect)]
         assert len(selects) == 1
         # Legacy: thread types in the channel_types list.
         assert discord.ChannelType.public_thread in selects[0].channel_types
         assert discord.ChannelType.private_thread in selects[0].channel_types
         # No buttons (other than possibly the create-channel one).
-        button_labels = [c.label for c in view.children
-                         if isinstance(c, discord.ui.Button)]
+        button_labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
         assert "📢 Channel" not in button_labels
         assert "🧵 Thread" not in button_labels
 
@@ -303,10 +318,10 @@ class TestFallbackPaths:
         """When a guild has no usable threads, don't bother with the
         button picker — it'd just be confusing."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([])  # empty
-        view  = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
-        button_labels = [c.label for c in view.children
-                         if isinstance(c, discord.ui.Button)]
+        view = ChannelSelectStep("placeholder", include_threads=True, guild=guild)
+        button_labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
         assert "📢 Channel" not in button_labels
         assert "🧵 Thread" not in button_labels
         # ChannelSelect rendered straight away.
@@ -314,26 +329,31 @@ class TestFallbackPaths:
 
     def test_archived_threads_filtered_out(self):
         from setup_cog import ChannelSelectStep
-        guild = _make_guild([
-            _make_thread("active",   "general", 100, archived=False),
-            _make_thread("archived", "general", 100, archived=True),
-            _make_thread("locked",   "general", 100, locked=True),
-        ])
+
+        guild = _make_guild(
+            [
+                _make_thread("active", "general", 100, archived=False),
+                _make_thread("archived", "general", 100, archived=True),
+                _make_thread("locked", "general", 100, locked=True),
+            ]
+        )
         # Pickable threads collector should keep only the active one.
         threads = ChannelSelectStep._collect_pickable_threads(guild)
         names = [t.name for t in threads]
-        assert "active"   in names
+        assert "active" in names
         assert "archived" not in names
-        assert "locked"   not in names
+        assert "locked" not in names
 
     def test_create_button_appears_in_simple_text_only_path(self):
         from setup_cog import ChannelSelectStep
+
         view = ChannelSelectStep("placeholder", include_threads=False, allow_create=True)
         labels = _labels(view)
         assert "➕ Create a new channel" in labels
 
 
 # ── Create-channel button visibility (#48) ────────────────────────────────────
+
 
 class TestCreateButtonAlwaysVisible:
     """Pre-1.1.0 the create-channel button was hidden whenever the wizard
@@ -345,9 +365,13 @@ class TestCreateButtonAlwaysVisible:
         """Premium guild, but no pickable threads → channel select renders
         with thread types in the picker. Create button should still appear."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([])  # premium-flagged, but no threads
-        view  = ChannelSelectStep(
-            "placeholder", include_threads=True, guild=guild, allow_create=True,
+        view = ChannelSelectStep(
+            "placeholder",
+            include_threads=True,
+            guild=guild,
+            allow_create=True,
         )
         assert "➕ Create a new channel" in _labels(view)
 
@@ -356,14 +380,18 @@ class TestCreateButtonAlwaysVisible:
         """Premium guild with pickable threads → button-driven flow.
         After the user picks Channel, the create button should be present."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([_make_thread("t1", "general", 100)])
-        view  = ChannelSelectStep(
-            "placeholder", include_threads=True, guild=guild, allow_create=True,
+        view = ChannelSelectStep(
+            "placeholder",
+            include_threads=True,
+            guild=guild,
+            allow_create=True,
         )
 
-        ch_btn = next(c for c in view.children
-                      if getattr(c, "label", "") == "📢 Channel")
-        inter = MagicMock(); inter.response.edit_message = AsyncMock()
+        ch_btn = next(c for c in view.children if getattr(c, "label", "") == "📢 Channel")
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock()
         await ch_btn.callback(inter)
 
         assert "➕ Create a new channel" in _labels(view)
@@ -371,13 +399,17 @@ class TestCreateButtonAlwaysVisible:
     def test_allow_create_false_suppresses_button(self):
         """Sanity: callers can still opt out via allow_create=False."""
         from setup_cog import ChannelSelectStep
+
         view = ChannelSelectStep(
-            "placeholder", include_threads=False, allow_create=False,
+            "placeholder",
+            include_threads=False,
+            allow_create=False,
         )
         assert "➕ Create a new channel" not in _labels(view)
 
 
 # ── Keep-current button (#80 / #94) ──────────────────────────────────────────
+
 
 class TestKeepCurrentChannel:
     """When the wizard passes a `current_id` that still resolves to a
@@ -388,10 +420,13 @@ class TestKeepCurrentChannel:
 
     def test_current_id_resolves_renders_keep_button(self):
         from setup_cog import ChannelSelectStep
+
         leadership = _make_channel("leadership", 555)
         guild = _make_guild([], channels=[leadership])
         view = ChannelSelectStep(
-            "placeholder", guild=guild, current_id=555,
+            "placeholder",
+            guild=guild,
+            current_id=555,
         )
         labels = _labels(view)
         assert any("Keep current" in lbl and "leadership" in lbl for lbl in labels)
@@ -399,6 +434,7 @@ class TestKeepCurrentChannel:
 
     def test_current_id_none_does_not_render_keep_button(self):
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([], channels=[_make_channel("leadership", 555)])
         view = ChannelSelectStep("placeholder", guild=guild)  # current_id default None
         labels = _labels(view)
@@ -409,6 +445,7 @@ class TestKeepCurrentChannel:
         """The schema stores 0 for "not configured". The keep button
         must not appear in that case — there's nothing to keep."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([], channels=[_make_channel("leadership", 555)])
         view = ChannelSelectStep("placeholder", guild=guild, current_id=0)
         labels = _labels(view)
@@ -420,6 +457,7 @@ class TestKeepCurrentChannel:
         returns None. View should still render its normal picker, and
         `is_current_stale` should flip True for the caller."""
         from setup_cog import ChannelSelectStep
+
         guild = _make_guild([], channels=[])  # no channels registered
         view = ChannelSelectStep(
             "placeholder",
@@ -436,13 +474,16 @@ class TestKeepCurrentChannel:
     @pytest.mark.asyncio
     async def test_clicking_keep_sets_selected_channel_and_stops(self):
         from setup_cog import ChannelSelectStep
+
         leadership = _make_channel("leadership", 555)
         guild = _make_guild([], channels=[leadership])
         view = ChannelSelectStep("placeholder", guild=guild, current_id=555)
 
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)
@@ -455,6 +496,7 @@ class TestKeepCurrentChannel:
         """When the saved id matches a thread (because the guild used a
         thread-as-destination originally), the keep button still shows."""
         from setup_cog import ChannelSelectStep
+
         thread = _make_thread("dt-mail", "r4-chat", 100, thread_id=777)
         guild = _make_guild([thread])
         view = ChannelSelectStep(
@@ -472,6 +514,7 @@ class TestKeepCurrentChannel:
         (📢 Channel / 🧵 Thread). The keep button must coexist with
         those buttons, not get clobbered when the user clicks Channel."""
         from setup_cog import ChannelSelectStep
+
         leadership = _make_channel("leadership", 555)
         thread = _make_thread("dt-mail", "r4-chat", 100)
         guild = _make_guild([thread], channels=[leadership])
@@ -489,11 +532,14 @@ class TestKeepCurrentChannel:
 
     def test_long_channel_name_clipped_to_80_chars(self):
         from setup_cog import ChannelSelectStep
+
         long_name = "x" * 200
-        long_ch   = _make_channel(long_name, 555)
-        guild     = _make_guild([], channels=[long_ch])
+        long_ch = _make_channel(long_name, 555)
+        guild = _make_guild([], channels=[long_ch])
         view = ChannelSelectStep("placeholder", guild=guild, current_id=555)
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         assert len(keep_btn.label) <= 80

@@ -47,12 +47,14 @@ FROZEN = datetime(2026, 5, 13, 14, 30, tzinfo=ET)
 
 # ── Premium env isolation (mirrors test_member_roster.py / test_storm_remind.py) ──
 
+
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
@@ -63,6 +65,7 @@ def _isolate_premium_env(monkeypatch):
 
 
 # ── Frozen clock ─────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def frozen_clock():
@@ -84,22 +87,27 @@ def frozen_clock():
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_cog():
     """SurveyCog with the @tasks.loop cancelled before any test body runs."""
     from survey import SurveyCog
+
     bot = MagicMock()
-    bot.add_view          = MagicMock()
+    bot.add_view = MagicMock()
     bot.add_dynamic_items = MagicMock()
     cog = SurveyCog(bot)
-    try: cog.check_scheduled_reminders.cancel()
-    except Exception: pass
+    try:
+        cog.check_scheduled_reminders.cancel()
+    except Exception:
+        pass
     return cog
 
 
 def _seed_setup_complete(guild_id: int):
     import config
+
     cfg = config.get_or_create_config(guild_id)
-    cfg.timezone       = "America/New_York"
+    cfg.timezone = "America/New_York"
     cfg.setup_complete = True
     config.save_config(cfg)
 
@@ -110,23 +118,32 @@ def _hhmm(dt: datetime) -> str:
 
 # ── DM destination + Premium ──────────────────────────────────────────────────
 
-class TestScheduledReminderDmBranch:
 
+class TestScheduledReminderDmBranch:
     @pytest.mark.asyncio
     async def test_premium_guild_fires_dm_path(self, seeded_db, frozen_clock):
         """Configured DM reminder + premium → `_send_reminder_via_dm`
         gets invoked exactly once, last_fired stamp updated."""
         import config
+
         _seed_setup_complete(PREMIUM_TEST_GUILD_ID)
         config.save_survey_config(
-            PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            PREMIUM_TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
 
         config.save_survey_reminder(
-            PREMIUM_TEST_GUILD_ID, "default",
-            enabled=1, frequency="daily",
-            day_of_week=0, time_str=_hhmm(frozen_clock),
-            channel_id=0, use_dm=1,
+            PREMIUM_TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=_hhmm(frozen_clock),
+            channel_id=0,
+            use_dm=1,
             message="DM reminder body",
         )
 
@@ -154,16 +171,25 @@ class TestScheduledReminderDmBranch:
         `_send_reminder_via_dm` is NOT called and `reminder_last_fired`
         stays empty so the next tick after re-upgrade fires."""
         import config
+
         _seed_setup_complete(TEST_GUILD_ID)
         config.save_survey_config(
-            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
 
         config.save_survey_reminder(
-            TEST_GUILD_ID, "default",
-            enabled=1, frequency="daily",
-            day_of_week=0, time_str=_hhmm(frozen_clock),
-            channel_id=0, use_dm=1,
+            TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=_hhmm(frozen_clock),
+            channel_id=0,
+            use_dm=1,
             message="DM body",
         )
 
@@ -183,31 +209,41 @@ class TestScheduledReminderDmBranch:
 
 # ── Weekly schedule ──────────────────────────────────────────────────────────
 
-class TestScheduledReminderWeeklySchedule:
 
+class TestScheduledReminderWeeklySchedule:
     @pytest.mark.asyncio
     async def test_weekly_only_fires_on_configured_weekday(self, seeded_db, frozen_clock):
         """Weekly reminders include `reminder_day_of_week` (Mon=0).
         On a non-matching weekday → no fire."""
         import config
+
         _seed_setup_complete(PREMIUM_TEST_GUILD_ID)
         config.save_survey_config(
-            PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            PREMIUM_TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
 
         # Pick a weekday that's NOT the frozen one.
         wrong_weekday = (frozen_clock.weekday() + 3) % 7
 
         config.save_survey_reminder(
-            PREMIUM_TEST_GUILD_ID, "default",
-            enabled=1, frequency="weekly",
-            day_of_week=wrong_weekday, time_str=_hhmm(frozen_clock),
-            channel_id=33333, use_dm=0,
+            PREMIUM_TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="weekly",
+            day_of_week=wrong_weekday,
+            time_str=_hhmm(frozen_clock),
+            channel_id=33333,
+            use_dm=0,
             message="weekly body",
         )
 
-        cog    = _make_cog()
-        target = AsyncMock(); target.send = AsyncMock()
+        cog = _make_cog()
+        target = AsyncMock()
+        target.send = AsyncMock()
         cog.bot.get_channel = MagicMock(return_value=target)
 
         await cog.check_scheduled_reminders()
@@ -216,21 +252,31 @@ class TestScheduledReminderWeeklySchedule:
     @pytest.mark.asyncio
     async def test_weekly_fires_when_weekday_matches(self, seeded_db, frozen_clock):
         import config
+
         _seed_setup_complete(PREMIUM_TEST_GUILD_ID)
         config.save_survey_config(
-            PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            PREMIUM_TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
 
         config.save_survey_reminder(
-            PREMIUM_TEST_GUILD_ID, "default",
-            enabled=1, frequency="weekly",
-            day_of_week=frozen_clock.weekday(), time_str=_hhmm(frozen_clock),
-            channel_id=33334, use_dm=0,
+            PREMIUM_TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="weekly",
+            day_of_week=frozen_clock.weekday(),
+            time_str=_hhmm(frozen_clock),
+            channel_id=33334,
+            use_dm=0,
             message="hello",
         )
 
-        cog    = _make_cog()
-        target = AsyncMock(); target.send = AsyncMock()
+        cog = _make_cog()
+        target = AsyncMock()
+        target.send = AsyncMock()
         cog.bot.get_channel = MagicMock(return_value=target)
 
         await cog.check_scheduled_reminders()
@@ -239,8 +285,8 @@ class TestScheduledReminderWeeklySchedule:
 
 # ── Multi-guild loop isolation ───────────────────────────────────────────────
 
-class TestScheduledReminderMultiGuildIsolation:
 
+class TestScheduledReminderMultiGuildIsolation:
     @pytest.mark.asyncio
     async def test_one_guild_helper_failure_does_not_block_another(self, seeded_db, frozen_clock):
         """Two guilds both due. Guild A's channel send raises; Guild
@@ -252,19 +298,35 @@ class TestScheduledReminderMultiGuildIsolation:
         for gid in (gid_a, gid_b):
             _seed_setup_complete(gid)
             config.save_survey_config(
-                gid, "Squad Powers", "Survey History", [], "intro",
+                gid,
+                "Squad Powers",
+                "Survey History",
+                [],
+                "intro",
             )
 
         target_time = _hhmm(frozen_clock)
         config.save_survey_reminder(
-            gid_a, "default", enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
-            channel_id=10001, use_dm=0, message="A",
+            gid_a,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=target_time,
+            channel_id=10001,
+            use_dm=0,
+            message="A",
         )
         config.save_survey_reminder(
-            gid_b, "default", enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
-            channel_id=10002, use_dm=0, message="B",
+            gid_b,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=target_time,
+            channel_id=10002,
+            use_dm=0,
+            message="B",
         )
 
         sent_to: list[int] = []
@@ -280,39 +342,52 @@ class TestScheduledReminderMultiGuildIsolation:
             await cog.check_scheduled_reminders()
 
         # B made it through despite A raising.
-        assert gid_b in sent_to, \
+        assert gid_b in sent_to, (
             f"Guild B's reminder must still fire after Guild A raised. sent_to={sent_to}"
+        )
 
 
 # ── Persistent idempotency across ticks ──────────────────────────────────────
 
-class TestScheduledReminderDbIdempotency:
 
+class TestScheduledReminderDbIdempotency:
     @pytest.mark.asyncio
     async def test_db_last_fired_stamp_blocks_second_tick_same_day(self, seeded_db, frozen_clock):
         """Once `reminder_last_fired` is today, the next tick (even
         with the time still matching) skips. This complements the
         existing in-memory test by exercising the DB-stamped path."""
         import config
+
         _seed_setup_complete(PREMIUM_TEST_GUILD_ID)
         config.save_survey_config(
-            PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            PREMIUM_TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
 
         # Pre-stamp last_fired = today (frozen).
         config.save_survey_reminder(
-            PREMIUM_TEST_GUILD_ID, "default",
-            enabled=1, frequency="daily",
-            day_of_week=0, time_str=_hhmm(frozen_clock),
-            channel_id=22222, use_dm=0,
+            PREMIUM_TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=_hhmm(frozen_clock),
+            channel_id=22222,
+            use_dm=0,
             message="should not fire",
         )
         config.update_survey_reminder_last_fired(
-            PREMIUM_TEST_GUILD_ID, "default", frozen_clock.date().isoformat(),
+            PREMIUM_TEST_GUILD_ID,
+            "default",
+            frozen_clock.date().isoformat(),
         )
 
         cog = _make_cog()
-        target = AsyncMock(); target.send = AsyncMock()
+        target = AsyncMock()
+        target.send = AsyncMock()
         cog.bot.get_channel = MagicMock(return_value=target)
 
         await cog.check_scheduled_reminders()

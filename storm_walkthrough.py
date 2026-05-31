@@ -25,6 +25,14 @@ import logging
 
 import discord
 
+from storm_event_hub import (
+    HUB_BTN_ATTENDANCE,
+    HUB_BTN_POST_SIGNUP,
+    HUB_BTN_PRESETS,
+    HUB_BTN_RULES,
+    HUB_BTN_VIEW_SIGNUPS,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,53 +77,49 @@ def _build_storm_hub_tour_steps(
         f"The buttons below cover every action in three groups: "
         f"event-day actions (top row), communications + configuration "
         f"(middle row), and reference + setup (bottom row).",
-
         # ── Step 2 / 5: The weekly cycle ─────────────────────────────────
         f"**Step 2 / 5: The weekly cycle**\n"
         f"{label} runs every **{event_day}** in-game. Here's the flow:\n"
         f"\n"
-        f"1. **📣 Post sign-up poll** drops a vote message in your sign-up "
+        f"1. **{HUB_BTN_POST_SIGNUP}** drops a vote message in your sign-up "
         f"channel. Members click a button to register their availability.\n"
-        f"2. After votes come in, click **👁️ View sign-ups + set up "
-        f"teams**. You'll see who voted in each bucket and can click "
+        f"2. After votes come in, click **{HUB_BTN_VIEW_SIGNUPS}**. "
+        f"You'll see who voted in each bucket and can click "
         f"🅰️ Set up Team A or 🅱️ Set up Team B to open the roster "
         f"builder, pre-filtered to members who signed up for that team.\n"
-        f"3. After the event, **📋 Record attendance** lets you mark who "
+        f"3. After the event, **{HUB_BTN_ATTENDANCE}** lets you mark who "
         f"actually showed at each assigned slot.\n"
         f"\n"
         f"Auto-scheduling can fire step 1 for you on a configured day; "
         f"otherwise the button works on-demand.",
-
         # ── Step 3 / 5: Strategy presets + member rules ──────────────────
         f"**Step 3 / 5: Strategy presets + member rules**\n"
         f"Two storage surfaces feed the roster builder:\n"
         f"\n"
-        f"**🧮 Manage strategy presets** opens your saved zone layouts. "
+        f"**{HUB_BTN_PRESETS}** opens your saved zone layouts. "
         f"A preset lists which zones the team uses, max players per "
         f"zone, optional minimum power per zone, and priority. When you "
         f"set up a team, you pick which preset to apply.\n"
         f"\n"
-        f"**👤 Manage member rules** opens the eligibility rule list. "
+        f"**{HUB_BTN_RULES}** opens the eligibility rule list. "
         f"Two types: power-band rules ('members ≥ 80M are eligible for "
         f"Power Tower') and per-member overrides ('Alice always plays "
         f"Team A'). Both feed into the auto-fill when you build a "
         f"roster.",
-
         # ── Step 4 / 5: Free vs Premium ──────────────────────────────────
-        f"**Step 4 / 5: Free vs Premium**\n"
-        f"The hub buttons with `💎` render disabled on the free tier. "
-        f"Here's what unlocks with `/upgrade`:\n"
-        f"\n"
-        f"**Premium:** Post sign-up poll, View sign-ups + set up teams, "
-        f"Record attendance, Send DM reminder to roster, View past "
-        f"rosters. These power the structured roster flow.\n"
-        f"\n"
-        f"**Free tier:** Manage strategy presets, Manage member rules, "
-        f"Generate mail (the legacy text template), Fill out "
-        f"participation questions, View past participation logs. "
-        f"Strategy presets + member rules still let free-tier alliances "
-        f"use the roster builder against their full roster.",
-
+        "**Step 4 / 5: Free vs Premium**\n"
+        "The hub buttons with `💎` render disabled on the free tier. "
+        "Here's what unlocks with `/upgrade`:\n"
+        "\n"
+        "**Premium:** Post sign-up poll, View sign-ups + set up teams, "
+        "Record attendance, Send DM reminder to roster, View past "
+        "rosters. These power the structured roster flow.\n"
+        "\n"
+        "**Free tier:** Manage strategy presets, Manage member rules, "
+        "Generate mail (the legacy text template), Fill out "
+        "participation questions, View past participation logs. "
+        "Strategy presets + member rules still let free-tier alliances "
+        "use the roster builder against their full roster.",
         # ── Step 5 / 5: Wrap-up ──────────────────────────────────────────
         f"**Step 5 / 5: That's the tour**\n"
         f"Run `/{parent}` any time to come back to this hub. The hub "
@@ -153,23 +157,24 @@ async def maybe_offer_storm_hub_tour(
     game-defined event day in Step 2, `/<parent>` reference in Step 5).
     """
     import config
+
     guild_id = interaction.guild_id
-    user_id  = interaction.user.id
+    user_id = interaction.user.id
     if not guild_id:
         return
     if config.is_walkthrough_dismissed(guild_id, user_id, walkthrough_key):
         return
 
     view = _OfferView(
-        guild_id=guild_id, user_id=user_id,
+        guild_id=guild_id,
+        user_id=user_id,
         walkthrough_key=walkthrough_key,
         event_type=event_type,
     )
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
         msg = await interaction.followup.send(
-            f"👋 First time opening {label}? Want a quick walkthrough "
-            f"of how this hub works?",
+            f"👋 First time opening {label}? Want a quick walkthrough of how this hub works?",
             view=view,
             ephemeral=True,
             wait=True,
@@ -179,9 +184,10 @@ async def maybe_offer_storm_hub_tour(
         view.message = msg
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM WALKTHROUGH] failed to send hub-tour offer "
-            "(guild=%s user=%s): %s",
-            guild_id, user_id, e,
+            "[STORM WALKTHROUGH] failed to send hub-tour offer (guild=%s user=%s): %s",
+            guild_id,
+            user_id,
+            e,
         )
 
 
@@ -191,12 +197,16 @@ class _OfferView(discord.ui.View):
     walkthrough_key tuple."""
 
     def __init__(
-        self, *, guild_id: int, user_id: int, walkthrough_key: str,
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        walkthrough_key: str,
         event_type: str = "DS",
     ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
-        self.user_id  = user_id
+        self.user_id = user_id
         self.walkthrough_key = walkthrough_key
         self.event_type = event_type
         self.message: discord.Message | discord.WebhookMessage | None = None
@@ -216,12 +226,14 @@ class _OfferView(discord.ui.View):
         self.stop()
 
         import config
+
         config.dismiss_walkthrough(self.guild_id, self.user_id, self.walkthrough_key)
         for item in self.children:
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="✅ Starting the tour…", view=self,
+                content="✅ Starting the tour…",
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -241,14 +253,15 @@ class _OfferView(discord.ui.View):
         self.stop()
 
         import config
+
         config.dismiss_walkthrough(self.guild_id, self.user_id, self.walkthrough_key)
         for item in self.children:
             item.disabled = True
         try:
             await inter.response.edit_message(
                 content="👍 Got it, won't ask again. Run `/help` any "
-                        "time and pick Desert Storm or Canyon Storm "
-                        "for a refresher.",
+                "time and pick Desert Storm or Canyon Storm "
+                "for a refresher.",
                 view=self,
             )
         except discord.HTTPException:
@@ -288,12 +301,17 @@ async def _send_tour_step(
     )
     try:
         msg = await interaction.followup.send(
-            content=steps[index], view=view, ephemeral=True, wait=True,
+            content=steps[index],
+            view=view,
+            ephemeral=True,
+            wait=True,
         )
         view.message = msg
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM WALKTHROUGH] failed to send tour step %s: %s", index, e,
+            "[STORM WALKTHROUGH] failed to send tour step %s: %s",
+            index,
+            e,
         )
 
 
@@ -341,6 +359,7 @@ class _TourStepView(discord.ui.View):
             except discord.HTTPException:
                 pass
             await _send_tour_step(inter, self._steps, index=self._index + 1)
+
         return _next
 
     def _make_skip(self):
@@ -368,6 +387,7 @@ class _TourStepView(discord.ui.View):
                 )
             except discord.HTTPException:
                 pass
+
         return _skip
 
     def _make_close(self):
@@ -387,6 +407,7 @@ class _TourStepView(discord.ui.View):
                 await inter.response.edit_message(view=self)
             except discord.HTTPException:
                 pass
+
         return _close
 
     async def on_timeout(self):

@@ -37,14 +37,15 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 def render(request):
     mod_name, attr = request.param.split(".")
     import importlib
+
     mod = importlib.import_module(mod_name)
     return getattr(mod, attr)
 
 
 # ── {name} substitution ──────────────────────────────────────────────────────
 
-class TestNamePlaceholderSubstitution:
 
+class TestNamePlaceholderSubstitution:
     def test_substitutes_name_when_present(self, render):
         assert render("Happy birthday, {name}!", name="Alice") == "Happy birthday, Alice!"
 
@@ -66,6 +67,7 @@ class TestNamePlaceholderSubstitution:
 
 
 # ── Defensive: typo / unknown placeholders ────────────────────────────────────
+
 
 class TestSurvivesUnknownPlaceholders:
     """If an alliance leader puts `{nme}` in their template (typo), or
@@ -101,6 +103,7 @@ class TestSurvivesUnknownPlaceholders:
 
 # ── End-to-end: each feature's default + override ─────────────────────────────
 
+
 class TestDefaultBodiesAreSane:
     """Sanity-check that the hardcoded default text (used when an
     alliance hasn't customised the DM body) is non-empty and contains
@@ -109,10 +112,12 @@ class TestDefaultBodiesAreSane:
 
     def test_train_default_uses_name_placeholder(self):
         from train_cog import DEFAULT_TRAIN_DM
+
         assert "**today's train is for you!**" in DEFAULT_TRAIN_DM
 
     def test_birthday_default_uses_name_placeholder(self):
         from train_cog import DEFAULT_BIRTHDAY_DM
+
         assert "{name}" in DEFAULT_BIRTHDAY_DM
         assert "Happy birthday" in DEFAULT_BIRTHDAY_DM
 
@@ -121,6 +126,7 @@ class TestDefaultBodiesAreSane:
         token that the caller substitutes before save. Verify the
         token is present and the substitution result reads cleanly."""
         from storm_log import DEFAULT_STORM_REMINDER_DM
+
         assert "{label}" in DEFAULT_STORM_REMINDER_DM
 
         ds = DEFAULT_STORM_REMINDER_DM.format(label="Desert Storm")

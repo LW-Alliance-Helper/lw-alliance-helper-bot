@@ -35,16 +35,16 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
 ET = ZoneInfo("America/New_York")
 
-GUILD_ID            = 12345
-LEADERSHIP_CHAN_ID  = 1111
+GUILD_ID = 12345
+LEADERSHIP_CHAN_ID = 1111
 ANNOUNCEMENT_CHAN_ID = 2222
 
 
 def _make_cfg():
     cfg = MagicMock()
-    cfg.guild_id                 = GUILD_ID
-    cfg.leadership_channel_id    = LEADERSHIP_CHAN_ID
-    cfg.announcement_channel_id  = ANNOUNCEMENT_CHAN_ID
+    cfg.guild_id = GUILD_ID
+    cfg.leadership_channel_id = LEADERSHIP_CHAN_ID
+    cfg.announcement_channel_id = ANNOUNCEMENT_CHAN_ID
     return cfg
 
 
@@ -53,34 +53,45 @@ def _make_bot(channels: dict):
     channel for that id (or None if not in the dict)."""
     bot = MagicMock()
     bot.get_channel = MagicMock(side_effect=lambda cid: channels.get(cid))
-    bot.wait_for    = AsyncMock()
+    bot.wait_for = AsyncMock()
     return bot
 
 
 def _make_interaction(user_display: str = "Editor"):
     interaction = MagicMock()
-    interaction.user             = MagicMock()
-    interaction.user.id          = 9001
+    interaction.user = MagicMock()
+    interaction.user.id = 9001
     interaction.user.display_name = user_display
-    interaction.user.mention     = f"<@{interaction.user.id}>"
-    interaction.message          = MagicMock()
-    interaction.message.edit     = AsyncMock()
-    interaction.response         = MagicMock()
-    interaction.response.defer   = AsyncMock()
-    interaction.followup         = MagicMock()
-    interaction.followup.send    = AsyncMock()
+    interaction.user.mention = f"<@{interaction.user.id}>"
+    interaction.message = MagicMock()
+    interaction.message.edit = AsyncMock()
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
 def _make_event_list():
     """Two-event list — first event 5 minutes after a fixed `dt`."""
     return [
-        {"key": "marauder", "name": "Marauder", "dt": datetime(2026, 5, 15, 22, 0, tzinfo=ET), "blurb": "Marauder at {time}."},
-        {"key": "siege",    "name": "Siege",    "dt": datetime(2026, 5, 15, 22, 30, tzinfo=ET), "blurb": "Siege at {time}."},
+        {
+            "key": "marauder",
+            "name": "Marauder",
+            "dt": datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+            "blurb": "Marauder at {time}.",
+        },
+        {
+            "key": "siege",
+            "name": "Siege",
+            "dt": datetime(2026, 5, 15, 22, 30, tzinfo=ET),
+            "blurb": "Siege at {time}.",
+        },
     ]
 
 
 # ── Send As-Is ────────────────────────────────────────────────────────────────
+
 
 class TestSendAsIs:
     """Posts the draft to announcements, stamps confirmation in
@@ -89,22 +100,28 @@ class TestSendAsIs:
     @pytest.mark.asyncio
     async def test_posts_draft_to_announcements_channel(self):
         from scheduler import ApprovalView, pending_warnings
+
         pending_warnings.clear()
 
-        cfg            = _make_cfg()
-        announcements  = AsyncMock()
+        cfg = _make_cfg()
+        announcements = AsyncMock()
         announcements.send = AsyncMock()
-        leadership     = AsyncMock()
+        leadership = AsyncMock()
         leadership.send = AsyncMock()
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: announcements,
-            LEADERSHIP_CHAN_ID:   leadership,
-        })
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: announcements,
+                LEADERSHIP_CHAN_ID: leadership,
+            }
+        )
 
         view = ApprovalView(
-            bot=bot, draft_message="Hello @members!",
-            event_key="event-123", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="Hello @members!",
+            event_key="event-123",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
         interaction = _make_interaction(user_display="LeadAlice")
 
@@ -122,24 +139,29 @@ class TestSendAsIs:
     @pytest.mark.asyncio
     async def test_schedules_5min_warning_when_event_list_present(self):
         from scheduler import ApprovalView, pending_warnings
+
         pending_warnings.clear()
 
-        cfg            = _make_cfg()
-        announcements  = AsyncMock()
+        cfg = _make_cfg()
+        announcements = AsyncMock()
         announcements.send = AsyncMock()
         bot = _make_bot({ANNOUNCEMENT_CHAN_ID: announcements, LEADERSHIP_CHAN_ID: AsyncMock()})
 
         view = ApprovalView(
-            bot=bot, draft_message="msg",
-            event_key="event-123", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="msg",
+            event_key="event-123",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
 
         with patch("config.get_config", return_value=cfg):
             await view.send_as_is.callback(_make_interaction())
 
-        assert "event-123" in pending_warnings, \
+        assert "event-123" in pending_warnings, (
             f"5-min warning should be scheduled. pending={pending_warnings}"
+        )
         warn_dt, stored_list, stored_gid = pending_warnings["event-123"]
         # 5 minutes before the first event (22:00 → 21:55)
         assert warn_dt.hour == 21 and warn_dt.minute == 55
@@ -150,16 +172,21 @@ class TestSendAsIs:
         """Friday shield reminders aren't followed by an event, so no
         5-minute warning should ever be queued for them."""
         from scheduler import ApprovalView, pending_warnings
+
         pending_warnings.clear()
 
         cfg = _make_cfg()
-        announcements = AsyncMock(); announcements.send = AsyncMock()
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
         bot = _make_bot({ANNOUNCEMENT_CHAN_ID: announcements, LEADERSHIP_CHAN_ID: AsyncMock()})
 
         view = ApprovalView(
-            bot=bot, draft_message="Shield up!",
-            event_key="shield-123", event_list=[],
-            is_shield=True, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="Shield up!",
+            event_key="shield-123",
+            event_list=[],
+            is_shield=True,
+            guild_id=GUILD_ID,
         )
 
         with patch("config.get_config", return_value=cfg):
@@ -169,6 +196,7 @@ class TestSendAsIs:
 
 
 # ── Edit & Send ───────────────────────────────────────────────────────────────
+
 
 class TestEditAndSend:
     """Audit gap: leadership's revisions go through Edit & Send.
@@ -180,25 +208,28 @@ class TestEditAndSend:
         ApprovalView seeded with that text."""
         from scheduler import ApprovalView
 
-        cfg          = _make_cfg()
-        leadership   = AsyncMock()
+        cfg = _make_cfg()
+        leadership = AsyncMock()
         leadership.send = AsyncMock(return_value=MagicMock(delete=AsyncMock()))
         bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
 
         # The user's revised message arriving in the leadership channel.
-        revised_msg              = MagicMock()
-        revised_msg.author       = MagicMock()
-        revised_msg.author.id    = 9001
-        revised_msg.channel      = MagicMock()
-        revised_msg.channel.id   = LEADERSHIP_CHAN_ID
-        revised_msg.content      = "Revised announcement text"
-        revised_msg.delete       = AsyncMock()
+        revised_msg = MagicMock()
+        revised_msg.author = MagicMock()
+        revised_msg.author.id = 9001
+        revised_msg.channel = MagicMock()
+        revised_msg.channel.id = LEADERSHIP_CHAN_ID
+        revised_msg.content = "Revised announcement text"
+        revised_msg.delete = AsyncMock()
         bot.wait_for = AsyncMock(return_value=revised_msg)
 
         view = ApprovalView(
-            bot=bot, draft_message="Original draft",
-            event_key="event-123", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="Original draft",
+            event_key="event-123",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
         interaction = _make_interaction(user_display="LeadBob")
 
@@ -216,6 +247,7 @@ class TestEditAndSend:
         assert "LeadBob" in body
         new_view = revised_post.kwargs["view"]
         from scheduler import ApprovalView as AV
+
         assert isinstance(new_view, AV)
         assert new_view.draft_message == "Revised announcement text"
 
@@ -226,32 +258,38 @@ class TestEditAndSend:
         won't be able to schedule the 5-minute warning correctly."""
         from scheduler import ApprovalView
 
-        cfg          = _make_cfg()
-        leadership   = AsyncMock(); leadership.send = AsyncMock(return_value=MagicMock(delete=AsyncMock()))
-        bot          = _make_bot({LEADERSHIP_CHAN_ID: leadership})
+        cfg = _make_cfg()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock(return_value=MagicMock(delete=AsyncMock()))
+        bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
 
-        revised_msg              = MagicMock()
-        revised_msg.author       = MagicMock(); revised_msg.author.id = 9001
-        revised_msg.channel      = MagicMock(); revised_msg.channel.id = LEADERSHIP_CHAN_ID
-        revised_msg.content      = "edit text"
-        revised_msg.delete       = AsyncMock()
+        revised_msg = MagicMock()
+        revised_msg.author = MagicMock()
+        revised_msg.author.id = 9001
+        revised_msg.channel = MagicMock()
+        revised_msg.channel.id = LEADERSHIP_CHAN_ID
+        revised_msg.content = "edit text"
+        revised_msg.delete = AsyncMock()
         bot.wait_for = AsyncMock(return_value=revised_msg)
 
         original_event_list = _make_event_list()
         view = ApprovalView(
-            bot=bot, draft_message="orig",
-            event_key="event-key-77", event_list=original_event_list,
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="orig",
+            event_key="event-key-77",
+            event_list=original_event_list,
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
 
         with patch("config.get_config", return_value=cfg):
             await view.edit_and_send.callback(_make_interaction())
 
         new_view = leadership.send.await_args_list[1].kwargs["view"]
-        assert new_view.event_key  == "event-key-77"
+        assert new_view.event_key == "event-key-77"
         assert new_view.event_list == original_event_list
-        assert new_view.is_shield  is False
-        assert new_view.guild_id   == GUILD_ID
+        assert new_view.is_shield is False
+        assert new_view.guild_id == GUILD_ID
 
     @pytest.mark.asyncio
     async def test_timeout_posts_friendly_message_and_skips_resend(self):
@@ -259,16 +297,20 @@ class TestEditAndSend:
         timeout note. No new ApprovalView is created."""
         from scheduler import ApprovalView
 
-        cfg          = _make_cfg()
-        leadership   = AsyncMock(); leadership.send = AsyncMock(return_value=MagicMock(delete=AsyncMock()))
-        bot          = _make_bot({LEADERSHIP_CHAN_ID: leadership})
+        cfg = _make_cfg()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock(return_value=MagicMock(delete=AsyncMock()))
+        bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
 
         bot.wait_for = AsyncMock(side_effect=asyncio.TimeoutError())
 
         view = ApprovalView(
-            bot=bot, draft_message="orig",
-            event_key="event-key", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="orig",
+            event_key="event-key",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
         interaction = _make_interaction(user_display="LeadDana")
 
@@ -296,9 +338,12 @@ class TestEditAndSend:
         bot = _make_bot({})  # nothing wired up
 
         view = ApprovalView(
-            bot=bot, draft_message="orig",
-            event_key="event-key", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="orig",
+            event_key="event-key",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
 
         with patch("config.get_config", return_value=cfg):
@@ -316,41 +361,50 @@ class TestEditAndSend:
         edit and the buttons stay live but unresponsive."""
         from scheduler import ApprovalView
 
-        cfg          = _make_cfg()
+        cfg = _make_cfg()
         revised_sent = MagicMock(name="revised_msg")
         revised_sent.delete = AsyncMock()
-        leadership   = AsyncMock()
+        leadership = AsyncMock()
         # First send (the prompt) returns a deletable; second send (the
         # revised draft + new view) returns revised_sent. Use a list-style
         # side effect so each await returns the next value.
-        leadership.send = AsyncMock(side_effect=[
-            MagicMock(delete=AsyncMock()),
-            revised_sent,
-        ])
+        leadership.send = AsyncMock(
+            side_effect=[
+                MagicMock(delete=AsyncMock()),
+                revised_sent,
+            ]
+        )
         bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
 
-        revised_msg              = MagicMock()
-        revised_msg.author       = MagicMock(); revised_msg.author.id = 9001
-        revised_msg.channel      = MagicMock(); revised_msg.channel.id = LEADERSHIP_CHAN_ID
-        revised_msg.content      = "edited body"
-        revised_msg.delete       = AsyncMock()
+        revised_msg = MagicMock()
+        revised_msg.author = MagicMock()
+        revised_msg.author.id = 9001
+        revised_msg.channel = MagicMock()
+        revised_msg.channel.id = LEADERSHIP_CHAN_ID
+        revised_msg.content = "edited body"
+        revised_msg.delete = AsyncMock()
         bot.wait_for = AsyncMock(return_value=revised_msg)
 
         view = ApprovalView(
-            bot=bot, draft_message="orig",
-            event_key="event-key", event_list=_make_event_list(),
-            is_shield=False, guild_id=GUILD_ID,
+            bot=bot,
+            draft_message="orig",
+            event_key="event-key",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
 
         with patch("config.get_config", return_value=cfg):
             await view.edit_and_send.callback(_make_interaction())
 
         new_view = leadership.send.await_args_list[1].kwargs["view"]
-        assert new_view.message is revised_sent, \
+        assert new_view.message is revised_sent, (
             "Revised ApprovalView must carry the sent message ref so on_timeout can edit it"
+        )
 
 
 # ── on_timeout: dead buttons must be cleaned up ──────────────────────────────
+
 
 class TestApprovalViewOnTimeout:
     """When the 1-hour ApprovalView timeout expires, the buttons must be
@@ -363,12 +417,16 @@ class TestApprovalViewOnTimeout:
         from scheduler import ApprovalView
 
         view = ApprovalView(
-            bot=MagicMock(), draft_message="m",
-            event_key="k", event_list=[], is_shield=False, guild_id=GUILD_ID,
+            bot=MagicMock(),
+            draft_message="m",
+            event_key="k",
+            event_list=[],
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
         view.message = MagicMock()
         view.message.content = "📣 Announcement draft body"
-        view.message.edit    = AsyncMock()
+        view.message.edit = AsyncMock()
 
         await view.on_timeout()
 
@@ -387,8 +445,12 @@ class TestApprovalViewOnTimeout:
         from scheduler import ApprovalView
 
         view = ApprovalView(
-            bot=MagicMock(), draft_message="m",
-            event_key="k", event_list=[], is_shield=False, guild_id=GUILD_ID,
+            bot=MagicMock(),
+            draft_message="m",
+            event_key="k",
+            event_list=[],
+            is_shield=False,
+            guild_id=GUILD_ID,
         )
         # view.message left as None by default.
         await view.on_timeout()  # should not raise
@@ -406,12 +468,15 @@ class TestEventEditorOnTimeout:
         from scheduler import EventEditorView
 
         view = EventEditorView(
-            bot=MagicMock(), event_list=[], event_key="ek",
-            run_date=date_cls(2026, 5, 15), guild_id=GUILD_ID,
+            bot=MagicMock(),
+            event_list=[],
+            event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            guild_id=GUILD_ID,
         )
         view.message = MagicMock()
         view.message.content = "📣 **Event Editor** body"
-        view.message.edit    = AsyncMock()
+        view.message.edit = AsyncMock()
 
         await view.on_timeout()
 
@@ -424,6 +489,7 @@ class TestEventEditorOnTimeout:
 
 # ── post_editor / Build Announcement: must wire view.message ─────────────────
 
+
 class TestSentMessageWiring:
     """post_editor and Build Announcement both send a View-bearing
     message. They must capture the returned message into view.message
@@ -435,21 +501,25 @@ class TestSentMessageWiring:
         from scheduler import post_editor
 
         sent = MagicMock(name="sent")
-        channel = AsyncMock(); channel.send = AsyncMock(return_value=sent)
+        channel = AsyncMock()
+        channel.send = AsyncMock(return_value=sent)
         bot = _make_bot({LEADERSHIP_CHAN_ID: channel})
         cfg = _make_cfg()
 
         await post_editor(
-            bot, event_list=[], event_key="ek",
+            bot,
+            event_list=[],
+            event_key="ek",
             run_date=date_cls(2026, 5, 15),
-            cfg=cfg, draft_channel_id=LEADERSHIP_CHAN_ID,
+            cfg=cfg,
+            draft_channel_id=LEADERSHIP_CHAN_ID,
             announcement_channel_id=ANNOUNCEMENT_CHAN_ID,
             five_min_warning=False,
         )
 
         # The view passed to channel.send must now carry message=sent.
         kwargs = channel.send.await_args.kwargs
-        view   = kwargs["view"]
+        view = kwargs["view"]
         assert view.message is sent
 
     @pytest.mark.asyncio
@@ -461,17 +531,22 @@ class TestSentMessageWiring:
         from scheduler import EventEditorView, ApprovalView
 
         sent = MagicMock(name="approval_msg")
-        channel = AsyncMock(); channel.send = AsyncMock(return_value=sent)
+        channel = AsyncMock()
+        channel.send = AsyncMock(return_value=sent)
         bot = _make_bot({LEADERSHIP_CHAN_ID: channel})
         cfg = _make_cfg()
         cfg.role_mention = "@everyone"
 
         view = EventEditorView(
-            bot=bot, event_list=_make_event_list(), event_key="ek",
-            run_date=date_cls(2026, 5, 15), guild_id=GUILD_ID,
+            bot=bot,
+            event_list=_make_event_list(),
+            event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            guild_id=GUILD_ID,
         )
         # Need a message to satisfy the existing "disable buttons" edit.
-        editor_msg = MagicMock(); editor_msg.edit = AsyncMock()
+        editor_msg = MagicMock()
+        editor_msg.edit = AsyncMock()
         interaction = _make_interaction()
         interaction.message = editor_msg
 

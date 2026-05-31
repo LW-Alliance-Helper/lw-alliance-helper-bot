@@ -19,6 +19,7 @@ Workflow happy paths and wizard branches are covered in the other
 `tests/integration/test_*.py` files; this file's job is breadth, not
 depth.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +62,9 @@ EXPECTED_COG_COMMANDS = {
         # (member-facing list) and /cancel (wizard exit). Subcommands
         # of /train (overview / log / birthdays) are introspected
         # separately.
-        "train", "birthdays", "cancel",
+        "train",
+        "birthdays",
+        "cancel",
     },
     "MemberRosterCog": {
         # Post-#195 + #201: just the /members group (overview / sync).
@@ -73,7 +76,9 @@ EXPECTED_COG_COMMANDS = {
         # Top-level commands: /donate, /upgrade, and the /premium group.
         # Subcommands of the /premium group are introspected separately
         # in `test_donate_cog_premium_group_has_expected_subcommands`.
-        "donate", "upgrade", "premium",
+        "donate",
+        "upgrade",
+        "premium",
     },
     "ExportImportCog": {
         # Top-level: /config group. Subcommands (overview / export /
@@ -98,11 +103,11 @@ EXPECTED_STORM_TOP_LEVEL_COMMANDS = {"desertstorm", "canyonstorm"}
 # the production registration — exercised separately in
 # `tests/unit/test_guild_install_metadata.py`.
 EXPECTED_MODULE_COMMANDS = {"growth", "events", "help"}
-EXPECTED_EVENTS_SUBCOMMANDS = {"overview", "show", "log"}
 EXPECTED_GROWTH_SUBCOMMANDS = {"overview", "breakdown"}
 
 
 # ── Cog instantiation helpers ─────────────────────────────────────────────────
+
 
 def _make_cog(cog_class):
     """Instantiate a cog with a MagicMock bot and a no-op task loop."""
@@ -123,6 +128,7 @@ def _commands_on(cog) -> set[str]:
     the Group's `.commands` directly."""
     out: set[str] = set()
     import discord.app_commands as _ac
+
     for attr_name in dir(cog):
         attr = getattr(cog, attr_name, None)
         if isinstance(attr, (_ac.Command, _ac.Group)):
@@ -139,11 +145,13 @@ def _subcommands_on(group) -> set[str]:
 
 # ── 1. Registration audit ─────────────────────────────────────────────────────
 
+
 class TestCogRegistration:
     """Every cog's expected slash commands are actually wired up."""
 
     def test_setup_cog_registers_expected_commands(self, seeded_db):
         from setup_cog import SetupCog
+
         cog = _make_cog(SetupCog)
         try:
             assert _commands_on(cog) == EXPECTED_COG_COMMANDS["SetupCog"]
@@ -157,6 +165,7 @@ class TestCogRegistration:
         event-hub view. Every action that used to be a subcommand is
         now a button on the hub view."""
         from storm_commands_root import StormCommandsRootCog
+
         cog = _make_cog(StormCommandsRootCog)
         # The cog stashes the registered Command objects on instance
         # attributes so the test can find them without poking through
@@ -170,8 +179,7 @@ class TestCogRegistration:
             # registered a Group, this would either fail at construction
             # or expose subcommands here.
             assert not isinstance(cmd, app_commands.Group), (
-                f"/{cmd.name} should be a single command after #187, "
-                f"got a Group instead."
+                f"/{cmd.name} should be a single command after #187, got a Group instead."
             )
 
     @pytest.mark.asyncio
@@ -179,6 +187,7 @@ class TestCogRegistration:
         # SurveyCog.__init__ starts a tasks.loop, which needs a running
         # event loop — hence async.
         from survey import SurveyCog
+
         cog = _make_cog(SurveyCog)
         try:
             assert _commands_on(cog) == EXPECTED_COG_COMMANDS["SurveyCog"]
@@ -193,10 +202,13 @@ class TestCogRegistration:
         """/survey is a top-level Group containing overview / post /
         remind."""
         from survey import SurveyCog
+
         cog = _make_cog(SurveyCog)
         try:
             assert _subcommands_on(cog.survey_group) == {
-                "overview", "post", "remind",
+                "overview",
+                "post",
+                "remind",
             }
         finally:
             try:
@@ -207,6 +219,7 @@ class TestCogRegistration:
     @pytest.mark.asyncio
     async def test_train_cog_registers_expected_commands(self, seeded_db):
         from train_cog import TrainCog
+
         cog = _make_cog(TrainCog)
         try:
             assert _commands_on(cog) == EXPECTED_COG_COMMANDS["TrainCog"]
@@ -222,10 +235,13 @@ class TestCogRegistration:
         birthdays. /birthdays (standalone member-facing list) and
         /cancel stay top-level and aren't part of the group."""
         from train_cog import TrainCog
+
         cog = _make_cog(TrainCog)
         try:
             assert _subcommands_on(cog.train_group) == {
-                "overview", "log", "birthdays",
+                "overview",
+                "log",
+                "birthdays",
             }
         finally:
             try:
@@ -235,6 +251,7 @@ class TestCogRegistration:
 
     def test_member_roster_cog_registers_expected_commands(self, seeded_db):
         from member_roster import MemberRosterCog
+
         cog = _make_cog(MemberRosterCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["MemberRosterCog"]
 
@@ -242,13 +259,16 @@ class TestCogRegistration:
         """/members is a top-level Group containing overview / sync.
         Subcommands are introspected here rather than via `_commands_on`."""
         from member_roster import MemberRosterCog
+
         cog = _make_cog(MemberRosterCog)
         assert _subcommands_on(cog.members_group) == {
-            "overview", "sync",
+            "overview",
+            "sync",
         }
 
     def test_donate_cog_registers_expected_commands(self, seeded_db):
         from donate import DonateCog
+
         cog = _make_cog(DonateCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["DonateCog"]
 
@@ -258,13 +278,17 @@ class TestCogRegistration:
         as a single top-level entry, with subcommands hanging off the
         Group's `.commands` property."""
         from donate import DonateCog
+
         cog = _make_cog(DonateCog)
         assert _subcommands_on(cog.premium_group) == {
-            "overview", "assign", "unassign",
+            "overview",
+            "assign",
+            "unassign",
         }
 
     def test_export_import_cog_registers_expected_commands(self, seeded_db):
         from export_import_cog import ExportImportCog
+
         cog = _make_cog(ExportImportCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["ExportImportCog"]
 
@@ -273,9 +297,12 @@ class TestCogRegistration:
         import — the data-portability hub. Subcommands are introspected
         here rather than via `_commands_on`."""
         from export_import_cog import ExportImportCog
+
         cog = _make_cog(ExportImportCog)
         assert _subcommands_on(cog.config_group) == {
-            "overview", "export", "import",
+            "overview",
+            "export",
+            "import",
         }
 
     def test_module_level_commands_registered_on_bot_tree(self, seeded_db):
@@ -293,16 +320,14 @@ class TestCogRegistration:
                 f"Registered commands: {sorted(registered)}"
             )
 
-        # /events is a Group — verify its subcommands too.
-        events_grp = registered.get("events")
-        assert events_grp is not None
-        sub_names = _subcommands_on(events_grp)
-        assert sub_names == EXPECTED_EVENTS_SUBCOMMANDS, (
-            f"/events subcommands mismatch: got {sub_names}, "
-            f"expected {EXPECTED_EVENTS_SUBCOMMANDS}"
-        )
+        # Post-#249: /events is now a single hub command (no subcommands).
+        # The pre-hub `/events overview|show|log` group was replaced by
+        # the in-hub buttons.
+        events_cmd = registered.get("events")
+        assert events_cmd is not None
+        assert not hasattr(events_cmd, "commands"), "/events should be a flat command, not a Group"
 
-        # /growth is also a Group post-#200.
+        # /growth is still a Group post-#200.
         growth_grp = registered.get("growth")
         assert growth_grp is not None
         growth_subs = _subcommands_on(growth_grp)
@@ -326,12 +351,18 @@ class TestCogRegistration:
         from donate import DonateCog
         from export_import_cog import ExportImportCog
 
-        for cog_class in (SetupCog, SurveyCog,
-                          TrainCog, MemberRosterCog, DonateCog, ExportImportCog):
+        for cog_class in (
+            SetupCog,
+            SurveyCog,
+            TrainCog,
+            MemberRosterCog,
+            DonateCog,
+            ExportImportCog,
+        ):
             cog = _make_cog(cog_class)
             expected = EXPECTED_COG_COMMANDS[cog_class.__name__]
-            actual   = _commands_on(cog)
-            extra    = actual - expected
+            actual = _commands_on(cog)
+            extra = actual - expected
             try:
                 assert not extra, (
                     f"{cog_class.__name__} has unexpected commands: {extra}. "
@@ -347,10 +378,11 @@ class TestCogRegistration:
 
 # ── 2. Gate smoke tests ───────────────────────────────────────────────────────
 
+
 # Helper: build a non-leadership, non-admin interaction.
 def _make_nonprivileged_interaction(guild_id=TEST_GUILD_ID):
     interaction = make_mock_interaction(guild_id=guild_id, is_admin=False)
-    interaction.user.roles = []   # no leadership role
+    interaction.user.roles = []  # no leadership role
     return interaction
 
 
@@ -366,17 +398,17 @@ def _make_leadership_interaction(guild_id=TEST_GUILD_ID):
 
 # Capture helper — pulls the most recent send call's content/embed.
 def _last_message(interaction):
-    for sender in (interaction.response.send_message,
-                   interaction.followup.send):
+    for sender in (interaction.response.send_message, interaction.followup.send):
         if sender.call_args:
             args, kwargs = sender.call_args
             content = args[0] if args else kwargs.get("content") or ""
-            embed   = kwargs.get("embed")
+            embed = kwargs.get("embed")
             return (content, embed)
     return ("", None)
 
 
 # ── /setup hub: leadership-or-admin gates (post-#201) ────────────────────────
+
 
 class TestSetupHubLaunchersGateNonAdmins:
     """Post-#201: every per-feature wizard the hub dispatches into via
@@ -385,15 +417,24 @@ class TestSetupHubLaunchersGateNonAdmins:
     can't be parametrised without driving real Discord interactions."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("launcher_name", [
-        "_launch_train_setup", "_launch_growth_setup",
-        "_launch_birthday_setup", "_launch_event_setup",
-        "_launch_survey_setup", "_launch_shiny_tasks_setup",
-    ])
+    @pytest.mark.parametrize(
+        "launcher_name",
+        [
+            "_launch_train_setup",
+            "_launch_growth_setup",
+            "_launch_birthday_setup",
+            "_launch_event_setup",
+            "_launch_survey_setup",
+            "_launch_shiny_tasks_setup",
+        ],
+    )
     async def test_launcher_rejects_non_privileged_caller(
-        self, seeded_db, launcher_name,
+        self,
+        seeded_db,
+        launcher_name,
     ):
         import setup_cog
+
         launcher = getattr(setup_cog, launcher_name)
         bot = MagicMock()
         interaction = _make_nonprivileged_interaction()
@@ -407,9 +448,12 @@ class TestSetupHubLaunchersGateNonAdmins:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("event_type", ["DS", "CS"])
     async def test_storm_launcher_rejects_non_privileged_caller(
-        self, seeded_db, event_type,
+        self,
+        seeded_db,
+        event_type,
     ):
         import setup_cog
+
         bot = MagicMock()
         interaction = _make_nonprivileged_interaction()
         await setup_cog._launch_storm_setup(interaction, bot, event_type)
@@ -425,6 +469,7 @@ class TestSetupHubGateNonAdmins:
     @pytest.mark.asyncio
     async def test_setup_command_rejects_non_admin(self, seeded_db):
         from setup_cog import SetupCog
+
         cog = _make_cog(SetupCog)
         interaction = make_mock_interaction(is_admin=False)
         await cog.setup.callback(cog, interaction)
@@ -434,6 +479,7 @@ class TestSetupHubGateNonAdmins:
     @pytest.mark.asyncio
     async def test_reset_flow_rejects_non_admin(self, seeded_db):
         import setup_cog
+
         interaction = make_mock_interaction(is_admin=False)
         await setup_cog._run_reset_flow(interaction)
         content, _ = _last_message(interaction)
@@ -441,6 +487,7 @@ class TestSetupHubGateNonAdmins:
 
 
 # ── /members group + /setup_members ──────────────────────────────────────────
+
 
 class TestMemberRosterCommandsGate:
     """Post-#195 + #201: `/sync_members` is now `/members sync` and
@@ -451,9 +498,11 @@ class TestMemberRosterCommandsGate:
     @pytest.mark.asyncio
     async def test_members_sync_rejects_non_privileged(self, seeded_db):
         import premium
+
         premium.clear_cache()
 
         from member_roster import MemberRosterCog
+
         cog = _make_cog(MemberRosterCog)
 
         interaction = _make_nonprivileged_interaction()
@@ -466,6 +515,7 @@ class TestMemberRosterCommandsGate:
     @pytest.mark.asyncio
     async def test_setup_members_launcher_rejects_non_privileged(self, seeded_db):
         import premium, member_roster
+
         premium.clear_cache()
         bot = MagicMock()
 
@@ -481,9 +531,11 @@ class TestMemberRosterCommandsGate:
     async def test_members_sync_premium_locked_for_free_admin(self, seeded_db):
         """An admin on a free guild gets the premium-locked embed."""
         import premium
+
         premium.clear_cache()
 
         from member_roster import MemberRosterCog
+
         cog = _make_cog(MemberRosterCog)
 
         interaction = make_mock_interaction(is_admin=True)
@@ -500,10 +552,12 @@ class TestMemberRosterCommandsGate:
 
 # ── Storm command gates (under the consolidated parent groups) ──────────────
 
+
 def _resolve_storm_top_level(name: str):
     """Return the callback of the `/desertstorm` or `/canyonstorm`
     top-level command (post-#187: each is a single Command, no Group)."""
     from storm_commands_root import StormCommandsRootCog
+
     cog = _make_cog(StormCommandsRootCog)
     cmd = cog.desertstorm_cmd if name == "desertstorm" else cog.canyonstorm_cmd
     return cmd.callback
@@ -519,30 +573,34 @@ class TestStormCommandsGate:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("name", ["desertstorm", "canyonstorm"])
     async def test_hub_rejects_caller_without_leadership_role(
-        self, seeded_db, name,
+        self,
+        seeded_db,
+        name,
     ):
         callback = _resolve_storm_top_level(name)
         interaction = make_mock_interaction()
-        interaction.user.roles = []   # no leadership role
+        interaction.user.roles = []  # no leadership role
 
         await callback(interaction)
 
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower(), (
-            f"/{name} should reject non-leadership caller, "
-            f"got: {content!r}"
+            f"/{name} should reject non-leadership caller, got: {content!r}"
         )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("event_type", ["DS", "CS"])
     async def test_strategy_list_helper_rejects_non_leadership(
-        self, seeded_db, event_type,
+        self,
+        seeded_db,
+        event_type,
     ):
         """The hub's `🧮 Manage strategy presets` button calls
         `open_strategy_list`. Confirm that path enforces the same
         leadership gate the legacy `/<event> strategy list` subcommand
         did."""
         from storm_strategy import open_strategy_list
+
         interaction = make_mock_interaction()
         interaction.user.roles = []
         await open_strategy_list(interaction, event_type)
@@ -552,10 +610,13 @@ class TestStormCommandsGate:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("event_type", ["DS", "CS"])
     async def test_member_rule_list_helper_rejects_non_leadership(
-        self, seeded_db, event_type,
+        self,
+        seeded_db,
+        event_type,
     ):
         """Same idea for the `👤 Manage member rules` button."""
         from storm_member_rules import open_member_rule_list
+
         interaction = make_mock_interaction()
         interaction.user.roles = []
         await open_member_rule_list(interaction, event_type, member_filter=None)
@@ -565,20 +626,27 @@ class TestStormCommandsGate:
 
 # ── Survey commands ───────────────────────────────────────────────────────────
 
+
 class TestSurveyCommandsGate:
     """Post-#199: survey commands live under the /survey group as
     `survey_overview`, `survey_post`, and `survey_remind` on the cog."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_attr", [
-        "survey_post", "survey_overview", "survey_remind",
-    ])
+    @pytest.mark.parametrize(
+        "command_attr",
+        [
+            "survey_post",
+            "survey_overview",
+            "survey_remind",
+        ],
+    )
     async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
         from survey import SurveyCog
+
         cog = _make_cog(SurveyCog)
         try:
             interaction = make_mock_interaction()
-            interaction.user.roles = []   # no leadership role
+            interaction.user.roles = []  # no leadership role
 
             cmd = getattr(cog, command_attr)
             await cmd.callback(cog, interaction)
@@ -594,6 +662,7 @@ class TestSurveyCommandsGate:
 
 # ── Train commands ────────────────────────────────────────────────────────────
 
+
 class TestTrainCommandsGate:
     """Post-#198: the train commands live under the /train group as
     `train_overview`, `train_log`, and `train_birthdays` on the cog;
@@ -601,15 +670,22 @@ class TestTrainCommandsGate:
     list of upcoming birthdays)."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_attr", [
-        "train_overview", "train_log", "train_birthdays", "birthdays",
-    ])
+    @pytest.mark.parametrize(
+        "command_attr",
+        [
+            "train_overview",
+            "train_log",
+            "train_birthdays",
+            "birthdays",
+        ],
+    )
     async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
         from train_cog import TrainCog
+
         cog = _make_cog(TrainCog)
         try:
             interaction = make_mock_interaction()
-            interaction.user.roles = []   # no leadership role
+            interaction.user.roles = []  # no leadership role
 
             cmd = getattr(cog, command_attr)
             try:
@@ -628,12 +704,14 @@ class TestTrainCommandsGate:
 
 # ── Donate / Upgrade are unguarded (anyone can run them) ─────────────────────
 
+
 class TestUnguardedCommandsRespond:
     """/donate and /upgrade work for anyone; they should reply."""
 
     @pytest.mark.asyncio
     async def test_donate_replies(self, seeded_db):
         from donate import DonateCog
+
         cog = _make_cog(DonateCog)
         interaction = make_mock_interaction(is_admin=False)
         interaction.entitlements = []
@@ -645,9 +723,11 @@ class TestUnguardedCommandsRespond:
     @pytest.mark.asyncio
     async def test_upgrade_replies(self, seeded_db):
         import premium
+
         premium.clear_cache()
 
         from donate import DonateCog
+
         cog = _make_cog(DonateCog)
         interaction = make_mock_interaction(is_admin=False)
         interaction.entitlements = []
@@ -660,27 +740,26 @@ class TestUnguardedCommandsRespond:
 
 # ── /cancel ───────────────────────────────────────────────────────────────────
 
-class TestCancelCommand:
 
+class TestCancelCommand:
     @pytest.mark.asyncio
     async def test_cancel_with_no_active_wizard(self, seeded_db):
         """/cancel run without an active wizard should reply gracefully —
         not crash, not stay silent."""
         from train_cog import TrainCog
+
         cog = _make_cog(TrainCog)
         try:
             interaction = make_mock_interaction()
-            role = MagicMock(); role.name = "Leadership"
+            role = MagicMock()
+            role.name = "Leadership"
             interaction.user.roles = [role]
             # /cancel works in any channel, no leadership-channel gate
 
             await cog.cancel.callback(cog, interaction)
 
             # It should have replied something
-            assert (
-                interaction.response.send_message.called
-                or interaction.followup.send.called
-            )
+            assert interaction.response.send_message.called or interaction.followup.send.called
         finally:
             try:
                 cog.check_reminder.cancel()
@@ -708,7 +787,6 @@ def _embed_total_chars(embed) -> int:
 
 
 class TestHelpCommand:
-
     @pytest.mark.asyncio
     async def test_help_replies_with_overview_embed_and_view(self, seeded_db):
         """`/help` should reply with the overview embed + a HelpView with
@@ -716,6 +794,7 @@ class TestHelpCommand:
         import bot as bot_module
         import premium
         from help_content import HelpView
+
         premium.clear_cache()
 
         help_cmd = bot_module.bot.tree.get_command("help")
@@ -745,8 +824,7 @@ class TestHelpCommand:
         for is_premium in (False, True):
             overview = build_overview_embed(is_premium)
             assert _embed_total_chars(overview) < DISCORD_EMBED_CHAR_LIMIT, (
-                f"Overview embed exceeds {DISCORD_EMBED_CHAR_LIMIT} "
-                f"(is_premium={is_premium})"
+                f"Overview embed exceeds {DISCORD_EMBED_CHAR_LIMIT} (is_premium={is_premium})"
             )
             for cat_id in HELP_CATEGORIES:
                 embed = build_category_embed(cat_id, is_premium)
@@ -774,8 +852,7 @@ class TestHelpCommand:
         select_interaction.response.edit_message = AsyncMock()
 
         # Select.values is a read-only property; patch at the class.
-        with patch.object(type(select), "values",
-                          new_callable=PropertyMock) as mock_values:
+        with patch.object(type(select), "values", new_callable=PropertyMock) as mock_values:
             mock_values.return_value = [first_cat]
             await select.callback(select_interaction)
 

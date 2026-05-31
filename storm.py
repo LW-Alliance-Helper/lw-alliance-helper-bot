@@ -28,6 +28,7 @@ import json
 import os
 import discord
 from config import get_config
+from messages import HUB_TIMEOUT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
 
@@ -73,9 +74,9 @@ DS_ZONE_STRUCTURE: list[str] = [
 # exceed the team size so officers can place the same person in multiple
 # stages without enforcement).
 DS_TEAM_STARTERS = 20
-DS_TEAM_SUBS     = 10
+DS_TEAM_SUBS = 10
 CS_TEAM_STARTERS = 20
-CS_TEAM_SUBS     = 10
+CS_TEAM_SUBS = 10
 
 
 def team_seats(event_type: str) -> tuple[int, int]:
@@ -113,6 +114,7 @@ def _split_legacy_subs(value: str) -> list[str]:
     ampersands, or dashes. Both shapes flatten through this helper.
     """
     import re
+
     parts: list[str] = []
     for chunk in re.split(r"\s*[,\-&]\s*", str(value)):
         name = chunk.strip()
@@ -121,11 +123,12 @@ def _split_legacy_subs(value: str) -> list[str]:
     return parts
 
 
-
 # ── Google Sheets persistence ──────────────────────────────────────────────────
+
 
 def _get_spreadsheet(guild_id: int = None):
     from config import get_spreadsheet
+
     return get_spreadsheet(guild_id)
 
 
@@ -140,17 +143,18 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
     behavior for callers that haven't been migrated yet.
     """
     zone_key = f"DS_{team}_ZONES"
-    sub_key  = f"DS_{team}_SUBS"
+    sub_key = f"DS_{team}_SUBS"
 
     try:
         from config import get_config
-        cfg  = get_config(guild_id) if guild_id else None
-        sh   = _get_spreadsheet(guild_id)
-        ws   = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+
+        cfg = get_config(guild_id) if guild_id else None
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         rows = ws.get_all_values()
 
-        zones   = {}
-        subs    = []
+        zones = {}
+        subs = []
         section = None
 
         for row in rows:
@@ -193,6 +197,7 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
 
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[STORM] Error loading Team {team} assignments: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
@@ -201,8 +206,7 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
         return dict(default_zones), list(default_subs)
 
 
-def save_ds_assignments(team: str, zones: dict, subs: list,
-                        guild_id: int = None):
+def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None):
     """
     Save DS assignments for one team without affecting the other team's data.
     Reads the full sheet, replaces this team's sections, and rewrites.
@@ -210,17 +214,14 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
     `guild_id` resolves the per-guild spreadsheet + tab name; when
     omitted, falls back to env-var SPREADSHEET_ID and tab "DS Assignments".
     """
-    zone_key = f"DS_{team}_ZONES"
-    sub_key  = f"DS_{team}_SUBS"
-    other    = "B" if team == "A" else "A"
-    other_zone_key = f"DS_{other}_ZONES"
-    other_sub_key  = f"DS_{other}_SUBS"
+    other = "B" if team == "A" else "A"
 
     try:
         from config import get_config
+
         cfg = get_config(guild_id) if guild_id else None
-        sh  = _get_spreadsheet(guild_id)
-        ws  = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
 
         # Load the other team's current data so we don't lose it
         other_zones, other_subs = load_ds_assignments(other, guild_id=guild_id)
@@ -230,10 +231,8 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
 
         # Team A first, then Team B — alphabetical for consistency
         for t, t_zones, t_subs in [
-            ("A", zones if team == "A" else other_zones,
-                  subs  if team == "A" else other_subs),
-            ("B", zones if team == "B" else other_zones,
-                  subs  if team == "B" else other_subs),
+            ("A", zones if team == "A" else other_zones, subs if team == "A" else other_subs),
+            ("B", zones if team == "B" else other_zones, subs if team == "B" else other_subs),
         ]:
             rows.append([f"DS_{t}_ZONES", ""])
             for zone, members in t_zones.items():
@@ -257,6 +256,7 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
 
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[STORM] Error saving Team {team} assignments: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
@@ -264,6 +264,7 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
 
 
 # ── Template builder & parser ──────────────────────────────────────────────────
+
 
 def build_ds_template(zones: dict, subs: list) -> str:
     """Render the editable template for DS draft.
@@ -304,7 +305,7 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
     side (right of ` - `), since the starter was never the actual sub.
     """
     canonical_by_lower = {z.lower(): z for z in DS_ZONE_STRUCTURE}
-    canonical_list     = ", ".join(DS_ZONE_STRUCTURE)
+    canonical_list = ", ".join(DS_ZONE_STRUCTURE)
     zones: dict = {}
     subs: list[str] = []
     errors: list[str] = []
@@ -334,8 +335,7 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
                 canonical = canonical_by_lower.get(zone_stripped.lower())
                 if canonical is None:
                     errors.append(
-                        f"Unknown zone `{zone_stripped}`. Must be one of: "
-                        f"{canonical_list}"
+                        f"Unknown zone `{zone_stripped}`. Must be one of: {canonical_list}"
                     )
                 else:
                     zones[canonical] = members.strip()
@@ -355,16 +355,27 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
 
 # ── Mail builder ───────────────────────────────────────────────────────────────
 
-def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
-                  guild_id: int = None, template_name: str | None = None) -> str:
+
+def build_ds_mail(
+    team: str,
+    zones: dict,
+    subs: list,
+    time_key: str,
+    guild_id: int = None,
+    template_name: str | None = None,
+) -> str:
     """Build DS mail using a guild's stored template (named or default)."""
     from config import (
-        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+        get_storm_template,
+        format_storm_slot,
+        get_storm_slot_for_key,
     )
+
     if guild_id:
         template = get_storm_template(guild_id, "DS", template_name)
     else:
         from config import get_storm_config
+
         template = (get_storm_config(guild_id, "DS") or {}).get("mail_template") or ""
 
     # `time_key` is "1" or "2" from TimeSelectView. Tests pass arbitrary text
@@ -392,6 +403,7 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
         zone_lines.append("")
 
     from storm_icons import zone_emoji_prefix
+
     for zone in DS_ZONE_STRUCTURE:
         members = zones.get(zone)
         if not members or members == "(open)":
@@ -435,20 +447,23 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
         )
 
     # Fallback plain format
-    return "\n".join([
-        "**Desert Storm**",
-        "",
-        "**Zone Assignments**",
-        zones_block,
-        "",
-        "**Subs**",
-        subs_block,
-        "",
-        f"**Time:** {time_str}",
-    ])
+    return "\n".join(
+        [
+            "**Desert Storm**",
+            "",
+            "**Zone Assignments**",
+            zones_block,
+            "",
+            "**Subs**",
+            subs_block,
+            "",
+            f"**Time:** {time_str}",
+        ]
+    )
 
 
 # ── UI Views ───────────────────────────────────────────────────────────────────
+
 
 class TeamSelectView(discord.ui.View):
     def __init__(self):
@@ -492,8 +507,7 @@ class TemplateUseEditView(discord.ui.View):
         self.stop()
 
 
-async def _post_and_copy(channel, post_channel_id: int, event_label: str,
-                          team: str, mail: str):
+async def _post_and_copy(channel, post_channel_id: int, event_label: str, team: str, mail: str):
     """
     Post the finalized mail to the configured post-channel (if set) and
     always send a copyable code block back into the leadership channel.
@@ -512,8 +526,7 @@ async def _post_and_copy(channel, post_channel_id: int, event_label: str,
 
     suffix = f" (also posted to {posted_to})" if posted_to else ""
     await channel.send(
-        f"✅ **{event_label} Team {team} mail, ready to copy{suffix}:**\n"
-        f"```\n{mail}\n```"
+        f"✅ **{event_label} Team {team} mail, ready to copy{suffix}:**\n```\n{mail}\n```"
     )
 
 
@@ -521,10 +534,12 @@ class TimeSelectView(discord.ui.View):
     """Dynamic time select — buttons built from the game-defined storm
     times (DS_SERVER_TIMES / CS_SERVER_TIMES) rendered against the guild's
     timezone."""
+
     def __init__(self, event_type: str = "DS", guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
         from config import get_storm_slot_labels
+
         labels = get_storm_slot_labels(event_type, guild_id)
 
         b1 = discord.ui.Button(label=labels[0][:80], style=discord.ButtonStyle.secondary)
@@ -534,6 +549,7 @@ class TimeSelectView(discord.ui.View):
             self.selected = "1"
             await interaction.response.defer()
             self.stop()
+
         async def pick_2(interaction: discord.Interaction):
             self.selected = "2"
             await interaction.response.defer()
@@ -546,15 +562,23 @@ class TimeSelectView(discord.ui.View):
 
 
 class StormApprovalView(discord.ui.View):
-    def __init__(self, bot, team: str, mail: str, zones: dict, subs: list,
-                 time_key: str, post_channel_id: int = 0):
+    def __init__(
+        self,
+        bot,
+        team: str,
+        mail: str,
+        zones: dict,
+        subs: list,
+        time_key: str,
+        post_channel_id: int = 0,
+    ):
         super().__init__(timeout=3600)
-        self.bot             = bot
-        self.team            = team
-        self.mail            = mail
-        self.zones           = zones
-        self.subs            = subs
-        self.time_key        = time_key
+        self.bot = bot
+        self.team = team
+        self.mail = mail
+        self.zones = zones
+        self.subs = subs
+        self.time_key = time_key
         self.post_channel_id = post_channel_id
 
     async def _disable(self, interaction: discord.Interaction):
@@ -567,8 +591,11 @@ class StormApprovalView(discord.ui.View):
         await interaction.response.defer()
         await self._disable(interaction)
         await _post_and_copy(
-            interaction.channel, self.post_channel_id,
-            "Desert Storm", self.team, self.mail,
+            interaction.channel,
+            self.post_channel_id,
+            "Desert Storm",
+            self.team,
+            self.mail,
         )
         self.stop()
 
@@ -581,6 +608,7 @@ class StormApprovalView(discord.ui.View):
 
 
 # ── Core wizard flow ───────────────────────────────────────────────────────────
+
 
 async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: str):
     """
@@ -596,6 +624,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
         return None
     import premium
     from config import get_storm_template_names
+
     if not await premium.is_premium(guild_id, bot=bot):
         return None
     names = get_storm_template_names(guild_id, event_type)
@@ -610,14 +639,17 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
                 placeholder="Pick a saved template…",
                 options=[discord.SelectOption(label=n[:100], value=n) for n in options],
             )
+
             async def _cb(inter):
                 self.selected = sel.values[0]
-                sel.disabled  = True
+                sel.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Template: **{self.selected}**", view=self,
+                    content=f"✅ Template: **{self.selected}**",
+                    view=self,
                 )
                 self.stop()
+
             sel.callback = _cb
             self.add_item(sel)
 
@@ -636,8 +668,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     return view.selected
 
 
-async def run_ds_draft_flow(bot, channel, user, team: str,
-                             current_zones: dict, current_subs: list):
+async def run_ds_draft_flow(bot, channel, user, team: str, current_zones: dict, current_subs: list):
     """
     Step 2-4 of the `📄 Generate mail` flow (DS):
 
@@ -654,7 +685,9 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Desert Storm this week?")
+    time_msg = await channel.send(
+        "**Step 2 of 4: Pick Time**\n⏰ What time is Desert Storm this week?"
+    )
     time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -664,8 +697,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         pass
     if time_view.selected is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND["DS"].lstrip("/"),
+                hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
     time_key = time_view.selected
@@ -694,14 +729,17 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     await use_view.wait()
     if use_view.choice is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND["DS"].lstrip("/"),
+                hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
 
     zones, subs = current_zones, current_subs
 
     if use_view.choice == "edit":
+
         def check(m):
             return m.author == user and m.channel == channel
 
@@ -713,9 +751,11 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
             await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
-        )
+                HUB_TIMEOUT.format(
+                    cmd=HUB_COMMAND["DS"].lstrip("/"),
+                    hub_btn=HUB_BTN_DRAFT,
+                )
+            )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -740,16 +780,19 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
             )
             return
         if errors:
-            await channel.send(
-                "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
-            )
+            await channel.send("⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors))
 
         zones, subs = edited_zones, edited_subs
 
         # Save the edited assignments now so they become next week's default,
         # but make it explicit we have NOT posted the mail yet.
         await asyncio.get_event_loop().run_in_executor(
-            None, save_ds_assignments, team, zones, subs, guild_id,
+            None,
+            save_ds_assignments,
+            team,
+            zones,
+            subs,
+            guild_id,
         )
         await channel.send(
             f"💾 **Team {team} template saved (not posted).** "
@@ -762,17 +805,26 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         return  # picker timed out
 
     mail = build_ds_mail(
-        team, zones, subs, time_key,
-        guild_id=guild_id, template_name=template_name,
+        team,
+        zones,
+        subs,
+        time_key,
+        guild_id=guild_id,
+        template_name=template_name,
     )
 
     from config import get_storm_config
-    storm_cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
+
+    storm_cfg = get_storm_config(guild_id, "DS") if guild_id else {}
     post_channel_id = int(storm_cfg.get("post_channel_id") or 0)
 
     approval_view = StormApprovalView(
-        bot=bot, team=team, mail=mail,
-        zones=zones, subs=subs, time_key=time_key,
+        bot=bot,
+        team=team,
+        mail=mail,
+        zones=zones,
+        subs=subs,
+        time_key=time_key,
         post_channel_id=post_channel_id,
     )
     await channel.send(
@@ -784,16 +836,16 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
 
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
+
 async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
+            ephemeral=True,
         )
         return False
     return True
@@ -819,7 +871,6 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
     is_ds = event_type == "DS"
     icon = "🔥" if is_ds else "⚡"
     label = "Desert Storm" if is_ds else "Canyon Storm"
-    parent = "desertstorm" if is_ds else "canyonstorm"
 
     # Step 1: Pick team
     team_msg = await channel.send(
@@ -837,8 +888,10 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
     if team_view.selected is None:
         event_type = "DS" if is_ds else "CS"
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND[event_type]}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND[event_type].lstrip("/"),
+                hub_btn=HUB_BTN_DRAFT,
+            )
         )
         await interaction.followup.send("⏰ Timed out.", ephemeral=True)
         return
@@ -848,11 +901,17 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
     # Load the team's saved assignments so they become the starting template.
     if is_ds:
         zones, subs = await asyncio.get_event_loop().run_in_executor(
-            None, load_ds_assignments, team, interaction.guild_id,
+            None,
+            load_ds_assignments,
+            team,
+            interaction.guild_id,
         )
     else:
         zones = await asyncio.get_event_loop().run_in_executor(
-            None, load_cs_assignments, team, interaction.guild_id,
+            None,
+            load_cs_assignments,
+            team,
+            interaction.guild_id,
         )
 
     await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
@@ -875,37 +934,42 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     await interaction.response.defer(ephemeral=True)
     from config import get_storm_config, get_config
 
-    label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    icon     = "⚔️" if event_type == "DS" else "🏜️"
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    icon = "⚔️" if event_type == "DS" else "🏜️"
     cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
     # The per-event `/setup_*` slash commands were retired in favour of
     # the `/setup` hub (#201); point officers at the hub + correct
     # button instead of a non-existent slash command.
-    setup_hint = (
-        "setup → ⚔️ Desert Storm" if event_type == "DS"
-        else "setup → 🏜️ Canyon Storm"
-    )
+    setup_hint = "setup → ⚔️ Desert Storm" if event_type == "DS" else "setup → 🏜️ Canyon Storm"
 
-    cfg  = get_config(interaction.guild_id)
+    cfg = get_config(interaction.guild_id)
     scfg = get_storm_config(interaction.guild_id, event_type)
-    log_channel_id = (cfg.ds_log_channel_id if event_type == "DS" else cfg.cs_log_channel_id) if cfg else 0
+    log_channel_id = (
+        (cfg.ds_log_channel_id if event_type == "DS" else cfg.cs_log_channel_id) if cfg else 0
+    )
 
     embed = discord.Embed(
         title=f"{icon} {label}",
         color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
     )
     from config import get_storm_team_slot_labels
+
     # Show the TEAM-mapped time labels (#251) — what each team actually
     # runs at, driven by the saved per-team slot picks in /setup_*storm
     # Step 3. Falls back to "*not set*" when the alliance hasn't picked
     # yet; setup-cmd hint is already in the footer below.
     team_a_label, team_b_label = get_storm_team_slot_labels(
-        interaction.guild_id, event_type,
+        interaction.guild_id,
+        event_type,
     )
     teams_setting = (scfg.get("teams") or "both").strip()
 
-    embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
-    embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
+    embed.add_field(name="Sheet Tab", value=scfg.get("tab_name", "*not set*"), inline=False)
+    embed.add_field(
+        name="Log Channel",
+        value=f"<#{log_channel_id}>" if log_channel_id else "*not set*",
+        inline=False,
+    )
     if teams_setting in ("both", "A"):
         embed.add_field(
             name="Team A Time",
@@ -923,27 +987,37 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     try:
         if event_type == "DS":
             zones, subs = await asyncio.get_event_loop().run_in_executor(
-                None, load_ds_assignments, "A", interaction.guild_id,
+                None,
+                load_ds_assignments,
+                "A",
+                interaction.guild_id,
             )
             template = build_ds_template(zones, subs)
         else:
             zones = await asyncio.get_event_loop().run_in_executor(
-                None, load_cs_assignments, "A", interaction.guild_id,
+                None,
+                load_cs_assignments,
+                "A",
+                interaction.guild_id,
             )
             template = build_cs_template(zones)
         # Discord field value cap is 1024 chars
         preview = template[:1000] + ("\n…" if len(template) > 1000 else "")
-        embed.add_field(name="Current Mail Template (Team A)", value=f"```\n{preview}\n```", inline=False)
+        embed.add_field(
+            name="Current Mail Template (Team A)", value=f"```\n{preview}\n```", inline=False
+        )
     except Exception as e:
         embed.add_field(name="Current Mail Template", value=f"⚠️ Could not load: {e}", inline=False)
 
-    embed.set_footer(text=f"Run /{setup_hint} to update. Run /{cmd_name} draft to generate a draft.")
+    embed.set_footer(
+        text=f"Run /{setup_hint} to update. Run /{cmd_name} draft to generate a draft."
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CANYON STORM (CS)
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
@@ -954,26 +1028,26 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
 # file) plus the CS_SUBS_KEY for {subs}; the existing test suite asserts
 # that property, so any key drift will fail loudly in CI.
 DEFAULT_CS_B = {
-    "s1_power_tower":    "",
-    "s1_dc1":            "",
-    "s1_dc2":            "",
-    "s1_sw1":            "",
-    "s1_sw2":            "",
-    "s1_sw3":            "",
-    "s1_sw4":            "",
-    "s2_ds1":            "",
-    "s2_ds2":            "",
-    "s2_sf1":            "",
-    "s2_sf2":            "",
-    "s3_virus_lab":      "",
-    "s3_power_tower":    "",
-    "s3_dc1":            "",
-    "s3_dc2":            "",
-    "s3_ds1":            "",
-    "s3_ds2":            "",
-    "s3_sf1":            "",
-    "s3_sf2":            "",
-    "s3_pop_pair1":      "",
+    "s1_power_tower": "",
+    "s1_dc1": "",
+    "s1_dc2": "",
+    "s1_sw1": "",
+    "s1_sw2": "",
+    "s1_sw3": "",
+    "s1_sw4": "",
+    "s2_ds1": "",
+    "s2_ds2": "",
+    "s2_sf1": "",
+    "s2_sf2": "",
+    "s3_virus_lab": "",
+    "s3_power_tower": "",
+    "s3_dc1": "",
+    "s3_dc2": "",
+    "s3_ds1": "",
+    "s3_ds2": "",
+    "s3_sf1": "",
+    "s3_sf2": "",
+    "s3_pop_pair1": "",
 }
 
 DEFAULT_CS_A = {k: "" for k in DEFAULT_CS_B}
@@ -982,15 +1056,17 @@ CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
 
 # ── CS Sheets persistence ──────────────────────────────────────────────────────
 
+
 def load_cs_assignments(team: str, guild_id: int = None) -> dict:
     zone_key = f"CS_{team}_ZONES"
     try:
         from config import get_config
+
         cfg = get_config(guild_id)
-        sh   = _get_spreadsheet(guild_id)
-        ws   = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         rows = ws.get_all_values()
-        zones   = {}
+        zones = {}
         section = None
         for row in rows:
             if not row or not row[0].strip():
@@ -1021,6 +1097,7 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
             return dict(CS_DEFAULTS[team])
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[STORM] Error loading CS Team {team} assignments: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
@@ -1032,10 +1109,10 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
     """Save CS assignments for one team without affecting DS or the other CS team."""
     try:
         from config import get_config
+
         cfg = get_config(guild_id) if guild_id else None
-        sh  = _get_spreadsheet(guild_id)
-        ws  = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
-        existing = ws.get_all_values()
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
 
         # Rebuild full sheet: preserve all DS and CS rows, replace this team's CS section
         other_cs = "B" if team == "A" else "A"
@@ -1059,8 +1136,10 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
                     rows.append([name])
             rows.append(["", ""])
 
-        for t, t_zones in [("A", zones if team == "A" else other_cs_zones),
-                            ("B", zones if team == "B" else other_cs_zones)]:
+        for t, t_zones in [
+            ("A", zones if team == "A" else other_cs_zones),
+            ("B", zones if team == "B" else other_cs_zones),
+        ]:
             rows.append([f"CS_{t}_ZONES", ""])
             for z, m in t_zones.items():
                 if isinstance(m, list):
@@ -1073,6 +1152,7 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
         print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[STORM] Error saving CS Team {team} assignments: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
@@ -1087,24 +1167,24 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
 # {subs} placeholder rather than a zone.
 CS_ZONE_STRUCTURE: list[tuple[int, str, str]] = [
     (1, "s1_power_tower", "Power Tower"),
-    (1, "s1_dc1",         "Data Center 1"),
-    (1, "s1_dc2",         "Data Center 2"),
-    (1, "s1_sw1",         "Sample Warehouse 1"),
-    (1, "s1_sw2",         "Sample Warehouse 2"),
-    (1, "s1_sw3",         "Sample Warehouse 3"),
-    (1, "s1_sw4",         "Sample Warehouse 4"),
-    (2, "s2_ds1",         "Defense System 1"),
-    (2, "s2_ds2",         "Defense System 2"),
-    (2, "s2_sf1",         "Serum Factory 1"),
-    (2, "s2_sf2",         "Serum Factory 2"),
-    (3, "s3_virus_lab",   "Virus Lab"),
+    (1, "s1_dc1", "Data Center 1"),
+    (1, "s1_dc2", "Data Center 2"),
+    (1, "s1_sw1", "Sample Warehouse 1"),
+    (1, "s1_sw2", "Sample Warehouse 2"),
+    (1, "s1_sw3", "Sample Warehouse 3"),
+    (1, "s1_sw4", "Sample Warehouse 4"),
+    (2, "s2_ds1", "Defense System 1"),
+    (2, "s2_ds2", "Defense System 2"),
+    (2, "s2_sf1", "Serum Factory 1"),
+    (2, "s2_sf2", "Serum Factory 2"),
+    (3, "s3_virus_lab", "Virus Lab"),
     (3, "s3_power_tower", "Power Tower"),
-    (3, "s3_dc1",         "Data Center 1"),
-    (3, "s3_dc2",         "Data Center 2"),
-    (3, "s3_ds1",         "Defense System 1"),
-    (3, "s3_ds2",         "Defense System 2"),
-    (3, "s3_sf1",         "Serum Factory 1"),
-    (3, "s3_sf2",         "Serum Factory 2"),
+    (3, "s3_dc1", "Data Center 1"),
+    (3, "s3_dc2", "Data Center 2"),
+    (3, "s3_ds1", "Defense System 1"),
+    (3, "s3_ds2", "Defense System 2"),
+    (3, "s3_sf1", "Serum Factory 1"),
+    (3, "s3_sf2", "Serum Factory 2"),
 ]
 
 # Key used as the {subs} placeholder rather than rendered as a zone.
@@ -1180,11 +1260,17 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
         if not line:
             continue
         if line.upper() == "STAGE 1":
-            stage = 1; section = None; continue
+            stage = 1
+            section = None
+            continue
         if line.upper() == "STAGE 2":
-            stage = 2; section = None; continue
+            stage = 2
+            section = None
+            continue
         if line.upper() == "STAGE 3":
-            stage = 3; section = None; continue
+            stage = 3
+            section = None
+            continue
 
         # Subs section header (no colon): `Subs` or legacy `Pop Pairs …`.
         if line.lower() in subs_header_labels:
@@ -1217,16 +1303,22 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
 
 # ── CS Mail builder ────────────────────────────────────────────────────────────
 
-def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
-                  template_name: str | None = None) -> str:
+
+def build_cs_mail(
+    team: str, z: dict, time_key: str, guild_id: int = None, template_name: str | None = None
+) -> str:
     """Build CS mail using a guild's stored template (named or default)."""
     from config import (
-        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+        get_storm_template,
+        format_storm_slot,
+        get_storm_slot_for_key,
     )
+
     if guild_id:
         template = get_storm_template(guild_id, "CS", template_name)
     else:
         from config import get_storm_config
+
         template = (get_storm_config(guild_id, "CS") or {}).get("mail_template") or ""
 
     slot = get_storm_slot_for_key("CS", time_key) if guild_id else None
@@ -1254,6 +1346,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
         zone_lines.append("")
 
     from storm_icons import zone_emoji_prefix
+
     for stage, key, label in CS_ZONE_STRUCTURE:
         members = z.get(key)
         if not members or members == "(open)":
@@ -1295,30 +1388,34 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
             time=time_str,
         )
 
-    return "\n".join([
-        "**Canyon Storm**",
-        "",
-        "**Zone Assignments**",
-        zones_block,
-        "",
-        "**Subs**",
-        subs_block,
-        "",
-        f"**Time:** {time_str}",
-    ])
+    return "\n".join(
+        [
+            "**Canyon Storm**",
+            "",
+            "**Zone Assignments**",
+            zones_block,
+            "",
+            "**Subs**",
+            subs_block,
+            "",
+            f"**Time:** {time_str}",
+        ]
+    )
 
 
 # ── CS Approval view ───────────────────────────────────────────────────────────
 
+
 class CSApprovalView(discord.ui.View):
-    def __init__(self, bot, team: str, mail: str, zones: dict, time_key: str,
-                 post_channel_id: int = 0):
+    def __init__(
+        self, bot, team: str, mail: str, zones: dict, time_key: str, post_channel_id: int = 0
+    ):
         super().__init__(timeout=3600)
-        self.bot             = bot
-        self.team            = team
-        self.mail            = mail
-        self.zones           = zones
-        self.time_key        = time_key
+        self.bot = bot
+        self.team = team
+        self.mail = mail
+        self.zones = zones
+        self.time_key = time_key
         self.post_channel_id = post_channel_id
 
     async def _disable(self, interaction: discord.Interaction):
@@ -1331,8 +1428,11 @@ class CSApprovalView(discord.ui.View):
         await interaction.response.defer()
         await self._disable(interaction)
         await _post_and_copy(
-            interaction.channel, self.post_channel_id,
-            "Canyon Storm", self.team, self.mail,
+            interaction.channel,
+            self.post_channel_id,
+            "Canyon Storm",
+            self.team,
+            self.mail,
         )
         self.stop()
 
@@ -1346,6 +1446,7 @@ class CSApprovalView(discord.ui.View):
 
 # ── CS Core wizard flow ────────────────────────────────────────────────────────
 
+
 async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     """
     Step 2-4 of the `📄 Generate mail` flow (CS): Time → Template (Use as-is / Edit) →
@@ -1354,7 +1455,9 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Canyon Storm this week?")
+    time_msg = await channel.send(
+        "**Step 2 of 4: Pick Time**\n⏰ What time is Canyon Storm this week?"
+    )
     time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -1364,8 +1467,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         pass
     if time_view.selected is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND["CS"].lstrip("/"),
+                hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
     time_key = time_view.selected
@@ -1394,14 +1499,17 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     await use_view.wait()
     if use_view.choice is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND["CS"].lstrip("/"),
+                hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
 
     zones = current_zones
 
     if use_view.choice == "edit":
+
         def check(m):
             return m.author == user and m.channel == channel
 
@@ -1413,9 +1521,11 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
             await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
-        )
+                HUB_TIMEOUT.format(
+                    cmd=HUB_COMMAND["CS"].lstrip("/"),
+                    hub_btn=HUB_BTN_DRAFT,
+                )
+            )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -1440,14 +1550,16 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             )
             return
         if errors:
-            await channel.send(
-                "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
-            )
+            await channel.send("⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors))
 
         zones = edited_zones
 
         await asyncio.get_event_loop().run_in_executor(
-            None, save_cs_assignments, team, zones, guild_id,
+            None,
+            save_cs_assignments,
+            team,
+            zones,
+            guild_id,
         )
         await channel.send(
             f"💾 **Team {team} template saved (not posted).** "
@@ -1460,17 +1572,25 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         return
 
     mail = build_cs_mail(
-        team, zones, time_key,
-        guild_id=guild_id, template_name=template_name,
+        team,
+        zones,
+        time_key,
+        guild_id=guild_id,
+        template_name=template_name,
     )
 
     from config import get_storm_config
-    storm_cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
+
+    storm_cfg = get_storm_config(guild_id, "CS") if guild_id else {}
     post_channel_id = int(storm_cfg.get("post_channel_id") or 0)
 
     approval_view = CSApprovalView(
-        bot=bot, team=team, mail=mail, zones=zones,
-        time_key=time_key, post_channel_id=post_channel_id,
+        bot=bot,
+        team=team,
+        mail=mail,
+        zones=zones,
+        time_key=time_key,
+        post_channel_id=post_channel_id,
     )
     await channel.send(
         f"**Step 4 of 4: Preview**\n"

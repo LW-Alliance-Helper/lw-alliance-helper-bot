@@ -232,18 +232,28 @@ class TestMostRecentEventDate:
     def test_returns_most_recent_past_event(self, seeded_db):
         # Seed two registration posts: one past, one future.
         import config
+
         config.record_storm_registration_post(
-            777, "DS", "2026-05-10",
-            channel_id=1, message_id=10,
+            777,
+            "DS",
+            "2026-05-10",
+            channel_id=1,
+            message_id=10,
         )
         config.record_storm_registration_post(
-            777, "DS", "2026-05-20",
-            channel_id=1, message_id=20,
+            777,
+            "DS",
+            "2026-05-20",
+            channel_id=1,
+            message_id=20,
         )
         # Different event type — should be ignored.
         config.record_storm_registration_post(
-            777, "CS", "2026-05-12",
-            channel_id=1, message_id=30,
+            777,
+            "CS",
+            "2026-05-12",
+            channel_id=1,
+            message_id=30,
         )
         iso = sdh.most_recent_event_date(777, "DS", today=self.TODAY)
         assert iso == "2026-05-10"
@@ -254,18 +264,26 @@ class TestMostRecentEventDate:
 
     def test_today_inclusive(self, seeded_db):
         import config
+
         config.record_storm_registration_post(
-            777, "DS", self.TODAY.isoformat(),
-            channel_id=1, message_id=99,
+            777,
+            "DS",
+            self.TODAY.isoformat(),
+            channel_id=1,
+            message_id=99,
         )
         iso = sdh.most_recent_event_date(777, "DS", today=self.TODAY)
         assert iso == self.TODAY.isoformat()
 
     def test_returns_none_when_only_future_posts(self, seeded_db):
         import config
+
         config.record_storm_registration_post(
-            777, "DS", "2026-06-01",
-            channel_id=1, message_id=50,
+            777,
+            "DS",
+            "2026-06-01",
+            channel_id=1,
+            message_id=50,
         )
         iso = sdh.most_recent_event_date(777, "DS", today=self.TODAY)
         assert iso is None
@@ -286,16 +304,19 @@ class TestParseLastUpdated:
         # With the column flagged DMY, the same numeric components
         # land on the EU interpretation.
         assert sdh.parse_last_updated(
-            "24/5/2026", dmy_first=True,
+            "24/5/2026",
+            dmy_first=True,
         ) == _dt.date(2026, 5, 24)
 
     def test_iso_date_bypasses_dmy_flag(self):
         # ISO 8601 is unambiguous — the flag must not flip it.
         assert sdh.parse_last_updated(
-            "2026-05-24", dmy_first=True,
+            "2026-05-24",
+            dmy_first=True,
         ) == _dt.date(2026, 5, 24)
         assert sdh.parse_last_updated(
-            "2026-05-24", dmy_first=False,
+            "2026-05-24",
+            dmy_first=False,
         ) == _dt.date(2026, 5, 24)
 
     def test_iso_datetime_with_tz_suffix(self):
@@ -318,7 +339,8 @@ class TestParseLastUpdated:
             "May 24, 2026",
         ) == _dt.date(2026, 5, 24)
         assert sdh.parse_last_updated(
-            "May 24, 2026", dmy_first=True,
+            "May 24, 2026",
+            dmy_first=True,
         ) == _dt.date(2026, 5, 24)
 
     def test_long_month_no_comma_day_first(self):
@@ -395,22 +417,41 @@ class TestDetectLastUpdatedDmyFirst:
     component is > 12, the whole column locks to DMY."""
 
     def test_all_mdy_safe_values_return_false(self):
-        assert sdh.detect_last_updated_dmy_first([
-            "5/24/2026", "6/15/2026", "11/30/2025",
-        ]) is False
+        assert (
+            sdh.detect_last_updated_dmy_first(
+                [
+                    "5/24/2026",
+                    "6/15/2026",
+                    "11/30/2025",
+                ]
+            )
+            is False
+        )
 
     def test_one_value_with_first_component_over_12_locks_dmy(self):
-        assert sdh.detect_last_updated_dmy_first([
-            "5/24/2026", "24/5/2026",
-        ]) is True
+        assert (
+            sdh.detect_last_updated_dmy_first(
+                [
+                    "5/24/2026",
+                    "24/5/2026",
+                ]
+            )
+            is True
+        )
 
     def test_iso_values_dont_contribute(self):
         # ISO is unambiguous; should not vote either way. All-ISO
         # columns return False (default MDY) so non-ISO rows can be
         # parsed against the same flag.
-        assert sdh.detect_last_updated_dmy_first([
-            "2026-05-24", "2026-13-05",
-        ]) is False
+        assert (
+            sdh.detect_last_updated_dmy_first(
+                [
+                    "2026-05-24",
+                    "2026-13-05",
+                ]
+            )
+            is False
+        )
 
     def test_empty_column_returns_false(self):
         assert sdh.detect_last_updated_dmy_first(["", ""]) is False
@@ -418,12 +459,26 @@ class TestDetectLastUpdatedDmyFirst:
 
     def test_dash_separated_values_also_detected(self):
         # `-` separator works too — both M-D-Y and D-M-Y see it.
-        assert sdh.detect_last_updated_dmy_first([
-            "5-24-2026", "31-12-2025",
-        ]) is True
+        assert (
+            sdh.detect_last_updated_dmy_first(
+                [
+                    "5-24-2026",
+                    "31-12-2025",
+                ]
+            )
+            is True
+        )
 
     def test_mixed_blank_and_data_uses_data_only(self):
         # Blank cells should be ignored cleanly.
-        assert sdh.detect_last_updated_dmy_first([
-            "", "5/24/2026", "", "25/12/2025",
-        ]) is True
+        assert (
+            sdh.detect_last_updated_dmy_first(
+                [
+                    "",
+                    "5/24/2026",
+                    "",
+                    "25/12/2025",
+                ]
+            )
+            is True
+        )

@@ -27,41 +27,42 @@ from defaults import (
     DEFAULT_CS_TEMPLATE,
 )
 
-DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
+DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
 
 # ── GuildConfig dataclass ──────────────────────────────────────────────────────
 
+
 @dataclass
 class GuildConfig:
-    guild_id:                 int
-    leadership_channel_id:    int        = 0
-    announcement_channel_id:  int        = 0
-    member_role_id:           int        = 0
-    member_role_name:         str        = "Member"
-    leadership_role_id:       int        = 0
-    leadership_role_name:     str        = "Leadership"
-    survey_channel_id:        int        = 0
-    survey_notify_channel_id: int        = 0
-    ds_log_channel_id:        int        = 0
-    cs_log_channel_id:        int        = 0
-    event_draft_channel_id:   int        = 0
-    event_announce_channel_id:int        = 0
-    event_draft_time:         str        = "12:00"
-    event_five_min_warning:   int        = 1
-    spreadsheet_id:           str        = ""
-    timezone:                 str        = "America/New_York"
-    tab_train_schedule:       str        = "Train Schedule"
-    tab_ds_assignments:       str        = "DS Assignments"
-    tab_sitouts:              str        = "DS-CS Sit-outs"
-    tab_survey_history:       str        = "Survey History"
-    tab_member_default:       str        = "Season 5 - Off-Season"
-    setup_complete:           bool       = False
+    guild_id: int
+    leadership_channel_id: int = 0
+    announcement_channel_id: int = 0
+    member_role_id: int = 0
+    member_role_name: str = "Member"
+    leadership_role_id: int = 0
+    leadership_role_name: str = "Leadership"
+    survey_channel_id: int = 0
+    survey_notify_channel_id: int = 0
+    ds_log_channel_id: int = 0
+    cs_log_channel_id: int = 0
+    event_draft_channel_id: int = 0
+    event_announce_channel_id: int = 0
+    event_draft_time: str = "12:00"
+    event_five_min_warning: int = 1
+    spreadsheet_id: str = ""
+    timezone: str = "America/New_York"
+    tab_train_schedule: str = "Train Schedule"
+    tab_ds_assignments: str = "DS Assignments"
+    tab_sitouts: str = "DS-CS Sit-outs"
+    tab_survey_history: str = "Survey History"
+    tab_member_default: str = "Season 5 - Off-Season"
+    setup_complete: bool = False
     # Opt-out toggle for the release-announcement embed posted to the
     # leadership channel when a new major/minor version deploys (#253).
     # Defaults to enabled so existing alliances see the next release;
     # surfaced as a toggle in the `/setup` re-entry hub.
-    release_announcements_enabled: int   = 1
+    release_announcements_enabled: int = 1
 
     def parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse 'HH:MM' into (hour, minute)."""
@@ -74,6 +75,7 @@ class GuildConfig:
 
 
 # ── Database layer ─────────────────────────────────────────────────────────────
+
 
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -686,25 +688,35 @@ def init_db():
             pass
 
         try:
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN event_draft_channel_id INTEGER DEFAULT 0")
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN event_announce_channel_id INTEGER DEFAULT 0")
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN event_draft_time TEXT DEFAULT '12:00'")
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN event_five_min_warning INTEGER DEFAULT 1")
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN event_draft_channel_id INTEGER DEFAULT 0"
+            )
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN event_announce_channel_id INTEGER DEFAULT 0"
+            )
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN event_draft_time TEXT DEFAULT '12:00'"
+            )
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN event_five_min_warning INTEGER DEFAULT 1"
+            )
             conn.commit()
         except Exception:
             pass
 
         try:
-            conn.execute("ALTER TABLE guild_storm_config ADD COLUMN log_channel_id INTEGER DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE guild_storm_config ADD COLUMN log_channel_id INTEGER DEFAULT 0"
+            )
             conn.commit()
             print("[CONFIG] Added log_channel_id column to guild_storm_config")
         except Exception:
             pass
 
         for col, definition in [
-            ("templates_json",   "TEXT DEFAULT '[]'"),
+            ("templates_json", "TEXT DEFAULT '[]'"),
             ("default_template", "TEXT DEFAULT 'Default'"),
-            ("post_channel_id",  "INTEGER DEFAULT 0"),
+            ("post_channel_id", "INTEGER DEFAULT 0"),
             # ── Participation log (#20 rework) ───────────────────────────────────
             # Each (guild_id, event_type) row carries its own participation
             # config: enabled, the sheet tab to write rows to, the
@@ -712,21 +724,21 @@ def init_db():
             # for `roster_names`-typed questions (tab + name_col + optional
             # alias_col + start_row). The log-summary channel reuses the
             # existing `log_channel_id` column so we don't duplicate state.
-            ("participation_enabled",         "INTEGER DEFAULT 0"),
-            ("participation_tab_name",        "TEXT    DEFAULT ''"),
-            ("participation_questions",       "TEXT    DEFAULT '[]'"),
-            ("participation_roster_tab",      "TEXT    DEFAULT ''"),
+            ("participation_enabled", "INTEGER DEFAULT 0"),
+            ("participation_tab_name", "TEXT    DEFAULT ''"),
+            ("participation_questions", "TEXT    DEFAULT '[]'"),
+            ("participation_roster_tab", "TEXT    DEFAULT ''"),
             ("participation_roster_name_col", "INTEGER DEFAULT 0"),
-            ("participation_roster_alias_col","INTEGER DEFAULT -1"),
-            ("participation_roster_start_row","INTEGER DEFAULT 2"),
+            ("participation_roster_alias_col", "INTEGER DEFAULT -1"),
+            ("participation_roster_start_row", "INTEGER DEFAULT 2"),
             # Premium DM-reminder body — sent when leadership clicks
             # `🔔 Send DM reminder to roster` on the storm hub
             # (empty → hardcoded default in storm_log.py).
-            ("dm_reminder_message",           "TEXT    DEFAULT ''"),
+            ("dm_reminder_message", "TEXT    DEFAULT ''"),
             # Which DS teams the alliance runs (#148) — 'both' | 'A' | 'B'.
             # Defaults to 'both' so existing alliances see no behaviour change.
             # CS rows ignore this field.
-            ("teams",                         "TEXT    DEFAULT 'both'"),
+            ("teams", "TEXT    DEFAULT 'both'"),
             # ── Structured storm flow (#38 + #54) ────────────────────────────────
             # Premium opt-in structured roster builder. `structured_flow_enabled`
             # gates the registration post, on-behalf voting, eligibility-gated
@@ -737,28 +749,28 @@ def init_db():
             # pairs). Tab names default to empty and are resolved to
             # event-type-aware defaults at read time.
             ("structured_flow_enabled", "INTEGER DEFAULT 0"),
-            ("power_metric_column",     "TEXT    DEFAULT 'B'"),
+            ("power_metric_column", "TEXT    DEFAULT 'B'"),
             # Power Data Source flexibility — see CREATE TABLE comment.
             # Empty values preserve the pre-flexibility default of
             # reading power from the Member Roster tab keyed by its
             # discord_id_col, so existing alliances see zero behaviour
             # change until they reconfigure via the wizard.
-            ("power_metric_tab",        "TEXT    DEFAULT ''"),
-            ("power_match_column",      "TEXT    DEFAULT ''"),
-            ("sub_mode",                "TEXT    DEFAULT 'pool'"),
-            ("signup_channel_id",       "INTEGER DEFAULT 0"),
-            ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
-            ("signups_tab",             "TEXT    DEFAULT ''"),
-            ("rosters_tab",             "TEXT    DEFAULT ''"),
-            ("attendance_tab",          "TEXT    DEFAULT ''"),
-            ("strategies_tab",          "TEXT    DEFAULT ''"),
-            ("member_rules_tab",        "TEXT    DEFAULT ''"),
+            ("power_metric_tab", "TEXT    DEFAULT ''"),
+            ("power_match_column", "TEXT    DEFAULT ''"),
+            ("sub_mode", "TEXT    DEFAULT 'pool'"),
+            ("signup_channel_id", "INTEGER DEFAULT 0"),
+            ("signup_schedule_cron", "TEXT    DEFAULT ''"),
+            ("signups_tab", "TEXT    DEFAULT ''"),
+            ("rosters_tab", "TEXT    DEFAULT ''"),
+            ("attendance_tab", "TEXT    DEFAULT ''"),
+            ("strategies_tab", "TEXT    DEFAULT ''"),
+            ("member_rules_tab", "TEXT    DEFAULT ''"),
             # Auto-scheduler (#131 + Rule H / #164). Event day is now
             # game-defined (DS = Friday, CS = Thursday), so we only
             # store the POLL day-of-week and the post time. -1 means
             # "manual posting only — use /<parent> post_signup".
-            ("poll_day_of_week",        "INTEGER DEFAULT -1"),
-            ("signup_time",             "TEXT    DEFAULT ''"),
+            ("poll_day_of_week", "INTEGER DEFAULT -1"),
+            ("signup_time", "TEXT    DEFAULT ''"),
             # Power-refresh DM nudge (#138). Premium-only — when on,
             # the SignupView click handler DMs the voter if their
             # power_column_name cell on the roster Sheet is missing
@@ -769,18 +781,18 @@ def init_db():
             # (Starter / Paired Sub / Pool Sub) so each can carry
             # role-specific framing. Empty = fall back to
             # defaults.py's DEFAULT_ROSTER_DM_* constants at send time.
-            ("roster_dm_starter_template",    "TEXT DEFAULT ''"),
+            ("roster_dm_starter_template", "TEXT DEFAULT ''"),
             ("roster_dm_paired_sub_template", "TEXT DEFAULT ''"),
-            ("roster_dm_pool_sub_template",   "TEXT DEFAULT ''"),
+            ("roster_dm_pool_sub_template", "TEXT DEFAULT ''"),
             # Per-team time-slot mapping (#251) — see CREATE TABLE comment.
             # No SQL default: NULL signals "leadership hasn't picked yet."
-            ("team_a_slot_index",        "INTEGER"),
-            ("team_b_slot_index",        "INTEGER"),
+            ("team_a_slot_index", "INTEGER"),
+            ("team_b_slot_index", "INTEGER"),
             # Stale-power DM nudge (#255) — see CREATE TABLE comment.
-            ("power_last_updated_tab",          "TEXT    DEFAULT ''"),
-            ("power_last_updated_column",       "TEXT    DEFAULT ''"),
+            ("power_last_updated_tab", "TEXT    DEFAULT ''"),
+            ("power_last_updated_column", "TEXT    DEFAULT ''"),
             ("power_last_updated_match_column", "TEXT    DEFAULT ''"),
-            ("power_refresh_stale_days",        "INTEGER DEFAULT 0"),
+            ("power_refresh_stale_days", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -815,9 +827,7 @@ def init_db():
         except Exception:
             pass
         try:
-            conn.execute(
-                "ALTER TABLE guild_storm_config DROP COLUMN power_column_name"
-            )
+            conn.execute("ALTER TABLE guild_storm_config DROP COLUMN power_column_name")
             conn.commit()
             print("[CONFIG] Dropped power_column_name from guild_storm_config")
         except Exception:
@@ -835,8 +845,7 @@ def init_db():
                 "WHERE event_day_of_week >= 0 AND poll_day_of_week = -1"
             )
             conn.commit()
-            print("[CONFIG] Migrated event_day_of_week + signup_lead_days "
-                  "-> poll_day_of_week")
+            print("[CONFIG] Migrated event_day_of_week + signup_lead_days -> poll_day_of_week")
         except Exception:
             pass
         # Drop the retired columns in the same boot. SQLite 3.35+ supports
@@ -852,14 +861,14 @@ def init_db():
 
         # ── guild_extra_surveys migrations (per-survey reminder fields) ────────
         for col, definition in [
-            ("reminder_message",      "TEXT DEFAULT ''"),
-            ("reminder_enabled",      "INTEGER DEFAULT 0"),
-            ("reminder_frequency",    "TEXT DEFAULT 'off'"),       # off | daily | weekly
-            ("reminder_day_of_week",  "INTEGER DEFAULT 1"),        # 0=Mon..6=Sun (weekly only)
-            ("reminder_time",         "TEXT DEFAULT '12:00'"),     # HH:MM 24h, in guild tz
-            ("reminder_channel_id",   "INTEGER DEFAULT 0"),        # 0 = DM-via-roster (Premium)
-            ("reminder_use_dm",       "INTEGER DEFAULT 0"),        # 1 = DM-via-roster (Premium)
-            ("reminder_last_fired",   "TEXT DEFAULT ''"),          # ISO date of last fire
+            ("reminder_message", "TEXT DEFAULT ''"),
+            ("reminder_enabled", "INTEGER DEFAULT 0"),
+            ("reminder_frequency", "TEXT DEFAULT 'off'"),  # off | daily | weekly
+            ("reminder_day_of_week", "INTEGER DEFAULT 1"),  # 0=Mon..6=Sun (weekly only)
+            ("reminder_time", "TEXT DEFAULT '12:00'"),  # HH:MM 24h, in guild tz
+            ("reminder_channel_id", "INTEGER DEFAULT 0"),  # 0 = DM-via-roster (Premium)
+            ("reminder_use_dm", "INTEGER DEFAULT 0"),  # 1 = DM-via-roster (Premium)
+            ("reminder_last_fired", "TEXT DEFAULT ''"),  # ISO date of last fire
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_extra_surveys ADD COLUMN {col} {definition}")
@@ -873,14 +882,14 @@ def init_db():
         # scheduled reminder config too. Free guilds use channel posts;
         # Premium can opt into DM-via-roster.
         for col, definition in [
-            ("reminder_message",      "TEXT DEFAULT ''"),
-            ("reminder_enabled",      "INTEGER DEFAULT 0"),
-            ("reminder_frequency",    "TEXT DEFAULT 'off'"),
-            ("reminder_day_of_week",  "INTEGER DEFAULT 1"),
-            ("reminder_time",         "TEXT DEFAULT '12:00'"),
-            ("reminder_channel_id",   "INTEGER DEFAULT 0"),
-            ("reminder_use_dm",       "INTEGER DEFAULT 0"),
-            ("reminder_last_fired",   "TEXT DEFAULT ''"),
+            ("reminder_message", "TEXT DEFAULT ''"),
+            ("reminder_enabled", "INTEGER DEFAULT 0"),
+            ("reminder_frequency", "TEXT DEFAULT 'off'"),
+            ("reminder_day_of_week", "INTEGER DEFAULT 1"),
+            ("reminder_time", "TEXT DEFAULT '12:00'"),
+            ("reminder_channel_id", "INTEGER DEFAULT 0"),
+            ("reminder_use_dm", "INTEGER DEFAULT 0"),
+            ("reminder_last_fired", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_survey_config ADD COLUMN {col} {definition}")
@@ -891,14 +900,14 @@ def init_db():
 
         # ── guild_train_config migrations ──────────────────────────────────────
         for col, definition in [
-            ("blurbs_enabled",      "INTEGER DEFAULT 1"),
-            ("reminders_enabled",   "INTEGER DEFAULT 1"),
+            ("blurbs_enabled", "INTEGER DEFAULT 1"),
+            ("reminders_enabled", "INTEGER DEFAULT 1"),
             ("reminder_channel_id", "INTEGER DEFAULT 0"),
-            ("reminder_time",       "TEXT DEFAULT '22:00'"),
-            ("templates_json",      "TEXT DEFAULT '[]'"),
-            ("default_template",    "TEXT DEFAULT 'Default'"),
+            ("reminder_time", "TEXT DEFAULT '22:00'"),
+            ("templates_json", "TEXT DEFAULT '[]'"),
+            ("default_template", "TEXT DEFAULT 'Default'"),
             # Premium DM-to-assignee body (empty → hardcoded default in train_cog.py)
-            ("dm_message",          "TEXT DEFAULT ''"),
+            ("dm_message", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -909,11 +918,11 @@ def init_db():
 
         # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
         for col, definition in [
-            ("tab_breakdown",             "TEXT    DEFAULT 'Growth Breakdown'"),
-            ("breakdown_thresholds",      "TEXT    DEFAULT '{}'"),
-            ("breakdown_labels",          "TEXT    DEFAULT '{}'"),
+            ("tab_breakdown", "TEXT    DEFAULT 'Growth Breakdown'"),
+            ("breakdown_thresholds", "TEXT    DEFAULT '{}'"),
+            ("breakdown_labels", "TEXT    DEFAULT '{}'"),
             ("breakdown_post_channel_id", "INTEGER DEFAULT 0"),
-            ("breakdown_bucket_filter",   "TEXT    DEFAULT '[]'"),
+            ("breakdown_bucket_filter", "TEXT    DEFAULT '[]'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_growth_config ADD COLUMN {col} {definition}")
@@ -924,14 +933,14 @@ def init_db():
 
         # ── guild_birthday_config migrations ───────────────────────────────────
         for col, definition in [
-            ("discord_id_col",      "INTEGER DEFAULT -1"),
-            ("train_integration",   "INTEGER DEFAULT 0"),
-            ("flexible_placement",  "INTEGER DEFAULT 1"),
-            ("reminders_enabled",   "INTEGER DEFAULT 0"),
+            ("discord_id_col", "INTEGER DEFAULT -1"),
+            ("train_integration", "INTEGER DEFAULT 0"),
+            ("flexible_placement", "INTEGER DEFAULT 1"),
+            ("reminders_enabled", "INTEGER DEFAULT 0"),
             ("reminder_channel_id", "INTEGER DEFAULT 0"),
-            ("reminder_time",       "TEXT DEFAULT '08:00'"),
+            ("reminder_time", "TEXT DEFAULT '08:00'"),
             # Premium birthday DM body (empty → hardcoded default in train_cog.py)
-            ("dm_message",          "TEXT DEFAULT ''"),
+            ("dm_message", "TEXT DEFAULT ''"),
             # SQLite-backed dedup for the 22:00 ET train-population fire.
             # ISO date of the last successful auto-pop. Survives bot
             # restarts and discord.py reconnects, which the prior
@@ -955,12 +964,12 @@ def init_db():
         # `leadership_role_id` (#95) lets the setup wizard's "Keep current"
         # button survive a role rename — old guilds only had the name.
         for col, definition in [
-            ("survey_channel_id",         "INTEGER DEFAULT 0"),
-            ("survey_notify_channel_id",  "INTEGER DEFAULT 0"),
-            ("ds_log_channel_id",         "INTEGER DEFAULT 0"),
-            ("cs_log_channel_id",         "INTEGER DEFAULT 0"),
-            ("timezone",                  "TEXT DEFAULT 'America/New_York'"),
-            ("leadership_role_id",        "INTEGER DEFAULT 0"),
+            ("survey_channel_id", "INTEGER DEFAULT 0"),
+            ("survey_notify_channel_id", "INTEGER DEFAULT 0"),
+            ("ds_log_channel_id", "INTEGER DEFAULT 0"),
+            ("cs_log_channel_id", "INTEGER DEFAULT 0"),
+            ("timezone", "TEXT DEFAULT 'America/New_York'"),
+            ("leadership_role_id", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_configs ADD COLUMN {col} {definition}")
@@ -970,7 +979,9 @@ def init_db():
                 pass
 
         try:
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN timezone TEXT DEFAULT 'America/New_York'")
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN timezone TEXT DEFAULT 'America/New_York'"
+            )
             conn.commit()
             print("[CONFIG] Added timezone column to existing database")
         except Exception:
@@ -1031,9 +1042,9 @@ def init_db():
         # ALTER an existing PRIMARY KEY, so the migration recreates the
         # table, copies rows over, then renames.
         try:
-            cols = [r[1] for r in conn.execute(
-                "PRAGMA table_info(storm_registration_posts)"
-            ).fetchall()]
+            cols = [
+                r[1] for r in conn.execute("PRAGMA table_info(storm_registration_posts)").fetchall()
+            ]
             if "id" not in cols:
                 conn.execute("""
                     CREATE TABLE storm_registration_posts_v265 (
@@ -1060,8 +1071,7 @@ def init_db():
                 """)
                 conn.execute("DROP TABLE storm_registration_posts")
                 conn.execute(
-                    "ALTER TABLE storm_registration_posts_v265 "
-                    "RENAME TO storm_registration_posts"
+                    "ALTER TABLE storm_registration_posts_v265 RENAME TO storm_registration_posts"
                 )
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_storm_reg_posts_event
@@ -1082,19 +1092,17 @@ def init_db():
         # leadership doesn't have to re-run the survey setup wizard by hand. Idempotent:
         # only upgrades type=text questions that haven't been migrated.
         _LW_DEFAULT_MAGNITUDES = {
-            "squad1_power":  "M",
-            "squad2_power":  "M",
-            "squad3_power":  "M",
-            "thp":           "M",
-            "total_kills":   "M",
-            "drone_level":   "raw",
+            "squad1_power": "M",
+            "squad2_power": "M",
+            "squad3_power": "M",
+            "thp": "M",
+            "total_kills": "M",
+            "drone_level": "raw",
             "gorilla_level": "raw",
         }
         for _table in ("guild_survey_config", "guild_extra_surveys"):
             try:
-                _rows = conn.execute(
-                    f"SELECT rowid, questions FROM {_table}"
-                ).fetchall()
+                _rows = conn.execute(f"SELECT rowid, questions FROM {_table}").fetchall()
             except Exception:
                 continue
             for _rowid, _raw in _rows:
@@ -1114,7 +1122,7 @@ def init_db():
                     if _mag is None:
                         continue
                     if _q.get("type") == "text" and "magnitude" not in _q:
-                        _q["type"]      = "numeric"
+                        _q["type"] = "numeric"
                         _q["magnitude"] = _mag
                         _changed = True
                 if _changed:
@@ -1124,8 +1132,10 @@ def init_db():
                             (json.dumps(_qs), _rowid),
                         )
                         conn.commit()
-                        print(f"[CONFIG] Upgraded LW default questions to numeric+magnitude "
-                              f"in {_table} rowid={_rowid}")
+                        print(
+                            f"[CONFIG] Upgraded LW default questions to numeric+magnitude "
+                            f"in {_table} rowid={_rowid}"
+                        )
                     except Exception as _e:
                         print(f"[CONFIG] Could not write back {_table} rowid={_rowid}: {_e}")
 
@@ -1139,15 +1149,21 @@ def init_db():
         # New rows after this migration always get an explicit version via
         # `upsert_guild_install_metadata(current_version=...)`.
         try:
-            conn.execute("ALTER TABLE guild_configs ADD COLUMN release_announcements_enabled INTEGER DEFAULT 1")
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN release_announcements_enabled INTEGER DEFAULT 1"
+            )
             conn.commit()
             print("[CONFIG] Added release_announcements_enabled to guild_configs")
         except Exception:
             pass
         try:
-            conn.execute("ALTER TABLE guild_install_metadata ADD COLUMN last_seen_version TEXT NOT NULL DEFAULT '1.3.3'")
+            conn.execute(
+                "ALTER TABLE guild_install_metadata ADD COLUMN last_seen_version TEXT NOT NULL DEFAULT '1.3.3'"
+            )
             conn.commit()
-            print("[CONFIG] Added last_seen_version to guild_install_metadata (existing rows backfilled to '1.3.3')")
+            print(
+                "[CONFIG] Added last_seen_version to guild_install_metadata (existing rows backfilled to '1.3.3')"
+            )
         except Exception:
             pass
 
@@ -1155,9 +1171,7 @@ def init_db():
 def get_config(guild_id: int) -> Optional[GuildConfig]:
     """Retrieve config for a guild. Returns None if not found."""
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM guild_configs WHERE guild_id = ?", (guild_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM guild_configs WHERE guild_id = ?", (guild_id,)).fetchone()
         if row is None:
             return None
         return GuildConfig(**dict(row))
@@ -1169,9 +1183,7 @@ def get_or_create_config(guild_id: int) -> GuildConfig:
     if cfg is not None:
         return cfg
     with _get_conn() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO guild_configs (guild_id) VALUES (?)", (guild_id,)
-        )
+        conn.execute("INSERT OR IGNORE INTO guild_configs (guild_id) VALUES (?)", (guild_id,))
         conn.commit()
     return get_config(guild_id)
 
@@ -1179,9 +1191,9 @@ def get_or_create_config(guild_id: int) -> GuildConfig:
 def save_config(cfg: GuildConfig):
     """Insert or replace a guild's config."""
     d = asdict(cfg)
-    cols         = ", ".join(d.keys())
+    cols = ", ".join(d.keys())
     placeholders = ", ".join(["?"] * len(d))
-    updates      = ", ".join(f"{k} = excluded.{k}" for k in d if k != "guild_id")
+    updates = ", ".join(f"{k} = excluded.{k}" for k in d if k != "guild_id")
     with _get_conn() as conn:
         conn.execute(
             f"INSERT INTO guild_configs ({cols}) VALUES ({placeholders}) "
@@ -1199,9 +1211,7 @@ def update_config_field(guild_id: int, field: str, value) -> bool:
             (value, guild_id),
         )
         conn.commit()
-        return conn.execute(
-            "SELECT changes()"
-        ).fetchone()[0] > 0
+        return conn.execute("SELECT changes()").fetchone()[0] > 0
 
 
 def get_member_tab(guild_id: int) -> str:
@@ -1229,20 +1239,24 @@ def get_spreadsheet(guild_id: int = None):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if credentials_json:
-        info  = json.loads(credentials_json)
+        info = json.loads(credentials_json)
         creds = Credentials.from_service_account_info(info, scopes=scopes)
     else:
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
 
-    gc       = gspread.authorize(creds)
+    gc = gspread.authorize(creds)
     sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
 
 
 def get_or_create_worksheet(
-    spreadsheet, tab_name: str, *,
-    header_row=None, rows: int = 200, cols: int = 10,
+    spreadsheet,
+    tab_name: str,
+    *,
+    header_row=None,
+    rows: int = 200,
+    cols: int = 10,
 ):
     """Return the worksheet matching `tab_name`, creating it if absent.
 
@@ -1287,8 +1301,7 @@ def power_column_letter_to_index(letter: str) -> int:
     return 1  # default B
 
 
-def describe_sheet_error(e: Exception, *,
-                         guild_id=None, tab: str = None) -> str:
+def describe_sheet_error(e: Exception, *, guild_id=None, tab: str = None) -> str:
     """Render a gspread exception as a one-line diagnostic for logging.
 
     Distinguishes worksheet-tab-missing from spreadsheet 404 / 403 / 429,
@@ -1314,10 +1327,7 @@ def describe_sheet_error(e: Exception, *,
         )
 
     if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-        return (
-            f"spreadsheet not found — was it deleted, or is the ID wrong "
-            f"in /setup?{suffix}"
-        )
+        return f"spreadsheet not found — was it deleted, or is the ID wrong in /setup?{suffix}"
 
     if isinstance(e, gspread.exceptions.APIError):
         status = None
@@ -1331,15 +1341,9 @@ def describe_sheet_error(e: Exception, *,
                 reason = None
         status = status or getattr(e, "code", None)
         if status == 404:
-            return (
-                f"spreadsheet 404 — deleted or inaccessible to the bot's "
-                f"service account{suffix}"
-            )
+            return f"spreadsheet 404 — deleted or inaccessible to the bot's service account{suffix}"
         if status == 403:
-            return (
-                f"spreadsheet 403 — share it with the bot's service account "
-                f"as Editor{suffix}"
-            )
+            return f"spreadsheet 403 — share it with the bot's service account as Editor{suffix}"
         if status == 429:
             return f"sheets API rate-limited (429){suffix}"
         if status:
@@ -1363,6 +1367,7 @@ def normalize_spreadsheet_id(value: str) -> str:
     URL if one is present, and otherwise returns the value as-is.
     """
     import re
+
     cleaned = (value or "").strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", cleaned)
     return m.group(1) if m else cleaned
@@ -1381,6 +1386,7 @@ def is_setup_complete(guild_id: int) -> bool:
 # `premium_assignments` table pins each subscriber's one license to a single
 # guild they choose. See issue #41 and `premium.is_premium` for how this layer
 # is consulted on every premium check.
+
 
 def get_premium_assignment_for_guild(guild_id: int) -> Optional[int]:
     """Return the user_id assigned to this guild, or None if no assignment."""
@@ -1417,6 +1423,7 @@ def set_premium_assignment(user_id: int, guild_id: int) -> bool:
     """
     from datetime import datetime, timezone
     import sqlite3
+
     now = datetime.now(timezone.utc).isoformat()
     try:
         with _get_conn() as conn:
@@ -1461,6 +1468,7 @@ def remove_premium_assignment(user_id: int) -> Optional[int]:
 # logged `guild_id` to an alliance name without a live Discord lookup).
 # See `guild_install_metadata` schema in `init_db` for the column list.
 
+
 def upsert_guild_install_metadata(
     guild_id: int,
     guild_name: str,
@@ -1484,6 +1492,7 @@ def upsert_guild_install_metadata(
     column.
     """
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc).isoformat()
     with _get_conn() as conn:
         existing = conn.execute(
@@ -1496,8 +1505,7 @@ def upsert_guild_install_metadata(
                    (guild_id, guild_name, owner_id, installer_user_id,
                     installed_at, last_seen_at, last_seen_version)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (guild_id, guild_name, owner_id, installer_user_id,
-                 now, now, current_version),
+                (guild_id, guild_name, owner_id, installer_user_id, now, now, current_version),
             )
         else:
             prev_installer = existing["installer_user_id"]
@@ -1548,18 +1556,18 @@ def delete_guild_install_metadata(guild_id: int) -> bool:
 
 # ── Guild event helpers ────────────────────────────────────────────────────────
 
+
 def get_guild_events(guild_id: int, active_only: bool = True) -> list:
     """Return all event configs for a guild as dicts."""
     with _get_conn() as conn:
         if active_only:
             rows = conn.execute(
                 "SELECT * FROM guild_events WHERE guild_id = ? AND active = 1 ORDER BY id",
-                (guild_id,)
+                (guild_id,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM guild_events WHERE guild_id = ? ORDER BY id",
-                (guild_id,)
+                "SELECT * FROM guild_events WHERE guild_id = ? ORDER BY id", (guild_id,)
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1568,8 +1576,7 @@ def get_guild_event(guild_id: int, short_key: str) -> dict | None:
     """Return a single event config by short_key."""
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_events WHERE guild_id = ? AND short_key = ?",
-            (guild_id, short_key)
+            "SELECT * FROM guild_events WHERE guild_id = ? AND short_key = ?", (guild_id, short_key)
         ).fetchone()
         return dict(row) if row else None
 
@@ -1577,9 +1584,11 @@ def get_guild_event(guild_id: int, short_key: str) -> dict | None:
 def save_guild_event(guild_id: int, event: dict):
     """Insert or replace an event config for a guild."""
     event["guild_id"] = guild_id
-    cols         = ", ".join(event.keys())
+    cols = ", ".join(event.keys())
     placeholders = ", ".join(["?"] * len(event))
-    updates      = ", ".join(f"{k} = excluded.{k}" for k in event if k not in ("id", "guild_id", "short_key"))
+    updates = ", ".join(
+        f"{k} = excluded.{k}" for k in event if k not in ("id", "guild_id", "short_key")
+    )
     with _get_conn() as conn:
         conn.execute(
             f"INSERT INTO guild_events ({cols}) VALUES ({placeholders}) "
@@ -1594,7 +1603,7 @@ def delete_guild_event(guild_id: int, short_key: str):
     with _get_conn() as conn:
         conn.execute(
             "UPDATE guild_events SET active = 0 WHERE guild_id = ? AND short_key = ?",
-            (guild_id, short_key)
+            (guild_id, short_key),
         )
         conn.commit()
 
@@ -1620,17 +1629,18 @@ def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
     """
     from zoneinfo import ZoneInfo
     from datetime import datetime, timezone as _tz, timedelta
-    cfg    = get_config(guild_id) if guild_id else None
+
+    cfg = get_config(guild_id) if guild_id else None
     tz_str = cfg.timezone if cfg and cfg.timezone else "America/New_York"
     try:
         server_tz = _tz(timedelta(hours=SERVER_TZ_OFFSET))
         # Use a stable date so DST behaves consistently for the rendered string.
         server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=server_tz)
-        local_dt  = server_dt.astimezone(ZoneInfo(tz_str))
-        h12       = local_dt.hour % 12 or 12
-        period    = "am" if local_dt.hour < 12 else "pm"
-        tz_abbr   = local_dt.strftime("%Z")
-        mins      = f":{local_dt.minute:02d}" if local_dt.minute != 0 else ""
+        local_dt = server_dt.astimezone(ZoneInfo(tz_str))
+        h12 = local_dt.hour % 12 or 12
+        period = "am" if local_dt.hour < 12 else "pm"
+        tz_abbr = local_dt.strftime("%Z")
+        mins = f":{local_dt.minute:02d}" if local_dt.minute != 0 else ""
         return f"{h12}{mins}{period} {tz_abbr}"
     except Exception:
         return f"{hour:02d}:{minute:02d} server time"
@@ -1658,7 +1668,9 @@ def get_storm_slot_labels(event_type: str, guild_id: int) -> list[str]:
 
 
 def get_storm_slot_label_by_index(
-    event_type: str, slot_index: int | None, guild_id: int,
+    event_type: str,
+    slot_index: int | None,
+    guild_id: int,
 ) -> str:
     """Render the label for a specific game slot (#251).
 
@@ -1675,7 +1687,9 @@ def get_storm_slot_label_by_index(
 
 
 def resolve_storm_team_slots(
-    guild_id: int, event_type: str, event_date: str | None = None,
+    guild_id: int,
+    event_type: str,
+    event_date: str | None = None,
 ) -> tuple[int | None, int | None]:
     """Return (team_a_slot_index, team_b_slot_index) for an event (#251).
 
@@ -1697,18 +1711,18 @@ def resolve_storm_team_slots(
             a = post.get("team_a_slot_index") or 0
             b = post.get("team_b_slot_index") or 0
             if a or b:
-                return (a if a in (1, 2) else None,
-                        b if b in (1, 2) else None)
+                return (a if a in (1, 2) else None, b if b in (1, 2) else None)
 
     cfg = get_storm_config(guild_id, event_type) or {}
     a = cfg.get("team_a_slot_index")
     b = cfg.get("team_b_slot_index")
-    return (a if a in (1, 2) else None,
-            b if b in (1, 2) else None)
+    return (a if a in (1, 2) else None, b if b in (1, 2) else None)
 
 
 def get_storm_team_slot_labels(
-    guild_id: int, event_type: str, event_date: str | None = None,
+    guild_id: int,
+    event_type: str,
+    event_date: str | None = None,
 ) -> tuple[str, str]:
     """Return (team_a_label, team_b_label) in TEAM ORDER (#251).
 
@@ -1747,6 +1761,7 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     `mail_template` column has content, treat it as the "Default" entry.
     """
     import json
+
     raw = d.get("templates_json") or "[]"
     try:
         parsed = json.loads(raw)
@@ -1759,10 +1774,12 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
         if legacy:
             parsed = [{"name": "Default", "template": legacy}]
     if not parsed:
-        parsed = [{
-            "name": "Default",
-            "template": DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
-        }]
+        parsed = [
+            {
+                "name": "Default",
+                "template": DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
+            }
+        ]
     d["templates"] = parsed
     known_names = {t.get("name") for t in parsed}
     if not d.get("default_template") or d["default_template"] not in known_names:
@@ -1780,8 +1797,7 @@ def has_storm_config(guild_id: int, event_type: str) -> bool:
     summary embed gate (#103)."""
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM guild_storm_config "
-            "WHERE guild_id = ? AND event_type = ?",
+            "SELECT 1 FROM guild_storm_config WHERE guild_id = ? AND event_type = ?",
             (guild_id, event_type),
         ).fetchone()
     return row is not None
@@ -1792,60 +1808,65 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM guild_storm_config WHERE guild_id = ? AND event_type = ?",
-            (guild_id, event_type)
+            (guild_id, event_type),
         ).fetchone()
     if row:
         return _normalize_storm_templates(dict(row), event_type)
     fallback = {
-        "guild_id":             guild_id,
-        "event_type":           event_type,
-        "tab_name":             "DS Assignments",
-        "mail_template":        DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
-        "templates_json":       "",
-        "default_template":     "Default",
-        "timezone":             "America/New_York",
-        "post_channel_id":      0,
-        "dm_reminder_message":  "",
-        "teams":                "both",
+        "guild_id": guild_id,
+        "event_type": event_type,
+        "tab_name": "DS Assignments",
+        "mail_template": DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
+        "templates_json": "",
+        "default_template": "Default",
+        "timezone": "America/New_York",
+        "post_channel_id": 0,
+        "dm_reminder_message": "",
+        "teams": "both",
         # Structured storm flow (#38 + #54) — never-configured guilds get
         # all-off; tab fields resolve to event-type defaults via
         # default_structured_tab() / get_structured_storm_config().
         "structured_flow_enabled": 0,
-        "power_metric_column":     "B",
-        "power_metric_tab":        "",
-        "power_match_column":      "",
-        "sub_mode":                "pool",
-        "signup_channel_id":       0,
-        "signup_schedule_cron":    "",
-        "signups_tab":             "",
-        "rosters_tab":             "",
-        "attendance_tab":          "",
-        "strategies_tab":          "",
-        "member_rules_tab":        "",
-        "poll_day_of_week":        -1,
-        "signup_time":             "",
+        "power_metric_column": "B",
+        "power_metric_tab": "",
+        "power_match_column": "",
+        "sub_mode": "pool",
+        "signup_channel_id": 0,
+        "signup_schedule_cron": "",
+        "signups_tab": "",
+        "rosters_tab": "",
+        "attendance_tab": "",
+        "strategies_tab": "",
+        "member_rules_tab": "",
+        "poll_day_of_week": -1,
+        "signup_time": "",
         "power_refresh_dm_enabled": 0,
         # Stale-power DM nudge (#255) — never-configured guilds get
         # all-off, mirroring the rest of the structured-flow defaults.
-        "power_last_updated_tab":           "",
-        "power_last_updated_column":        "",
-        "power_last_updated_match_column":  "",
-        "power_refresh_stale_days":         0,
+        "power_last_updated_tab": "",
+        "power_last_updated_column": "",
+        "power_last_updated_match_column": "",
+        "power_refresh_stale_days": 0,
         # Per-team time-slot mapping (#251) — NULL until setup-touched.
-        "team_a_slot_index":       None,
-        "team_b_slot_index":       None,
+        "team_a_slot_index": None,
+        "team_b_slot_index": None,
     }
     return _normalize_storm_templates(fallback, event_type)
 
 
-def save_storm_config(guild_id: int, event_type: str, tab_name: str,
-                      mail_template: str,
-                      timezone: str, log_channel_id: int = 0,
-                      templates: list | None = None,
-                      default_template: str = "Default",
-                      post_channel_id: int = 0,
-                      dm_reminder_message: str = "",
-                      teams: str = "both"):
+def save_storm_config(
+    guild_id: int,
+    event_type: str,
+    tab_name: str,
+    mail_template: str,
+    timezone: str,
+    log_channel_id: int = 0,
+    templates: list | None = None,
+    default_template: str = "Default",
+    post_channel_id: int = 0,
+    dm_reminder_message: str = "",
+    teams: str = "both",
+):
     """
     Insert or replace a guild's storm config.
 
@@ -1870,6 +1891,7 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     pre-#148 behaviour for callers that don't pass it.
     """
     import json
+
     if templates is None:
         templates = [{"name": "Default", "template": mail_template or ""}]
     templates_json = json.dumps(templates)
@@ -1893,14 +1915,26 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "post_channel_id=excluded.post_channel_id, "
             "dm_reminder_message=excluded.dm_reminder_message, "
             "teams=excluded.teams",
-            (guild_id, event_type, tab_name, default_text, templates_json, default_template,
-             timezone, log_channel_id, post_channel_id, dm_reminder_message, teams_value)
+            (
+                guild_id,
+                event_type,
+                tab_name,
+                default_text,
+                templates_json,
+                default_template,
+                timezone,
+                log_channel_id,
+                post_channel_id,
+                dm_reminder_message,
+                teams_value,
+            ),
         )
         conn.commit()
 
 
 def save_storm_team_slots(
-    guild_id: int, event_type: str,
+    guild_id: int,
+    event_type: str,
     team_a_slot_index: int | None,
     team_b_slot_index: int | None,
 ) -> None:
@@ -1912,6 +1946,7 @@ def save_storm_team_slots(
     wizard's team-time step can be re-run without touching the rest of
     the storm config — same precedent as `save_structured_storm_config`.
     """
+
     def _norm(v):
         if v is None:
             return None
@@ -1929,8 +1964,7 @@ def save_storm_team_slots(
         # Defaults from the CREATE TABLE definition apply on the INSERT
         # path; the UPDATE path only touches the two slot columns.
         conn.execute(
-            "INSERT OR IGNORE INTO guild_storm_config (guild_id, event_type) "
-            "VALUES (?, ?)",
+            "INSERT OR IGNORE INTO guild_storm_config (guild_id, event_type) VALUES (?, ?)",
             (int(guild_id), event_type),
         )
         conn.execute(
@@ -1954,17 +1988,17 @@ def save_storm_team_slots(
 # vs CS.
 _STRUCTURED_TAB_DEFAULTS = {
     "DS": {
-        "signups_tab":      "DS Signups",
-        "rosters_tab":      "DS Rosters",
-        "attendance_tab":   "DS Attendance",
-        "strategies_tab":   "DS Strategies",
+        "signups_tab": "DS Signups",
+        "rosters_tab": "DS Rosters",
+        "attendance_tab": "DS Attendance",
+        "strategies_tab": "DS Strategies",
         "member_rules_tab": "DS Member Rules",
     },
     "CS": {
-        "signups_tab":      "CS Signups",
-        "rosters_tab":      "CS Rosters",
-        "attendance_tab":   "CS Attendance",
-        "strategies_tab":   "CS Strategies",
+        "signups_tab": "CS Signups",
+        "rosters_tab": "CS Rosters",
+        "attendance_tab": "CS Attendance",
+        "strategies_tab": "CS Strategies",
         "member_rules_tab": "CS Member Rules",
     },
 }
@@ -1982,8 +2016,10 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
     Unset tab fields fall back to event-type-aware defaults (e.g. DS row
     with empty `signups_tab` reads as 'DS Signups')."""
     cfg = get_storm_config(guild_id, event_type)
+
     def _tab(key: str) -> str:
         return cfg.get(key) or default_structured_tab(event_type, key)
+
     # poll_day_of_week stored as -1 (or None on a fallback dict) when
     # auto-scheduling hasn't been configured. Normalise to -1 so
     # callers can check `< 0` without worrying about Python's truthy-0
@@ -1993,32 +2029,34 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         raw_dow = -1
     return {
         "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
-        "power_metric_column":     (cfg.get("power_metric_column") or "B").upper(),
+        "power_metric_column": (cfg.get("power_metric_column") or "B").upper(),
         # Power Data Source flexibility — empty values are the canonical
         # "use Member Roster + discord_id_col" signal; the read path in
         # storm_roster_builder._read_roster_powers interprets them.
-        "power_metric_tab":        (cfg.get("power_metric_tab") or ""),
-        "power_match_column":      (cfg.get("power_match_column") or "").upper(),
-        "sub_mode":                cfg.get("sub_mode") or "pool",
-        "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
-        "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
-        "signups_tab":             _tab("signups_tab"),
-        "rosters_tab":             _tab("rosters_tab"),
-        "attendance_tab":          _tab("attendance_tab"),
-        "strategies_tab":          _tab("strategies_tab"),
-        "member_rules_tab":        _tab("member_rules_tab"),
-        "poll_day_of_week":        int(raw_dow),
-        "signup_time":             cfg.get("signup_time") or "",
+        "power_metric_tab": (cfg.get("power_metric_tab") or ""),
+        "power_match_column": (cfg.get("power_match_column") or "").upper(),
+        "sub_mode": cfg.get("sub_mode") or "pool",
+        "signup_channel_id": int(cfg.get("signup_channel_id") or 0),
+        "signup_schedule_cron": cfg.get("signup_schedule_cron") or "",
+        "signups_tab": _tab("signups_tab"),
+        "rosters_tab": _tab("rosters_tab"),
+        "attendance_tab": _tab("attendance_tab"),
+        "strategies_tab": _tab("strategies_tab"),
+        "member_rules_tab": _tab("member_rules_tab"),
+        "poll_day_of_week": int(raw_dow),
+        "signup_time": cfg.get("signup_time") or "",
         "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
         # Stale-power DM nudge (#255). Empty tab / empty column /
         # 0 days each independently disable the stale branch (the
         # click-handler treats any of those as "skip the staleness
         # check"). Match column falls back to `power_match_column`
         # at read time when empty.
-        "power_last_updated_tab":          (cfg.get("power_last_updated_tab") or ""),
-        "power_last_updated_column":       (cfg.get("power_last_updated_column") or "").upper(),
-        "power_last_updated_match_column": (cfg.get("power_last_updated_match_column") or "").upper(),
-        "power_refresh_stale_days":        int(cfg.get("power_refresh_stale_days") or 0),
+        "power_last_updated_tab": (cfg.get("power_last_updated_tab") or ""),
+        "power_last_updated_column": (cfg.get("power_last_updated_column") or "").upper(),
+        "power_last_updated_match_column": (
+            cfg.get("power_last_updated_match_column") or ""
+        ).upper(),
+        "power_refresh_stale_days": int(cfg.get("power_refresh_stale_days") or 0),
     }
 
 
@@ -2083,26 +2121,28 @@ def get_scheduled_storm_rows() -> list[dict]:
 
 
 def save_structured_storm_config(
-    guild_id: int, event_type: str, *,
+    guild_id: int,
+    event_type: str,
+    *,
     structured_flow_enabled: bool = False,
-    power_metric_column: str        = "B",
-    power_metric_tab: str           = "",
-    power_match_column: str         = "",
-    sub_mode: str                   = "pool",
-    signup_channel_id: int          = 0,
-    signup_schedule_cron: str       = "",
-    signups_tab: str                = "",
-    rosters_tab: str                = "",
-    attendance_tab: str             = "",
-    strategies_tab: str             = "",
-    member_rules_tab: str           = "",
-    poll_day_of_week: int           = -1,
-    signup_time: str                = "",
-    power_refresh_dm_enabled: bool  = False,
-    power_last_updated_tab: str           = "",
-    power_last_updated_column: str        = "",
-    power_last_updated_match_column: str  = "",
-    power_refresh_stale_days: int         = 0,
+    power_metric_column: str = "B",
+    power_metric_tab: str = "",
+    power_match_column: str = "",
+    sub_mode: str = "pool",
+    signup_channel_id: int = 0,
+    signup_schedule_cron: str = "",
+    signups_tab: str = "",
+    rosters_tab: str = "",
+    attendance_tab: str = "",
+    strategies_tab: str = "",
+    member_rules_tab: str = "",
+    poll_day_of_week: int = -1,
+    signup_time: str = "",
+    power_refresh_dm_enabled: bool = False,
+    power_last_updated_tab: str = "",
+    power_last_updated_column: str = "",
+    power_last_updated_match_column: str = "",
+    power_refresh_stale_days: int = 0,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
@@ -2184,13 +2224,22 @@ def save_structured_storm_config(
                 pm_tab,
                 pm_match,
                 sub_mode,
-                int(signup_channel_id or 0), signup_schedule_cron,
-                signups_tab, rosters_tab, attendance_tab,
-                strategies_tab, member_rules_tab,
-                dow, signup_time,
+                int(signup_channel_id or 0),
+                signup_schedule_cron,
+                signups_tab,
+                rosters_tab,
+                attendance_tab,
+                strategies_tab,
+                member_rules_tab,
+                dow,
+                signup_time,
                 1 if power_refresh_dm_enabled else 0,
-                lu_tab, lu_col, lu_match, stale_days,
-                guild_id, event_type,
+                lu_tab,
+                lu_col,
+                lu_match,
+                stale_days,
+                guild_id,
+                event_type,
             ),
         )
         conn.commit()
@@ -2211,6 +2260,7 @@ def _utcnow_iso() -> str:
     suffix. Replaces the deprecated naive `datetime.utcnow()` so consumers
     can't accidentally interpret stored timestamps as local time."""
     import datetime as _dt
+
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
 
@@ -2250,9 +2300,16 @@ def record_storm_vote(
             "  message_id    = excluded.message_id, "
             "  voted_at      = excluded.voted_at",
             (
-                int(guild_id), event_type, event_date, target_member_id,
-                int(voter_user_id), vote, 1 if is_on_behalf else 0,
-                int(channel_id or 0), int(message_id or 0), voted_at,
+                int(guild_id),
+                event_type,
+                event_date,
+                target_member_id,
+                int(voter_user_id),
+                vote,
+                1 if is_on_behalf else 0,
+                int(channel_id or 0),
+                int(message_id or 0),
+                voted_at,
             ),
         )
         conn.execute(
@@ -2261,8 +2318,13 @@ def record_storm_vote(
             " voter_user_id, vote, is_on_behalf, voted_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                int(guild_id), event_type, event_date, target_member_id,
-                int(voter_user_id), vote, 1 if is_on_behalf else 0,
+                int(guild_id),
+                event_type,
+                event_date,
+                target_member_id,
+                int(voter_user_id),
+                vote,
+                1 if is_on_behalf else 0,
                 voted_at,
             ),
         )
@@ -2271,7 +2333,9 @@ def record_storm_vote(
 
 
 def get_storm_signup_history(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
     target_member_id: str | None = None,
 ) -> list[dict]:
     """Return every recorded vote for an event (or a single target),
@@ -2324,7 +2388,10 @@ def get_storm_signups(guild_id: int, event_type: str, event_date: str) -> list[d
 
 
 def get_member_vote(
-    guild_id: int, event_type: str, event_date: str, target_member_id: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    target_member_id: str,
 ) -> dict | None:
     """Return a single member's vote row, or None if they haven't voted."""
     with _get_conn() as conn:
@@ -2391,23 +2458,14 @@ def save_storm_team_plan(
     sub_set = set(subs)
     overlap = primary_set & sub_set
     if overlap:
-        errors.append(
-            "Members listed as both primary and sub: " + ", ".join(sorted(overlap))
-        )
+        errors.append("Members listed as both primary and sub: " + ", ".join(sorted(overlap)))
     if len(primaries) > STORM_PLAN_MAX_PRIMARIES:
-        errors.append(
-            f"Too many primaries ({len(primaries)}); max is "
-            f"{STORM_PLAN_MAX_PRIMARIES}."
-        )
+        errors.append(f"Too many primaries ({len(primaries)}); max is {STORM_PLAN_MAX_PRIMARIES}.")
     if len(subs) > STORM_PLAN_MAX_SUBS:
-        errors.append(
-            f"Too many subs ({len(subs)}); max is {STORM_PLAN_MAX_SUBS}."
-        )
+        errors.append(f"Too many subs ({len(subs)}); max is {STORM_PLAN_MAX_SUBS}.")
     total = len(primary_set | sub_set)
     if total > STORM_PLAN_MAX_TOTAL:
-        errors.append(
-            f"Total ({total}) exceeds {STORM_PLAN_MAX_TOTAL} per team."
-        )
+        errors.append(f"Total ({total}) exceeds {STORM_PLAN_MAX_TOTAL} per team.")
     if errors:
         return False, errors
 
@@ -2423,16 +2481,16 @@ def save_storm_team_plan(
                 f"  AND team != ? "
                 f"  AND target_member_id IN ({placeholders})",
                 (
-                    int(guild_id), event_type, event_date, team,
+                    int(guild_id),
+                    event_type,
+                    event_date,
+                    team,
                     *sorted(incoming),
                 ),
             ).fetchall()
             conflicts = sorted({r["target_member_id"] for r in rows})
             if conflicts:
-                errors.append(
-                    "Already on the other team for this event: "
-                    + ", ".join(conflicts)
-                )
+                errors.append("Already on the other team for this event: " + ", ".join(conflicts))
                 return False, errors
 
         saved_at = _utcnow_iso()
@@ -2444,12 +2502,28 @@ def save_storm_team_plan(
                 (int(guild_id), event_type, event_date, team),
             )
             rows_to_insert = [
-                (int(guild_id), event_type, event_date, team, m,
-                 "primary", int(saved_by_user_id), saved_at)
+                (
+                    int(guild_id),
+                    event_type,
+                    event_date,
+                    team,
+                    m,
+                    "primary",
+                    int(saved_by_user_id),
+                    saved_at,
+                )
                 for m in primaries
             ] + [
-                (int(guild_id), event_type, event_date, team, m,
-                 "sub", int(saved_by_user_id), saved_at)
+                (
+                    int(guild_id),
+                    event_type,
+                    event_date,
+                    team,
+                    m,
+                    "sub",
+                    int(saved_by_user_id),
+                    saved_at,
+                )
                 for m in subs
             ]
             if rows_to_insert:
@@ -2468,7 +2542,10 @@ def save_storm_team_plan(
 
 
 def get_storm_team_plan(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> dict | None:
     """Return the saved team plan or None if no rows exist for this
     (guild, event_type, event_date, team). Shape:
@@ -2506,7 +2583,9 @@ def get_storm_team_plan(
 
 
 def get_storm_team_plans_for_event(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> dict[str, dict]:
     """Return a `{team: plan_dict}` map covering every team that has a
     plan for this event. Cheaper than two `get_storm_team_plan` calls
@@ -2523,8 +2602,7 @@ def get_storm_team_plans_for_event(
         team = r["team"]
         p = plans.setdefault(
             team,
-            {"primaries": [], "subs": [],
-             "saved_by_user_id": 0, "saved_at": ""},
+            {"primaries": [], "subs": [], "saved_by_user_id": 0, "saved_at": ""},
         )
         if r["role"] == "primary":
             p["primaries"].append(r["target_member_id"])
@@ -2540,7 +2618,10 @@ def get_storm_team_plans_for_event(
 
 
 def clear_storm_team_plan(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> int:
     """Delete the saved plan for one team. Returns the number of rows
     removed (0 if nothing was saved)."""
@@ -2578,6 +2659,7 @@ def save_roster_draft(
     upsert keyed by (guild_id, event_type, team) so one team only
     ever has one draft row."""
     from datetime import datetime, timezone as _tz
+
     updated_at = datetime.now(_tz.utc).isoformat()
     with _get_conn() as conn:
         conn.execute(
@@ -2588,14 +2670,15 @@ def save_roster_draft(
             "  session_json = excluded.session_json, "
             "  event_date   = excluded.event_date, "
             "  updated_at   = excluded.updated_at",
-            (int(guild_id), event_type, team, session_json,
-             event_date, updated_at),
+            (int(guild_id), event_type, team, session_json, event_date, updated_at),
         )
         conn.commit()
 
 
 def get_roster_draft(
-    guild_id: int, event_type: str, team: str,
+    guild_id: int,
+    event_type: str,
+    team: str,
 ) -> Optional[dict]:
     """Return the saved roster draft for one team, or None if no row
     exists. Caller deserializes `session_json` and reconciles against
@@ -2611,21 +2694,22 @@ def get_roster_draft(
         return None
     return {
         "session_json": row["session_json"],
-        "event_date":   row["event_date"],
-        "updated_at":   row["updated_at"],
+        "event_date": row["event_date"],
+        "updated_at": row["updated_at"],
     }
 
 
 def delete_roster_draft(
-    guild_id: int, event_type: str, team: str,
+    guild_id: int,
+    event_type: str,
+    team: str,
 ) -> int:
     """Delete the saved draft for one team. Returns the rowcount (0
     if nothing was saved). Called when the officer confirms
     🆕 Set up new — the draft is cleared and a fresh builder opens."""
     with _get_conn() as conn:
         cur = conn.execute(
-            "DELETE FROM storm_roster_drafts "
-            "WHERE guild_id = ? AND event_type = ? AND team = ?",
+            "DELETE FROM storm_roster_drafts WHERE guild_id = ? AND event_type = ? AND team = ?",
             (int(guild_id), event_type, team),
         )
         conn.commit()
@@ -2636,8 +2720,11 @@ def delete_roster_draft(
 
 
 def record_storm_registration_post(
-    guild_id: int, event_type: str, event_date: str,
-    channel_id: int, message_id: int,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    channel_id: int,
+    message_id: int,
     *,
     time_a_label: str = "",
     time_b_label: str = "",
@@ -2667,10 +2754,15 @@ def record_storm_registration_post(
             " time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, posted_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                int(guild_id), event_type, event_date,
-                int(channel_id), int(message_id),
-                time_a_label, time_b_label,
-                int(team_a_slot_index or 0), int(team_b_slot_index or 0),
+                int(guild_id),
+                event_type,
+                event_date,
+                int(channel_id),
+                int(message_id),
+                time_a_label,
+                time_b_label,
+                int(team_a_slot_index or 0),
+                int(team_b_slot_index or 0),
                 posted_at,
             ),
         )
@@ -2698,6 +2790,7 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
     drift the cutoff out from under non-UTC alliances.
     """
     import datetime as _dt
+
     today_utc = _dt.datetime.now(_dt.timezone.utc).date()
     cutoff = (today_utc - _dt.timedelta(days=within_days)).isoformat()
     with _get_conn() as conn:
@@ -2713,7 +2806,9 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
 
 
 def get_storm_registration_post(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> dict | None:
     """Return the LATEST storm_registration_posts row for (guild,
     event_type, event_date), or None if no post has been recorded.
@@ -2745,8 +2840,13 @@ def get_storm_registration_post(
 
 
 def save_roster_image_ref(
-    guild_id: int, event_type: str, event_date: str, team: str,
-    channel_id: int, message_id: int, user_id: int,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
+    channel_id: int,
+    message_id: int,
+    user_id: int,
 ) -> None:
     """UPSERT the (channel_id, message_id) of a freshly-posted roster
     image. Composite key (guild, event_type, event_date, team) — DS has
@@ -2766,15 +2866,23 @@ def save_roster_image_ref(
             "    posted_by_user_id = excluded.posted_by_user_id, "
             "    posted_at = excluded.posted_at",
             (
-                int(guild_id), event_type, event_date, team or "",
-                int(channel_id), int(message_id), int(user_id), posted_at,
+                int(guild_id),
+                event_type,
+                event_date,
+                team or "",
+                int(channel_id),
+                int(message_id),
+                int(user_id),
+                posted_at,
             ),
         )
         conn.commit()
 
 
 def list_roster_image_refs(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> list[dict]:
     """All saved roster-image pointers for a (guild, event) — usually
     one for CS, up to two (Team A + Team B) for DS. Empty list if no
@@ -2793,7 +2901,10 @@ def list_roster_image_refs(
 
 
 def delete_roster_image_ref(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> bool:
     """Remove a saved pointer (e.g. when the click-time fetch finds the
     message was deleted and the officer asks to unlink). Returns True
@@ -2813,7 +2924,10 @@ def delete_roster_image_ref(
 
 
 def has_power_refresh_dm_been_sent(
-    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_user_id: int,
 ) -> bool:
     """True if the bot has already sent the power-refresh nudge to this
     voter for this event. Used by the SignupView click handler to
@@ -2830,7 +2944,10 @@ def has_power_refresh_dm_been_sent(
 
 
 def record_power_refresh_dm_sent(
-    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_user_id: int,
 ) -> bool:
     """Idempotent record of "this voter got a power-refresh DM for
     this event." Returns True on a fresh insert, False if already
@@ -2848,8 +2965,11 @@ def record_power_refresh_dm_sent(
             "(guild_id, event_type, event_date, voter_user_id, sent_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (
-                int(guild_id), event_type, event_date,
-                int(voter_user_id), _utcnow_iso(),
+                int(guild_id),
+                event_type,
+                event_date,
+                int(voter_user_id),
+                _utcnow_iso(),
             ),
         )
         conn.commit()
@@ -2857,7 +2977,10 @@ def record_power_refresh_dm_sent(
 
 
 def clear_power_refresh_dm_sent(
-    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_user_id: int,
 ) -> bool:
     """Back out a `record_power_refresh_dm_sent` row. Used by the
     click handler when a transient `discord.HTTPException` blew up
@@ -2882,7 +3005,9 @@ def clear_power_refresh_dm_sent(
 
 
 def is_walkthrough_dismissed(
-    guild_id: int, user_id: int, walkthrough_key: str,
+    guild_id: int,
+    user_id: int,
+    walkthrough_key: str,
 ) -> bool:
     """True if this officer has already seen (or declined) the named
     walkthrough in this guild. Walkthrough keys carry a version suffix
@@ -2898,7 +3023,9 @@ def is_walkthrough_dismissed(
 
 
 def dismiss_walkthrough(
-    guild_id: int, user_id: int, walkthrough_key: str,
+    guild_id: int,
+    user_id: int,
+    walkthrough_key: str,
 ) -> None:
     """Record that an officer has seen or declined a walkthrough.
     Idempotent — re-recording is a no-op."""
@@ -2925,7 +3052,10 @@ def dismiss_walkthrough(
 
 
 def claim_storm_session(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
     user_id: int,
 ) -> tuple[bool, Optional[int]]:
     """Try to claim the build slot for this (guild, event_type, event_date,
@@ -2968,7 +3098,10 @@ def claim_storm_session(
 
 
 def release_storm_session(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> bool:
     """Drop the session lock. Safe to call on Done / Cancel / Approve /
     timeout — re-releasing is a no-op."""
@@ -3013,14 +3146,16 @@ def get_roster_dm_templates(guild_id: int, event_type: str) -> dict:
     """
     cfg = get_storm_config(guild_id, event_type)
     return {
-        "starter":    (cfg.get("roster_dm_starter_template")    or ""),
+        "starter": (cfg.get("roster_dm_starter_template") or ""),
         "paired_sub": (cfg.get("roster_dm_paired_sub_template") or ""),
-        "pool_sub":   (cfg.get("roster_dm_pool_sub_template")   or ""),
+        "pool_sub": (cfg.get("roster_dm_pool_sub_template") or ""),
     }
 
 
 def save_roster_dm_templates(
-    guild_id: int, event_type: str, *,
+    guild_id: int,
+    event_type: str,
+    *,
     starter: str = "",
     paired_sub: str = "",
     pool_sub: str = "",
@@ -3038,14 +3173,14 @@ def save_roster_dm_templates(
             "  roster_dm_paired_sub_template = ?, "
             "  roster_dm_pool_sub_template   = ?  "
             "WHERE guild_id = ? AND event_type = ?",
-            (starter or "", paired_sub or "", pool_sub or "",
-             guild_id, event_type),
+            (starter or "", paired_sub or "", pool_sub or "", guild_id, event_type),
         )
         conn.commit()
         return cur.rowcount > 0
 
 
 # ── Participation log config (#20) ────────────────────────────────────────────
+
 
 def get_participation_config(guild_id: int, event_type: str) -> dict:
     """
@@ -3056,6 +3191,7 @@ def get_participation_config(guild_id: int, event_type: str) -> dict:
     bits — questions, sheet tab, roster source.
     """
     import json
+
     cfg = get_storm_config(guild_id, event_type)
     raw_qs = cfg.get("participation_questions") or "[]"
     try:
@@ -3063,27 +3199,32 @@ def get_participation_config(guild_id: int, event_type: str) -> dict:
     except (json.JSONDecodeError, TypeError):
         questions = []
     return {
-        "enabled":          bool(cfg.get("participation_enabled")),
-        "log_channel_id":   int(cfg.get("log_channel_id") or 0),
-        "tab_name":         cfg.get("participation_tab_name") or "",
-        "questions":        questions,
-        "roster_tab":       cfg.get("participation_roster_tab") or "",
-        "roster_name_col":  int(cfg.get("participation_roster_name_col") or 0),
-        "roster_alias_col": int(cfg.get("participation_roster_alias_col")
-                                if cfg.get("participation_roster_alias_col") is not None else -1),
+        "enabled": bool(cfg.get("participation_enabled")),
+        "log_channel_id": int(cfg.get("log_channel_id") or 0),
+        "tab_name": cfg.get("participation_tab_name") or "",
+        "questions": questions,
+        "roster_tab": cfg.get("participation_roster_tab") or "",
+        "roster_name_col": int(cfg.get("participation_roster_name_col") or 0),
+        "roster_alias_col": int(
+            cfg.get("participation_roster_alias_col")
+            if cfg.get("participation_roster_alias_col") is not None
+            else -1
+        ),
         "roster_start_row": int(cfg.get("participation_roster_start_row") or 2),
     }
 
 
 def save_participation_config(
-    guild_id: int, event_type: str, *,
-    enabled: int           = 0,
-    tab_name: str          = "",
-    questions: list        = None,
-    roster_tab: str        = "",
-    roster_name_col: int   = 0,
-    roster_alias_col: int  = -1,
-    roster_start_row: int  = 2,
+    guild_id: int,
+    event_type: str,
+    *,
+    enabled: int = 0,
+    tab_name: str = "",
+    questions: list = None,
+    roster_tab: str = "",
+    roster_name_col: int = 0,
+    roster_alias_col: int = -1,
+    roster_start_row: int = 2,
 ):
     """
     Persist the participation-log config to the (guild_id, event_type) row.
@@ -3093,6 +3234,7 @@ def save_participation_config(
     main storm-setup save call, so it isn't a parameter here.
     """
     import json
+
     if questions is None:
         questions = []
     questions_json = json.dumps(questions)
@@ -3108,10 +3250,15 @@ def save_participation_config(
             "  participation_roster_start_row = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
-                1 if enabled else 0, tab_name,
-                questions_json, roster_tab, roster_name_col,
-                roster_alias_col, roster_start_row,
-                guild_id, event_type,
+                1 if enabled else 0,
+                tab_name,
+                questions_json,
+                roster_tab,
+                roster_name_col,
+                roster_alias_col,
+                roster_start_row,
+                guild_id,
+                event_type,
             ),
         )
         conn.commit()
@@ -3157,10 +3304,10 @@ def get_growth_config(guild_id: int) -> dict:
     are parsed back into dicts/lists; empty / malformed JSON falls back to
     empty defaults so callers don't need to handle parse errors."""
     import json
+
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_growth_config WHERE guild_id = ?",
-            (guild_id,)
+            "SELECT * FROM guild_growth_config WHERE guild_id = ?", (guild_id,)
         ).fetchone()
     if row:
         d = dict(row)
@@ -3170,7 +3317,7 @@ def get_growth_config(guild_id: int) -> dict:
             d["metrics"] = []
         for json_field, fallback in (
             ("breakdown_thresholds", {}),
-            ("breakdown_labels",     {}),
+            ("breakdown_labels", {}),
             ("breakdown_bucket_filter", []),
         ):
             raw = d.get(json_field)
@@ -3180,30 +3327,39 @@ def get_growth_config(guild_id: int) -> dict:
                 d[json_field] = fallback
         return d
     return {
-        "guild_id":                  guild_id,
-        "enabled":                   0,
-        "tab_source":                "",
-        "name_col":                  "A",
-        "metrics":                   [],
-        "tab_growth":                "Growth Tracking",
-        "snapshot_frequency":        "monthly",
-        "snapshot_day":              1,
-        "snapshot_interval":         30,
-        "data_start_row":            2,
-        "tab_breakdown":             "Growth Breakdown",
-        "breakdown_thresholds":      {},
-        "breakdown_labels":          {},
+        "guild_id": guild_id,
+        "enabled": 0,
+        "tab_source": "",
+        "name_col": "A",
+        "metrics": [],
+        "tab_growth": "Growth Tracking",
+        "snapshot_frequency": "monthly",
+        "snapshot_day": 1,
+        "snapshot_interval": 30,
+        "data_start_row": 2,
+        "tab_breakdown": "Growth Breakdown",
+        "breakdown_thresholds": {},
+        "breakdown_labels": {},
         "breakdown_post_channel_id": 0,
-        "breakdown_bucket_filter":   [],
+        "breakdown_bucket_filter": [],
     }
 
 
-def save_growth_config(guild_id: int, enabled: int, tab_source: str,
-                       name_col: str, metrics: list, tab_growth: str,
-                       snapshot_frequency: str, snapshot_day: int,
-                       snapshot_interval: int, data_start_row: int):
+def save_growth_config(
+    guild_id: int,
+    enabled: int,
+    tab_source: str,
+    name_col: str,
+    metrics: list,
+    tab_growth: str,
+    snapshot_frequency: str,
+    snapshot_day: int,
+    snapshot_interval: int,
+    data_start_row: int,
+):
     """Insert or replace a guild's growth config."""
     import json
+
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_growth_config "
@@ -3218,8 +3374,18 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
             "snapshot_day=excluded.snapshot_day, "
             "snapshot_interval=excluded.snapshot_interval, "
             "data_start_row=excluded.data_start_row",
-            (guild_id, enabled, tab_source, name_col, json.dumps(metrics),
-             tab_growth, snapshot_frequency, snapshot_day, snapshot_interval, data_start_row)
+            (
+                guild_id,
+                enabled,
+                tab_source,
+                name_col,
+                json.dumps(metrics),
+                tab_growth,
+                snapshot_frequency,
+                snapshot_day,
+                snapshot_interval,
+                data_start_row,
+            ),
         )
         conn.commit()
 
@@ -3247,12 +3413,13 @@ def has_growth_breakdown_config(guild_id: int) -> bool:
 
 
 def save_growth_breakdown_config(
-    guild_id: int, *,
-    tab_breakdown: str             = "Growth Breakdown",
-    breakdown_thresholds: dict     = None,
-    breakdown_labels: dict         = None,
+    guild_id: int,
+    *,
+    tab_breakdown: str = "Growth Breakdown",
+    breakdown_thresholds: dict = None,
+    breakdown_labels: dict = None,
     breakdown_post_channel_id: int = 0,
-    breakdown_bucket_filter: list  = None,
+    breakdown_bucket_filter: list = None,
 ) -> bool:
     """Update the breakdown-specific fields on guild_growth_config without
     touching the core growth-snapshot fields. Returns True if a row was
@@ -3267,6 +3434,7 @@ def save_growth_breakdown_config(
     fire the auto-post (empty list = post every bucket).
     """
     import json
+
     if breakdown_thresholds is None:
         breakdown_thresholds = {}
     if breakdown_labels is None:
@@ -3314,10 +3482,10 @@ def has_survey_config(guild_id: int) -> bool:
 def get_survey_config(guild_id: int) -> dict:
     """Return survey config for a guild."""
     import json
+
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_survey_config WHERE guild_id = ?",
-            (guild_id,)
+            "SELECT * FROM guild_survey_config WHERE guild_id = ?", (guild_id,)
         ).fetchone()
     if row:
         d = dict(row)
@@ -3327,18 +3495,20 @@ def get_survey_config(guild_id: int) -> dict:
             d["questions"] = []
         return d
     return {
-        "guild_id":        guild_id,
+        "guild_id": guild_id,
         "tab_squad_powers": "Squad Powers",
-        "tab_history":     "Survey History",
-        "questions":       [],
-        "intro_message":   "",
+        "tab_history": "Survey History",
+        "questions": [],
+        "intro_message": "",
     }
 
 
-def save_survey_config(guild_id: int, tab_squad_powers: str, tab_history: str,
-                       questions: list, intro_message: str):
+def save_survey_config(
+    guild_id: int, tab_squad_powers: str, tab_history: str, questions: list, intro_message: str
+):
     """Insert or replace a guild's default survey config."""
     import json
+
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message) "
@@ -3346,7 +3516,7 @@ def save_survey_config(guild_id: int, tab_squad_powers: str, tab_history: str,
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_squad_powers=excluded.tab_squad_powers, tab_history=excluded.tab_history, "
             "questions=excluded.questions, intro_message=excluded.intro_message",
-            (guild_id, tab_squad_powers, tab_history, json.dumps(questions), intro_message)
+            (guild_id, tab_squad_powers, tab_history, json.dumps(questions), intro_message),
         )
         conn.commit()
 
@@ -3357,6 +3527,7 @@ def save_survey_config(guild_id: int, tab_squad_powers: str, tab_history: str,
 # Additional named surveys live in guild_extra_surveys, keyed by survey_id.
 # Premium subscribers may use up to LIMITS["surveys"] (TBD when wizard lands).
 
+
 def list_surveys(guild_id: int) -> list[dict]:
     """
     Return all surveys configured for a guild as a list of dicts. The first
@@ -3365,17 +3536,20 @@ def list_surveys(guild_id: int) -> list[dict]:
     """
     surveys: list[dict] = []
     default_cfg = get_survey_config(guild_id)
-    surveys.append({
-        "survey_id":         "default",
-        "survey_name":       "Default",
-        "tab_squad_powers":  default_cfg.get("tab_squad_powers", "Squad Powers"),
-        "tab_history":       default_cfg.get("tab_history", "Survey History"),
-        "questions":         default_cfg.get("questions", []),
-        "intro_message":     default_cfg.get("intro_message", ""),
-        "survey_channel_id": 0,   # default uses guild-level channel
-        "notify_channel_id": 0,
-    })
+    surveys.append(
+        {
+            "survey_id": "default",
+            "survey_name": "Default",
+            "tab_squad_powers": default_cfg.get("tab_squad_powers", "Squad Powers"),
+            "tab_history": default_cfg.get("tab_history", "Survey History"),
+            "questions": default_cfg.get("questions", []),
+            "intro_message": default_cfg.get("intro_message", ""),
+            "survey_channel_id": 0,  # default uses guild-level channel
+            "notify_channel_id": 0,
+        }
+    )
     import json
+
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM guild_extra_surveys WHERE guild_id = ? ORDER BY survey_name",
@@ -3400,24 +3574,25 @@ def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
     if survey_id == "default":
         cfg = get_survey_config(guild_id)
         return {
-            "survey_id":            "default",
-            "survey_name":          "Default",
-            "tab_squad_powers":     cfg.get("tab_squad_powers", "Squad Powers"),
-            "tab_history":          cfg.get("tab_history", "Survey History"),
-            "questions":            cfg.get("questions", []),
-            "intro_message":        cfg.get("intro_message", ""),
-            "survey_channel_id":    0,
-            "notify_channel_id":    0,
-            "reminder_message":     cfg.get("reminder_message", ""),
-            "reminder_enabled":     cfg.get("reminder_enabled", 0),
-            "reminder_frequency":   cfg.get("reminder_frequency", "off"),
+            "survey_id": "default",
+            "survey_name": "Default",
+            "tab_squad_powers": cfg.get("tab_squad_powers", "Squad Powers"),
+            "tab_history": cfg.get("tab_history", "Survey History"),
+            "questions": cfg.get("questions", []),
+            "intro_message": cfg.get("intro_message", ""),
+            "survey_channel_id": 0,
+            "notify_channel_id": 0,
+            "reminder_message": cfg.get("reminder_message", ""),
+            "reminder_enabled": cfg.get("reminder_enabled", 0),
+            "reminder_frequency": cfg.get("reminder_frequency", "off"),
             "reminder_day_of_week": cfg.get("reminder_day_of_week", 1),
-            "reminder_time":        cfg.get("reminder_time", "12:00"),
-            "reminder_channel_id":  cfg.get("reminder_channel_id", 0),
-            "reminder_use_dm":      cfg.get("reminder_use_dm", 0),
-            "reminder_last_fired":  cfg.get("reminder_last_fired", ""),
+            "reminder_time": cfg.get("reminder_time", "12:00"),
+            "reminder_channel_id": cfg.get("reminder_channel_id", 0),
+            "reminder_use_dm": cfg.get("reminder_use_dm", 0),
+            "reminder_last_fired": cfg.get("reminder_last_fired", ""),
         }
     import json
+
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM guild_extra_surveys WHERE guild_id = ? AND survey_id = ?",
@@ -3434,19 +3609,22 @@ def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
 
 
 def save_extra_survey(
-    guild_id: int, survey_id: str, *,
+    guild_id: int,
+    survey_id: str,
+    *,
     survey_name: str,
     tab_squad_powers: str = "Squad Powers",
-    tab_history: str       = "Survey History",
-    questions: list        = None,
-    intro_message: str     = "",
+    tab_history: str = "Survey History",
+    questions: list = None,
+    intro_message: str = "",
     survey_channel_id: int = 0,
     notify_channel_id: int = 0,
-    reminder_message: str  = "",
-    reminder_enabled: int  = 0,
+    reminder_message: str = "",
+    reminder_enabled: int = 0,
 ):
     """Insert or replace a non-default named survey for a guild."""
     import json
+
     if questions is None:
         questions = []
     with _get_conn() as conn:
@@ -3466,22 +3644,34 @@ def save_extra_survey(
             " notify_channel_id=excluded.notify_channel_id, "
             " reminder_message=excluded.reminder_message, "
             " reminder_enabled=excluded.reminder_enabled",
-            (guild_id, survey_id, survey_name, tab_squad_powers, tab_history,
-             json.dumps(questions), intro_message, survey_channel_id, notify_channel_id,
-             reminder_message, reminder_enabled),
+            (
+                guild_id,
+                survey_id,
+                survey_name,
+                tab_squad_powers,
+                tab_history,
+                json.dumps(questions),
+                intro_message,
+                survey_channel_id,
+                notify_channel_id,
+                reminder_message,
+                reminder_enabled,
+            ),
         )
         conn.commit()
 
 
 def save_survey_reminder(
-    guild_id: int, survey_id: str, *,
-    enabled: int            = 0,
-    frequency: str          = "off",
-    day_of_week: int        = 1,
-    time_str: str           = "12:00",
-    channel_id: int         = 0,
-    use_dm: int             = 0,
-    message: str            = "",
+    guild_id: int,
+    survey_id: str,
+    *,
+    enabled: int = 0,
+    frequency: str = "off",
+    day_of_week: int = 1,
+    time_str: str = "12:00",
+    channel_id: int = 0,
+    use_dm: int = 0,
+    message: str = "",
 ):
     """
     Store the scheduled-reminder config for one survey. `survey_id="default"`
@@ -3492,8 +3682,13 @@ def save_survey_reminder(
     table = "guild_survey_config" if survey_id == "default" else "guild_extra_surveys"
     where = "guild_id = ?" if survey_id == "default" else "guild_id = ? AND survey_id = ?"
     params: tuple = (
-        enabled, frequency, day_of_week, time_str,
-        channel_id, use_dm, message,
+        enabled,
+        frequency,
+        day_of_week,
+        time_str,
+        channel_id,
+        use_dm,
+        message,
         guild_id,
     )
     if survey_id != "default":
@@ -3546,7 +3741,7 @@ def list_scheduled_survey_reminders() -> list[dict]:
             "WHERE s.reminder_enabled = 1 AND s.reminder_frequency != 'off'"
         ).fetchall():
             d = dict(r)
-            d["survey_id"]   = "default"
+            d["survey_id"] = "default"
             d["survey_name"] = "Default"
             out.append(d)
         # Extra surveys: many per guild.
@@ -3604,37 +3799,45 @@ def get_birthday_config(guild_id: int) -> dict:
     """Return birthday config for a guild."""
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_birthday_config WHERE guild_id = ?",
-            (guild_id,)
+            "SELECT * FROM guild_birthday_config WHERE guild_id = ?", (guild_id,)
         ).fetchone()
     if row:
         return dict(row)
     return {
-        "guild_id":                   guild_id,
-        "tab_name":                   "Birthdays",
-        "name_col":                   0,
-        "birthday_col":               1,
-        "discord_id_col":             -1,
-        "data_start_row":             2,
-        "enabled":                    0,
-        "train_integration":          0,
-        "flexible_placement":         1,
-        "lookahead_days":             14,
-        "reminders_enabled":          0,
-        "reminder_channel_id":        0,
-        "reminder_time":              "08:00",
-        "dm_message":                 "",
+        "guild_id": guild_id,
+        "tab_name": "Birthdays",
+        "name_col": 0,
+        "birthday_col": 1,
+        "discord_id_col": -1,
+        "data_start_row": 2,
+        "enabled": 0,
+        "train_integration": 0,
+        "flexible_placement": 1,
+        "lookahead_days": 14,
+        "reminders_enabled": 0,
+        "reminder_channel_id": 0,
+        "reminder_time": "08:00",
+        "dm_message": "",
         "last_train_population_date": "",
     }
 
 
-def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
-                         birthday_col: int, discord_id_col: int = -1,
-                         data_start_row: int = 2, enabled: int = 1,
-                         train_integration: int = 0, flexible_placement: int = 1,
-                         lookahead_days: int = 14, reminders_enabled: int = 0,
-                         reminder_channel_id: int = 0, reminder_time: str = "08:00",
-                         dm_message: str = ""):
+def save_birthday_config(
+    guild_id: int,
+    tab_name: str,
+    name_col: int,
+    birthday_col: int,
+    discord_id_col: int = -1,
+    data_start_row: int = 2,
+    enabled: int = 1,
+    train_integration: int = 0,
+    flexible_placement: int = 1,
+    lookahead_days: int = 14,
+    reminders_enabled: int = 0,
+    reminder_channel_id: int = 0,
+    reminder_time: str = "08:00",
+    dm_message: str = "",
+):
     """Insert or replace a guild's birthday config."""
     with _get_conn() as conn:
         conn.execute(
@@ -3654,9 +3857,22 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
             "reminder_channel_id=excluded.reminder_channel_id, "
             "reminder_time=excluded.reminder_time, "
             "dm_message=excluded.dm_message",
-            (guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row,
-             enabled, train_integration, flexible_placement, lookahead_days,
-             reminders_enabled, reminder_channel_id, reminder_time, dm_message)
+            (
+                guild_id,
+                tab_name,
+                name_col,
+                birthday_col,
+                discord_id_col,
+                data_start_row,
+                enabled,
+                train_integration,
+                flexible_placement,
+                lookahead_days,
+                reminders_enabled,
+                reminder_channel_id,
+                reminder_time,
+                dm_message,
+            ),
         )
         conn.commit()
 
@@ -3669,13 +3885,12 @@ def get_birthday_population_last_fired(guild_id: int) -> str:
     instance got wiped on every Railway redeploy. See #89."""
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT last_train_population_date FROM guild_birthday_config "
-            "WHERE guild_id = ?",
+            "SELECT last_train_population_date FROM guild_birthday_config WHERE guild_id = ?",
             (guild_id,),
         ).fetchone()
     if row is None:
         return ""
-    return (dict(row).get("last_train_population_date") or "")
+    return dict(row).get("last_train_population_date") or ""
 
 
 def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
@@ -3687,8 +3902,7 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
     so we know the row is present."""
     with _get_conn() as conn:
         conn.execute(
-            "UPDATE guild_birthday_config SET last_train_population_date = ? "
-            "WHERE guild_id = ?",
+            "UPDATE guild_birthday_config SET last_train_population_date = ? WHERE guild_id = ?",
             (date_iso, guild_id),
         )
         conn.commit()
@@ -3719,16 +3933,16 @@ def get_member_roster_config(guild_id: int) -> dict:
     if row:
         return dict(row)
     return {
-        "guild_id":       guild_id,
-        "enabled":        0,
-        "tab_name":       "Member Roster",
+        "guild_id": guild_id,
+        "enabled": 0,
+        "tab_name": "Member Roster",
         "discord_id_col": 0,
-        "name_col":       1,
-        "display_col":    2,
-        "joined_col":     3,
-        "roles_col":      4,
+        "name_col": 1,
+        "display_col": 2,
+        "joined_col": 3,
+        "roles_col": 4,
         "role_filter_id": 0,
-        "auto_sync":      1,
+        "auto_sync": 1,
         "last_synced_at": "",
     }
 
@@ -3736,15 +3950,15 @@ def get_member_roster_config(guild_id: int) -> dict:
 def save_member_roster_config(
     guild_id: int,
     *,
-    enabled:        int = 1,
-    tab_name:       str = "Member Roster",
+    enabled: int = 1,
+    tab_name: str = "Member Roster",
     discord_id_col: int = 0,
-    name_col:       int = 1,
-    display_col:    int = 2,
-    joined_col:     int = 3,
-    roles_col:      int = 4,
+    name_col: int = 1,
+    display_col: int = 2,
+    joined_col: int = 3,
+    roles_col: int = 4,
     role_filter_id: int = 0,
-    auto_sync:      int = 1,
+    auto_sync: int = 1,
     last_synced_at: str = "",
 ):
     """Insert or replace a guild's member-roster config."""
@@ -3760,8 +3974,19 @@ def save_member_roster_config(
             " display_col=excluded.display_col, joined_col=excluded.joined_col, "
             " roles_col=excluded.roles_col, role_filter_id=excluded.role_filter_id, "
             " auto_sync=excluded.auto_sync, last_synced_at=excluded.last_synced_at",
-            (guild_id, enabled, tab_name, discord_id_col, name_col, display_col,
-             joined_col, roles_col, role_filter_id, auto_sync, last_synced_at),
+            (
+                guild_id,
+                enabled,
+                tab_name,
+                discord_id_col,
+                name_col,
+                display_col,
+                joined_col,
+                roles_col,
+                role_filter_id,
+                auto_sync,
+                last_synced_at,
+            ),
         )
         conn.commit()
 
@@ -3793,9 +4018,9 @@ def lookup_discord_id_for_name(guild_id: int, name: str) -> str | None:
         return None
 
     target = name.strip().lower()
-    did_col   = cfg["discord_id_col"]
-    disp_col  = cfg["display_col"]
-    name_col  = cfg["name_col"]
+    did_col = cfg["discord_id_col"]
+    disp_col = cfg["display_col"]
+    name_col = cfg["name_col"]
     for row in rows[1:]:  # skip header
         if not row:
             continue
@@ -3817,11 +4042,11 @@ def get_member_roster_sheet(guild_id: int, tab_name: str):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if credentials_json:
-        info  = json.loads(credentials_json)
+        info = json.loads(credentials_json)
         creds = Credentials.from_service_account_info(info, scopes=scopes)
     else:
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(get_spreadsheet_id(guild_id))
@@ -3841,6 +4066,7 @@ def _normalize_train_templates(d: dict) -> dict:
     column has content, treat the legacy template as the "Default" entry.
     """
     import json
+
     raw = d.get("templates_json") or "[]"
     try:
         parsed = json.loads(raw)
@@ -3884,44 +4110,53 @@ def has_train_config(guild_id: int) -> bool:
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to framework defaults."""
     import json
+
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_train_config WHERE guild_id = ?",
-            (guild_id,)
+            "SELECT * FROM guild_train_config WHERE guild_id = ?", (guild_id,)
         ).fetchone()
     if row:
         d = dict(row)
         try:
             d["themes"] = json.loads(d["themes"]) if d["themes"] else DEFAULT_THEMES
-            d["tones"]  = json.loads(d["tones"])  if d["tones"]  else DEFAULT_TONES
+            d["tones"] = json.loads(d["tones"]) if d["tones"] else DEFAULT_TONES
         except (json.JSONDecodeError, TypeError):
             d["themes"] = DEFAULT_THEMES
-            d["tones"]  = DEFAULT_TONES
+            d["tones"] = DEFAULT_TONES
         return _normalize_train_templates(d)
     fallback = {
-        "guild_id":            guild_id,
-        "tab_name":            "Train Schedule",
-        "blurbs_enabled":      1,
-        "themes":              DEFAULT_THEMES,
-        "tones":               DEFAULT_TONES,
-        "prompt_template":     DEFAULT_PROMPT,
-        "templates_json":      "",
-        "default_template":    "Default",
-        "default_tone":        "Default (match the theme)",
-        "reminders_enabled":   1,
+        "guild_id": guild_id,
+        "tab_name": "Train Schedule",
+        "blurbs_enabled": 1,
+        "themes": DEFAULT_THEMES,
+        "tones": DEFAULT_TONES,
+        "prompt_template": DEFAULT_PROMPT,
+        "templates_json": "",
+        "default_template": "Default",
+        "default_tone": "Default (match the theme)",
+        "reminders_enabled": 1,
         "reminder_channel_id": 0,
-        "reminder_time":       "22:00",
-        "dm_message":          "",
+        "reminder_time": "22:00",
+        "dm_message": "",
     }
     return _normalize_train_templates(fallback)
 
 
-def save_train_config(guild_id: int, tab_name: str, themes: list,
-                      tones: list, prompt_template: str, default_tone: str,
-                      blurbs_enabled: int = 1, reminders_enabled: int = 1,
-                      reminder_channel_id: int = 0, reminder_time: str = "22:00",
-                      templates: list | None = None, default_template: str = "Default",
-                      dm_message: str = ""):
+def save_train_config(
+    guild_id: int,
+    tab_name: str,
+    themes: list,
+    tones: list,
+    prompt_template: str,
+    default_tone: str,
+    blurbs_enabled: int = 1,
+    reminders_enabled: int = 1,
+    reminder_channel_id: int = 0,
+    reminder_time: str = "22:00",
+    templates: list | None = None,
+    default_template: str = "Default",
+    dm_message: str = "",
+):
     """
     Insert or replace a guild's train config.
 
@@ -3935,6 +4170,7 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
     default". Supports the `{name}` placeholder.
     """
     import json
+
     if templates is None:
         templates = [{"name": "Default", "template": prompt_template or ""}]
     templates_json = json.dumps(templates)
@@ -3962,14 +4198,27 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
             "reminder_channel_id=excluded.reminder_channel_id, "
             "reminder_time=excluded.reminder_time, "
             "dm_message=excluded.dm_message",
-            (guild_id, tab_name, blurbs_enabled, json.dumps(themes), json.dumps(tones),
-             default_text, templates_json, default_template, default_tone,
-             reminders_enabled, reminder_channel_id, reminder_time, dm_message)
+            (
+                guild_id,
+                tab_name,
+                blurbs_enabled,
+                json.dumps(themes),
+                json.dumps(tones),
+                default_text,
+                templates_json,
+                default_template,
+                default_tone,
+                reminders_enabled,
+                reminder_channel_id,
+                reminder_time,
+                dm_message,
+            ),
         )
         conn.commit()
 
 
 # ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────
+
 
 def has_shiny_tasks_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_shiny_tasks_config` — i.e.
@@ -4010,19 +4259,20 @@ def get_shiny_tasks_config(guild_id: int) -> dict:
     if row:
         return dict(row)
     return {
-        "guild_id":         guild_id,
-        "enabled":          0,
-        "channel_id":       0,
-        "post_time":        "09:00",
-        "server_min":       0,
-        "server_max":       0,
+        "guild_id": guild_id,
+        "enabled": 0,
+        "channel_id": 0,
+        "post_time": "09:00",
+        "server_min": 0,
+        "server_max": 0,
         "message_template": "",
         "last_posted_date": "",
     }
 
 
 def save_shiny_tasks_config(
-    guild_id: int, *,
+    guild_id: int,
+    *,
     enabled: int,
     channel_id: int,
     post_time: str,
@@ -4051,8 +4301,16 @@ def save_shiny_tasks_config(
             "post_time=excluded.post_time, server_min=excluded.server_min, "
             "server_max=excluded.server_max, "
             "message_template=excluded.message_template",
-            (guild_id, enabled, channel_id, post_time, server_min, server_max,
-             message_template, guild_id),
+            (
+                guild_id,
+                enabled,
+                channel_id,
+                post_time,
+                server_min,
+                server_max,
+                message_template,
+                guild_id,
+            ),
         )
         conn.commit()
 
@@ -4065,8 +4323,7 @@ def mark_shiny_tasks_posted(guild_id: int, posted_date: str) -> None:
     """
     with _get_conn() as conn:
         conn.execute(
-            "UPDATE guild_shiny_tasks_config SET last_posted_date = ? "
-            "WHERE guild_id = ?",
+            "UPDATE guild_shiny_tasks_config SET last_posted_date = ? WHERE guild_id = ?",
             (posted_date, guild_id),
         )
         conn.commit()
@@ -4086,7 +4343,8 @@ def list_shiny_enabled_guild_ids() -> list[int]:
 
 
 def upsert_shiny_task_servers(
-    rows: list[tuple[int, str, str]], seen_at: str,
+    rows: list[tuple[int, str, str]],
+    seen_at: str,
 ) -> int:
     """Upsert a batch of (server_number, creation_date, region) rows.
 
@@ -4113,7 +4371,10 @@ def upsert_shiny_task_servers(
 
 
 def get_shiny_task_servers_in_range(
-    server_min: int, server_max: int, *, max_age_days: int = 30,
+    server_min: int,
+    server_max: int,
+    *,
+    max_age_days: int = 30,
 ) -> list[dict]:
     """Return rows in [server_min, server_max] seen within `max_age_days`.
 
@@ -4122,6 +4383,7 @@ def get_shiny_task_servers_in_range(
     is sorted by server_number for deterministic announcement copy.
     """
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
     cutoff = (_dt.now(tz=_tz.utc) - _td(days=max_age_days)).isoformat()
     with _get_conn() as conn:
         rows = conn.execute(
@@ -4139,9 +4401,7 @@ def count_shiny_task_servers() -> int:
     """Return the total row count in `shiny_task_servers` (used to
     decide whether the initial seed has run)."""
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM shiny_task_servers"
-        ).fetchone()
+        row = conn.execute("SELECT COUNT(*) AS n FROM shiny_task_servers").fetchone()
     return row["n"] if row else 0
 
 
@@ -4156,11 +4416,9 @@ def get_last_shiny_refresh_at():
     `MAX(last_seen_at)` is the persistent equivalent.
     """
     from datetime import datetime as _dt
+
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT MAX(last_seen_at) AS last FROM shiny_task_servers"
-        ).fetchone()
+        row = conn.execute("SELECT MAX(last_seen_at) AS last FROM shiny_task_servers").fetchone()
     if not row or not row["last"]:
         return None
     return _dt.fromisoformat(row["last"])
-

@@ -42,37 +42,56 @@ def fake_env(seeded_db):
     # Header order mirrors storm_roster_builder._ROSTERS_HEADER from
     # production: `Override Below Minimum` comes BEFORE `Posted At (UTC)`,
     # not after. The prior fixture order was column-index-fragile.
-    rosters = _FakeWorksheet("DS Rosters", [
-        ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Override Below Minimum",
-         "Posted At (UTC)"],
-        ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
-        ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
-        ["2026-05-18", "A", "Nuclear Silo", "Carol", "primary", "280000000", "1003", "",    ""],
-        ["2026-05-18", "A", "",             "Dan",   "sub",     "220000000", "1004", "",    ""],
-        ["2026-05-11", "A", "Power Tower",  "Alice", "primary", "400000000", "1001", "",    ""],
-        ["2026-05-11", "A", "Power Tower",  "Erin",  "primary", "190000000", "1005", "yes", ""],
-        # Bad date — should be filtered out of list_event_dates.
-        ["2026-13-50", "A", "Power Tower",  "Z",     "primary", "1",         "9",    "",    ""],
-    ])
+    rosters = _FakeWorksheet(
+        "DS Rosters",
+        [
+            [
+                "Event Date",
+                "Team",
+                "Zone",
+                "Member",
+                "Role",
+                "Power at Assignment",
+                "Discord ID",
+                "Override Below Minimum",
+                "Posted At (UTC)",
+            ],
+            ["2026-05-18", "A", "Power Tower", "Alice", "primary", "412000000", "1001", "", ""],
+            ["2026-05-18", "A", "Power Tower", "Bob", "primary", "350000000", "1002", "", ""],
+            ["2026-05-18", "A", "Nuclear Silo", "Carol", "primary", "280000000", "1003", "", ""],
+            ["2026-05-18", "A", "", "Dan", "sub", "220000000", "1004", "", ""],
+            ["2026-05-11", "A", "Power Tower", "Alice", "primary", "400000000", "1001", "", ""],
+            ["2026-05-11", "A", "Power Tower", "Erin", "primary", "190000000", "1005", "yes", ""],
+            # Bad date — should be filtered out of list_event_dates.
+            ["2026-13-50", "A", "Power Tower", "Z", "primary", "1", "9", "", ""],
+        ],
+    )
     fake._tabs["DS Rosters"] = rosters
 
-    attendance = _FakeWorksheet("DS Attendance", [
-        ["Event Date", "Team", "Zone", "Member", "Status",
-         "Recorded By", "Recorded At (UTC)"],
-        ["2026-05-18", "A", "Power Tower",  "Alice", "attended",      "999", ""],
-        ["2026-05-18", "A", "Power Tower",  "Bob",   "no_show",       "999", ""],
-        ["2026-05-18", "A", "Nuclear Silo", "Carol", "sub_activated", "999", ""],
-    ])
+    attendance = _FakeWorksheet(
+        "DS Attendance",
+        [
+            ["Event Date", "Team", "Zone", "Member", "Status", "Recorded By", "Recorded At (UTC)"],
+            ["2026-05-18", "A", "Power Tower", "Alice", "attended", "999", ""],
+            ["2026-05-18", "A", "Power Tower", "Bob", "no_show", "999", ""],
+            ["2026-05-18", "A", "Nuclear Silo", "Carol", "sub_activated", "999", ""],
+        ],
+    )
     fake._tabs["DS Attendance"] = attendance
 
     for et in ("DS", "CS"):
         config.save_storm_config(
-            TEST_GUILD_ID, et, tab_name=f"{et} Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            et,
+            tab_name=f"{et} Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, et, structured_flow_enabled=True,
+            TEST_GUILD_ID,
+            et,
+            structured_flow_enabled=True,
         )
 
     with patch.object(config, "get_spreadsheet", return_value=fake):
@@ -141,8 +160,8 @@ class TestLoadEventAttendance:
         # Keys are normalized: member name case-folded so a stray case
         # difference between rosters_tab and attendance_tab doesn't
         # silently break the overlay.
-        assert att[sh._attendance_join_key("A", "Power Tower",  "Alice")] == "attended"
-        assert att[sh._attendance_join_key("A", "Power Tower",  "Bob")]   == "no_show"
+        assert att[sh._attendance_join_key("A", "Power Tower", "Alice")] == "attended"
+        assert att[sh._attendance_join_key("A", "Power Tower", "Bob")] == "no_show"
         assert att[sh._attendance_join_key("A", "Nuclear Silo", "Carol")] == "sub_activated"
 
     def test_join_key_is_whitespace_and_case_tolerant(self, fake_env):
@@ -181,16 +200,24 @@ def _embed_body(embed) -> str:
 class TestRenderEventEmbed:
     def test_renders_attendance_glyphs(self):
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "role": "primary", "power": "412000000",
-             "discord_id": "1", "override_below_floor": False},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "412000000",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
         ]
         attendance = {
             sh._attendance_join_key("A", "Power Tower", "Alice"): "attended",
         }
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance=attendance,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance=attendance,
         )
         body = _embed_body(embed)
         assert "Alice" in body
@@ -198,13 +225,21 @@ class TestRenderEventEmbed:
 
     def test_no_attendance_falls_through(self):
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "role": "primary", "power": "412000000",
-             "discord_id": "1", "override_below_floor": False},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "412000000",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         # Renders an unrecorded marker, not crash.
         assert "—" in _embed_body(embed)
@@ -220,35 +255,62 @@ class TestRenderEventEmbed:
         made. Officers reviewing history don't need the build-time
         override flagged."""
         slots = [
-            {"team": "A", "phase": "", "zone": "Power Tower", "member": "Erin",
-             "role": "primary", "power": "190000000",
-             "discord_id": "5", "override_below_floor": True,
-             "paired_with": ""},
+            {
+                "team": "A",
+                "phase": "",
+                "zone": "Power Tower",
+                "member": "Erin",
+                "role": "primary",
+                "power": "190000000",
+                "discord_id": "5",
+                "override_below_floor": True,
+                "paired_with": "",
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-11",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-11",
+            slots=slots,
+            attendance={},
         )
         assert "override" not in _embed_body(embed).lower()
         assert "⚠️" not in _embed_body(embed)
 
     def test_empty_slots_message(self):
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=[], attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=[],
+            attendance={},
         )
         assert "No structured roster" in (embed.description or "")
 
     def test_grouping_by_team_and_zone(self):
         slots = [
-            {"team": "A", "zone": "Power Tower",  "member": "Alice",
-             "role": "primary", "power": "", "discord_id": "1", "override_below_floor": False},
-            {"team": "A", "zone": "Nuclear Silo", "member": "Bob",
-             "role": "primary", "power": "", "discord_id": "2", "override_below_floor": False},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
+            {
+                "team": "A",
+                "zone": "Nuclear Silo",
+                "member": "Bob",
+                "role": "primary",
+                "power": "",
+                "discord_id": "2",
+                "override_below_floor": False,
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         # Team renders as a separate field, not in the description.
         field_names = [f.name for f in embed.fields]
@@ -263,14 +325,30 @@ class TestRenderEventEmbed:
         be in that order. New behaviour sorts teams alphabetically."""
         slots = [
             # B first in the input → A should still render first.
-            {"team": "B", "zone": "Power Tower", "member": "Bob",
-             "role": "primary", "power": "", "discord_id": "2", "override_below_floor": False},
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "role": "primary", "power": "", "discord_id": "1", "override_below_floor": False},
+            {
+                "team": "B",
+                "zone": "Power Tower",
+                "member": "Bob",
+                "role": "primary",
+                "power": "",
+                "discord_id": "2",
+                "override_below_floor": False,
+            },
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         field_names = [f.name for f in embed.fields]
         assert field_names == ["Team A", "Team B"]
@@ -281,22 +359,45 @@ class TestRenderEventEmbed:
         rows for Phase 1, Phase 2, etc., and members fall under the
         phase they were rostered into."""
         slots = [
-            {"team": "A", "phase": "1", "zone": "Power Tower",
-             "member": "Alice", "role": "primary", "power": "",
-             "discord_id": "1", "override_below_floor": False,
-             "paired_with": ""},
-            {"team": "A", "phase": "2", "zone": "Power Tower",
-             "member": "Bob", "role": "primary", "power": "",
-             "discord_id": "2", "override_below_floor": False,
-             "paired_with": ""},
-            {"team": "A", "phase": "3", "zone": "Power Tower",
-             "member": "Carol", "role": "primary", "power": "",
-             "discord_id": "3", "override_below_floor": False,
-             "paired_with": ""},
+            {
+                "team": "A",
+                "phase": "1",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "",
+                "discord_id": "1",
+                "override_below_floor": False,
+                "paired_with": "",
+            },
+            {
+                "team": "A",
+                "phase": "2",
+                "zone": "Power Tower",
+                "member": "Bob",
+                "role": "primary",
+                "power": "",
+                "discord_id": "2",
+                "override_below_floor": False,
+                "paired_with": "",
+            },
+            {
+                "team": "A",
+                "phase": "3",
+                "zone": "Power Tower",
+                "member": "Carol",
+                "role": "primary",
+                "power": "",
+                "discord_id": "3",
+                "override_below_floor": False,
+                "paired_with": "",
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         body = _embed_body(embed)
         # Phase headers appear, and the per-phase members are listed
@@ -309,19 +410,28 @@ class TestRenderEventEmbed:
         p2 = body.index("**Stage 2**")
         p3 = body.index("**Stage 3**")
         assert "Alice" in body[p1:p2]
-        assert "Bob"   in body[p2:p3]
+        assert "Bob" in body[p2:p3]
         assert "Carol" in body[p3:]
 
     def test_flat_event_does_not_render_phase_headers(self):
         slots = [
-            {"team": "A", "phase": "", "zone": "Power Tower",
-             "member": "Alice", "role": "primary", "power": "",
-             "discord_id": "1", "override_below_floor": False,
-             "paired_with": ""},
+            {
+                "team": "A",
+                "phase": "",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "",
+                "discord_id": "1",
+                "override_below_floor": False,
+                "paired_with": "",
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         body = _embed_body(embed)
         assert "Stage 1" not in body
@@ -331,13 +441,21 @@ class TestRenderEventEmbed:
         """Raw `"412000000"` should display as `"412M"` for the human
         readers — the prior renderer showed the digits verbatim."""
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "role": "primary", "power": "412000000",
-             "discord_id": "1", "override_below_floor": False},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "412000000",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         body = _embed_body(embed)
         assert "412M" in body
@@ -346,13 +464,21 @@ class TestRenderEventEmbed:
 
     def test_power_unknown_sentinel_dropped(self):
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Erin",
-             "role": "primary", "power": "unknown",
-             "discord_id": "5", "override_below_floor": False},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Erin",
+                "role": "primary",
+                "power": "unknown",
+                "discord_id": "5",
+                "override_below_floor": False,
+            },
         ]
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance={},
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance={},
         )
         body = _embed_body(embed)
         # The sentinel itself isn't surfaced — just no power readout.
@@ -361,8 +487,15 @@ class TestRenderEventEmbed:
 
     def test_footer_summary_counts(self):
         slots = [
-            {"team": "A", "zone": "Z", "member": f"M{i}", "role": "primary",
-             "power": "", "discord_id": str(i), "override_below_floor": False}
+            {
+                "team": "A",
+                "zone": "Z",
+                "member": f"M{i}",
+                "role": "primary",
+                "power": "",
+                "discord_id": str(i),
+                "override_below_floor": False,
+            }
             for i in range(3)
         ]
         attendance = {
@@ -371,8 +504,10 @@ class TestRenderEventEmbed:
             sh._attendance_join_key("A", "Z", "M2"): "sub_activated",
         }
         embed = sh.render_event_embed(
-            event_type="DS", event_date="2026-05-18",
-            slots=slots, attendance=attendance,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            attendance=attendance,
         )
         # Rule K (#171): footer drops 🔄 Sub activated. Legacy
         # `sub_activated` rows render as `—` and don't count toward
@@ -416,9 +551,12 @@ class TestDateButtonStaysActive:
     @pytest.mark.asyncio
     async def test_button_callback_does_not_disable_other_buttons(self, fake_env):
         from unittest.mock import AsyncMock, MagicMock
+
         fake, gid = fake_env
         view = sh._HistoryListView(
-            guild_id=gid, user_id=42, event_type="DS",
+            guild_id=gid,
+            user_id=42,
+            event_type="DS",
             dates=["2026-05-18", "2026-05-11"],
         )
         # Capture pre-state of the buttons.
@@ -427,7 +565,8 @@ class TestDateButtonStaysActive:
 
         # Drive the first button's callback.
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 42
+        inter.user = MagicMock()
+        inter.user.id = 42
         inter.response = MagicMock()
         inter.response.defer = AsyncMock()
         inter.followup = MagicMock()
@@ -460,13 +599,17 @@ class TestOpenHistoryEphemeralConsistency:
     async def test_date_button_callback_is_ephemeral(self, fake_env):
         """The third render path (date-button click) sends ephemerally."""
         from unittest.mock import AsyncMock, MagicMock
+
         fake, gid = fake_env
         view = sh._HistoryListView(
-            guild_id=gid, user_id=42, event_type="DS",
+            guild_id=gid,
+            user_id=42,
+            event_type="DS",
             dates=["2026-05-18"],
         )
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 42
+        inter.user = MagicMock()
+        inter.user.id = 42
         inter.response = MagicMock()
         inter.response.defer = AsyncMock()
         inter.followup = MagicMock()
@@ -483,6 +626,7 @@ class TestOpenHistoryEphemeralConsistency:
         must use `ephemeral=True` on its followup.send. The audit
         flagged this as inconsistent across the three paths."""
         import inspect
+
         src = inspect.getsource(sh.open_history)
         # All three followup.send calls in open_history must have
         # ephemeral=True. Count the substring occurrences as a tripwire.
@@ -505,8 +649,10 @@ class TestRosterImageLinksView:
             {"team": "B", "channel_id": 900, "message_id": 2002},
         ]
         view = sh._RosterImageLinksView(
-            owner_id=42, guild_id=gid,
-            event_type="DS", event_date="2026-05-18",
+            owner_id=42,
+            guild_id=gid,
+            event_type="DS",
+            event_date="2026-05-18",
             refs=refs,
         )
         labels = [b.label for b in view.children]
@@ -516,8 +662,10 @@ class TestRosterImageLinksView:
         fake, gid = fake_env
         refs = [{"team": "", "channel_id": 900, "message_id": 5555}]
         view = sh._RosterImageLinksView(
-            owner_id=42, guild_id=gid,
-            event_type="CS", event_date="2026-05-18",
+            owner_id=42,
+            guild_id=gid,
+            event_type="CS",
+            event_date="2026-05-18",
             refs=refs,
         )
         assert len(view.children) == 1
@@ -534,14 +682,21 @@ class TestRosterImageLinksView:
         fake, gid = fake_env
         # Save a pointer the test can later observe being deleted.
         config.save_roster_image_ref(
-            gid, "DS", "2026-05-18", "A",
-            channel_id=900, message_id=1001, user_id=42,
+            gid,
+            "DS",
+            "2026-05-18",
+            "A",
+            channel_id=900,
+            message_id=1001,
+            user_id=42,
         )
 
         refs = config.list_roster_image_refs(gid, "DS", "2026-05-18")
         view = sh._RosterImageLinksView(
-            owner_id=42, guild_id=gid,
-            event_type="DS", event_date="2026-05-18",
+            owner_id=42,
+            guild_id=gid,
+            event_type="DS",
+            event_date="2026-05-18",
             refs=refs,
         )
 
@@ -551,7 +706,8 @@ class TestRosterImageLinksView:
             side_effect=discord.NotFound(MagicMock(status=404), "gone"),
         )
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 42
+        inter.user = MagicMock()
+        inter.user.id = 42
         inter.guild = MagicMock()
         inter.guild.get_channel_or_thread = MagicMock(return_value=channel)
         inter.response = MagicMock()
@@ -571,15 +727,19 @@ class TestRosterImageLinksView:
     @pytest.mark.asyncio
     async def test_owner_only_button_interaction_check(self, fake_env):
         from unittest.mock import AsyncMock, MagicMock
+
         fake, gid = fake_env
         refs = [{"team": "A", "channel_id": 900, "message_id": 1001}]
         view = sh._RosterImageLinksView(
-            owner_id=42, guild_id=gid,
-            event_type="DS", event_date="2026-05-18",
+            owner_id=42,
+            guild_id=gid,
+            event_type="DS",
+            event_date="2026-05-18",
             refs=refs,
         )
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 999   # not the owner
+        inter.user = MagicMock()
+        inter.user.id = 999  # not the owner
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 

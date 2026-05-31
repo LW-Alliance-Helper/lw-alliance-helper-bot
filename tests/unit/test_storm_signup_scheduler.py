@@ -45,63 +45,95 @@ class TestShouldFireNow:
     def test_fires_on_exact_match(self):
         # Today = Tuesday 2026-05-12; poll-day = Tuesday (1). 14:00 ET.
         today = _dt.date(2026, 5, 12)
-        now   = _dt.time(14, 0)
-        assert sss._should_fire_now(
-            today=today, now=now,
-            poll_dow=1, signup_time=_dt.time(14, 0),
-        ) is True
+        now = _dt.time(14, 0)
+        assert (
+            sss._should_fire_now(
+                today=today,
+                now=now,
+                poll_dow=1,
+                signup_time=_dt.time(14, 0),
+            )
+            is True
+        )
 
     def test_no_fire_on_wrong_minute(self):
         today = _dt.date(2026, 5, 12)
-        assert sss._should_fire_now(
-            today=today, now=_dt.time(14, 1),
-            poll_dow=1, signup_time=_dt.time(14, 0),
-        ) is False
+        assert (
+            sss._should_fire_now(
+                today=today,
+                now=_dt.time(14, 1),
+                poll_dow=1,
+                signup_time=_dt.time(14, 0),
+            )
+            is False
+        )
 
     def test_no_fire_on_wrong_hour(self):
         today = _dt.date(2026, 5, 12)
-        assert sss._should_fire_now(
-            today=today, now=_dt.time(13, 0),
-            poll_dow=1, signup_time=_dt.time(14, 0),
-        ) is False
+        assert (
+            sss._should_fire_now(
+                today=today,
+                now=_dt.time(13, 0),
+                poll_dow=1,
+                signup_time=_dt.time(14, 0),
+            )
+            is False
+        )
 
     def test_no_fire_on_wrong_weekday(self):
         # Today = Tuesday; poll-day = Wednesday → don't fire.
         today = _dt.date(2026, 5, 12)
-        assert sss._should_fire_now(
-            today=today, now=_dt.time(14, 0),
-            poll_dow=2, signup_time=_dt.time(14, 0),
-        ) is False
+        assert (
+            sss._should_fire_now(
+                today=today,
+                now=_dt.time(14, 0),
+                poll_dow=2,
+                signup_time=_dt.time(14, 0),
+            )
+            is False
+        )
 
     def test_invalid_dow_no_fire(self):
         today = _dt.date(2026, 5, 12)
-        assert sss._should_fire_now(
-            today=today, now=_dt.time(14, 0),
-            poll_dow=-1, signup_time=_dt.time(14, 0),
-        ) is False
+        assert (
+            sss._should_fire_now(
+                today=today,
+                now=_dt.time(14, 0),
+                poll_dow=-1,
+                signup_time=_dt.time(14, 0),
+            )
+            is False
+        )
 
 
 class TestScheduledStormRows:
     def test_only_returns_enabled_and_scheduled(self, seeded_db):
         import config
+
         # Storm rows must exist before save_structured_storm_config
         # can UPDATE them.
         for et in ("DS", "CS"):
             config.save_storm_config(
-                TEST_GUILD_ID, et,
-                tab_name=f"{et} Tab", mail_template="x",
-                timezone="America/New_York", log_channel_id=0,
+                TEST_GUILD_ID,
+                et,
+                tab_name=f"{et} Tab",
+                mail_template="x",
+                timezone="America/New_York",
+                log_channel_id=0,
             )
 
         # DS: structured enabled + scheduled.
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
-            poll_day_of_week=1, signup_time="14:00",
+            poll_day_of_week=1,
+            signup_time="14:00",
         )
         # CS: structured enabled but not scheduled (default dow=-1).
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "CS",
+            TEST_GUILD_ID,
+            "CS",
             structured_flow_enabled=True,
         )
 
@@ -112,22 +144,25 @@ class TestScheduledStormRows:
 
     def test_excludes_structured_disabled(self, seeded_db):
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=False,
-            poll_day_of_week=1, signup_time="14:00",
+            poll_day_of_week=1,
+            signup_time="14:00",
         )
         rows = sss._scheduled_storm_rows()
         # No matches because structured is off.
-        assert not any(
-            r["guild_id"] == TEST_GUILD_ID and r["event_type"] == "DS"
-            for r in rows
-        )
+        assert not any(r["guild_id"] == TEST_GUILD_ID and r["event_type"] == "DS" for r in rows)
 
 
 class TestRunOneTick:
@@ -137,13 +172,18 @@ class TestRunOneTick:
     def _seed(self, poll_dow: int, signup_time: str, *, enabled: bool = True):
         """Seed the test DB with a DS row that matches the test parameters."""
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=enabled,
             poll_day_of_week=poll_dow,
             signup_time=signup_time,
@@ -165,16 +205,18 @@ class TestRunOneTick:
         self._seed(poll_dow=1, signup_time="14:00")
         bot, _guild = self._fake_bot()
 
-        post_mock = AsyncMock(return_value={"status": "ok",
-                                            "channel_id": 99, "message_id": 1234})
-        with patch.object(sss, "_guild_today_and_now",
-                          return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))), \
-             patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_post.post_registration", post_mock):
+        post_mock = AsyncMock(return_value={"status": "ok", "channel_id": 99, "message_id": 1234})
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
             fired = await sss._run_one_tick(bot)
         assert fired == 1
         post_mock.assert_awaited_once()
-        call_args   = post_mock.await_args.args
+        call_args = post_mock.await_args.args
         # post_registration(bot, guild, event_type, event_date, *, structured=...)
         assert call_args[2] == "DS"
         assert call_args[3] == "2026-05-15"  # next Friday after Tue 5/12
@@ -187,10 +229,13 @@ class TestRunOneTick:
         self._seed(poll_dow=1, signup_time="14:00")
         bot, _guild = self._fake_bot()
         post_mock = AsyncMock(return_value={"status": "ok"})
-        with patch.object(sss, "_guild_today_and_now",
-                          return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))), \
-             patch("premium.is_premium", new=AsyncMock(return_value=False)), \
-             patch("storm_signup_post.post_registration", post_mock):
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("premium.is_premium", new=AsyncMock(return_value=False)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
             fired = await sss._run_one_tick(bot)
         assert fired == 0
         post_mock.assert_not_awaited()
@@ -200,9 +245,12 @@ class TestRunOneTick:
         self._seed(poll_dow=1, signup_time="14:00")
         bot, _guild = self._fake_bot()
         post_mock = AsyncMock(return_value={"status": "ok"})
-        with patch.object(sss, "_guild_today_and_now",
-                          return_value=(_dt.date(2026, 5, 12), _dt.time(14, 5))), \
-             patch("storm_signup_post.post_registration", post_mock):
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 5))
+            ),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
             fired = await sss._run_one_tick(bot)
         assert fired == 0
         post_mock.assert_not_awaited()
@@ -217,16 +265,22 @@ class TestRunOneTick:
         bot, _guild = self._fake_bot()
         # Now simulate a "racy" disable — re-save with enabled=False.
         import config
+
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=False,
-            poll_day_of_week=1, signup_time="14:00",
+            poll_day_of_week=1,
+            signup_time="14:00",
             signup_channel_id=99,
         )
         post_mock = AsyncMock(return_value={"status": "ok"})
-        with patch.object(sss, "_guild_today_and_now",
-                          return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))), \
-             patch("storm_signup_post.post_registration", post_mock):
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
             fired = await sss._run_one_tick(bot)
         assert fired == 0
         post_mock.assert_not_awaited()
@@ -238,9 +292,12 @@ class TestRunOneTick:
         bot.is_closed.return_value = False
         bot.get_guild.return_value = None  # guild not in cache
         post_mock = AsyncMock()
-        with patch.object(sss, "_guild_today_and_now",
-                          return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))), \
-             patch("storm_signup_post.post_registration", post_mock):
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
             fired = await sss._run_one_tick(bot)
         assert fired == 0
         post_mock.assert_not_awaited()
@@ -251,34 +308,41 @@ class TestParseStormSignupTime:
 
     def test_accepts_24h_format(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("14:00") == "14:00"
         assert parse_storm_signup_time("23:59") == "23:59"
 
     def test_accepts_pm_format(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("2pm") == "14:00"
         assert parse_storm_signup_time("2:30pm") == "14:30"
         assert parse_storm_signup_time("2:30 PM") == "14:30"
 
     def test_accepts_bare_hour(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("14") == "14:00"
 
     def test_midnight_am(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("12:00am") == "00:00"
 
     def test_noon_pm(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("12:00pm") == "12:00"
 
     def test_empty_returns_none(self):
         from config import parse_storm_signup_time
+
         assert parse_storm_signup_time("") is None
         assert parse_storm_signup_time("   ") is None
         assert parse_storm_signup_time(None) is None
 
     def test_garbage_returns_none(self):
         from config import parse_storm_signup_time
+
         for bad in ("garbage", "25:00", "14:60", "-1:00"):
             assert parse_storm_signup_time(bad) is None

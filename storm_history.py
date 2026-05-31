@@ -22,6 +22,8 @@ from typing import Optional
 
 import discord
 
+from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,24 +32,23 @@ logger = logging.getLogger(__name__)
 
 def _rosters_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     cfg = config.get_structured_storm_config(guild_id, event_type)
-    return cfg.get("rosters_tab") or config.default_structured_tab(
-        event_type, "rosters_tab"
-    )
+    return cfg.get("rosters_tab") or config.default_structured_tab(event_type, "rosters_tab")
 
 
 def _attendance_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     cfg = config.get_structured_storm_config(guild_id, event_type)
-    return cfg.get("attendance_tab") or config.default_structured_tab(
-        event_type, "attendance_tab"
-    )
+    return cfg.get("attendance_tab") or config.default_structured_tab(event_type, "attendance_tab")
 
 
 def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], list[str]]:
     """Generic Sheet-tab reader. Returns `(rows, errors)`. Missing tab
     returns `([], [])` so callers degrade gracefully."""
     import config
+
     try:
         sh = config.get_spreadsheet(guild_id)
     except Exception as e:
@@ -65,7 +66,10 @@ def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], lis
 
 
 def list_event_dates(
-    guild_id: int, event_type: str, *, limit: int = 8,
+    guild_id: int,
+    event_type: str,
+    *,
+    limit: int = 8,
 ) -> tuple[list[str], list[str]]:
     """Return the most-recent N event dates (descending) for which a
     structured roster exists. Returns `(dates, errors)`."""
@@ -101,7 +105,9 @@ def list_event_dates(
 
 
 def load_event_roster(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> tuple[list[dict], list[str]]:
     """Return all rosters_tab rows for an event date as a list of dicts.
     Each row: `{team, zone, member, role, power, discord_id,
@@ -120,15 +126,15 @@ def load_event_roster(
         except ValueError:
             return -1
 
-    date_col   = _col("Event Date")
-    team_col   = _col("Team")
-    phase_col  = _col("Stage")        # #152 — empty for sub-pool rows
-    zone_col   = _col("Zone")
+    date_col = _col("Event Date")
+    team_col = _col("Team")
+    phase_col = _col("Stage")  # #152 — empty for sub-pool rows
+    zone_col = _col("Zone")
     member_col = _col("Member")
-    role_col   = _col("Role")
-    power_col  = _col("Power at Assignment")
-    id_col     = _col("Discord ID")
-    ovr_col    = _col("Override Below Minimum")
+    role_col = _col("Role")
+    power_col = _col("Power at Assignment")
+    id_col = _col("Discord ID")
+    ovr_col = _col("Override Below Minimum")
     if ovr_col < 0:
         # Legacy header alias (dev/staging sheets pre-rename).
         ovr_col = _col("Override Below Floor")
@@ -145,24 +151,28 @@ def load_event_roster(
 
     slots: list[dict] = []
     for row in rows[1:]:
+
         def _cell(idx: int) -> str:
             return row[idx].strip() if 0 <= idx < len(row) else ""
+
         if _cell(date_col) != event_date:
             continue
-        slots.append({
-            "team":     _cell(team_col),
-            "phase":    _cell(phase_col),     # "1"/"2" for phased rows, "" otherwise
-            "zone":     _cell(zone_col),
-            "member":   _cell(member_col),
-            "role":     _cell(role_col) or "primary",
-            "power":    _cell(power_col),
-            "discord_id": _cell(id_col),
-            "override_below_floor": _cell(ovr_col).lower() in truthy,
-            # `paired_with` is the primary's name on sub rows when
-            # sub_mode=paired; blank for primary rows and pool-mode subs.
-            # Older rosters_tab data without the column reads as "".
-            "paired_with": _cell(paired_col),
-        })
+        slots.append(
+            {
+                "team": _cell(team_col),
+                "phase": _cell(phase_col),  # "1"/"2" for phased rows, "" otherwise
+                "zone": _cell(zone_col),
+                "member": _cell(member_col),
+                "role": _cell(role_col) or "primary",
+                "power": _cell(power_col),
+                "discord_id": _cell(id_col),
+                "override_below_floor": _cell(ovr_col).lower() in truthy,
+                # `paired_with` is the primary's name on sub rows when
+                # sub_mode=paired; blank for primary rows and pool-mode subs.
+                # Older rosters_tab data without the column reads as "".
+                "paired_with": _cell(paired_col),
+            }
+        )
     return slots, errors
 
 
@@ -183,7 +193,9 @@ def _attendance_join_key(team: str, zone: str, member: str) -> tuple[str, str, s
 
 
 def load_event_attendance(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> tuple[dict[tuple[str, str, str], str], list[str]]:
     """Return `{normalized_key: status}` for this event's attendance
     rows. Missing tab → empty dict (no errors).
@@ -205,20 +217,24 @@ def load_event_attendance(
         except ValueError:
             return -1
 
-    date_col   = _col("Event Date")
-    team_col   = _col("Team")
-    zone_col   = _col("Zone")
+    date_col = _col("Event Date")
+    team_col = _col("Team")
+    zone_col = _col("Zone")
     member_col = _col("Member")
     status_col = _col("Status")
 
     out: dict[tuple[str, str, str], str] = {}
     for row in rows[1:]:
+
         def _cell(idx: int) -> str:
             return row[idx].strip() if 0 <= idx < len(row) else ""
+
         if _cell(date_col) != event_date:
             continue
         key = _attendance_join_key(
-            _cell(team_col), _cell(zone_col), _cell(member_col),
+            _cell(team_col),
+            _cell(zone_col),
+            _cell(member_col),
         )
         out[key] = _cell(status_col)
     return out, errors
@@ -232,10 +248,10 @@ def load_event_attendance(
 # decision; the reader keeps them mapped to `—` so officers see "not
 # recorded" rather than a crashing/unknown status.
 _STATUS_GLYPH = {
-    "attended":      "✅",
-    "no_show":       "❌",
+    "attended": "✅",
+    "no_show": "❌",
     "sub_activated": "—",
-    "":              "—",
+    "": "—",
 }
 
 
@@ -251,6 +267,7 @@ def _format_power_display(raw: str) -> str:
     except (TypeError, ValueError):
         return f" · {raw}"
     from storm_strategy import format_power
+
     return f" · {format_power(n)}"
 
 
@@ -268,12 +285,12 @@ def render_event_embed(
 
     embed = discord.Embed(
         title=f"📜 {label} Roster: {date_pretty}",
-        color=discord.Color.dark_gold() if event_type == "DS"
-              else discord.Color.dark_orange(),
+        color=discord.Color.dark_gold() if event_type == "DS" else discord.Color.dark_orange(),
     )
 
     if not slots:
         from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
+
         hub_cmd = HUB_COMMAND[event_type]
         embed.description = (
             "_No structured roster found for this date. Check the date "
@@ -310,7 +327,9 @@ def render_event_embed(
         counter."""
         nonlocal total_recorded, total_attended, total_no_show
         key = _attendance_join_key(
-            slot["team"], slot["zone"], slot["member"],
+            slot["team"],
+            slot["zone"],
+            slot["member"],
         )
         status = attendance.get(key, "")
         glyph = _STATUS_GLYPH.get(status, "—")
@@ -349,6 +368,7 @@ def render_event_embed(
 
         team_lines: list[str] = []
         from storm_icons import zone_emoji_prefix
+
         for zone in sorted(zones.keys()):
             members = zones[zone]
             # #158: prefix every zone header with its emoji icon (no-op
@@ -380,9 +400,7 @@ def render_event_embed(
                     return (1, p)
 
             for phase in sorted(by_phase.keys(), key=_phase_sort_key):
-                phase_label = (
-                    f"Stage {phase}" if phase != "?" else "Stage (unspecified)"
-                )
+                phase_label = f"Stage {phase}" if phase != "?" else "Stage (unspecified)"
                 team_lines.append(f"   └ **{phase_label}**")
                 for slot in by_phase[phase]:
                     team_lines.append(_render_slot(slot))
@@ -405,6 +423,7 @@ def render_event_embed(
         )
     else:
         from storm_event_hub import HUB_COMMAND, HUB_BTN_ATTENDANCE
+
         embed.set_footer(
             text=(
                 f"Attendance not yet recorded. Run "
@@ -416,16 +435,17 @@ def render_event_embed(
 
 
 def render_history_list_embed(
-    event_type: str, dates: list[str],
+    event_type: str,
+    dates: list[str],
 ) -> discord.Embed:
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
         title=f"📜 {label}: Recent Rosters",
-        color=discord.Color.dark_gold() if event_type == "DS"
-              else discord.Color.dark_orange(),
+        color=discord.Color.dark_gold() if event_type == "DS" else discord.Color.dark_orange(),
     )
     if not dates:
         from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
+
         embed.description = (
             f"_No structured rosters posted yet. Run "
             f"`{HUB_COMMAND[event_type]}` and click "
@@ -454,8 +474,12 @@ class _RosterImageLinksView(discord.ui.View):
     """
 
     def __init__(
-        self, *,
-        owner_id: int, guild_id: int, event_type: str, event_date: str,
+        self,
+        *,
+        owner_id: int,
+        guild_id: int,
+        event_type: str,
+        event_date: str,
         refs: list[dict],
     ):
         super().__init__(timeout=300)
@@ -473,7 +497,8 @@ class _RosterImageLinksView(discord.ui.View):
             else:
                 label = "📷 View image"
             btn = discord.ui.Button(
-                label=label, style=discord.ButtonStyle.secondary,
+                label=label,
+                style=discord.ButtonStyle.secondary,
             )
             btn.callback = self._make_callback(ref)
             self.add_item(btn)
@@ -481,7 +506,7 @@ class _RosterImageLinksView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use these buttons.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -515,37 +540,48 @@ class _RosterImageLinksView(discord.ui.View):
             except discord.HTTPException as e:
                 logger.warning(
                     "[STORM HISTORY] image fetch failed guild=%s msg=%s: %s",
-                    self.guild_id, message_id, e,
+                    self.guild_id,
+                    message_id,
+                    e,
                 )
                 await inter.response.send_message(
-                    f"⚠️ Couldn't fetch the saved image: {e}.", ephemeral=True,
+                    f"⚠️ Couldn't fetch the saved image: {e}.",
+                    ephemeral=True,
                 )
                 return
 
             link = msg.jump_url
             await inter.response.send_message(
-                f"📷 [Open the saved roster image]({link}) "
-                f"(posted in {channel.mention}).",
+                f"📷 [Open the saved roster image]({link}) (posted in {channel.mention}).",
                 ephemeral=True,
             )
 
         return _cb
 
     async def _handle_missing(
-        self, inter: discord.Interaction, team: str, *, reason: str,
+        self,
+        inter: discord.Interaction,
+        team: str,
+        *,
+        reason: str,
     ) -> None:
         """The saved message was deleted (or the channel is gone).
         Drop the stale pointer so the button stops appearing on future
         history opens, and tell the officer what happened."""
         import config
+
         try:
             await asyncio.to_thread(
                 config.delete_roster_image_ref,
-                self.guild_id, self.event_type, self.event_date, team,
+                self.guild_id,
+                self.event_type,
+                self.event_date,
+                team,
             )
         except Exception as e:
             logger.warning(
-                "[STORM HISTORY] delete_roster_image_ref failed: %s", e,
+                "[STORM HISTORY] delete_roster_image_ref failed: %s",
+                e,
             )
         team_label = f" for Team {team}" if team else ""
         what = "channel" if reason == "channel" else "image"
@@ -565,16 +601,19 @@ class _HistoryListView(discord.ui.View):
     def __init__(
         self,
         *,
-        guild_id: int, user_id: int, event_type: str,
+        guild_id: int,
+        user_id: int,
+        event_type: str,
         dates: list[str],
     ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
-        self.user_id  = user_id
+        self.user_id = user_id
         self.event_type = event_type
         self.message: Optional[discord.Message] = None
 
         from storm_date_helpers import format_event_date_compact
+
         for date_str in dates:
             btn = discord.ui.Button(
                 label=format_event_date_compact(date_str),
@@ -587,7 +626,7 @@ class _HistoryListView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened this view can switch dates.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -600,18 +639,29 @@ class _HistoryListView(discord.ui.View):
             # for a network round-trip each. SQLite image-refs lookup
             # is cheap but fans out here so the await is in one place.
             import config
+
             slots_task = asyncio.to_thread(
-                load_event_roster, self.guild_id, self.event_type, date_str,
+                load_event_roster,
+                self.guild_id,
+                self.event_type,
+                date_str,
             )
             attendance_task = asyncio.to_thread(
-                load_event_attendance, self.guild_id, self.event_type, date_str,
+                load_event_attendance,
+                self.guild_id,
+                self.event_type,
+                date_str,
             )
             image_refs_task = asyncio.to_thread(
                 config.list_roster_image_refs,
-                self.guild_id, self.event_type, date_str,
+                self.guild_id,
+                self.event_type,
+                date_str,
             )
             (slots, _slot_errs), (attendance, _att_errs), image_refs = await asyncio.gather(
-                slots_task, attendance_task, image_refs_task,
+                slots_task,
+                attendance_task,
+                image_refs_task,
             )
             embed = render_event_embed(
                 event_type=self.event_type,
@@ -633,6 +683,7 @@ class _HistoryListView(discord.ui.View):
                 view=child_view or discord.utils.MISSING,
                 ephemeral=True,
             )
+
         return _cb
 
     async def on_timeout(self):
@@ -649,24 +700,32 @@ class _HistoryListView(discord.ui.View):
 
 
 async def open_history(
-    interaction: discord.Interaction, event_type: str, event_date: str | None,
+    interaction: discord.Interaction,
+    event_type: str,
+    event_date: str | None,
 ) -> None:
     """Top-level handler called from the `roster_history` subcommand on
     each strategy group in storm_strategy."""
     from storm_permissions import (
-        is_leader_or_admin, deny_non_leader, ensure_premium_structured,
+        is_leader_or_admin,
+        deny_non_leader,
+        ensure_premium_structured,
     )
+
     if not is_leader_or_admin(interaction):
         await deny_non_leader(interaction)
         return
     if not interaction.guild_id:
         await interaction.response.send_message(
-            "⚠️ This command must be used inside a server.", ephemeral=True,
+            "⚠️ This command must be used inside a server.",
+            ephemeral=True,
         )
         return
     from storm_event_hub import HUB_COMMAND, HUB_BTN_PAST_ROSTERS
+
     ok, _structured = await ensure_premium_structured(
-        interaction, event_type,
+        interaction,
+        event_type,
         feature_label=f"the **{HUB_BTN_PAST_ROSTERS}** button on `{HUB_COMMAND[event_type]}`",
     )
     if not ok:
@@ -680,11 +739,14 @@ async def open_history(
 
     if event_date:
         from storm_date_helpers import parse_event_date
+
         parsed = parse_event_date(event_date.strip())
         if parsed is None:
             await interaction.followup.send(
-                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                f"`5/18`, `2026-05-18`, or `yesterday`.",
+                DATE_PARSE_REJECT.format(
+                    raw=event_date,
+                    examples="`May 18`, `5/18`, `2026-05-18`, or `yesterday`",
+                ),
                 ephemeral=True,
             )
             return
@@ -694,18 +756,29 @@ async def open_history(
         # are cheap, but we batch with the Sheet reads anyway so the
         # await fans out in one place.
         import config
+
         slots_task = asyncio.to_thread(
-            load_event_roster, interaction.guild_id, event_type, date_clean,
+            load_event_roster,
+            interaction.guild_id,
+            event_type,
+            date_clean,
         )
         attendance_task = asyncio.to_thread(
-            load_event_attendance, interaction.guild_id, event_type, date_clean,
+            load_event_attendance,
+            interaction.guild_id,
+            event_type,
+            date_clean,
         )
         image_refs_task = asyncio.to_thread(
             config.list_roster_image_refs,
-            interaction.guild_id, event_type, date_clean,
+            interaction.guild_id,
+            event_type,
+            date_clean,
         )
         (slots, slot_errors), (attendance, _att_errs), image_refs = await asyncio.gather(
-            slots_task, attendance_task, image_refs_task,
+            slots_task,
+            attendance_task,
+            image_refs_task,
         )
         embed = render_event_embed(
             event_type=event_type,
@@ -718,7 +791,9 @@ async def open_history(
             content = "⚠️ Read had soft errors. See bot logs."
             logger.warning(
                 "[STORM HISTORY] roster read errors guild=%s date=%s: %s",
-                interaction.guild_id, date_clean, "; ".join(slot_errors),
+                interaction.guild_id,
+                date_clean,
+                "; ".join(slot_errors),
             )
         view: Optional[discord.ui.View] = None
         if image_refs:
@@ -730,14 +805,19 @@ async def open_history(
                 refs=image_refs,
             )
         await interaction.followup.send(
-            content=content, embed=embed, view=view or discord.utils.MISSING,
+            content=content,
+            embed=embed,
+            view=view or discord.utils.MISSING,
             ephemeral=True,
         )
         return
 
     # No date → list view. gspread off the event loop.
     dates, _list_errors = await asyncio.to_thread(
-        list_event_dates, interaction.guild_id, event_type, limit=8,
+        list_event_dates,
+        interaction.guild_id,
+        event_type,
+        limit=8,
     )
     embed = render_history_list_embed(event_type, dates)
     if dates:
@@ -748,7 +828,9 @@ async def open_history(
             dates=dates,
         )
         msg = await interaction.followup.send(
-            embed=embed, view=view, ephemeral=True,
+            embed=embed,
+            view=view,
+            ephemeral=True,
         )
         view.message = msg
     else:

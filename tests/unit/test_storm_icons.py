@@ -66,9 +66,9 @@ class TestZoneEmojiPrefixWithMapping:
 
     def _patched_dict(self):
         return {
-            "nuclear_silo":   123,
+            "nuclear_silo": 123,
             "field_hospital": 456,
-            "data_center":    789,
+            "data_center": 789,
         }
 
     def test_known_stem_returns_emoji_markup(self):
@@ -117,11 +117,13 @@ class TestRefreshZoneEmojiIds:
     @pytest.mark.asyncio
     async def test_populates_dict_from_bot_application_emojis(self):
         bot = MagicMock()
-        bot.fetch_application_emojis = AsyncMock(return_value=[
-            _FakeEmoji("nuclear_silo", 111),
-            _FakeEmoji("power_tower", 222),
-            _FakeEmoji("field_hospital", 333),
-        ])
+        bot.fetch_application_emojis = AsyncMock(
+            return_value=[
+                _FakeEmoji("nuclear_silo", 111),
+                _FakeEmoji("power_tower", 222),
+                _FakeEmoji("field_hospital", 333),
+            ]
+        )
         with patch.object(si, "ZONE_EMOJI_IDS", {}):
             count = await si.refresh_zone_emoji_ids(bot)
             assert count == 3
@@ -139,15 +141,19 @@ class TestRefreshZoneEmojiIds:
         cleans up automatically."""
         bot = MagicMock()
         with patch.object(si, "ZONE_EMOJI_IDS", {}):
-            bot.fetch_application_emojis = AsyncMock(return_value=[
-                _FakeEmoji("old_icon", 999),
-            ])
+            bot.fetch_application_emojis = AsyncMock(
+                return_value=[
+                    _FakeEmoji("old_icon", 999),
+                ]
+            )
             await si.refresh_zone_emoji_ids(bot)
             assert "old_icon" in si.ZONE_EMOJI_IDS
 
-            bot.fetch_application_emojis = AsyncMock(return_value=[
-                _FakeEmoji("new_icon", 1),
-            ])
+            bot.fetch_application_emojis = AsyncMock(
+                return_value=[
+                    _FakeEmoji("new_icon", 1),
+                ]
+            )
             await si.refresh_zone_emoji_ids(bot)
             assert "old_icon" not in si.ZONE_EMOJI_IDS
             assert si.ZONE_EMOJI_IDS == {"new_icon": 1}
@@ -173,6 +179,7 @@ class TestRefreshZoneEmojiIds:
         before the upload script runs) populates an empty dict, which
         is the same as the shipped default."""
         import logging
+
         bot = MagicMock()
         bot.fetch_application_emojis = AsyncMock(return_value=[])
         with patch.object(si, "ZONE_EMOJI_IDS", {}):
@@ -180,10 +187,7 @@ class TestRefreshZoneEmojiIds:
                 count = await si.refresh_zone_emoji_ids(bot)
             assert count == 0
             assert si.ZONE_EMOJI_IDS == {}
-            assert any(
-                "no application emojis registered" in rec.message
-                for rec in caplog.records
-            )
+            assert any("no application emojis registered" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_zone_emoji_prefix_uses_runtime_populated_dict(self):
@@ -191,9 +195,11 @@ class TestRefreshZoneEmojiIds:
         render helper against the populated dict. Confirms the upload
         → refresh → render chain hands off correctly."""
         bot = MagicMock()
-        bot.fetch_application_emojis = AsyncMock(return_value=[
-            _FakeEmoji("nuclear_silo", 555),
-        ])
+        bot.fetch_application_emojis = AsyncMock(
+            return_value=[
+                _FakeEmoji("nuclear_silo", 555),
+            ]
+        )
         with patch.object(si, "ZONE_EMOJI_IDS", {}):
             await si.refresh_zone_emoji_ids(bot)
             assert si.zone_emoji_prefix("Nuclear Silo") == "<:nuclear_silo:555> "

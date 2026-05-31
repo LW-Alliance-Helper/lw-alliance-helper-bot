@@ -71,8 +71,8 @@ async def _invoke(*, default, current=None):
 
 # ── Two-button layout (original behavior, no `current` provided) ──────────────
 
-class TestTwoButtonLayoutWhenNoDistinctCurrent:
 
+class TestTwoButtonLayoutWhenNoDistinctCurrent:
     @pytest.mark.asyncio
     async def test_button_label_says_use_default_when_current_is_none(self):
         _, view = await _invoke(default="Birthdays")
@@ -116,6 +116,7 @@ class TestTwoButtonLayoutWhenNoDistinctCurrent:
 
 # ── Three-button layout (`current` differs from `default`) ────────────────────
 
+
 class TestThreeButtonLayoutWhenCurrentDiffersFromDefault:
     """The OGV regression: if the guild has previously saved a tab name
     like 'Season 5 - Off-Season', the wizard must label it as 'Keep
@@ -132,10 +133,7 @@ class TestThreeButtonLayoutWhenCurrentDiffersFromDefault:
     async def test_keep_current_label_uses_current_value(self):
         _, view = await _invoke(default="Birthdays", current="Season 5 - Off-Season")
         labels = [item.label for item in view.children]
-        assert any(
-            "Keep current" in lbl and "Season 5 - Off-Season" in lbl
-            for lbl in labels
-        )
+        assert any("Keep current" in lbl and "Season 5 - Off-Season" in lbl for lbl in labels)
 
     @pytest.mark.asyncio
     async def test_revert_to_default_button_uses_default_value(self):
@@ -144,10 +142,7 @@ class TestThreeButtonLayoutWhenCurrentDiffersFromDefault:
         _, view = await _invoke(default="Birthdays", current="Season 5 - Off-Season")
         labels = [item.label for item in view.children]
         # The revert button uses ↩️ rather than ✅ to differentiate it.
-        assert any(
-            "Use default" in lbl and "Birthdays" in lbl
-            for lbl in labels
-        )
+        assert any("Use default" in lbl and "Birthdays" in lbl for lbl in labels)
 
     @pytest.mark.asyncio
     async def test_define_my_own_button_present_in_both_layouts(self):
@@ -168,6 +163,7 @@ class TestThreeButtonLayoutWhenCurrentDiffersFromDefault:
 
 
 # ── Function still returns None on cancel ────────────────────────────────────
+
 
 class TestCancelStillReturnsNoneAcrossLayouts:
     """The `current` plumbing must not change the cancel-path contract:

@@ -54,6 +54,7 @@ class StormCommandsRootCog(commands.Cog):
         @app_commands.guild_only()
         async def desertstorm(interaction: discord.Interaction):
             from storm_event_hub import handle_event_hub
+
             await handle_event_hub(self.bot, interaction, "DS")
 
         @app_commands.command(
@@ -63,6 +64,7 @@ class StormCommandsRootCog(commands.Cog):
         @app_commands.guild_only()
         async def canyonstorm(interaction: discord.Interaction):
             from storm_event_hub import handle_event_hub
+
             await handle_event_hub(self.bot, interaction, "CS")
 
         self.desertstorm_cmd = desertstorm

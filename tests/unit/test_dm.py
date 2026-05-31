@@ -28,10 +28,12 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     import importlib
+
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
@@ -43,22 +45,23 @@ def _isolate_premium_env(monkeypatch):
 
 # ── send_dm_to_id ─────────────────────────────────────────────────────────────
 
-class TestSendDmToId:
 
+class TestSendDmToId:
     @pytest.mark.asyncio
     async def test_returns_false_for_free_tier(self):
         import dm
+
         bot = MagicMock()
-        ok  = await dm.send_dm_to_id(bot, TEST_GUILD_ID, 123, content="hi")
+        ok = await dm.send_dm_to_id(bot, TEST_GUILD_ID, 123, content="hi")
         assert ok is False
 
     @pytest.mark.asyncio
     async def test_sends_to_user_for_premium_guild(self):
         import dm
 
-        user      = AsyncMock()
+        user = AsyncMock()
         user.send = AsyncMock()
-        bot       = MagicMock()
+        bot = MagicMock()
         bot.fetch_user = AsyncMock(return_value=user)
 
         ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, 12345, content="hi there")
@@ -71,9 +74,9 @@ class TestSendDmToId:
     async def test_returns_false_when_user_closed_dms(self):
         import dm
 
-        user      = AsyncMock()
+        user = AsyncMock()
         user.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "DMs closed"))
-        bot       = MagicMock()
+        bot = MagicMock()
         bot.fetch_user = AsyncMock(return_value=user)
 
         ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, 99, content="hi")
@@ -94,19 +97,20 @@ class TestSendDmToId:
         import dm
 
         bot = MagicMock()
-        ok  = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, "not-a-number", content="x")
+        ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, "not-a-number", content="x")
         assert ok is False
 
 
 # ── send_dm (roster lookup) ───────────────────────────────────────────────────
 
-class TestSendDmByName:
 
+class TestSendDmByName:
     @pytest.mark.asyncio
     async def test_returns_false_for_free_tier(self):
         import dm
+
         bot = MagicMock()
-        ok  = await dm.send_dm(bot, TEST_GUILD_ID, "Alice", content="hi")
+        ok = await dm.send_dm(bot, TEST_GUILD_ID, "Alice", content="hi")
         assert ok is False
 
     @pytest.mark.asyncio
@@ -122,9 +126,9 @@ class TestSendDmByName:
     async def test_finds_id_in_roster_and_dms(self, seeded_db):
         import dm
 
-        user      = AsyncMock()
+        user = AsyncMock()
         user.send = AsyncMock()
-        bot       = MagicMock()
+        bot = MagicMock()
         bot.fetch_user = AsyncMock(return_value=user)
 
         with patch("dm.lookup_discord_id_for_name", return_value="555"):
@@ -136,11 +140,12 @@ class TestSendDmByName:
 
 # ── mention_or_name ───────────────────────────────────────────────────────────
 
-class TestMentionOrName:
 
+class TestMentionOrName:
     @pytest.mark.asyncio
     async def test_free_tier_returns_plain_name(self):
         import dm
+
         bot = MagicMock()
         out = await dm.mention_or_name(bot, TEST_GUILD_ID, "Alice")
         assert out == "Alice"
@@ -148,6 +153,7 @@ class TestMentionOrName:
     @pytest.mark.asyncio
     async def test_premium_with_roster_returns_mention(self, seeded_db):
         import dm
+
         bot = MagicMock()
         with patch("dm.lookup_discord_id_for_name", return_value="777"):
             out = await dm.mention_or_name(bot, PREMIUM_TEST_GUILD_ID, "Alice")
@@ -156,6 +162,7 @@ class TestMentionOrName:
     @pytest.mark.asyncio
     async def test_premium_without_roster_match_returns_plain_name(self, seeded_db):
         import dm
+
         bot = MagicMock()
         with patch("dm.lookup_discord_id_for_name", return_value=None):
             out = await dm.mention_or_name(bot, PREMIUM_TEST_GUILD_ID, "Stranger")

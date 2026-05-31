@@ -15,6 +15,7 @@ storm_log.py, storm_signup_post.py, storm_officer_view.py,
 storm_attendance.py, storm_strategy.py, storm_member_rules.py,
 storm_history.py). Each button is a thin dispatcher.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,8 @@ import logging
 from typing import Optional
 
 import discord
+
+from messages import DENY_NOT_OWNER
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +108,12 @@ def _build_event_hub_embed(
     teams_setting = (cfg.get("teams") or "both").strip()
     teams_display = {
         "both": "A & B",
-        "A":    "Team A only",
-        "B":    "Team B only",
+        "A": "Team A only",
+        "B": "Team B only",
     }.get(teams_setting, "A & B")
 
     signup_channel_id = int(structured.get("signup_channel_id") or 0)
-    signup_channel_line = (
-        f"<#{signup_channel_id}>" if signup_channel_id else "_not configured_"
-    )
+    signup_channel_line = f"<#{signup_channel_id}>" if signup_channel_id else "_not configured_"
 
     # Poll auto-schedule line. Use an explicit `is None` check rather
     # than `or -1`: `poll_day_of_week == 0` is Monday, which is falsy
@@ -122,11 +123,8 @@ def _build_event_hub_embed(
     poll_dow = int(poll_dow_raw) if poll_dow_raw is not None else -1
     poll_time = (structured.get("signup_time") or "").strip()
     if poll_dow >= 0 and poll_time:
-        _DOW = ["Monday", "Tuesday", "Wednesday", "Thursday",
-                "Friday", "Saturday", "Sunday"]
-        signup_channel_line += (
-            f"\n   auto-posted {_DOW[poll_dow]} at {poll_time} server time"
-        )
+        _DOW = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        signup_channel_line += f"\n   auto-posted {_DOW[poll_dow]} at {poll_time} server time"
 
     structured_on = bool(structured.get("structured_flow_enabled"))
     power_column = (structured.get("power_metric_column") or "").strip().upper()
@@ -141,6 +139,7 @@ def _build_event_hub_embed(
     # Preset count.
     try:
         import storm_strategy as ss
+
         preset_count = len(ss.list_presets(guild.id, event_type) or [])
     except Exception:
         preset_count = 0
@@ -150,10 +149,7 @@ def _build_event_hub_embed(
         next_iso = next_event_date(guild.id, event_type)
         next_event_line = format_event_date(next_iso)
     except Exception:
-        next_event_line = (
-            f"next {_FIXED_EVENT_DAY[event_type]} "
-            f"(game-defined)"
-        )
+        next_event_line = f"next {_FIXED_EVENT_DAY[event_type]} (game-defined)"
 
     description_lines = [
         f"📅 **Next event:** {next_event_line}",
@@ -175,7 +171,7 @@ def _build_event_hub_embed(
     )
     embed.set_footer(
         text=f"Pick a button below. Re-run /{_PARENT_CMD[event_type]} "
-             f"any time to refresh this view.",
+        f"any time to refresh this view.",
     )
     return embed
 
@@ -230,7 +226,7 @@ class _EventHubView(discord.ui.View):
         pattern every other shared view uses."""
         if inter.user.id != self.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -238,6 +234,7 @@ class _EventHubView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
+
         await expire_view_message(
             self.message,
             command_hint=f"/{_PARENT_CMD[self.event_type]}",
@@ -301,19 +298,22 @@ class _EventHubView(discord.ui.View):
         self._add_button(
             label=HUB_BTN_PRESETS,
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=1,
+            disabled=False,
+            row=1,
             callback=self._on_manage_presets,
         )
         self._add_button(
             label=HUB_BTN_RULES,
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=1,
+            disabled=False,
+            row=1,
             callback=self._on_manage_rules,
         )
         self._add_button(
             label=HUB_BTN_DRAFT,
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=1,
+            disabled=False,
+            row=1,
             callback=self._on_draft,
         )
 
@@ -321,7 +321,8 @@ class _EventHubView(discord.ui.View):
         self._add_button(
             label=HUB_BTN_LOGS,
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=2,
+            disabled=False,
+            row=2,
             callback=self._on_log,
         )
         # Trends Viewer (Premium): same reference row as Logs and Past
@@ -344,7 +345,8 @@ class _EventHubView(discord.ui.View):
         self._add_button(
             label=HUB_BTN_SETUP,
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=2,
+            disabled=False,
+            row=2,
             callback=self._on_setup,
         )
 
@@ -373,22 +375,27 @@ class _EventHubView(discord.ui.View):
 
     async def _on_post_signup(self, inter: discord.Interaction) -> None:
         from storm_signup_post import handle_post_signup
+
         await handle_post_signup(self.bot, inter, self.event_type, None)
 
     async def _on_view_signups(self, inter: discord.Interaction) -> None:
         from storm_officer_view import handle_storm_signups
+
         await handle_storm_signups(self.bot, inter, self.event_type, None)
 
     async def _on_attendance(self, inter: discord.Interaction) -> None:
         from storm_attendance import handle_storm_attendance
+
         await handle_storm_attendance(self.bot, inter, self.event_type, None)
 
     async def _on_past_rosters(self, inter: discord.Interaction) -> None:
         from storm_history import open_history
+
         await open_history(inter, self.event_type, None)
 
     async def _on_remind(self, inter: discord.Interaction) -> None:
         from storm_log import handle_storm_remind
+
         await handle_storm_remind(self.bot, inter, self.event_type)
 
     async def _on_manage_presets(self, inter: discord.Interaction) -> None:
@@ -396,28 +403,34 @@ class _EventHubView(discord.ui.View):
         # Create/Edit/Delete inline buttons, so the hub doesn't need
         # to add a sub-hub for preset CRUD).
         from storm_strategy import open_strategy_list
+
         await open_strategy_list(inter, self.event_type)
 
     async def _on_manage_rules(self, inter: discord.Interaction) -> None:
         # Same shape as Manage presets: open the rule-list view which
         # already has [➕ Add rule] + [🗑 Clear N] buttons per #169.
         from storm_member_rules import open_member_rule_list
+
         await open_member_rule_list(inter, self.event_type, member_filter=None)
 
     async def _on_draft(self, inter: discord.Interaction) -> None:
         from storm import handle_storm_draft
+
         await handle_storm_draft(self.bot, inter, self.event_type)
 
     async def _on_participation(self, inter: discord.Interaction) -> None:
         from storm_log import handle_storm_participation
+
         await handle_storm_participation(self.bot, inter, self.event_type)
 
     async def _on_log(self, inter: discord.Interaction) -> None:
         from storm_log import handle_storm_log
+
         await handle_storm_log(self.bot, inter, self.event_type, None)
 
     async def _on_trends(self, inter: discord.Interaction) -> None:
         from storm_trends import handle_storm_trends
+
         await handle_storm_trends(self.bot, inter, self.event_type)
 
     async def _on_setup(self, inter: discord.Interaction) -> None:
@@ -431,6 +444,7 @@ class _EventHubView(discord.ui.View):
         # mid-flow (matches the /growth Edit Config pattern).
         import wizard_registry
         from setup_cog import _launch_storm_setup
+
         for item in self.children:
             item.disabled = True
         try:
@@ -473,12 +487,15 @@ async def handle_event_hub(
     # build the view; cache on the view instance so callbacks don't
     # re-check.
     import premium
+
     try:
         is_premium = bool(await premium.is_premium(guild.id, bot=bot))
     except Exception as e:
         logger.warning(
             "[STORM HUB] premium check failed for guild=%s event=%s: %s",
-            guild.id, event_type, e,
+            guild.id,
+            event_type,
+            e,
         )
         is_premium = False
 
@@ -487,7 +504,10 @@ async def handle_event_hub(
     # heartbeat doesn't stall on cold connections (the Railway redeploy
     # boot path was hitting 10-20s blocks before this `to_thread` wrap).
     embed = await asyncio.to_thread(
-        _build_event_hub_embed, guild, event_type, is_premium=is_premium,
+        _build_event_hub_embed,
+        guild,
+        event_type,
+        is_premium=is_premium,
     )
     view = _EventHubView(
         bot=bot,
@@ -518,13 +538,17 @@ async def handle_event_hub(
     # offer no-ops if the officer has already dismissed it.
     try:
         from storm_walkthrough import maybe_offer_storm_hub_tour
+
         await maybe_offer_storm_hub_tour(
-            interaction, event_type=event_type,
+            interaction,
+            event_type=event_type,
         )
     except Exception as e:
         # Walkthrough offer is non-essential; don't let a tour-side
         # failure (DB error, ephemeral send fail) take down the hub.
         logger.warning(
             "[STORM HUB] tour offer failed for guild=%s event=%s: %s",
-            guild.id, event_type, e,
+            guild.id,
+            event_type,
+            e,
         )

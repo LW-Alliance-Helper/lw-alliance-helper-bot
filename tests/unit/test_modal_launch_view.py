@@ -28,10 +28,12 @@ def _make_modal():
     """Return a real TextInputModal — Discord doesn't care if we never
     submit it; we just need somewhere for `modal.value` to live."""
     from setup_cog import TextInputModal
+
     return TextInputModal("title", "label", placeholder="ph")
 
 
 # ── Default (no current_value) path ──────────────────────────────────────────
+
 
 class TestDefaultRendering:
     """No `current_value` → the view renders just the Enter Value
@@ -39,6 +41,7 @@ class TestDefaultRendering:
 
     def test_no_current_value_renders_enter_only(self):
         from setup_cog import ModalLaunchView
+
         view = ModalLaunchView(_make_modal())
         labels = _labels(view)
         assert any("Enter Value" in lbl for lbl in labels)
@@ -49,20 +52,21 @@ class TestDefaultRendering:
         the field is empty on a not-yet-configured guild. Empty string
         should be treated the same as None — no keep button."""
         from setup_cog import ModalLaunchView
+
         view = ModalLaunchView(_make_modal(), current_value="")
         assert not any("Keep current" in lbl for lbl in _labels(view))
 
 
 # ── Keep-current path (#106) ─────────────────────────────────────────────────
 
-class TestKeepCurrent:
 
+class TestKeepCurrent:
     def test_current_value_renders_keep_button(self):
         from setup_cog import ModalLaunchView
+
         view = ModalLaunchView(_make_modal(), current_value="some-saved-id")
         labels = _labels(view)
-        assert any("Keep current" in lbl and "some-saved-id" in lbl
-                   for lbl in labels)
+        assert any("Keep current" in lbl and "some-saved-id" in lbl for lbl in labels)
         # Enter Value still present so leadership can type a new value.
         assert any("Enter Value" in lbl for lbl in labels)
 
@@ -71,15 +75,18 @@ class TestKeepCurrent:
         cap once "✅ Keep current: " is prepended. Wizards truncate
         the display via the `current_display` kwarg."""
         from setup_cog import ModalLaunchView
+
         long_id = "1G21IGB5wyh79NpKEdgJabcdefghijklmnopqrstuv"
         view = ModalLaunchView(
             _make_modal(),
             current_value=long_id,
             current_display=f"{long_id[:25]}…",
         )
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         # Truncated display in the label, not the full id.
         assert long_id not in keep_btn.label
         assert long_id[:25] in keep_btn.label
@@ -91,20 +98,24 @@ class TestKeepCurrent:
         `view.wait()`. Keep-current sets `modal.value` directly so the
         caller's read works without knowing the modal was skipped."""
         from setup_cog import ModalLaunchView
+
         modal = _make_modal()
-        view  = ModalLaunchView(modal, current_value="saved-sheet-id")
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        view = ModalLaunchView(modal, current_value="saved-sheet-id")
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)
-        assert modal.value     == "saved-sheet-id"
-        assert view.confirmed  is True
+        assert modal.value == "saved-sheet-id"
+        assert view.confirmed is True
         assert view.is_finished()
 
 
 # ── on_keep_current callback path (shiny tasks server range) ──────────────────
+
 
 class TestOnKeepCurrentCallback:
     """Modals whose `value` is a read-only derived property (e.g.
@@ -145,9 +156,11 @@ class TestOnKeepCurrentCallback:
             current_value="677 – 804",
             on_keep_current=_on_keep,
         )
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)
@@ -155,7 +168,7 @@ class TestOnKeepCurrentCallback:
         assert invoked_with == [modal]
         assert modal.min_value == "677"
         assert modal.max_value == "804"
-        assert view.confirmed  is True
+        assert view.confirmed is True
         assert view.is_finished()
 
     @pytest.mark.asyncio
@@ -163,11 +176,14 @@ class TestOnKeepCurrentCallback:
         """Regression: callers that don't pass on_keep_current should
         still get the original modal.value = current_value behavior."""
         from setup_cog import ModalLaunchView
+
         modal = _make_modal()
-        view  = ModalLaunchView(modal, current_value="hello")
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        view = ModalLaunchView(modal, current_value="hello")
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)

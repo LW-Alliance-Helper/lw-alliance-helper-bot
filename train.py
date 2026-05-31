@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import wizard_registry
 
 from config import get_config
+from messages import NOT_SET_UP
 
 # Birthday helpers + member-sheet loader live in train_birthdays.py.
 # Re-export here so existing imports (`from train import load_birthdays`,
@@ -59,6 +60,7 @@ active_wizards: dict[int, asyncio.Event] = {}
 #
 # All reads/writes go through gspread using the same service account as the rest of the bot
 
+
 def _get_train_sheet(guild_id: int = None):
     """Return the Train Schedule worksheet."""
     import gspread
@@ -67,15 +69,16 @@ def _get_train_sheet(guild_id: int = None):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if credentials_json:
-        info  = json.loads(credentials_json)
+        info = json.loads(credentials_json)
         creds = Credentials.from_service_account_info(info, scopes=scopes)
     else:
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
     from config import get_spreadsheet_id, get_config
-    sh  = gc.open_by_key(get_spreadsheet_id(guild_id))
+
+    sh = gc.open_by_key(get_spreadsheet_id(guild_id))
     cfg = get_config(guild_id)
     tab = cfg.tab_train_schedule if cfg else "Train Schedule"
     return sh.worksheet(tab)
@@ -87,7 +90,7 @@ def load_schedule(guild_id: int = None) -> dict:
     Returns { "YYYY-MM-DD": { name, theme, tone, notes, prompt_retrieved } }
     """
     try:
-        ws   = _get_train_sheet(guild_id)
+        ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
         schedule = {}
         for row in rows[1:]:  # skip header row
@@ -95,15 +98,16 @@ def load_schedule(guild_id: int = None) -> dict:
                 continue
             date_str = row[0].strip()
             schedule[date_str] = {
-                "name":             row[1].strip() if len(row) > 1 else "",
-                "theme":            row[2].strip() if len(row) > 2 else "",
-                "tone":             row[3].strip() if len(row) > 3 else "",
-                "notes":            row[4].strip() if len(row) > 4 else "",
+                "name": row[1].strip() if len(row) > 1 else "",
+                "theme": row[2].strip() if len(row) > 2 else "",
+                "tone": row[3].strip() if len(row) > 3 else "",
+                "notes": row[4].strip() if len(row) > 4 else "",
                 "prompt_retrieved": row[5].strip().upper() == "TRUE" if len(row) > 5 else False,
             }
         return schedule
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[TRAIN] Error loading schedule: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
@@ -126,19 +130,22 @@ def save_schedule(schedule: dict, guild_id: int = None):
 
         rows = []
         for date_str, entry in sorted(schedule.items()):
-            rows.append([
-                date_str,
-                entry.get("name", ""),
-                entry.get("theme", ""),
-                entry.get("tone", ""),
-                entry.get("notes", ""),
-                "TRUE" if entry.get("prompt_retrieved", False) else "FALSE",
-            ])
+            rows.append(
+                [
+                    date_str,
+                    entry.get("name", ""),
+                    entry.get("theme", ""),
+                    entry.get("tone", ""),
+                    entry.get("notes", ""),
+                    "TRUE" if entry.get("prompt_retrieved", False) else "FALSE",
+                ]
+            )
 
         ws.update("A2", rows, value_input_option="USER_ENTERED")
         print(f"[TRAIN] Schedule saved to sheet ({len(rows)} entries)")
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[TRAIN] Error saving schedule: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
@@ -148,7 +155,7 @@ def save_schedule(schedule: dict, guild_id: int = None):
 def mark_blurb_generated(date_str: str, guild_id: int = None):
     """Mark a specific date's prompt_retrieved flag as TRUE in the sheet."""
     try:
-        ws   = _get_train_sheet(guild_id)
+        ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
         for i, row in enumerate(rows[1:], start=2):
             if row and row[0].strip() == date_str:
@@ -158,6 +165,7 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
         print(f"[TRAIN] Could not find row for {date_str} to mark as retrieved")
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[TRAIN] Error marking blurb generated for {date_str}: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
@@ -167,15 +175,16 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
 def blurb_generated_today(guild_id: int = None) -> bool:
     """Check if today's prompt has been retrieved."""
     try:
-        today    = date.today().isoformat()
-        ws       = _get_train_sheet(guild_id)
-        rows     = ws.get_all_values()
+        today = date.today().isoformat()
+        ws = _get_train_sheet(guild_id)
+        rows = ws.get_all_values()
         for row in rows[1:]:
             if row and row[0].strip() == today:
                 return len(row) > 5 and row[5].strip().upper() == "TRUE"
         return False
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[TRAIN] Error checking blurb log: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
@@ -186,7 +195,7 @@ def blurb_generated_today(guild_id: int = None) -> bool:
 def load_blurb_log(guild_id: int = None) -> set:
     """Return the set of all dates where prompt has been retrieved."""
     try:
-        ws   = _get_train_sheet(guild_id)
+        ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
         return {
             row[0].strip()
@@ -195,6 +204,7 @@ def load_blurb_log(guild_id: int = None) -> set:
         }
     except Exception as e:
         from config import describe_sheet_error
+
         print(
             f"[TRAIN] Error loading blurb log: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
@@ -205,11 +215,29 @@ def load_blurb_log(guild_id: int = None) -> set:
 # ── Schedule date parsing ──────────────────────────────────────────────────────
 
 MONTH_MAP = {
-    "january": 1, "february": 2, "march": 3, "april": 4,
-    "may": 5, "june": 6, "july": 7, "august": 8,
-    "september": 9, "october": 10, "november": 11, "december": 12,
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 
@@ -228,7 +256,7 @@ def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None,
     # Theme hint keywords found in parentheses
     THEME_HINTS = {
         "birthday": "Birthday",
-        "birtday": "Birthday",   # common typo
+        "birtday": "Birthday",  # common typo
         "birtbday": "Birthday",  # another common typo
         "bday": "Birthday",
         "welcome": "Welcome",
@@ -252,7 +280,7 @@ def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None,
                     hint = THEME_HINTS[word]
                     break
             # Remove the parenthetical from the name
-            raw_name = raw_name[:paren_match.start()].strip()
+            raw_name = raw_name[: paren_match.start()].strip()
         return raw_name.strip(), hint
 
     # Numeric: 4/1 - Name or 4/1/2026 - Name
@@ -272,12 +300,14 @@ def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None,
     # Month name: April 1 - Name or April 1: Name
     named = re.match(
         r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s*[-:]\s*(.+)$",
-        line, re.IGNORECASE,
+        line,
+        re.IGNORECASE,
     )
     if not named:
         named = re.match(
             r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s+(.+)$",
-            line, re.IGNORECASE,
+            line,
+            re.IGNORECASE,
         )
     if named:
         month = MONTH_MAP.get(named.group(1).lower())
@@ -319,6 +349,7 @@ DEFAULT_TONES = [
 def get_themes(guild_id: int = None) -> list:
     """Return the theme list for a guild."""
     from config import get_train_config
+
     cfg = get_train_config(guild_id) if guild_id else {}
     return cfg.get("themes") or DEFAULT_THEMES
 
@@ -326,6 +357,7 @@ def get_themes(guild_id: int = None) -> list:
 def get_tones(guild_id: int = None) -> list:
     """Return the tone list for a guild."""
     from config import get_train_config
+
     cfg = get_train_config(guild_id) if guild_id else {}
     return cfg.get("tones") or DEFAULT_TONES
 
@@ -337,9 +369,10 @@ def get_prompt_template(guild_id: int = None, template_name: str = None) -> str:
     `prompt_template` column for backwards compatibility.
     """
     from config import get_train_config
+
     cfg = get_train_config(guild_id) if guild_id else {}
     templates = cfg.get("templates") or []
-    target    = template_name or cfg.get("default_template") or "Default"
+    target = template_name or cfg.get("default_template") or "Default"
     for t in templates:
         if t.get("name") == target:
             return t.get("template", "") or ""
@@ -351,13 +384,17 @@ def get_prompt_template(guild_id: int = None, template_name: str = None) -> str:
 def get_train_template_names(guild_id: int = None) -> list[str]:
     """Return the list of saved template names for a guild (premium feature)."""
     from config import get_train_config
+
     cfg = get_train_config(guild_id) if guild_id else {}
     return [t.get("name", "") for t in (cfg.get("templates") or []) if t.get("name")]
 
+
 # ── Prompt builder ─────────────────────────────────────────────────────────────
 
-def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str,
-                          guild_id: int = None, template_name: str = None) -> str:
+
+def build_chatgpt_prompt(
+    name: str, theme: str, tone: str, notes: str, guild_id: int = None, template_name: str = None
+) -> str:
     """Format a ready-to-paste ChatGPT prompt using the guild's stored template."""
     template = get_prompt_template(guild_id, template_name=template_name)
     if template:
@@ -379,6 +416,7 @@ def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str,
 
 # ── Embed builders ─────────────────────────────────────────────────────────────
 
+
 def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     """Build a scannable embed showing the next 14 days of the train schedule."""
     today = date.today()
@@ -396,27 +434,27 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     # ── Upcoming: next 14 days ───────────────────────────────────────────────
     upcoming_lines = []
     for i in range(14):
-        d        = today + timedelta(days=i)
+        d = today + timedelta(days=i)
         date_str = d.isoformat()
-        entry    = schedule.get(date_str)
-        day_str  = f"{d:%A, %B} {d.day}"
+        entry = schedule.get(date_str)
+        day_str = f"{d:%A, %B} {d.day}"
 
         if i == 0:
             # Today
             if entry:
-                name    = entry.get("name", "Unknown")
+                name = entry.get("name", "Unknown")
                 is_bday = entry.get("theme", "").lower() == "birthday"
-                bday    = " 🎂" if is_bday else ""
-                done    = date_str in blurb_log
-                status  = "✅ Done" if done else "⏳ Pending"
+                bday = " 🎂" if is_bday else ""
+                done = date_str in blurb_log
+                status = "✅ Done" if done else "⏳ Pending"
                 upcoming_lines.append(f"🟢 {day_str} — {name}{bday} — {status}")
             else:
                 upcoming_lines.append(f"🟢 {day_str} — [Empty]")
         else:
             if entry:
-                name    = entry.get("name", "Unknown")
+                name = entry.get("name", "Unknown")
                 is_bday = entry.get("theme", "").lower() == "birthday"
-                bday    = " 🎂" if is_bday else ""
+                bday = " 🎂" if is_bday else ""
                 upcoming_lines.append(f"{day_str} — {name}{bday}")
             else:
                 upcoming_lines.append(f"{day_str} — [Empty]")
@@ -426,9 +464,9 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     # ── Past 7 days ───────────────────────────────────────────────────────────
     past_names = []
     for i in range(1, 8):
-        d        = today - timedelta(days=i)
+        d = today - timedelta(days=i)
         date_str = d.isoformat()
-        entry    = schedule.get(date_str)
+        entry = schedule.get(date_str)
         if entry:
             past_names.append(entry.get("name", "Unknown"))
 
@@ -443,6 +481,7 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
 
 
 # ── UI Views ───────────────────────────────────────────────────────────────────
+
 
 class ThemeSelectView(discord.ui.View):
     def __init__(self, guild_id: int = None):
@@ -483,27 +522,31 @@ class ToneSelectView(discord.ui.View):
 class ReminderView(discord.ui.View):
     def __init__(self, cog, date_str: str, name: str):
         super().__init__(timeout=3600)
-        self.cog      = cog
+        self.cog = cog
         self.date_str = date_str
-        self.name     = name
+        self.name = name
         # Set by the reminder loop right after channel.send so on_timeout
         # can strip the button + post the re-initiate hint.
-        self.message  = None
+        self.message = None
 
     async def on_timeout(self):
         """Strip the prompt button and tell the assignee how to re-open
         it. Without this, the button looks live for an hour after the
         view stopped listening — clicks fail with 'Interaction failed'."""
         from wizard_registry import expire_view_message
+
         await expire_view_message(self.message, command_hint="/train overview")
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_names = [r.name for r in interaction.user.roles]
         from config import get_config
+
         cfg = get_config(interaction.guild_id)
         if not cfg:
-            await interaction.response.send_message("⚙️ Bot not configured. Run `/setup`.", ephemeral=True)
+            await interaction.response.send_message(
+                "⚙️ Bot not configured. Run `/setup`.", ephemeral=True
+            )
             return
         req_role = cfg.leadership_role_name
         if req_role not in role_names:
@@ -517,14 +560,20 @@ class ReminderView(discord.ui.View):
 
         # Lazy import to avoid the train ⇆ train_ui circular import at load time
         from train_ui import run_blurb_wizard_for_entry
+
         await run_blurb_wizard_for_entry(
-            self.cog.bot, interaction.channel, interaction.user,
-            self.date_str, self.name, interaction.guild_id,
+            self.cog.bot,
+            interaction.channel,
+            interaction.user,
+            self.date_str,
+            self.name,
+            interaction.guild_id,
         )
         self.stop()
 
 
 # ── Slash command guards ───────────────────────────────────────────────────────
+
 
 def _is_leadership(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
@@ -532,16 +581,16 @@ def _is_leadership(interaction: discord.Interaction) -> bool:
         return False
     return cfg.leadership_role_name in [r.name for r in interaction.user.roles]
 
+
 async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
     if not _is_leadership(interaction):
         await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
+            ephemeral=True,
         )
         return False
     return True
@@ -558,4 +607,5 @@ date_cls = date
 
 async def setup(bot: commands.Bot):
     from train_cog import TrainCog
+
     await bot.add_cog(TrainCog(bot))

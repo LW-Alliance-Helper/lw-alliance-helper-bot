@@ -16,6 +16,7 @@ member_roster.run_member_roster_setup; setup_cog.run_setup;
 setup_cog._send_view_configuration; setup_cog._reset_config). Each
 button is a thin dispatcher.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,7 +24,37 @@ from typing import Optional
 
 import discord
 
+from messages import DENY_ADMIN_OR_ROLE, NOT_SET_UP_HUB
+
 logger = logging.getLogger(__name__)
+
+
+# ── Hub button label constants ───────────────────────────────────────────────
+# Extracted so other modules can import these instead of duplicating the
+# literal in error copy, wizard timeout messages, /help text, etc. (#208).
+# Mirrors the HUB_BTN_* pattern already in storm_event_hub.py.
+
+HUB_BTN_SETUP_WIZARD = "⚙️ Open setup wizard"
+HUB_BTN_VIEW_CONFIG = "🗂️ View configuration"
+HUB_BTN_RESET = "🗑️ Reset configuration"
+HUB_BTN_RELEASE_ANN = (
+    "📢 Release announcements"  # base; live label suffixed in _refresh_release_announcement_label
+)
+HUB_BTN_TRAIN = "🚂 Train"
+HUB_BTN_GROWTH = "📈 Growth"
+HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
+HUB_BTN_EVENTS = "📣 Events"
+HUB_BTN_DS = "⚔️ Desert Storm"
+HUB_BTN_CS = "🏜️ Canyon Storm"
+HUB_BTN_SHINY = "🌟 Shiny Tasks"
+HUB_BTN_MEMBERS = "👥 Member Sync"
+HUB_BTN_SURVEY = "📋 Survey"
+HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
+
+STORM_SETUP_NAV = {
+    "DS": f"/setup → {HUB_BTN_DS}",
+    "CS": f"/setup → {HUB_BTN_CS}",
+}
 
 
 # ── Embed builder ────────────────────────────────────────────────────────────
@@ -50,9 +81,14 @@ def _build_setup_hub_embed(
     """
     import config
     from config import (
-        get_config, get_train_config, get_growth_config,
-        get_birthday_config, get_storm_config, get_guild_events,
-        get_survey_config, get_member_roster_config,
+        get_config,
+        get_train_config,
+        get_growth_config,
+        get_birthday_config,
+        get_storm_config,
+        get_guild_events,
+        get_survey_config,
+        get_member_roster_config,
         get_shiny_tasks_config,
     )
 
@@ -70,10 +106,8 @@ def _build_setup_hub_embed(
         else "_not configured_"
     )
     timezone_str = (cfg.timezone if cfg else "") or "_not configured_"
-    sheet_id     = ((cfg.spreadsheet_id if cfg else "") or "").strip()
-    sheet_line   = (
-        f"`{sheet_id[:24]}…`" if sheet_id else "_not configured_"
-    )
+    sheet_id = ((cfg.spreadsheet_id if cfg else "") or "").strip()
+    sheet_line = f"`{sheet_id[:24]}…`" if sheet_id else "_not configured_"
 
     # Per-feature state. Each helper returns a dict with sensible defaults
     # for unconfigured guilds — `enabled` flag (or its absence) is the
@@ -84,7 +118,7 @@ def _build_setup_hub_embed(
         train_on = False
     try:
         growth_cfg = get_growth_config(guild.id) or {}
-        growth_on  = bool(growth_cfg.get("enabled"))
+        growth_on = bool(growth_cfg.get("enabled"))
         breakdown_post_on = bool(growth_cfg.get("breakdown_post_channel_id"))
     except Exception:
         growth_on = False
@@ -103,12 +137,12 @@ def _build_setup_hub_embed(
         cs_on = False
     try:
         events_count = len(get_guild_events(guild.id, active_only=True) or [])
-        events_on    = events_count > 0
+        events_on = events_count > 0
     except Exception:
         events_on = False
     try:
         survey_cfg = get_survey_config(guild.id) or {}
-        survey_on  = bool(survey_cfg.get("questions"))
+        survey_on = bool(survey_cfg.get("questions"))
     except Exception:
         survey_on = False
     try:
@@ -215,6 +249,7 @@ class _SetupHubView(discord.ui.View):
         from `__init__` so each hub render picks up the latest value
         from `guild_configs`."""
         from config import get_config
+
         cfg = get_config(self.guild_id)
         enabled = bool(cfg.release_announcements_enabled) if cfg else True
         state = "ON" if enabled else "OFF"
@@ -227,13 +262,14 @@ class _SetupHubView(discord.ui.View):
         # admin, mirroring the per-feature `/setup_*` wizard gate
         # (`setup_cog._has_leadership_or_admin`).
         from setup_cog import _has_leadership_or_admin
+
         if not _has_leadership_or_admin(interaction):
             from config import get_config
+
             cfg = get_config(interaction.guild_id)
             role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
             await interaction.response.send_message(
-                f"⛔ You need server administrator permission or the "
-                f"**{role_name}** role to use the setup hub.",
+                DENY_ADMIN_OR_ROLE.format(role=role_name, action="use the setup hub"),
                 ephemeral=True,
             )
             return False
@@ -241,35 +277,39 @@ class _SetupHubView(discord.ui.View):
 
     # ── Row 0: foundations + utilities ────────────────────────────────────────
 
-    @discord.ui.button(label="⚙️ Open setup wizard", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label=HUB_BTN_SETUP_WIZARD, style=discord.ButtonStyle.primary, row=0)
     async def btn_root_wizard(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import run_setup, _check_wizard_can_run
+
         if not await _check_wizard_can_run(inter, "setup"):
             return
         await inter.response.send_message(
-            "⚙️ Starting setup — check the channel for prompts!", ephemeral=True,
+            "⚙️ Starting setup — check the channel for prompts!",
+            ephemeral=True,
         )
         await run_setup(inter, self.bot)
 
-    @discord.ui.button(label="🗂️ View configuration", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=HUB_BTN_VIEW_CONFIG, style=discord.ButtonStyle.secondary, row=0)
     async def btn_view_config(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _send_view_configuration
         from config import get_config
+
         cfg = get_config(inter.guild_id)
         if not cfg or not cfg.setup_complete:
             await inter.response.send_message(
-                "⚙️ This server hasn't been set up yet. Click **⚙️ Open setup wizard** above to start.",
+                NOT_SET_UP_HUB.format(hub_btn=HUB_BTN_SETUP_WIZARD),
                 ephemeral=True,
             )
             return
         await _send_view_configuration(inter, cfg)
 
-    @discord.ui.button(label="🗑️ Reset configuration", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label=HUB_BTN_RESET, style=discord.ButtonStyle.danger, row=0)
     async def btn_reset(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _run_reset_flow
+
         await _run_reset_flow(inter)
 
-    @discord.ui.button(label="📢 Release announcements", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=HUB_BTN_RELEASE_ANN, style=discord.ButtonStyle.secondary, row=0)
     async def btn_release_announcements(self, inter: discord.Interaction, _b: discord.ui.Button):
         """One-click opt-in/opt-out for the leadership-channel release
         notification posted on each new major/minor version (#253). The
@@ -277,6 +317,7 @@ class _SetupHubView(discord.ui.View):
         `_refresh_release_announcement_label`); clicking flips it and
         replies ephemerally with the new state. Default is ON."""
         from config import get_config, get_or_create_config, update_config_field
+
         cfg = get_config(inter.guild_id) or get_or_create_config(inter.guild_id)
         currently_on = bool(cfg.release_announcements_enabled)
         new_value = 0 if currently_on else 1
@@ -297,58 +338,68 @@ class _SetupHubView(discord.ui.View):
 
     # ── Row 1: free-tier features ────────────────────────────────────────────
 
-    @discord.ui.button(label="🚂 Train", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_TRAIN, style=discord.ButtonStyle.secondary, row=1)
     async def btn_train(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_train_setup
+
         await _launch_train_setup(inter, self.bot)
 
-    @discord.ui.button(label="📈 Growth", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_GROWTH, style=discord.ButtonStyle.secondary, row=1)
     async def btn_growth(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_growth_setup
+
         await _launch_growth_setup(inter, self.bot)
 
-    @discord.ui.button(label="🎂 Birthdays", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_BIRTHDAYS, style=discord.ButtonStyle.secondary, row=1)
     async def btn_birthdays(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_birthday_setup
+
         await _launch_birthday_setup(inter, self.bot)
 
-    @discord.ui.button(label="📣 Events", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_EVENTS, style=discord.ButtonStyle.secondary, row=1)
     async def btn_events(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_event_setup
+
         await _launch_event_setup(inter, self.bot)
 
     # ── Row 2: Premium event flow (Storm + Shiny Tasks) ─────────────────────
 
-    @discord.ui.button(label="⚔️ Desert Storm", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_DS, style=discord.ButtonStyle.secondary, row=2)
     async def btn_desertstorm(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_storm_setup
+
         await _launch_storm_setup(inter, self.bot, "DS")
 
-    @discord.ui.button(label="🏜️ Canyon Storm", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_CS, style=discord.ButtonStyle.secondary, row=2)
     async def btn_canyonstorm(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_storm_setup
+
         await _launch_storm_setup(inter, self.bot, "CS")
 
-    @discord.ui.button(label="🌟 Shiny Tasks", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_SHINY, style=discord.ButtonStyle.secondary, row=2)
     async def btn_shiny_tasks(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_shiny_tasks_setup
+
         await _launch_shiny_tasks_setup(inter, self.bot)
 
     # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 
-    @discord.ui.button(label="👥 Member Sync", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_MEMBERS, style=discord.ButtonStyle.secondary, row=3)
     async def btn_members(self, inter: discord.Interaction, _b: discord.ui.Button):
         from member_roster import _launch_member_roster_setup
+
         await _launch_member_roster_setup(inter, self.bot)
 
-    @discord.ui.button(label="📋 Survey", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_SURVEY, style=discord.ButtonStyle.secondary, row=3)
     async def btn_survey(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_survey_setup
+
         await _launch_survey_setup(inter, self.bot)
 
-    @discord.ui.button(label="📊 Growth Breakdown", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_BREAKDOWN, style=discord.ButtonStyle.secondary, row=3)
     async def btn_growth_breakdown(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_growth_breakdown_setup
+
         await _launch_growth_breakdown_setup(inter, self.bot)
 
 
@@ -367,25 +418,31 @@ async def handle_setup_hub(bot, interaction: discord.Interaction) -> None:
     without needing admin permissions.
     """
     from setup_cog import _has_leadership_or_admin
+
     if not _has_leadership_or_admin(interaction):
         from config import get_config
+
         cfg = get_config(interaction.guild_id)
         role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
         await interaction.response.send_message(
-            f"⛔ You need server administrator permission or the "
-            f"**{role_name}** role to run `/setup`.",
+            DENY_ADMIN_OR_ROLE.format(role=role_name, action="run `/setup`"),
             ephemeral=True,
         )
         return
 
     import premium
+
     is_premium = await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     )
 
     embed = _build_setup_hub_embed(interaction.guild, is_premium=is_premium)
-    view  = _SetupHubView(
-        bot, interaction.guild_id, interaction.user.id,
+    view = _SetupHubView(
+        bot,
+        interaction.guild_id,
+        interaction.user.id,
         is_premium=is_premium,
     )
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

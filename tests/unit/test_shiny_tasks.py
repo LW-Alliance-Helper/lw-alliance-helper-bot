@@ -26,9 +26,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
 from tests.constants import TEST_GUILD_ID
@@ -38,6 +36,7 @@ ET = ZoneInfo("America/New_York")
 
 # ── Date math ────────────────────────────────────────────────────────────────
 
+
 class TestIsShinyToday:
     """Verified against cpt-hedge.com 'Shiny Tasks' column for
     #2263–#2270 on 2026-05-11. See docs/hedge_data_source.md."""
@@ -46,51 +45,59 @@ class TestIsShinyToday:
     CASES = [
         # (server, creation_date, hedge_says_today)
         ("#2263", date(2026, 4, 27), False),  # Tomorrow
-        ("#2264", date(2026, 4, 29), True),   # Today
-        ("#2265", date(2026, 5, 1),  False),  # In 2 days
-        ("#2266", date(2026, 5, 2),  True),   # Today
-        ("#2267", date(2026, 5, 4),  False),  # In 2 days
-        ("#2268", date(2026, 5, 6),  False),  # Tomorrow
-        ("#2269", date(2026, 5, 8),  True),   # Today
+        ("#2264", date(2026, 4, 29), True),  # Today
+        ("#2265", date(2026, 5, 1), False),  # In 2 days
+        ("#2266", date(2026, 5, 2), True),  # Today
+        ("#2267", date(2026, 5, 4), False),  # In 2 days
+        ("#2268", date(2026, 5, 6), False),  # Tomorrow
+        ("#2269", date(2026, 5, 8), True),  # Today
         ("#2270", date(2026, 5, 10), False),  # In 2 days
     ]
 
     @pytest.mark.parametrize("label,created,expected", CASES)
     def test_hedge_reference_rows(self, label, created, expected):
         from shiny_tasks import is_shiny_today
+
         assert is_shiny_today(created, self.TODAY) is expected, label
 
     def test_first_shiny_is_day_three(self):
         """A server created today doesn't go shiny until day 3."""
         from shiny_tasks import is_shiny_today
+
         created = date(2026, 5, 1)
         assert is_shiny_today(created, date(2026, 5, 1)) is False  # Day 0
         assert is_shiny_today(created, date(2026, 5, 2)) is False  # Day 1
         assert is_shiny_today(created, date(2026, 5, 3)) is False  # Day 2
-        assert is_shiny_today(created, date(2026, 5, 4)) is True   # Day 3 ✓
+        assert is_shiny_today(created, date(2026, 5, 4)) is True  # Day 3 ✓
         assert is_shiny_today(created, date(2026, 5, 5)) is False  # Day 4
-        assert is_shiny_today(created, date(2026, 5, 7)) is True   # Day 6 ✓
+        assert is_shiny_today(created, date(2026, 5, 7)) is True  # Day 6 ✓
 
     def test_does_not_count_creation_date_as_shiny(self):
         """`delta=0 and delta % 3 == 0` would naively be shiny — verify
         the explicit `delta >= 3` guard rules that out."""
         from shiny_tasks import is_shiny_today
+
         d = date(2026, 1, 1)
         assert is_shiny_today(d, d) is False
 
 
 # ── Pure helpers ─────────────────────────────────────────────────────────────
 
+
 class TestFormatServerList:
-    @pytest.mark.parametrize("nums,expected", [
-        ([],            ""),
-        ([681],         "681"),
-        ([681, 682],    "681 and 682"),
-        ([681, 682, 689],            "681, 682 and 689"),
-        ([681, 682, 689, 704, 706],  "681, 682, 689, 704 and 706"),
-    ])
+    @pytest.mark.parametrize(
+        "nums,expected",
+        [
+            ([], ""),
+            ([681], "681"),
+            ([681, 682], "681 and 682"),
+            ([681, 682, 689], "681, 682 and 689"),
+            ([681, 682, 689, 704, 706], "681, 682, 689, 704 and 706"),
+        ],
+    )
     def test_joins_with_oxford_and(self, nums, expected):
         from shiny_tasks import format_server_list
+
         assert format_server_list(nums) == expected
 
 
@@ -100,6 +107,7 @@ class TestServersShinyToday:
         accept ISO strings (production path from SQLite) and `date`
         objects (in-memory fixtures) interchangeably."""
         from shiny_tasks import servers_shiny_today
+
         today = date(2026, 5, 11)
         rows = [
             {"server_number": 2266, "creation_date": "2026-05-02"},  # shiny
@@ -111,6 +119,7 @@ class TestServersShinyToday:
 
     def test_unparseable_creation_date_skipped(self):
         from shiny_tasks import servers_shiny_today
+
         rows = [
             {"server_number": 1, "creation_date": "not-a-date"},
             {"server_number": 2, "creation_date": "2026-04-29"},
@@ -135,6 +144,7 @@ class TestRenderAnnouncement:
         returns the literal `{servrs}` text instead, so the scheduler
         loop survives a misconfigured template."""
         from shiny_tasks import render_announcement
+
         out = render_announcement(
             "Shinies today: {servrs}",
             servers=[681],
@@ -145,6 +155,7 @@ class TestRenderAnnouncement:
     def test_date_placeholder_is_locale_safe(self):
         """`{date}` must render without %-d / %#d platform quirks."""
         from shiny_tasks import render_announcement
+
         out = render_announcement(
             "Heads up for {date}: {servers}",
             servers=[1],
@@ -158,11 +169,13 @@ class TestResolveAnnouncementTemplate:
     def test_empty_returns_default(self):
         from shiny_tasks import resolve_announcement_template
         from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+
         assert resolve_announcement_template("") == DEFAULT_SHINY_TASKS_MESSAGE
         assert resolve_announcement_template("   ") == DEFAULT_SHINY_TASKS_MESSAGE
 
     def test_custom_returned_verbatim(self):
         from shiny_tasks import resolve_announcement_template
+
         custom = "🌟 Today: {servers}!"
         assert resolve_announcement_template(custom) == custom
 
@@ -170,6 +183,7 @@ class TestResolveAnnouncementTemplate:
 class TestBuildAnnouncementForGuild:
     def test_filters_to_range_and_renders(self):
         from shiny_tasks import build_announcement_for_guild
+
         rows = [
             {"server_number": 2263, "creation_date": "2026-04-27"},  # tomorrow
             {"server_number": 2264, "creation_date": "2026-04-29"},  # in-range, shiny
@@ -178,7 +192,8 @@ class TestBuildAnnouncementForGuild:
         ]
         body = build_announcement_for_guild(
             server_rows=rows,
-            server_min=2264, server_max=2266,
+            server_min=2264,
+            server_max=2266,
             today=date(2026, 5, 11),
             template="",  # use default
         )
@@ -191,12 +206,14 @@ class TestBuildAnnouncementForGuild:
         """Caller must skip posting when no servers in range are shiny
         today — posting "Daily shinies: ." would be a bug."""
         from shiny_tasks import build_announcement_for_guild
+
         rows = [
             {"server_number": 2263, "creation_date": "2026-04-27"},
         ]
         body = build_announcement_for_guild(
             server_rows=rows,
-            server_min=2263, server_max=2263,
+            server_min=2263,
+            server_max=2263,
             today=date(2026, 5, 11),
             template="",
         )
@@ -204,6 +221,7 @@ class TestBuildAnnouncementForGuild:
 
 
 # ── Hedge bundle parser ──────────────────────────────────────────────────────
+
 
 class TestParseRecords:
     """`_parse_records` must extract the (id, ts, region) triple from
@@ -214,7 +232,7 @@ class TestParseRecords:
     SAMPLE_BUNDLE = (
         # Realistic-ish slice of two adjacent records, with extra fields
         # between `timestamp` and `region` that must be skipped over.
-        '...prefix...'
+        "...prefix..."
         '{"id":"10","server":"State#10","timestamp":"1694157329000",'
         '"seasonStartTimestamps":{"s4":"1747044000000"},'
         '"currentSeason":6,"isPostSeason":false,"currentWeek":5,'
@@ -223,11 +241,12 @@ class TestParseRecords:
         '"seasonStartTimestamps":{"s4":"1747044000000"},'
         '"currentSeason":6,"isPostSeason":false,"currentWeek":5,'
         '"updatedAt":1776087064698,"region":["europe"]}'
-        '...suffix...'
+        "...suffix..."
     )
 
     def test_extracts_two_records(self):
         from shiny_tasks import _parse_records
+
         rows = _parse_records(self.SAMPLE_BUNDLE)
         assert len(rows) == 2
         ids = sorted(r[0] for r in rows)
@@ -235,6 +254,7 @@ class TestParseRecords:
 
     def test_creation_date_decoded_from_ms(self):
         from shiny_tasks import _parse_records
+
         rows = _parse_records(self.SAMPLE_BUNDLE)
         d = {r[0]: r[1] for r in rows}
         # 1694157329000 ms = 2023-09-08 in UTC; date-only round trip.
@@ -242,20 +262,20 @@ class TestParseRecords:
 
     def test_empty_region_list_yields_empty_string(self):
         from shiny_tasks import _parse_records
+
         # `"region":[]` (empty list) should still parse and emit region=""
-        chunk = (
-            '{"id":"42","server":"State#42","timestamp":"1700000000000",'
-            '"foo":1,"region":[]}'
-        )
+        chunk = '{"id":"42","server":"State#42","timestamp":"1700000000000","foo":1,"region":[]}'
         rows = _parse_records(chunk)
         assert rows == [(42, "2023-11-14", "")]
 
     def test_no_records_returns_empty(self):
         from shiny_tasks import _parse_records
+
         assert _parse_records("nothing of interest in here") == []
 
 
 # ── DB helpers (use the temp_db fixture from conftest) ───────────────────────
+
 
 class TestDbHelpers:
     def test_upsert_and_range_query(self, temp_db):
@@ -263,6 +283,7 @@ class TestDbHelpers:
             upsert_shiny_task_servers,
             get_shiny_task_servers_in_range,
         )
+
         now_iso = datetime.now(tz=timezone.utc).isoformat()
         n = upsert_shiny_task_servers(
             [
@@ -302,6 +323,7 @@ class TestDbHelpers:
             upsert_shiny_task_servers,
             get_shiny_task_servers_in_range,
         )
+
         stale_iso = (datetime.now(tz=timezone.utc).replace(year=2020)).isoformat()
         upsert_shiny_task_servers([(681, "2025-01-01", "global")], seen_at=stale_iso)
         # Re-upsert with fresh timestamp → 681 is back in queries.
@@ -313,30 +335,41 @@ class TestDbHelpers:
 
     def test_count_and_enabled_list(self, temp_db):
         from config import (
-            count_shiny_task_servers, list_shiny_enabled_guild_ids,
-            save_shiny_tasks_config, upsert_shiny_task_servers,
+            count_shiny_task_servers,
+            list_shiny_enabled_guild_ids,
+            save_shiny_tasks_config,
+            upsert_shiny_task_servers,
         )
+
         assert count_shiny_task_servers() == 0
         assert list_shiny_enabled_guild_ids() == []
 
         upsert_shiny_task_servers(
-            [(1, "2025-01-01", "")], seen_at=datetime.now(tz=timezone.utc).isoformat(),
+            [(1, "2025-01-01", "")],
+            seen_at=datetime.now(tz=timezone.utc).isoformat(),
         )
         save_shiny_tasks_config(
-            TEST_GUILD_ID, enabled=1, channel_id=999, post_time="09:00",
-            server_min=1, server_max=2, message_template="",
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=999,
+            post_time="09:00",
+            server_min=1,
+            server_max=2,
+            message_template="",
         )
         assert count_shiny_task_servers() == 1
         assert list_shiny_enabled_guild_ids() == [TEST_GUILD_ID]
 
     def test_get_last_shiny_refresh_at_empty(self, temp_db):
         from config import get_last_shiny_refresh_at
+
         assert get_last_shiny_refresh_at() is None
 
     def test_get_last_shiny_refresh_at_returns_max(self, temp_db):
         """Returns the max `last_seen_at` across all rows so the weekly
         gate keys off the most recent successful refresh."""
         from config import get_last_shiny_refresh_at, upsert_shiny_task_servers
+
         older = datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat()
         newer = datetime(2026, 5, 10, tzinfo=timezone.utc).isoformat()
         upsert_shiny_task_servers([(1, "2025-01-01", "")], seen_at=older)
@@ -351,18 +384,30 @@ class TestDbHelpers:
         otherwise a Railway restart between save + the next post-time
         minute would let the loop fire a second time."""
         from config import (
-            save_shiny_tasks_config, mark_shiny_tasks_posted,
+            save_shiny_tasks_config,
+            mark_shiny_tasks_posted,
             get_shiny_tasks_config,
         )
+
         save_shiny_tasks_config(
-            TEST_GUILD_ID, enabled=1, channel_id=1, post_time="09:00",
-            server_min=1, server_max=2, message_template="",
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=1,
+            post_time="09:00",
+            server_min=1,
+            server_max=2,
+            message_template="",
         )
         mark_shiny_tasks_posted(TEST_GUILD_ID, "2026-05-11")
         # Re-save (simulating wizard re-run) with different values.
         save_shiny_tasks_config(
-            TEST_GUILD_ID, enabled=1, channel_id=2, post_time="10:00",
-            server_min=1, server_max=3, message_template="hi",
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=2,
+            post_time="10:00",
+            server_min=1,
+            server_max=3,
+            message_template="hi",
         )
         cfg = get_shiny_tasks_config(TEST_GUILD_ID)
         assert cfg["last_posted_date"] == "2026-05-11"
@@ -376,18 +421,26 @@ def _seed_complete(guild_id: int):
     """Mark a guild's core config setup_complete=1 and stamp its tz so
     the per-minute loop can resolve ZoneInfo."""
     import config
+
     cfg = config.get_or_create_config(guild_id)
     cfg.timezone = "America/New_York"
     cfg.setup_complete = True
     config.save_config(cfg)
 
 
-def _enable_shiny(guild_id: int, *, post_time: str, channel_id: int,
-                  server_min: int = 1, server_max: int = 2000):
+def _enable_shiny(
+    guild_id: int, *, post_time: str, channel_id: int, server_min: int = 1, server_max: int = 2000
+):
     from config import save_shiny_tasks_config
+
     save_shiny_tasks_config(
-        guild_id, enabled=1, channel_id=channel_id, post_time=post_time,
-        server_min=server_min, server_max=server_max, message_template="",
+        guild_id,
+        enabled=1,
+        channel_id=channel_id,
+        post_time=post_time,
+        server_min=server_min,
+        server_max=server_max,
+        message_template="",
     )
 
 
@@ -395,8 +448,10 @@ def _seed_servers(rows):
     """Insert (server_number, creation_date_iso, region) tuples with a
     fresh `last_seen_at` so the soft-delete filter doesn't drop them."""
     from config import upsert_shiny_task_servers
+
     upsert_shiny_task_servers(
-        rows, seen_at=datetime.now(tz=timezone.utc).isoformat(),
+        rows,
+        seen_at=datetime.now(tz=timezone.utc).isoformat(),
     )
 
 
@@ -417,6 +472,7 @@ async def _run_loop_at(now_dt: datetime, *, send_ok: bool = True):
     chan.send = AsyncMock(side_effect=_send if send_ok else None)
     if not send_ok:
         import discord
+
         chan.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no perms"))
 
     fake_bot = MagicMock()
@@ -425,8 +481,7 @@ async def _run_loop_at(now_dt: datetime, *, send_ok: bool = True):
     fake_dt = MagicMock()
     fake_dt.now = MagicMock(return_value=now_dt)
 
-    with patch.object(bot_module, "bot", fake_bot), \
-         patch("bot.datetime", fake_dt):
+    with patch.object(bot_module, "bot", fake_bot), patch("bot.datetime", fake_dt):
         await bot_module.shiny_tasks_post_task.coro()
     return sent
 
@@ -451,6 +506,7 @@ class TestServerRangeModalValueProperty:
         class _Stub:
             min_value = "681"
             max_value = "799"
+
             # Inline-copy the property body to assert the contract:
             @property
             def value(self):
@@ -467,6 +523,7 @@ class TestServerRangeModalValueProperty:
         ServerRangeModal.value property may need to change too)."""
         import inspect
         from setup_cog import ModalLaunchView
+
         src = inspect.getsource(ModalLaunchView)
         assert "self.modal.value" in src, (
             "ModalLaunchView no longer references self.modal.value — "
@@ -475,7 +532,6 @@ class TestServerRangeModalValueProperty:
 
 
 class TestShinyTasksPostTask:
-
     @pytest.mark.asyncio
     async def test_fires_when_time_matches(self, temp_db):
         _seed_complete(TEST_GUILD_ID)
@@ -483,8 +539,11 @@ class TestShinyTasksPostTask:
         # Today = 2026-05-11; server #2264 (created Apr 29) is shiny today.
         _seed_servers([(2264, "2026-04-29", "global")])
         _enable_shiny(
-            TEST_GUILD_ID, post_time="09:00", channel_id=123,
-            server_min=2200, server_max=2300,
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
         )
 
         now = datetime(2026, 5, 11, 9, 0, tzinfo=ET)
@@ -510,8 +569,11 @@ class TestShinyTasksPostTask:
         _seed_complete(TEST_GUILD_ID)
         _seed_servers([(2264, "2026-04-29", "global")])
         _enable_shiny(
-            TEST_GUILD_ID, post_time="09:00", channel_id=123,
-            server_min=2200, server_max=2300,
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
         )
         mark_shiny_tasks_posted(TEST_GUILD_ID, "2026-05-11")
 
@@ -529,41 +591,43 @@ class TestShinyTasksPostTask:
         # #2263 is "Tomorrow" (Day 14 from 2026-04-27), not today.
         _seed_servers([(2263, "2026-04-27", "global")])
         _enable_shiny(
-            TEST_GUILD_ID, post_time="09:00", channel_id=123,
-            server_min=2263, server_max=2263,
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=123,
+            server_min=2263,
+            server_max=2263,
         )
 
         sent = await _run_loop_at(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
         assert sent == []
-        assert (
-            get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"]
-            == "2026-05-11"
-        )
+        assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == "2026-05-11"
 
     @pytest.mark.asyncio
     async def test_missing_channel_skips_quietly(self, temp_db):
         """`bot.get_channel` returns None (channel deleted, bot left
         the guild) — the loop logs and moves on without crashing."""
         import bot as bot_module
+
         _seed_complete(TEST_GUILD_ID)
         _seed_servers([(2264, "2026-04-29", "global")])
         _enable_shiny(
-            TEST_GUILD_ID, post_time="09:00", channel_id=999,
-            server_min=2200, server_max=2300,
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=999,
+            server_min=2200,
+            server_max=2300,
         )
 
         fake_bot = MagicMock()
         fake_bot.get_channel = MagicMock(return_value=None)
         fake_dt = MagicMock()
-        fake_dt.now = MagicMock(
-            return_value=datetime(2026, 5, 11, 9, 0, tzinfo=ET)
-        )
-        with patch.object(bot_module, "bot", fake_bot), \
-             patch("bot.datetime", fake_dt):
+        fake_dt.now = MagicMock(return_value=datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        with patch.object(bot_module, "bot", fake_bot), patch("bot.datetime", fake_dt):
             await bot_module.shiny_tasks_post_task.coro()
         # Did not raise; last_posted_date stays empty because we
         # didn't actually post.
         from config import get_shiny_tasks_config
+
         assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == ""
 
 
@@ -606,9 +670,7 @@ class TestShinyTasksRefreshTask:
         import bot as bot_module
         import shiny_tasks
 
-        stale = (
-            datetime.now(tz=timezone.utc) - timedelta(days=8)
-        ).isoformat()
+        stale = (datetime.now(tz=timezone.utc) - timedelta(days=8)).isoformat()
         upsert_shiny_task_servers([(1, "2025-01-01", "")], seen_at=stale)
 
         mock_refresh = AsyncMock(return_value=2266)

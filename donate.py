@@ -34,15 +34,15 @@ import premium
 # current bot owner. Other platforms default to empty (omitted from embed).
 DONATION_PLATFORMS = [
     {
-        "env":   "KOFI_URL",
-        "name":  "Ko-fi",
+        "env": "KOFI_URL",
+        "name": "Ko-fi",
         "emoji": "☕",
         "default": "https://ko-fi.com/pinkcatboi",
     },
-    {"env": "BUYMEACOFFEE_URL",   "name": "Buy Me a Coffee", "emoji": "🥤", "default": ""},
-    {"env": "GITHUB_SPONSORS_URL","name": "GitHub Sponsors", "emoji": "💖", "default": ""},
-    {"env": "PATREON_URL",        "name": "Patreon",         "emoji": "🎁", "default": ""},
-    {"env": "PAYPAL_URL",         "name": "PayPal",          "emoji": "💵", "default": ""},
+    {"env": "BUYMEACOFFEE_URL", "name": "Buy Me a Coffee", "emoji": "🥤", "default": ""},
+    {"env": "GITHUB_SPONSORS_URL", "name": "GitHub Sponsors", "emoji": "💖", "default": ""},
+    {"env": "PATREON_URL", "name": "Patreon", "emoji": "🎁", "default": ""},
+    {"env": "PAYPAL_URL", "name": "PayPal", "emoji": "💵", "default": ""},
 ]
 
 
@@ -57,6 +57,7 @@ def _active_platforms() -> list[tuple[str, str, str]]:
 
 
 # ── Helpers shared between commands ───────────────────────────────────────────
+
 
 async def _resolve_guild_name(bot: commands.Bot, guild_id: int) -> str:
     """Best-effort human-readable name for a guild_id. Falls back to the
@@ -86,13 +87,19 @@ async def _resolve_user_label(bot: commands.Bot, user_id: int) -> str:
 
 # ── Confirmation views ────────────────────────────────────────────────────────
 
+
 class _ConfirmActionView(discord.ui.View):
     """Generic two-button confirm/cancel used by /premium assign (both fresh
     and switch flows) and /premium unassign. The confirm button label is
     configurable so each call site reads naturally."""
 
-    def __init__(self, *, owner_id: int, confirm_label: str,
-                 confirm_style: discord.ButtonStyle = discord.ButtonStyle.primary):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        confirm_label: str,
+        confirm_style: discord.ButtonStyle = discord.ButtonStyle.primary,
+    ):
         super().__init__(timeout=120)
         self.owner_id = owner_id
         self.confirmed: Optional[bool] = None
@@ -131,6 +138,7 @@ class _ConfirmActionView(discord.ui.View):
 
 # ── Shared pitch embed ────────────────────────────────────────────────────────
 
+
 def _build_upgrade_pitch_embed() -> discord.Embed:
     """The Premium feature pitch + price + assignment explanation. Shared
     between /upgrade (when caller has no active sub) and /premium overview
@@ -148,7 +156,7 @@ def _build_upgrade_pitch_embed() -> discord.Embed:
             "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"
             "• 🧵 Use threads as destinations for any channel-pickable feature\n"
             "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"
-            "• 📅 30-day history windows on `/events log` and `/train log`\n"
+            "• 📅 30-day history windows on the `/events` log and `/train log`\n"
             "• 📜 Unlimited storm-log lookback\n\n"
             "**$4.99/month**, billed by Discord. Cancel anytime.\n\n"
             "🪪 Your subscription unlocks Premium in **one server at a time**. "
@@ -162,6 +170,7 @@ def _build_upgrade_pitch_embed() -> discord.Embed:
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
+
 
 class DonateCog(commands.Cog):
     # /premium is a top-level slash-command group containing overview /
@@ -211,7 +220,9 @@ class DonateCog(commands.Cog):
                 inline=False,
             )
 
-        embed.set_footer(text="100% optional — the bot is and will remain free to use at the base level.")
+        embed.set_footer(
+            text="100% optional — the bot is and will remain free to use at the base level."
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /upgrade ──────────────────────────────────────────────────────────────
@@ -222,7 +233,7 @@ class DonateCog(commands.Cog):
     )
     async def upgrade(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
-        user_id  = interaction.user.id
+        user_id = interaction.user.id
 
         # If this guild is already premium via FORCE_PREMIUM/bypass or an
         # already-assigned subscription, short-circuit with the existing
@@ -334,7 +345,8 @@ class DonateCog(commands.Cog):
         await self._send_pitch_with_subscribe_button(interaction)
 
     async def _send_pitch_with_subscribe_button(
-        self, interaction: discord.Interaction,
+        self,
+        interaction: discord.Interaction,
     ) -> None:
         """Render the upgrade pitch with Discord's subscribe button.
 
@@ -370,7 +382,6 @@ class DonateCog(commands.Cog):
     )
     async def premium_overview(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        guild_id = interaction.guild_id
 
         has_sub = await premium.user_has_active_subscription(user_id, bot=self.bot)
         assigned_guild = premium.get_assigned_guild(user_id)
@@ -431,11 +442,12 @@ class DonateCog(commands.Cog):
     )
     async def premium_assign(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
-        user_id  = interaction.user.id
+        user_id = interaction.user.id
 
         if guild_id is None:
             await interaction.response.send_message(
-                "This command can only be used inside a server.", ephemeral=True,
+                "This command can only be used inside a server.",
+                ephemeral=True,
             )
             return
 
@@ -444,7 +456,7 @@ class DonateCog(commands.Cog):
             embed = discord.Embed(
                 title="💎 You don't have an active Premium subscription",
                 description=(
-                    "Run `/upgrade` to subscribe, then `/premium assign` to pin "
+                    "Run `/upgrade` to unlock it, then `/premium assign` to pin "
                     "your subscription to a specific server."
                 ),
                 color=discord.Color.purple(),
@@ -511,7 +523,8 @@ class DonateCog(commands.Cog):
 
             if not view.confirmed:
                 await interaction.followup.send(
-                    "Cancelled — your subscription is unchanged.", ephemeral=True,
+                    "Cancelled — your subscription is unchanged.",
+                    ephemeral=True,
                 )
                 return
 
@@ -564,7 +577,8 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your subscription is unchanged.", ephemeral=True,
+                "Cancelled — your subscription is unchanged.",
+                ephemeral=True,
             )
             return
 
@@ -641,7 +655,8 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your assignment is unchanged.", ephemeral=True,
+                "Cancelled — your assignment is unchanged.",
+                ephemeral=True,
             )
             return
 
@@ -651,8 +666,8 @@ class DonateCog(commands.Cog):
         freed = premium.unassign(user_id)
         if freed is None:
             await interaction.followup.send(
-                "Nothing to release — your assignment was already cleared "
-                "before you confirmed.", ephemeral=True,
+                "Nothing to release — your assignment was already cleared before you confirmed.",
+                ephemeral=True,
             )
             return
 
@@ -740,8 +755,10 @@ class DonateCog(commands.Cog):
             user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
             await user.send(embed=embed)
         except discord.Forbidden:
-            print(f"[PREMIUM] Cannot DM user {user_id} (DMs closed); "
-                  f"they will need to run /premium overview manually")
+            print(
+                f"[PREMIUM] Cannot DM user {user_id} (DMs closed); "
+                f"they will need to run /premium overview manually"
+            )
         except Exception as exc:
             print(f"[PREMIUM] Failed to DM user {user_id} after entitlement event: {exc}")
 
@@ -777,7 +794,7 @@ class DonateCog(commands.Cog):
         await self._dm_user(user_id, embed)
 
     async def _dm_blocked_assignment(self, user_id: int, guild_id: int, holder_id: int) -> None:
-        guild_name   = await _resolve_guild_name(self.bot, guild_id)
+        guild_name = await _resolve_guild_name(self.bot, guild_id)
         holder_label = await _resolve_user_label(self.bot, holder_id)
         embed = discord.Embed(
             title="💎 Premium subscription confirmed",

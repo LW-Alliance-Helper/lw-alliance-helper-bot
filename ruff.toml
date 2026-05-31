@@ -1,0 +1,46 @@
+# Ruff configuration for lw-alliance-helper-bot.
+#
+# ruff is both the linter and the formatter here (replacing what would be
+# flake8 + black). Both run via pre-commit on staged files; see
+# .pre-commit-config.yaml.
+
+target-version = "py311"
+
+# The codebase was hand-wrapped narrow (most lines well under 80). 100 was
+# chosen as the formatter width because it comfortably contains the existing
+# longest lines without forcing extra splits, while still keeping things
+# readable. Changed once, enforced from here on.
+line-length = 100
+
+[lint]
+# Lint scope is real bugs and dead code: pyflakes (F) for undefined names
+# (F821), dead locals (F841), and f-string / syntax mistakes; E9 for syntax
+# errors. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
+# and import sorting (I) are intentionally left off -- whitespace/layout is
+# the formatter's job, and we don't want the linter second-guessing the
+# author's `if x: return` style choices.
+select = ["E9", "F"]
+
+# F401 (unused import) and F811 (redefinition) are DELIBERATELY OFF. This
+# codebase uses two patterns ruff's autofix actively breaks:
+#   1. Module-level re-exports (e.g. train.py re-exports parse_birthday from
+#      train_birthdays for `from train import parse_birthday` to keep working).
+#      F401 sees these as unused and --fix deletes them.
+#   2. Inline `from config import X` *inside functions* that also import X at
+#      module level -- a deliberate late-binding hook so tests can patch
+#      `config.X` (see CLAUDE.md). F811 calls the inline import a redefinition
+#      and --fix strips it, silently defeating every test that patches config.X.
+# Both bit us during the initial sweep (train.py + train_cog.check_reminder).
+# They're tidiness rules, not bug-catchers, so dropping them costs nothing the
+# bug-catching F rules don't already cover.
+ignore = ["F401", "F811"]
+
+[lint.per-file-ignores]
+# Tests legitimately pull conftest helpers via star-import (F403/F405) and
+# bind-and-discard locals -- a captured mock or intermediate value kept for
+# clarity but not asserted on (F841).
+"tests/**" = ["F403", "F405", "F841"]
+
+[format]
+# Defaults otherwise (double quotes -- the codebase is already ~95%
+# double-quoted -- space indentation, magic trailing comma respected).

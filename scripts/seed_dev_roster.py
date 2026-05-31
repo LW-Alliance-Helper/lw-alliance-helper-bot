@@ -44,6 +44,7 @@ ENVIRONMENT (same as seed_demo.py):
 
 The dev Sheet must already be shared with the service account email.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,14 +55,56 @@ import config
 
 
 _DEFAULT_NAMES = [
-    "Astrid", "Bjorn", "Cyra", "Draven", "Elara", "Faelan", "Gwendolyn",
-    "Hakon", "Iolanthe", "Jareth", "Kassian", "Lyra", "Magnus", "Niamh",
-    "Orion", "Persephone", "Quinlan", "Rhiannon", "Soren", "Talia",
-    "Ulrich", "Vesper", "Wolfgang", "Xanthe", "Ysolde", "Zephyr",
-    "Aldric", "Brienne", "Caspian", "Daphne", "Elias", "Fenella",
-    "Gareth", "Helia", "Ivor", "Junia", "Kael", "Lirien", "Mireille",
-    "Nikola", "Octavia", "Phineas", "Quill", "Rowena", "Silas", "Thora",
-    "Una", "Varian", "Wren", "Xio",
+    "Astrid",
+    "Bjorn",
+    "Cyra",
+    "Draven",
+    "Elara",
+    "Faelan",
+    "Gwendolyn",
+    "Hakon",
+    "Iolanthe",
+    "Jareth",
+    "Kassian",
+    "Lyra",
+    "Magnus",
+    "Niamh",
+    "Orion",
+    "Persephone",
+    "Quinlan",
+    "Rhiannon",
+    "Soren",
+    "Talia",
+    "Ulrich",
+    "Vesper",
+    "Wolfgang",
+    "Xanthe",
+    "Ysolde",
+    "Zephyr",
+    "Aldric",
+    "Brienne",
+    "Caspian",
+    "Daphne",
+    "Elias",
+    "Fenella",
+    "Gareth",
+    "Helia",
+    "Ivor",
+    "Junia",
+    "Kael",
+    "Lirien",
+    "Mireille",
+    "Nikola",
+    "Octavia",
+    "Phineas",
+    "Quill",
+    "Rowena",
+    "Silas",
+    "Thora",
+    "Una",
+    "Varian",
+    "Wren",
+    "Xio",
 ]
 
 
@@ -78,8 +121,10 @@ def _build_rows(count: int, power_tiers_m: list[int]) -> list[list[str]]:
     distribution toward that average. Jitter of ±5M keeps each row in
     its tier's neighbourhood without colliding with the next band.
     """
-    names = _DEFAULT_NAMES[:count] if count <= len(_DEFAULT_NAMES) else (
-        _DEFAULT_NAMES + [f"Stormtest{i:03d}" for i in range(count - len(_DEFAULT_NAMES))]
+    names = (
+        _DEFAULT_NAMES[:count]
+        if count <= len(_DEFAULT_NAMES)
+        else (_DEFAULT_NAMES + [f"Stormtest{i:03d}" for i in range(count - len(_DEFAULT_NAMES))])
     )
     rng = random.Random(42)  # deterministic so re-seeds produce the same data
     rows: list[list[str]] = []
@@ -91,51 +136,58 @@ def _build_rows(count: int, power_tiers_m: list[int]) -> list[list[str]]:
         # Floor at 10M so a low tier + negative jitter can't produce
         # nonsense values (no real player is below ~15M 1st squad).
         power = max(10_000_000, (tier_m + jitter_m) * 1_000_000)
-        rows.append([
-            "",                    # A: Discord ID (blank = non-Discord)
-            name,                  # B: Name
-            name,                  # C: Display Name
-            "2026-01-01",          # D: Joined (placeholder)
-            "Member",              # E: Roles
-            "No",                  # F: Is this user in Discord?
-            str(power),            # G: Power column (synthetic; letter G default)
-        ])
+        rows.append(
+            [
+                "",  # A: Discord ID (blank = non-Discord)
+                name,  # B: Name
+                name,  # C: Display Name
+                "2026-01-01",  # D: Joined (placeholder)
+                "Member",  # E: Roles
+                "No",  # F: Is this user in Discord?
+                str(power),  # G: Power column (synthetic; letter G default)
+            ]
+        )
     return rows
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--guild-id", type=int, required=True,
-                        help="Dev guild ID")
-    parser.add_argument("--count", type=int, default=50,
-                        help="Number of synthetic members (default 50)")
+    parser.add_argument("--guild-id", type=int, required=True, help="Dev guild ID")
     parser.add_argument(
-        "--power-tier-spread", type=str,
+        "--count", type=int, default=50, help="Number of synthetic members (default 50)"
+    )
+    parser.add_argument(
+        "--power-tier-spread",
+        type=str,
         default="30,50,60,60,70,70,80,80,80,90,90,100,120",
         help="Comma-separated 1st-squad power tiers in millions "
-             "(default biased toward 60-80M with a couple of new "
-             "players and a couple of whales)",
+        "(default biased toward 60-80M with a couple of new "
+        "players and a couple of whales)",
     )
-    parser.add_argument("--clear", action="store_true",
-                        help="Wipe the tab before writing (keeps header row)")
-    parser.add_argument("--no-confirm", action="store_true",
-                        help="Skip the confirmation prompt")
+    parser.add_argument(
+        "--clear", action="store_true", help="Wipe the tab before writing (keeps header row)"
+    )
+    parser.add_argument("--no-confirm", action="store_true", help="Skip the confirmation prompt")
     args = parser.parse_args()
 
     try:
         tiers = [int(t.strip()) for t in args.power_tier_spread.split(",") if t.strip()]
     except ValueError:
-        print(f"⚠️ Couldn't parse --power-tier-spread {args.power_tier_spread!r}. "
-              f"Use comma-separated integers like '60,70,80'.",
-              file=sys.stderr)
+        print(
+            f"⚠️ Couldn't parse --power-tier-spread {args.power_tier_spread!r}. "
+            f"Use comma-separated integers like '60,70,80'.",
+            file=sys.stderr,
+        )
         return 2
 
     roster_cfg = config.get_member_roster_config(args.guild_id)
     if not roster_cfg.get("enabled"):
-        print(f"⚠️ Guild {args.guild_id} hasn't run the /setup → 👥 Members wizard yet, so "
-              f"the bot doesn't know which Sheet/tab to write to. Run "
-              f"setup, then re-run this script.",
-              file=sys.stderr)
+        print(
+            f"⚠️ Guild {args.guild_id} hasn't run the /setup → 👥 Members wizard yet, so "
+            f"the bot doesn't know which Sheet/tab to write to. Run "
+            f"setup, then re-run this script.",
+            file=sys.stderr,
+        )
         return 2
 
     tab_name = roster_cfg.get("tab_name") or "Member Roster"
@@ -145,7 +197,7 @@ def main() -> int:
         print(f"    tab:      '{tab_name}'")
         print(f"    clear:    {args.clear}")
         print(f"    tiers:    {tiers} (M)")
-        print(f"\n  Continue? [y/N] ", end="")
+        print("\n  Continue? [y/N] ", end="")
         reply = input().strip().lower()
         if reply not in ("y", "yes"):
             print("Aborted.")
@@ -160,8 +212,7 @@ def main() -> int:
             if len(existing) > 1:
                 # Delete data rows in one batch
                 ws.batch_clear([f"A2:Z{len(existing)}"])
-                print(f"Cleared {len(existing) - 1} existing data row(s) "
-                      f"from '{tab_name}'.")
+                print(f"Cleared {len(existing) - 1} existing data row(s) from '{tab_name}'.")
         except Exception as e:
             print(f"⚠️ Couldn't clear existing rows: {e}", file=sys.stderr)
 
@@ -172,14 +223,16 @@ def main() -> int:
         print(f"⚠️ Sheet write failed: {e}", file=sys.stderr)
         return 1
 
-    print(f"✅ Seeded {len(rows)} synthetic non-Discord roster row(s) into "
-          f"'{tab_name}' for guild {args.guild_id}.")
-    print(f"\nNext steps:")
-    print(f"  - In /setup → ⚔️ Desert Storm (or /setup → 🏜️ Canyon Storm), set Power")
-    print(f"    Metric Column to G (the column this script writes power to).")
-    print(f"  - Do NOT run /members sync on this guild. It'll wipe these")
-    print(f"    rows. Re-seed via this script after a sync if you want both")
-    print(f"    real members + synthetic ones.")
+    print(
+        f"✅ Seeded {len(rows)} synthetic non-Discord roster row(s) into "
+        f"'{tab_name}' for guild {args.guild_id}."
+    )
+    print("\nNext steps:")
+    print("  - In /setup → ⚔️ Desert Storm (or /setup → 🏜️ Canyon Storm), set Power")
+    print("    Metric Column to G (the column this script writes power to).")
+    print("  - Do NOT run /members sync on this guild. It'll wipe these")
+    print("    rows. Re-seed via this script after a sync if you want both")
+    print("    real members + synthetic ones.")
     return 0
 
 

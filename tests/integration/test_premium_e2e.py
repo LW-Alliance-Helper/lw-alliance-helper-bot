@@ -30,6 +30,7 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 
 # ── Scenario A — Free-tier hits the cap ───────────────────────────────────────
 
+
 @pytest.mark.free_tier_only
 class TestFreeTierHitsCaps:
     """Drive each capped feature past its limit on a free-tier guild and
@@ -41,24 +42,28 @@ class TestFreeTierHitsCaps:
     async def test_events_count_blocked_at_five(self, seeded_db):
         """A free guild with exactly 5 events is at the cap. Premium=None."""
         import config, premium
+
         premium.clear_cache()
 
         for i in range(5):
-            config.save_guild_event(TEST_GUILD_ID, {
-                "short_key":               f"e_{i}",
-                "name":                    f"E{i}",
-                "timezone":                "America/New_York",
-                "default_time":            "12:00",
-                "announcement_blurb":      "x",
-                "schedule_type":           "manual",
-                "anchor_date":             "",
-                "interval_days":           0,
-                "draft_channel_id":        100,
-                "announcement_channel_id": 200,
-                "draft_time":              "12:00",
-                "five_min_warning":        1,
-                "active":                  1,
-            })
+            config.save_guild_event(
+                TEST_GUILD_ID,
+                {
+                    "short_key": f"e_{i}",
+                    "name": f"E{i}",
+                    "timezone": "America/New_York",
+                    "default_time": "12:00",
+                    "announcement_blurb": "x",
+                    "schedule_type": "manual",
+                    "anchor_date": "",
+                    "interval_days": 0,
+                    "draft_channel_id": 100,
+                    "announcement_channel_id": 200,
+                    "draft_time": "12:00",
+                    "five_min_warning": 1,
+                    "active": 1,
+                },
+            )
 
         cap = await premium.get_limit("events", TEST_GUILD_ID)
         events = config.get_guild_events(TEST_GUILD_ID, active_only=False)
@@ -69,6 +74,7 @@ class TestFreeTierHitsCaps:
     @pytest.mark.asyncio
     async def test_growth_metrics_capped_at_five(self, seeded_db):
         import config, premium
+
         premium.clear_cache()
 
         cap = await premium.get_limit("growth_metrics", TEST_GUILD_ID)
@@ -78,11 +84,15 @@ class TestFreeTierHitsCaps:
         # add button at 5 — but the storage layer accepts whatever you
         # give it (caps are enforced in UI to keep DB simple).
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": f"m{i}", "col": chr(ord("E") + i)} for i in range(5)],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
         cfg = config.get_growth_config(TEST_GUILD_ID)
@@ -91,30 +101,35 @@ class TestFreeTierHitsCaps:
     @pytest.mark.asyncio
     async def test_train_template_cap_one_for_free(self, seeded_db):
         import premium
+
         premium.clear_cache()
         assert await premium.get_limit("train_templates", TEST_GUILD_ID) == 1
 
     @pytest.mark.asyncio
     async def test_storm_template_cap_one_for_free(self, seeded_db):
         import premium
+
         premium.clear_cache()
         assert await premium.get_limit("storm_templates", TEST_GUILD_ID) == 1
 
     @pytest.mark.asyncio
     async def test_themes_cap_three_for_free(self, seeded_db):
         import premium
+
         premium.clear_cache()
         assert await premium.get_limit("themes", TEST_GUILD_ID) == 3
-        assert await premium.get_limit("tones",  TEST_GUILD_ID) == 3
+        assert await premium.get_limit("tones", TEST_GUILD_ID) == 3
 
     @pytest.mark.asyncio
     async def test_storm_log_window_four_for_free(self, seeded_db):
         import premium
+
         premium.clear_cache()
         assert await premium.get_limit("storm_log_recent", TEST_GUILD_ID) == 4
 
 
 # ── Scenario B — Premium goes past free caps ──────────────────────────────────
+
 
 class TestPremiumUnlocksAllCaps:
     """A premium guild (via PREMIUM_BYPASS_GUILD_IDS) gets `None` from every
@@ -125,6 +140,7 @@ class TestPremiumUnlocksAllCaps:
     async def test_premium_unlimited_events(self, seeded_db, monkeypatch):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
+
         importlib.reload(premium)
         try:
             assert await premium.get_limit("events", PREMIUM_TEST_GUILD_ID) is None
@@ -135,6 +151,7 @@ class TestPremiumUnlocksAllCaps:
     async def test_premium_train_templates_capped_at_ten(self, seeded_db, monkeypatch):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
+
         importlib.reload(premium)
         try:
             assert await premium.get_limit("train_templates", PREMIUM_TEST_GUILD_ID) == 10
@@ -145,6 +162,7 @@ class TestPremiumUnlocksAllCaps:
     async def test_premium_storm_templates_capped_at_ten(self, seeded_db, monkeypatch):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
+
         importlib.reload(premium)
         try:
             assert await premium.get_limit("storm_templates", PREMIUM_TEST_GUILD_ID) == 10
@@ -155,6 +173,7 @@ class TestPremiumUnlocksAllCaps:
     async def test_test_guild_id_env_var_unlocks_premium(self, monkeypatch, seeded_db):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(TEST_GUILD_ID))
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             assert await _premium.is_premium(TEST_GUILD_ID) is True
@@ -168,6 +187,7 @@ class TestPremiumUnlocksAllCaps:
     async def test_force_premium_env_var_unlocks_globally(self, monkeypatch, seeded_db):
         monkeypatch.setenv("FORCE_PREMIUM", "1")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             # Any random guild ID is premium.
@@ -179,6 +199,7 @@ class TestPremiumUnlocksAllCaps:
 
 
 # ── Cross-cutting: roster + DM + mention ──────────────────────────────────────
+
 
 class TestRosterDmMentionChain:
     """The full premium chain: roster sync writes a sheet, DM helpers look up
@@ -194,20 +215,25 @@ class TestRosterDmMentionChain:
         # The premium guild needs to be premium for member_sync — set the bypass env var.
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium as _premium
+
         importlib.reload(_premium)
         _premium.clear_cache()
 
         # Configure roster for the premium guild
         config.save_member_roster_config(
-            PREMIUM_TEST_GUILD_ID, enabled=1, tab_name="Roster",
+            PREMIUM_TEST_GUILD_ID,
+            enabled=1,
+            tab_name="Roster",
         )
 
         # Mock the underlying sheet to return a known roster row
         ws = MagicMock()
-        ws.get_all_values = MagicMock(return_value=[
-            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
-            ["888777", "alice_handle", "Alice", "", ""],
-        ])
+        ws.get_all_values = MagicMock(
+            return_value=[
+                ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+                ["888777", "alice_handle", "Alice", "", ""],
+            ]
+        )
         monkeypatch.setattr(config, "get_member_roster_sheet", lambda gid, tab: ws)
 
         # mention_or_name finds the ID and returns a Discord mention.
@@ -216,7 +242,7 @@ class TestRosterDmMentionChain:
         assert out == "<@888777>"
 
         # send_dm fetches the user and sends.
-        user      = AsyncMock()
+        user = AsyncMock()
         user.send = AsyncMock()
         bot.fetch_user = AsyncMock(return_value=user)
         ok = await dm.send_dm(bot, PREMIUM_TEST_GUILD_ID, "Alice", content="hi")
@@ -225,14 +251,16 @@ class TestRosterDmMentionChain:
 
     @pytest.mark.free_tier_only
     @pytest.mark.asyncio
-    async def test_full_chain_free_tier_skips_dm_and_returns_plain_name(self, seeded_db, monkeypatch):
+    async def test_full_chain_free_tier_skips_dm_and_returns_plain_name(
+        self, seeded_db, monkeypatch
+    ):
         import dm
         from unittest.mock import MagicMock
 
         # Even with a roster configured, free tier skips lookups.
         bot = MagicMock()
         out = await dm.mention_or_name(bot, TEST_GUILD_ID, "Alice")
-        assert out == "Alice"   # plain, no <@id>
+        assert out == "Alice"  # plain, no <@id>
 
         ok = await dm.send_dm(bot, TEST_GUILD_ID, "Alice", content="hi")
         assert ok is False

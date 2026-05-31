@@ -4,6 +4,7 @@ Guards #250: the baseline lookup used `path.as_posix()` (absolute path)
 against `git show HEAD:<path>`, which git rejects — collapsing the
 baseline to an empty set and flagging every historical bullet as new.
 """
+
 from __future__ import annotations
 
 import sys

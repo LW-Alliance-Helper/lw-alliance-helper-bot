@@ -35,6 +35,7 @@ import logging
 
 import discord
 
+from messages import CANCEL_BACKPEDAL_DEFAULT, DENY_NOT_OWNER, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def _strategy_helpers():
     load). The cost is a few function-call lookups per command; the
     benefit is no cog-import-order coupling between the two modules."""
     from storm_strategy import parse_power, format_power, canonical_zones_for
+
     return parse_power, format_power, canonical_zones_for
 
 
@@ -55,7 +57,7 @@ _RULE_TYPE_POWER_BAND = "power_band"
 _RULE_TYPE_PER_MEMBER = "per_member"
 
 _PER_MEMBER_SUB_TYPES = ("team", "zone")
-_TEAMS                = ("A", "B")
+_TEAMS = ("A", "B")
 
 
 # ── Subject resolution (#136) ────────────────────────────────────────────────
@@ -126,7 +128,8 @@ def _resolve_subject(
 
 
 def _match_member_by_display_name(
-    guild: discord.Guild, name: str,
+    guild: discord.Guild,
+    name: str,
 ) -> discord.Member | None:
     """Case-insensitive single-match lookup against `guild.members`.
     Bots are excluded. Returns None when zero matches OR more than one
@@ -152,6 +155,7 @@ def _match_member_by_display_name(
 
 def _rules_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     cfg = config.get_structured_storm_config(guild_id, event_type)
     return cfg.get("member_rules_tab") or config.default_structured_tab(
         event_type, "member_rules_tab"
@@ -162,6 +166,7 @@ def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
     """Returns the worksheet, creating it (with header) if missing.
     Returns None if no Sheet is configured."""
     import config
+
     sh = config.get_spreadsheet(guild_id)
     if sh is None:
         return None
@@ -169,22 +174,27 @@ def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
     if not tab_name:
         return None
     return config.get_or_create_worksheet(
-        sh, tab_name, header_row=_HEADER, rows=500,
+        sh,
+        tab_name,
+        header_row=_HEADER,
+        rows=500,
         cols=max(8, len(_HEADER)),
     )
 
 
 class Rule:
     """One member rule row. Discriminated by `rule_type`."""
+
     __slots__ = ("rule_type", "subject", "sub_type", "value", "notes")
 
-    def __init__(self, rule_type: str, subject: str, value: str,
-                 sub_type: str = "", notes: str = ""):
+    def __init__(
+        self, rule_type: str, subject: str, value: str, sub_type: str = "", notes: str = ""
+    ):
         self.rule_type = rule_type
-        self.subject   = subject
-        self.sub_type  = sub_type or ""
-        self.value     = value
-        self.notes     = notes or ""
+        self.subject = subject
+        self.sub_type = sub_type or ""
+        self.value = value
+        self.notes = notes or ""
 
     def render_label(self, *, guild=None) -> str:
         """Human-readable single-line summary for embed listings.
@@ -263,8 +273,9 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
     try:
         values = ws.get_all_values()
     except Exception as e:
-        logger.warning("[STORM RULES] list_rules failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM RULES] list_rules failed for guild=%s event=%s: %s", guild_id, event_type, e
+        )
         return []
     if not values:
         return []
@@ -277,11 +288,11 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         except ValueError:
             return -1
 
-    type_col    = _col("Rule Type")
+    type_col = _col("Rule Type")
     subject_col = _col("Subject")
     subtype_col = _col("Sub-Type")
-    value_col   = _col("Value")
-    notes_col   = _col("Notes")
+    value_col = _col("Value")
+    notes_col = _col("Notes")
 
     def _cell(row: list[str], idx: int) -> str:
         if idx < 0 or idx >= len(row):
@@ -313,18 +324,24 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         # insensitive equality against the preset's ZoneRow.zone (now
         # display names post-#178), so a stale `s1_power_tower` value
         # would silently no-op without this translation.
-        if _translate_legacy_cs_zone is not None and value and (
-            rule_type == _RULE_TYPE_POWER_BAND
-            or (rule_type == _RULE_TYPE_PER_MEMBER and sub_type == "zone")
+        if (
+            _translate_legacy_cs_zone is not None
+            and value
+            and (
+                rule_type == _RULE_TYPE_POWER_BAND
+                or (rule_type == _RULE_TYPE_PER_MEMBER and sub_type == "zone")
+            )
         ):
             value = _translate_legacy_cs_zone(value)
-        rules.append(Rule(
-            rule_type=rule_type,
-            subject=_cell(row, subject_col),
-            sub_type=sub_type,
-            value=value,
-            notes=_cell(row, notes_col),
-        ))
+        rules.append(
+            Rule(
+                rule_type=rule_type,
+                subject=_cell(row, subject_col),
+                sub_type=sub_type,
+                value=value,
+                notes=_cell(row, notes_col),
+            )
+        )
     return rules
 
 
@@ -335,11 +352,9 @@ def _rows_equivalent(rule: Rule, candidate: Rule) -> bool:
         return False
     if rule.rule_type == _RULE_TYPE_POWER_BAND:
         # power_band uniqueness keyed on (threshold, zone)
-        return (rule.subject == candidate.subject
-                and rule.value.lower() == candidate.value.lower())
+        return rule.subject == candidate.subject and rule.value.lower() == candidate.value.lower()
     # per_member uniqueness keyed on (member, sub_type)
-    return (rule.subject.lower() == candidate.subject.lower()
-            and rule.sub_type == candidate.sub_type)
+    return rule.subject.lower() == candidate.subject.lower() and rule.sub_type == candidate.sub_type
 
 
 def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
@@ -352,15 +367,16 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
 
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
-        return False, "Your Google Sheet isn't configured. Run setup first."
+        return False, NOT_SET_UP
     try:
         ws.append_row(
             [rule.rule_type, rule.subject, rule.sub_type, rule.value, rule.notes],
             value_input_option="RAW",
         )
     except Exception as e:
-        logger.warning("[STORM RULES] save_rule failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM RULES] save_rule failed for guild=%s event=%s: %s", guild_id, event_type, e
+        )
         return False, "Couldn't write to the Sheet (see logs for details)."
     return True, "Rule saved."
 
@@ -387,8 +403,12 @@ def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
     try:
         row_count = len(ws.get_all_values())
     except Exception as e:
-        logger.warning("[STORM RULES] delete row-count read failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM RULES] delete row-count read failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
         return False
 
     # Sheet is 1-indexed; row 1 is the header, row (2 + index) is the
@@ -400,8 +420,9 @@ def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
     try:
         ws.delete_rows(target_row)
     except Exception as e:
-        logger.warning("[STORM RULES] delete write failed for guild=%s event=%s: %s",
-                       guild_id, event_type, e)
+        logger.warning(
+            "[STORM RULES] delete write failed for guild=%s event=%s: %s", guild_id, event_type, e
+        )
         return False
     return True
 
@@ -413,6 +434,7 @@ async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
     """Return True iff the caller is admin/leadership. Sends the standard
     denial ephemeral on the False branch."""
     from storm_permissions import is_leader_or_admin, deny_non_leader
+
     if is_leader_or_admin(interaction):
         return True
     await deny_non_leader(interaction)
@@ -424,20 +446,28 @@ class _RulesListView(discord.ui.View):
     limits Views to 25 components; we paginate at 20 rules per page (4
     rows of 5 clear buttons)."""
 
-    def __init__(self, guild_id: int, user_id: int, event_type: str,
-                 rules: list[Rule], page: int = 0, per_page: int = 20,
-                 *, guild: discord.Guild | None = None):
+    def __init__(
+        self,
+        guild_id: int,
+        user_id: int,
+        event_type: str,
+        rules: list[Rule],
+        page: int = 0,
+        per_page: int = 20,
+        *,
+        guild: discord.Guild | None = None,
+    ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
-        self.user_id  = user_id
+        self.user_id = user_id
         self.event_type = event_type
-        self.rules    = rules
-        self.page     = page
+        self.rules = rules
+        self.page = page
         self.per_page = per_page
         # Live Guild handle so Rule.render_label can resolve Discord-ID
         # subjects to their current display name. Falls back gracefully
         # to the raw subject when None.
-        self.guild    = guild
+        self.guild = guild
         self.message: discord.Message | None = None
         self._build_buttons()
 
@@ -461,7 +491,7 @@ class _RulesListView(discord.ui.View):
 
     def page_slice(self) -> list[tuple[int, Rule]]:
         start = self.page * self.per_page
-        return list(enumerate(self.rules))[start:start + self.per_page]
+        return list(enumerate(self.rules))[start : start + self.per_page]
 
     def render_embed(self) -> discord.Embed:
         label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
@@ -496,21 +526,26 @@ class _RulesListView(discord.ui.View):
         # state — the list view is the canonical place officers reach
         # for to manage rules, so the add affordance lives here too.
         add_btn = discord.ui.Button(
-            label="➕ Add rule", style=discord.ButtonStyle.primary, row=4,
+            label="➕ Add rule",
+            style=discord.ButtonStyle.primary,
+            row=4,
         )
 
         async def _on_add(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the command owner can add rules from this list.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             picker = _AddRuleTypePickerView(
-                event_type=self.event_type, owner_id=self.user_id,
+                event_type=self.event_type,
+                owner_id=self.user_id,
             )
             await inter.response.send_message(
-                "➕ Pick the rule type to add.", view=picker, ephemeral=True,
+                "➕ Pick the rule type to add.",
+                view=picker,
+                ephemeral=True,
             )
             try:
                 picker.message = await inter.original_response()
@@ -522,18 +557,23 @@ class _RulesListView(discord.ui.View):
 
         if self.total_pages > 1:
             prev_btn = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary,
-                disabled=self.page == 0, row=4,
+                label="◀ Prev",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page == 0,
+                row=4,
             )
             next_btn = discord.ui.Button(
-                label="Next ▶", style=discord.ButtonStyle.secondary,
-                disabled=self.page >= self.total_pages - 1, row=4,
+                label="Next ▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page >= self.total_pages - 1,
+                row=4,
             )
 
             async def _prev(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the command owner can paginate.", ephemeral=True,
+                        DENY_NOT_OWNER,
+                        ephemeral=True,
                     )
                     return
                 self.page = max(0, self.page - 1)
@@ -543,7 +583,8 @@ class _RulesListView(discord.ui.View):
             async def _next(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the command owner can paginate.", ephemeral=True,
+                        DENY_NOT_OWNER,
+                        ephemeral=True,
                     )
                     return
                 self.page = min(self.total_pages - 1, self.page + 1)
@@ -574,7 +615,8 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.parent = parent
 
         pb_btn = discord.ui.Button(
-            label="⚡ Add a power-band rule", style=discord.ButtonStyle.primary,
+            label="⚡ Add a power-band rule",
+            style=discord.ButtonStyle.primary,
         )
         pb_btn.callback = self._on_power_band
         self.add_item(pb_btn)
@@ -587,7 +629,8 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.add_item(pm_btn)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
         )
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
@@ -595,7 +638,7 @@ class _AddRuleTypePickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened the list can add rules.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -647,7 +690,8 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled. No rule added.", view=self,
+                content=CANCEL_BACKPEDAL_DEFAULT,
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -666,10 +710,11 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
     """Build a click callback for one Clear-rule button. Pulled out as a
     function so each iteration of the for-loop captures `idx` by value
     rather than by reference."""
+
     async def _cb(inter: discord.Interaction):
         if inter.user.id != view.user_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can clear rules from this list.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -677,7 +722,10 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
         # a network round-trip.
         await inter.response.defer()
         ok = await asyncio.to_thread(
-            delete_rule_at, view.guild_id, view.event_type, idx,
+            delete_rule_at,
+            view.guild_id,
+            view.event_type,
+            idx,
         )
         if not ok:
             await inter.followup.send(
@@ -686,7 +734,9 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
             )
             return
         view.rules = await asyncio.to_thread(
-            list_rules, view.guild_id, view.event_type,
+            list_rules,
+            view.guild_id,
+            view.event_type,
         )
         if view.page >= view.total_pages:
             view.page = max(0, view.total_pages - 1)
@@ -694,10 +744,12 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
         # We deferred above, so edit the deferred response in place.
         try:
             await inter.edit_original_response(
-                embed=view.render_embed(), view=view,
+                embed=view.render_embed(),
+                view=view,
             )
         except discord.HTTPException:
             pass
+
     return _cb
 
 
@@ -716,7 +768,9 @@ async def open_member_rule_list(
         return
     # gspread off the event loop.
     rules = await asyncio.to_thread(
-        list_rules, interaction.guild_id, event_type,
+        list_rules,
+        interaction.guild_id,
+        event_type,
     )
     if member_filter:
         # Filter matches either the raw subject (works for non-Discord
@@ -735,8 +789,10 @@ async def open_member_rule_list(
                 filtered.append(r)
         rules = filtered
     view = _RulesListView(
-        interaction.guild_id, interaction.user.id,
-        event_type, rules,
+        interaction.guild_id,
+        interaction.user.id,
+        event_type,
+        rules,
         guild=interaction.guild,
     )
     if interaction.response.is_done():
@@ -807,21 +863,23 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
-        ok, msg = await asyncio.to_thread(save_rule,
-            interaction.guild_id, self.event_type,
-            Rule(rule_type=_RULE_TYPE_POWER_BAND,
-                 subject=str(int(n)), value=self.zone),
+        ok, msg = await asyncio.to_thread(
+            save_rule,
+            interaction.guild_id,
+            self.event_type,
+            Rule(rule_type=_RULE_TYPE_POWER_BAND, subject=str(int(n)), value=self.zone),
         )
         if ok:
             await interaction.response.send_message(
-                f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
-                f"**{self.zone}**.\n"
+                f"✅ Saved rule for **{self.zone}**: members ≥ "
+                f"{format_power(int(n))} are eligible.\n"
                 f"Add more rules later via `{hub_cmd}` → **{HUB_BTN_RULES}**.",
                 ephemeral=True,
             )
         else:
             await interaction.response.send_message(
-                f"⚠️ {msg}", ephemeral=True,
+                f"⚠️ {msg}",
+                ephemeral=True,
             )
 
 
@@ -848,7 +906,8 @@ class InlinePowerBandView(discord.ui.View):
         zones = canonical_zones_for(self.event_type)
         options = [
             discord.SelectOption(
-                label=z[:100], value=z[:100],
+                label=z[:100],
+                value=z[:100],
                 default=(z == self.selected_zone),
             )
             for z in zones[:25]
@@ -856,15 +915,18 @@ class InlinePowerBandView(discord.ui.View):
         zone_select = discord.ui.Select(
             placeholder=(
                 f"Pick a zone…  (current: {self.selected_zone})"
-                if self.selected_zone else "Pick a zone…"
+                if self.selected_zone
+                else "Pick a zone…"
             ),
-            min_values=1, max_values=1, options=options,
+            min_values=1,
+            max_values=1,
+            options=options,
         )
 
         async def _on_zone(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -887,13 +949,14 @@ class InlinePowerBandView(discord.ui.View):
         async def _on_set(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             if not self.selected_zone:
                 await inter.response.send_message(
-                    "⚠️ Pick a zone first.", ephemeral=True,
+                    "⚠️ Pick a zone first.",
+                    ephemeral=True,
                 )
                 return
             await inter.response.send_modal(
@@ -913,13 +976,14 @@ class InlinePowerBandView(discord.ui.View):
         self.add_item(set_btn)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
         )
 
         async def _on_cancel(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -927,7 +991,8 @@ class InlinePowerBandView(discord.ui.View):
                 child.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="↩️ Cancelled. No rule saved.", view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT,
+                    view=self,
                 )
             except discord.HTTPException:
                 pass

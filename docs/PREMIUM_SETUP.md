@@ -172,9 +172,6 @@ When you're ready to flip the switch for real users:
 
 ## What existing servers see when Premium goes live
 
-> This section also lives in [`docs/MIGRATION.md`](MIGRATION.md) for
-> linking from announcements.
-
 **Nothing changes by default.** Every existing alliance keeps every
 feature they had on the day Premium launched. The hard caps that are
 *new* (e.g. 5 events on free) are higher than what most alliances

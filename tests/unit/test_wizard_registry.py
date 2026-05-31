@@ -21,7 +21,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from wizard_registry import (
-    register, unregister, cancel_user, wait_view_or_cancel,
+    register,
+    unregister,
+    cancel_user,
+    wait_view_or_cancel,
     expire_view_message,
     safe_edit_response,
 )
@@ -34,7 +37,7 @@ class _FakeView:
 
     def __init__(self):
         self._stop_event = asyncio.Event()
-        self.confirmed   = False
+        self.confirmed = False
         # Note: cancelled is set by wait_view_or_cancel itself.
 
     async def wait(self):
@@ -51,18 +54,20 @@ class _FakeView:
 
 # ── wait_view_or_cancel ───────────────────────────────────────────────────────
 
-class TestWaitViewOrCancel:
 
+class TestWaitViewOrCancel:
     @pytest.mark.asyncio
     async def test_returns_normally_when_view_confirmed(self):
         """View confirmed before cancel → cancelled stays False."""
-        view  = _FakeView()
+        view = _FakeView()
         event = asyncio.Event()
+
         # Confirm the view after a short delay, simulating the user
         # clicking a button.
         async def _confirm():
             await asyncio.sleep(0.01)
             view.confirm()
+
         asyncio.create_task(_confirm())
         await wait_view_or_cancel(view, event)
         assert view.confirmed is True
@@ -72,11 +77,13 @@ class TestWaitViewOrCancel:
     async def test_cancel_event_sets_cancelled_and_stops_view(self):
         """If cancel fires first, view.cancelled becomes True AND the
         view is stopped so its own wait() unblocks."""
-        view  = _FakeView()
+        view = _FakeView()
         event = asyncio.Event()
+
         async def _cancel():
             await asyncio.sleep(0.01)
             event.set()
+
         asyncio.create_task(_cancel())
         await wait_view_or_cancel(view, event)
         assert view.cancelled is True
@@ -90,9 +97,11 @@ class TestWaitViewOrCancel:
         stays False and the view runs to completion as if wait() were
         called bare."""
         view = _FakeView()
+
         async def _confirm():
             await asyncio.sleep(0.01)
             view.confirm()
+
         asyncio.create_task(_confirm())
         await wait_view_or_cancel(view, None)
         assert view.confirmed is True
@@ -102,11 +111,13 @@ class TestWaitViewOrCancel:
     async def test_cancelled_attribute_initialised_even_on_normal_path(self):
         """Wizards check `if view.cancelled: return`; the attribute
         must exist after every call, not just the cancel path."""
-        view  = _FakeView()
+        view = _FakeView()
         event = asyncio.Event()
+
         async def _confirm():
             await asyncio.sleep(0.01)
             view.confirm()
+
         asyncio.create_task(_confirm())
         await wait_view_or_cancel(view, event)
         # The wizard is allowed to read view.cancelled — it must exist.
@@ -115,6 +126,7 @@ class TestWaitViewOrCancel:
 
 
 # ── End-to-end with cancel_user ───────────────────────────────────────────────
+
 
 class TestCancelUserDrivesViewWait:
     """Verify the full flow: register cancel event → start view wait →
@@ -126,9 +138,11 @@ class TestCancelUserDrivesViewWait:
         cancel_event = register(user_id)
         try:
             view = _FakeView()
+
             async def _cancel_after_delay():
                 await asyncio.sleep(0.01)
                 cancel_user(user_id)
+
             asyncio.create_task(_cancel_after_delay())
             await wait_view_or_cancel(view, cancel_event)
             assert view.cancelled is True
@@ -139,6 +153,7 @@ class TestCancelUserDrivesViewWait:
 
 
 # ── expire_view_message ───────────────────────────────────────────────────────
+
 
 class TestExpireViewMessage:
     """When a View's timeout fires, expire_view_message strips the
@@ -151,7 +166,7 @@ class TestExpireViewMessage:
     async def test_strips_view_and_appends_notice_with_command(self):
         msg = MagicMock()
         msg.content = "📣 Original draft body"
-        msg.edit    = AsyncMock()
+        msg.edit = AsyncMock()
 
         await expire_view_message(msg, command_hint="/events")
 
@@ -168,7 +183,7 @@ class TestExpireViewMessage:
     async def test_omits_command_suffix_when_hint_empty(self):
         msg = MagicMock()
         msg.content = "draft"
-        msg.edit    = AsyncMock()
+        msg.edit = AsyncMock()
 
         await expire_view_message(msg)  # no command_hint
 
@@ -184,7 +199,9 @@ class TestExpireViewMessage:
         msg = MagicMock()
         msg.edit = AsyncMock()
         # Simulate first run already happened.
-        msg.content = "draft\n\n⏰ *The actions for this have timed out. Use /events to re-initiate.*"
+        msg.content = (
+            "draft\n\n⏰ *The actions for this have timed out. Use /events to re-initiate.*"
+        )
 
         await expire_view_message(msg, command_hint="/events")
 
@@ -203,7 +220,7 @@ class TestExpireViewMessage:
         it so the bot's task loop doesn't crash."""
         msg = MagicMock()
         msg.content = "draft"
-        msg.edit    = AsyncMock(side_effect=RuntimeError("message gone"))
+        msg.edit = AsyncMock(side_effect=RuntimeError("message gone"))
 
         # Should not raise.
         await expire_view_message(msg, command_hint="/events")
@@ -211,6 +228,7 @@ class TestExpireViewMessage:
 
 
 # ── safe_edit_response ────────────────────────────────────────────────────────
+
 
 def _make_not_found() -> discord.NotFound:
     """Build a discord.NotFound with code 10062 (Unknown interaction)."""
@@ -229,7 +247,7 @@ class TestSafeEditResponse:
         no fallback runs."""
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
-        inter.message.edit          = AsyncMock()
+        inter.message.edit = AsyncMock()
         view = MagicMock()
         await safe_edit_response(inter, content="hi", view=view)
         inter.response.edit_message.assert_awaited_once_with(content="hi", view=view)
@@ -242,7 +260,7 @@ class TestSafeEditResponse:
         self.stop() can run unconditionally."""
         inter = MagicMock()
         inter.response.edit_message = AsyncMock(side_effect=_make_not_found())
-        inter.message.edit          = AsyncMock()
+        inter.message.edit = AsyncMock()
         view = MagicMock()
         await safe_edit_response(inter, content="hi", view=view)
         inter.response.edit_message.assert_awaited_once()
@@ -254,7 +272,8 @@ class TestSafeEditResponse:
         the helper must not propagate — that would leave the wizard hanging."""
         inter = MagicMock()
         inter.response.edit_message = AsyncMock(side_effect=_make_not_found())
-        resp = MagicMock(); resp.status = 500
+        resp = MagicMock()
+        resp.status = 500
         inter.message.edit = AsyncMock(
             side_effect=discord.HTTPException(resp, {"message": "boom", "code": 0})
         )

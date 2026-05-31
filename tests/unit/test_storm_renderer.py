@@ -27,10 +27,8 @@ def test_render_returns_png_bytes():
     roster = sr.RosterData(
         title="Desert Storm — Standard — Team A — 2026-05-18",
         zones=[
-            sr.RosterZone(name="Power Tower",  max_players=4,
-                          members=["Alice", "Bob"]),
-            sr.RosterZone(name="Nuclear Silo", max_players=4,
-                          members=["Carol"]),
+            sr.RosterZone(name="Power Tower", max_players=4, members=["Alice", "Bob"]),
+            sr.RosterZone(name="Nuclear Silo", max_players=4, members=["Carol"]),
         ],
         subs=["Dan", "Erin"],
     )
@@ -65,10 +63,14 @@ def test_render_includes_paired_subs():
     roster = sr.RosterData(
         title="Paired demo",
         event_type="DS",
-        zones=[sr.RosterZone(
-            name="Nuclear Silo", canonical_zone="Nuclear Silo",
-            max_players=2, members=["Alice", "Bob"],
-        )],
+        zones=[
+            sr.RosterZone(
+                name="Nuclear Silo",
+                canonical_zone="Nuclear Silo",
+                max_players=2,
+                members=["Alice", "Bob"],
+            )
+        ],
         paired_subs={"Alice": "Carol"},
     )
     png = sr.render(roster)
@@ -117,8 +119,14 @@ def test_render_closed_zero_cap_zone_survives():
 
 
 class _FakeMember:
-    def __init__(self, name: str, key: str, power: int | None = 0,
-                 discord_id: str = "", not_on_discord: bool = False):
+    def __init__(
+        self,
+        name: str,
+        key: str,
+        power: int | None = 0,
+        discord_id: str = "",
+        not_on_discord: bool = False,
+    ):
         self.name = name
         self.key = key
         self.power = power
@@ -128,22 +136,37 @@ class _FakeMember:
     @property
     def as_dict(self):
         return {
-            "key": self.key, "name": self.name, "discord_id": self.discord_id,
-            "power": self.power, "not_on_discord": self.not_on_discord,
+            "key": self.key,
+            "name": self.name,
+            "discord_id": self.discord_id,
+            "power": self.power,
+            "not_on_discord": self.not_on_discord,
         }
 
 
 def _make_session(team="A", *, members=None, paired_subs=None, sub_mode="pool"):
     import storm_roster_builder as srb
+
     preset_zones = [
-        ss.ZoneRow(zone="Power Tower",  max_players=2, min_power_a=300_000_000, min_power_b=180_000_000),
-        ss.ZoneRow(zone="Nuclear Silo", max_players=2, min_power_a=250_000_000, min_power_b=150_000_000),
+        ss.ZoneRow(
+            zone="Power Tower", max_players=2, min_power_a=300_000_000, min_power_b=180_000_000
+        ),
+        ss.ZoneRow(
+            zone="Nuclear Silo", max_players=2, min_power_a=250_000_000, min_power_b=150_000_000
+        ),
     ]
     preset = ss.PresetBuffer(name="Standard", event_type="DS", zones=preset_zones)
     sess = srb.RosterBuilderSession(
-        guild_id=1, user_id=42, event_type="DS", team=team,
-        preset=preset, members=members or {}, per_member_rules=[],
-        power_band_rules=[], event_date="2026-05-18", sub_mode=sub_mode,
+        guild_id=1,
+        user_id=42,
+        event_type="DS",
+        team=team,
+        preset=preset,
+        members=members or {},
+        per_member_rules=[],
+        power_band_rules=[],
+        event_date="2026-05-18",
+        sub_mode=sub_mode,
     )
     if paired_subs:
         sess.paired_subs = paired_subs
@@ -174,11 +197,13 @@ class TestRosterFromSession:
     def test_paired_subs_carried_through(self):
         members = {
             "1001": _FakeMember("Alice", "1001").as_dict,
-            "1002": _FakeMember("Bob",   "1002").as_dict,
+            "1002": _FakeMember("Bob", "1002").as_dict,
         }
         sess = _make_session(
-            team="A", members=members,
-            paired_subs={"1001": "1002"}, sub_mode="paired",
+            team="A",
+            members=members,
+            paired_subs={"1001": "1002"},
+            sub_mode="paired",
         )
         sess.assignments["Power Tower"].append("1001")
         data = sr.roster_from_session(sess)
@@ -194,34 +219,48 @@ class TestRosterFromSession:
         empty hole where the zone should be."""
         import storm_strategy as ss
         import storm_roster_builder as srb
+
         members = {
             "1001": _FakeMember("Alice", "1001").as_dict,
         }
         # Phase-aware preset where Field Hospital III is closed for
         # every phase (max_phase1 + max_phase2 both default to 0).
         zones = [
-            ss.ZoneRow(zone="Info Center", max_players=0,
-                       max_phase1=2, max_phase2=1,
-                       min_power_a=200_000_000, min_power_b=100_000_000),
-            ss.ZoneRow(zone="Field Hospital III", max_players=0,
-                       max_phase1=0, max_phase2=0,
-                       min_power_a=0, min_power_b=0),
+            ss.ZoneRow(
+                zone="Info Center",
+                max_players=0,
+                max_phase1=2,
+                max_phase2=1,
+                min_power_a=200_000_000,
+                min_power_b=100_000_000,
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital III",
+                max_players=0,
+                max_phase1=0,
+                max_phase2=0,
+                min_power_a=0,
+                min_power_b=0,
+            ),
         ]
-        preset = ss.PresetBuffer(name="Closed", event_type="DS",
-                                 zones=zones, phase_count=2)
+        preset = ss.PresetBuffer(name="Closed", event_type="DS", zones=zones, phase_count=2)
         sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[], sub_mode="pool",
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
+            sub_mode="pool",
         )
         sess.event_date = "2026-05-18"
         data = sr.roster_from_session(sess)
         # Field Hospital III appears as a `canonical_zone` key in the
         # roster.zones list, with cap=0 and no members, for every
         # phase the preset declares.
-        fh3_blocks = [
-            z for z in data.zones if z.canonical_zone == "Field Hospital III"
-        ]
+        fh3_blocks = [z for z in data.zones if z.canonical_zone == "Field Hospital III"]
         assert len(fh3_blocks) == 2
         for b in fh3_blocks:
             assert b.max_players == 0
@@ -230,24 +269,33 @@ class TestRosterFromSession:
     def test_pool_subs_carried_through(self):
         members = {
             "1003": _FakeMember("Carol", "1003").as_dict,
-            "1004": _FakeMember("Dan",   "1004").as_dict,
+            "1004": _FakeMember("Dan", "1004").as_dict,
         }
         sess = _make_session(team="A", members=members, sub_mode="pool")
         sess.subs = ["1003", "1004"]
         data = sr.roster_from_session(sess)
         assert "Carol" in data.subs
-        assert "Dan"   in data.subs
+        assert "Dan" in data.subs
 
     def test_cs_faction_in_title(self):
         import storm_roster_builder as srb
+
         preset = ss.PresetBuffer(
-            name="Rulebringers Plan", event_type="CS", faction="Rulebringers",
+            name="Rulebringers Plan",
+            event_type="CS",
+            faction="Rulebringers",
             zones=[ss.ZoneRow(zone="Z", max_players=4)],
         )
         sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS", team="",
-            preset=preset, members={}, per_member_rules=[],
-            power_band_rules=[], event_date="2026-05-18",
+            guild_id=1,
+            user_id=42,
+            event_type="CS",
+            team="",
+            preset=preset,
+            members={},
+            per_member_rules=[],
+            power_band_rules=[],
+            event_date="2026-05-18",
         )
         data = sr.roster_from_session(sess)
         assert "Rulebringers" in data.title
@@ -260,6 +308,7 @@ class TestRendererPillowMissing:
     def test_render_raises_runtime_error_when_pillow_missing(self):
         import sys
         from unittest.mock import patch
+
         # Map PIL + every submodule we import inside render to None.
         # Pillow's submodules are imported lazily in `render()`; patching
         # `PIL` alone is insufficient because `from PIL import X` resolves
@@ -284,16 +333,24 @@ class TestMapBasedRender:
 
     def test_ds_render_produces_png(self):
         roster = sr.RosterData(
-            title="DS demo", event_type="DS",
-            preset_name="Standard", team_label="Team A",
+            title="DS demo",
+            event_type="DS",
+            preset_name="Standard",
+            team_label="Team A",
             event_date_label="May 18 2026",
             zones=[
-                sr.RosterZone(name="Nuclear Silo",
-                              canonical_zone="Nuclear Silo",
-                              max_players=4, members=["Alice", "Bob"]),
-                sr.RosterZone(name="Info Center",
-                              canonical_zone="Info Center",
-                              max_players=4, members=["Carol"]),
+                sr.RosterZone(
+                    name="Nuclear Silo",
+                    canonical_zone="Nuclear Silo",
+                    max_players=4,
+                    members=["Alice", "Bob"],
+                ),
+                sr.RosterZone(
+                    name="Info Center",
+                    canonical_zone="Info Center",
+                    max_players=4,
+                    members=["Carol"],
+                ),
             ],
             subs=["Dan"],
         )
@@ -302,21 +359,27 @@ class TestMapBasedRender:
         # Sanity: the DS layout canvas is wider than tall after
         # SCALE-up — distinguishable from a CS render.
         from PIL import Image
+
         img = Image.open(io.BytesIO(png))
         assert img.size[0] > img.size[1]
 
     def test_cs_render_produces_png_with_taller_canvas(self):
         roster = sr.RosterData(
-            title="CS demo", event_type="CS",
-            preset_name="Rulebringers Plan", team_label="Rulebringers",
+            title="CS demo",
+            event_type="CS",
+            preset_name="Rulebringers Plan",
+            team_label="Rulebringers",
             event_date_label="May 18 2026",
             zones=[
-                sr.RosterZone(name="Power Tower",
-                              canonical_zone="Power Tower",
-                              max_players=4, members=["Alice"]),
-                sr.RosterZone(name="Virus Lab",
-                              canonical_zone="Virus Lab",
-                              max_players=4, members=["Bob"]),
+                sr.RosterZone(
+                    name="Power Tower",
+                    canonical_zone="Power Tower",
+                    max_players=4,
+                    members=["Alice"],
+                ),
+                sr.RosterZone(
+                    name="Virus Lab", canonical_zone="Virus Lab", max_players=4, members=["Bob"]
+                ),
             ],
         )
         png = sr.render(roster)
@@ -324,6 +387,7 @@ class TestMapBasedRender:
         # CS canvas is taller-relative to DS because the 3-stage
         # layout needs the extra vertical room.
         from PIL import Image
+
         img = Image.open(io.BytesIO(png))
         # CS svg post-#227 is 1235.67 wide x 938.44 tall — aspect
         # ratio ≈ 1.32. DS is 1107.6 x 764.3 — aspect ≈ 1.45. CS
@@ -336,14 +400,21 @@ class TestMapBasedRender:
         # the old text-canvas would print whatever string came in; the
         # map renderer drops zones it can't place.
         roster = sr.RosterData(
-            title="Typo zone", event_type="DS",
+            title="Typo zone",
+            event_type="DS",
             zones=[
-                sr.RosterZone(name="Misspelled Zone",
-                              canonical_zone="Misspelled Zone",
-                              max_players=4, members=["Alice"]),
-                sr.RosterZone(name="Nuclear Silo",
-                              canonical_zone="Nuclear Silo",
-                              max_players=4, members=["Bob"]),
+                sr.RosterZone(
+                    name="Misspelled Zone",
+                    canonical_zone="Misspelled Zone",
+                    max_players=4,
+                    members=["Alice"],
+                ),
+                sr.RosterZone(
+                    name="Nuclear Silo",
+                    canonical_zone="Nuclear Silo",
+                    max_players=4,
+                    members=["Bob"],
+                ),
             ],
         )
         png = sr.render(roster)
@@ -354,17 +425,24 @@ class TestMapBasedRender:
         # renderer groups them so the map slot for Info Center renders
         # once with both phases' members stacked inside the pill.
         roster = sr.RosterData(
-            title="Phased demo", event_type="DS",
+            title="Phased demo",
+            event_type="DS",
             phase_count=2,
             zones=[
-                sr.RosterZone(name="Stage 1 — Info Center",
-                              canonical_zone="Info Center",
-                              max_players=4, members=["Alice", "Bob"],
-                              phase=1),
-                sr.RosterZone(name="Stage 2 — Info Center",
-                              canonical_zone="Info Center",
-                              max_players=2, members=["Carol"],
-                              phase=2),
+                sr.RosterZone(
+                    name="Stage 1 — Info Center",
+                    canonical_zone="Info Center",
+                    max_players=4,
+                    members=["Alice", "Bob"],
+                    phase=1,
+                ),
+                sr.RosterZone(
+                    name="Stage 2 — Info Center",
+                    canonical_zone="Info Center",
+                    max_players=2,
+                    members=["Carol"],
+                    phase=2,
+                ),
             ],
         )
         png = sr.render(roster)
@@ -372,21 +450,32 @@ class TestMapBasedRender:
 
     def test_three_phase_cs_render(self):
         roster = sr.RosterData(
-            title="3-phase CS", event_type="CS",
-            phase_count=3, team_label="Rulebringers",
+            title="3-phase CS",
+            event_type="CS",
+            phase_count=3,
+            team_label="Rulebringers",
             zones=[
-                sr.RosterZone(name="Stage 1 — Power Tower",
-                              canonical_zone="Power Tower",
-                              max_players=4, members=["A", "B"],
-                              phase=1),
-                sr.RosterZone(name="Stage 2 — Power Tower",
-                              canonical_zone="Power Tower",
-                              max_players=2, members=["C"],
-                              phase=2),
-                sr.RosterZone(name="Stage 3 — Power Tower",
-                              canonical_zone="Power Tower",
-                              max_players=2, members=["D"],
-                              phase=3),
+                sr.RosterZone(
+                    name="Stage 1 — Power Tower",
+                    canonical_zone="Power Tower",
+                    max_players=4,
+                    members=["A", "B"],
+                    phase=1,
+                ),
+                sr.RosterZone(
+                    name="Stage 2 — Power Tower",
+                    canonical_zone="Power Tower",
+                    max_players=2,
+                    members=["C"],
+                    phase=2,
+                ),
+                sr.RosterZone(
+                    name="Stage 3 — Power Tower",
+                    canonical_zone="Power Tower",
+                    max_players=2,
+                    members=["D"],
+                    phase=3,
+                ),
             ],
         )
         png = sr.render(roster)
@@ -399,18 +488,24 @@ class TestMapBasedRender:
         # shipped before its art did. (All DS slots have art today —
         # this is a defensive guard for the next zone the game adds.)
         from unittest.mock import patch
+
         patched = dict(sr._DS_ICON_FILES)
         patched["Arsenal"] = None
         patched["Mercenary Factory"] = None
         with patch.object(sr, "_DS_ICON_FILES", patched):
             roster = sr.RosterData(
-                title="Missing icon", event_type="DS",
+                title="Missing icon",
+                event_type="DS",
                 zones=[
-                    sr.RosterZone(name="Arsenal", canonical_zone="Arsenal",
-                                  max_players=4, members=["Alice"]),
-                    sr.RosterZone(name="Mercenary Factory",
-                                  canonical_zone="Mercenary Factory",
-                                  max_players=4, members=["Bob"]),
+                    sr.RosterZone(
+                        name="Arsenal", canonical_zone="Arsenal", max_players=4, members=["Alice"]
+                    ),
+                    sr.RosterZone(
+                        name="Mercenary Factory",
+                        canonical_zone="Mercenary Factory",
+                        max_players=4,
+                        members=["Bob"],
+                    ),
                 ],
             )
             png = sr.render(roster)
@@ -475,6 +570,7 @@ class TestFontFallbackForNonLatinNames:
         # Smoke test the actual loader so a font-file-missing scenario
         # would surface here rather than crashing render().
         from PIL.ImageFont import FreeTypeFont
+
         f = sr._font_for_text("김민준", 16)
         # Either the Noto fallback loaded, or it gracefully fell back
         # to Inter (the catch path inside `_font_for_text`).
@@ -492,12 +588,26 @@ class TestFontFallbackForNonLatinNames:
         roster = sr.RosterData(
             title="Desert Storm — Mixed",
             zones=[
-                sr.RosterZone(name="Power Tower", max_players=4, members=[
-                    "Alice", "김민준", "田中", "محمد",
-                ]),
-                sr.RosterZone(name="Nuclear Silo", max_players=4, members=[
-                    "José", "王伟", "타나카", "علي",
-                ]),
+                sr.RosterZone(
+                    name="Power Tower",
+                    max_players=4,
+                    members=[
+                        "Alice",
+                        "김민준",
+                        "田中",
+                        "محمد",
+                    ],
+                ),
+                sr.RosterZone(
+                    name="Nuclear Silo",
+                    max_players=4,
+                    members=[
+                        "José",
+                        "王伟",
+                        "타나카",
+                        "علي",
+                    ],
+                ),
             ],
             subs=["Алексей", "한국 Member"],
             event_type="DS",
@@ -520,14 +630,23 @@ class TestRosterFromSessionStructuredFields:
 
     def test_cs_session_populates_faction_label(self):
         import storm_roster_builder as srb
+
         preset = ss.PresetBuffer(
-            name="Plan", event_type="CS", faction="Rulebringers",
+            name="Plan",
+            event_type="CS",
+            faction="Rulebringers",
             zones=[ss.ZoneRow(zone="Virus Lab", max_players=4)],
         )
         sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS", team="",
-            preset=preset, members={}, per_member_rules=[],
-            power_band_rules=[], event_date="2026-05-18",
+            guild_id=1,
+            user_id=42,
+            event_type="CS",
+            team="",
+            preset=preset,
+            members={},
+            per_member_rules=[],
+            power_band_rules=[],
+            event_date="2026-05-18",
         )
         data = sr.roster_from_session(sess)
         assert data.event_type == "CS"
@@ -535,13 +654,21 @@ class TestRosterFromSessionStructuredFields:
 
     def test_phase_count_carried_through(self):
         import storm_roster_builder as srb
+
         preset = ss.PresetBuffer(
-            name="Phased", event_type="DS", phase_count=2,
+            name="Phased",
+            event_type="DS",
+            phase_count=2,
             zones=[ss.ZoneRow(zone="Info Center", max_phase1=4, max_phase2=2)],
         )
         sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS", team="A",
-            preset=preset, members={}, per_member_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members={},
+            per_member_rules=[],
             power_band_rules=[],
         )
         data = sr.roster_from_session(sess)
@@ -605,9 +732,7 @@ class TestPairedSubsNameWrap:
         for budget in (200, 100, 60, 30):
             lines = sr._wrap_name_to_lines(original, font, budget)
             recovered = "".join(lines).replace("-", "")
-            assert recovered == original, (
-                f"At budget={budget}, wrap dropped characters: {lines}"
-            )
+            assert recovered == original, f"At budget={budget}, wrap dropped characters: {lines}"
 
     def test_space_wrap_lines_have_no_hyphen(self):
         """Word-wrap doesn't add hyphens — the space IS the natural
@@ -625,9 +750,7 @@ class TestPairedSubsNameWrap:
         """Even very long names return as one line when the column
         is wide enough."""
         font = sr._try_font(16)
-        assert sr._wrap_name_to_lines("dominicsteele99", font, 1000) == [
-            "dominicsteele99"
-        ]
+        assert sr._wrap_name_to_lines("dominicsteele99", font, 1000) == ["dominicsteele99"]
 
     def test_empty_name_returns_empty_list_entry(self):
         font = sr._try_font(16)
@@ -641,9 +764,9 @@ class TestPairedSubsNameWrap:
             zones=[],
             subs=[],
             paired_subs={
-                "Mrs. Corporal":   "LokisBabyGirl",
+                "Mrs. Corporal": "LokisBabyGirl",
                 "dominicsteele99": "dominicsteele01",
-                "KayyyShawty":     "Wally",
+                "KayyyShawty": "Wally",
             },
             event_type="DS",
         )
@@ -688,14 +811,19 @@ class TestClosedEmptyZoneRendering:
     def test_fully_empty_zone_renders_both_stage_headers(self):
         font = self._font_factory()
         phase_blocks = [
-            sr.RosterZone(name="S1", max_players=0, members=[],
-                          phase=1, canonical_zone="Field Hospital II"),
-            sr.RosterZone(name="S2", max_players=0, members=[],
-                          phase=2, canonical_zone="Field Hospital II"),
+            sr.RosterZone(
+                name="S1", max_players=0, members=[], phase=1, canonical_zone="Field Hospital II"
+            ),
+            sr.RosterZone(
+                name="S2", max_players=0, members=[], phase=2, canonical_zone="Field Hospital II"
+            ),
         ]
         lines, overflow = sr._attempt_flow_at(
-            phase_blocks, font,
-            pill_content_width_px=200, cols=1, max_rows=7,
+            phase_blocks,
+            font,
+            pill_content_width_px=200,
+            cols=1,
+            max_rows=7,
             canonical_zone="Field Hospital II",
         )
         types = [ln["type"] for ln in lines]
@@ -709,15 +837,23 @@ class TestClosedEmptyZoneRendering:
         phase is the deliberate "this stage doesn't apply" config."""
         font = self._font_factory()
         phase_blocks = [
-            sr.RosterZone(name="S1", max_players=0, members=[],
-                          phase=1, canonical_zone="Mercenary Factory"),
-            sr.RosterZone(name="S2", max_players=3,
-                          members=["Alice", "Bob", "Carol"],
-                          phase=2, canonical_zone="Mercenary Factory"),
+            sr.RosterZone(
+                name="S1", max_players=0, members=[], phase=1, canonical_zone="Mercenary Factory"
+            ),
+            sr.RosterZone(
+                name="S2",
+                max_players=3,
+                members=["Alice", "Bob", "Carol"],
+                phase=2,
+                canonical_zone="Mercenary Factory",
+            ),
         ]
         lines, overflow = sr._attempt_flow_at(
-            phase_blocks, font,
-            pill_content_width_px=200, cols=1, max_rows=7,
+            phase_blocks,
+            font,
+            pill_content_width_px=200,
+            cols=1,
+            max_rows=7,
             canonical_zone="Mercenary Factory",
         )
         # Header for Stage 2 plus its 3 single-name rows. No Stage 1
@@ -732,14 +868,19 @@ class TestClosedEmptyZoneRendering:
         behaviour as before — the cap>0 case was never broken."""
         font = self._font_factory()
         phase_blocks = [
-            sr.RosterZone(name="S1", max_players=3, members=[],
-                          phase=1, canonical_zone="Field Hospital I"),
-            sr.RosterZone(name="S2", max_players=0, members=[],
-                          phase=2, canonical_zone="Field Hospital I"),
+            sr.RosterZone(
+                name="S1", max_players=3, members=[], phase=1, canonical_zone="Field Hospital I"
+            ),
+            sr.RosterZone(
+                name="S2", max_players=0, members=[], phase=2, canonical_zone="Field Hospital I"
+            ),
         ]
         lines, overflow = sr._attempt_flow_at(
-            phase_blocks, font,
-            pill_content_width_px=200, cols=1, max_rows=7,
+            phase_blocks,
+            font,
+            pill_content_width_px=200,
+            cols=1,
+            max_rows=7,
             canonical_zone="Field Hospital I",
         )
         # Stage 1 labels + (empty), Stage 2 also labels + (empty)
@@ -756,26 +897,39 @@ class TestClosedEmptyZoneRendering:
         against regression."""
         font = self._font_factory()
         phase_blocks = [
-            sr.RosterZone(name="S1", max_players=2,
-                          members=["Alice", "Bob"],
-                          phase=1, canonical_zone="Sample Warehouse 1"),
-            sr.RosterZone(name="S2", max_players=2, members=[],
-                          phase=2, canonical_zone="Sample Warehouse 1"),
-            sr.RosterZone(name="S3", max_players=2, members=[],
-                          phase=3, canonical_zone="Sample Warehouse 1"),
+            sr.RosterZone(
+                name="S1",
+                max_players=2,
+                members=["Alice", "Bob"],
+                phase=1,
+                canonical_zone="Sample Warehouse 1",
+            ),
+            sr.RosterZone(
+                name="S2", max_players=2, members=[], phase=2, canonical_zone="Sample Warehouse 1"
+            ),
+            sr.RosterZone(
+                name="S3", max_players=2, members=[], phase=3, canonical_zone="Sample Warehouse 1"
+            ),
         ]
         lines, overflow = sr._attempt_flow_at(
-            phase_blocks, font,
-            pill_content_width_px=200, cols=1, max_rows=8,
+            phase_blocks,
+            font,
+            pill_content_width_px=200,
+            cols=1,
+            max_rows=8,
             canonical_zone="Sample Warehouse 1",
         )
         types = [ln["type"] for ln in lines]
         # Stage 1 (header + 2 single-name rows), Stage 2 (header +
         # empty), Stage 3 (header + empty).
         assert types == [
-            "header", "row", "row",
-            "header", "empty",
-            "header", "empty",
+            "header",
+            "row",
+            "row",
+            "header",
+            "empty",
+            "header",
+            "empty",
         ]
         assert lines[0]["text"] == "Stage 1:"
         assert lines[3]["text"] == "Stage 2:"
@@ -788,17 +942,26 @@ class TestClosedEmptyZoneRendering:
         would mislead members reading the post."""
         font = self._font_factory()
         phase_blocks = [
-            sr.RosterZone(name="S1", max_players=0, members=[],
-                          phase=1, canonical_zone="Virus Lab"),
-            sr.RosterZone(name="S2", max_players=0, members=[],
-                          phase=2, canonical_zone="Virus Lab"),
-            sr.RosterZone(name="S3", max_players=2,
-                          members=["Alice", "Bob"],
-                          phase=3, canonical_zone="Virus Lab"),
+            sr.RosterZone(
+                name="S1", max_players=0, members=[], phase=1, canonical_zone="Virus Lab"
+            ),
+            sr.RosterZone(
+                name="S2", max_players=0, members=[], phase=2, canonical_zone="Virus Lab"
+            ),
+            sr.RosterZone(
+                name="S3",
+                max_players=2,
+                members=["Alice", "Bob"],
+                phase=3,
+                canonical_zone="Virus Lab",
+            ),
         ]
         lines, overflow = sr._attempt_flow_at(
-            phase_blocks, font,
-            pill_content_width_px=200, cols=1, max_rows=8,
+            phase_blocks,
+            font,
+            pill_content_width_px=200,
+            cols=1,
+            max_rows=8,
             canonical_zone="Virus Lab",
         )
         # Only Stage 3 lines survive.

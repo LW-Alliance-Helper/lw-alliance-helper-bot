@@ -37,6 +37,7 @@ from typing import Optional
 
 import discord
 
+from messages import CANCEL_BACKPEDAL, DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 # under "Power Metric Column" — falling back to the design rule of
 # "exclude unknown power, never silently coerce to zero."
 
+
 def _read_power_column_header(guild_id: int, event_type: str) -> str:
     """Return the human-readable header text for the configured power
     column (row 1 of the roster Sheet at the configured letter), with
@@ -70,6 +72,7 @@ def _read_power_column_header(guild_id: int, event_type: str) -> str:
     generic wording in that case.
     """
     import config
+
     try:
         roster_cfg = config.get_member_roster_config(guild_id)
     except Exception:
@@ -89,9 +92,7 @@ def _read_power_column_header(guild_id: int, event_type: str) -> str:
     # header label members see in the DM matches the actual column
     # the bot is reading.
     configured_power_tab = (structured.get("power_metric_tab") or "").strip()
-    tab_to_read = configured_power_tab or (
-        roster_cfg.get("tab_name") or "Member Roster"
-    )
+    tab_to_read = configured_power_tab or (roster_cfg.get("tab_name") or "Member Roster")
     try:
         ws = config.get_member_roster_sheet(guild_id, tab_to_read)
         header_row = ws.row_values(1)
@@ -113,7 +114,10 @@ def _read_power_column_header(guild_id: int, event_type: str) -> str:
 
 
 def _build_cross_tab_power_index(
-    guild_id: int, tab_name: str, power_col: int, match_col: int,
+    guild_id: int,
+    tab_name: str,
+    power_col: int,
+    match_col: int,
 ) -> tuple[dict[str, int], dict[str, list[int]], list[str]]:
     """Read a power source tab and build two parallel lookup indexes.
 
@@ -137,17 +141,13 @@ def _build_cross_tab_power_index(
     try:
         ws = config.get_member_roster_sheet(guild_id, tab_name)
     except Exception as e:
-        errors.append(
-            f"power-source tab {tab_name!r} open failed: {e}"
-        )
+        errors.append(f"power-source tab {tab_name!r} open failed: {e}")
         return {}, {}, errors
 
     try:
         values = ws.get_all_values()
     except Exception as e:
-        errors.append(
-            f"power-source tab {tab_name!r} read failed: {e}"
-        )
+        errors.append(f"power-source tab {tab_name!r} read failed: {e}")
         return {}, {}, errors
 
     if not values:
@@ -156,14 +156,8 @@ def _build_cross_tab_power_index(
     # Skip the header row when building the index — header cells in
     # the match column shouldn't match a Discord ID or a name.
     for row in values[1:]:
-        match_cell = (
-            row[match_col].strip()
-            if 0 <= match_col < len(row) else ""
-        )
-        power_cell = (
-            row[power_col].strip()
-            if 0 <= power_col < len(row) else ""
-        )
+        match_cell = row[match_col].strip() if 0 <= match_col < len(row) else ""
+        power_cell = row[power_col].strip() if 0 <= power_col < len(row) else ""
         if not (match_cell and power_cell):
             continue
         parsed = parse_power(power_cell)
@@ -183,7 +177,10 @@ def _build_cross_tab_power_index(
 
 
 def _build_last_updated_index(
-    guild_id: int, tab_name: str, last_updated_col: int, match_col: int,
+    guild_id: int,
+    tab_name: str,
+    last_updated_col: int,
+    match_col: int,
 ) -> tuple[dict[str, "_dt.date"], dict[str, list["_dt.date"]], list[str]]:
     """Read a last-updated source tab and build two parallel lookup
     indexes mirroring `_build_cross_tab_power_index` but storing
@@ -217,17 +214,13 @@ def _build_last_updated_index(
     try:
         ws = config.get_member_roster_sheet(guild_id, tab_name)
     except Exception as e:
-        errors.append(
-            f"last-updated source tab {tab_name!r} open failed: {e}"
-        )
+        errors.append(f"last-updated source tab {tab_name!r} open failed: {e}")
         return {}, {}, errors
 
     try:
         values = ws.get_all_values()
     except Exception as e:
-        errors.append(
-            f"last-updated source tab {tab_name!r} read failed: {e}"
-        )
+        errors.append(f"last-updated source tab {tab_name!r} read failed: {e}")
         return {}, {}, errors
 
     if not values:
@@ -245,14 +238,8 @@ def _build_last_updated_index(
 
     # Parse pass. Match column same convention as power: header skipped.
     for row in values[1:]:
-        match_cell = (
-            row[match_col].strip()
-            if 0 <= match_col < len(row) else ""
-        )
-        ts_cell = (
-            row[last_updated_col].strip()
-            if 0 <= last_updated_col < len(row) else ""
-        )
+        match_cell = row[match_col].strip() if 0 <= match_col < len(row) else ""
+        ts_cell = row[last_updated_col].strip() if 0 <= last_updated_col < len(row) else ""
         if not (match_cell and ts_cell):
             continue
         parsed = parse_last_updated(ts_cell, dmy_first=dmy_first)
@@ -310,7 +297,10 @@ def _lookup_power_in_index(
 
 
 def _read_roster_powers(
-    guild_id: int, event_type: str, *, guild=None,
+    guild_id: int,
+    event_type: str,
+    *,
+    guild=None,
 ) -> tuple[dict[str, dict], list[str]]:
     """Read the alliance's roster Sheet and return:
 
@@ -377,13 +367,8 @@ def _read_roster_powers(
     # Match column for cross-tab lookups. Empty `power_match_column`
     # falls back to the Member Roster's discord_id_col (existing
     # behaviour). Letter on the configured power tab when set.
-    configured_match_letter = (
-        structured.get("power_match_column") or ""
-    ).strip().upper()
-    if (
-        len(configured_match_letter) == 1
-        and "A" <= configured_match_letter <= "Z"
-    ):
+    configured_match_letter = (structured.get("power_match_column") or "").strip().upper()
+    if len(configured_match_letter) == 1 and "A" <= configured_match_letter <= "Z":
         cross_tab_match_col = config.power_column_letter_to_index(
             configured_match_letter,
         )
@@ -399,7 +384,8 @@ def _read_roster_powers(
 
     try:
         ws = config.get_member_roster_sheet(
-            guild_id, roster_cfg.get("tab_name") or "Member Roster",
+            guild_id,
+            roster_cfg.get("tab_name") or "Member Roster",
         )
     except Exception as e:
         errors.append(f"roster-sheet open failed: {e}")
@@ -423,7 +409,7 @@ def _read_roster_powers(
                 return idx
         return -1
 
-    id_col      = int(roster_cfg.get("discord_id_col", 0))
+    id_col = int(roster_cfg.get("discord_id_col", 0))
     # Display-name column resolution. Alliances that overwrote the
     # bot-managed Display Name column (default C) with their own data
     # — typically the power column — would otherwise have the
@@ -452,10 +438,7 @@ def _read_roster_powers(
     # column lives on a different sheet and is validated inside
     # `_build_cross_tab_power_index`.
     if same_power_tab:
-        power_col_header = (
-            header[power_col].strip()
-            if 0 <= power_col < len(header) else ""
-        )
+        power_col_header = header[power_col].strip() if 0 <= power_col < len(header) else ""
         if not power_col_header:
             errors.append(
                 f"power column {power_letter} doesn't exist in your roster "
@@ -466,8 +449,12 @@ def _read_roster_powers(
                 "[STORM ROSTER] power column letter %r resolves to index %d, "
                 "which is past the header row (len=%d) for guild=%s event=%s. "
                 "Header: %s",
-                power_letter, power_col, len(header),
-                guild_id, event_type, header,
+                power_letter,
+                power_col,
+                len(header),
+                guild_id,
+                event_type,
+                header,
             )
     else:
         power_col_header = ""  # logged later as N/A
@@ -492,13 +479,22 @@ def _read_roster_powers(
         "(participation roster_alias_col=%d, display_col=%d), "
         "power_col=%d (letter %s, header %r, tab %r same=%s match_col=%d), "
         "presence_col=%d, not_disc_col=%d, header=%s",
-        guild_id, event_type,
-        id_col, int(roster_cfg.get("discord_id_col", 0)),
-        name_col, part_alias_col,
+        guild_id,
+        event_type,
+        id_col,
+        int(roster_cfg.get("discord_id_col", 0)),
+        name_col,
+        part_alias_col,
         int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1))),
-        power_col, power_letter, power_col_header,
-        power_tab_for_logging, same_power_tab, cross_tab_match_col,
-        presence_col, not_disc_col, header,
+        power_col,
+        power_letter,
+        power_col_header,
+        power_tab_for_logging,
+        same_power_tab,
+        cross_tab_match_col,
+        presence_col,
+        not_disc_col,
+        header,
     )
 
     truthy = {"1", "true", "yes", "y", "x", "t"}
@@ -507,13 +503,14 @@ def _read_roster_powers(
     members: dict[str, dict] = {}
     stale_ids: list[str] = []
     for row in values[1:]:
+
         def _cell(idx: int) -> str:
             if idx < 0 or idx >= len(row):
                 return ""
             return str(row[idx]).strip()
 
-        discord_id     = _cell(id_col)
-        display_value  = _cell(name_col)
+        discord_id = _cell(id_col)
+        display_value = _cell(name_col)
         username_value = _cell(username_col)
         # Resolve the human-readable name with a fallback cascade:
         # Display Name → Name → live Discord member → discord_id (#268).
@@ -522,8 +519,12 @@ def _read_roster_powers(
         # rendered as the raw Discord ID (or as the alliance's
         # workaround text typed into the ID column).
         from storm_officer_view import _resolve_member_name
+
         resolved_name = _resolve_member_name(
-            discord_id, display_value, username_value, guild,
+            discord_id,
+            display_value,
+            username_value,
+            guild,
         )
         # Keep `name` as the legacy variable referenced below — its
         # semantic is now "resolved display name", not "display_col
@@ -547,9 +548,11 @@ def _read_roster_powers(
                 parsed = parse_power(raw_power)
                 if parsed is None:
                     logger.warning(
-                        "[STORM ROSTER] couldn't parse power %r for member %r "
-                        "(guild=%s event=%s)",
-                        raw_power, name or discord_id, guild_id, event_type,
+                        "[STORM ROSTER] couldn't parse power %r for member %r (guild=%s event=%s)",
+                        raw_power,
+                        name or discord_id,
+                        guild_id,
+                        event_type,
                     )
                 else:
                     power_val = int(parsed)
@@ -566,27 +569,25 @@ def _read_roster_powers(
             presence_cell = _cell(presence_col).lower()
             if presence_cell == "yes":
                 members[discord_id or name] = {
-                    "key":            discord_id or name,
-                    "name":           name,
-                    "discord_id":     discord_id,
-                    "power":          power_val,
+                    "key": discord_id or name,
+                    "name": name,
+                    "discord_id": discord_id,
+                    "power": power_val,
                     "not_on_discord": False,
                 }
                 continue
             if presence_cell == "no":
                 key = discord_id or name
                 members[key] = {
-                    "key":            key,
-                    "name":           name,
-                    "discord_id":     discord_id,
-                    "power":          power_val,
+                    "key": key,
+                    "name": name,
+                    "discord_id": discord_id,
+                    "power": power_val,
                     "not_on_discord": True,
                 }
                 continue
             # Blank / unknown value → fall through to legacy + inference.
-        explicit_set = (
-            _cell(not_disc_col).lower() in truthy if has_not_col else False
-        )
+        explicit_set = _cell(not_disc_col).lower() in truthy if has_not_col else False
         inferred = False
         if not explicit_set:
             if not discord_id:
@@ -614,10 +615,10 @@ def _read_roster_powers(
         if not key:
             continue
         members[key] = {
-            "key":            key,
-            "name":           name,
-            "discord_id":     discord_id,
-            "power":          power_val,
+            "key": key,
+            "name": name,
+            "discord_id": discord_id,
+            "power": power_val,
             "not_on_discord": not_on_discord,
         }
 
@@ -625,12 +626,13 @@ def _read_roster_powers(
         preview = ", ".join(stale_ids[:5])
         extra = f" (+{len(stale_ids) - 5} more)" if len(stale_ids) > 5 else ""
         errors.append(
-            "stale Discord IDs on roster (member likely left the server): "
-            f"{preview}{extra}"
+            f"stale Discord IDs on roster (member likely left the server): {preview}{extra}"
         )
         logger.warning(
             "[STORM ROSTER] stale roster Discord IDs for guild=%s event=%s: %s",
-            guild_id, event_type, "; ".join(stale_ids),
+            guild_id,
+            event_type,
+            "; ".join(stale_ids),
         )
 
     # Cross-tab power overlay. When the alliance pointed storm at a
@@ -640,8 +642,10 @@ def _read_roster_powers(
     # member.
     if not same_power_tab and members:
         power_by_id, power_by_name, p_errors = _build_cross_tab_power_index(
-            guild_id, configured_power_tab,
-            power_col, cross_tab_match_col,
+            guild_id,
+            configured_power_tab,
+            power_col,
+            cross_tab_match_col,
         )
         errors.extend(p_errors)
         matched_count = 0
@@ -653,9 +657,13 @@ def _read_roster_powers(
         logger.info(
             "[STORM ROSTER] cross-tab power overlay: tab=%r matched=%d/%d "
             "(by_id=%d, by_name=%d) guild=%s event=%s",
-            configured_power_tab, matched_count, len(members),
-            len(power_by_id), len(power_by_name),
-            guild_id, event_type,
+            configured_power_tab,
+            matched_count,
+            len(members),
+            len(power_by_id),
+            len(power_by_name),
+            guild_id,
+            event_type,
         )
 
     # Last-updated overlay (#255). Stale-power DM nudge needs each
@@ -670,9 +678,7 @@ def _read_roster_powers(
     lu_col_letter = (structured.get("power_last_updated_column") or "").strip().upper()
     if lu_tab and len(lu_col_letter) == 1 and "A" <= lu_col_letter <= "Z" and members:
         lu_col = config.power_column_letter_to_index(lu_col_letter)
-        lu_match_letter = (
-            structured.get("power_last_updated_match_column") or ""
-        ).strip().upper()
+        lu_match_letter = (structured.get("power_last_updated_match_column") or "").strip().upper()
         if len(lu_match_letter) == 1 and "A" <= lu_match_letter <= "Z":
             lu_match_col = config.power_column_letter_to_index(lu_match_letter)
         else:
@@ -681,7 +687,10 @@ def _read_roster_powers(
             # alliance already configured for power lookups.
             lu_match_col = cross_tab_match_col
         lu_by_id, lu_by_name, lu_errors = _build_last_updated_index(
-            guild_id, lu_tab, lu_col, lu_match_col,
+            guild_id,
+            lu_tab,
+            lu_col,
+            lu_match_col,
         )
         errors.extend(lu_errors)
         lu_matched = 0
@@ -693,9 +702,14 @@ def _read_roster_powers(
         logger.info(
             "[STORM ROSTER] last-updated overlay: tab=%r col=%s matched=%d/%d "
             "(by_id=%d, by_name=%d) guild=%s event=%s",
-            lu_tab, lu_col_letter, lu_matched, len(members),
-            len(lu_by_id), len(lu_by_name),
-            guild_id, event_type,
+            lu_tab,
+            lu_col_letter,
+            lu_matched,
+            len(members),
+            len(lu_by_id),
+            len(lu_by_name),
+            guild_id,
+            event_type,
         )
 
     return members, errors
@@ -722,8 +736,8 @@ class RosterBuilderSession:
         guild_id: int,
         user_id: int,
         event_type: str,
-        team: str,                              # "A" / "B" / "" (CS uses faction)
-        preset,                                 # storm_strategy.PresetBuffer
+        team: str,  # "A" / "B" / "" (CS uses faction)
+        preset,  # storm_strategy.PresetBuffer
         members: dict[str, dict],
         per_member_rules: list,
         power_band_rules: list,
@@ -732,11 +746,11 @@ class RosterBuilderSession:
         sub_mode: str = "pool",
     ):
         self.guild_id = guild_id
-        self.user_id  = user_id
+        self.user_id = user_id
         self.event_type = event_type
-        self.team     = team
-        self.preset   = preset
-        self.members  = members
+        self.team = team
+        self.preset = preset
+        self.members = members
         self.event_date = event_date
         # `sub_mode` reflects the alliance's per-event-type config.
         # `pool` — flat sub list; any sub can cover any primary.
@@ -998,7 +1012,8 @@ class RosterBuilderSession:
 
 
 def _resolve_per_member_subject(
-    members: dict[str, dict], subject: str,
+    members: dict[str, dict],
+    subject: str,
 ) -> str | None:
     """Three-way subject resolution for per_member rules.
 
@@ -1068,8 +1083,11 @@ AUTO_FILL_STRATEGIES = ("balanced", "priority_greedy")
 
 
 def _place_starter_in_zone(
-    session: RosterBuilderSession, starter_key: str, zone_name: str,
-    phase: int, summary: dict,
+    session: RosterBuilderSession,
+    starter_key: str,
+    zone_name: str,
+    phase: int,
+    summary: dict,
 ) -> None:
     """Append a starter to a phase's zone and update the auto-fill
     bookkeeping (below-floor override flag, power-band counter,
@@ -1089,8 +1107,12 @@ def _place_starter_in_zone(
 
 
 def _fill_balanced(
-    session: RosterBuilderSession, remaining: list[str], phase: int,
-    zones_sorted: list, phase_assignments: dict, summary: dict,
+    session: RosterBuilderSession,
+    remaining: list[str],
+    phase: int,
+    zones_sorted: list,
+    phase_assignments: dict,
+    summary: dict,
 ) -> None:
     """Round-robin fill: pass over zones in priority order placing one
     starter per zone per pass, looping until every starter is placed
@@ -1114,29 +1136,71 @@ def _fill_balanced(
             break
 
 
+def _zone_priority_value(session: RosterBuilderSession, z, phase: int) -> int:
+    """The effective priority of a zone for a phase, matching the sort key
+    used to order `zones_sorted`. priority=0 ("no priority set") sorts last
+    via 9999. Phase-aware presets read per-phase priority; flat presets use
+    the single `priority` field."""
+    prio = z.priority_for_phase(phase) if session.is_phase_aware else z.priority
+    return prio if prio > 0 else 9999
+
+
 def _fill_priority_greedy(
-    session: RosterBuilderSession, remaining: list[str], phase: int,
-    zones_sorted: list, phase_assignments: dict, summary: dict,
+    session: RosterBuilderSession,
+    remaining: list[str],
+    phase: int,
+    zones_sorted: list,
+    phase_assignments: dict,
+    summary: dict,
 ) -> None:
-    """Priority-greedy fill: walk zones in priority asc, fill each
-    zone to capacity from the front of the power-desc starter list
-    before moving on. Concentrates the strongest members in
-    top-priority zones; low-priority zones get the weakest starters
-    (or stay empty if the team runs out). 0-cap zones are skipped by
-    the capacity guard."""
-    for z in zones_sorted:
+    """Priority-greedy fill, balanced within each priority tier (#273).
+
+    Walks zones in priority asc, but zones that share a priority form a
+    group and are balanced by total squad power instead of being filled
+    one-at-a-time. Within a group, each next-strongest starter goes to the
+    group zone with the lowest running power total that still has capacity
+    (longest-processing-time / greedy load balancing). Across groups the
+    pool is still consumed strongest-first, so higher-priority zones get
+    the strongest members overall — only the lopsided split between
+    equal-priority zones (e.g. Oil Refinery I taking the top 5 and II the
+    next 5) is fixed. 0-cap zones are skipped by the capacity guard.
+
+    `remaining` is assumed power-desc (the caller sorts it); members with
+    unknown power count as 0 for balancing purposes."""
+    from itertools import groupby
+
+    def _power(key: str) -> int:
+        return session.members.get(key, {}).get("power") or 0
+
+    # `zones_sorted` is already priority-asc, so consecutive equal-priority
+    # zones are adjacent and groupby yields one group per tier in order.
+    for _prio, grp in groupby(zones_sorted, key=lambda z: _zone_priority_value(session, z, phase)):
+        group = list(grp)
         if not remaining:
             break
+        # Seed each zone's running total from anything already placed
+        # there (e.g. per-member pins landed before the fill).
+        running = {z.zone: sum(_power(k) for k in phase_assignments.get(z.zone, [])) for z in group}
         while remaining:
-            if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
+            open_zones = [
+                z
+                for z in group
+                if session.zone_member_count(z.zone) < session.zone_capacity(z.zone)
+            ]
+            if not open_zones:
                 break
+            # Lowest running power first; ties keep group (priority-sort)
+            # order so the result is deterministic across re-runs.
+            target = min(open_zones, key=lambda z: running[z.zone])
             starter_key = remaining.pop(0)
-            _place_starter_in_zone(session, starter_key, z.zone, phase, summary)
+            _place_starter_in_zone(session, starter_key, target.zone, phase, summary)
+            running[target.zone] += _power(starter_key)
 
 
 def _auto_fill_session(
     session: RosterBuilderSession,
-    *, strategy: str = "balanced",
+    *,
+    strategy: str = "balanced",
     plan: dict | None = None,
 ) -> dict:
     """Auto-fill the roster from member rules and the LW 20-starters-plus-10-subs
@@ -1162,8 +1226,9 @@ def _auto_fill_session(
       3. Per-phase zone fill (#226). Same starter pool across every
          phase the preset declares. The `strategy` parameter picks:
            "balanced" — round-robin (default; current behavior).
-           "priority_greedy" — fill top-priority zones to capacity
-             with the strongest members before moving on.
+           "priority_greedy" — feed the strongest members to the
+             highest-priority zones first, balancing power evenly
+             between zones that share a priority (#273).
          Both strategies share `_place_starter_in_zone` so floor
          handling and summary bookkeeping stay aligned, and both
          skip 0-cap zones via the capacity guard.
@@ -1202,18 +1267,18 @@ def _auto_fill_session(
     summary = {
         "per_member_rules_applied": 0,
         "power_band_rules_applied": 0,
-        "auto_filled_by_power":     0,
+        "auto_filled_by_power": 0,
         # Decision #14 (#171): track each auto-pair explicitly so the
         # summary can list `Alice ↔ Bob, Carol ↔ Dan` instead of a
         # bare count. Officers edit auto-paired subs most often, so
         # visibility matters.
-        "auto_paired_subs":         [],  # list[str] each "PrimaryName ↔ SubName"
-        "gaps":                     [],  # member names with no parseable power
-        "conflicts":                [],  # short strings: rule application failures
+        "auto_paired_subs": [],  # list[str] each "PrimaryName ↔ SubName"
+        "gaps": [],  # member names with no parseable power
+        "conflicts": [],  # short strings: rule application failures
         # #219: how many starter seats went unfilled because too few
         # members signed up. 0 in the normal 30-signup case; positive
         # when the alliance is short.
-        "starters_short":           0,
+        "starters_short": 0,
         # #238: subs that ended up in the available pool because their
         # power was below the floor for every remaining unpaired
         # primary's zone. Each entry is `{"name": ..., "power": int,
@@ -1243,21 +1308,15 @@ def _auto_fill_session(
         if match_key is None:
             continue
         if not session.preset.find_zone(zone):
-            summary["conflicts"].append(
-                f"per_member rule names unknown zone: {zone}"
-            )
+            summary["conflicts"].append(f"per_member rule names unknown zone: {zone}")
             continue
         if session.zone_member_count(zone) >= session.zone_capacity(zone):
-            summary["conflicts"].append(
-                f"{zone} full when pinning {subject}"
-            )
+            summary["conflicts"].append(f"{zone} full when pinning {subject}")
             continue
         # Cross-phase duplicate check: pinned member can't already be
         # assigned in any phase or in the sub pool.
         if match_key in session.assigned_member_keys():
-            summary["conflicts"].append(
-                f"{subject} pinned to multiple zones"
-            )
+            summary["conflicts"].append(f"{subject} pinned to multiple zones")
             continue
         session.assignments_for_phase(1)[zone].append(match_key)
         summary["per_member_rules_applied"] += 1
@@ -1280,6 +1339,7 @@ def _auto_fill_session(
     # member's vote changed to "cannot" after the plan was saved) are
     # also surfaced as conflicts.
     from storm import team_seats
+
     starters_target, subs_target = team_seats(session.event_type)
 
     pinned_keys: set[str] = set()
@@ -1296,9 +1356,12 @@ def _auto_fill_session(
     if plan is None and session.event_date and session.team:
         try:
             import config
+
             plan = config.get_storm_team_plan(
-                session.guild_id, session.event_type,
-                session.event_date, session.team,
+                session.guild_id,
+                session.event_type,
+                session.event_date,
+                session.team,
             )
         except Exception:
             plan = None
@@ -1327,8 +1390,7 @@ def _auto_fill_session(
         missing_plan_keys = all_plan_keys - member_keys
         for k in sorted(missing_plan_keys):
             summary["conflicts"].append(
-                f"plan key {k} missing from pool (vote changed or "
-                f"member dropped from roster)"
+                f"plan key {k} missing from pool (vote changed or member dropped from roster)"
             )
         # Gaps still apply: any member with no parseable power that
         # isn't pinned. Plan-driven and signup-driven paths share the
@@ -1372,19 +1434,15 @@ def _auto_fill_session(
             sub_pool.append(key)
 
     # ── 3. Per-phase fill via the selected strategy (#226) ──
-    # priority=0 means "no priority set" so it sorts to the end via 9999.
-    # Phase-aware presets read per-phase priority; flat presets use the
-    # single `priority` field.
-    def _phase_priority_key(p):
-        def key(z):
-            prio = z.priority_for_phase(p) if session.is_phase_aware else z.priority
-            return prio if prio > 0 else 9999
-        return key
-
+    # Zones order by priority asc via `_zone_priority_value` (priority=0
+    # sorts last; phase-aware presets read per-phase priority).
     for phase in session.iter_phases():
         session.selected_phase = phase
         phase_assignments = session.assignments_for_phase(phase)
-        zones_sorted = sorted(session.preset.zones, key=_phase_priority_key(phase))
+        zones_sorted = sorted(
+            session.preset.zones,
+            key=lambda z: _zone_priority_value(session, z, phase),
+        )
 
         # Members already placed in this phase (from per-member rules in
         # phase 1 only): they occupy a starter seat but were already put
@@ -1401,13 +1459,21 @@ def _auto_fill_session(
 
         if strategy == "priority_greedy":
             _fill_priority_greedy(
-                session, remaining, phase, zones_sorted,
-                phase_assignments, summary,
+                session,
+                remaining,
+                phase,
+                zones_sorted,
+                phase_assignments,
+                summary,
             )
         else:
             _fill_balanced(
-                session, remaining, phase, zones_sorted,
-                phase_assignments, summary,
+                session,
+                remaining,
+                phase,
+                zones_sorted,
+                phase_assignments,
+                summary,
             )
 
     # ── 4. Sub pairings (paired mode only) ──
@@ -1446,7 +1512,7 @@ def _auto_fill_session(
                 # Power-unknown primaries pair last (any eligible sub
                 # is acceptable since there's no closest-power anchor).
                 # 10**18 outranks any realistic squad power.
-                return (power if power is not None else 10 ** 18, key)
+                return (power if power is not None else 10**18, key)
 
             primaries_with_zone.sort(key=_primary_rank_key)
 
@@ -1472,22 +1538,21 @@ def _auto_fill_session(
                     # No anchor for closest-power. Use the strongest
                     # eligible sub so the unknown-power primary at least
                     # gets a backup.
-                    eligible.sort(
-                        key=lambda sk: -(session.members[sk].get("power") or 0)
-                    )
+                    eligible.sort(key=lambda sk: -(session.members[sk].get("power") or 0))
                     chosen_sub = eligible[0]
                 else:
+
                     def _distance(sk: str) -> tuple[int, str]:
                         sp = session.members[sk].get("power") or 0
                         return (abs(sp - primary_power), sk)
+
                     eligible.sort(key=_distance)
                     chosen_sub = eligible[0]
                 phase_pairings[primary_key] = chosen_sub
                 available_subs.remove(chosen_sub)
                 sub_m = session.members.get(chosen_sub, {})
                 summary["auto_paired_subs"].append(
-                    f"{primary_m.get('name', primary_key)} ↔ "
-                    f"{sub_m.get('name', chosen_sub)}"
+                    f"{primary_m.get('name', primary_key)} ↔ {sub_m.get('name', chosen_sub)}"
                 )
 
         # ── 4b. Unpaired-sub reasons (#238) ──
@@ -1499,9 +1564,7 @@ def _auto_fill_session(
         # below the 80M minimum for any remaining open positions."
         all_paired_sub_keys: set[str] = set()
         for ph in session.iter_phases():
-            all_paired_sub_keys.update(
-                session.paired_subs_for_phase(ph).values()
-            )
+            all_paired_sub_keys.update(session.paired_subs_for_phase(ph).values())
         unpaired_primary_floors: list[tuple[str, int]] = []
         for ph in session.iter_phases():
             ph_assigns = session.assignments_for_phase(ph)
@@ -1526,11 +1589,13 @@ def _auto_fill_session(
             if not unpaired_primary_floors:
                 continue  # No unpaired primaries — sub was just surplus.
             if all(sub_power < floor for _, floor in unpaired_primary_floors):
-                summary["unpaired_subs_below_floor"].append({
-                    "name": sub_m.get("name", sub_key),
-                    "power": sub_power,
-                    "min_floor": min(f for _, f in unpaired_primary_floors),
-                })
+                summary["unpaired_subs_below_floor"].append(
+                    {
+                        "name": sub_m.get("name", sub_key),
+                        "power": sub_power,
+                        "min_floor": min(f for _, f in unpaired_primary_floors),
+                    }
+                )
 
     # ── 5. Spillover into session.subs ──
     # Plan-aware (#239): session.subs is exactly the plan's sub list
@@ -1575,6 +1640,7 @@ def _format_member_label(member: dict) -> str:
         suffix = " (power unknown)"
     else:
         from storm_strategy import format_power
+
         suffix = f" ({format_power(power)})"
     if member.get("not_on_discord"):
         suffix += " ¹"
@@ -1582,7 +1648,9 @@ def _format_member_label(member: dict) -> str:
 
 
 def _format_zone_member_list(
-    session: "RosterBuilderSession", member_keys: list[str], phase: int,
+    session: "RosterBuilderSession",
+    member_keys: list[str],
+    phase: int,
 ) -> str:
     """Render the comma-separated member list for one zone in one phase.
 
@@ -1603,6 +1671,7 @@ def _zone_minimum_suffix(session: RosterBuilderSession, zone_name: str) -> str:
     floor > 0 (#238). Returns the empty string for zones without a
     rule so unrestricted zones stay visually clean."""
     from storm_strategy import format_power
+
     floor = _effective_floor_for_zone(session, zone_name)
     if floor and floor > 0:
         return f" _(minimum {format_power(floor)})_"
@@ -1632,6 +1701,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
         return f"{zone_name} (?/?)"
 
     from storm_icons import zone_emoji_prefix
+
     icon = zone_emoji_prefix(zone_name)  # "" until #158 emojis upload.
     min_suffix = _zone_minimum_suffix(session, zone_name)
 
@@ -1670,10 +1740,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     sel_cap = int(z.max_players)
     member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
     names_part = _format_zone_member_list(session, member_keys, phase=session.selected_phase)
-    return (
-        f"{icon}**{zone_name}**{min_suffix} "
-        f"({sel_count}/{sel_cap}): {names_part}"
-    )
+    return f"{icon}**{zone_name}**{min_suffix} ({sel_count}/{sel_cap}): {names_part}"
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
@@ -1712,15 +1779,12 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     # buttons will mutate.
     if session.is_phase_aware:
         lines.append(
-            f"- 🔀 Editing Stage {session.selected_phase} "
-            f"_(use the Stage buttons below to switch)_"
+            f"- 🔀 Editing Stage {session.selected_phase} _(use the Stage buttons below to switch)_"
         )
     lines.append("")
 
     if session.is_paired:
-        lines.append(
-            "## 📋 Zones _(paired mode: each primary has a dedicated sub)_"
-        )
+        lines.append("## 📋 Zones _(paired mode: each primary has a dedicated sub)_")
     else:
         lines.append("## 📋 Zones")
     for z in session.preset.zones:
@@ -1747,22 +1811,16 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         unpaired = session.unpaired_primaries()
         if unpaired:
             unpaired_names = ", ".join(
-                session.members[k]["name"] for k in unpaired
-                if k in session.members
+                session.members[k]["name"] for k in unpaired if k in session.members
             )
-            lines.append(
-                f"Primaries without a designated Sub ({len(unpaired)}): "
-                f"{unpaired_names}."
-            )
+            lines.append(f"Primaries without a designated Sub ({len(unpaired)}): {unpaired_names}.")
             lines.append(
                 "Click 🔁 Pair subs to attach a sub to any of them. "
                 "Subs may not cover every primary; that's expected."
             )
         # session.subs in paired mode = overflow only (members who
         # couldn't pair). Typically empty in the 30-signup case.
-        sub_names = [
-            session.members[k]["name"] for k in session.subs if k in session.members
-        ]
+        sub_names = [session.members[k]["name"] for k in session.subs if k in session.members]
         if sub_names:
             lines.append(
                 f"🪑 Available subs ({len(sub_names)}): "
@@ -1770,9 +1828,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 f"or leave as bench."
             )
     else:
-        sub_names = [
-            session.members[k]["name"] for k in session.subs if k in session.members
-        ]
+        sub_names = [session.members[k]["name"] for k in session.subs if k in session.members]
         if sub_names:
             lines.append(f"🪑 Subs ({len(sub_names)}): {', '.join(sub_names)}")
         else:
@@ -1785,18 +1841,14 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         per_phase = []
         for p in session.iter_phases():
             assigned = sum(
-                len(zone_members)
-                for zone_members in session.assignments_for_phase(p).values()
+                len(zone_members) for zone_members in session.assignments_for_phase(p).values()
             )
-            cap = sum(
-                int(z.max_for_phase(p)) for z in session.preset.zones
-            )
+            cap = sum(int(z.max_for_phase(p)) for z in session.preset.zones)
             per_phase.append(f"S{p}: {assigned}/{cap}")
         lines.append(f"📊 Filled: {', '.join(per_phase)}")
     else:
         total_assigned = sum(
-            len(zone_members)
-            for zone_members in session.assignments_for_phase(1).values()
+            len(zone_members) for zone_members in session.assignments_for_phase(1).values()
         )
         total_capacity = session.preset.total_capacity()
         lines.append(f"📊 Filled: {total_assigned} / {total_capacity}")
@@ -1804,10 +1856,12 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     selected = session.selected_zone
     if selected:
         from storm_icons import zone_emoji_prefix
+
         active_icon = zone_emoji_prefix(selected)
         preset_floor = session.floor_for_zone(selected)
         effective_floor = _effective_floor_for_zone(session, selected)
         from storm_strategy import format_power
+
         if effective_floor != preset_floor:
             # A power_band Member Rule lowered the effective minimum for
             # this zone. Surface both so leadership can tell at a glance
@@ -1842,18 +1896,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             # #219: surface short-signup counts up front so officers
             # see the gap before scanning the per-zone fill state.
             lines.append(
-                f"- ⚠️ {af['starters_short']} of 20 starter seats unfilled "
-                f"(short on signups)."
+                f"- ⚠️ {af['starters_short']} of 20 starter seats unfilled (short on signups)."
             )
-        lines.append(
-            f"- Per-member rules applied: {af['per_member_rules_applied']}"
-        )
+        lines.append(f"- Per-member rules applied: {af['per_member_rules_applied']}")
         lines.append(
             f"- Members slotted via a band-relaxed minimum: {af['power_band_rules_applied']}"
         )
-        lines.append(
-            f"- Auto-filled by power: {af['auto_filled_by_power']}"
-        )
+        lines.append(f"- Auto-filled by power: {af['auto_filled_by_power']}")
         # Count only; the explicit `Primary ↔ Sub` list now lives in
         # the `### Auto-paired Subs:` section above, sourced from
         # current session state.
@@ -1863,6 +1912,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         # remaining open primary zone get a dedicated warning line so
         # officers can see *why* they stayed in the Available pool.
         from storm_strategy import format_power as _fmt_pw
+
         for entry in af.get("unpaired_subs_below_floor") or []:
             lines.append(
                 f"- ⚠️ Couldn't auto-pair **{entry['name']}** "
@@ -1876,19 +1926,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         # manually. `(+N more)` hid exactly the entries they needed.
         if af["gaps"]:
             lines.append(
-                f"- Gaps (power unknown, not slotted) ({len(af['gaps'])}): "
-                f"{', '.join(af['gaps'])}"
+                f"- Gaps (power unknown, not slotted) ({len(af['gaps'])}): {', '.join(af['gaps'])}"
             )
         if af["conflicts"]:
-            lines.append(
-                f"- Conflicts ({len(af['conflicts'])}): "
-                f"{'; '.join(af['conflicts'])}"
-            )
+            lines.append(f"- Conflicts ({len(af['conflicts'])}): {'; '.join(af['conflicts'])}")
         else:
             lines.append("- Conflicts: 0")
-        not_on_discord_count = sum(
-            1 for m in session.members.values() if m.get("not_on_discord")
-        )
+        not_on_discord_count = sum(1 for m in session.members.values() if m.get("not_on_discord"))
         lines.append(f"- Not on Discord: {not_on_discord_count}")
 
     # #8 (#240 follow-up): Discord caps embed description at 4096
@@ -1904,10 +1948,10 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         description = (
             description[:budget].rsplit("\n", 1)[0]
             + "\n\n…\n⚠️ Builder details were too long to display in one "
-              "embed — some lines were clipped. The underlying roster "
-              "state is still intact; only the display was trimmed. "
-              "Check your sheet's `Rosters` tab for the full record "
-              "after Approve & Post."
+            "embed — some lines were clipped. The underlying roster "
+            "state is still intact; only the display was trimmed. "
+            "Check your sheet's `Rosters` tab for the full record "
+            "after Approve & Post."
         )
 
     embed = discord.Embed(
@@ -1926,21 +1970,19 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 "💾 Auto-saving as you go. Close anytime; resume from "
                 "/desertstorm signups → ♻️ Resume Team X."
                 if session.event_type == "DS"
-                else
-                "💾 Auto-saving as you go. Close anytime; resume from "
+                else "💾 Auto-saving as you go. Close anytime; resume from "
                 "/canyonstorm signups → ♻️ Resume Team X."
             )
         )
     return embed
 
 
-
-
 # ── Eligibility helpers ──────────────────────────────────────────────────────
 
 
 def _effective_floor_for_zone(
-    session: RosterBuilderSession, zone_name: str,
+    session: RosterBuilderSession,
+    zone_name: str,
 ) -> int:
     """The power threshold a member must meet to be eligible for this
     zone, accounting for both the preset's per-team floor AND any
@@ -1973,7 +2015,8 @@ def _effective_floor_for_zone(
 
 
 def _eligible_member_keys_for_zone(
-    session: RosterBuilderSession, zone_name: str,
+    session: RosterBuilderSession,
+    zone_name: str,
 ) -> tuple[list[str], list[str]]:
     """Return (eligible_keys, below_floor_keys). Both lists exclude
     already-assigned members.
@@ -2011,6 +2054,7 @@ def _eligible_member_keys_for_zone(
             eligible.append(key)
         else:
             below.append(key)
+
     # Sort eligible high-power-first; tie-break on name so the order is
     # content-deterministic (Python's sort is stable, so equal-power
     # members would otherwise fall back to dict-insertion order — fine
@@ -2019,6 +2063,7 @@ def _eligible_member_keys_for_zone(
     def _power_then_name(k: str) -> tuple[int, str]:
         m = session.members[k]
         return (-(m.get("power") or 0), m.get("name") or "")
+
     eligible.sort(key=_power_then_name)
     below.sort(key=_power_then_name)
     return eligible, below
@@ -2103,11 +2148,12 @@ class RosterBuilderView(discord.ui.View):
         if s.is_phase_aware:
             for phase in s.iter_phases():
                 btn = discord.ui.Button(
-                    label=f"Stage {phase}"
-                          + (" •" if phase == s.selected_phase else ""),
-                    style=(discord.ButtonStyle.primary
-                           if phase == s.selected_phase
-                           else discord.ButtonStyle.secondary),
+                    label=f"Stage {phase}" + (" •" if phase == s.selected_phase else ""),
+                    style=(
+                        discord.ButtonStyle.primary
+                        if phase == s.selected_phase
+                        else discord.ButtonStyle.secondary
+                    ),
                     row=0,
                 )
 
@@ -2117,6 +2163,7 @@ class RosterBuilderView(discord.ui.View):
                             return
                         s.selected_phase = p
                         await self._redraw(inter)
+
                     return _on_phase
 
                 btn.callback = _make_callback(phase)
@@ -2127,12 +2174,14 @@ class RosterBuilderView(discord.ui.View):
         # the dropdown stays scannable; the embed line still shows both
         # phases' counts for the broader view.
         if s.preset.zones:
+
             def _zone_option_label(z):
                 count = s.zone_member_count(z.zone)
                 cap = s.zone_capacity(z.zone)
                 if s.is_phase_aware:
                     return f"S{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
                 return f"{z.zone} ({count}/{cap})"[:100]
+
             zone_options = [
                 discord.SelectOption(
                     label=_zone_option_label(z),
@@ -2143,7 +2192,8 @@ class RosterBuilderView(discord.ui.View):
             ]
             zone_select = discord.ui.Select(
                 placeholder="Pick a zone to edit…",
-                min_values=1, max_values=1,
+                min_values=1,
+                max_values=1,
                 options=zone_options,
                 row=zone_row,
             )
@@ -2175,13 +2225,17 @@ class RosterBuilderView(discord.ui.View):
                 label = _format_member_label(m)[:100]
                 is_below = k in below
                 description = "below minimum" if is_below else None
-                options.append(discord.SelectOption(
-                    label=label, value=value, description=description,
-                ))
+                options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=value,
+                        description=description,
+                    )
+                )
             placeholder = (
                 f"Pick a member for {s.selected_zone or 'a zone'}…"
-                if pool else
-                "No members available for this zone."
+                if pool
+                else "No members available for this zone."
             )
             # Surface overflow so the officer knows the dropdown is
             # truncated — Discord caps Select options at 25 and a
@@ -2191,7 +2245,8 @@ class RosterBuilderView(discord.ui.View):
                 placeholder = f"{placeholder} (+{overflow} more)"
             member_select = discord.ui.Select(
                 placeholder=placeholder[:150],
-                min_values=1, max_values=1,
+                min_values=1,
+                max_values=1,
                 options=options,
                 row=member_row,
             )
@@ -2201,7 +2256,8 @@ class RosterBuilderView(discord.ui.View):
                     return
                 if not s.selected_zone:
                     await inter.response.send_message(
-                        "⚠️ Pick a zone first.", ephemeral=True,
+                        "⚠️ Pick a zone first.",
+                        ephemeral=True,
                     )
                     return
                 key = member_select.values[0]
@@ -2220,8 +2276,7 @@ class RosterBuilderView(discord.ui.View):
                     member_label = _format_member_label(member)
                     member_power = member.get("power")
                     floor_power = (
-                        _effective_floor_for_zone(s, s.selected_zone)
-                        if is_below else None
+                        _effective_floor_for_zone(s, s.selected_zone) if is_below else None
                     )
                     prompt_lines = []
                     if is_over_max:
@@ -2237,19 +2292,14 @@ class RosterBuilderView(discord.ui.View):
                             )
                         else:
                             from storm_strategy import format_power
-                            floor_text = (
-                                format_power(floor_power)
-                                if floor_power else "the minimum"
-                            )
+
+                            floor_text = format_power(floor_power) if floor_power else "the minimum"
                             prompt_lines.append(
                                 f"⚠️ **{member_label}**'s power is below "
                                 f"**{s.selected_zone}**'s minimum "
                                 f"({floor_text})."
                             )
-                    prompt_lines.append(
-                        f"Do you want to assign **{member_label}** "
-                        f"anyway?"
-                    )
+                    prompt_lines.append(f"Do you want to assign **{member_label}** anyway?")
                     confirm = _AssignConfirmView(
                         parent_view=self,
                         member_key=key,
@@ -2294,10 +2344,7 @@ class RosterBuilderView(discord.ui.View):
         # so officers can surgically move or remove one person without
         # nuking the whole zone. Disabled when the current zone is
         # empty — there's nothing to edit.
-        zone_count = (
-            s.zone_member_count(s.selected_zone)
-            if s.selected_zone else 0
-        )
+        zone_count = s.zone_member_count(s.selected_zone) if s.selected_zone else 0
         edit_btn = discord.ui.Button(
             label="✏️ Edit zone members",
             style=discord.ButtonStyle.secondary,
@@ -2310,7 +2357,8 @@ class RosterBuilderView(discord.ui.View):
                 return
             if not s.selected_zone:
                 await inter.response.send_message(
-                    "⚠️ Pick a zone first.", ephemeral=True,
+                    "⚠️ Pick a zone first.",
+                    ephemeral=True,
                 )
                 return
             edit_view = _ZoneMemberEditView(
@@ -2319,8 +2367,7 @@ class RosterBuilderView(discord.ui.View):
                 phase=s.selected_phase,
             )
             await inter.response.send_message(
-                f"✏️ Editing **{s.selected_zone}** — pick a member, "
-                f"then pick where to send them.",
+                f"✏️ Editing **{s.selected_zone}** — pick a member, then pick where to send them.",
                 view=edit_view,
                 ephemeral=True,
             )
@@ -2330,7 +2377,8 @@ class RosterBuilderView(discord.ui.View):
 
         unassign_btn = discord.ui.Button(
             label="🧹 Clear this zone",
-            style=discord.ButtonStyle.secondary, row=action_row,
+            style=discord.ButtonStyle.secondary,
+            row=action_row,
         )
 
         async def _unassign(inter: discord.Interaction):
@@ -2351,45 +2399,31 @@ class RosterBuilderView(discord.ui.View):
         unassign_btn.callback = _unassign
         self.add_item(unassign_btn)
 
-        move_to_subs_btn = discord.ui.Button(
-            label="🪑 Add all unassigned to Subs", style=discord.ButtonStyle.secondary, row=action_row,
+        # 🪑 Manage subs (#274). Opens an ephemeral menu with both sub-pool
+        # directions: bulk "Add all unassigned to Subs" (the old one-click
+        # action) AND "Return a sub to available" so an officer can pull a
+        # member back out of the sub pool and make them a starter — the
+        # missing reverse that blocked starter/sub swaps. Combining them
+        # under one button keeps the action_row within Discord's 5-button
+        # cap (phase-aware structured paired mode is already full).
+        manage_subs_btn = discord.ui.Button(
+            label="🪑 Manage subs",
+            style=discord.ButtonStyle.secondary,
+            row=action_row,
         )
 
-        async def _move_to_subs(inter: discord.Interaction):
+        async def _manage_subs(inter: discord.Interaction):
             if not await self._guard_owner(inter):
                 return
-            # Bulk move: every member in this team's available pool who
-            # isn't already a primary in any phase + isn't already in
-            # subs (or paired with a primary, in paired mode) goes to
-            # the subs pool. Subs have no minimum power filter — this
-            # is a pure pool transfer, not an eligibility check.
-            primaries: set[str] = set()
-            for phase in s.iter_phases():
-                for zone_members in s.assignments_for_phase(phase).values():
-                    primaries.update(zone_members)
-            already_subs = set(s.subs)
-            paired_keys = set(s.paired_subs.values()) if s.is_paired else set()
-            to_move = [
-                key for key in s.members.keys()
-                if key not in primaries
-                and key not in already_subs
-                and key not in paired_keys
-            ]
-            if not to_move:
-                await inter.response.send_message(
-                    "⚠️ No unassigned members to move. Everyone in this "
-                    "team's pool is already assigned as a primary or sub.",
-                    ephemeral=True,
-                )
-                return
-            s.subs.extend(to_move)
-            s.prune_stale_overrides()
-            s.prune_stale_pairings()
-            s.auto_fill_summary = None
-            await self._redraw(inter)
+            menu = _SubsManageView(parent_view=self)
+            await inter.response.send_message(
+                menu.render_content(),
+                view=menu,
+                ephemeral=True,
+            )
 
-        move_to_subs_btn.callback = _move_to_subs
-        self.add_item(move_to_subs_btn)
+        manage_subs_btn.callback = _manage_subs
+        self.add_item(manage_subs_btn)
 
         # Pair subs button (paired mode only). Opens an ephemeral view
         # with a running pair list + Primary Select + Sub Select +
@@ -2399,7 +2433,9 @@ class RosterBuilderView(discord.ui.View):
         # + separate Re-pair flow that #168 retired.
         if s.is_paired:
             pair_btn = discord.ui.Button(
-                label="🔁 Pair subs", style=discord.ButtonStyle.secondary, row=action_row,
+                label="🔁 Pair subs",
+                style=discord.ButtonStyle.secondary,
+                row=action_row,
             )
 
             async def _pair_subs(inter: discord.Interaction):
@@ -2421,11 +2457,13 @@ class RosterBuilderView(discord.ui.View):
         if s.is_structured:
             auto_fill_btn = discord.ui.Button(
                 label="🎯 Auto-fill",
-                style=discord.ButtonStyle.primary, row=auto_fill_row,
+                style=discord.ButtonStyle.primary,
+                row=auto_fill_row,
             )
 
             async def _run_auto_fill(
-                inter: discord.Interaction, *,
+                inter: discord.Interaction,
+                *,
                 strategy: str = "balanced",
             ):
                 """Actually execute the auto-fill + refresh. Called by
@@ -2438,13 +2476,20 @@ class RosterBuilderView(discord.ui.View):
                 logger.info(
                     "[STORM AUTO-FILL] start: guild=%s event=%s team=%s "
                     "preset=%s strategy=%s pool_size=%d (members=%s)",
-                    s.guild_id, s.event_type, s.team,
-                    s.preset.name, strategy, len(s.members),
+                    s.guild_id,
+                    s.event_type,
+                    s.team,
+                    s.preset.name,
+                    strategy,
+                    len(s.members),
                     [
-                        {"key": k, "name": m.get("name"),
-                         "discord_id": m.get("discord_id"),
-                         "power": m.get("power"),
-                         "not_on_discord": m.get("not_on_discord")}
+                        {
+                            "key": k,
+                            "name": m.get("name"),
+                            "discord_id": m.get("discord_id"),
+                            "power": m.get("power"),
+                            "not_on_discord": m.get("not_on_discord"),
+                        }
                         for k, m in list(s.members.items())[:20]
                     ],
                 )
@@ -2453,7 +2498,9 @@ class RosterBuilderView(discord.ui.View):
                 except Exception as e:
                     logger.exception(
                         "[STORM AUTO-FILL] crashed for guild=%s event=%s: %s",
-                        s.guild_id, s.event_type, e,
+                        s.guild_id,
+                        s.event_type,
+                        e,
                     )
                     await inter.response.send_message(
                         f"⚠️ Auto-fill hit an unexpected error: `{type(e).__name__}: {str(e)[:120]}`. "
@@ -2464,9 +2511,13 @@ class RosterBuilderView(discord.ui.View):
                 logger.info(
                     "[STORM AUTO-FILL] done: guild=%s event=%s strategy=%s summary=%s "
                     "assignments=%s subs=%d paired=%d",
-                    s.guild_id, s.event_type, strategy, summary,
+                    s.guild_id,
+                    s.event_type,
+                    strategy,
+                    summary,
                     {z: names for z, names in s.assignments.items() if names},
-                    len(s.subs), len(s.paired_subs),
+                    len(s.subs),
+                    len(s.paired_subs),
                 )
                 await self._redraw(inter)
 
@@ -2488,9 +2539,9 @@ class RosterBuilderView(discord.ui.View):
                     "\n"
                     "- ⚖️ **Balanced spread:** one starter per zone per "
                     "pass, power distributed across every zone.\n"
-                    "- 💪 **Strength to priority:** fill the top-priority "
-                    "zone fully with the strongest members before moving "
-                    "on."
+                    "- 💪 **Strength to priority:** send the strongest "
+                    "members to the highest-priority zones first, keeping "
+                    "power even between zones that share a priority."
                 )
                 if s.has_existing_assignments():
                     body = (
@@ -2500,7 +2551,9 @@ class RosterBuilderView(discord.ui.View):
                         "will be lost.\n\n"
                     ) + body
                 await inter.response.send_message(
-                    body, view=picker_view, ephemeral=True,
+                    body,
+                    view=picker_view,
+                    ephemeral=True,
                 )
                 try:
                     picker_view.message = await inter.original_response()
@@ -2519,14 +2572,17 @@ class RosterBuilderView(discord.ui.View):
             if post_row is not None:
                 approve_image_btn = discord.ui.Button(
                     label="🖼️ Approve & Post (with image)",
-                    style=discord.ButtonStyle.success, row=final_row,
+                    style=discord.ButtonStyle.success,
+                    row=final_row,
                 )
 
                 async def _approve_with_image(inter: discord.Interaction):
                     if not await self._guard_owner(inter):
                         return
                     await _finalize_structured_roster(
-                        inter, self, include_image=True,
+                        inter,
+                        self,
+                        include_image=True,
                     )
 
                 approve_image_btn.callback = _approve_with_image
@@ -2534,14 +2590,17 @@ class RosterBuilderView(discord.ui.View):
 
                 approve_text_btn = discord.ui.Button(
                     label="📄 Approve & Post (text only)",
-                    style=discord.ButtonStyle.success, row=final_row,
+                    style=discord.ButtonStyle.success,
+                    row=final_row,
                 )
 
                 async def _approve_text_only(inter: discord.Interaction):
                     if not await self._guard_owner(inter):
                         return
                     await _finalize_structured_roster(
-                        inter, self, include_image=False,
+                        inter,
+                        self,
+                        include_image=False,
                     )
 
                 approve_text_btn.callback = _approve_text_only
@@ -2549,7 +2608,8 @@ class RosterBuilderView(discord.ui.View):
             else:
                 approve_btn = discord.ui.Button(
                     label="✅ Approve & Post",
-                    style=discord.ButtonStyle.success, row=final_row,
+                    style=discord.ButtonStyle.success,
+                    row=final_row,
                 )
 
                 async def _approve(inter: discord.Interaction):
@@ -2559,7 +2619,8 @@ class RosterBuilderView(discord.ui.View):
                     picker = _ApprovePostPickerView(parent_view=self)
                     await inter.response.send_message(
                         "📬 **Approve & Post.** Pick how to post the roster:",
-                        view=picker, ephemeral=True,
+                        view=picker,
+                        ephemeral=True,
                     )
                     try:
                         picker.message = await inter.original_response()
@@ -2572,7 +2633,8 @@ class RosterBuilderView(discord.ui.View):
             preview_row = post_row if post_row is not None else final_row
             preview_btn = discord.ui.Button(
                 label="📄 Preview mail",
-                style=discord.ButtonStyle.secondary, row=preview_row,
+                style=discord.ButtonStyle.secondary,
+                row=preview_row,
             )
 
             async def _preview(inter: discord.Interaction):
@@ -2584,7 +2646,9 @@ class RosterBuilderView(discord.ui.View):
             self.add_item(preview_btn)
         else:
             mail_btn = discord.ui.Button(
-                label="📄 Generate mail", style=discord.ButtonStyle.primary, row=final_row,
+                label="📄 Generate mail",
+                style=discord.ButtonStyle.primary,
+                row=final_row,
             )
 
             async def _gen_mail(inter: discord.Interaction):
@@ -2596,7 +2660,9 @@ class RosterBuilderView(discord.ui.View):
             self.add_item(mail_btn)
 
             save_preset_btn = discord.ui.Button(
-                label="💾 Save as preset", style=discord.ButtonStyle.success, row=final_row,
+                label="💾 Save as preset",
+                style=discord.ButtonStyle.success,
+                row=final_row,
             )
 
             async def _save_preset(inter: discord.Interaction):
@@ -2620,7 +2686,9 @@ class RosterBuilderView(discord.ui.View):
         )
         render_row = post_row if post_row is not None else final_row
         render_btn = discord.ui.Button(
-            label=render_label, style=discord.ButtonStyle.secondary, row=render_row,
+            label=render_label,
+            style=discord.ButtonStyle.secondary,
+            row=render_row,
         )
 
         async def _render(inter: discord.Interaction):
@@ -2636,13 +2704,10 @@ class RosterBuilderView(discord.ui.View):
         # Button label switches from "❌ Cancel" (which implied
         # destruction) to "👋 Close (draft saved)" so officers know
         # they can come back via ♻️ Resume.
-        cancel_label = (
-            "👋 Close (draft saved)" if s.is_structured else "✅ Done"
-        )
+        cancel_label = "👋 Close (draft saved)" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
             label=cancel_label,
-            style=discord.ButtonStyle.secondary
-            if s.is_structured else discord.ButtonStyle.danger,
+            style=discord.ButtonStyle.secondary if s.is_structured else discord.ButtonStyle.danger,
             row=final_row,
         )
 
@@ -2652,10 +2717,7 @@ class RosterBuilderView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             if s.is_structured:
-                hub_cmd = (
-                    "/desertstorm signups" if s.event_type == "DS"
-                    else "/canyonstorm signups"
-                )
+                hub_cmd = "/desertstorm signups" if s.event_type == "DS" else "/canyonstorm signups"
                 close_msg = (
                     f"👋 Builder closed. **Your draft is saved** — "
                     f"come back via `{hub_cmd}` and click "
@@ -2694,7 +2756,7 @@ class RosterBuilderView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this builder can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2708,7 +2770,8 @@ class RosterBuilderView(discord.ui.View):
         self._user_action_since_open = True
         self._rebuild()
         await inter.response.edit_message(
-            embed=_render_builder_embed(self.session), view=self,
+            embed=_render_builder_embed(self.session),
+            view=self,
         )
 
     def _release_session_lock(self) -> None:
@@ -2720,14 +2783,21 @@ class RosterBuilderView(discord.ui.View):
             return
         try:
             import config
+
             config.release_storm_session(
-                s.guild_id, s.event_type, s.event_date or "", s.team or "",
+                s.guild_id,
+                s.event_type,
+                s.event_date or "",
+                s.team or "",
             )
         except Exception as e:
             logger.warning(
-                "[STORM BUILDER] release_storm_session failed for "
-                "guild=%s event=%s/%s team=%s: %s",
-                s.guild_id, s.event_type, s.event_date, s.team, e,
+                "[STORM BUILDER] release_storm_session failed for guild=%s event=%s/%s team=%s: %s",
+                s.guild_id,
+                s.event_type,
+                s.event_date,
+                s.team,
+                e,
             )
 
     async def on_timeout(self) -> None:
@@ -2801,7 +2871,8 @@ class _ZoneMemberEditView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can edit.", ephemeral=True,
+                DENY_NOT_OWNER,
+                ephemeral=True,
             )
             return False
         return True
@@ -2810,29 +2881,31 @@ class _ZoneMemberEditView(discord.ui.View):
         self.clear_items()
         s = self.parent_view.session
 
-        zone_members = list(
-            s.assignments_for_phase(self.phase).get(self.zone, [])
-        )
+        zone_members = list(s.assignments_for_phase(self.phase).get(self.zone, []))
 
         # Member select (row 0) — the zone's current members.
         if zone_members:
             member_options = []
             for k in zone_members[:25]:
                 m = s.members.get(k, {"name": k})
-                member_options.append(discord.SelectOption(
-                    label=_format_member_label(m)[:100],
-                    value=k[:100],
-                    default=(k == self.selected_member),
-                ))
+                member_options.append(
+                    discord.SelectOption(
+                        label=_format_member_label(m)[:100],
+                        value=k[:100],
+                        default=(k == self.selected_member),
+                    )
+                )
             m_placeholder = (
                 f"Picked: {self._picked_member_label()}"
-                if self.selected_member else
-                f"Pick a member from {self.zone}…"
+                if self.selected_member
+                else f"Pick a member from {self.zone}…"
             )
             m_select = discord.ui.Select(
                 placeholder=m_placeholder[:150],
                 options=member_options,
-                min_values=1, max_values=1, row=0,
+                min_values=1,
+                max_values=1,
+                row=0,
             )
 
             async def _on_member_pick(inter: discord.Interaction):
@@ -2859,11 +2932,13 @@ class _ZoneMemberEditView(discord.ui.View):
         # officers can spot over-cap destinations before clicking
         # Apply.
         if self.selected_member:
-            dest_options = [discord.SelectOption(
-                label="🗑️ Remove (no destination zone)"[:100],
-                value=self.REMOVE_VALUE,
-                default=(self.selected_destination == self.REMOVE_VALUE),
-            )]
+            dest_options = [
+                discord.SelectOption(
+                    label="🗑️ Remove (no destination zone)"[:100],
+                    value=self.REMOVE_VALUE,
+                    default=(self.selected_destination == self.REMOVE_VALUE),
+                )
+            ]
             for z in s.preset.zones:
                 if z.zone == self.zone:
                     continue
@@ -2874,23 +2949,27 @@ class _ZoneMemberEditView(discord.ui.View):
                 # over-cap moves before clicking Apply.
                 over_hint = " ⚠️ at cap" if count >= cap and cap > 0 else ""
                 label = f"↔️ Move to {z.zone} {cap_hint}{over_hint}"
-                dest_options.append(discord.SelectOption(
-                    label=label[:100],
-                    value=z.zone[:100],
-                    default=(self.selected_destination == z.zone),
-                ))
+                dest_options.append(
+                    discord.SelectOption(
+                        label=label[:100],
+                        value=z.zone[:100],
+                        default=(self.selected_destination == z.zone),
+                    )
+                )
                 if len(dest_options) >= 25:  # Discord cap
                     break
 
             d_placeholder = (
                 f"Destination: {self.selected_destination}"
-                if self.selected_destination else
-                "Pick where to send them (or Remove)…"
+                if self.selected_destination
+                else "Pick where to send them (or Remove)…"
             )
             d_select = discord.ui.Select(
                 placeholder=d_placeholder[:150],
                 options=dest_options,
-                min_values=1, max_values=1, row=1,
+                min_values=1,
+                max_values=1,
+                row=1,
             )
 
             async def _on_dest_pick(inter: discord.Interaction):
@@ -2908,10 +2987,7 @@ class _ZoneMemberEditView(discord.ui.View):
             self.add_item(d_select)
 
         # Apply / Cancel (row 2).
-        can_apply = (
-            self.selected_member is not None
-            and self.selected_destination is not None
-        )
+        can_apply = self.selected_member is not None and self.selected_destination is not None
         apply_btn = discord.ui.Button(
             label="✅ Apply",
             style=discord.ButtonStyle.success,
@@ -2933,7 +3009,8 @@ class _ZoneMemberEditView(discord.ui.View):
         if not self.selected_member:
             return ""
         m = self.parent_view.session.members.get(
-            self.selected_member, {"name": self.selected_member},
+            self.selected_member,
+            {"name": self.selected_member},
         )
         return _format_member_label(m)
 
@@ -2959,15 +3036,10 @@ class _ZoneMemberEditView(discord.ui.View):
             pass  # already gone from source somehow — be defensive
 
         if dest == self.REMOVE_VALUE:
-            ack = (
-                f"🗑️ Removed **{member_label}** from **{self.zone}**."
-            )
+            ack = f"🗑️ Removed **{member_label}** from **{self.zone}**."
         else:
             s.assignments_for_phase(self.phase)[dest].append(member_key)
-            ack = (
-                f"↔️ Moved **{member_label}** from **{self.zone}** "
-                f"to **{dest}**."
-            )
+            ack = f"↔️ Moved **{member_label}** from **{self.zone}** to **{dest}**."
 
         s.prune_stale_overrides()
         s.prune_stale_pairings()
@@ -3003,6 +3075,231 @@ class _ZoneMemberEditView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content="↩️ Edit cancelled. No changes made.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+class _SubsManageView(discord.ui.View):
+    """Ephemeral menu for the sub pool (#274 tester ask). Two actions in
+    one place, opened by the main builder's 🪑 Manage subs button:
+
+      - 🪑 Add all unassigned to Subs — bulk-sweep every member who isn't
+        a primary and isn't already a sub into the sub pool (the old
+        one-click behaviour, now living here).
+      - ↩️ Return a sub to available — pull one member back OUT of the
+        sub pool so they can be assigned as a starter again. Before this,
+        moving to subs was a one-way trip: subs are hidden from the
+        zone-assign picker (`assigned_member_keys_in_phase` unions
+        `session.subs`), so an officer couldn't swap a starter and a sub.
+
+    Returning a sub clears any pairing where they're the sub side, in
+    every phase — `prune_stale_pairings` only drops pairings by the
+    PRIMARY leaving a zone, so the sub-side cleanup is done explicitly.
+    """
+
+    def __init__(self, *, parent_view: "RosterBuilderView"):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.selected_sub: Optional[str] = None
+        self._build()
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _unassigned_keys(self) -> list[str]:
+        """Members eligible for the bulk add: in this team's pool, not a
+        primary in any phase, not already a sub, and (paired mode) not
+        already paired with a primary."""
+        s = self.parent_view.session
+        primaries: set[str] = set()
+        for phase in s.iter_phases():
+            for zone_members in s.assignments_for_phase(phase).values():
+                primaries.update(zone_members)
+        already_subs = set(s.subs)
+        paired_keys = set(s.paired_subs.values()) if s.is_paired else set()
+        return [
+            key
+            for key in s.members.keys()
+            if key not in primaries and key not in already_subs and key not in paired_keys
+        ]
+
+    def render_content(self) -> str:
+        s = self.parent_view.session
+        sub_count = len(s.subs)
+        unassigned = len(self._unassigned_keys())
+        return (
+            "🪑 **Manage subs**\n"
+            f"Sub pool: **{sub_count}** | unassigned in pool: **{unassigned}**.\n\n"
+            "- **Add all unassigned to Subs** moves everyone not already a "
+            "primary or sub into the sub pool.\n"
+            "- **Return a sub to available** pulls one member back out so "
+            "you can make them a starter (then send the starter you're "
+            "replacing to subs)."
+        )
+
+    def _build(self) -> None:
+        self.clear_items()
+        s = self.parent_view.session
+
+        # Return-a-sub select (row 0) — only when there are subs.
+        if s.subs:
+            options = []
+            for k in s.subs[:_MAX_DROPDOWN_OPTIONS]:
+                m = s.members.get(k, {"name": k})
+                options.append(
+                    discord.SelectOption(
+                        label=_format_member_label(m)[:100],
+                        value=k[:100],
+                        default=(k == self.selected_sub),
+                    )
+                )
+            placeholder = (
+                f"Picked: {self._picked_sub_label()}"
+                if self.selected_sub
+                else "Pick a sub to return to available…"
+            )
+            overflow = len(s.subs) - len(options)
+            if overflow > 0:
+                placeholder = f"{placeholder} (+{overflow} more)"
+            sub_select = discord.ui.Select(
+                placeholder=placeholder[:150],
+                options=options,
+                min_values=1,
+                max_values=1,
+                row=0,
+            )
+
+            async def _on_sub_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                vals = inter.data.get("values") or []
+                self.selected_sub = vals[0] if vals else None
+                self._build()
+                try:
+                    await inter.response.edit_message(content=self.render_content(), view=self)
+                except discord.HTTPException:
+                    pass
+
+            sub_select.callback = _on_sub_pick
+            self.add_item(sub_select)
+
+        # Action buttons (row 1).
+        add_all_btn = discord.ui.Button(
+            label="🪑 Add all unassigned to Subs",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+            disabled=not self._unassigned_keys(),
+        )
+        add_all_btn.callback = self._on_add_all
+        self.add_item(add_all_btn)
+
+        return_btn = discord.ui.Button(
+            label="↩️ Return to available",
+            style=discord.ButtonStyle.primary,
+            row=1,
+            disabled=self.selected_sub is None,
+        )
+        return_btn.callback = self._on_return_sub
+        self.add_item(return_btn)
+
+        done_btn = discord.ui.Button(
+            label="✔ Done",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        done_btn.callback = self._on_done
+        self.add_item(done_btn)
+
+    def _picked_sub_label(self) -> str:
+        if not self.selected_sub:
+            return ""
+        m = self.parent_view.session.members.get(
+            self.selected_sub,
+            {"name": self.selected_sub},
+        )
+        return _format_member_label(m)
+
+    async def _refresh_parent(self) -> None:
+        """Rebuild + re-render the main builder so pool/sub changes show."""
+        s = self.parent_view.session
+        if self.parent_view.message is not None:
+            try:
+                self.parent_view._user_action_since_open = True
+                self.parent_view._rebuild()
+                await self.parent_view.message.edit(
+                    embed=_render_builder_embed(s),
+                    view=self.parent_view,
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _on_add_all(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        s = self.parent_view.session
+        to_move = self._unassigned_keys()
+        if not to_move:
+            await inter.response.send_message(
+                "⚠️ No unassigned members to move. Everyone in this team's "
+                "pool is already assigned as a primary or sub.",
+                ephemeral=True,
+            )
+            return
+        s.subs.extend(to_move)
+        s.prune_stale_overrides()
+        s.prune_stale_pairings()
+        s.auto_fill_summary = None
+        self.selected_sub = None
+        self._build()
+        try:
+            await inter.response.edit_message(content=self.render_content(), view=self)
+        except discord.HTTPException:
+            pass
+        await self._refresh_parent()
+
+    async def _on_return_sub(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        s = self.parent_view.session
+        key = self.selected_sub
+        if not key or key not in s.subs:
+            self.selected_sub = None
+            self._build()
+            try:
+                await inter.response.edit_message(content=self.render_content(), view=self)
+            except discord.HTTPException:
+                pass
+            return
+        s.subs.remove(key)
+        # Clear any pairing where this member is the SUB side, every phase.
+        for phase in s.iter_phases():
+            pairings = s.paired_subs_for_phase(phase)
+            for primary in [p for p, sub in pairings.items() if sub == key]:
+                del pairings[primary]
+        s.prune_stale_overrides()
+        s.auto_fill_summary = None
+        self.selected_sub = None
+        self._build()
+        try:
+            await inter.response.edit_message(content=self.render_content(), view=self)
+        except discord.HTTPException:
+            pass
+        await self._refresh_parent()
+
+    async def _on_done(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="✔ Done managing subs.",
                 view=None,
             )
         except discord.HTTPException:
@@ -3064,14 +3361,16 @@ class _AssignConfirmView(discord.ui.View):
         # callbacks remain regular methods callable from unit tests.
         yes_btn = discord.ui.Button(
             label="✅ Yes, assign anyway",
-            style=discord.ButtonStyle.danger, row=0,
+            style=discord.ButtonStyle.danger,
+            row=0,
         )
         yes_btn.callback = self.yes
         self.add_item(yes_btn)
 
         no_btn = discord.ui.Button(
             label="↩️ No, cancel",
-            style=discord.ButtonStyle.secondary, row=0,
+            style=discord.ButtonStyle.secondary,
+            row=0,
         )
         no_btn.callback = self.no
         self.add_item(no_btn)
@@ -3079,7 +3378,8 @@ class _AssignConfirmView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER,
+                ephemeral=True,
             )
             return False
         return True
@@ -3145,9 +3445,8 @@ class _AssignConfirmView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content=(
-                    f"↩️ Cancelled. **{self.member_label}** was not "
-                    f"added to **{self.zone}**."
+                content=CANCEL_BACKPEDAL.format(
+                    detail=f"**{self.member_label}** was not added to **{self.zone}**.",
                 ),
                 view=None,
             )
@@ -3209,13 +3508,17 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER,
+                ephemeral=True,
             )
             return False
         return True
 
     async def _run_with_strategy(
-        self, inter: discord.Interaction, strategy: str, label: str,
+        self,
+        inter: discord.Interaction,
+        strategy: str,
+        label: str,
     ) -> None:
         if not await self._guard_owner(inter):
             return
@@ -3230,7 +3533,9 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         except Exception as e:
             logger.exception(
                 "[STORM AUTO-FILL] picker-path crashed for guild=%s event=%s: %s",
-                s.guild_id, s.event_type, e,
+                s.guild_id,
+                s.event_type,
+                e,
             )
             try:
                 await inter.response.edit_message(
@@ -3245,9 +3550,11 @@ class _AutoFillStrategyPickerView(discord.ui.View):
                 pass
             return
         logger.info(
-            "[STORM AUTO-FILL] picker-path done: guild=%s event=%s "
-            "strategy=%s summary=%s",
-            s.guild_id, s.event_type, strategy, summary,
+            "[STORM AUTO-FILL] picker-path done: guild=%s event=%s strategy=%s summary=%s",
+            s.guild_id,
+            s.event_type,
+            strategy,
+            summary,
         )
         # Collapse the picker to a brief "done — look up" line and
         # remove the buttons so the officer's eye is pulled to the
@@ -3257,9 +3564,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         # inconsistent semantics for component-attached messages.
         try:
             await inter.response.edit_message(
-                content=(
-                    f"✅ {label} complete. Builder above is updated."
-                ),
+                content=(f"✅ {label} complete. Builder above is updated."),
                 view=None,
             )
         except discord.HTTPException:
@@ -3283,26 +3588,24 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     # read fine against the blue background (the earlier 🎯 / 🔝
     # rendered washed-out at small sizes). All three buttons fit on a
     # single row.
-    @discord.ui.button(label="⚖️ Balanced spread",
-                       style=discord.ButtonStyle.primary, row=0)
-    async def balanced(self, inter: discord.Interaction,
-                       _btn: discord.ui.Button):
+    @discord.ui.button(label="⚖️ Balanced spread", style=discord.ButtonStyle.primary, row=0)
+    async def balanced(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
-            inter, "balanced", "⚖️ Balanced spread auto-fill",
+            inter,
+            "balanced",
+            "⚖️ Balanced spread auto-fill",
         )
 
-    @discord.ui.button(label="💪 Strength to priority",
-                       style=discord.ButtonStyle.primary, row=0)
-    async def priority_greedy(self, inter: discord.Interaction,
-                              _btn: discord.ui.Button):
+    @discord.ui.button(label="💪 Strength to priority", style=discord.ButtonStyle.primary, row=0)
+    async def priority_greedy(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
-            inter, "priority_greedy", "💪 Strength-to-priority auto-fill",
+            inter,
+            "priority_greedy",
+            "💪 Strength-to-priority auto-fill",
         )
 
-    @discord.ui.button(label="↩️ Cancel Auto-fill",
-                       style=discord.ButtonStyle.secondary, row=0)
-    async def cancel(self, inter: discord.Interaction,
-                     _btn: discord.ui.Button):
+    @discord.ui.button(label="↩️ Cancel Auto-fill", style=discord.ButtonStyle.secondary, row=0)
+    async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard_owner(inter):
             return
         if self.is_finished():
@@ -3328,6 +3631,23 @@ class _AutoFillStrategyPickerView(discord.ui.View):
                 pass
 
 
+async def _drop_approve_picker(inter: discord.Interaction) -> None:
+    """Drop the Approve & Post picker before the finalize flow takes
+    over. The finalize step posts the mail to channel + sends its own
+    ephemeral result ack, both of which are better as the most-recent
+    visible messages than a disabled picker sitting above them. Defers
+    the interaction first so subsequent followup.send calls inside the
+    finalize step still work."""
+    try:
+        await inter.response.defer()
+    except discord.HTTPException:
+        pass
+    try:
+        await inter.delete_original_response()
+    except discord.HTTPException:
+        pass
+
+
 class _ApprovePostPickerView(discord.ui.View):
     """Phase-aware-only fallback for the Approve & Post choice (#225).
 
@@ -3346,45 +3666,42 @@ class _ApprovePostPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER,
+                ephemeral=True,
             )
             return False
         return True
 
-    @discord.ui.button(label="🖼️ With image",
-                       style=discord.ButtonStyle.success)
-    async def with_image(self, inter: discord.Interaction,
-                         _btn: discord.ui.Button):
+    @discord.ui.button(label="🖼️ With image", style=discord.ButtonStyle.success)
+    async def with_image(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard_owner(inter):
             return
         if self.is_finished():
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        await _drop_approve_picker(inter)
         await _finalize_structured_roster(
-            inter, self.parent_view, include_image=True,
+            inter,
+            self.parent_view,
+            include_image=True,
         )
 
-    @discord.ui.button(label="📄 Text only",
-                       style=discord.ButtonStyle.success)
-    async def text_only(self, inter: discord.Interaction,
-                        _btn: discord.ui.Button):
+    @discord.ui.button(label="📄 Text only", style=discord.ButtonStyle.success)
+    async def text_only(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard_owner(inter):
             return
         if self.is_finished():
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        await _drop_approve_picker(inter)
         await _finalize_structured_roster(
-            inter, self.parent_view, include_image=False,
+            inter,
+            self.parent_view,
+            include_image=False,
         )
 
-    @discord.ui.button(label="↩️ Cancel",
-                       style=discord.ButtonStyle.secondary)
-    async def cancel(self, inter: discord.Interaction,
-                     _btn: discord.ui.Button):
+    @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard_owner(inter):
             return
         if self.is_finished():
@@ -3436,13 +3753,16 @@ async def _open_pair_subs_view(
     view = _PairSubsView(main_view=main_view)
     try:
         await interaction.response.send_message(
-            content=view.render_content(), view=view, ephemeral=True,
+            content=view.render_content(),
+            view=view,
+            ephemeral=True,
         )
         view.message = await interaction.original_response()
     except discord.HTTPException as e:
         logger.warning(
             "[STORM BUILDER] pair-subs view failed to send (guild=%s): %s",
-            s.guild_id, e,
+            s.guild_id,
+            e,
         )
 
 
@@ -3534,8 +3854,7 @@ class _PairSubsView(discord.ui.View):
         pair_rows = self._pair_rows()
         if pair_rows:
             pair_block = "\n".join(
-                f"• **{p}** → **{s_name}**  _({zone})_"
-                for p, s_name, zone in pair_rows
+                f"• **{p}** → **{s_name}**  _({zone})_" for p, s_name, zone in pair_rows
             )
             pairs_line = f"\n\n**Current pairings ({len(pair_rows)}):**\n{pair_block}"
         else:
@@ -3546,9 +3865,7 @@ class _PairSubsView(discord.ui.View):
                 for k, _zone in unpaired
                 if k in self.main_view.session.members
             )
-            unpaired_line = (
-                f"\n\n⚠️ **Unpaired primaries ({len(unpaired)}):** {unpaired_block}"
-            )
+            unpaired_line = f"\n\n⚠️ **Unpaired primaries ({len(unpaired)}):** {unpaired_block}"
         else:
             unpaired_line = ""
         return header + pairs_line + unpaired_line
@@ -3577,15 +3894,20 @@ class _PairSubsView(discord.ui.View):
             for primary_key, zone in unpaired[:_MAX_DROPDOWN_OPTIONS]:
                 m = s.members.get(primary_key)
                 name = m["name"] if m else primary_key
-                options.append(discord.SelectOption(
-                    label=name[:100],
-                    value=primary_key[:100],
-                    description=zone[:100],
-                    default=(primary_key == self.selected_primary),
-                ))
+                options.append(
+                    discord.SelectOption(
+                        label=name[:100],
+                        value=primary_key[:100],
+                        description=zone[:100],
+                        default=(primary_key == self.selected_primary),
+                    )
+                )
             primary_select = discord.ui.Select(
                 placeholder="Pick an unpaired primary…",
-                min_values=1, max_values=1, options=options, row=0,
+                min_values=1,
+                max_values=1,
+                options=options,
+                row=0,
             )
 
             async def _on_primary(inter: discord.Interaction):
@@ -3595,7 +3917,8 @@ class _PairSubsView(discord.ui.View):
                 self._build_components()
                 try:
                     await inter.response.edit_message(
-                        content=self.render_content(), view=self,
+                        content=self.render_content(),
+                        view=self,
                     )
                 except discord.HTTPException:
                     pass
@@ -3609,15 +3932,20 @@ class _PairSubsView(discord.ui.View):
                 m = s.members.get(sub_key)
                 if not m:
                     continue
-                options.append(discord.SelectOption(
-                    label=_format_member_label(m)[:100],
-                    value=sub_key[:100],
-                    default=(sub_key == self.selected_sub),
-                ))
+                options.append(
+                    discord.SelectOption(
+                        label=_format_member_label(m)[:100],
+                        value=sub_key[:100],
+                        default=(sub_key == self.selected_sub),
+                    )
+                )
             if options:
                 sub_select = discord.ui.Select(
                     placeholder="Pick a sub…",
-                    min_values=1, max_values=1, options=options, row=1,
+                    min_values=1,
+                    max_values=1,
+                    options=options,
+                    row=1,
                 )
 
                 async def _on_sub(inter: discord.Interaction):
@@ -3627,7 +3955,8 @@ class _PairSubsView(discord.ui.View):
                     self._build_components()
                     try:
                         await inter.response.edit_message(
-                            content=self.render_content(), view=self,
+                            content=self.render_content(),
+                            view=self,
                         )
                     except discord.HTTPException:
                         pass
@@ -3636,21 +3965,27 @@ class _PairSubsView(discord.ui.View):
                 self.add_item(sub_select)
 
         assign_btn = discord.ui.Button(
-            label="✅ Assign pair", style=discord.ButtonStyle.primary, row=2,
+            label="✅ Assign pair",
+            style=discord.ButtonStyle.primary,
+            row=2,
             disabled=not (self.selected_primary and self.selected_sub),
         )
         assign_btn.callback = self._on_assign
         self.add_item(assign_btn)
 
         unpair_btn = discord.ui.Button(
-            label="🔄 Unpair…", style=discord.ButtonStyle.secondary, row=2,
+            label="🔄 Unpair…",
+            style=discord.ButtonStyle.secondary,
+            row=2,
             disabled=not bool(self._phase_pairings()),
         )
         unpair_btn.callback = self._enter_unpair_mode
         self.add_item(unpair_btn)
 
         done_btn = discord.ui.Button(
-            label="✔ Done", style=discord.ButtonStyle.secondary, row=2,
+            label="✔ Done",
+            style=discord.ButtonStyle.secondary,
+            row=2,
         )
         done_btn.callback = self._on_done
         self.add_item(done_btn)
@@ -3684,7 +4019,10 @@ class _PairSubsView(discord.ui.View):
             ]
             unpair_select = discord.ui.Select(
                 placeholder="Pick a pair to unpair…",
-                min_values=1, max_values=1, options=options, row=0,
+                min_values=1,
+                max_values=1,
+                options=options,
+                row=0,
             )
 
             async def _on_pick(inter: discord.Interaction):
@@ -3694,7 +4032,8 @@ class _PairSubsView(discord.ui.View):
                 self._build_components()
                 try:
                     await inter.response.edit_message(
-                        content=self.render_content(), view=self,
+                        content=self.render_content(),
+                        view=self,
                     )
                 except discord.HTTPException:
                     pass
@@ -3703,14 +4042,18 @@ class _PairSubsView(discord.ui.View):
             self.add_item(unpair_select)
 
         confirm_btn = discord.ui.Button(
-            label="🔄 Confirm unpair", style=discord.ButtonStyle.danger, row=1,
+            label="🔄 Confirm unpair",
+            style=discord.ButtonStyle.danger,
+            row=1,
             disabled=not self.selected_unpair_primary,
         )
         confirm_btn.callback = self._on_confirm_unpair
         self.add_item(confirm_btn)
 
         back_btn = discord.ui.Button(
-            label="↩️ Back", style=discord.ButtonStyle.secondary, row=1,
+            label="↩️ Back",
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
         back_btn.callback = self._exit_unpair_mode
         self.add_item(back_btn)
@@ -3719,7 +4062,7 @@ class _PairSubsView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.main_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can pair subs.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -3752,7 +4095,8 @@ class _PairSubsView(discord.ui.View):
         self._build_components()
         try:
             await inter.response.edit_message(
-                content=self.render_content(), view=self,
+                content=self.render_content(),
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -3761,7 +4105,8 @@ class _PairSubsView(discord.ui.View):
             if self.main_view.message:
                 self.main_view._rebuild()
                 await self.main_view.message.edit(
-                    embed=_render_builder_embed(s), view=self.main_view,
+                    embed=_render_builder_embed(s),
+                    view=self.main_view,
                 )
         except discord.HTTPException:
             pass
@@ -3774,7 +4119,8 @@ class _PairSubsView(discord.ui.View):
         self._build_components()
         try:
             await inter.response.edit_message(
-                content=self.render_content(), view=self,
+                content=self.render_content(),
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -3787,7 +4133,8 @@ class _PairSubsView(discord.ui.View):
         self._build_components()
         try:
             await inter.response.edit_message(
-                content=self.render_content(), view=self,
+                content=self.render_content(),
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -3797,7 +4144,8 @@ class _PairSubsView(discord.ui.View):
             return
         if not self.selected_unpair_primary:
             await inter.response.send_message(
-                "⚠️ Pick a pair to unpair.", ephemeral=True,
+                "⚠️ Pick a pair to unpair.",
+                ephemeral=True,
             )
             return
         s = self.main_view.session
@@ -3809,7 +4157,8 @@ class _PairSubsView(discord.ui.View):
         self._build_components()
         try:
             await inter.response.edit_message(
-                content=self.render_content(), view=self,
+                content=self.render_content(),
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -3817,7 +4166,8 @@ class _PairSubsView(discord.ui.View):
             if self.main_view.message:
                 self.main_view._rebuild()
                 await self.main_view.message.edit(
-                    embed=_render_builder_embed(s), view=self.main_view,
+                    embed=_render_builder_embed(s),
+                    view=self.main_view,
                 )
         except discord.HTTPException:
             pass
@@ -3825,13 +4175,28 @@ class _PairSubsView(discord.ui.View):
     async def _on_done(self, inter: discord.Interaction):
         if not await self._guard_owner(inter):
             return
+        self.stop()
+        # Drop the picker on Done — the builder above already reflects
+        # the final pairings (each Assign/Unpair edits it in-place), so
+        # leaving a disabled picker below the builder just buries the
+        # actionable view. Disable buttons first as a fallback in case
+        # the delete fails (rate limit, expired token, etc.).
         for item in self.children:
             item.disabled = True
-        self.stop()
         try:
-            await inter.response.edit_message(view=self)
+            await inter.response.defer()
         except discord.HTTPException:
             pass
+        if self.message is not None:
+            try:
+                await self.message.delete()
+            except discord.HTTPException:
+                # Fallback: at least disable the buttons so the picker
+                # can't be re-clicked.
+                try:
+                    await self.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
 
     async def on_timeout(self):
         for item in self.children:
@@ -3850,7 +4215,8 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
         self.preset_name = discord.ui.TextInput(
             label="Preset name (overwrites if exists)",
             default=view.session.preset.name,
-            required=True, max_length=60,
+            required=True,
+            max_length=60,
         )
         self.add_item(self.preset_name)
 
@@ -3858,7 +4224,8 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
         name = (self.preset_name.value or "").strip()
         if not name:
             await inter.response.send_message(
-                "⚠️ Preset name is required.", ephemeral=True,
+                "⚠️ Preset name is required.",
+                ephemeral=True,
             )
             return
         s = self._view.session
@@ -3869,6 +4236,7 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
         # would silently strip it to flat and lose the phase-migration
         # data the officer just built.
         import storm_strategy as ss
+
         new_zones = []
         for z in s.preset.zones:
             # For each phase, prefer the live count if the officer
@@ -3881,32 +4249,38 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
                 return int(z.max_for_phase(phase) or 0)
 
             flat_count = s.zone_member_count(z.zone, phase=1)
-            new_zones.append(ss.ZoneRow(
-                zone=z.zone,
-                max_players=(
-                    flat_count if flat_count > 0 else int(z.max_players)
-                ),
-                max_phase1=_cap_for(1),
-                max_phase2=_cap_for(2),
-                max_phase3=_cap_for(3),
-                min_power_a=int(z.min_power_a or 0),
-                min_power_b=int(z.min_power_b or 0),
-                priority=int(z.priority or 0),
-                priority_phase1=int(z.priority_phase1 or 0),
-                priority_phase2=int(z.priority_phase2 or 0),
-                priority_phase3=int(z.priority_phase3 or 0),
-            ))
+            new_zones.append(
+                ss.ZoneRow(
+                    zone=z.zone,
+                    max_players=(flat_count if flat_count > 0 else int(z.max_players)),
+                    max_phase1=_cap_for(1),
+                    max_phase2=_cap_for(2),
+                    max_phase3=_cap_for(3),
+                    min_power_a=int(z.min_power_a or 0),
+                    min_power_b=int(z.min_power_b or 0),
+                    priority=int(z.priority or 0),
+                    priority_phase1=int(z.priority_phase1 or 0),
+                    priority_phase2=int(z.priority_phase2 or 0),
+                    priority_phase3=int(z.priority_phase3 or 0),
+                )
+            )
         buf = ss.PresetBuffer(
-            name=name, event_type=s.event_type, zones=new_zones,
+            name=name,
+            event_type=s.event_type,
+            zones=new_zones,
             faction=s.preset.faction,
             phase_count=s.preset.phase_count,
         )
         ok = await asyncio.to_thread(
-            ss.save_preset, s.guild_id, s.event_type, buf,
+            ss.save_preset,
+            s.guild_id,
+            s.event_type,
+            buf,
         )
         if ok:
             await inter.response.send_message(
-                f"✅ Saved roster as preset **{name}**.", ephemeral=True,
+                f"✅ Saved roster as preset **{name}**.",
+                ephemeral=True,
             )
         else:
             await inter.response.send_message(
@@ -3927,7 +4301,8 @@ _MAX_MESSAGE_CONTENT = 2000
 
 
 async def _render_and_attach(
-    inter: discord.Interaction, session: RosterBuilderSession,
+    inter: discord.Interaction,
+    session: RosterBuilderSession,
 ) -> None:
     """Render the current roster as a PNG, post it publicly in the
     invoking channel so other leaders can see + reference it, and
@@ -3957,18 +4332,22 @@ async def _render_and_attach(
     except discord.HTTPException as e:
         logger.warning(
             "[STORM RENDER] defer failed (guild=%s): %s",
-            session.guild_id, e,
+            session.guild_id,
+            e,
         )
         return
 
     try:
         import storm_renderer
+
         roster_data = storm_renderer.roster_from_session(session)
         png_bytes = await asyncio.to_thread(storm_renderer.render, roster_data)
     except RuntimeError as e:
         logger.warning(
             "[STORM RENDER] Pillow not available (guild=%s event=%s): %s",
-            session.guild_id, session.event_type, e,
+            session.guild_id,
+            session.event_type,
+            e,
         )
         await inter.followup.send(
             "⚠️ Image render isn't available. The host is missing Pillow. "
@@ -3979,7 +4358,9 @@ async def _render_and_attach(
     except Exception as e:
         logger.exception(
             "[STORM RENDER] failed for guild=%s event=%s: %s",
-            session.guild_id, session.event_type, e,
+            session.guild_id,
+            session.event_type,
+            e,
         )
         await inter.followup.send(
             "⚠️ Couldn't render the roster image. See bot logs.",
@@ -3990,7 +4371,9 @@ async def _render_and_attach(
     if len(png_bytes) > _MAX_ATTACHMENT_BYTES:
         logger.warning(
             "[STORM RENDER] PNG exceeded 25MB (size=%d guild=%s event=%s)",
-            len(png_bytes), session.guild_id, session.event_type,
+            len(png_bytes),
+            session.guild_id,
+            session.event_type,
         )
         await inter.followup.send(
             "⚠️ Rendered roster image is too large to attach "
@@ -4019,14 +4402,16 @@ async def _render_and_attach(
         except discord.Forbidden:
             logger.warning(
                 "[STORM RENDER] no perms to post in channel=%s guild=%s",
-                getattr(inter.channel, "id", None), session.guild_id,
+                getattr(inter.channel, "id", None),
+                session.guild_id,
             )
             # Fall through to ephemeral-only delivery so the officer
             # still gets the image — they just don't get the public copy.
         except discord.HTTPException as e:
             logger.warning(
                 "[STORM RENDER] failed to post public image (guild=%s): %s",
-                session.guild_id, e,
+                session.guild_id,
+                e,
             )
 
     if public_msg is None:
@@ -4055,10 +4440,7 @@ async def _render_and_attach(
         public_message_id=public_msg.id,
     )
     await inter.followup.send(
-        content=(
-            f"🖼️ Roster image posted above. Pick an action below; only "
-            f"you'll see this prompt."
-        ),
+        content=("🖼️ Roster image posted above. Pick an action below; only you'll see this prompt."),
         view=view,
         ephemeral=True,
     )
@@ -4072,9 +4454,17 @@ class _RenderActionView(discord.ui.View):
     seconds later if they keep tweaking."""
 
     def __init__(
-        self, *, owner_id: int, png_bytes: bytes, filename: str,
-        guild_id: int, event_type: str, event_date: str, team: str,
-        public_channel_id: int, public_message_id: int,
+        self,
+        *,
+        owner_id: int,
+        png_bytes: bytes,
+        filename: str,
+        guild_id: int,
+        event_type: str,
+        event_date: str,
+        team: str,
+        public_channel_id: int,
+        public_message_id: int,
     ):
         super().__init__(timeout=900)  # 15 min — enough for a coffee + caption typing
         self.owner_id = owner_id
@@ -4098,7 +4488,9 @@ class _RenderActionView(discord.ui.View):
 
     @discord.ui.button(label="📥 Download", style=discord.ButtonStyle.secondary)
     async def download_btn(
-        self, inter: discord.Interaction, _btn: discord.ui.Button,
+        self,
+        inter: discord.Interaction,
+        _btn: discord.ui.Button,
     ):
         """DM the image to the officer. DMs have native save-to-device
         UI on every Discord client (right-click on desktop, long-press
@@ -4124,7 +4516,9 @@ class _RenderActionView(discord.ui.View):
         except discord.HTTPException as e:
             logger.warning(
                 "[STORM RENDER] download DM failed user=%s guild=%s: %s",
-                inter.user.id, self.guild_id, e,
+                inter.user.id,
+                self.guild_id,
+                e,
             )
             await inter.response.send_message(
                 f"⚠️ DM send failed: {e}. Right-click the channel image to save.",
@@ -4138,12 +4532,15 @@ class _RenderActionView(discord.ui.View):
 
     @discord.ui.button(label="💾 Save to history", style=discord.ButtonStyle.primary)
     async def save_btn(
-        self, inter: discord.Interaction, _btn: discord.ui.Button,
+        self,
+        inter: discord.Interaction,
+        _btn: discord.ui.Button,
     ):
         """Store the (channel, message) pointer so the history browser
         can offer a `📷 View image` button on this event. Image bytes
         live in Discord; we just remember where."""
         import config
+
         if not self.event_date:
             await inter.response.send_message(
                 "⚠️ Can't save to history without an event date. Open the "
@@ -4155,13 +4552,19 @@ class _RenderActionView(discord.ui.View):
         try:
             await asyncio.to_thread(
                 config.save_roster_image_ref,
-                self.guild_id, self.event_type, self.event_date, self.team,
-                self.public_channel_id, self.public_message_id, inter.user.id,
+                self.guild_id,
+                self.event_type,
+                self.event_date,
+                self.team,
+                self.public_channel_id,
+                self.public_message_id,
+                inter.user.id,
             )
         except Exception as e:
             logger.exception(
                 "[STORM RENDER] save_roster_image_ref failed guild=%s: %s",
-                self.guild_id, e,
+                self.guild_id,
+                e,
             )
             await inter.response.send_message(
                 "⚠️ Couldn't save to history. See bot logs.",
@@ -4178,7 +4581,9 @@ class _RenderActionView(discord.ui.View):
 
     @discord.ui.button(label="📢 Post to channel...", style=discord.ButtonStyle.secondary)
     async def post_btn(
-        self, inter: discord.Interaction, _btn: discord.ui.Button,
+        self,
+        inter: discord.Interaction,
+        _btn: discord.ui.Button,
     ):
         """Open a channel picker; once picked, prompt for an optional
         caption, then re-post the image into the chosen channel."""
@@ -4204,8 +4609,13 @@ class _PostToChannelPicker(discord.ui.View):
     modal; the modal's submit handler actually posts the image."""
 
     def __init__(
-        self, *, owner_id: int, png_bytes: bytes, filename: str,
-        event_type: str, event_date: str,
+        self,
+        *,
+        owner_id: int,
+        png_bytes: bytes,
+        filename: str,
+        event_type: str,
+        event_date: str,
     ):
         super().__init__(timeout=300)
         self.owner_id = owner_id
@@ -4222,13 +4632,15 @@ class _PostToChannelPicker(discord.ui.View):
                 discord.ChannelType.news,
             ],
             placeholder="Channel to post to...",
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
         )
 
         async def _on_pick(picker_inter: discord.Interaction):
             if picker_inter.user.id != self.owner_id:
                 await picker_inter.response.send_message(
-                    "⛔ Not for you.", ephemeral=True,
+                    "⛔ Not for you.",
+                    ephemeral=True,
                 )
                 return
             picked = select.values[0]
@@ -4257,8 +4669,12 @@ class _PostCaptionModal(discord.ui.Modal):
     channel and posts the image with the caption as the message body."""
 
     def __init__(
-        self, *, channel_id: int, channel_mention: str,
-        png_bytes: bytes, filename: str,
+        self,
+        *,
+        channel_id: int,
+        channel_mention: str,
+        png_bytes: bytes,
+        filename: str,
     ):
         super().__init__(title="Post roster image to channel")
         self.channel_id = channel_id
@@ -4298,14 +4714,17 @@ class _PostCaptionModal(discord.ui.Modal):
         except discord.HTTPException as e:
             logger.warning(
                 "[STORM RENDER] post-to-channel failed channel=%s: %s",
-                self.channel_id, e,
+                self.channel_id,
+                e,
             )
             await inter.response.send_message(
-                f"⚠️ Discord refused the post: {e}.", ephemeral=True,
+                f"⚠️ Discord refused the post: {e}.",
+                ephemeral=True,
             )
             return
         await inter.response.send_message(
-            f"📢 Posted to {self.channel_mention}.", ephemeral=True,
+            f"📢 Posted to {self.channel_mention}.",
+            ephemeral=True,
         )
 
 
@@ -4333,7 +4752,7 @@ def _mail_zone_and_sub_lists(
     list so subs aren't duplicated across blocks.
     """
     zones_for_mail: dict[str, list[str]] = {}
-    is_paired = (session.sub_mode == "paired")
+    is_paired = session.sub_mode == "paired"
     assignments = session.assignments_for_phase(phase)
     pairings = session.paired_subs_for_phase(phase)
     for zone_name, keys in assignments.items():
@@ -4362,9 +4781,7 @@ def _mail_zone_and_sub_lists(
         # `Primary ↔ Sub` line AND a bare name.
         if session.is_phase_aware:
             for p in session.iter_phases():
-                paired_sub_keys.update(
-                    session.paired_subs_for_phase(p).values()
-                )
+                paired_sub_keys.update(session.paired_subs_for_phase(p).values())
         else:
             paired_sub_keys.update(pairings.values())
         for primary_key, sub_key in pairings.items():
@@ -4384,12 +4801,14 @@ def _mail_zone_and_sub_lists(
 
 
 def _build_mail_for_phase(
-    session: RosterBuilderSession, phase: int,
+    session: RosterBuilderSession,
+    phase: int,
 ) -> str:
     """Build the mail body for a single phase, delegating to the
     event-specific storm.build_*_mail. Phase 2 callers pass an empty
     sub list so the global sub block only renders once (with phase 1)."""
     import storm
+
     zones_for_mail, sub_names = _mail_zone_and_sub_lists(session, phase=phase)
     if session.event_type == "DS":
         return storm.build_ds_mail(
@@ -4460,7 +4879,8 @@ def _build_zone_grouped_block(session: RosterBuilderSession) -> str:
     by_zone: dict[str, dict[int, list[str]]] = {}
     for phase in phases:
         zones_for_phase, _subs = _mail_zone_and_sub_lists(
-            session, phase=phase,
+            session,
+            phase=phase,
         )
         for zone, members in zones_for_phase.items():
             if not members:
@@ -4564,15 +4984,15 @@ def _build_unified_mail(session: RosterBuilderSession) -> str:
     see the same shape on every roster.
     """
     from config import (
-        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+        get_storm_template,
+        format_storm_slot,
+        get_storm_slot_for_key,
     )
 
     event_type = session.event_type
     template = ""
     if session.guild_id:
-        template = (
-            get_storm_template(session.guild_id, event_type, None) or ""
-        )
+        template = get_storm_template(session.guild_id, event_type, None) or ""
 
     # Subs: walk every phase to collect paired-mode pairings plus the
     # event-level pool. Dedupe so a paired primary isn't double-listed.
@@ -4581,28 +5001,21 @@ def _build_unified_mail(session: RosterBuilderSession) -> str:
     #   phase N (N>1) → only phase-N pairings
     sub_names_combined: list[str] = []
     seen_subs: set[str] = set()
-    phases_for_subs = (
-        list(session.iter_phases())
-        if session.is_phase_aware else [1]
-    )
+    phases_for_subs = list(session.iter_phases()) if session.is_phase_aware else [1]
     for phase in phases_for_subs:
         _zones_p, sub_names_p = _mail_zone_and_sub_lists(
-            session, phase=phase,
+            session,
+            phase=phase,
         )
         for s in sub_names_p:
             if s in seen_subs:
                 continue
             sub_names_combined.append(s)
             seen_subs.add(s)
-    subs_block = (
-        "\n".join(sub_names_combined) if sub_names_combined else "(none)"
-    )
+    subs_block = "\n".join(sub_names_combined) if sub_names_combined else "(none)"
 
     # Time string (matches the per-phase builder's `time_key="1"`).
-    slot = (
-        get_storm_slot_for_key(event_type, "1")
-        if session.guild_id else None
-    )
+    slot = get_storm_slot_for_key(event_type, "1") if session.guild_id else None
     if slot is not None:
         h, m = slot
         time_str = format_storm_slot(h, m, session.guild_id)
@@ -4621,17 +5034,19 @@ def _build_unified_mail(session: RosterBuilderSession) -> str:
 
     # Fallback plain format (no alliance template configured).
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    return "\n".join([
-        f"**{label}**",
-        "",
-        "**Zone Assignments**",
-        zones_block,
-        "",
-        "**Subs**",
-        subs_block,
-        "",
-        f"**Time:** {time_str}",
-    ])
+    return "\n".join(
+        [
+            f"**{label}**",
+            "",
+            "**Zone Assignments**",
+            zones_block,
+            "",
+            "**Subs**",
+            subs_block,
+            "",
+            f"**Time:** {time_str}",
+        ]
+    )
 
 
 # Back-compat alias — older callers / tests reference this name.
@@ -4654,7 +5069,8 @@ def _build_mail_body(session: RosterBuilderSession) -> str:
 
 
 async def _send_mail_preview(
-    inter: discord.Interaction, session: RosterBuilderSession,
+    inter: discord.Interaction,
+    session: RosterBuilderSession,
 ) -> None:
     """Build the text-template mail from the current roster and post a
     preview ephemerally. Officer copies it into the alliance's mail
@@ -4675,7 +5091,10 @@ async def _send_mail_preview(
 
 
 def _signup_filter_keys(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> set[str]:
     """Return the set of target_member_id values that voted in a way
     compatible with the target team. DS team A pool = voted A or
@@ -4687,6 +5106,7 @@ def _signup_filter_keys(
     string keys that match `members` in `_read_roster_powers`.
     """
     import config
+
     rows = config.get_storm_signups(guild_id, event_type, event_date)
     accept_a = team in ("A", "")
     accept_b = team == "B"
@@ -4727,6 +5147,7 @@ def _serialize_session(session: RosterBuilderSession) -> str:
     in the current pool to look up by key anymore (#240 follow-up).
     """
     import json
+
     payload = {
         "version": _DRAFT_FORMAT_VERSION,
         "selected_preset_name": session.preset.name if session.preset else "",
@@ -4767,9 +5188,7 @@ def _serialize_session(session: RosterBuilderSession) -> str:
     referenced_keys.update(payload["below_floor_overrides_p2"])
     referenced_keys.update(payload["below_floor_overrides_p3"])
     payload["member_names_at_save"] = {
-        k: session.members.get(k, {}).get("name") or k
-        for k in referenced_keys
-        if k
+        k: session.members.get(k, {}).get("name") or k for k in referenced_keys if k
     }
     return json.dumps(payload)
 
@@ -4837,24 +5256,30 @@ def _apply_saved_state(
     # Per-phase apply
     kept_assignments = 0
     kept_assignments += _apply_assignments(
-        saved_payload.get("assignments_p1", {}), session.assignments,
+        saved_payload.get("assignments_p1", {}),
+        session.assignments,
     )
     kept_assignments += _apply_assignments(
-        saved_payload.get("assignments_p2", {}), session.assignments_p2,
+        saved_payload.get("assignments_p2", {}),
+        session.assignments_p2,
     )
     kept_assignments += _apply_assignments(
-        saved_payload.get("assignments_p3", {}), session.assignments_p3,
+        saved_payload.get("assignments_p3", {}),
+        session.assignments_p3,
     )
 
     kept_pairings = 0
     kept_pairings += _apply_pairings(
-        saved_payload.get("paired_subs_p1", {}), session.paired_subs,
+        saved_payload.get("paired_subs_p1", {}),
+        session.paired_subs,
     )
     kept_pairings += _apply_pairings(
-        saved_payload.get("paired_subs_p2", {}), session.paired_subs_p2,
+        saved_payload.get("paired_subs_p2", {}),
+        session.paired_subs_p2,
     )
     kept_pairings += _apply_pairings(
-        saved_payload.get("paired_subs_p3", {}), session.paired_subs_p3,
+        saved_payload.get("paired_subs_p3", {}),
+        session.paired_subs_p3,
     )
 
     # Flat sub pool (pool mode)
@@ -4902,15 +5327,14 @@ def _apply_saved_state(
     # event_date, surface it so the officer reviews before posting.
     saved_event_date = saved_payload.get("saved_for_event_date", "") or ""
     stale_event_date: Optional[str] = None
-    if saved_event_date and session.event_date and \
-            saved_event_date != session.event_date:
+    if saved_event_date and session.event_date and saved_event_date != session.event_date:
         stale_event_date = saved_event_date
 
     return {
-        "dropped_members":    dropped_names,
-        "kept_assignments":   kept_assignments,
-        "kept_pairings":      kept_pairings,
-        "stale_event_date":   stale_event_date,
+        "dropped_members": dropped_names,
+        "kept_assignments": kept_assignments,
+        "kept_pairings": kept_pairings,
+        "stale_event_date": stale_event_date,
     }
 
 
@@ -4929,6 +5353,7 @@ def _autosave_draft(session: RosterBuilderSession) -> None:
         return
     try:
         import config
+
         config.save_roster_draft(
             session.guild_id,
             session.event_type,
@@ -4945,12 +5370,18 @@ def _autosave_draft(session: RosterBuilderSession) -> None:
         session.autosave_failed = True
         logger.warning(
             "[STORM DRAFT] autosave failed (guild=%s event=%s team=%s): %s",
-            session.guild_id, session.event_type, session.team, e,
+            session.guild_id,
+            session.event_type,
+            session.team,
+            e,
         )
 
 
 def _team_plan_keys_or_signup_keys(
-    guild_id: int, event_type: str, event_date: str, team: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
 ) -> tuple[set[str], bool]:
     """Return the constrained candidate pool for the structured builder
     (#239).
@@ -4965,10 +5396,62 @@ def _team_plan_keys_or_signup_keys(
     caller surface a banner so officers know why the pool shrank.
     """
     import config
+
     plan = config.get_storm_team_plan(guild_id, event_type, event_date, team)
     if plan and (plan["primaries"] or plan["subs"]):
         return set(plan["primaries"]) | set(plan["subs"]), True
     return _signup_filter_keys(guild_id, event_type, event_date, team), False
+
+
+def _other_team_claimed_keys(
+    guild_id: int,
+    event_type: str,
+    team: str,
+) -> set[str]:
+    """Member keys already assigned on the OTHER team's saved draft (#275).
+
+    A player can only be on one storm team at a time (hard game rule), but
+    an "either time works" voter is eligible for both teams' pools. The
+    builder auto-saves each team's in-progress roster to `storm_roster_drafts`
+    on every edit, so when one team's pool is built we subtract everyone the
+    other team has already placed — even before Approve & Post.
+
+    "Claimed" = every member that appears as a zone primary, a flat sub, or a
+    paired sub in any phase of the other team's draft. Returns an empty set
+    when there's no other team's draft, the alliance isn't running both
+    teams, or the draft can't be read/parsed (best-effort — never blocks the
+    build). Single-team alliances (team == "") have no other team.
+    """
+    if team not in ("A", "B"):
+        return set()
+    other_team = "B" if team == "A" else "A"
+
+    import config
+    import json
+
+    try:
+        draft = config.get_roster_draft(guild_id, event_type, other_team)
+    except Exception:
+        return set()
+    if not draft or not draft.get("session_json"):
+        return set()
+    try:
+        payload = json.loads(draft["session_json"])
+    except (ValueError, TypeError):
+        return set()
+
+    claimed: set[str] = set()
+    for pkey in ("assignments_p1", "assignments_p2", "assignments_p3"):
+        for keys in (payload.get(pkey) or {}).values():
+            claimed.update(k for k in keys if k)
+    for pkey in ("paired_subs_p1", "paired_subs_p2", "paired_subs_p3"):
+        for primary, sub in (payload.get(pkey) or {}).items():
+            if primary:
+                claimed.add(primary)
+            if sub:
+                claimed.add(sub)
+    claimed.update(k for k in (payload.get("subs") or []) if k)
+    return claimed
 
 
 # ── Long-mail picker (#237) ─────────────────────────────────────────────────
@@ -4987,11 +5470,12 @@ def _team_plan_keys_or_signup_keys(
 # Plus a Cancel button so the officer can back out and edit the
 # roster before re-trying.
 
-_HEADING_RE = re.compile(r'^(\*\*[^*\n]+\*\*)\s*$', re.MULTILINE)
+_HEADING_RE = re.compile(r"^(\*\*[^*\n]+\*\*)\s*$", re.MULTILINE)
 
 
 def _split_mail_at_heading(
-    mail: str, max_len: int = 2000,
+    mail: str,
+    max_len: int = 2000,
 ) -> Optional[tuple[str, str]]:
     """Split a long mail body at a natural heading break (#237). The
     second message always starts with a `**Heading**` line so
@@ -5006,10 +5490,7 @@ def _split_mail_at_heading(
     # A valid split position p means part_1 = mail[:p],
     # part_2 = mail[p:]. Both must fit, and p must be > 0 (otherwise
     # part_1 is empty).
-    valid = [
-        p for p in candidates
-        if 0 < p and p <= max_len and (len(mail) - p) <= max_len
-    ]
+    valid = [p for p in candidates if 0 < p and p <= max_len and (len(mail) - p) <= max_len]
     if not valid:
         return None
     mid = len(mail) // 2
@@ -5031,11 +5512,7 @@ class _LongMailPickerView(discord.ui.View):
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "⛔ Only the officer who clicked Approve can pick the "
-                "post format.",
-                ephemeral=True,
-            )
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 
@@ -5051,22 +5528,16 @@ class _LongMailPickerView(discord.ui.View):
             pass
         self.stop()
 
-    @discord.ui.button(label="📨 Send as 2 posts",
-                       style=discord.ButtonStyle.primary)
-    async def split_btn(self, inter: discord.Interaction,
-                        _btn: discord.ui.Button):
+    @discord.ui.button(label="📨 Send as 2 posts", style=discord.ButtonStyle.primary)
+    async def split_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "split")
 
-    @discord.ui.button(label="📎 Send as .txt attachment",
-                       style=discord.ButtonStyle.primary)
-    async def attach_btn(self, inter: discord.Interaction,
-                         _btn: discord.ui.Button):
+    @discord.ui.button(label="📎 Send as .txt attachment", style=discord.ButtonStyle.primary)
+    async def attach_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "txt")
 
-    @discord.ui.button(label="↩️ Cancel",
-                       style=discord.ButtonStyle.secondary)
-    async def cancel_btn(self, inter: discord.Interaction,
-                         _btn: discord.ui.Button):
+    @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "cancel")
 
 
@@ -5107,12 +5578,14 @@ def _collect_dm_assignments(
         pairings = session.paired_subs_for_phase(phase)
         for zone in zone_order:
             for key in assignments.get(zone, []):
-                by_member.setdefault(key, []).append({
-                    "role":      "primary",
-                    "zone":      zone,
-                    "phase":     phase,
-                    "pair_with": None,
-                })
+                by_member.setdefault(key, []).append(
+                    {
+                        "role": "primary",
+                        "zone": zone,
+                        "phase": phase,
+                        "pair_with": None,
+                    }
+                )
         # Paired subs — attribute the sub to the zone(s) their primary
         # is in for THIS phase, so the DM tells them where they'd be
         # filling in. A primary in two zones in the same phase
@@ -5121,21 +5594,18 @@ def _collect_dm_assignments(
         for primary_key, sub_key in pairings.items():
             if not sub_key:
                 continue
-            primary_zones = [
-                z for z in zone_order
-                if primary_key in assignments.get(z, [])
-            ]
+            primary_zones = [z for z in zone_order if primary_key in assignments.get(z, [])]
             primary_m = session.members.get(primary_key)
-            primary_name = (
-                primary_m.get("name") if primary_m else primary_key
-            )
+            primary_name = primary_m.get("name") if primary_m else primary_key
             for z in primary_zones:
-                by_member.setdefault(sub_key, []).append({
-                    "role":      "paired_sub",
-                    "zone":      z,
-                    "phase":     phase,
-                    "pair_with": primary_name,
-                })
+                by_member.setdefault(sub_key, []).append(
+                    {
+                        "role": "paired_sub",
+                        "zone": z,
+                        "phase": phase,
+                        "pair_with": primary_name,
+                    }
+                )
 
     # Pool subs — anyone in `session.subs` who isn't already covered
     # as a paired_sub somewhere (paired-mode sessions keep paired
@@ -5145,12 +5615,14 @@ def _collect_dm_assignments(
         existing = by_member.get(sub_key, [])
         if any(a["role"] == "paired_sub" for a in existing):
             continue
-        existing.append({
-            "role":      "pool_sub",
-            "zone":      None,
-            "phase":     None,
-            "pair_with": None,
-        })
+        existing.append(
+            {
+                "role": "pool_sub",
+                "zone": None,
+                "phase": None,
+                "pair_with": None,
+            }
+        )
         by_member[sub_key] = existing
 
     return list(by_member.items())
@@ -5183,7 +5655,9 @@ def _safe_dm_format(template: str, **fields) -> str:
 
 
 def _format_starter_assignments(
-    assignments: "list[dict]", *, is_phase_aware: bool,
+    assignments: "list[dict]",
+    *,
+    is_phase_aware: bool,
 ) -> str:
     """Bullet list for Starter `{assignments}`. Each line is:
         `• Stage 1: Power Tower` (phase-aware)
@@ -5197,25 +5671,24 @@ def _format_starter_assignments(
     for a in assignments:
         if a["role"] == "pool_sub":
             continue
-        stage_prefix = (
-            f"Stage {a['phase']}: " if is_phase_aware else ""
-        )
+        stage_prefix = f"Stage {a['phase']}: " if is_phase_aware else ""
         if a["role"] == "primary":
             lines.append(f"• {stage_prefix}{a['zone']}")
         else:  # paired_sub mixed into a starter DM (member plays as
-               # a primary in one phase + as a sub in another)
+            # a primary in one phase + as a sub in another)
             partner = a.get("pair_with") or "a primary"
             lines.append(f"• {stage_prefix}Sub for {partner}")
     if has_pool:
         lines.append(
-            "• Plus standby pool — leadership may call you in if "
-            "another primary can't make it."
+            "• Plus standby pool — leadership may call you in if another primary can't make it."
         )
     return "\n".join(lines)
 
 
 def _format_paired_sub_assignments(
-    assignments: "list[dict]", *, is_phase_aware: bool,
+    assignments: "list[dict]",
+    *,
+    is_phase_aware: bool,
 ) -> str:
     """Line list for Paired Sub `{assignments}`. Format mirrors the
     user's spec: `Sub for {Primary}` per pairing, with a stage prefix
@@ -5232,9 +5705,7 @@ def _format_paired_sub_assignments(
     lines: list[str] = []
     for partner, phases in by_partner.items():
         if is_phase_aware and phases:
-            phase_str = ", ".join(
-                f"Stage {p}" for p in sorted(set(phases))
-            )
+            phase_str = ", ".join(f"Stage {p}" for p in sorted(set(phases)))
             lines.append(f"{phase_str}: Sub for {partner}")
         else:
             lines.append(f"Sub for {partner}")
@@ -5280,14 +5751,16 @@ def _build_dm_body(
     #   * paired_sub only   → Paired Sub template
     #   * pool_sub only     → Pool Sub template
     has_primary = any(a["role"] == "primary" for a in assignments)
-    only_pool = (
-        bool(assignments)
-        and all(a["role"] == "pool_sub" for a in assignments)
-    )
+    only_pool = bool(assignments) and all(a["role"] == "pool_sub" for a in assignments)
 
-    templates = config.get_roster_dm_templates(
-        session.guild_id, session.event_type,
-    ) if session.guild_id else {"starter": "", "paired_sub": "", "pool_sub": ""}
+    templates = (
+        config.get_roster_dm_templates(
+            session.guild_id,
+            session.event_type,
+        )
+        if session.guild_id
+        else {"starter": "", "paired_sub": "", "pool_sub": ""}
+    )
 
     if only_pool:
         template = templates.get("pool_sub") or DEFAULT_ROSTER_DM_POOL_SUB
@@ -5295,12 +5768,14 @@ def _build_dm_body(
     elif has_primary:
         template = templates.get("starter") or DEFAULT_ROSTER_DM_STARTER
         assignments_block = _format_starter_assignments(
-            assignments, is_phase_aware=is_phase_aware,
+            assignments,
+            is_phase_aware=is_phase_aware,
         )
     else:  # paired_sub-only
         template = templates.get("paired_sub") or DEFAULT_ROSTER_DM_PAIRED_SUB
         assignments_block = _format_paired_sub_assignments(
-            assignments, is_phase_aware=is_phase_aware,
+            assignments,
+            is_phase_aware=is_phase_aware,
         )
 
     return _safe_dm_format(
@@ -5324,8 +5799,11 @@ def _resolve_dm_time_label(session: "RosterBuilderSession") -> str:
         return "(time not configured)"
     try:
         from config import get_storm_team_slot_labels
+
         a_label, b_label = get_storm_team_slot_labels(
-            session.guild_id, session.event_type, session.event_date,
+            session.guild_id,
+            session.event_type,
+            session.event_date,
         )
     except Exception:
         return "(time not configured)"
@@ -5344,13 +5822,16 @@ def _resolve_dm_date_label(session: "RosterBuilderSession") -> str:
         return "the next event"
     try:
         from storm_date_helpers import format_event_date
+
         return format_event_date(session.event_date)
     except Exception:
         return session.event_date
 
 
 async def _try_send_personal_dm(
-    bot, discord_id: int, body: str,
+    bot,
+    discord_id: int,
+    body: str,
 ) -> "tuple[bool, str]":
     """Send `body` to `discord_id` as a DM. Returns (success, reason).
 
@@ -5365,7 +5846,9 @@ async def _try_send_personal_dm(
         return False, "Discord user not found (left server?)"
     except (discord.HTTPException, ValueError, TypeError) as e:
         logger.warning(
-            "[STORM DM] fetch_user(%s) failed: %s", discord_id, e,
+            "[STORM DM] fetch_user(%s) failed: %s",
+            discord_id,
+            e,
         )
         return False, "Discord lookup failed"
     try:
@@ -5375,13 +5858,16 @@ async def _try_send_personal_dm(
         return False, "DMs closed by member"
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM DM] send to %s failed: %s", discord_id, e,
+            "[STORM DM] send to %s failed: %s",
+            discord_id,
+            e,
         )
         return False, f"Discord rejected the send ({e.status})"
 
 
 async def _dm_rostered_members(
-    session: "RosterBuilderSession", bot,
+    session: "RosterBuilderSession",
+    bot,
 ) -> "tuple[int, list[tuple[str, str]]]":
     """Send a personalised DM to every primary + paired sub + pool sub
     on the approved roster.
@@ -5417,11 +5903,16 @@ async def _dm_rostered_members(
             failures.append((display_name, "no Discord ID linked"))
             continue
         body = _build_dm_body(
-            session, m, assignments,
-            time_label=time_label, date_label=date_label,
+            session,
+            m,
+            assignments,
+            time_label=time_label,
+            date_label=date_label,
         )
         ok, reason = await _try_send_personal_dm(
-            bot, int(discord_id_raw), body,
+            bot,
+            int(discord_id_raw),
+            body,
         )
         if ok:
             sent += 1
@@ -5444,14 +5935,11 @@ class _DmRosteredMembersView(discord.ui.View):
         self.owner_id = owner_id
 
     async def interaction_check(
-        self, interaction: discord.Interaction,
+        self,
+        interaction: discord.Interaction,
     ) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "⛔ Only the officer who posted the roster can fire "
-                "the DMs.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 
@@ -5460,7 +5948,8 @@ class _DmRosteredMembersView(discord.ui.View):
         style=discord.ButtonStyle.primary,
     )
     async def send_dms(
-        self, interaction: discord.Interaction,
+        self,
+        interaction: discord.Interaction,
         _btn: discord.ui.Button,
     ):
         # Premium gate. Belt-and-suspenders — the view should only be
@@ -5468,13 +5957,14 @@ class _DmRosteredMembersView(discord.ui.View):
         # so a downgrade between attach and click doesn't fire DMs
         # the alliance is no longer entitled to.
         import premium
+
         if not await premium.is_premium(
-            self.session.guild_id, bot=self.bot,
+            self.session.guild_id,
+            bot=self.bot,
             interaction=interaction,
         ):
             await interaction.response.send_message(
-                "💎 DM-the-roster is a Premium feature. Run "
-                "`/upgrade` to enable it.",
+                PREMIUM_LOCKED_INLINE.format(feature="DM-the-roster"),
                 ephemeral=True,
             )
             return
@@ -5485,7 +5975,8 @@ class _DmRosteredMembersView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         sent, failures = await _dm_rostered_members(
-            self.session, self.bot,
+            self.session,
+            self.bot,
         )
 
         # Render the outcome summary. Keep it under Discord's 2000-char
@@ -5495,20 +5986,11 @@ class _DmRosteredMembersView(discord.ui.View):
         if sent and not failures:
             lines.append(f"✅ DM'd {sent} member(s) on the approved roster.")
         elif sent:
-            lines.append(
-                f"✅ DM'd {sent} member(s) · "
-                f"⚠️ {len(failures)} couldn't be reached:"
-            )
+            lines.append(f"✅ DM'd {sent} member(s) · ⚠️ {len(failures)} couldn't be reached:")
         elif failures:
-            lines.append(
-                f"⚠️ Couldn't DM any members "
-                f"({len(failures)} failed):"
-            )
+            lines.append(f"⚠️ Couldn't DM any members ({len(failures)} failed):")
         else:
-            lines.append(
-                "⚠️ No rostered members to DM — the approved roster "
-                "is empty."
-            )
+            lines.append("⚠️ No rostered members to DM — the approved roster is empty.")
 
         if failures:
             preview_limit = 20
@@ -5516,12 +5998,12 @@ class _DmRosteredMembersView(discord.ui.View):
                 lines.append(f"• **{name}** — {reason}")
             if len(failures) > preview_limit:
                 lines.append(
-                    f"_…and {len(failures) - preview_limit} more "
-                    f"(see bot logs for the full list)._"
+                    f"_…and {len(failures) - preview_limit} more (see bot logs for the full list)._"
                 )
                 logger.info(
                     "[STORM DM] guild=%s event=%s full un-DM'd list: %s",
-                    self.session.guild_id, self.session.event_type,
+                    self.session.guild_id,
+                    self.session.event_type,
                     failures,
                 )
 
@@ -5533,7 +6015,9 @@ class _DmRosteredMembersView(discord.ui.View):
         except discord.HTTPException as e:
             logger.warning(
                 "[STORM DM] outcome ephemeral failed (guild=%s event=%s): %s",
-                self.session.guild_id, self.session.event_type, e,
+                self.session.guild_id,
+                self.session.event_type,
+                e,
             )
 
         # Edit the parent message to remove the now-clicked button so
@@ -5546,8 +6030,10 @@ class _DmRosteredMembersView(discord.ui.View):
 
 
 async def _finalize_structured_roster(
-    interaction: discord.Interaction, view: RosterBuilderView,
-    *, include_image: bool = False,
+    interaction: discord.Interaction,
+    view: RosterBuilderView,
+    *,
+    include_image: bool = False,
 ) -> None:
     """Approve & Post: posts the structured mail to the configured
     post channel and writes one row per slot to rosters_tab.
@@ -5577,16 +6063,19 @@ async def _finalize_structured_roster(
         # cold cache.
         try:
             import member_roster
+
             await member_roster._ensure_member_cache(interaction.guild)
         except Exception as e:
             logger.warning(
-                "[STORM STRUCTURED] guild.chunk() pre-pass failed for "
-                "guild=%s: %s",
-                s.guild_id, e,
+                "[STORM STRUCTURED] guild.chunk() pre-pass failed for guild=%s: %s",
+                s.guild_id,
+                e,
             )
         fresh_members, _refresh_errors = await asyncio.to_thread(
             _read_roster_powers,
-            s.guild_id, s.event_type, guild=interaction.guild,
+            s.guild_id,
+            s.event_type,
+            guild=interaction.guild,
         )
         for key, m in s.members.items():
             fresh = fresh_members.get(key)
@@ -5594,9 +6083,10 @@ async def _finalize_structured_roster(
                 m["power"] = fresh.get("power")
     except Exception as e:
         logger.warning(
-            "[STORM STRUCTURED] roster re-read for power snapshot failed "
-            "(guild=%s event=%s): %s",
-            s.guild_id, s.event_date, e,
+            "[STORM STRUCTURED] roster re-read for power snapshot failed (guild=%s event=%s): %s",
+            s.guild_id,
+            s.event_date,
+            e,
         )
 
     # Build mail. `_build_mail_body` honors paired sub_mode (pairings
@@ -5624,21 +6114,21 @@ async def _finalize_structured_roster(
     if include_image and post_channel_id and post_channel is not None:
         try:
             import storm_renderer
+
             roster_data = storm_renderer.roster_from_session(s)
             png_bytes = await asyncio.to_thread(
-                storm_renderer.render, roster_data,
+                storm_renderer.render,
+                roster_data,
             )
             image_overflow = list(roster_data.overflow or [])
         except RuntimeError as e:
             # Pillow missing — host doesn't have the dependency installed.
-            image_warning = (
-                "Couldn't attach the image (host is missing Pillow). "
-                "Posted text only."
-            )
+            image_warning = "Couldn't attach the image (host is missing Pillow). Posted text only."
             logger.warning(
-                "[STORM STRUCTURED] image render skipped (Pillow missing) "
-                "guild=%s event=%s: %s",
-                s.guild_id, s.event_type, e,
+                "[STORM STRUCTURED] image render skipped (Pillow missing) guild=%s event=%s: %s",
+                s.guild_id,
+                s.event_type,
+                e,
             )
             png_bytes = None
         except Exception as e:
@@ -5648,7 +6138,8 @@ async def _finalize_structured_roster(
             )
             logger.exception(
                 "[STORM STRUCTURED] image render failed guild=%s event=%s",
-                s.guild_id, s.event_type,
+                s.guild_id,
+                s.event_type,
             )
             png_bytes = None
         if png_bytes is not None:
@@ -5659,9 +6150,10 @@ async def _finalize_structured_roster(
                     f"limit). Posted text only."
                 )
                 logger.warning(
-                    "[STORM STRUCTURED] image too large to attach (size=%d "
-                    "guild=%s event=%s)",
-                    len(png_bytes), s.guild_id, s.event_type,
+                    "[STORM STRUCTURED] image too large to attach (size=%d guild=%s event=%s)",
+                    len(png_bytes),
+                    s.guild_id,
+                    s.event_type,
                 )
             else:
                 filename = (
@@ -5707,9 +6199,10 @@ async def _finalize_structured_roster(
             )
         except discord.HTTPException as e:
             logger.warning(
-                "[STORM STRUCTURED] long-mail picker followup failed "
-                "(guild=%s event=%s): %s",
-                s.guild_id, s.event_type, e,
+                "[STORM STRUCTURED] long-mail picker followup failed (guild=%s event=%s): %s",
+                s.guild_id,
+                s.event_type,
+                e,
             )
             # Fall back to the #234 .txt behaviour if the picker can't
             # be sent — better than leaving the interaction stuck.
@@ -5717,6 +6210,14 @@ async def _finalize_structured_roster(
         if long_mail_choice is None:
             await picker.wait()
             long_mail_choice = picker.choice or "cancel"
+        # Tear down the picker regardless of outcome — either the cancel
+        # ack or the final post-result ack will be the most-recent
+        # visible message instead of a disabled picker hanging above.
+        if getattr(picker, "message", None) is not None:
+            try:
+                await picker.message.delete()
+            except discord.HTTPException:
+                pass
         if long_mail_choice == "cancel":
             # Officer cancelled — release the session lock so they can
             # reopen the builder, then exit without posting / writing
@@ -5728,8 +6229,9 @@ async def _finalize_structured_roster(
             view.stop()
             try:
                 await interaction.followup.send(
-                    "↩️ Cancelled. Roster wasn't posted; you can keep "
-                    "editing the builder if you'd like.",
+                    CANCEL_BACKPEDAL.format(
+                        detail="Roster wasn't posted; you can keep editing the builder if you'd like.",
+                    ),
                     ephemeral=True,
                 )
             except discord.HTTPException:
@@ -5765,10 +6267,7 @@ async def _finalize_structured_roster(
         # exception message captured.
         post_status = "posted_ok"
         try:
-            if (
-                long_mail_choice == "split"
-                and len(mail) > _MAX_MESSAGE_CONTENT
-            ):
+            if long_mail_choice == "split" and len(mail) > _MAX_MESSAGE_CONTENT:
                 parts = _split_mail_at_heading(mail)
                 if parts is not None:
                     part1, part2 = parts
@@ -5782,10 +6281,7 @@ async def _finalize_structured_roster(
                     # so the officer still gets the full mail.
                     long_mail_choice = "txt"
 
-            if (
-                long_mail_choice != "split"
-                or len(mail) <= _MAX_MESSAGE_CONTENT
-            ):
+            if long_mail_choice != "split" or len(mail) <= _MAX_MESSAGE_CONTENT:
                 files: list[discord.File] = []
                 if len(mail) > _MAX_MESSAGE_CONTENT:
                     txt_name = (
@@ -5794,9 +6290,12 @@ async def _finalize_structured_roster(
                         + (f"-team-{s.team}" if s.team else "")
                         + ".txt"
                     )
-                    files.append(discord.File(
-                        io.BytesIO(mail.encode("utf-8")), filename=txt_name,
-                    ))
+                    files.append(
+                        discord.File(
+                            io.BytesIO(mail.encode("utf-8")),
+                            filename=txt_name,
+                        )
+                    )
                     content = (
                         f"📋 **{s.event_type} Roster** — full mail "
                         f"attached (longer than Discord's 2000-char "
@@ -5821,9 +6320,10 @@ async def _finalize_structured_roster(
             post_status = "send_failed"
             post_error = str(e)
             logger.warning(
-                "[STORM STRUCTURED] failed to post mail to channel=%s "
-                "guild=%s: %s",
-                post_channel_id, s.guild_id, e,
+                "[STORM STRUCTURED] failed to post mail to channel=%s guild=%s: %s",
+                post_channel_id,
+                s.guild_id,
+                e,
             )
 
     # Sheet write — one row per slot. Best-effort; failures log but
@@ -5838,10 +6338,11 @@ async def _finalize_structured_roster(
 
     # Build the officer-facing summary based on the post outcome.
     if post_status == "posted_ok":
-        summary_lines = ["✅ Roster posted.",
-                         f"📬 Mail sent to {posted_to_mention}."]
+        summary_lines = ["✅ Roster posted.", f"📬 Mail sent to {posted_to_mention}."]
     elif post_status == "no_channel":
-        setup_cmd = "/setup → ⚔️ Desert Storm" if s.event_type == "DS" else "/setup → 🏜️ Canyon Storm"
+        from setup_hub import STORM_SETUP_NAV
+
+        setup_cmd = STORM_SETUP_NAV[s.event_type]
         summary_lines = [
             "✅ Roster recorded.",
             "⚠️ No post channel is configured. Mail was built but not "
@@ -5909,9 +6410,11 @@ async def _finalize_structured_roster(
         # in "thinking…" if the detail ephemeral still fails for any
         # reason (unexpected encoding issue, rate limit, etc.).
         logger.warning(
-            "[STORM STRUCTURED] detail ephemeral failed (guild=%s "
-            "event=%s, len=%d): %s",
-            s.guild_id, s.event_type, len(detail), e,
+            "[STORM STRUCTURED] detail ephemeral failed (guild=%s event=%s, len=%d): %s",
+            s.guild_id,
+            s.event_type,
+            len(detail),
+            e,
         )
         try:
             await interaction.followup.send(
@@ -5932,19 +6435,24 @@ async def _finalize_structured_roster(
     if post_status == "posted_ok":
         try:
             import premium
+
             is_premium = await premium.is_premium(
-                s.guild_id, bot=interaction.client,
+                s.guild_id,
+                bot=interaction.client,
                 interaction=interaction,
             )
         except Exception as e:
             logger.warning(
                 "[STORM DM] premium check failed (guild=%s): %s",
-                s.guild_id, e,
+                s.guild_id,
+                e,
             )
             is_premium = False
         if is_premium:
             dm_view = _DmRosteredMembersView(
-                s, interaction.client, owner_id=interaction.user.id,
+                s,
+                interaction.client,
+                owner_id=interaction.user.id,
             )
             dm_intro = (
                 "📨 **DM rostered members?**\n"
@@ -5958,13 +6466,16 @@ async def _finalize_structured_roster(
             )
             try:
                 await interaction.followup.send(
-                    dm_intro, view=dm_view, ephemeral=True,
+                    dm_intro,
+                    view=dm_view,
+                    ephemeral=True,
                 )
             except discord.HTTPException as e:
                 logger.warning(
-                    "[STORM DM] DM-the-roster ephemeral failed "
-                    "(guild=%s event=%s): %s",
-                    s.guild_id, s.event_type, e,
+                    "[STORM DM] DM-the-roster ephemeral failed (guild=%s event=%s): %s",
+                    s.guild_id,
+                    s.event_type,
+                    e,
                 )
 
     # #228 follow-up: if the rendered image couldn't fit every member
@@ -5976,6 +6487,7 @@ async def _finalize_structured_roster(
     if image_overflow and post_status == "posted_ok":
         # Group by (zone, stage) so the warning reads cleanly.
         from collections import OrderedDict
+
         grouped: "OrderedDict[tuple[str, int], list[str]]" = OrderedDict()
         for entry in image_overflow:
             key = (entry.canonical_zone, entry.phase)
@@ -5999,9 +6511,10 @@ async def _finalize_structured_roster(
             await interaction.followup.send(warning, ephemeral=True)
         except discord.HTTPException as e:
             logger.warning(
-                "[STORM STRUCTURED] overflow warning followup failed "
-                "(guild=%s event=%s): %s",
-                s.guild_id, s.event_type, e,
+                "[STORM STRUCTURED] overflow warning followup failed (guild=%s event=%s): %s",
+                s.guild_id,
+                s.event_type,
+                e,
             )
 
     view._release_session_lock()
@@ -6009,9 +6522,17 @@ async def _finalize_structured_roster(
 
 
 _ROSTERS_HEADER = [
-    "Event Date", "Team", "Stage", "Zone", "Member", "Role",
-    "Power at Assignment", "Discord ID", "Override Below Minimum",
-    "Paired With", "Posted At (UTC)",
+    "Event Date",
+    "Team",
+    "Stage",
+    "Zone",
+    "Member",
+    "Role",
+    "Power at Assignment",
+    "Discord ID",
+    "Override Below Minimum",
+    "Paired With",
+    "Posted At (UTC)",
 ]
 
 # Pre-Rule-B Sheet column names → their post-rename header. The
@@ -6056,8 +6577,11 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
 
     try:
         ws = config.get_or_create_worksheet(
-            sh, tab, header_row=_ROSTERS_HEADER,
-            rows=2000, cols=len(_ROSTERS_HEADER),
+            sh,
+            tab,
+            header_row=_ROSTERS_HEADER,
+            rows=2000,
+            cols=len(_ROSTERS_HEADER),
         )
     except Exception as e:
         return [f"rosters tab create/open failed: {e}"]
@@ -6102,7 +6626,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 # Translate each existing data row into the new column
                 # order via name lookup, defaulting missing cells to "".
                 rewritten_rows: list[list[str]] = [list(_ROSTERS_HEADER)]
-                for row in (all_values[1:] if all_values else []):
+                for row in all_values[1:] if all_values else []:
                     new_row: list[str] = []
                     for col_name in _ROSTERS_HEADER:
                         if col_name == "Stage" and "Stage" not in old_idx:
@@ -6136,6 +6660,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 )
 
     from config import _utcnow_iso
+
     posted_at = _utcnow_iso()
     rows: list[list[str]] = []
     # Iterate phases the session knows about. Flat presets yield [1]
@@ -6156,41 +6681,43 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                     continue
                 power = m.get("power")
                 override = "yes" if key in phase_overrides else ""
-                rows.append([
-                    session.event_date or "",
-                    session.team or "",
-                    phase_cell,
-                    z.zone,
-                    m["name"],
-                    "primary",
-                    str(power) if power is not None else "unknown",
-                    m.get("discord_id") or "",
-                    override,
-                    "",  # Paired With — primary rows leave blank.
-                    posted_at,
-                ])
+                rows.append(
+                    [
+                        session.event_date or "",
+                        session.team or "",
+                        phase_cell,
+                        z.zone,
+                        m["name"],
+                        "primary",
+                        str(power) if power is not None else "unknown",
+                        m.get("discord_id") or "",
+                        override,
+                        "",  # Paired With — primary rows leave blank.
+                        posted_at,
+                    ]
+                )
                 if session.is_paired:
                     sub_key = phase_pairings.get(key)
                     if sub_key:
                         sub_m = session.members.get(sub_key)
                         if sub_m:
                             sub_power = sub_m.get("power")
-                            sub_override = (
-                                "yes" if sub_key in phase_overrides else ""
+                            sub_override = "yes" if sub_key in phase_overrides else ""
+                            rows.append(
+                                [
+                                    session.event_date or "",
+                                    session.team or "",
+                                    phase_cell,
+                                    z.zone,
+                                    sub_m["name"],
+                                    "sub",
+                                    str(sub_power) if sub_power is not None else "unknown",
+                                    sub_m.get("discord_id") or "",
+                                    sub_override,
+                                    m["name"],  # Paired With → the primary
+                                    posted_at,
+                                ]
                             )
-                            rows.append([
-                                session.event_date or "",
-                                session.team or "",
-                                phase_cell,
-                                z.zone,
-                                sub_m["name"],
-                                "sub",
-                                str(sub_power) if sub_power is not None else "unknown",
-                                sub_m.get("discord_id") or "",
-                                sub_override,
-                                m["name"],  # Paired With → the primary
-                                posted_at,
-                            ])
 
     # Pool-mode subs (or paired-mode overflow) — written without a
     # paired-with reference. Subs are event-level (no phase scope) so
@@ -6201,19 +6728,21 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         if not m:
             continue
         power = m.get("power")
-        rows.append([
-            session.event_date or "",
-            session.team or "",
-            "",  # Phase — sub-pool rows are event-level, not phase-scoped.
-            "",
-            m["name"],
-            "sub",
-            str(power) if power is not None else "unknown",
-            m.get("discord_id") or "",
-            "",
-            "",  # Paired With — pool subs have no specific primary.
-            posted_at,
-        ])
+        rows.append(
+            [
+                session.event_date or "",
+                session.team or "",
+                "",  # Phase — sub-pool rows are event-level, not phase-scoped.
+                "",
+                m["name"],
+                "sub",
+                str(power) if power is not None else "unknown",
+                m.get("discord_id") or "",
+                "",
+                "",  # Paired With — pool subs have no specific primary.
+                posted_at,
+            ]
+        )
 
     if not rows:
         return errors  # Nothing to write; treat as success.
@@ -6269,25 +6798,29 @@ async def open_roster_builder(
 
     if not interaction.guild_id:
         await interaction.response.send_message(
-            "⚠️ This command must be used inside a server.", ephemeral=True,
+            "⚠️ This command must be used inside a server.",
+            ephemeral=True,
         )
         return
 
     is_structured = bool(event_date)
     if is_structured:
         ok, _structured = await ensure_premium_structured(
-            interaction, event_type,
+            interaction,
+            event_type,
             feature_label="The structured roster builder",
         )
         if not ok:
             return
 
     preset = await asyncio.to_thread(
-        ss.load_preset, interaction.guild_id, event_type, preset_name,
+        ss.load_preset,
+        interaction.guild_id,
+        event_type,
+        preset_name,
     )
     if preset is None:
-        msg = (f"⚠️ No preset named **{preset_name}**. Use the list command "
-               f"to see saved presets.")
+        msg = f"⚠️ No preset named **{preset_name}**. Use the list command to see saved presets."
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
         else:
@@ -6295,8 +6828,10 @@ async def open_roster_builder(
         return
 
     if not preset.zones:
-        msg = (f"⚠️ Preset **{preset_name}** has no zones yet. Edit it first "
-               f"to add zones before applying.")
+        msg = (
+            f"⚠️ Preset **{preset_name}** has no zones yet. Edit it first "
+            f"to add zones before applying."
+        )
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
         else:
@@ -6314,6 +6849,7 @@ async def open_roster_builder(
     team = team_override or ""
     if not team:
         import config as _config
+
         cfg = _config.get_storm_config(interaction.guild_id, event_type) or {}
         teams_setting = (cfg.get("teams") or "both").strip()
         if teams_setting == "A":
@@ -6323,14 +6859,15 @@ async def open_roster_builder(
         else:
             team_view = _TeamPickerView(interaction.user.id)
             team_view.message = await interaction.followup.send(
-                f"Build roster for **Team A** or **Team B** with preset "
-                f"**{preset_name}**?",
-                view=team_view, ephemeral=True,
+                f"Build roster for **Team A** or **Team B** with preset **{preset_name}**?",
+                view=team_view,
+                ephemeral=True,
             )
             await team_view.wait()
             if team_view.selected is None:
                 await interaction.followup.send(
-                    "⏰ Timed out. Run the apply command again.", ephemeral=True,
+                    "⏰ Timed out. Run the apply command again.",
+                    ephemeral=True,
                 )
                 return
             team = team_view.selected
@@ -6342,11 +6879,13 @@ async def open_roster_builder(
     # cache warning still fires in that case.
     try:
         import member_roster
+
         await member_roster._ensure_member_cache(interaction.guild)
     except Exception as e:
         logger.warning(
             "[STORM BUILDER] guild.chunk() pre-pass failed for guild=%s: %s",
-            interaction.guild_id, e,
+            interaction.guild_id,
+            e,
         )
 
     # Load powers + rules. Passes the live guild so the reader can
@@ -6355,7 +6894,9 @@ async def open_roster_builder(
     # the event loop.
     members, roster_errors = await asyncio.to_thread(
         _read_roster_powers,
-        interaction.guild_id, event_type, guild=interaction.guild,
+        interaction.guild_id,
+        event_type,
+        guild=interaction.guild,
     )
 
     # Structured-mode pool filter: keep only members who signed up
@@ -6367,7 +6908,10 @@ async def open_roster_builder(
     plan_was_applied = False
     if is_structured:
         signup_keys, plan_was_applied = _team_plan_keys_or_signup_keys(
-            interaction.guild_id, event_type, event_date, team,
+            interaction.guild_id,
+            event_type,
+            event_date,
+            team,
         )
         before_count = len(members)
         # Lenient match: an on-behalf vote's target_member_id may be a
@@ -6382,28 +6926,66 @@ async def open_roster_builder(
         # filter and the builder reports "no signed-up members" even
         # though the bucket-map embed shows the vote.
         signup_keys_ci = {k.lower() for k in signup_keys if k}
+
         def _is_signed_up(key: str, m: dict) -> bool:
             if key in signup_keys:
                 return True
             mname = (m.get("name") or "").strip().lower()
             return bool(mname and mname in signup_keys_ci)
+
         members = {k: v for k, v in members.items() if _is_signed_up(k, v)}
         # Surface signup keys we couldn't reconcile to any roster row.
-        matched_names_ci = {
-            (m.get("name") or "").strip().lower()
-            for m in members.values()
-        }
+        # Computed before cross-team exclusion so a member who's simply on
+        # the other team isn't mislabelled as "couldn't be matched."
+        matched_names_ci = {(m.get("name") or "").strip().lower() for m in members.values()}
         missing = {
-            sk for sk in signup_keys
-            if sk not in members and sk.lower() not in matched_names_ci
+            sk for sk in signup_keys if sk not in members and sk.lower() not in matched_names_ci
         }
         if missing:
             roster_errors.append(
                 f"{len(missing)} signed-up member(s) couldn't be matched to a "
                 f"roster row: {', '.join(sorted(missing))[:200]}"
             )
+
+        # Cross-team exclusion (#275): a player can only be on one storm
+        # team at a time. An "either time works" voter is eligible for
+        # both pools, so drop anyone already assigned on the OTHER team's
+        # auto-saved draft — even before Approve & Post. To move someone
+        # A→B the officer pulls them off A first (autosave frees them).
+        other_claimed = _other_team_claimed_keys(
+            interaction.guild_id,
+            event_type,
+            team,
+        )
+        excluded_for_other_team: list[str] = []
+        if other_claimed:
+            excluded_for_other_team = [
+                m.get("name") or k for k, m in members.items() if k in other_claimed
+            ]
+            members = {k: v for k, v in members.items() if k not in other_claimed}
+            if excluded_for_other_team:
+                other_team = "B" if team == "A" else "A"
+                roster_errors.append(
+                    f"{len(excluded_for_other_team)} member(s) already on Team "
+                    f"{other_team}'s roster were hidden (a player can only be "
+                    f"on one team): {', '.join(sorted(excluded_for_other_team))[:200]}"
+                )
+
         if not members:
             from storm_date_helpers import format_event_date
+
+            if excluded_for_other_team:
+                # Pool emptied specifically because everyone who signed up
+                # for this team is already on the other team's roster.
+                other_team = "B" if team == "A" else "A"
+                await interaction.followup.send(
+                    f"⚠️ Everyone who signed up for team **{team or 'A'}** is "
+                    f"already on Team {other_team}'s roster (a player can only "
+                    f"be on one team). Move someone off Team {other_team} first, "
+                    f"or wait for more sign-ups.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
                 f"event **{format_event_date(event_date)}**. Run "
@@ -6425,7 +7007,9 @@ async def open_roster_builder(
             )
 
     rules = await asyncio.to_thread(
-        smr.list_rules, interaction.guild_id, event_type,
+        smr.list_rules,
+        interaction.guild_id,
+        event_type,
     )
     per_member = [r for r in rules if r.rule_type == "per_member"]
     power_band = [r for r in rules if r.rule_type == "power_band"]
@@ -6435,12 +7019,17 @@ async def open_roster_builder(
     # the same team for the same event in parallel.
     if is_structured:
         import config
+
         ok, holder = config.claim_storm_session(
-            interaction.guild_id, event_type, event_date, team,
+            interaction.guild_id,
+            event_type,
+            event_date,
+            team,
             interaction.user.id,
         )
         if not ok:
             from storm_date_helpers import format_event_date
+
             await interaction.followup.send(
                 f"⚠️ Another officer (<@{holder}>) is already building "
                 f"**Team {team or 'roster'}** for event **{format_event_date(event_date)}**. "
@@ -6455,8 +7044,10 @@ async def open_roster_builder(
     # normalises unknowns to "pool"; defense in depth, the session
     # __init__ re-normalises too.
     import config
+
     structured_cfg = config.get_structured_storm_config(
-        interaction.guild_id, event_type,
+        interaction.guild_id,
+        event_type,
     )
     sub_mode = structured_cfg.get("sub_mode") or "pool"
 
@@ -6488,24 +7079,32 @@ async def open_roster_builder(
     if resume_from_draft and is_structured:
         try:
             saved = config.get_roster_draft(
-                interaction.guild_id, event_type, team or "",
+                interaction.guild_id,
+                event_type,
+                team or "",
             )
         except Exception as e:
             saved = None
             logger.warning(
                 "[STORM DRAFT] load failed (guild=%s event=%s team=%s): %s",
-                interaction.guild_id, event_type, team, e,
+                interaction.guild_id,
+                event_type,
+                team,
+                e,
             )
         if saved is not None:
             try:
                 import json
+
                 payload = json.loads(saved["session_json"])
             except (ValueError, KeyError) as e:
                 payload = None
                 logger.warning(
-                    "[STORM DRAFT] payload parse failed "
-                    "(guild=%s event=%s team=%s): %s",
-                    interaction.guild_id, event_type, team, e,
+                    "[STORM DRAFT] payload parse failed (guild=%s event=%s team=%s): %s",
+                    interaction.guild_id,
+                    event_type,
+                    team,
+                    e,
                 )
             if payload is not None:
                 report = _apply_saved_state(session, payload)
@@ -6516,6 +7115,7 @@ async def open_roster_builder(
                 lines: list[str] = []
                 if report["stale_event_date"]:
                     from storm_date_helpers import format_event_date
+
                     lines.append(
                         f"📅 Resumed a draft last saved for "
                         f"**{format_event_date(report['stale_event_date'])}**. "
@@ -6525,10 +7125,7 @@ async def open_roster_builder(
                 if report["dropped_members"]:
                     dropped = report["dropped_members"]
                     sample = ", ".join(dropped[:5])
-                    more = (
-                        f" (+{len(dropped) - 5} more)"
-                        if len(dropped) > 5 else ""
-                    )
+                    more = f" (+{len(dropped) - 5} more)" if len(dropped) > 5 else ""
                     lines.append(
                         f"⚠️ {len(dropped)} saved member(s) aren't in "
                         f"this week's pool and were removed: "
@@ -6549,7 +7146,9 @@ async def open_roster_builder(
         # release the lock so the next attempt isn't blocked.
         logger.warning(
             "[STORM BUILDER] failed to send builder view (guild=%s event=%s): %s",
-            interaction.guild_id, event_date, e,
+            interaction.guild_id,
+            event_date,
+            e,
         )
         view._release_session_lock()
         raise
@@ -6570,28 +7169,32 @@ class _TeamPickerView(discord.ui.View):
         async def _pick_a(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who started the apply can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             self.selected = "A"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await inter.response.edit_message(
-                content="✅ Team A selected.", view=self,
+                content="✅ Team A selected.",
+                view=self,
             )
             self.stop()
 
         async def _pick_b(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who started the apply can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
             self.selected = "B"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await inter.response.edit_message(
-                content="✅ Team B selected.", view=self,
+                content="✅ Team B selected.",
+                view=self,
             )
             self.stop()
 

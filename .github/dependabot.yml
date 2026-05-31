@@ -1,0 +1,33 @@
+# Dependabot: automated dependency + GitHub Actions update PRs.
+#
+# NOTE: Dependabot reads this file from the DEFAULT branch (main) only. While
+# it lives on dev it is dormant; it starts scanning once dev merges to main.
+#
+# Solo-maintainer tuning: weekly cadence, minor/patch updates grouped into a
+# single PR per ecosystem to cut noise, Conventional-Commits "chore" prefix to
+# match this repo's commit style.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+    groups:
+      actions:
+        patterns:
+          - "*"

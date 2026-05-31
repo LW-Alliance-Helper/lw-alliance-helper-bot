@@ -35,11 +35,12 @@ def _make_channel():
 
 # ── had_prior_config=False ───────────────────────────────────────────────────
 
-class TestFirstTimeDisable:
 
+class TestFirstTimeDisable:
     @pytest.mark.asyncio
     async def test_no_button_when_no_prior_config(self):
         from setup_cog import ask_disable_with_clear
+
         channel = _make_channel()
         clear_called = MagicMock()
 
@@ -62,11 +63,12 @@ class TestFirstTimeDisable:
 
 # ── had_prior_config=True ────────────────────────────────────────────────────
 
-class TestHadPriorConfig:
 
+class TestHadPriorConfig:
     @pytest.mark.asyncio
     async def test_message_mentions_restore_and_offers_clear_button(self):
         from setup_cog import ask_disable_with_clear
+
         channel = _make_channel()
 
         async def _bail(view, ev):
@@ -94,6 +96,7 @@ class TestHadPriorConfig:
     @pytest.mark.asyncio
     async def test_clicking_clear_invokes_sync_clear_fn(self):
         from setup_cog import ask_disable_with_clear
+
         channel = _make_channel()
         clear_called = MagicMock()
 
@@ -110,8 +113,9 @@ class TestHadPriorConfig:
                 cancel_event=None,
             )
         view = channel.send.call_args.kwargs["view"]
-        clear_btn = next(c for c in view.children
-                         if "Clear my saved configuration" in (c.label or ""))
+        clear_btn = next(
+            c for c in view.children if "Clear my saved configuration" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await clear_btn.callback(inter)
@@ -124,6 +128,7 @@ class TestHadPriorConfig:
     @pytest.mark.asyncio
     async def test_clicking_clear_invokes_async_clear_fn(self):
         from setup_cog import ask_disable_with_clear
+
         channel = _make_channel()
         clear_called = AsyncMock()
 
@@ -140,8 +145,9 @@ class TestHadPriorConfig:
                 cancel_event=None,
             )
         view = channel.send.call_args.kwargs["view"]
-        clear_btn = next(c for c in view.children
-                         if "Clear my saved configuration" in (c.label or ""))
+        clear_btn = next(
+            c for c in view.children if "Clear my saved configuration" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await clear_btn.callback(inter)
@@ -155,7 +161,9 @@ class TestHadPriorConfig:
         crash — it should surface the error in the original message and
         leave the view stopped so the dead button doesn't linger."""
         from setup_cog import ask_disable_with_clear
+
         channel = _make_channel()
+
         def _boom():
             raise RuntimeError("DB locked")
 
@@ -172,8 +180,9 @@ class TestHadPriorConfig:
                 cancel_event=None,
             )
         view = channel.send.call_args.kwargs["view"]
-        clear_btn = next(c for c in view.children
-                         if "Clear my saved configuration" in (c.label or ""))
+        clear_btn = next(
+            c for c in view.children if "Clear my saved configuration" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         # Must NOT raise.

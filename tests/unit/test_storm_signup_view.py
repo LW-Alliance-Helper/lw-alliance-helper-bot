@@ -19,10 +19,7 @@ from tests.unit.test_config import TEST_GUILD_ID
 def _vote_buttons(view):
     """Return only the vote buttons on a SignupView (filters out the
     leadership 'View sign-ups' button added in #258)."""
-    return [
-        c for c in view.children
-        if (c.custom_id or "").startswith("signup:")
-    ]
+    return [c for c in view.children if (c.custom_id or "").startswith("signup:")]
 
 
 def _vote_codes(view):
@@ -35,10 +32,10 @@ class TestCustomIdEncoding:
         cid = sv.make_custom_id(12345, "DS", "2026-05-18", "a")
         parsed = sv.parse_custom_id(cid)
         assert parsed == {
-            "guild_id":   12345,
+            "guild_id": 12345,
             "event_type": "ds",
             "event_date": "2026-05-18",
-            "vote":       "a",
+            "vote": "a",
         }
 
     def test_event_type_normalised_lowercase(self):
@@ -60,8 +57,14 @@ class TestCustomIdEncoding:
         assert sv.parse_custom_id("signup:1:ds:2026-01-01:bogus") is None
 
     def test_malformed_returns_none(self):
-        for bad in ("", "signup", "signup:foo", "signup:not_int:ds:2026-01-01:a",
-                    "other:1:ds:2026-01-01:a", "signup:1:ds:2026-01-01:a:extra"):
+        for bad in (
+            "",
+            "signup",
+            "signup:foo",
+            "signup:not_int:ds:2026-01-01:a",
+            "other:1:ds:2026-01-01:a",
+            "signup:1:ds:2026-01-01:a:extra",
+        ):
             assert sv.parse_custom_id(bad) is None
 
     def test_custom_id_under_discord_limit(self):
@@ -73,20 +76,18 @@ class TestCustomIdEncoding:
 
 class TestSignupViewConstruction:
     def test_four_buttons_with_stable_custom_ids(self):
-        view = sv.SignupView(12345, "DS", "2026-05-18",
-                             time_a_label="9pm ET", time_b_label="4pm ET")
+        view = sv.SignupView(
+            12345, "DS", "2026-05-18", time_a_label="9pm ET", time_b_label="4pm ET"
+        )
         # 4 vote buttons + 1 leadership "View sign-ups" button (#258)
         assert len(view.children) == 5
         # Each vote button has a parseable custom_id
-        vote_buttons = [
-            c for c in view.children
-            if (c.custom_id or "").startswith("signup:")
-        ]
+        vote_buttons = [c for c in view.children if (c.custom_id or "").startswith("signup:")]
         votes_found = set()
         for btn in vote_buttons:
             parsed = sv.parse_custom_id(btn.custom_id)
             assert parsed is not None
-            assert parsed["guild_id"]   == 12345
+            assert parsed["guild_id"] == 12345
             assert parsed["event_type"] == "ds"
             assert parsed["event_date"] == "2026-05-18"
             votes_found.add(parsed["vote"])
@@ -108,8 +109,7 @@ class TestSignupViewConstruction:
         assert any("Team B" in lab for lab in labels)
 
     def test_custom_labels_propagate(self):
-        view = sv.SignupView(1, "DS", "2026-05-18",
-                             time_a_label="9pm ET", time_b_label="4pm ET")
+        view = sv.SignupView(1, "DS", "2026-05-18", time_a_label="9pm ET", time_b_label="4pm ET")
         labels = [c.label for c in view.children]
         assert any("9pm ET" in lab for lab in labels)
         assert any("4pm ET" in lab for lab in labels)
@@ -127,16 +127,14 @@ class TestSignupViewConstruction:
         registered so a pre-hotfix CS post (which has all 4 buttons
         already rendered in Discord) stays clickable after a bot
         restart — discord.py routes by custom_id matching."""
-        view = sv.SignupView(12345, "CS", "2026-05-18",
-                             _force_all_buttons=True)
+        view = sv.SignupView(12345, "CS", "2026-05-18", _force_all_buttons=True)
         codes = sorted(_vote_codes(view))
         assert codes == ["a", "b", "cannot", "either"]
 
     def test_force_all_buttons_noop_for_ds(self):
         """DS always has all 4 vote buttons regardless of the flag."""
         view_default = sv.SignupView(1, "DS", "2026-05-18")
-        view_forced = sv.SignupView(1, "DS", "2026-05-18",
-                                    _force_all_buttons=True)
+        view_forced = sv.SignupView(1, "DS", "2026-05-18", _force_all_buttons=True)
         assert len(_vote_buttons(view_default)) == 4
         assert len(_vote_buttons(view_forced)) == 4
 
@@ -160,8 +158,7 @@ class TestSignupViewConstruction:
         regardless of the current `teams` setting — a pre-config-change
         post may have all 4 buttons rendered, and the View needs
         routes for every persisted custom_id."""
-        view = sv.SignupView(1, "DS", "2026-05-18",
-                             teams="A", _force_all_buttons=True)
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="A", _force_all_buttons=True)
         assert len(_vote_buttons(view)) == 4
 
     def test_cs_respects_teams_setting(self):
@@ -183,15 +180,10 @@ class TestSignupViewConstruction:
         """The doubled-label bug: when `time_a_label=""`, the button
         should render as `🅰️ Team A`, not `🅰️ Team A: ` (trailing
         colon) and definitely not `🅰️ Team A: Team A`."""
-        view = sv.SignupView(1, "DS", "2026-05-18",
-                             time_a_label="", time_b_label="")
+        view = sv.SignupView(1, "DS", "2026-05-18", time_a_label="", time_b_label="")
         labels = [c.label for c in view.children]
-        assert any(lab == "🅰️ Team A" for lab in labels), (
-            f"expected bare '🅰️ Team A' in {labels}"
-        )
-        assert any(lab == "🅱️ Team B" for lab in labels), (
-            f"expected bare '🅱️ Team B' in {labels}"
-        )
+        assert any(lab == "🅰️ Team A" for lab in labels), f"expected bare '🅰️ Team A' in {labels}"
+        assert any(lab == "🅱️ Team B" for lab in labels), f"expected bare '🅱️ Team B' in {labels}"
         # Nothing renders as a doubled label.
         assert not any("Team A: Team A" in lab for lab in labels)
         assert not any("Team B: Team B" in lab for lab in labels)
@@ -207,11 +199,15 @@ class TestCsStaleVoteReject:
     async def test_cs_b_vote_rejected_when_team_a_only(self, seeded_db):
         from unittest.mock import AsyncMock, MagicMock, patch
         import config
+
         # Seed CS config with teams=A so the b vote is invalid.
         config.save_storm_config(
-            TEST_GUILD_ID, "CS",
-            tab_name="CS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "CS",
+            tab_name="CS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
             teams="A",
         )
         cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "b")
@@ -220,10 +216,12 @@ class TestCsStaleVoteReject:
         interaction.data = {"custom_id": cid}
         interaction.user.id = 42
         interaction.response.send_message = AsyncMock()
-        interaction.response.defer       = AsyncMock()
-        interaction.followup.send        = AsyncMock()
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(interaction, "b")
         # The polite reject fires BEFORE record_storm_vote.
         record.assert_not_called()
@@ -235,10 +233,14 @@ class TestCsStaleVoteReject:
     async def test_cs_either_vote_rejected_when_single_team(self, seeded_db):
         from unittest.mock import AsyncMock, MagicMock, patch
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "CS",
-            tab_name="CS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "CS",
+            tab_name="CS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
             teams="A",
         )
         cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "either")
@@ -247,8 +249,10 @@ class TestCsStaleVoteReject:
         interaction.data = {"custom_id": cid}
         interaction.user.id = 42
         interaction.response.send_message = AsyncMock()
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(interaction, "either")
         record.assert_not_called()
 
@@ -257,6 +261,7 @@ class TestCsStaleVoteReject:
         """Sanity — `a` and `cannot` on CS still route through to the
         record path."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "a")
         interaction = MagicMock()
         interaction.guild_id = TEST_GUILD_ID
@@ -267,14 +272,15 @@ class TestCsStaleVoteReject:
         interaction.client = MagicMock()
         interaction.user.display_name = "Alice"
         interaction.response.send_message = AsyncMock()
-        interaction.response.defer       = AsyncMock()
-        interaction.followup.send        = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
         interaction.guild = None  # short-circuits the chunk pre-pass
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_view._mirror_vote_to_sheet"), \
-             patch("storm_signup_view._maybe_send_power_refresh_dm",
-                   new=AsyncMock()), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_view._mirror_vote_to_sheet"),
+            patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(interaction, "a")
         record.assert_called_once()
 
@@ -282,6 +288,7 @@ class TestCsStaleVoteReject:
     async def test_ds_b_vote_still_proceeds(self, seeded_db):
         """The reject only fires on CS — DS Team B remains valid."""
         from unittest.mock import AsyncMock, MagicMock, patch
+
         cid = sv.make_custom_id(TEST_GUILD_ID, "DS", "2026-05-18", "b")
         interaction = MagicMock()
         interaction.guild_id = TEST_GUILD_ID
@@ -292,14 +299,15 @@ class TestCsStaleVoteReject:
         interaction.client = MagicMock()
         interaction.user.display_name = "Alice"
         interaction.response.send_message = AsyncMock()
-        interaction.response.defer       = AsyncMock()
-        interaction.followup.send        = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
         interaction.guild = None
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_view._mirror_vote_to_sheet"), \
-             patch("storm_signup_view._maybe_send_power_refresh_dm",
-                   new=AsyncMock()), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_view._mirror_vote_to_sheet"),
+            patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(interaction, "b")
         record.assert_called_once()
 
@@ -313,10 +321,14 @@ class TestDsSingleTeamStaleVoteReject:
     @pytest.fixture
     def env_teams_a(self, seeded_db):
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
             teams="A",
         )
         return TEST_GUILD_ID
@@ -324,16 +336,21 @@ class TestDsSingleTeamStaleVoteReject:
     @pytest.fixture
     def env_teams_b(self, seeded_db):
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
             teams="B",
         )
         return TEST_GUILD_ID
 
     def _fake_interaction(self, vote: str, event_type: str = "DS"):
         from unittest.mock import AsyncMock, MagicMock
+
         cid = sv.make_custom_id(TEST_GUILD_ID, event_type, "2026-05-18", vote)
         interaction = MagicMock()
         interaction.guild_id = TEST_GUILD_ID
@@ -344,17 +361,20 @@ class TestDsSingleTeamStaleVoteReject:
         interaction.client = MagicMock()
         interaction.user.display_name = "Alice"
         interaction.response.send_message = AsyncMock()
-        interaction.response.defer       = AsyncMock()
-        interaction.followup.send        = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
         interaction.guild = None
         return interaction
 
     @pytest.mark.asyncio
     async def test_teams_a_rejects_team_b_vote(self, env_teams_a):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("b")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "b")
         record.assert_not_called()
         body = inter.response.send_message.await_args.args[0]
@@ -363,42 +383,52 @@ class TestDsSingleTeamStaleVoteReject:
     @pytest.mark.asyncio
     async def test_teams_a_rejects_either_vote(self, env_teams_a):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("either")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "either")
         record.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_teams_a_accepts_team_a_vote(self, env_teams_a):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("a")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_view._mirror_vote_to_sheet"), \
-             patch("storm_signup_view._maybe_send_power_refresh_dm",
-                   new=AsyncMock()), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_view._mirror_vote_to_sheet"),
+            patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "a")
         record.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_teams_a_accepts_cannot_vote(self, env_teams_a):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("cannot")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_view._mirror_vote_to_sheet"), \
-             patch("storm_signup_view._maybe_send_power_refresh_dm",
-                   new=AsyncMock()), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_view._mirror_vote_to_sheet"),
+            patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "cannot")
         record.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_teams_b_rejects_team_a_vote(self, env_teams_b):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("a")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "a")
         record.assert_not_called()
         body = inter.response.send_message.await_args.args[0]
@@ -407,21 +437,26 @@ class TestDsSingleTeamStaleVoteReject:
     @pytest.mark.asyncio
     async def test_teams_b_rejects_either_vote(self, env_teams_b):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("either")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "either")
         record.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_teams_b_accepts_team_b_vote(self, env_teams_b):
         from unittest.mock import AsyncMock, patch
+
         inter = self._fake_interaction("b")
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch("storm_signup_view._mirror_vote_to_sheet"), \
-             patch("storm_signup_view._maybe_send_power_refresh_dm",
-                   new=AsyncMock()), \
-             patch("config.record_storm_vote") as record:
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_view._mirror_vote_to_sheet"),
+            patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+            patch("config.record_storm_vote") as record,
+        ):
             await sv._handle_signup_click(inter, "b")
         record.assert_called_once()
 
@@ -429,20 +464,26 @@ class TestDsSingleTeamStaleVoteReject:
     async def test_teams_both_accepts_all_votes(self, seeded_db):
         """teams=both (default) preserves the original 4-vote behaviour."""
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
             teams="both",
         )
         from unittest.mock import AsyncMock, patch
+
         for vote in ("a", "b", "either", "cannot"):
             inter = self._fake_interaction(vote)
-            with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-                 patch("storm_signup_view._mirror_vote_to_sheet"), \
-                 patch("storm_signup_view._maybe_send_power_refresh_dm",
-                       new=AsyncMock()), \
-                 patch("config.record_storm_vote") as record:
+            with (
+                patch("premium.is_premium", new=AsyncMock(return_value=True)),
+                patch("storm_signup_view._mirror_vote_to_sheet"),
+                patch("storm_signup_view._maybe_send_power_refresh_dm", new=AsyncMock()),
+                patch("config.record_storm_vote") as record,
+            ):
                 await sv._handle_signup_click(inter, vote)
             record.assert_called_once(), f"vote {vote} should record"
 
@@ -454,12 +495,19 @@ class TestSignupHistoryAudit:
 
     def test_self_vote_appends_history_row(self, seeded_db):
         import config
+
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=42, target_member_id="42", vote="a",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="a",
         )
         history = config.get_storm_signup_history(
-            TEST_GUILD_ID, "DS", "2026-05-18",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
         )
         assert len(history) == 1
         assert history[0]["voter_user_id"] == 42
@@ -469,24 +517,40 @@ class TestSignupHistoryAudit:
 
     def test_revote_preserves_prior_vote_in_history(self, seeded_db):
         import config
+
         # First vote — A
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=42, target_member_id="42", vote="a",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="a",
         )
         # Officer overrides — B
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=999, target_member_id="42", vote="b",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="42",
+            vote="b",
             is_on_behalf=True,
         )
         # Member changes their mind — Either
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=42, target_member_id="42", vote="either",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="either",
         )
         history = config.get_storm_signup_history(
-            TEST_GUILD_ID, "DS", "2026-05-18", target_member_id="42",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            target_member_id="42",
         )
         # All three votes preserved, newest first.
         assert [h["vote"] for h in history] == ["either", "b", "a"]
@@ -498,20 +562,34 @@ class TestSignupHistoryAudit:
         """Sanity-check the contract: the current row in `storm_signups`
         reflects the latest vote; full history lives in the audit table."""
         import config
+
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=42, target_member_id="42", vote="a",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="a",
         )
         config.record_storm_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            voter_user_id=42, target_member_id="42", vote="cannot",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="cannot",
         )
         current = config.get_member_vote(
-            TEST_GUILD_ID, "DS", "2026-05-18", "42",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "42",
         )
         assert current["vote"] == "cannot"
         history = config.get_storm_signup_history(
-            TEST_GUILD_ID, "DS", "2026-05-18",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
         )
         assert len(history) == 2
 
@@ -524,15 +602,23 @@ class TestPersistentViewRegistration:
 
     def test_walks_recent_posts_and_calls_add_view(self, seeded_db):
         import config
+
         # Two posts within the 14-day window.
         config.record_storm_registration_post(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            channel_id=100, message_id=200,
-            time_a_label="9pm ET", time_b_label="4pm ET",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            channel_id=100,
+            message_id=200,
+            time_a_label="9pm ET",
+            time_b_label="4pm ET",
         )
         config.record_storm_registration_post(
-            TEST_GUILD_ID, "CS", "2026-05-25",
-            channel_id=100, message_id=300,
+            TEST_GUILD_ID,
+            "CS",
+            "2026-05-25",
+            channel_id=100,
+            message_id=300,
             time_a_label="12pm ET",
         )
 
@@ -550,9 +636,13 @@ class TestPersistentViewRegistration:
 
     def test_add_view_failure_is_logged_not_raised(self, seeded_db):
         import config
+
         config.record_storm_registration_post(
-            TEST_GUILD_ID, "DS", "2026-05-18",
-            channel_id=100, message_id=200,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            channel_id=100,
+            message_id=200,
         )
         bot = MagicMock()
         bot.add_view.side_effect = RuntimeError("simulated")
@@ -573,13 +663,18 @@ class TestPowerRefreshDmNudge:
         plus a roster fixture where the voter (`42`) has unparseable
         power so the nudge is in scope."""
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_refresh_dm_enabled=True,
@@ -588,6 +683,7 @@ class TestPowerRefreshDmNudge:
 
     def _fake_interaction(self, *, send_raises=None, user_id=42):
         from unittest.mock import AsyncMock
+
         inter = MagicMock()
         inter.guild = MagicMock()
         inter.guild.id = TEST_GUILD_ID
@@ -601,12 +697,19 @@ class TestPowerRefreshDmNudge:
 
     def _patch_roster(self, voter_power):
         from unittest.mock import patch
+
         return patch(
             "storm_roster_builder._read_roster_powers",
             return_value=(
-                {"42": {"key": "42", "name": "Alice",
-                        "discord_id": "42", "power": voter_power,
-                        "not_on_discord": False}},
+                {
+                    "42": {
+                        "key": "42",
+                        "name": "Alice",
+                        "discord_id": "42",
+                        "power": voter_power,
+                        "not_on_discord": False,
+                    }
+                },
                 [],
             ),
         )
@@ -614,27 +717,38 @@ class TestPowerRefreshDmNudge:
     @pytest.mark.asyncio
     async def test_disabled_flag_short_circuits(self, env, seeded_db):
         import config
+
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             power_refresh_dm_enabled=False,
         )
         inter = self._fake_interaction()
         await sv._maybe_send_power_refresh_dm(
-            inter, env, "DS", "2026-05-18", 42,
+            inter,
+            env,
+            "DS",
+            "2026-05-18",
+            42,
         )
         inter.user.send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_voter_not_on_roster_skipped(self, env):
         from unittest.mock import patch
+
         inter = self._fake_interaction()
         with patch(
             "storm_roster_builder._read_roster_powers",
             return_value=({}, []),
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_not_called()
 
@@ -643,17 +757,26 @@ class TestPowerRefreshDmNudge:
         inter = self._fake_interaction()
         with self._patch_roster(voter_power=412_000_000):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_power_unparseable_sends_dm_and_records(self, env):
         import config
+
         inter = self._fake_interaction()
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_awaited_once()
         body = inter.user.send.await_args.args[0]
@@ -663,7 +786,10 @@ class TestPowerRefreshDmNudge:
         assert "power value" in body.lower()
         # Cooldown row recorded — subsequent re-vote is silent.
         assert config.has_power_refresh_dm_been_sent(
-            env, "DS", "2026-05-18", 42,
+            env,
+            "DS",
+            "2026-05-18",
+            42,
         )
 
     @pytest.mark.asyncio
@@ -671,14 +797,22 @@ class TestPowerRefreshDmNudge:
         inter1 = self._fake_interaction()
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter1, env, "DS", "2026-05-18", 42,
+                inter1,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         assert inter1.user.send.await_count == 1
         # Second re-vote → cooldown short-circuits, no second DM.
         inter2 = self._fake_interaction()
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter2, env, "DS", "2026-05-18", 42,
+                inter2,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter2.user.send.assert_not_called()
 
@@ -688,18 +822,27 @@ class TestPowerRefreshDmNudge:
         re-vote."""
         import config
         import discord as _d
+
         inter = self._fake_interaction(
             send_raises=_d.Forbidden(
-                response=MagicMock(status=403), message="DMs disabled",
+                response=MagicMock(status=403),
+                message="DMs disabled",
             ),
         )
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         # Cooldown is recorded so we don't hit the Sheet read again.
         assert config.has_power_refresh_dm_been_sent(
-            env, "DS", "2026-05-18", 42,
+            env,
+            "DS",
+            "2026-05-18",
+            42,
         )
 
     @pytest.mark.asyncio
@@ -708,18 +851,27 @@ class TestPowerRefreshDmNudge:
         cooldown row so the next re-vote retries. Audit Major M1."""
         import config
         import discord as _d
+
         inter = self._fake_interaction(
             send_raises=_d.HTTPException(
-                response=MagicMock(status=503), message="Service unavailable",
+                response=MagicMock(status=503),
+                message="Service unavailable",
             ),
         )
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         # Cooldown was backed out — next click can retry.
         assert not config.has_power_refresh_dm_been_sent(
-            env, "DS", "2026-05-18", 42,
+            env,
+            "DS",
+            "2026-05-18",
+            42,
         )
 
     @pytest.mark.asyncio
@@ -728,6 +880,7 @@ class TestPowerRefreshDmNudge:
         the SELECT before either INSERTs. INSERT-first ordering means
         only the first sees a fresh row → only the first DMs."""
         from unittest.mock import patch
+
         inter_a = self._fake_interaction()
         inter_b = self._fake_interaction()
 
@@ -735,10 +888,18 @@ class TestPowerRefreshDmNudge:
         # state (no cooldown row yet). The first INSERT-first wins.
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter_a, env, "DS", "2026-05-18", 42,
+                inter_a,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
             await sv._maybe_send_power_refresh_dm(
-                inter_b, env, "DS", "2026-05-18", 42,
+                inter_b,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
 
         # Exactly one DM was sent.
@@ -757,13 +918,18 @@ class TestStalePowerDmNudge:
         """Premium-flag-on guild with both the master toggle and stale
         check on, threshold 7 days, source configured."""
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_refresh_dm_enabled=True,
@@ -775,6 +941,7 @@ class TestStalePowerDmNudge:
 
     def _fake_interaction(self, *, send_raises=None, user_id=42):
         from unittest.mock import AsyncMock
+
         inter = MagicMock()
         inter.guild = MagicMock()
         inter.guild.id = TEST_GUILD_ID
@@ -791,13 +958,20 @@ class TestStalePowerDmNudge:
         power is parseable but whose `last_updated` lets us drive the
         stale check."""
         from unittest.mock import patch
+
         return patch(
             "storm_roster_builder._read_roster_powers",
             return_value=(
-                {"42": {"key": "42", "name": "Alice",
-                        "discord_id": "42", "power": voter_power,
+                {
+                    "42": {
+                        "key": "42",
+                        "name": "Alice",
+                        "discord_id": "42",
+                        "power": voter_power,
                         "not_on_discord": False,
-                        "last_updated": voter_last_updated}},
+                        "last_updated": voter_last_updated,
+                    }
+                },
                 [],
             ),
         )
@@ -808,13 +982,19 @@ class TestStalePowerDmNudge:
         → DM fires. Body names the days-stale figure."""
         import datetime as _dt
         import config
+
         inter = self._fake_interaction()
         old = _dt.date.today() - _dt.timedelta(days=30)
         with self._patch_roster(
-            voter_power=412_000_000, voter_last_updated=old,
+            voter_power=412_000_000,
+            voter_last_updated=old,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_awaited_once()
         body = inter.user.send.await_args.args[0]
@@ -822,20 +1002,29 @@ class TestStalePowerDmNudge:
         assert "days ago" in body.lower()
         # Cooldown shared with the missing-power path.
         assert config.has_power_refresh_dm_been_sent(
-            env, "DS", "2026-05-18", 42,
+            env,
+            "DS",
+            "2026-05-18",
+            42,
         )
 
     @pytest.mark.asyncio
     async def test_fresh_power_no_dm(self, env):
         """Power present + timestamp inside the threshold → no DM."""
         import datetime as _dt
+
         inter = self._fake_interaction()
         fresh = _dt.date.today() - _dt.timedelta(days=2)
         with self._patch_roster(
-            voter_power=412_000_000, voter_last_updated=fresh,
+            voter_power=412_000_000,
+            voter_last_updated=fresh,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_not_called()
 
@@ -844,13 +1033,19 @@ class TestStalePowerDmNudge:
         """Boundary: a value that's exactly `stale_days` old should
         DM. The comparison is inclusive (>=)."""
         import datetime as _dt
+
         inter = self._fake_interaction()
         edge = _dt.date.today() - _dt.timedelta(days=7)
         with self._patch_roster(
-            voter_power=412_000_000, voter_last_updated=edge,
+            voter_power=412_000_000,
+            voter_last_updated=edge,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_awaited_once()
 
@@ -861,10 +1056,15 @@ class TestStalePowerDmNudge:
         NOT punish members for an alliance-side data-quality issue."""
         inter = self._fake_interaction()
         with self._patch_roster(
-            voter_power=412_000_000, voter_last_updated=None,
+            voter_power=412_000_000,
+            voter_last_updated=None,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_not_called()
 
@@ -875,8 +1075,10 @@ class TestStalePowerDmNudge:
         runs as before (covered in TestPowerRefreshDmNudge)."""
         import config
         import datetime as _dt
+
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_refresh_dm_enabled=True,
@@ -887,10 +1089,15 @@ class TestStalePowerDmNudge:
         inter = self._fake_interaction()
         old = _dt.date.today() - _dt.timedelta(days=30)
         with self._patch_roster(
-            voter_power=412_000_000, voter_last_updated=old,
+            voter_power=412_000_000,
+            voter_last_updated=old,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_not_called()
 
@@ -900,13 +1107,19 @@ class TestStalePowerDmNudge:
         branch fires (not the stale branch). DM copy should match the
         missing-power wording, not the stale-days wording."""
         import datetime as _dt
+
         inter = self._fake_interaction()
         old = _dt.date.today() - _dt.timedelta(days=30)
         with self._patch_roster(
-            voter_power=None, voter_last_updated=old,
+            voter_power=None,
+            voter_last_updated=old,
         ):
             await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
+                inter,
+                env,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_awaited_once()
         body = inter.user.send.await_args.args[0]
@@ -921,25 +1134,42 @@ class TestClearPowerRefreshDmSent:
 
     def test_round_trip(self, seeded_db):
         import config
+
         config.record_power_refresh_dm_sent(
-            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            42,
         )
         assert config.has_power_refresh_dm_been_sent(
-            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            42,
         )
         ok = config.clear_power_refresh_dm_sent(
-            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            42,
         )
         assert ok
         assert not config.has_power_refresh_dm_been_sent(
-            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            42,
         )
 
     def test_clear_nothing_is_safe(self, seeded_db):
         import config
+
         # Clearing a non-existent row is a no-op, not an exception.
         assert not config.clear_power_refresh_dm_sent(
-            TEST_GUILD_ID, "DS", "2026-05-18", 999,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            999,
         )
 
 
@@ -955,7 +1185,7 @@ class TestViewSignupsCustomId:
         cid = sv.make_view_signups_custom_id(12345, "DS", "2026-05-18")
         parsed = sv.parse_view_signups_custom_id(cid)
         assert parsed == {
-            "guild_id":   12345,
+            "guild_id": 12345,
             "event_type": "ds",
             "event_date": "2026-05-18",
         }
@@ -972,8 +1202,13 @@ class TestViewSignupsCustomId:
         assert sv.parse_view_signups_custom_id("signup_view:1:xx:2026-01-01") is None
 
     def test_malformed_returns_none(self):
-        for bad in ("", "signup_view", "signup_view:not_int:ds:2026-01-01",
-                    "other:1:ds:2026-01-01", "signup_view:1:ds:2026-01-01:extra"):
+        for bad in (
+            "",
+            "signup_view",
+            "signup_view:not_int:ds:2026-01-01",
+            "other:1:ds:2026-01-01",
+            "signup_view:1:ds:2026-01-01:extra",
+        ):
             assert sv.parse_view_signups_custom_id(bad) is None
 
     def test_under_discord_limit(self):
@@ -990,10 +1225,7 @@ class TestSignupViewLeadershipButton:
 
     def test_view_signups_button_present_on_default_view(self):
         view = sv.SignupView(1, "DS", "2026-05-18")
-        view_buttons = [
-            c for c in view.children
-            if (c.custom_id or "").startswith("signup_view:")
-        ]
+        view_buttons = [c for c in view.children if (c.custom_id or "").startswith("signup_view:")]
         assert len(view_buttons) == 1
         btn = view_buttons[0]
         assert "View sign-ups" in btn.label
@@ -1004,21 +1236,17 @@ class TestSignupViewLeadershipButton:
         # teams=A renders 2 vote buttons + the leadership button.
         view = sv.SignupView(1, "DS", "2026-05-18", teams="A")
         assert len(_vote_buttons(view)) == 2
-        leadership = [
-            c for c in view.children
-            if (c.custom_id or "").startswith("signup_view:")
-        ]
+        leadership = [c for c in view.children if (c.custom_id or "").startswith("signup_view:")]
         assert len(leadership) == 1
 
     def test_view_signups_button_custom_id_encodes_post_identity(self):
         view = sv.SignupView(12345, "CS", "2026-05-18")
         leadership = next(
-            c for c in view.children
-            if (c.custom_id or "").startswith("signup_view:")
+            c for c in view.children if (c.custom_id or "").startswith("signup_view:")
         )
         parsed = sv.parse_view_signups_custom_id(leadership.custom_id)
         assert parsed == {
-            "guild_id":   12345,
+            "guild_id": 12345,
             "event_type": "cs",
             "event_date": "2026-05-18",
         }
@@ -1030,8 +1258,11 @@ class TestPollStyleAck:
 
     def _record(self, gid, vote, voter_id, *, et="DS", date="2026-05-18"):
         import config
+
         config.record_storm_vote(
-            gid, et, date,
+            gid,
+            et,
+            date,
             voter_user_id=voter_id,
             target_member_id=str(voter_id),
             vote=vote,
@@ -1044,8 +1275,11 @@ class TestPollStyleAck:
         gid = TEST_GUILD_ID
         self._record(gid, "a", 100)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="a", voter_vote_label="Team A",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="a",
+            voter_vote_label="Team A",
         )
         assert "Team A" in embed.title
         assert "✅" in embed.title
@@ -1056,22 +1290,19 @@ class TestPollStyleAck:
         self._record(gid, "a", 100)
         self._record(gid, "b", 101)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="a", voter_vote_label="Team A: 9pm ET",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="a",
+            voter_vote_label="Team A: 9pm ET",
         )
         # The ✓ marker sits on the voter's row inside the code block.
         # Strip the code-block fences and find the Team A line.
         body = embed.description
-        team_a_lines = [
-            line for line in body.split("\n")
-            if line.startswith("Team A")
-        ]
+        team_a_lines = [line for line in body.split("\n") if line.startswith("Team A")]
         assert team_a_lines, body
         assert "✓" in team_a_lines[0]
-        team_b_lines = [
-            line for line in body.split("\n")
-            if line.startswith("Team B")
-        ]
+        team_b_lines = [line for line in body.split("\n") if line.startswith("Team B")]
         assert team_b_lines, body
         assert "✓" not in team_b_lines[0]
 
@@ -1080,8 +1311,11 @@ class TestPollStyleAck:
         for i, vote in enumerate(("a", "a", "b", "either", "cannot")):
             self._record(gid, vote, 100 + i)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="cannot", voter_vote_label="Cannot participate",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="cannot",
+            voter_vote_label="Cannot participate",
         )
         assert "**Total votes:** 5" in embed.description
 
@@ -1092,13 +1326,16 @@ class TestPollStyleAck:
         gid = TEST_GUILD_ID
         self._record(gid, "a", 100)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="a", voter_vote_label="Team A",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="a",
+            voter_vote_label="Team A",
             teams_setting="A",
         )
         body = embed.description
         assert "Team A" in body
-        assert "Can't"  in body
+        assert "Can't" in body
         assert "Team B" not in body
         assert "Either" not in body
 
@@ -1106,13 +1343,16 @@ class TestPollStyleAck:
         gid = TEST_GUILD_ID
         self._record(gid, "b", 100)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="b", voter_vote_label="Team B",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="b",
+            voter_vote_label="Team B",
             teams_setting="B",
         )
         body = embed.description
         assert "Team B" in body
-        assert "Can't"  in body
+        assert "Can't" in body
         assert "Team A" not in body
         assert "Either" not in body
 
@@ -1123,14 +1363,14 @@ class TestPollStyleAck:
         gid = TEST_GUILD_ID
         self._record(gid, "a", 100)
         embed = sv._render_vote_poll_embed(
-            gid, "DS", "2026-05-18",
-            voter_vote="a", voter_vote_label="Team A",
+            gid,
+            "DS",
+            "2026-05-18",
+            voter_vote="a",
+            voter_vote_label="Team A",
         )
         body = embed.description
-        team_b_lines = [
-            line for line in body.split("\n")
-            if line.startswith("Team B")
-        ]
+        team_b_lines = [line for line in body.split("\n") if line.startswith("Team B")]
         assert team_b_lines
         # 0 count rendered with no bar blocks.
         assert "█" not in team_b_lines[0]
@@ -1142,10 +1382,14 @@ class TestPollStyleAck:
         gid = TEST_GUILD_ID
         self._record(gid, "a", 100, et="CS")
         embed = sv._render_vote_poll_embed(
-            gid, "CS", "2026-05-18",
-            voter_vote="a", voter_vote_label="Team A",
+            gid,
+            "CS",
+            "2026-05-18",
+            voter_vote="a",
+            voter_vote_label="Team A",
         )
         import discord
+
         assert embed.color == discord.Color.orange()
 
 
@@ -1156,6 +1400,7 @@ class TestHandleViewSignupsClick:
 
     def _interaction(self, *, is_leader: bool):
         from unittest.mock import AsyncMock
+
         inter = MagicMock()
         inter.guild_id = TEST_GUILD_ID
         inter.guild = MagicMock()
@@ -1165,6 +1410,7 @@ class TestHandleViewSignupsClick:
         # Cast as Member instance so storm_permissions.is_leader_or_admin
         # doesn't bail on the DMs path.
         import discord
+
         member.__class__ = discord.Member
         inter.user = member
         inter.response.is_done.return_value = False
@@ -1177,7 +1423,10 @@ class TestHandleViewSignupsClick:
     async def test_non_leader_gets_rejection_ephemeral(self, seeded_db):
         inter = self._interaction(is_leader=False)
         await sv._handle_view_signups_click(
-            inter, TEST_GUILD_ID, "ds", "2026-05-18",
+            inter,
+            TEST_GUILD_ID,
+            "ds",
+            "2026-05-18",
         )
         inter.response.send_message.assert_awaited_once()
         body = inter.response.send_message.await_args.args[0]
@@ -1192,17 +1441,21 @@ class TestHandleViewSignupsClick:
     @pytest.mark.asyncio
     async def test_leader_gets_breakdown_embed(self, seeded_db):
         from unittest.mock import patch
+
         inter = self._interaction(is_leader=True)
         fake_embed = MagicMock()
         # Patch the two officer-view helpers — we don't need to drive
         # the full bucket-build pipeline here, just confirm the handler
         # delegates to them and sends the resulting embed.
-        with patch("storm_officer_view._build_bucket_map",
-                   return_value=({"a": []}, [])), \
-             patch("storm_officer_view._render_embed",
-                   return_value=fake_embed):
+        with (
+            patch("storm_officer_view._build_bucket_map", return_value=({"a": []}, [])),
+            patch("storm_officer_view._render_embed", return_value=fake_embed),
+        ):
             await sv._handle_view_signups_click(
-                inter, TEST_GUILD_ID, "ds", "2026-05-18",
+                inter,
+                TEST_GUILD_ID,
+                "ds",
+                "2026-05-18",
             )
         inter.response.defer.assert_awaited_once()
         inter.followup.send.assert_awaited_once()
@@ -1218,13 +1471,18 @@ class TestPowerDmAckPrefix:
 
     def _env(self):
         import config
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_refresh_dm_enabled=True,
@@ -1233,6 +1491,7 @@ class TestPowerDmAckPrefix:
 
     def _interaction(self):
         from unittest.mock import AsyncMock
+
         inter = MagicMock()
         inter.guild = MagicMock()
         inter.guild.id = TEST_GUILD_ID
@@ -1243,12 +1502,19 @@ class TestPowerDmAckPrefix:
 
     def _patch_roster(self, voter_power):
         from unittest.mock import patch
+
         return patch(
             "storm_roster_builder._read_roster_powers",
             return_value=(
-                {"42": {"key": "42", "name": "Alice",
-                        "discord_id": "42", "power": voter_power,
-                        "not_on_discord": False}},
+                {
+                    "42": {
+                        "key": "42",
+                        "name": "Alice",
+                        "discord_id": "42",
+                        "power": voter_power,
+                        "not_on_discord": False,
+                    }
+                },
                 [],
             ),
         )
@@ -1259,7 +1525,11 @@ class TestPowerDmAckPrefix:
         inter = self._interaction()
         with self._patch_roster(voter_power=None):
             await sv._maybe_send_power_refresh_dm(
-                inter, gid, "DS", "2026-05-18", 42,
+                inter,
+                gid,
+                "DS",
+                "2026-05-18",
+                42,
             )
         inter.user.send.assert_awaited_once()
         body = inter.user.send.await_args.args[0]
@@ -1269,13 +1539,19 @@ class TestPowerDmAckPrefix:
     @pytest.mark.asyncio
     async def test_header_variant_also_leads_with_vote_recorded(self, seeded_db):
         from unittest.mock import patch
+
         gid = self._env()
         inter = self._interaction()
-        with self._patch_roster(voter_power=None), \
-             patch("storm_roster_builder._read_power_column_header",
-                   return_value="Squad Power"):
+        with (
+            self._patch_roster(voter_power=None),
+            patch("storm_roster_builder._read_power_column_header", return_value="Squad Power"),
+        ):
             await sv._maybe_send_power_refresh_dm(
-                inter, gid, "DS", "2026-05-18", 42,
+                inter,
+                gid,
+                "DS",
+                "2026-05-18",
+                42,
             )
         body = inter.user.send.await_args.args[0]
         assert body.startswith("✅ Your vote was recorded."), body

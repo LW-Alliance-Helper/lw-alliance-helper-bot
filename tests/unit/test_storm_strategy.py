@@ -116,8 +116,9 @@ class TestPresetBuffer:
         assert buf.dirty is True
 
     def test_upsert_existing_zone_updates_in_place(self):
-        buf = ss.PresetBuffer(name="P", event_type="DS",
-                              zones=[ss.ZoneRow(zone="Power Tower", max_players=2)])
+        buf = ss.PresetBuffer(
+            name="P", event_type="DS", zones=[ss.ZoneRow(zone="Power Tower", max_players=2)]
+        )
         buf.dirty = False
         buf.upsert_zone(ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=300_000_000))
         assert len(buf.zones) == 1
@@ -126,8 +127,7 @@ class TestPresetBuffer:
         assert buf.dirty is True
 
     def test_remove_zone_returns_true_when_found(self):
-        buf = ss.PresetBuffer(name="P", event_type="DS",
-                              zones=[ss.ZoneRow(zone="Power Tower")])
+        buf = ss.PresetBuffer(name="P", event_type="DS", zones=[ss.ZoneRow(zone="Power Tower")])
         buf.dirty = False
         assert buf.remove_zone("Power Tower") is True
         assert len(buf.zones) == 0
@@ -139,16 +139,19 @@ class TestPresetBuffer:
         assert buf.dirty is False
 
     def test_total_capacity(self):
-        buf = ss.PresetBuffer(name="P", event_type="DS", zones=[
-            ss.ZoneRow(zone="A", max_players=4),
-            ss.ZoneRow(zone="B", max_players=4),
-            ss.ZoneRow(zone="C", max_players=2),
-        ])
+        buf = ss.PresetBuffer(
+            name="P",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(zone="A", max_players=4),
+                ss.ZoneRow(zone="B", max_players=4),
+                ss.ZoneRow(zone="C", max_players=2),
+            ],
+        )
         assert buf.total_capacity() == 10
 
     def test_find_zone_case_insensitive(self):
-        buf = ss.PresetBuffer(name="P", event_type="DS",
-                              zones=[ss.ZoneRow(zone="Power Tower")])
+        buf = ss.PresetBuffer(name="P", event_type="DS", zones=[ss.ZoneRow(zone="Power Tower")])
         assert buf.find_zone("power tower") is not None
         assert buf.find_zone("POWER TOWER") is not None
         assert buf.find_zone("nothing") is None
@@ -157,6 +160,7 @@ class TestPresetBuffer:
 class TestCanonicalSeed:
     def test_ds_seed_has_canonical_zones(self):
         import storm
+
         buf = ss.seed_default_preset("Test", "DS")
         assert [z.zone for z in buf.zones] == list(storm.DS_ZONE_STRUCTURE)
 
@@ -167,6 +171,7 @@ class TestCanonicalSeed:
         ZoneRow, so one "Power Tower" entry with `max_phase1` +
         `max_phase3` cleanly subsumes the old s1+s3 pair."""
         import storm
+
         buf = ss.seed_default_preset("Test", "CS")
         # Build the expected deduped list in the same order
         # canonical_zones_for / CS_ZONE_STRUCTURE produce.
@@ -242,18 +247,24 @@ def fake_sheet_factory(seeded_db):
     plug it into config.get_spreadsheet. Pre-enables the structured
     flow so strategies_tab is configured."""
     import config
+
     fake = _FakeSpreadsheet()
 
     # Ensure the guild has a storm row to attach structured-flow config to.
     from tests.unit.test_config import TEST_GUILD_ID
+
     for et in ("DS", "CS"):
         config.save_storm_config(
-            TEST_GUILD_ID, et,
-            tab_name=f"{et} Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            et,
+            tab_name=f"{et} Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, et,
+            TEST_GUILD_ID,
+            et,
             structured_flow_enabled=True,
         )
 
@@ -264,12 +275,26 @@ def fake_sheet_factory(seeded_db):
 class TestSheetRoundTrip:
     def test_save_then_load_ds(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Standard", event_type="DS", zones=[
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                       min_power_a=300_000_000, min_power_b=180_000_000, priority=1),
-            ss.ZoneRow(zone="Oil Refinery I", max_players=4,
-                       min_power_a=250_000_000, min_power_b=150_000_000, priority=2),
-        ])
+        buf = ss.PresetBuffer(
+            name="Standard",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(
+                    zone="Nuclear Silo",
+                    max_players=4,
+                    min_power_a=300_000_000,
+                    min_power_b=180_000_000,
+                    priority=1,
+                ),
+                ss.ZoneRow(
+                    zone="Oil Refinery I",
+                    max_players=4,
+                    min_power_a=250_000_000,
+                    min_power_b=150_000_000,
+                    priority=2,
+                ),
+            ],
+        )
         ok = ss.save_preset(gid, "DS", buf)
         assert ok is True
 
@@ -281,15 +306,24 @@ class TestSheetRoundTrip:
         assert loaded.zones[0].max_players == 4
         assert loaded.zones[0].min_power_a == 300_000_000
         assert loaded.zones[0].min_power_b == 180_000_000
-        assert loaded.zones[0].priority    == 1
+        assert loaded.zones[0].priority == 1
 
     def test_save_then_load_cs(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Rulebringers", event_type="CS", faction="Rulebringers", zones=[
-            ss.ZoneRow(zone="Some CS Zone", max_players=4,
-                       min_power_a=250_000_000, min_power_b=180_000_000,
-                       priority=1),
-        ])
+        buf = ss.PresetBuffer(
+            name="Rulebringers",
+            event_type="CS",
+            faction="Rulebringers",
+            zones=[
+                ss.ZoneRow(
+                    zone="Some CS Zone",
+                    max_players=4,
+                    min_power_a=250_000_000,
+                    min_power_b=180_000_000,
+                    priority=1,
+                ),
+            ],
+        )
         ok = ss.save_preset(gid, "CS", buf)
         assert ok is True
 
@@ -302,9 +336,13 @@ class TestSheetRoundTrip:
     def test_list_presets_returns_unique_names(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
         for name in ("Standard", "Saturation"):
-            buf = ss.PresetBuffer(name=name, event_type="DS", zones=[
-                ss.ZoneRow(zone="Nuclear Silo", max_players=4),
-            ])
+            buf = ss.PresetBuffer(
+                name=name,
+                event_type="DS",
+                zones=[
+                    ss.ZoneRow(zone="Nuclear Silo", max_players=4),
+                ],
+            )
             ss.save_preset(gid, "DS", buf)
         names = ss.list_presets(gid, "DS")
         assert set(names) == {"Standard", "Saturation"}
@@ -312,9 +350,13 @@ class TestSheetRoundTrip:
     def test_delete_preset_removes_rows(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
         for name in ("Standard", "Saturation"):
-            buf = ss.PresetBuffer(name=name, event_type="DS", zones=[
-                ss.ZoneRow(zone="Nuclear Silo", max_players=4),
-            ])
+            buf = ss.PresetBuffer(
+                name=name,
+                event_type="DS",
+                zones=[
+                    ss.ZoneRow(zone="Nuclear Silo", max_players=4),
+                ],
+            )
             ss.save_preset(gid, "DS", buf)
         assert ss.delete_preset(gid, "DS", "Standard") is True
         assert set(ss.list_presets(gid, "DS")) == {"Saturation"}
@@ -323,15 +365,23 @@ class TestSheetRoundTrip:
 
     def test_save_replaces_prior_rows_for_same_name(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Standard", event_type="DS", zones=[
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4),
-            ss.ZoneRow(zone="Oil Refinery I", max_players=4),
-        ])
+        buf = ss.PresetBuffer(
+            name="Standard",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(zone="Nuclear Silo", max_players=4),
+                ss.ZoneRow(zone="Oil Refinery I", max_players=4),
+            ],
+        )
         ss.save_preset(gid, "DS", buf)
         # Re-save with one fewer zone — old row should be gone.
-        buf2 = ss.PresetBuffer(name="Standard", event_type="DS", zones=[
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4),
-        ])
+        buf2 = ss.PresetBuffer(
+            name="Standard",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(zone="Nuclear Silo", max_players=4),
+            ],
+        )
         ss.save_preset(gid, "DS", buf2)
         loaded = ss.load_preset(gid, "DS", "Standard")
         assert len(loaded.zones) == 1
@@ -345,6 +395,7 @@ class TestSheetRoundTrip:
         rather than crashing."""
         import config
         from tests.unit.test_config import TEST_GUILD_ID
+
         with patch.object(config, "get_spreadsheet", return_value=None):
             assert ss.load_preset(TEST_GUILD_ID, "DS", "Anything") is None
             assert ss.list_presets(TEST_GUILD_ID, "DS") == []
@@ -393,43 +444,72 @@ class TestLoadPresetCsLegacyMigration:
         promotes the old `Min Power` column onto the new
         `Min Power A` slot."""
         import config
+
         ws = fake.add_worksheet("CS Strategies")
         legacy_cs_header = [
-            "Preset Name", "Zone", "Max Players",
-            "Max Stage 1", "Max Stage 2", "Max Stage 3",
+            "Preset Name",
+            "Zone",
+            "Max Players",
+            "Max Stage 1",
+            "Max Stage 2",
+            "Max Stage 3",
             "Min Power",
             "Priority",
-            "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
-            "Faction", "Stage Count",
+            "Priority Stage 1",
+            "Priority Stage 2",
+            "Priority Stage 3",
+            "Faction",
+            "Stage Count",
         ]
         ws._rows = [
             list(legacy_cs_header),
             # s1_power_tower row — phase 1 data only
             [
-                "Legacy", "s1_power_tower", "0",
-                "4", "0", "0",   # max_players, max_p1, max_p2, max_p3
-                "300000000",      # min_power
-                "0",              # priority
-                "1", "0", "0",    # priority_p1, p2, p3
-                "Either", "3",    # faction, phase_count
+                "Legacy",
+                "s1_power_tower",
+                "0",
+                "4",
+                "0",
+                "0",  # max_players, max_p1, max_p2, max_p3
+                "300000000",  # min_power
+                "0",  # priority
+                "1",
+                "0",
+                "0",  # priority_p1, p2, p3
+                "Either",
+                "3",  # faction, phase_count
             ],
             # s3_power_tower row — phase 3 data only
             [
-                "Legacy", "s3_power_tower", "0",
-                "0", "0", "4",
+                "Legacy",
+                "s3_power_tower",
+                "0",
+                "0",
+                "0",
+                "4",
                 "300000000",
                 "0",
-                "0", "0", "3",
-                "Either", "3",
+                "0",
+                "0",
+                "3",
+                "Either",
+                "3",
             ],
             # An untouched zone alongside (single-stage)
             [
-                "Legacy", "s3_virus_lab", "0",
-                "0", "0", "2",
+                "Legacy",
+                "s3_virus_lab",
+                "0",
+                "0",
+                "0",
+                "2",
                 "350000000",
                 "0",
-                "0", "0", "1",
-                "Either", "3",
+                "0",
+                "0",
+                "1",
+                "Either",
+                "3",
             ],
         ]
         return ws
@@ -460,13 +540,22 @@ class TestLoadPresetCsLegacyMigration:
     def test_already_migrated_preset_loads_unchanged(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
         # Display-name rows round-trip cleanly (no translation needed).
-        buf = ss.PresetBuffer(name="Post178", event_type="CS",
-                              phase_count=3, zones=[
-            ss.ZoneRow(zone="Power Tower", max_players=0,
-                       max_phase1=4, max_phase3=4,
-                       min_power_a=300_000_000,
-                       priority_phase1=1, priority_phase3=3),
-        ])
+        buf = ss.PresetBuffer(
+            name="Post178",
+            event_type="CS",
+            phase_count=3,
+            zones=[
+                ss.ZoneRow(
+                    zone="Power Tower",
+                    max_players=0,
+                    max_phase1=4,
+                    max_phase3=4,
+                    min_power_a=300_000_000,
+                    priority_phase1=1,
+                    priority_phase3=3,
+                ),
+            ],
+        )
         ss.save_preset(gid, "CS", buf)
         loaded = ss.load_preset(gid, "CS", "Post178")
         assert loaded is not None
@@ -478,8 +567,9 @@ class TestLoadPresetCsLegacyMigration:
 
 class TestZoneRowRenderLine:
     def test_ds_both_renders_both_floors(self):
-        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                         min_power_a=300_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Nuclear Silo", max_players=4, min_power_a=300_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("DS", teams="both")
         assert "Min A:" in line
         assert "Min B:" in line
@@ -487,8 +577,9 @@ class TestZoneRowRenderLine:
         assert "180M" in line
 
     def test_ds_a_only_drops_min_b(self):
-        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                         min_power_a=300_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Nuclear Silo", max_players=4, min_power_a=300_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("DS", teams="A")
         assert "Min:" in line
         assert "300M" in line
@@ -497,30 +588,34 @@ class TestZoneRowRenderLine:
         assert "180M" not in line
 
     def test_ds_b_only_shows_only_b(self):
-        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                         min_power_a=300_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Nuclear Silo", max_players=4, min_power_a=300_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("DS", teams="B")
         assert "180M" in line
         assert "300M" not in line
 
     def test_cs_a_only_shows_only_a(self):
-        row = ss.ZoneRow(zone="Power Tower", max_players=4,
-                         min_power_a=250_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Power Tower", max_players=4, min_power_a=250_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("CS", teams="A")
         assert "Min:" in line
         assert "250M" in line
         assert "180M" not in line
 
     def test_cs_b_only_shows_only_b(self):
-        row = ss.ZoneRow(zone="Power Tower", max_players=4,
-                         min_power_a=250_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Power Tower", max_players=4, min_power_a=250_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("CS", teams="B")
         assert "180M" in line
         assert "250M" not in line
 
     def test_cs_both_shows_per_team_minimums(self):
-        row = ss.ZoneRow(zone="Power Tower", max_players=4,
-                         min_power_a=250_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Power Tower", max_players=4, min_power_a=250_000_000, min_power_b=180_000_000
+        )
         line = row.render_line("CS", teams="both")
         assert "Min A:" in line
         assert "Min B:" in line
@@ -528,8 +623,9 @@ class TestZoneRowRenderLine:
         assert "180M" in line
 
     def test_default_teams_is_both(self):
-        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                         min_power_a=300_000_000, min_power_b=180_000_000)
+        row = ss.ZoneRow(
+            zone="Nuclear Silo", max_players=4, min_power_a=300_000_000, min_power_b=180_000_000
+        )
         assert row.render_line("DS") == row.render_line("DS", teams="both")
 
 
@@ -565,6 +661,7 @@ class TestTeamsConfigPersistence:
     def test_default_when_unset(self, seeded_db):
         import config
         from tests.unit.test_config import TEST_GUILD_ID
+
         # The seeded_db fixture creates a guild with default columns;
         # `teams` should read as 'both'.
         cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
@@ -573,9 +670,14 @@ class TestTeamsConfigPersistence:
     def test_save_a_only(self, seeded_db):
         import config
         from tests.unit.test_config import TEST_GUILD_ID
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Assignments", "tpl",
-            "America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Assignments",
+            "tpl",
+            "America/New_York",
+            log_channel_id=0,
             teams="A",
         )
         cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
@@ -584,9 +686,14 @@ class TestTeamsConfigPersistence:
     def test_save_invalid_normalizes_to_both(self, seeded_db):
         import config
         from tests.unit.test_config import TEST_GUILD_ID
+
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Assignments", "tpl",
-            "America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Assignments",
+            "tpl",
+            "America/New_York",
+            log_channel_id=0,
             teams="garbage",
         )
         cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
@@ -641,7 +748,9 @@ class TestSiblingZoneNames:
         zones = self._ds_preset()
         sibs = ss._sibling_zone_names(zones, "Field Hospital II")
         assert sorted(sibs) == [
-            "Field Hospital I", "Field Hospital III", "Field Hospital IV",
+            "Field Hospital I",
+            "Field Hospital III",
+            "Field Hospital IV",
         ]
 
     def test_oil_refinery_family(self):
@@ -675,7 +784,9 @@ class TestSiblingZoneNames:
         ]
         sibs = ss._sibling_zone_names(zones, "Sample Warehouse 2")
         assert sorted(sibs) == [
-            "Sample Warehouse 1", "Sample Warehouse 3", "Sample Warehouse 4",
+            "Sample Warehouse 1",
+            "Sample Warehouse 3",
+            "Sample Warehouse 4",
         ]
 
     def test_excludes_self_case_insensitively(self):
@@ -723,8 +834,9 @@ class TestPhaseAwarePresets:
         assert buf.phase_count == 3
 
     def test_render_line_flat_keeps_max_label(self):
-        row = ss.ZoneRow(zone="Info Center", max_players=4,
-                         min_power_a=200_000_000, min_power_b=100_000_000)
+        row = ss.ZoneRow(
+            zone="Info Center", max_players=4, min_power_a=200_000_000, min_power_b=100_000_000
+        )
         line = row.render_line("DS", phase_count=0)
         assert "Max: 4" in line
         assert "P1:" not in line
@@ -734,9 +846,14 @@ class TestPhaseAwarePresets:
         """#172 / Rule L: phase-aware presets render the capacity readout
         per-zone-per-phase — one indented row per phase under the zone
         header — instead of the pre-#172 inline `(P1: 3, P2: 1)` shape."""
-        row = ss.ZoneRow(zone="Info Center", max_players=4,
-                         max_phase1=3, max_phase2=1,
-                         min_power_a=200_000_000, min_power_b=100_000_000)
+        row = ss.ZoneRow(
+            zone="Info Center",
+            max_players=4,
+            max_phase1=3,
+            max_phase2=1,
+            min_power_a=200_000_000,
+            min_power_b=100_000_000,
+        )
         line = row.render_line("DS", phase_count=2)
         assert "Max:" not in line
         # Per-phase rows under the zone header.
@@ -745,9 +862,14 @@ class TestPhaseAwarePresets:
         assert "Stage 3" not in line
 
     def test_render_line_three_phase_includes_p3(self):
-        row = ss.ZoneRow(zone="Power Tower", max_players=0,
-                         max_phase1=4, max_phase2=2, max_phase3=3,
-                         min_power_a=200_000_000)
+        row = ss.ZoneRow(
+            zone="Power Tower",
+            max_players=0,
+            max_phase1=4,
+            max_phase2=2,
+            max_phase3=3,
+            min_power_a=200_000_000,
+        )
         line = row.render_line("CS", phase_count=3)
         assert "Max:" not in line
         assert "Stage 1: cap 4" in line
@@ -755,46 +877,68 @@ class TestPhaseAwarePresets:
         assert "Stage 3: cap 3" in line
 
     def test_total_capacity_flat_sums_max_players(self):
-        buf = ss.PresetBuffer(name="Flat", event_type="DS", zones=[
-            ss.ZoneRow(zone="Info Center", max_players=4),
-            ss.ZoneRow(zone="Nuclear Silo", max_players=6),
-        ])
+        buf = ss.PresetBuffer(
+            name="Flat",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(zone="Info Center", max_players=4),
+                ss.ZoneRow(zone="Nuclear Silo", max_players=6),
+            ],
+        )
         assert buf.total_capacity() == 10
 
     def test_total_capacity_phase_aware_sums_max_phase_columns(self):
-        buf = ss.PresetBuffer(name="Phases", event_type="DS",
-                              uses_phases=True, zones=[
-            ss.ZoneRow(zone="Info Center", max_players=4,
-                       max_phase1=4, max_phase2=2),
-            ss.ZoneRow(zone="Nuclear Silo", max_players=6,
-                       max_phase1=0, max_phase2=4),
-        ])
+        buf = ss.PresetBuffer(
+            name="Phases",
+            event_type="DS",
+            uses_phases=True,
+            zones=[
+                ss.ZoneRow(zone="Info Center", max_players=4, max_phase1=4, max_phase2=2),
+                ss.ZoneRow(zone="Nuclear Silo", max_players=6, max_phase1=0, max_phase2=4),
+            ],
+        )
         # 4+2 + 0+4 = 10
         assert buf.total_capacity() == 10
 
     def test_upsert_zone_copies_phase_fields(self):
-        buf = ss.PresetBuffer(name="P", event_type="DS", zones=[
-            ss.ZoneRow(zone="Info Center", max_players=4,
-                       max_phase1=4, max_phase2=2),
-        ])
+        buf = ss.PresetBuffer(
+            name="P",
+            event_type="DS",
+            zones=[
+                ss.ZoneRow(zone="Info Center", max_players=4, max_phase1=4, max_phase2=2),
+            ],
+        )
         # Update with new phase caps — should replace, not append.
-        buf.upsert_zone(ss.ZoneRow(zone="Info Center", max_players=4,
-                                   max_phase1=3, max_phase2=3))
+        buf.upsert_zone(ss.ZoneRow(zone="Info Center", max_players=4, max_phase1=3, max_phase2=3))
         assert len(buf.zones) == 1
         assert buf.zones[0].max_phase1 == 3
         assert buf.zones[0].max_phase2 == 3
 
     def test_save_then_load_ds_round_trips_phase_fields(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Phased", event_type="DS",
-                              uses_phases=True, zones=[
-            ss.ZoneRow(zone="Info Center", max_players=4,
-                       max_phase1=4, max_phase2=2,
-                       min_power_a=200_000_000, min_power_b=100_000_000),
-            ss.ZoneRow(zone="Arsenal", max_players=0,
-                       max_phase1=0, max_phase2=4,
-                       min_power_a=0, min_power_b=0),
-        ])
+        buf = ss.PresetBuffer(
+            name="Phased",
+            event_type="DS",
+            uses_phases=True,
+            zones=[
+                ss.ZoneRow(
+                    zone="Info Center",
+                    max_players=4,
+                    max_phase1=4,
+                    max_phase2=2,
+                    min_power_a=200_000_000,
+                    min_power_b=100_000_000,
+                ),
+                ss.ZoneRow(
+                    zone="Arsenal",
+                    max_players=0,
+                    max_phase1=0,
+                    max_phase2=4,
+                    min_power_a=0,
+                    min_power_b=0,
+                ),
+            ],
+        )
         assert ss.save_preset(gid, "DS", buf) is True
         loaded = ss.load_preset(gid, "DS", "Phased")
         assert loaded is not None
@@ -809,13 +953,21 @@ class TestPhaseAwarePresets:
 
     def test_save_then_load_cs_round_trips_phase_fields(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Phased CS", event_type="CS",
-                              uses_phases=True, faction="Rulebringers",
-                              zones=[
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       max_phase1=3, max_phase2=1,
-                       min_power_a=250_000_000),
-        ])
+        buf = ss.PresetBuffer(
+            name="Phased CS",
+            event_type="CS",
+            uses_phases=True,
+            faction="Rulebringers",
+            zones=[
+                ss.ZoneRow(
+                    zone="Power Tower",
+                    max_players=4,
+                    max_phase1=3,
+                    max_phase2=1,
+                    min_power_a=250_000_000,
+                ),
+            ],
+        )
         assert ss.save_preset(gid, "CS", buf) is True
         loaded = ss.load_preset(gid, "CS", "Phased CS")
         assert loaded is not None
@@ -827,11 +979,19 @@ class TestPhaseAwarePresets:
 
     def test_flat_preset_round_trip_preserves_uses_phases_false(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="Flat", event_type="DS",
-                              uses_phases=False, zones=[
-            ss.ZoneRow(zone="Info Center", max_players=4,
-                       min_power_a=200_000_000, min_power_b=100_000_000),
-        ])
+        buf = ss.PresetBuffer(
+            name="Flat",
+            event_type="DS",
+            uses_phases=False,
+            zones=[
+                ss.ZoneRow(
+                    zone="Info Center",
+                    max_players=4,
+                    min_power_a=200_000_000,
+                    min_power_b=100_000_000,
+                ),
+            ],
+        )
         assert ss.save_preset(gid, "DS", buf) is True
         loaded = ss.load_preset(gid, "DS", "Flat")
         assert loaded is not None
@@ -845,18 +1005,28 @@ class TestPhaseAwarePresets:
 
     def test_save_then_load_three_phase_cs_preset(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
-        buf = ss.PresetBuffer(name="ThreePhase", event_type="CS",
-                              phase_count=3, faction="Rulebringers",
-                              zones=[
-            ss.ZoneRow(zone="Power Tower", max_players=0,
-                       max_phase1=4, max_phase2=2, max_phase3=3,
-                       min_power_a=200_000_000,
-                       priority_phase1=1, priority_phase2=3, priority_phase3=2),
-            ss.ZoneRow(zone="Virus Lab", max_players=0,
-                       max_phase3=4,
-                       min_power_a=0,
-                       priority_phase3=1),
-        ])
+        buf = ss.PresetBuffer(
+            name="ThreePhase",
+            event_type="CS",
+            phase_count=3,
+            faction="Rulebringers",
+            zones=[
+                ss.ZoneRow(
+                    zone="Power Tower",
+                    max_players=0,
+                    max_phase1=4,
+                    max_phase2=2,
+                    max_phase3=3,
+                    min_power_a=200_000_000,
+                    priority_phase1=1,
+                    priority_phase2=3,
+                    priority_phase3=2,
+                ),
+                ss.ZoneRow(
+                    zone="Virus Lab", max_players=0, max_phase3=4, min_power_a=0, priority_phase3=1
+                ),
+            ],
+        )
         assert ss.save_preset(gid, "CS", buf) is True
         loaded = ss.load_preset(gid, "CS", "ThreePhase")
         assert loaded is not None
@@ -885,20 +1055,30 @@ class TestPhaseAwarePresets:
         # without Phase Count + Max Phase 3).
         ws = fake.add_worksheet("DS Strategies")
         ws.append_row(
-            ["Preset Name", "Zone", "Max Players",
-             "Max Phase 1", "Max Phase 2",
-             "Min Power A", "Min Power B", "Priority", "Use Phases"],
+            [
+                "Preset Name",
+                "Zone",
+                "Max Players",
+                "Max Phase 1",
+                "Max Phase 2",
+                "Min Power A",
+                "Min Power B",
+                "Priority",
+                "Use Phases",
+            ],
             value_input_option="RAW",
         )
         ws.append_row(
-            ["Legacy", "Info Center", "0", "4", "2",
-             "200000000", "100000000", "1", "TRUE"],
+            ["Legacy", "Info Center", "0", "4", "2", "200000000", "100000000", "1", "TRUE"],
             value_input_option="RAW",
         )
         # Wire the strategies_tab pointer so the loader looks at this ws.
         import config
+
         config.save_structured_storm_config(
-            gid, "DS", strategies_tab="DS Strategies",
+            gid,
+            "DS",
+            strategies_tab="DS Strategies",
         )
         loaded = ss.load_preset(gid, "DS", "Legacy")
         assert loaded is not None
@@ -922,8 +1102,7 @@ class TestStrategyListView:
     def test_empty_state_enables_only_create(self):
         view = ss._StrategyListView(owner_id=1, event_type="DS", names=[])
         labels_disabled = {
-            getattr(c, "label", ""): getattr(c, "disabled", False)
-            for c in view.children
+            getattr(c, "label", ""): getattr(c, "disabled", False) for c in view.children
         }
         # All three buttons render, but Edit + Delete are disabled when
         # no presets exist so the officer can't open an empty Select.
@@ -938,11 +1117,12 @@ class TestStrategyListView:
 
     def test_populated_state_enables_all_three(self):
         view = ss._StrategyListView(
-            owner_id=1, event_type="DS", names=["Standard DS"],
+            owner_id=1,
+            event_type="DS",
+            names=["Standard DS"],
         )
         labels_disabled = {
-            getattr(c, "label", ""): getattr(c, "disabled", False)
-            for c in view.children
+            getattr(c, "label", ""): getattr(c, "disabled", False) for c in view.children
         }
         for label, disabled in labels_disabled.items():
             if any(action in label for action in ("Create", "Edit", "Delete")):
@@ -969,7 +1149,8 @@ class TestPresetEditorPolish:
         buf = ss.PresetBuffer(name="P", event_type="DS")
         view = ss._PresetEditorView(guild_id=1, user_id=1, buf=buf)
         phase_selects = [
-            c for c in view.children
+            c
+            for c in view.children
             if isinstance(c, __import__("discord").ui.Select)
             and "Stage mode" in (c.placeholder or "")
         ]
@@ -1011,7 +1192,8 @@ class TestPresetPickerView:
 
     def test_picker_lists_sorted_names_case_insensitive(self):
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS",
+            owner_id=1,
+            event_type="DS",
             names=["zeta", "Alpha", "beta"],
             action="edit",
         )
@@ -1023,21 +1205,28 @@ class TestPresetPickerView:
     def test_picker_caps_at_25_options(self):
         names = [f"Preset {i:02d}" for i in range(40)]
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS", names=names, action="delete",
+            owner_id=1,
+            event_type="DS",
+            names=names,
+            action="delete",
         )
         select = view.children[0]
         assert len(select.options) == 25
 
     def test_picker_placeholder_reflects_action(self):
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS", names=["X"], action="delete",
+            owner_id=1,
+            event_type="DS",
+            names=["X"],
+            action="delete",
         )
         select = view.children[0]
         assert "delete" in select.placeholder.lower()
 
     def test_overflow_notice_empty_when_under_cap(self):
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS",
+            owner_id=1,
+            event_type="DS",
             names=[f"P{i}" for i in range(10)],
             action="edit",
         )
@@ -1047,7 +1236,8 @@ class TestPresetPickerView:
 
     def test_overflow_notice_at_exactly_25_is_empty(self):
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS",
+            owner_id=1,
+            event_type="DS",
             names=[f"P{i:02d}" for i in range(25)],
             action="edit",
         )
@@ -1060,7 +1250,8 @@ class TestPresetPickerView:
         searching for an older preset that didn't appear had no signal.
         Notice now surfaces the gap."""
         view = ss._PresetPickerView(
-            owner_id=1, event_type="DS",
+            owner_id=1,
+            event_type="DS",
             names=[f"P{i:02d}" for i in range(40)],
             action="delete",
         )

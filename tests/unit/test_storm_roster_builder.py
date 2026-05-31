@@ -49,6 +49,7 @@ class _FakeWorksheet:
         a single row (header migration, blank-trailing) don't wipe the
         whole tab. Only parses the column-A anchor, sufficient here."""
         import re
+
         m = re.match(r"^A(\d+)", str(range_))
         start_row = int(m.group(1)) - 1 if m else 0
         new_payload = [list(r) for r in values]
@@ -94,14 +95,21 @@ def fake_env(seeded_db):
     # a custom power column and a `not_on_discord` flag.
     roster_ws = fake.add_worksheet("Member Roster")
     roster_ws._rows = [
-        ["Discord ID", "Name", "Display Name", "Joined", "Roles",
-         "1st Squad Power", "not_on_discord"],
-        ["1001", "alice", "Alice",   "2024-01-01", "Member", "412M", ""],
-        ["1002", "bob",   "Bob",     "2024-01-02", "Member", "230M", ""],
-        ["1003", "carol", "Carol",   "2024-01-03", "Member", "180M", ""],
-        ["",     "dave",  "Dave",    "",           "",       "200M", "x"],   # non-Discord
-        ["1004", "erin",  "Erin",    "2024-02-01", "Member", "",     ""],    # power unknown
-        ["1005", "frank", "Frank",   "2024-02-02", "Member", "tbd",  ""],    # garbage power
+        [
+            "Discord ID",
+            "Name",
+            "Display Name",
+            "Joined",
+            "Roles",
+            "1st Squad Power",
+            "not_on_discord",
+        ],
+        ["1001", "alice", "Alice", "2024-01-01", "Member", "412M", ""],
+        ["1002", "bob", "Bob", "2024-01-02", "Member", "230M", ""],
+        ["1003", "carol", "Carol", "2024-01-03", "Member", "180M", ""],
+        ["", "dave", "Dave", "", "", "200M", "x"],  # non-Discord
+        ["1004", "erin", "Erin", "2024-02-01", "Member", "", ""],  # power unknown
+        ["1005", "frank", "Frank", "2024-02-02", "Member", "tbd", ""],  # garbage power
     ]
 
     # Enable member roster + structured flow with the configured column.
@@ -117,12 +125,16 @@ def fake_env(seeded_db):
     )
     for et in ("DS", "CS"):
         config.save_storm_config(
-            TEST_GUILD_ID, et,
-            tab_name=f"{et} Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            et,
+            tab_name=f"{et} Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, et,
+            TEST_GUILD_ID,
+            et,
             structured_flow_enabled=True,
             # Fake roster sheet has "1st Squad Power" at column F (index 5).
             power_metric_column="F",
@@ -132,8 +144,10 @@ def fake_env(seeded_db):
     def _fake_member_roster_sheet(guild_id: int, tab_name: str):
         return fake.worksheet(tab_name)
 
-    with patch.object(config, "get_spreadsheet", return_value=fake), \
-         patch.object(config, "get_member_roster_sheet", side_effect=_fake_member_roster_sheet):
+    with (
+        patch.object(config, "get_spreadsheet", return_value=fake),
+        patch.object(config, "get_member_roster_sheet", side_effect=_fake_member_roster_sheet),
+    ):
         yield fake, TEST_GUILD_ID
 
 
@@ -178,26 +192,32 @@ class TestReadRosterPowers:
     def test_power_column_letter_past_header_surfaces_error(self, fake_env):
         fake, gid = fake_env
         import config
+
         # Fake roster sheet has 7 columns (A-G). Picking column Z (past
         # the header) surfaces a soft error + every power reads None.
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="Z",
         )
         members, errs = srb._read_roster_powers(gid, "DS")
-        assert any("power column Z doesn't exist" in e.lower() or
-                   "power column z doesn't exist" in e.lower()
-                   for e in errs)
+        assert any(
+            "power column Z doesn't exist" in e.lower()
+            or "power column z doesn't exist" in e.lower()
+            for e in errs
+        )
         assert all(m["power"] is None for m in members.values())
 
     def test_power_column_letter_at_non_power_column_reads_none(self, fake_env):
         fake, gid = fake_env
         import config
+
         # Pointing at the Name column (B) — every cell parses as None
         # (not a power value), no soft error.
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
         )
@@ -215,18 +235,27 @@ class TestNameFallbackCascadeRosterBuilder:
 
     def _seed_member_cfg(self, gid: int) -> None:
         import config
+
         config.save_member_roster_config(
-            gid, enabled=1, tab_name="Member Roster",
-            discord_id_col=0, name_col=1, display_col=2,
+            gid,
+            enabled=1,
+            tab_name="Member Roster",
+            discord_id_col=0,
+            name_col=1,
+            display_col=2,
         )
         for et in ("DS", "CS"):
             config.save_storm_config(
-                gid, et,
-                tab_name=f"{et} Tab", mail_template="",
-                timezone="America/New_York", log_channel_id=0,
+                gid,
+                et,
+                tab_name=f"{et} Tab",
+                mail_template="",
+                timezone="America/New_York",
+                log_channel_id=0,
             )
             config.save_structured_storm_config(
-                gid, et,
+                gid,
+                et,
                 structured_flow_enabled=True,
                 power_metric_column="F",
             )
@@ -242,18 +271,24 @@ class TestNameFallbackCascadeRosterBuilder:
         Name blank. The structured builder should resolve to the Name
         column value, not fall straight to discord_id."""
         import config
+
         gid = TEST_GUILD_ID + 91268
         self._seed_member_cfg(gid)
-        fake = self._build_fake_env(gid, [
-            ["Discord ID", "Name",      "Display Name", "Joined", "Roles", "1st Squad Power"],
-            ["",           "JoeNoDisc", "",             "",       "",      "100M"],
-        ])
+        fake = self._build_fake_env(
+            gid,
+            [
+                ["Discord ID", "Name", "Display Name", "Joined", "Roles", "1st Squad Power"],
+                ["", "JoeNoDisc", "", "", "", "100M"],
+            ],
+        )
 
         def _fake_ws(_gid: int, tab_name: str):
             return fake.worksheet(tab_name)
 
-        with patch.object(config, "get_spreadsheet", return_value=fake), \
-             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+        with (
+            patch.object(config, "get_spreadsheet", return_value=fake),
+            patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws),
+        ):
             members, _errs = srb._read_roster_powers(gid, "DS")
 
         # Keyed by name since discord_id is blank.
@@ -268,18 +303,24 @@ class TestNameFallbackCascadeRosterBuilder:
         ("no-disc-1") with the real name in column B. Pre-fix rendered
         "no-disc-1" as the member's name everywhere downstream."""
         import config
+
         gid = TEST_GUILD_ID + 92268
         self._seed_member_cfg(gid)
-        fake = self._build_fake_env(gid, [
-            ["Discord ID", "Name",  "Display Name", "Joined", "Roles", "1st Squad Power"],
-            ["no-disc-1",  "Alice", "",             "",       "",      "150M"],
-        ])
+        fake = self._build_fake_env(
+            gid,
+            [
+                ["Discord ID", "Name", "Display Name", "Joined", "Roles", "1st Squad Power"],
+                ["no-disc-1", "Alice", "", "", "", "150M"],
+            ],
+        )
 
         def _fake_ws(_gid: int, tab_name: str):
             return fake.worksheet(tab_name)
 
-        with patch.object(config, "get_spreadsheet", return_value=fake), \
-             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+        with (
+            patch.object(config, "get_spreadsheet", return_value=fake),
+            patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws),
+        ):
             members, _errs = srb._read_roster_powers(gid, "DS")
 
         # Keyed by the placeholder ID (truthy), but the rendered name
@@ -294,12 +335,16 @@ class TestNameFallbackCascadeRosterBuilder:
         the Team Plan rendering when display_col was blank for a real
         Discord-on member."""
         import config
+
         gid = TEST_GUILD_ID + 93268
         self._seed_member_cfg(gid)
-        fake = self._build_fake_env(gid, [
-            ["Discord ID", "Name", "Display Name", "Joined", "Roles", "1st Squad Power"],
-            ["100",        "",     "",             "",       "",      "200M"],
-        ])
+        fake = self._build_fake_env(
+            gid,
+            [
+                ["Discord ID", "Name", "Display Name", "Joined", "Roles", "1st Squad Power"],
+                ["100", "", "", "", "", "200M"],
+            ],
+        )
 
         def _fake_ws(_gid: int, tab_name: str):
             return fake.worksheet(tab_name)
@@ -321,8 +366,10 @@ class TestNameFallbackCascadeRosterBuilder:
                         return m
                 return None
 
-        with patch.object(config, "get_spreadsheet", return_value=fake), \
-             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+        with (
+            patch.object(config, "get_spreadsheet", return_value=fake),
+            patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws),
+        ):
             members, _errs = srb._read_roster_powers(gid, "DS", guild=_Guild(gid))
 
         assert "100" in members
@@ -343,12 +390,14 @@ class TestPowerDataSourceFlexibility:
         the Member Roster row" (the pre-flexibility behaviour)."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="F",
-            power_metric_tab="",     # empty → Member Roster
-            power_match_column="",   # empty → discord_id_col
+            power_metric_tab="",  # empty → Member Roster
+            power_match_column="",  # empty → discord_id_col
         )
         members, errs = srb._read_roster_powers(gid, "DS")
         assert errs == []
@@ -360,16 +409,18 @@ class TestPowerDataSourceFlexibility:
         the other tab, matched by Discord ID in column A."""
         fake, gid = fake_env
         import config
+
         # Add a Squad Powers tab with one row per member, power in
         # column B, Discord IDs in column A.
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power"],
-            ["1001",       "500M"],
-            ["1002",       "350M"],
+            ["1001", "500M"],
+            ["1002", "350M"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -390,15 +441,17 @@ class TestPowerDataSourceFlexibility:
         match."""
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
-            ["Member",  "1st Squad Power"],
-            ["Alice",   "411M"],
-            ["bob",     "229M"],
-            ["dave",    "189M"],  # the non-Discord member
+            ["Member", "1st Squad Power"],
+            ["Alice", "411M"],
+            ["bob", "229M"],
+            ["dave", "189M"],  # the non-Discord member
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -417,8 +470,10 @@ class TestPowerDataSourceFlexibility:
         a soft error and falls through with power=None for everyone."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Nonexistent Tab",
@@ -435,14 +490,16 @@ class TestPowerDataSourceFlexibility:
         that row just doesn't contribute to the index."""
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power"],
-            ["1001",       "tbd"],
-            ["1002",       "260M"],
+            ["1001", "tbd"],
+            ["1002", "260M"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -467,13 +524,15 @@ class TestReadPowerColumnHeader:
         The DM must surface `Squad Power`, not `Display Name`."""
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "Name", "Squad Power"],
-            ["1001",       "Alice", "500M"],
+            ["1001", "Alice", "500M"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="C",
             power_metric_tab="Squad Powers",
@@ -487,8 +546,10 @@ class TestReadPowerColumnHeader:
         Column F on the fake roster is `1st Squad Power`."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="F",
             power_metric_tab="",
@@ -501,13 +562,15 @@ class TestReadPowerColumnHeader:
         sentence comes out `your Power`, not `your Your Power`)."""
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "Your Power"],
-            ["1001",       "500M"],
+            ["1001", "500M"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -521,8 +584,10 @@ class TestReadPowerColumnHeader:
         crashing the signup handler."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Nonexistent Tab",
@@ -550,16 +615,19 @@ class TestLastUpdatedOverlay:
         parses each row's date and exposes it as a `datetime.date`
         on the member."""
         import datetime as _dt
+
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power", "Date Modified"],
-            ["1001",       "500M",            "5/24/2026"],
-            ["1002",       "350M",            "4/10/2026"],
+            ["1001", "500M", "5/24/2026"],
+            ["1002", "350M", "4/10/2026"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -583,14 +651,16 @@ class TestLastUpdatedOverlay:
         row gets skipped without crashing the read."""
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power", "Date Modified"],
-            ["1001",       "500M",            "two weeks ago"],
-            ["1002",       "350M",            "4/10/2026"],
+            ["1001", "500M", "two weeks ago"],
+            ["1002", "350M", "4/10/2026"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -607,19 +677,22 @@ class TestLastUpdatedOverlay:
         """A column with `25/12/2025`-style values (first component
         > 12) auto-detects DMY and parses every cell that way."""
         import datetime as _dt
+
         fake, gid = fake_env
         import config
+
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power", "Date Modified"],
             # First value is unambiguous DMY (24 > 12).
-            ["1001",       "500M",            "24/5/2026"],
+            ["1001", "500M", "24/5/2026"],
             # Second value would be ambiguous on its own; locks to DMY
             # by the column-wide flag and resolves to May 10.
-            ["1002",       "350M",            "10/5/2026"],
+            ["1002", "350M", "10/5/2026"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -636,22 +709,25 @@ class TestLastUpdatedOverlay:
         """Last-updated source lives on a different tab than power,
         matched by member name rather than Discord ID."""
         import datetime as _dt
+
         fake, gid = fake_env
         import config
+
         # Power lives on Squad Powers by ID.
         sp = fake.add_worksheet("Squad Powers")
         sp._rows = [
             ["Discord ID", "1st Squad Power"],
-            ["1001",       "500M"],
+            ["1001", "500M"],
         ]
         # Last-updated lives on a completely separate tab, matched by name.
         lu = fake.add_worksheet("Audit Log")
         lu._rows = [
             ["Member Name", "Updated At"],
-            ["Alice",       "2026-05-24"],
+            ["Alice", "2026-05-24"],
         ]
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="B",
             power_metric_tab="Squad Powers",
@@ -670,8 +746,10 @@ class TestLastUpdatedOverlay:
         every member's last_updated is None (no crash)."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="F",
             power_last_updated_tab="Nonexistent Audit Tab",
@@ -688,8 +766,10 @@ class TestLastUpdatedOverlay:
         Members keep their default shape with no `last_updated` key."""
         fake, gid = fake_env
         import config
+
         config.save_structured_storm_config(
-            gid, "DS",
+            gid,
+            "DS",
             structured_flow_enabled=True,
             power_metric_column="F",
             power_last_updated_tab="Squad Powers",
@@ -704,17 +784,31 @@ class TestLastUpdatedOverlay:
 # ── Session + eligibility ────────────────────────────────────────────────────
 
 
-def _make_session(team: str = "A", *, members=None, preset_zones=None,
-                  per_member_rules=None, power_band_rules=None,
-                  sub_mode: str = "pool"):
+def _make_session(
+    team: str = "A",
+    *,
+    members=None,
+    preset_zones=None,
+    per_member_rules=None,
+    power_band_rules=None,
+    sub_mode: str = "pool",
+):
     preset_zones = preset_zones or [
-        ss.ZoneRow(zone="Power Tower",    max_players=4, min_power_a=300_000_000, min_power_b=180_000_000),
-        ss.ZoneRow(zone="Nuclear Silo",   max_players=4, min_power_a=250_000_000, min_power_b=150_000_000),
-        ss.ZoneRow(zone="Oil Refinery I", max_players=4, min_power_a=200_000_000, min_power_b=100_000_000),
+        ss.ZoneRow(
+            zone="Power Tower", max_players=4, min_power_a=300_000_000, min_power_b=180_000_000
+        ),
+        ss.ZoneRow(
+            zone="Nuclear Silo", max_players=4, min_power_a=250_000_000, min_power_b=150_000_000
+        ),
+        ss.ZoneRow(
+            zone="Oil Refinery I", max_players=4, min_power_a=200_000_000, min_power_b=100_000_000
+        ),
     ]
     preset = ss.PresetBuffer(name="Standard", event_type="DS", zones=preset_zones)
     return srb.RosterBuilderSession(
-        guild_id=1, user_id=42, event_type="DS",
+        guild_id=1,
+        user_id=42,
+        event_type="DS",
         team=team,
         preset=preset,
         members=members or {},
@@ -727,12 +821,12 @@ def _make_session(team: str = "A", *, members=None, preset_zones=None,
 class TestFloorForZone:
     def test_team_a_reads_min_a(self):
         session = _make_session(team="A")
-        assert session.floor_for_zone("Power Tower")  == 300_000_000
+        assert session.floor_for_zone("Power Tower") == 300_000_000
         assert session.floor_for_zone("Nuclear Silo") == 250_000_000
 
     def test_team_b_reads_min_b(self):
         session = _make_session(team="B")
-        assert session.floor_for_zone("Power Tower")  == 180_000_000
+        assert session.floor_for_zone("Power Tower") == 180_000_000
         assert session.floor_for_zone("Nuclear Silo") == 150_000_000
 
     def test_missing_zone_returns_zero(self):
@@ -742,26 +836,57 @@ class TestFloorForZone:
 
 class TestEligibility:
     def test_eligible_filters_by_floor(self):
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 230_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 230_000_000,
+                    "not_on_discord": False,
+                },
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         # Min A for Power Tower = 300M. Only Alice qualifies.
         assert eligible == ["1001"]
         assert set(below) == {"1002", "1003"}
 
     def test_power_unknown_in_below_bucket(self):
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1004": {"key": "1004", "name": "Erin",  "discord_id": "1004",
-                     "power": None, "not_on_discord": False},  # power unknown
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1004": {
+                    "key": "1004",
+                    "name": "Erin",
+                    "discord_id": "1004",
+                    "power": None,
+                    "not_on_discord": False,
+                },  # power unknown
+            },
+        )
         eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         assert eligible == ["1001"]
         # Power-unknown lands in below — not silently treated as 0 and
@@ -769,12 +894,25 @@ class TestEligibility:
         assert "1004" in below
 
     def test_assigned_member_excluded_from_pool(self):
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 350_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         # Pre-assign Alice to Power Tower.
         session.assignments["Power Tower"].append("1001")
         eligible, _below = srb._eligible_member_keys_for_zone(session, "Nuclear Silo")
@@ -783,14 +921,32 @@ class TestEligibility:
         assert "1002" in eligible
 
     def test_eligible_sorted_by_power_desc(self):
-        session = _make_session(team="B", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 300_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 500_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 200_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="B",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 300_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 500_000_000,
+                    "not_on_discord": False,
+                },
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 200_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         eligible, _below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         # Team B floor for Power Tower = 180M; all three eligible.
         assert eligible == ["1002", "1001", "1003"]
@@ -799,20 +955,33 @@ class TestEligibility:
 class TestRulePreApplication:
     def test_per_member_zone_rule_pins_member(self):
         rule = smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="Alice",
+            sub_type="zone",
+            value="Power Tower",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }, per_member_rules=[rule])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            per_member_rules=[rule],
+        )
         srb._apply_rules_to_session(session)
         assert "1001" in session.assignments["Power Tower"]
 
     def test_per_member_zone_rule_with_unknown_member_noops(self):
         rule = smr.Rule(
-            rule_type="per_member", subject="Ghost",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="Ghost",
+            sub_type="zone",
+            value="Power Tower",
         )
         session = _make_session(team="A", per_member_rules=[rule])
         srb._apply_rules_to_session(session)
@@ -821,16 +990,32 @@ class TestRulePreApplication:
 
     def test_per_member_rule_skipped_if_zone_full(self):
         rule = smr.Rule(
-            rule_type="per_member", subject="Bob",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="Bob",
+            sub_type="zone",
+            value="Power Tower",
         )
         # Manually fill Power Tower to capacity before rule application.
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-        }, per_member_rules=[rule])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 350_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            per_member_rules=[rule],
+        )
         # Pre-fill manually (capacity = 4)
         for i in range(4):
             session.assignments["Power Tower"].append(f"placeholder_{i}")
@@ -843,8 +1028,10 @@ class TestRulePreApplication:
         # (the team is implicit from the apply-time choice). They'd be
         # used to filter the picker — out of scope for this test.
         rule = smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="Alice",
+            sub_type="team",
+            value="A",
         )
         session = _make_session(team="A", per_member_rules=[rule])
         srb._apply_rules_to_session(session)
@@ -858,17 +1045,30 @@ class TestRulePreApplication:
         so there's nothing to apply and nothing to report. No
         roster_errors warning surfaces."""
         rule_active = smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="Alice",
+            sub_type="zone",
+            value="Power Tower",
         )
         rule_stale = smr.Rule(
-            rule_type="per_member", subject="OldName",
-            sub_type="zone", value="Nuclear Silo",
+            rule_type="per_member",
+            subject="OldName",
+            sub_type="zone",
+            value="Nuclear Silo",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }, per_member_rules=[rule_active, rule_stale])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            per_member_rules=[rule_active, rule_stale],
+        )
         srb._apply_rules_to_session(session)
         # Active rule still applies.
         assert "1001" in session.assignments["Power Tower"]
@@ -885,15 +1085,31 @@ class TestPowerBandRuleConsumption:
         # Preset floor for Power Tower (team A) = 300M. A band rule of
         # "≥ 200M → Power Tower" should let Bob (230M) qualify.
         band = smr.Rule(
-            rule_type="power_band", subject="200000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="200000000",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 230_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 230_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         assert set(eligible) == {"1001", "1002"}
         assert below == []
@@ -901,13 +1117,24 @@ class TestPowerBandRuleConsumption:
     def test_band_does_not_affect_other_zones(self):
         # Band targets Power Tower only — Nuclear Silo's floor unchanged.
         band = smr.Rule(
-            rule_type="power_band", subject="100000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="100000000",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         # Carol (180M) is eligible for Power Tower (band lowered to 100M)…
         eligible_pt, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
         assert "1003" in eligible_pt
@@ -921,13 +1148,24 @@ class TestPowerBandRuleConsumption:
         # than preset. Effective floor is min(preset, band) = 300M,
         # because bands are meant to GRANT eligibility, not deny it.
         band = smr.Rule(
-            rule_type="power_band", subject="400000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="400000000",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 350_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 350_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         # Alice (350M, above preset 300M) stays eligible.
         assert eligible == ["1001"]
@@ -936,28 +1174,46 @@ class TestPowerBandRuleConsumption:
     def test_multiple_bands_use_lowest_threshold(self):
         # Two bands target the same zone; the LOWEST threshold wins.
         bands = [
-            smr.Rule(rule_type="power_band", subject="250000000",
-                     value="Power Tower", sub_type=""),
-            smr.Rule(rule_type="power_band", subject="150000000",
-                     value="Power Tower", sub_type=""),
+            smr.Rule(rule_type="power_band", subject="250000000", value="Power Tower", sub_type=""),
+            smr.Rule(rule_type="power_band", subject="150000000", value="Power Tower", sub_type=""),
         ]
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        }, power_band_rules=bands)
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=bands,
+        )
         eligible, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
         # 180M >= 150M (lower band) → eligible.
         assert "1003" in eligible
 
     def test_band_zone_match_is_case_insensitive(self):
         band = smr.Rule(
-            rule_type="power_band", subject="100000000",
-            value="POWER TOWER", sub_type="",
+            rule_type="power_band",
+            subject="100000000",
+            value="POWER TOWER",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 150_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 150_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         eligible, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
         assert "1003" in eligible
 
@@ -965,13 +1221,24 @@ class TestPowerBandRuleConsumption:
         # A power_band row with a non-integer Subject must not crash;
         # `_effective_floor_for_zone` skips it.
         band = smr.Rule(
-            rule_type="power_band", subject="not_a_number",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="not_a_number",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
         # Carol at 180M still below the 300M preset floor — band ignored.
         assert "1003" not in eligible
@@ -979,8 +1246,10 @@ class TestPowerBandRuleConsumption:
 
     def test_band_relaxation_surfaced_in_embed(self):
         band = smr.Rule(
-            rule_type="power_band", subject="200000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="200000000",
+            value="Power Tower",
+            sub_type="",
         )
         session = _make_session(team="A", power_band_rules=[band])
         session.selected_zone = "Power Tower"
@@ -1012,10 +1281,18 @@ class TestEmbedRendering:
         members instead get a confirm-flow hint so officers know they
         can still be picked."""
         # Add a member with no parseable power to trigger the hint.
-        session = _make_session(team="A", members={
-            "9": {"key": "9", "name": "Ghost", "discord_id": "9",
-                  "power": None, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "9": {
+                    "key": "9",
+                    "name": "Ghost",
+                    "discord_id": "9",
+                    "power": None,
+                    "not_on_discord": False,
+                },
+            },
+        )
         embed = srb._render_builder_embed(session)
         assert "power unknown" in embed.description.lower()
         assert "confirmation" in embed.description.lower()
@@ -1039,48 +1316,63 @@ class TestEmbedRendering:
 class TestSignupFilterKeys:
     def test_ds_team_a_includes_a_and_either(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=1, target_member_id="1", vote="a")
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=2, target_member_id="2", vote="b")
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=3, target_member_id="3", vote="either")
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=4, target_member_id="4", vote="cannot")
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=1, target_member_id="1", vote="a"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=2, target_member_id="2", vote="b"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=3, target_member_id="3", vote="either"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=4, target_member_id="4", vote="cannot"
+        )
         keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", "A")
         assert keys == {"1", "3"}
 
     def test_ds_team_b_includes_b_and_either(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=1, target_member_id="1", vote="a")
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=2, target_member_id="2", vote="b")
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=3, target_member_id="3", vote="either")
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=1, target_member_id="1", vote="a"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=2, target_member_id="2", vote="b"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=3, target_member_id="3", vote="either"
+        )
         keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", "B")
         assert keys == {"2", "3"}
 
     def test_cs_pool_treats_a_and_either(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "CS", "2026-05-18",
-                                 voter_user_id=10, target_member_id="10", vote="a")
-        config.record_storm_vote(gid, "CS", "2026-05-18",
-                                 voter_user_id=11, target_member_id="11", vote="either")
-        config.record_storm_vote(gid, "CS", "2026-05-18",
-                                 voter_user_id=12, target_member_id="12", vote="cannot")
+        config.record_storm_vote(
+            gid, "CS", "2026-05-18", voter_user_id=10, target_member_id="10", vote="a"
+        )
+        config.record_storm_vote(
+            gid, "CS", "2026-05-18", voter_user_id=11, target_member_id="11", vote="either"
+        )
+        config.record_storm_vote(
+            gid, "CS", "2026-05-18", voter_user_id=12, target_member_id="12", vote="cannot"
+        )
         # CS team is "" — accept_a True, accept_b False, but either always.
         keys = srb._signup_filter_keys(gid, "CS", "2026-05-18", "")
         assert keys == {"10", "11"}
 
     def test_cannot_never_appears(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "DS", "2026-05-18",
-                                 voter_user_id=1, target_member_id="1", vote="cannot")
+        config.record_storm_vote(
+            gid, "DS", "2026-05-18", voter_user_id=1, target_member_id="1", vote="cannot"
+        )
         for team in ("A", "B", ""):
             keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", team)
             assert "1" not in keys
@@ -1094,32 +1386,51 @@ class TestTeamPlanKeysOrSignupKeys:
 
     def test_no_plan_falls_back_to_signup_filter(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "DS", "2026-05-21",
-                                 voter_user_id=1, target_member_id="1", vote="a")
-        config.record_storm_vote(gid, "DS", "2026-05-21",
-                                 voter_user_id=2, target_member_id="2", vote="either")
+        config.record_storm_vote(
+            gid, "DS", "2026-05-21", voter_user_id=1, target_member_id="1", vote="a"
+        )
+        config.record_storm_vote(
+            gid, "DS", "2026-05-21", voter_user_id=2, target_member_id="2", vote="either"
+        )
         keys, applied = srb._team_plan_keys_or_signup_keys(
-            gid, "DS", "2026-05-21", "A",
+            gid,
+            "DS",
+            "2026-05-21",
+            "A",
         )
         assert keys == {"1", "2"}
         assert applied is False
 
     def test_saved_plan_overrides_signup_filter(self, seeded_db):
         import config
+
         gid = TEST_GUILD_ID
         # Signups would include 1, 2, 3 — but plan says only 1, 2.
         for tid in ("1", "2", "3"):
             config.record_storm_vote(
-                gid, "DS", "2026-05-21",
-                voter_user_id=int(tid), target_member_id=tid, vote="a",
+                gid,
+                "DS",
+                "2026-05-21",
+                voter_user_id=int(tid),
+                target_member_id=tid,
+                vote="a",
             )
         config.save_storm_team_plan(
-            gid, "DS", "2026-05-21", "A",
-            primaries=["1"], subs=["2"], saved_by_user_id=999,
+            gid,
+            "DS",
+            "2026-05-21",
+            "A",
+            primaries=["1"],
+            subs=["2"],
+            saved_by_user_id=999,
         )
         keys, applied = srb._team_plan_keys_or_signup_keys(
-            gid, "DS", "2026-05-21", "A",
+            gid,
+            "DS",
+            "2026-05-21",
+            "A",
         )
         assert keys == {"1", "2"}
         assert applied is True
@@ -1128,16 +1439,26 @@ class TestTeamPlanKeysOrSignupKeys:
         """A `clear`-ed plan returns None; the helper falls back to
         signups. Also covers the no-rows-but-table-exists edge."""
         import config
+
         gid = TEST_GUILD_ID
-        config.record_storm_vote(gid, "DS", "2026-05-21",
-                                 voter_user_id=1, target_member_id="1", vote="a")
+        config.record_storm_vote(
+            gid, "DS", "2026-05-21", voter_user_id=1, target_member_id="1", vote="a"
+        )
         config.save_storm_team_plan(
-            gid, "DS", "2026-05-21", "A",
-            primaries=["1"], subs=[], saved_by_user_id=999,
+            gid,
+            "DS",
+            "2026-05-21",
+            "A",
+            primaries=["1"],
+            subs=[],
+            saved_by_user_id=999,
         )
         config.clear_storm_team_plan(gid, "DS", "2026-05-21", "A")
         keys, applied = srb._team_plan_keys_or_signup_keys(
-            gid, "DS", "2026-05-21", "A",
+            gid,
+            "DS",
+            "2026-05-21",
+            "A",
         )
         assert keys == {"1"}
         assert applied is False
@@ -1153,38 +1474,38 @@ class TestAutoFillPlanAware:
         """30 members with descending power so the by-power split is
         unambiguous (M01 strongest, M30 weakest)."""
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 31)
         }
         return members
 
     def _make_eleven_zone_preset(self):
         return [
-            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
-                       min_power_a=100_000_000, priority=1),
-            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
-                       min_power_a=100_000_000, priority=2),
-            ss.ZoneRow(zone="Science Hub", max_players=3,
-                       min_power_a=100_000_000, priority=3),
-            ss.ZoneRow(zone="Info Center", max_players=3,
-                       min_power_a=100_000_000, priority=4),
-            ss.ZoneRow(zone="Field Hospital I", max_players=2,
-                       min_power_a=100_000_000, priority=5),
-            ss.ZoneRow(zone="Field Hospital II", max_players=2,
-                       min_power_a=100_000_000, priority=6),
-            ss.ZoneRow(zone="Field Hospital III", max_players=2,
-                       min_power_a=100_000_000, priority=7),
-            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
-                       min_power_a=100_000_000, priority=8),
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                       min_power_a=100_000_000, priority=9),
-            ss.ZoneRow(zone="Arsenal", max_players=3,
-                       min_power_a=100_000_000, priority=10),
-            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
-                       min_power_a=100_000_000, priority=11),
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3, min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3, min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3, min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3, min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2, min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(
+                zone="Field Hospital II", max_players=2, min_power_a=100_000_000, priority=6
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital III", max_players=2, min_power_a=100_000_000, priority=7
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital IV", max_players=2, min_power_a=100_000_000, priority=8
+            ),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4, min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3, min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(
+                zone="Mercenary Factory", max_players=3, min_power_a=100_000_000, priority=11
+            ),
         ]
 
     def test_plan_overrides_by_power_split(self):
@@ -1193,7 +1514,8 @@ class TestAutoFillPlanAware:
         rather than the by-power default."""
         members = self._make_thirty_members()
         session = _make_session(
-            team="A", members=members,
+            team="A",
+            members=members,
             preset_zones=self._make_eleven_zone_preset(),
         )
         # Make M21..M40 (the bottom 20) primaries and M01..M10 subs.
@@ -1221,7 +1543,8 @@ class TestAutoFillPlanAware:
         in a zone."""
         members = self._make_thirty_members()
         session = _make_session(
-            team="A", members=members,
+            team="A",
+            members=members,
             preset_zones=self._make_eleven_zone_preset(),
         )
         plan = {"primaries": ["30"], "subs": []}
@@ -1250,13 +1573,19 @@ class TestAutoFillPlanAware:
         """Per-member rule pins a member to a zone; plan marks them as
         sub. Pin wins, conflict surfaces in summary."""
         import storm_member_rules as smr
+
         members = self._make_thirty_members()
-        per_member = [smr.Rule(
-            rule_type="per_member", sub_type="zone",
-            subject="M01", value="Oil Refinery I",
-        )]
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                sub_type="zone",
+                subject="M01",
+                value="Oil Refinery I",
+            )
+        ]
         session = _make_session(
-            team="A", members=members,
+            team="A",
+            members=members,
             preset_zones=self._make_eleven_zone_preset(),
             per_member_rules=per_member,
         )
@@ -1281,8 +1610,9 @@ class TestAutoFillPlanAware:
         matches the legacy behaviour exactly."""
         members = self._make_thirty_members()
         # No event_date, no team — auto-load path skipped.
-        session = _make_session(team="A", members=members,
-                                preset_zones=self._make_eleven_zone_preset())
+        session = _make_session(
+            team="A", members=members, preset_zones=self._make_eleven_zone_preset()
+        )
         # Sanity: no event_date so the session can't trigger plan
         # auto-load even if a plan existed in the DB.
         assert session.event_date is None
@@ -1301,12 +1631,13 @@ class TestAutoFillPlanAware:
         validator's permissive partial-plan behaviour)."""
         members = self._make_thirty_members()
         session = _make_session(
-            team="A", members=members,
+            team="A",
+            members=members,
             preset_zones=self._make_eleven_zone_preset(),
         )
         plan = {
-            "primaries": [str(i) for i in range(1, 19)],   # 18 primaries
-            "subs":      [str(i) for i in range(21, 26)],  # 5 subs
+            "primaries": [str(i) for i in range(1, 19)],  # 18 primaries
+            "subs": [str(i) for i in range(21, 26)],  # 5 subs
         }
         summary = srb._auto_fill_session(session, plan=plan)
         placed: set[str] = set()
@@ -1335,14 +1666,32 @@ class TestSessionStructuredMode:
 class TestWriteRostersTab:
     def test_writes_primary_and_sub_rows(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 280_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+                "1002": {
+                    "key": "1002",
+                    "name": "Bob",
+                    "discord_id": "1002",
+                    "power": 350_000_000,
+                    "not_on_discord": False,
+                },
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 280_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         # Assign Alice + Bob primaries; Carol as sub.
@@ -1365,15 +1714,23 @@ class TestWriteRostersTab:
         pc = srb._ROSTERS_HEADER.index("Power at Assignment")
         data = [(r[mc], r[rc], r[pc]) for r in rows[1:]]
         assert ("Alice", "primary", "412000000") in data
-        assert ("Bob",   "primary", "350000000") in data
-        assert ("Carol", "sub",     "280000000") in data
+        assert ("Bob", "primary", "350000000") in data
+        assert ("Carol", "sub", "280000000") in data
 
     def test_power_unknown_renders_as_unknown(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1004": {"key": "1004", "name": "Erin", "discord_id": "1004",
-                     "power": None, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1004": {
+                    "key": "1004",
+                    "name": "Erin",
+                    "discord_id": "1004",
+                    "power": None,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.assignments["Power Tower"].append("1004")
@@ -1388,10 +1745,18 @@ class TestWriteRostersTab:
 
     def test_event_date_and_team_in_each_row(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="B", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 200_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="B",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 200_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-25"
         session.assignments["Power Tower"].append("1001")
@@ -1413,10 +1778,18 @@ class TestOverrideBelowFloorCapture:
 
     def test_assigned_below_floor_member_flagged_yes(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         # Carol's 180M is below the 300M Power Tower floor; officer
@@ -1433,10 +1806,18 @@ class TestOverrideBelowFloorCapture:
 
     def test_at_floor_member_flag_blank(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.assignments["Power Tower"].append("1001")
@@ -1452,10 +1833,18 @@ class TestOverrideBelowFloorCapture:
         # Even if a sub was flagged at some earlier assignment, subs
         # aren't subject to the per-zone floor — clear the flag.
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.subs.append("1003")
@@ -1471,10 +1860,18 @@ class TestOverrideBelowFloorCapture:
     def test_prune_clears_unassigned_overrides(self):
         # Unassign-then-reassign-without-toggle must not leave a stale
         # flag on the new slot.
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.assignments["Power Tower"].append("1003")
         session.below_floor_overrides.add("1003")
         # Officer hits Unassign on the zone.
@@ -1484,10 +1881,18 @@ class TestOverrideBelowFloorCapture:
 
     def test_prune_keeps_currently_assigned_overrides(self):
         # A member still in a zone keeps their override flag.
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 180_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 180_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.assignments["Power Tower"].append("1003")
         session.below_floor_overrides.add("1003")
         session.prune_stale_overrides()
@@ -1507,12 +1912,27 @@ class TestAutoFill:
 
     def _three_members(self) -> dict[str, dict]:
         return {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 280_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 220_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 220_000_000,
+                "not_on_discord": False,
+            },
         }
 
     def test_resets_state_before_filling(self):
@@ -1535,10 +1955,14 @@ class TestAutoFill:
         # Move Bob below all floors so greedy fill wouldn't pick him for
         # Power Tower; pin him there via per_member rule.
         members["1002"]["power"] = 100_000_000
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="Bob",
-            sub_type="zone", value="Nuclear Silo",
-        )]
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="Bob",
+                sub_type="zone",
+                value="Nuclear Silo",
+            )
+        ]
         session = _make_session(team="A", members=members, per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert "1002" in session.assignments["Nuclear Silo"]
@@ -1584,35 +2008,34 @@ class TestAutoFill:
         # across zones where the band isn't relevant.
         members = self._three_members()
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=300_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=300_000_000, priority=1),
         ]
-        power_band = [smr.Rule(
-            rule_type="power_band", subject="200000000",
-            value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones,
-                                power_band_rules=power_band)
+        power_band = [
+            smr.Rule(
+                rule_type="power_band",
+                subject="200000000",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(
+            team="A", members=members, preset_zones=zones, power_band_rules=power_band
+        )
         summary = srb._auto_fill_session(session)
         assert summary["power_band_rules_applied"] == 2
 
     def test_conflict_when_zone_full(self):
         # Two rules pin two different members to the same zone with cap=1.
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=1,
-                       min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=1, min_power_a=100_000_000, priority=1),
         ]
         members = self._three_members()
         per_member = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="zone", value="Power Tower"),
-            smr.Rule(rule_type="per_member", subject="Bob",
-                     sub_type="zone", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="Alice", sub_type="zone", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="Bob", sub_type="zone", value="Power Tower"),
         ]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones,
-                                per_member_rules=per_member)
+        session = _make_session(
+            team="A", members=members, preset_zones=zones, per_member_rules=per_member
+        )
         summary = srb._auto_fill_session(session)
         # First rule placed Alice; second rule conflicts (zone full).
         assert "1001" in session.assignments["Power Tower"]
@@ -1621,12 +2044,15 @@ class TestAutoFill:
 
     def test_conflict_when_per_member_zone_unknown(self):
         members = self._three_members()
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="zone", value="Mars Base",  # not in preset
-        )]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="zone",
+                value="Mars Base",  # not in preset
+            )
+        ]
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert any("Mars Base" in c for c in summary["conflicts"])
         # Alice is not pinned and may still get auto-filled elsewhere.
@@ -1646,12 +2072,15 @@ class TestAutoFill:
         of digits) should still resolve to the right member — #136
         prep work."""
         members = self._three_members()
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="1001",  # discord_id, not name
-            sub_type="zone", value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="1001",  # discord_id, not name
+                sub_type="zone",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert "1001" in session.assignments["Power Tower"]
         assert summary["per_member_rules_applied"] == 1
@@ -1667,15 +2096,23 @@ class TestAutoFill:
             # discord_id is a separate value. The original audit test
             # used key == "1001" AND discord_id == "1001", which made
             # the first OR branch satisfy the match.
-            "Alice": {"key": "Alice", "name": "Alice", "discord_id": "55001",
-                      "power": 412_000_000, "not_on_discord": False},
+            "Alice": {
+                "key": "Alice",
+                "name": "Alice",
+                "discord_id": "55001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="55001",
-            sub_type="zone", value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="55001",
+                sub_type="zone",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert "Alice" in session.assignments["Power Tower"]
         assert summary["per_member_rules_applied"] == 1
@@ -1687,24 +2124,23 @@ class TestAutoFill:
         full when pinning, pinned to multiple zones) still surface."""
         members = self._three_members()
         per_member = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="zone", value="Power Tower"),
-            smr.Rule(rule_type="per_member", subject="GhostMember",
-                     sub_type="zone", value="Nuclear Silo"),
+            smr.Rule(rule_type="per_member", subject="Alice", sub_type="zone", value="Power Tower"),
+            smr.Rule(
+                rule_type="per_member", subject="GhostMember", sub_type="zone", value="Nuclear Silo"
+            ),
         ]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert summary["per_member_rules_applied"] == 1
         assert not any("GhostMember" in c for c in summary["conflicts"])
         # Sanity: other conflict shapes still surface — exercise with
         # a rule that names an unknown zone.
         per_member_bad_zone = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="zone", value="No Such Zone"),
+            smr.Rule(
+                rule_type="per_member", subject="Alice", sub_type="zone", value="No Such Zone"
+            ),
         ]
-        session2 = _make_session(team="A", members=members,
-                                 per_member_rules=per_member_bad_zone)
+        session2 = _make_session(team="A", members=members, per_member_rules=per_member_bad_zone)
         summary2 = srb._auto_fill_session(session2)
         assert any("unknown zone" in c for c in summary2["conflicts"])
 
@@ -1714,15 +2150,23 @@ class TestAutoFill:
         Below Floor column must reflect it. Audit found auto-fill was
         silently weaker than the equivalent manual assignment."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": None, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": None,
+                "not_on_discord": False,
+            },
         }
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="zone", value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="zone",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         srb._auto_fill_session(session)
         assert "1001" in session.assignments["Power Tower"]
         assert "1001" in session.below_floor_overrides
@@ -1775,24 +2219,41 @@ class TestAutoFill:
         # don't count as band-relaxed slottings; only members between
         # 200M and 300M do.
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 250_000_000, "not_on_discord": False},  # band-relaxed
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 220_000_000, "not_on_discord": False},  # band-relaxed
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 250_000_000,
+                "not_on_discord": False,
+            },  # band-relaxed
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 220_000_000,
+                "not_on_discord": False,
+            },  # band-relaxed
         }
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=300_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=300_000_000, priority=1),
         ]
-        band = [smr.Rule(
-            rule_type="power_band", subject="200000000",
-            value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones,
-                                power_band_rules=band)
+        band = [
+            smr.Rule(
+                rule_type="power_band",
+                subject="200000000",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(
+            team="A", members=members, preset_zones=zones, power_band_rules=band
+        )
         summary = srb._auto_fill_session(session)
         # Bob (250M) and Carol (220M) both slotted via the band.
         # Alice (412M) is above preset floor — not counted.
@@ -1803,20 +2264,27 @@ class TestAutoFill:
         """A band rule on a zone where the eventual fill is all
         above-preset-floor members shouldn't count as 'effective'."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=300_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=300_000_000, priority=1),
         ]
-        band = [smr.Rule(
-            rule_type="power_band", subject="200000000",
-            value="Power Tower",
-        )]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones,
-                                power_band_rules=band)
+        band = [
+            smr.Rule(
+                rule_type="power_band",
+                subject="200000000",
+                value="Power Tower",
+            )
+        ]
+        session = _make_session(
+            team="A", members=members, preset_zones=zones, power_band_rules=band
+        )
         summary = srb._auto_fill_session(session)
         # Alice was above preset floor — band wasn't "effective".
         assert summary["power_band_rules_applied"] == 0
@@ -1828,10 +2296,20 @@ class TestAutoFill:
         # Two members with identical power; "Alice" should always come
         # first regardless of insertion order.
         members_zora_first = {
-            "Z": {"key": "Z", "name": "Zora", "discord_id": "Z",
-                  "power": 300_000_000, "not_on_discord": False},
-            "A": {"key": "A", "name": "Alice", "discord_id": "A",
-                  "power": 300_000_000, "not_on_discord": False},
+            "Z": {
+                "key": "Z",
+                "name": "Zora",
+                "discord_id": "Z",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
+            "A": {
+                "key": "A",
+                "name": "Alice",
+                "discord_id": "A",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
         }
         members_alice_first = {
             "A": members_zora_first["A"],
@@ -1862,38 +2340,37 @@ class TestAutoFillTwentyTenSplit:
         # rule. This is the configuration testers were reporting:
         # auto-fill used to land all 30 as primaries.
         zones = [
-            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
-                       min_power_a=100_000_000, priority=1),
-            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
-                       min_power_a=100_000_000, priority=2),
-            ss.ZoneRow(zone="Science Hub", max_players=3,
-                       min_power_a=100_000_000, priority=3),
-            ss.ZoneRow(zone="Info Center", max_players=3,
-                       min_power_a=100_000_000, priority=4),
-            ss.ZoneRow(zone="Field Hospital I", max_players=2,
-                       min_power_a=100_000_000, priority=5),
-            ss.ZoneRow(zone="Field Hospital II", max_players=2,
-                       min_power_a=100_000_000, priority=6),
-            ss.ZoneRow(zone="Field Hospital III", max_players=2,
-                       min_power_a=100_000_000, priority=7),
-            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
-                       min_power_a=100_000_000, priority=8),
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                       min_power_a=100_000_000, priority=9),
-            ss.ZoneRow(zone="Arsenal", max_players=3,
-                       min_power_a=100_000_000, priority=10),
-            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
-                       min_power_a=100_000_000, priority=11),
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3, min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3, min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3, min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3, min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2, min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(
+                zone="Field Hospital II", max_players=2, min_power_a=100_000_000, priority=6
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital III", max_players=2, min_power_a=100_000_000, priority=7
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital IV", max_players=2, min_power_a=100_000_000, priority=8
+            ),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4, min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3, min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(
+                zone="Mercenary Factory", max_players=3, min_power_a=100_000_000, priority=11
+            ),
         ]
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 31)
         }
-        return _make_session(team="A", members=members,
-                             preset_zones=zones, sub_mode=sub_mode)
+        return _make_session(team="A", members=members, preset_zones=zones, sub_mode=sub_mode)
 
     def test_exactly_twenty_starters_placed_in_zones(self):
         sess = self._make_thirty_signups()
@@ -1961,10 +2438,13 @@ class TestAutoFillTwentyTenSplit:
     def test_starters_short_reports_gap_when_under_twenty(self):
         # 17 members → 3 starter seats unfilled.
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 500_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 500_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 18)
         }
         sess = _make_session(team="A", members=members)
@@ -1973,10 +2453,13 @@ class TestAutoFillTwentyTenSplit:
 
     def test_starters_short_renders_in_embed(self):
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 500_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 500_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 18)
         }
         sess = _make_session(team="A", members=members)
@@ -2027,29 +2510,34 @@ class TestAutoFillTwentyTenSplit:
         count them as a starter, and the top-power list fills 19 more
         seats (not 20) around them."""
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 31)
         }
         zones = [
-            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
-                       min_power_a=0, priority=1),
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3, min_power_a=0, priority=1),
         ] + [
-            ss.ZoneRow(zone=f"Zone {i}", max_players=3,
-                       min_power_a=0, priority=i)
+            ss.ZoneRow(zone=f"Zone {i}", max_players=3, min_power_a=0, priority=i)
             for i in range(2, 12)
         ]
         # Pin M25 (a low-power member who'd normally be a sub) to
         # Oil Refinery I. They become a starter.
-        per_member = [smr.Rule(
-            rule_type="per_member", subject="M25",
-            sub_type="zone", value="Oil Refinery I",
-        )]
-        sess = _make_session(team="A", members=members,
-                             preset_zones=zones,
-                             per_member_rules=per_member)
+        per_member = [
+            smr.Rule(
+                rule_type="per_member",
+                subject="M25",
+                sub_type="zone",
+                value="Oil Refinery I",
+            )
+        ]
+        sess = _make_session(
+            team="A", members=members, preset_zones=zones, per_member_rules=per_member
+        )
         srb._auto_fill_session(sess)
         # M25 is in a zone → starter.
         all_placed: set[str] = set()
@@ -2067,10 +2555,13 @@ class TestAutoFillTwentyTenSplit:
 
     def test_under_twenty_signups_all_become_starters(self):
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 500_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 500_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 11)  # 10 members
         }
         sess = _make_session(team="A", members=members)
@@ -2085,10 +2576,13 @@ class TestAutoFillTwentyTenSplit:
     def test_between_twenty_and_thirty_signups_fills_subs_partially(self):
         # 25 signups → 20 starters, 5 subs.
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 26)
         }
         sess = self._make_thirty_signups()
@@ -2105,28 +2599,47 @@ class TestAutoFillTwentyTenSplit:
         phase round-robins those 20 into its own zones; nobody else
         gets pulled in for phase 2."""
         zones = [
-            ss.ZoneRow(zone="Info Center", max_players=0,
-                       max_phase1=10, max_phase2=10,
-                       min_power_a=0, min_power_b=0,
-                       priority_phase1=1, priority_phase2=1),
-            ss.ZoneRow(zone="Arsenal", max_players=0,
-                       max_phase1=10, max_phase2=10,
-                       min_power_a=0, min_power_b=0,
-                       priority_phase1=2, priority_phase2=2),
+            ss.ZoneRow(
+                zone="Info Center",
+                max_players=0,
+                max_phase1=10,
+                max_phase2=10,
+                min_power_a=0,
+                min_power_b=0,
+                priority_phase1=1,
+                priority_phase2=1,
+            ),
+            ss.ZoneRow(
+                zone="Arsenal",
+                max_players=0,
+                max_phase1=10,
+                max_phase2=10,
+                min_power_a=0,
+                min_power_b=0,
+                priority_phase1=2,
+                priority_phase2=2,
+            ),
         ]
-        preset = ss.PresetBuffer(name="TwoPhase", event_type="DS",
-                                 zones=zones, phase_count=2)
+        preset = ss.PresetBuffer(name="TwoPhase", event_type="DS", zones=zones, phase_count=2)
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 31)
         }
         sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
             sub_mode="pool",
         )
         srb._auto_fill_session(sess)
@@ -2153,10 +2666,13 @@ class TestAutoFillTwentyTenSplit:
         # 21 members, all with the same power except #21 also at the
         # same power. Top 20 by tiebreak (key asc) become starters.
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 300_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 300_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 22)
         }
         sess = _make_session(team="A", members=members)
@@ -2204,34 +2720,34 @@ class TestAutoFillPriorityGreedy:
         # Same 30-member, 11-zone preset shape as the balanced tests
         # so the algorithms are testing against identical fixtures.
         zones = [
-            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
-                       min_power_a=100_000_000, priority=1),
-            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
-                       min_power_a=100_000_000, priority=2),
-            ss.ZoneRow(zone="Science Hub", max_players=3,
-                       min_power_a=100_000_000, priority=3),
-            ss.ZoneRow(zone="Info Center", max_players=3,
-                       min_power_a=100_000_000, priority=4),
-            ss.ZoneRow(zone="Field Hospital I", max_players=2,
-                       min_power_a=100_000_000, priority=5),
-            ss.ZoneRow(zone="Field Hospital II", max_players=2,
-                       min_power_a=100_000_000, priority=6),
-            ss.ZoneRow(zone="Field Hospital III", max_players=2,
-                       min_power_a=100_000_000, priority=7),
-            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
-                       min_power_a=100_000_000, priority=8),
-            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
-                       min_power_a=100_000_000, priority=9),
-            ss.ZoneRow(zone="Arsenal", max_players=3,
-                       min_power_a=100_000_000, priority=10),
-            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
-                       min_power_a=100_000_000, priority=11),
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3, min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3, min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3, min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3, min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2, min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(
+                zone="Field Hospital II", max_players=2, min_power_a=100_000_000, priority=6
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital III", max_players=2, min_power_a=100_000_000, priority=7
+            ),
+            ss.ZoneRow(
+                zone="Field Hospital IV", max_players=2, min_power_a=100_000_000, priority=8
+            ),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4, min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3, min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(
+                zone="Mercenary Factory", max_players=3, min_power_a=100_000_000, priority=11
+            ),
         ]
         members = {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 510_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 510_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 31)
         }
         return _make_session(team="A", members=members, preset_zones=zones)
@@ -2375,12 +2891,8 @@ class TestApprovePostButtonSplit:
         )
         assert auto_row == preview_row == gen_image_row
         # Approve & Cancel share final_row, exactly one row below.
-        approve_image_row = next(
-            r for l, r in rows_by_label.items() if "with image" in l
-        )
-        approve_text_row = next(
-            r for l, r in rows_by_label.items() if "text only" in l
-        )
+        approve_image_row = next(r for l, r in rows_by_label.items() if "with image" in l)
+        approve_text_row = next(r for l, r in rows_by_label.items() if "text only" in l)
         # #240 follow-up renamed the structured-mode close button from
         # "❌ Cancel" to "👋 Close (draft saved)" since the draft now
         # persists and there's nothing to "cancel" anymore.
@@ -2393,6 +2905,7 @@ class TestApprovePostButtonSplit:
         # split happens behind an ephemeral picker. Only one Approve
         # button shows on the main view.
         from unittest.mock import patch
+
         sess = _make_phase_aware_session()
         sess.event_date = "2026-05-18"
         view = srb.RosterBuilderView(sess)
@@ -2454,6 +2967,7 @@ class TestNonDiscordAutoDetect:
 
     def test_stale_discord_id_inferred_non_discord(self, fake_env):
         from unittest.mock import MagicMock
+
         fake, gid = fake_env
         # Mock a guild where Alice (1001) is NOT a member — simulating
         # she's left the server but is still on the roster Sheet.
@@ -2468,7 +2982,9 @@ class TestNonDiscordAutoDetect:
 
     def test_present_guild_member_not_flagged(self, fake_env):
         from unittest.mock import MagicMock
+
         fake, gid = fake_env
+
         # Mock a guild that returns a (non-bot) member for Alice but
         # not for other IDs. `.bot = False` is critical — MagicMock's
         # auto-attribute would otherwise satisfy the bot-filter and
@@ -2479,6 +2995,7 @@ class TestNonDiscordAutoDetect:
                 m.bot = False
                 return m
             return None
+
         guild = MagicMock()
         guild.get_member.side_effect = _get_member
         members, _errs = srb._read_roster_powers(gid, "DS", guild=guild)
@@ -2490,6 +3007,7 @@ class TestNonDiscordAutoDetect:
         ID) is treated as a stale match — bots aren't real alliance
         members."""
         from unittest.mock import MagicMock
+
         fake, gid = fake_env
         bot_member = MagicMock()
         bot_member.bot = True
@@ -2503,6 +3021,7 @@ class TestNonDiscordAutoDetect:
 
     def test_explicit_flag_wins_over_inference(self, fake_env):
         from unittest.mock import MagicMock
+
         fake, gid = fake_env
         # Dave has "x" in not_on_discord AND a blank Discord ID. Even
         # if we hand a guild that returned a member (impossible since
@@ -2522,12 +3041,27 @@ class TestPairedSubMode:
 
     def _three_members(self) -> dict[str, dict]:
         return {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 280_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 350_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
         }
 
     def test_is_paired_property(self):
@@ -2579,11 +3113,13 @@ class TestPairedSubMode:
     def test_auto_fill_pairs_subs_in_paired_mode(self):
         members = self._three_members()
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=1,
-                       min_power_a=200_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=1, min_power_a=200_000_000, priority=1),
         ]
         sess = _make_session(
-            team="A", members=members, preset_zones=zones, sub_mode="paired",
+            team="A",
+            members=members,
+            preset_zones=zones,
+            sub_mode="paired",
         )
         summary = srb._auto_fill_session(sess)
         # Alice slotted as primary; Bob is the next-best eligible →
@@ -2682,20 +3218,34 @@ class TestSessionStateLock:
 
     def test_claim_succeeds_for_fresh_slot(self, seeded_db):
         import config
+
         ok, holder = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         assert ok is True
         assert holder is None
 
     def test_second_officer_claim_rejected(self, seeded_db):
         import config
+
         ok, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         assert ok is True
         ok2, holder = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=99,
         )
         assert ok2 is False
         assert holder == 42
@@ -2704,35 +3254,60 @@ class TestSessionStateLock:
         # An officer who re-opens the builder for a team they already
         # hold doesn't get locked out by their own prior claim.
         import config
+
         config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         ok, holder = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         assert ok is True
         assert holder is None
 
     def test_release_frees_slot(self, seeded_db):
         import config
+
         config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         released = config.release_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
         )
         assert released is True
         # Now a different officer can claim it.
         ok, holder = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=99,
         )
         assert ok is True
         assert holder is None
 
     def test_release_unclaimed_slot_is_safe(self, seeded_db):
         import config
+
         released = config.release_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
         )
         assert released is False  # nothing to release, no exception
 
@@ -2740,11 +3315,20 @@ class TestSessionStateLock:
         # Team A and Team B for the same event are separate slots; one
         # officer can hold A while another holds B.
         import config
+
         ok_a, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         ok_b, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "B", user_id=99,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "B",
+            user_id=99,
         )
         assert ok_a is True
         assert ok_b is True
@@ -2753,11 +3337,20 @@ class TestSessionStateLock:
         # Holding Team A for one event date doesn't block the same
         # team for a different event date.
         import config
+
         ok_1, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         ok_2, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-25", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-25",
+            "A",
+            user_id=42,
         )
         assert ok_1 is True
         assert ok_2 is True
@@ -2768,11 +3361,20 @@ class TestSessionStateLock:
         # so historical Sheet data round-trips cleanly. Post-#166, new
         # CS sessions use "A"/"B" the same as DS does.
         import config
+
         ok_1, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=42,
+            TEST_GUILD_ID,
+            "CS",
+            "2026-05-18",
+            "",
+            user_id=42,
         )
         ok_2, holder = config.claim_storm_session(
-            TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=99,
+            TEST_GUILD_ID,
+            "CS",
+            "2026-05-18",
+            "",
+            user_id=99,
         )
         assert ok_1 is True
         assert ok_2 is False
@@ -2785,8 +3387,7 @@ class TestRenderActionView:
     save button writes to SQLite, and the download button handles a
     DMs-disabled user gracefully."""
 
-    def _make_view(self, *, owner_id=42, event_date="2026-05-18", team="A",
-                   guild_id=None):
+    def _make_view(self, *, owner_id=42, event_date="2026-05-18", team="A", guild_id=None):
         return srb._RenderActionView(
             owner_id=owner_id,
             png_bytes=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,
@@ -2809,9 +3410,11 @@ class TestRenderActionView:
     @pytest.mark.asyncio
     async def test_non_owner_blocked_by_interaction_check(self):
         from unittest.mock import AsyncMock, MagicMock
+
         view = self._make_view(owner_id=42)
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 999
+        inter.user = MagicMock()
+        inter.user.id = 999
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
         allowed = await view.interaction_check(inter)
@@ -2822,15 +3425,16 @@ class TestRenderActionView:
     async def test_save_button_writes_pointer_to_sqlite(self, seeded_db):
         from unittest.mock import AsyncMock, MagicMock
         import config
+
         view = self._make_view()
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 42
+        inter.user = MagicMock()
+        inter.user.id = 42
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
         # Find the save button and drive its callback.
-        save_btn = next(c for c in view.children
-                        if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
         await save_btn.callback(inter)
 
         refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
@@ -2849,14 +3453,15 @@ class TestRenderActionView:
         instead of writing a stub row."""
         from unittest.mock import AsyncMock, MagicMock
         import config
+
         view = self._make_view(event_date="")
         inter = MagicMock()
-        inter.user = MagicMock(); inter.user.id = 42
+        inter.user = MagicMock()
+        inter.user.id = 42
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        save_btn = next(c for c in view.children
-                        if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
         await save_btn.callback(inter)
 
         # Nothing was written.
@@ -2871,6 +3476,7 @@ class TestRenderActionView:
         """DMs disabled → friendly ephemeral instead of crashing."""
         from unittest.mock import AsyncMock, MagicMock
         import discord
+
         view = self._make_view()
 
         user = MagicMock()
@@ -2883,8 +3489,7 @@ class TestRenderActionView:
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        download_btn = next(c for c in view.children
-                            if getattr(c, "label", "") == "📥 Download")
+        download_btn = next(c for c in view.children if getattr(c, "label", "") == "📥 Download")
         await download_btn.callback(inter)
 
         inter.response.send_message.assert_awaited_once()
@@ -2897,9 +3502,14 @@ class TestBuilderViewTimeoutCleanup:
     @pytest.mark.asyncio
     async def test_on_timeout_releases_structured_lock(self, seeded_db):
         import config
+
         # Claim the lock under user 42 to simulate a session being open.
         config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=42,
         )
         session = _make_session(team="A")
         session.guild_id = TEST_GUILD_ID
@@ -2910,7 +3520,11 @@ class TestBuilderViewTimeoutCleanup:
         await view.on_timeout()
         # Lock is released.
         ok, _ = config.claim_storm_session(
-            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            "A",
+            user_id=99,
         )
         assert ok is True
 
@@ -2949,6 +3563,7 @@ class TestFinalizePostOutcomes:
 
     def _make_interaction(self, guild=None):
         from unittest.mock import AsyncMock, MagicMock
+
         inter = MagicMock()
         inter.guild = guild
         inter.response = MagicMock()
@@ -2957,9 +3572,11 @@ class TestFinalizePostOutcomes:
         inter.followup.send = AsyncMock()
         return inter
 
-    def _make_fake_channel(self, channel_id: int, mention: str = "#storm",
-                           send_raises: Exception | None = None):
+    def _make_fake_channel(
+        self, channel_id: int, mention: str = "#storm", send_raises: Exception | None = None
+    ):
         from unittest.mock import AsyncMock, MagicMock
+
         ch = MagicMock()
         ch.id = channel_id
         ch.mention = mention
@@ -2972,21 +3589,41 @@ class TestFinalizePostOutcomes:
     def _make_structured_view(self, fake_env, *, channel=None, channel_id=0):
         fake, gid = fake_env
         import config
+
         # Wire post_channel_id into the storm config so the finalize
         # path knows where to look.
         if channel_id:
             cfg = config.get_storm_config(gid, "DS")
             cfg["post_channel_id"] = channel_id
-            config.save_storm_config(gid, "DS", **{
-                k: v for k, v in cfg.items()
-                if k in {"tab_name", "mail_template", "timezone",
-                         "log_channel_id", "post_channel_id"}
-            })
+            config.save_storm_config(
+                gid,
+                "DS",
+                **{
+                    k: v
+                    for k, v in cfg.items()
+                    if k
+                    in {
+                        "tab_name",
+                        "mail_template",
+                        "timezone",
+                        "log_channel_id",
+                        "post_channel_id",
+                    }
+                },
+            )
 
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.assignments["Power Tower"].append("1001")
@@ -2996,6 +3633,7 @@ class TestFinalizePostOutcomes:
         config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=42)
 
         from unittest.mock import MagicMock
+
         guild = MagicMock()
         guild.get_channel = MagicMock(return_value=channel)
         inter = self._make_interaction(guild=guild)
@@ -3011,7 +3649,9 @@ class TestFinalizePostOutcomes:
     @pytest.mark.asyncio
     async def test_channel_deleted_says_channel_gone(self, fake_env):
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=None, channel_id=12345,
+            fake_env,
+            channel=None,
+            channel_id=12345,
         )
         await srb._finalize_structured_roster(inter, view)
         sent = inter.followup.send.await_args.args[0]
@@ -3025,10 +3665,13 @@ class TestFinalizePostOutcomes:
         # A bare Exception is enough — the finalize path catches the
         # broad `Exception` and surfaces the message verbatim.
         ch = self._make_fake_channel(
-            12345, send_raises=Exception("Missing Permissions"),
+            12345,
+            send_raises=Exception("Missing Permissions"),
         )
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         await srb._finalize_structured_roster(inter, view)
         sent = inter.followup.send.await_args.args[0]
@@ -3042,7 +3685,9 @@ class TestFinalizePostOutcomes:
     async def test_happy_path_renders_posted_to_mention(self, fake_env):
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         await srb._finalize_structured_roster(inter, view)
         ch.send.assert_awaited_once()
@@ -3059,9 +3704,12 @@ class TestFinalizePostOutcomes:
         PNG to `channel.send` as the `file=` argument so the post lands
         with both text and image."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
         with patch("storm_renderer.render", return_value=fake_png):
@@ -3078,7 +3726,9 @@ class TestFinalizePostOutcomes:
     async def test_text_only_skips_file_argument(self, fake_env):
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         await srb._finalize_structured_roster(inter, view, include_image=False)
         ch.send.assert_awaited_once()
@@ -3091,9 +3741,12 @@ class TestFinalizePostOutcomes:
         the attachment, posts text-only, and tacks the failure reason
         onto the officer ephemeral so the missing image isn't silent."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         with patch(
             "storm_renderer.render",
@@ -3117,9 +3770,12 @@ class TestFinalizePostOutcomes:
         them."""
         from unittest.mock import patch
         import storm_renderer as sr
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
 
@@ -3130,10 +3786,14 @@ class TestFinalizePostOutcomes:
         def _fake_render(roster_data):
             roster_data.overflow = [
                 sr._OverflowEntry(
-                    canonical_zone="Nuclear Silo", phase=2, name="Member 7",
+                    canonical_zone="Nuclear Silo",
+                    phase=2,
+                    name="Member 7",
                 ),
                 sr._OverflowEntry(
-                    canonical_zone="Nuclear Silo", phase=2, name="Member 14",
+                    canonical_zone="Nuclear Silo",
+                    phase=2,
+                    name="Member 14",
                 ),
             ]
             return fake_png
@@ -3162,12 +3822,15 @@ class TestFinalizePostOutcomes:
         trip without giving up on exercising the rest of the long-
         mail flow."""
         from unittest.mock import patch, AsyncMock, MagicMock
+
         instance = MagicMock()
         instance.choice = choice
         instance.message = MagicMock()
         instance.wait = AsyncMock(return_value=None)
         return patch.object(
-            srb, "_LongMailPickerView", return_value=instance,
+            srb,
+            "_LongMailPickerView",
+            return_value=instance,
         )
 
     @pytest.mark.asyncio
@@ -3176,20 +3839,28 @@ class TestFinalizePostOutcomes:
         picker (Send as 2 posts / Send as .txt / Cancel) instead of
         the bot silently picking the format."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         long_mail = "X" * 2500
-        with self._stub_picker("txt"), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("txt"),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view)
 
         # The picker followup must have fired; the body explains the
         # two options to the officer.
         picker_call = next(
-            (c for c in inter.followup.send.await_args_list
-             if "goes over the limit" in (c.args[0] if c.args else "")),
+            (
+                c
+                for c in inter.followup.send.await_args_list
+                if "goes over the limit" in (c.args[0] if c.args else "")
+            ),
             None,
         )
         assert picker_call is not None, (
@@ -3202,13 +3873,18 @@ class TestFinalizePostOutcomes:
         behaviour: full mail rides as a .txt file with a short
         placeholder in the inline content."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         long_mail = "X" * 2500
-        with self._stub_picker("txt"), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("txt"),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view)
 
         ch.send.assert_awaited_once()
@@ -3226,15 +3902,20 @@ class TestFinalizePostOutcomes:
         """Picker → "Send as .txt attachment" + with-image attaches
         both files on a single Discord message."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         long_mail = "X" * 2500
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
-        with self._stub_picker("txt"), \
-             patch("storm_renderer.render", return_value=fake_png), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("txt"),
+            patch("storm_renderer.render", return_value=fake_png),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
         ch.send.assert_awaited_once()
@@ -3252,9 +3933,12 @@ class TestFinalizePostOutcomes:
         both parts. The second post always starts with a `**Heading**`
         line so sections stay together."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         # Build a long mail with a clear heading midway so the split
         # helper has a natural break point.
@@ -3264,8 +3948,10 @@ class TestFinalizePostOutcomes:
             + "\n**Stage 2**\n\n"
             + ("Other line\n" * 100)
         )
-        with self._stub_picker("split"), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("split"),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view)
 
         # Two posts, both under 2000 chars; second starts with **Stage 2**.
@@ -3286,20 +3972,20 @@ class TestFinalizePostOutcomes:
         attaching to post 1 made readers scroll up to find the
         image after reading the second post)."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
-        long_mail = (
-            "**Stage 1**\n\n"
-            + ("Line\n" * 200)
-            + "\n**Stage 2**\n\n"
-            + ("Line\n" * 200)
-        )
+        long_mail = "**Stage 1**\n\n" + ("Line\n" * 200) + "\n**Stage 2**\n\n" + ("Line\n" * 200)
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
-        with self._stub_picker("split"), \
-             patch("storm_renderer.render", return_value=fake_png), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("split"),
+            patch("storm_renderer.render", return_value=fake_png),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
         assert ch.send.await_count == 2
@@ -3313,21 +3999,29 @@ class TestFinalizePostOutcomes:
         """Picker → Cancel: nothing posts, view stops, officer gets a
         friendly "cancelled" ephemeral."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         long_mail = "X" * 2500
-        with self._stub_picker("cancel"), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("cancel"),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view)
 
         # Channel never gets a post.
         ch.send.assert_not_awaited()
         # Officer sees a cancelled-ephemeral.
         cancel_call = next(
-            (c for c in inter.followup.send.await_args_list
-             if "Cancelled" in (c.args[0] if c.args else "")),
+            (
+                c
+                for c in inter.followup.send.await_args_list
+                if "Cancelled" in (c.args[0] if c.args else "")
+            ),
             None,
         )
         assert cancel_call is not None
@@ -3338,15 +4032,21 @@ class TestFinalizePostOutcomes:
         ephemeral must always fit in 2000 chars so the interaction
         doesn't stay stuck in "thinking…". Tester report 2026-05-21."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(
-            12345, send_raises=Exception("Some failure"),
+            12345,
+            send_raises=Exception("Some failure"),
         )
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         long_mail = "Y" * 2500
-        with self._stub_picker("txt"), \
-             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with (
+            self._stub_picker("txt"),
+            patch("storm_roster_builder._build_mail_body", return_value=long_mail),
+        ):
             await srb._finalize_structured_roster(inter, view)
 
         inter.followup.send.assert_awaited()
@@ -3363,9 +4063,12 @@ class TestFinalizePostOutcomes:
         second-ephemeral path is skipped — just the standard
         confirmation goes out."""
         from unittest.mock import patch
+
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
-            fake_env, channel=ch, channel_id=12345,
+            fake_env,
+            channel=ch,
+            channel_id=12345,
         )
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
 
@@ -3389,12 +4092,7 @@ class TestSplitMailAtHeading:
     a `**Heading**` line and sections stay together for context."""
 
     def test_splits_at_heading_nearest_midpoint(self):
-        mail = (
-            "**Stage 1**\n\n"
-            + "x" * 800
-            + "\n**Stage 2**\n\n"
-            + "y" * 800
-        )
+        mail = "**Stage 1**\n\n" + "x" * 800 + "\n**Stage 2**\n\n" + "y" * 800
         parts = srb._split_mail_at_heading(mail)
         assert parts is not None
         part1, part2 = parts
@@ -3452,13 +4150,22 @@ class TestPowerSnapshotAtFinalize:
         and Approve flows into the rosters_tab write."""
         import config
         from unittest.mock import AsyncMock, MagicMock
+
         fake, gid = fake_env
 
         # Open the session with stale power for Alice.
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 100_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 100_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.assignments["Power Tower"].append("1001")
@@ -3501,10 +4208,20 @@ class TestPairedSubMailRendering:
 
     def test_pool_mode_unchanged(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 280_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="pool")
         session.assignments["Power Tower"].append("1001")
@@ -3516,10 +4233,20 @@ class TestPairedSubMailRendering:
 
     def test_paired_mode_pairings_render_as_separate_list(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 280_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1001")
@@ -3532,8 +4259,13 @@ class TestPairedSubMailRendering:
 
     def test_paired_mode_unpaired_primary_renders_plain(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1001")
@@ -3546,12 +4278,27 @@ class TestPairedSubMailRendering:
         """When `session.subs` is non-empty in paired mode (auto-fill's
         overflow pool), those names append after the pairing lines."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 280_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 220_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 220_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1001")
@@ -3569,10 +4316,20 @@ class TestPairedSubMailRendering:
         showed up in the subs block before the dedup, which read as
         a roster bug to the tester."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 280_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1001")
@@ -3593,26 +4350,48 @@ class TestPairedSubMailRendering:
         roster could double-render the sub if they're only paired in
         a later stage."""
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 412_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "2",
-                  "power": 280_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "2",
+                "power": 280_000_000,
+                "not_on_discord": False,
+            },
         }
         zones = [
             ss.ZoneRow(
-                zone="Data Center 1", max_players=0,
-                max_phase1=1, max_phase2=1, max_phase3=1,
-                min_power_a=0, min_power_b=0,
+                zone="Data Center 1",
+                max_players=0,
+                max_phase1=1,
+                max_phase2=1,
+                max_phase3=1,
+                min_power_a=0,
+                min_power_b=0,
             ),
         ]
         preset = ss.PresetBuffer(
-            name="Multi-phase", event_type="CS", zones=zones,
-            uses_phases=True, phase_count=3,
+            name="Multi-phase",
+            event_type="CS",
+            zones=zones,
+            uses_phases=True,
+            phase_count=3,
         )
         session = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="CS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
             sub_mode="paired",
         )
         session.assignments_p2["Data Center 1"].append("1")
@@ -3637,19 +4416,31 @@ class TestRostersTabHeaderMigration:
         # (no `Paired With`, no `Phase`).
         old_rosters = fake.add_worksheet("DS Rosters")
         old_rosters._rows = [
-            ["Event Date", "Team", "Zone", "Member", "Role",
-             "Power at Assignment", "Discord ID", "Override Below Floor",
-             "Posted At (UTC)"],
-            ["2026-05-11", "A", "Power Tower", "Old", "primary",
-             "300000000", "1", "", ""],
+            [
+                "Event Date",
+                "Team",
+                "Zone",
+                "Member",
+                "Role",
+                "Power at Assignment",
+                "Discord ID",
+                "Override Below Floor",
+                "Posted At (UTC)",
+            ],
+            ["2026-05-11", "A", "Power Tower", "Old", "primary", "300000000", "1", "", ""],
         ]
 
         # Build a session and finalise — header should migrate AND the
         # existing data row should shift so each value lands under the
         # same column name in the new header.
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.guild_id = gid
@@ -3687,15 +4478,28 @@ class TestRostersTabHeaderMigration:
         fake, gid = fake_env
         old_rosters = fake.add_worksheet("DS Rosters")
         old_rosters._rows = [
-            ["Event Date", "Team", "Zone", "Member", "Role",
-             "Power at Assignment", "Discord ID", "Override Below Floor",
-             "Paired With", "Posted At (UTC)"],  # 10-col, no Phase yet
-            ["2026-05-11", "A", "Power Tower", "Old", "primary",
-             "180000000", "9", "yes", "", ""],
+            [
+                "Event Date",
+                "Team",
+                "Zone",
+                "Member",
+                "Role",
+                "Power at Assignment",
+                "Discord ID",
+                "Override Below Floor",
+                "Paired With",
+                "Posted At (UTC)",
+            ],  # 10-col, no Phase yet
+            ["2026-05-11", "A", "Power Tower", "Old", "primary", "180000000", "9", "yes", "", ""],
         ]
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.guild_id = gid
@@ -3727,15 +4531,17 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         `Primary ↔ Sub` strings rather than a bare count, so the
         summary can render the explicit pairings."""
         members = {
-            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
-                        "power": 400_000_000 - i * 10_000_000,
-                        "not_on_discord": False}
+            f"100{i}": {
+                "key": f"100{i}",
+                "name": f"M{i}",
+                "discord_id": f"100{i}",
+                "power": 400_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(8)
         }
-        zones = [ss.ZoneRow(zone="Power Tower", max_players=4,
-                            min_power_a=100_000_000, priority=1)]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones, sub_mode="paired")
+        zones = [ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=100_000_000, priority=1)]
+        session = _make_session(team="A", members=members, preset_zones=zones, sub_mode="paired")
         summary = srb._auto_fill_session(session)
         # 4 primaries auto-filled + 4 paired subs (each rendered as
         # "PrimaryName ↔ SubName").
@@ -3746,8 +4552,13 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
 
     def test_pool_mode_paired_list_is_empty(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members, sub_mode="pool")
         summary = srb._auto_fill_session(session)
@@ -3763,37 +4574,69 @@ class TestZoneMinimumSuffix:
 
     def test_no_suffix_when_floor_is_zero(self):
         # No power_band rule + zero preset floor → no suffix.
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         suffix = srb._zone_minimum_suffix(session, "Mercenary Factory")
         # Mercenary Factory has no preset floor in the default fixture.
         assert suffix == "" or "minimum" not in suffix
 
     def test_suffix_renders_when_power_band_floor_set(self):
         import storm_member_rules as smr
+
         band = smr.Rule(
-            rule_type="power_band", subject="80000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="80000000",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         suffix = srb._zone_minimum_suffix(session, "Power Tower")
         assert suffix == " _(minimum 80M)_"
 
     def test_render_zone_line_includes_suffix_flat_mode(self):
         import storm_member_rules as smr
+
         band = smr.Rule(
-            rule_type="power_band", subject="80000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="80000000",
+            value="Power Tower",
+            sub_type="",
         )
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }, power_band_rules=[band])
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+            power_band_rules=[band],
+        )
         line = srb._render_zone_line(session, "Power Tower")
         # Bold name, italic minimum, then (count/cap) and members.
         assert "**Power Tower**" in line
@@ -3818,30 +4661,40 @@ class TestUnpairedSubBelowFloor:
         for i in range(4):
             key = f"100{i:02d}"
             members[key] = {
-                "key": key, "name": f"S{i:02d}", "discord_id": key,
+                "key": key,
+                "name": f"S{i:02d}",
+                "discord_id": key,
                 "power": 400_000_000 - i * 10_000_000,
                 "not_on_discord": False,
             }
         members["10004"] = {
-            "key": "10004", "name": "Weak", "discord_id": "10004",
-            "power": weak_power, "not_on_discord": False,
+            "key": "10004",
+            "name": "Weak",
+            "discord_id": "10004",
+            "power": weak_power,
+            "not_on_discord": False,
         }
         return members
 
     def test_unpaired_sub_below_floor_listed_with_reason(self):
         import storm_member_rules as smr
+
         band = smr.Rule(
-            rule_type="power_band", subject="80000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="80000000",
+            value="Power Tower",
+            sub_type="",
         )
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=80_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=80_000_000, priority=1),
         ]
         members = self._short_fixture(weak_power=50_000_000)
         session = _make_session(
-            team="A", members=members, preset_zones=zones,
-            power_band_rules=[band], sub_mode="paired",
+            team="A",
+            members=members,
+            preset_zones=zones,
+            power_band_rules=[band],
+            sub_mode="paired",
         )
         summary = srb._auto_fill_session(session)
         # The weak sub couldn't pair (below 80M floor for Power Tower).
@@ -3859,19 +4712,24 @@ class TestUnpairedSubBelowFloor:
         have paired up, so they aren't in the unpaired pool to begin
         with."""
         import storm_member_rules as smr
+
         band = smr.Rule(
-            rule_type="power_band", subject="80000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="80000000",
+            value="Power Tower",
+            sub_type="",
         )
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=80_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=80_000_000, priority=1),
         ]
         # Weak's power is above 80M floor — should pair, not flag.
         members = self._short_fixture(weak_power=100_000_000)
         session = _make_session(
-            team="A", members=members, preset_zones=zones,
-            power_band_rules=[band], sub_mode="paired",
+            team="A",
+            members=members,
+            preset_zones=zones,
+            power_band_rules=[band],
+            sub_mode="paired",
         )
         summary = srb._auto_fill_session(session)
         assert summary["unpaired_subs_below_floor"] == []
@@ -3880,18 +4738,23 @@ class TestUnpairedSubBelowFloor:
         """Pool mode never pairs anyone, so the `unpaired_subs_below_floor`
         list stays empty even when subs are below zone floors."""
         import storm_member_rules as smr
+
         band = smr.Rule(
-            rule_type="power_band", subject="80000000",
-            value="Power Tower", sub_type="",
+            rule_type="power_band",
+            subject="80000000",
+            value="Power Tower",
+            sub_type="",
         )
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=80_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=80_000_000, priority=1),
         ]
         members = self._short_fixture(weak_power=50_000_000)
         session = _make_session(
-            team="A", members=members, preset_zones=zones,
-            power_band_rules=[band], sub_mode="pool",
+            team="A",
+            members=members,
+            preset_zones=zones,
+            power_band_rules=[band],
+            sub_mode="pool",
         )
         summary = srb._auto_fill_session(session)
         # Pool mode populates session.subs but doesn't do pairing, so
@@ -3907,8 +4770,13 @@ class TestAutoFillSummaryRenderingNoTruncation:
 
     def test_gaps_list_is_not_truncated(self):
         members = {
-            f"100{i}": {"key": f"100{i}", "name": f"Ghost{i}", "discord_id": f"100{i}",
-                        "power": None, "not_on_discord": False}
+            f"100{i}": {
+                "key": f"100{i}",
+                "name": f"Ghost{i}",
+                "discord_id": f"100{i}",
+                "power": None,
+                "not_on_discord": False,
+            }
             for i in range(10)
         }
         session = _make_session(team="A", members=members)
@@ -3925,12 +4793,12 @@ class TestAutoFillSummaryRenderingNoTruncation:
         # 4 per-member rules pointing at an unknown zone — each triggers
         # a conflict.
         per_member = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="zone", value=f"No Such Zone {i}")
+            smr.Rule(
+                rule_type="per_member", subject="Alice", sub_type="zone", value=f"No Such Zone {i}"
+            )
             for i in range(4)
         ]
-        session = _make_session(team="A", members=members,
-                                per_member_rules=per_member)
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
         srb._auto_fill_session(session)
         embed = srb._render_builder_embed(session)
         body = embed.description or ""
@@ -3941,15 +4809,17 @@ class TestAutoFillSummaryRenderingNoTruncation:
 
     def test_auto_paired_listing_shows_explicit_pairs(self):
         members = {
-            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
-                        "power": 400_000_000 - i * 10_000_000,
-                        "not_on_discord": False}
+            f"100{i}": {
+                "key": f"100{i}",
+                "name": f"M{i}",
+                "discord_id": f"100{i}",
+                "power": 400_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(4)
         }
-        zones = [ss.ZoneRow(zone="Power Tower", max_players=2,
-                            min_power_a=100_000_000, priority=1)]
-        session = _make_session(team="A", members=members,
-                                preset_zones=zones, sub_mode="paired")
+        zones = [ss.ZoneRow(zone="Power Tower", max_players=2, min_power_a=100_000_000, priority=1)]
+        session = _make_session(team="A", members=members, preset_zones=zones, sub_mode="paired")
         srb._auto_fill_session(session)
         embed = srb._render_builder_embed(session)
         body = embed.description or ""
@@ -3962,12 +4832,27 @@ class TestAutoFillSummaryRenderingNoTruncation:
 
     def _three_members(self):
         return {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 350_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 350_000_000,
+                "not_on_discord": False,
+            },
         }
 
 
@@ -3978,16 +4863,26 @@ class TestAutoFillConfirmDestructive:
 
     def test_fresh_session_has_no_existing_assignments(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         assert session.has_existing_assignments() is False
 
     def test_session_with_assignment_reports_existing(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"].append("1001")
@@ -3995,8 +4890,13 @@ class TestAutoFillConfirmDestructive:
 
     def test_session_with_sub_reports_existing(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.subs.append("1001")
@@ -4025,27 +4925,51 @@ class TestAutoFillConfirmDestructive:
 
 def _make_phase_aware_session(*, sub_mode: str = "pool"):
     zones = [
-        ss.ZoneRow(zone="Info Center", max_players=0,
-                   max_phase1=2, max_phase2=1,
-                   min_power_a=200_000_000, min_power_b=100_000_000),
-        ss.ZoneRow(zone="Arsenal", max_players=0,
-                   max_phase1=0, max_phase2=4,
-                   min_power_a=0, min_power_b=0),
+        ss.ZoneRow(
+            zone="Info Center",
+            max_players=0,
+            max_phase1=2,
+            max_phase2=1,
+            min_power_a=200_000_000,
+            min_power_b=100_000_000,
+        ),
+        ss.ZoneRow(
+            zone="Arsenal", max_players=0, max_phase1=0, max_phase2=4, min_power_a=0, min_power_b=0
+        ),
     ]
-    preset = ss.PresetBuffer(name="Phased", event_type="DS",
-                             zones=zones, uses_phases=True)
+    preset = ss.PresetBuffer(name="Phased", event_type="DS", zones=zones, uses_phases=True)
     members = {
-        "1": {"key": "1", "name": "Alice", "discord_id": "1",
-              "power": 412_000_000, "not_on_discord": False},
-        "2": {"key": "2", "name": "Bob",   "discord_id": "2",
-              "power": 350_000_000, "not_on_discord": False},
-        "3": {"key": "3", "name": "Cyrus", "discord_id": "3",
-              "power": 300_000_000, "not_on_discord": False},
+        "1": {
+            "key": "1",
+            "name": "Alice",
+            "discord_id": "1",
+            "power": 412_000_000,
+            "not_on_discord": False,
+        },
+        "2": {
+            "key": "2",
+            "name": "Bob",
+            "discord_id": "2",
+            "power": 350_000_000,
+            "not_on_discord": False,
+        },
+        "3": {
+            "key": "3",
+            "name": "Cyrus",
+            "discord_id": "3",
+            "power": 300_000_000,
+            "not_on_discord": False,
+        },
     }
     return srb.RosterBuilderSession(
-        guild_id=1, user_id=42, event_type="DS",
-        team="A", preset=preset, members=members,
-        per_member_rules=[], power_band_rules=[],
+        guild_id=1,
+        user_id=42,
+        event_type="DS",
+        team="A",
+        preset=preset,
+        members=members,
+        per_member_rules=[],
+        power_band_rules=[],
         sub_mode=sub_mode,
     )
 
@@ -4093,9 +5017,9 @@ class TestSessionPhaseAware:
 
     def test_assigned_member_keys_unions_both_phases(self):
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")          # Alice in P1
-        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
-        s.subs.append("3")                                # Cyrus in subs
+        s.assignments["Info Center"].append("1")  # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")  # Bob in P2
+        s.subs.append("3")  # Cyrus in subs
         assert s.assigned_member_keys() == {"1", "2", "3"}
 
     def test_prune_stale_pairings_walks_both_phases(self):
@@ -4128,28 +5052,41 @@ def _make_three_phase_session():
     """Build a session backed by a 3-phase CS preset for the new
     Phase 3 attribute / iteration coverage."""
     zones = [
-        ss.ZoneRow(zone="Power Tower", max_players=0,
-                   max_phase1=2, max_phase2=2, max_phase3=2,
-                   min_power_a=100_000_000,
-                   priority_phase1=1, priority_phase2=2, priority_phase3=3),
-        ss.ZoneRow(zone="Virus Lab", max_players=0,
-                   max_phase3=2,
-                   min_power_a=0,
-                   priority_phase3=1),
+        ss.ZoneRow(
+            zone="Power Tower",
+            max_players=0,
+            max_phase1=2,
+            max_phase2=2,
+            max_phase3=2,
+            min_power_a=100_000_000,
+            priority_phase1=1,
+            priority_phase2=2,
+            priority_phase3=3,
+        ),
+        ss.ZoneRow(zone="Virus Lab", max_players=0, max_phase3=2, min_power_a=0, priority_phase3=1),
     ]
-    preset = ss.PresetBuffer(name="ThreePhase", event_type="CS",
-                             zones=zones, phase_count=3,
-                             faction="Rulebringers")
+    preset = ss.PresetBuffer(
+        name="ThreePhase", event_type="CS", zones=zones, phase_count=3, faction="Rulebringers"
+    )
     members = {
-        str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
-                 "power": 500_000_000 - i * 10_000_000,
-                 "not_on_discord": False}
+        str(i): {
+            "key": str(i),
+            "name": f"M{i}",
+            "discord_id": str(i),
+            "power": 500_000_000 - i * 10_000_000,
+            "not_on_discord": False,
+        }
         for i in range(1, 7)
     }
     return srb.RosterBuilderSession(
-        guild_id=1, user_id=42, event_type="CS",
-        team="A", preset=preset, members=members,
-        per_member_rules=[], power_band_rules=[],
+        guild_id=1,
+        user_id=42,
+        event_type="CS",
+        team="A",
+        preset=preset,
+        members=members,
+        per_member_rules=[],
+        power_band_rules=[],
         sub_mode="pool",
     )
 
@@ -4203,10 +5140,18 @@ class TestMailBodyPhaseAware:
         pass
 
     def test_flat_mail_has_no_phase_headers(self):
-        s = _make_session(team="A", members={
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 412_000_000, "not_on_discord": False},
-        })
+        s = _make_session(
+            team="A",
+            members={
+                "1": {
+                    "key": "1",
+                    "name": "Alice",
+                    "discord_id": "1",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         s.assignments["Power Tower"].append("1")
         body = srb._build_mail_body(s)
         assert "Stage 1" not in body
@@ -4218,8 +5163,8 @@ class TestMailBodyPhaseAware:
         each zone's heading — matches the PNG render organization.
         Each zone shows its Stage N entries indented below."""
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")          # Alice in P1
-        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        s.assignments["Info Center"].append("1")  # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")  # Bob in P2
         body = srb._build_mail_body(s)
         assert "Stage 1" in body
         assert "Stage 2" in body
@@ -4229,8 +5174,7 @@ class TestMailBodyPhaseAware:
         # Alice should appear after the Info Center heading. Walk the
         # block: each zone's stage 1/2/3 are stacked under it.
         assert "Alice" in body[info_idx:arsenal_idx] or (
-            arsenal_idx < info_idx
-            and "Alice" in body[info_idx:]
+            arsenal_idx < info_idx and "Alice" in body[info_idx:]
         )
         # Stage label appears right under the zone name (zone-major
         # ordering, not stage-major).
@@ -4248,9 +5192,9 @@ class TestMailBodyPhaseAware:
         2000-char limit because the template wrapped each phase
         block)."""
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")          # P1
-        s.assignments_p2["Arsenal"].append("2")           # P2
-        s.subs.append("3")                                # Cyrus
+        s.assignments["Info Center"].append("1")  # P1
+        s.assignments_p2["Arsenal"].append("2")  # P2
+        s.subs.append("3")  # Cyrus
         body = srb._build_mail_body(s)
         # Cyrus appears exactly once in the body (was twice or more
         # before with per-phase template rendering).
@@ -4264,15 +5208,18 @@ class TestMailBodyPhaseAware:
         `(empty)` for that stage — mirrors the PNG render so leadership
         can see deliberate gaps (some strategies leave a stage open)."""
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments["Info Center"].append("1")  # Alice in P1
         # Info Center P2 has cap > 0 but no assignees → should show
         # as Stage 2 (empty).
         body = srb._build_mail_body(s)
         info_idx = body.index("Info Center")
         # The Info Center block should contain Stage 1 with Alice
         # and Stage 2 with (empty).
-        info_block = body[info_idx:body.index("\n\n", info_idx)] \
-            if "\n\n" in body[info_idx:] else body[info_idx:]
+        info_block = (
+            body[info_idx : body.index("\n\n", info_idx)]
+            if "\n\n" in body[info_idx:]
+            else body[info_idx:]
+        )
         assert "Stage 1" in info_block
         assert "Alice" in info_block
         assert "Stage 2" in info_block
@@ -4322,23 +5269,40 @@ class TestMailBodyPhaseAware:
         stage from first-open onward must appear."""
         zones = [
             ss.ZoneRow(
-                zone="Sample Warehouse 1", max_players=0,
-                max_phase1=2, max_phase2=2, max_phase3=2,
-                min_power_a=0, min_power_b=0,
+                zone="Sample Warehouse 1",
+                max_players=0,
+                max_phase1=2,
+                max_phase2=2,
+                max_phase3=2,
+                min_power_a=0,
+                min_power_b=0,
             ),
         ]
         preset = ss.PresetBuffer(
-            name="SW Test", event_type="CS", zones=zones,
-            uses_phases=True, phase_count=3,
+            name="SW Test",
+            event_type="CS",
+            zones=zones,
+            uses_phases=True,
+            phase_count=3,
         )
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         s = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="CS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
             sub_mode="pool",
         )
         # Only Stage 1 gets a member; Stages 2 + 3 have capacity but
@@ -4402,25 +5366,43 @@ class TestAutoFillPhaseAware:
 
     def _bigger_session(self):
         zones = [
-            ss.ZoneRow(zone="Info Center", max_players=0,
-                       max_phase1=2, max_phase2=1,
-                       min_power_a=100_000_000, min_power_b=50_000_000),
-            ss.ZoneRow(zone="Arsenal", max_players=0,
-                       max_phase1=0, max_phase2=3,
-                       min_power_a=0, min_power_b=0),
+            ss.ZoneRow(
+                zone="Info Center",
+                max_players=0,
+                max_phase1=2,
+                max_phase2=1,
+                min_power_a=100_000_000,
+                min_power_b=50_000_000,
+            ),
+            ss.ZoneRow(
+                zone="Arsenal",
+                max_players=0,
+                max_phase1=0,
+                max_phase2=3,
+                min_power_a=0,
+                min_power_b=0,
+            ),
         ]
-        preset = ss.PresetBuffer(name="Phased", event_type="DS",
-                                 zones=zones, uses_phases=True)
+        preset = ss.PresetBuffer(name="Phased", event_type="DS", zones=zones, uses_phases=True)
         members = {
-            str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
-                     "power": 500_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i}",
+                "discord_id": str(i),
+                "power": 500_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 8)
         }
         return srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
             sub_mode="pool",
         )
 
@@ -4443,14 +5425,12 @@ class TestAutoFillPhaseAware:
         # and Phase 1 already using 2, Phase 2 should also see the
         # top-power members — including overlap with Phase 1 since
         # they're allowed to migrate.
-        p2_all = (set(s.assignments_p2["Info Center"]) |
-                  set(s.assignments_p2["Arsenal"]))
+        p2_all = set(s.assignments_p2["Info Center"]) | set(s.assignments_p2["Arsenal"])
         # The two strongest members (M1, M2) should appear in both
         # phases — they're top-power so they get drafted into Phase 1
         # and stay eligible for Phase 2.
         assert p1_ic & p2_all, (
-            "expected at least one member to play in both phases "
-            "(migration use case)"
+            "expected at least one member to play in both phases (migration use case)"
         )
 
     def test_auto_fill_summary_counts_both_phases(self):
@@ -4461,12 +5441,25 @@ class TestAutoFillPhaseAware:
 
     def test_auto_fill_on_flat_preset_unchanged(self):
         # Sanity: flat presets don't get phase 2 fills.
-        s = _make_session(team="A", members={
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "2",
-                  "power": 400_000_000, "not_on_discord": False},
-        })
+        s = _make_session(
+            team="A",
+            members={
+                "1": {
+                    "key": "1",
+                    "name": "Alice",
+                    "discord_id": "1",
+                    "power": 500_000_000,
+                    "not_on_discord": False,
+                },
+                "2": {
+                    "key": "2",
+                    "name": "Bob",
+                    "discord_id": "2",
+                    "power": 400_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         srb._auto_fill_session(s)
         # Phase 2 dict stays empty for flat presets even with members
         # available.
@@ -4482,10 +5475,13 @@ class TestEmbedLayoutOverhaul:
 
     def _ten_members(self):
         return {
-            str(i): {"key": str(i), "name": f"M{i:02d}",
-                     "discord_id": str(i),
-                     "power": 410_000_000 - i * 10_000_000,
-                     "not_on_discord": False}
+            str(i): {
+                "key": str(i),
+                "name": f"M{i:02d}",
+                "discord_id": str(i),
+                "power": 410_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(1, 11)
         }
 
@@ -4516,9 +5512,7 @@ class TestEmbedLayoutOverhaul:
         # None of the status glyphs appear in the embed body. The n/cap
         # count is the only state indicator now.
         for glyph in ("🟡", "✅", "⬜"):
-            assert glyph not in body, (
-                f"status glyph {glyph!r} should be gone from the embed"
-            )
+            assert glyph not in body, f"status glyph {glyph!r} should be gone from the embed"
         # n/cap is still there.
         assert "(2/4)" in body
 
@@ -4538,10 +5532,20 @@ class TestEmbedLayoutOverhaul:
 
     def test_zone_lines_drop_inline_sub_in_paired_mode(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": False,
+            },
         }
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
@@ -4577,8 +5581,13 @@ class TestEmbedLayoutOverhaul:
 
     def test_unpaired_message_drops_warning_emoji(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
@@ -4611,8 +5620,7 @@ class TestEmbedLayoutOverhaul:
         # Single-zone preset so the round-robin places several primaries
         # in one zone and triggers pairing.
         sess.preset.zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=4,
-                       min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Power Tower", max_players=4, min_power_a=100_000_000, priority=1),
         ]
         # Re-init assignment dicts to match new zone set.
         for ph_dict in (sess.assignments, sess.assignments_p2, sess.assignments_p3):
@@ -4632,10 +5640,20 @@ class TestEmbedLayoutOverhaul:
 
     def test_auto_fill_summary_includes_not_on_discord_count(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": True},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": True,
+            },
         }
         sess = _make_session(team="A", members=members)
         srb._auto_fill_session(sess)
@@ -4652,8 +5670,13 @@ class TestEmbedLayoutOverhaul:
 
     def test_footer_dropped(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": True},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": True,
+            },
         }
         sess = _make_session(team="A", members=members)
         embed = srb._render_builder_embed(sess)
@@ -4666,12 +5689,8 @@ class TestEmbedLayoutOverhaul:
         sess.selected_zone = "Power Tower"
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
-        filled_line = next(
-            line for line in body.splitlines() if line.startswith("📊 Filled:")
-        )
-        active_line = next(
-            line for line in body.splitlines() if line.startswith("🎯 Active zone:")
-        )
+        filled_line = next(line for line in body.splitlines() if line.startswith("📊 Filled:"))
+        active_line = next(line for line in body.splitlines() if line.startswith("🎯 Active zone:"))
         # No `**` markdown bold around the labels or counts.
         assert "**" not in filled_line
         # The `_(preset minimum ... relaxed)_` italic note can use
@@ -4688,8 +5707,8 @@ class TestPhaseAwareEmbedRendering:
 
     def test_phase_aware_zone_line_has_per_phase_rows(self):
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")          # Alice in P1
-        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        s.assignments["Info Center"].append("1")  # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")  # Bob in P2
         line = srb._render_zone_line(s, "Info Center")
         assert "Stage 1:" in line
         assert "Stage 2:" in line
@@ -4714,10 +5733,18 @@ class TestPhaseAwareEmbedRendering:
         assert "**Arsenal**" in line
 
     def test_flat_zone_line_keeps_single_row_shape(self):
-        s = _make_session(team="A", members={
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 412_000_000, "not_on_discord": False},
-        })
+        s = _make_session(
+            team="A",
+            members={
+                "1": {
+                    "key": "1",
+                    "name": "Alice",
+                    "discord_id": "1",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         s.assignments["Power Tower"].append("1")
         line = srb._render_zone_line(s, "Power Tower")
         # Flat presets stay one-line — no \n inside the zone line.
@@ -4734,10 +5761,18 @@ class TestPhaseAwareEmbedRendering:
         assert "S2:" in embed.description
 
     def test_filled_line_uses_single_total_when_flat(self):
-        s = _make_session(team="A", members={
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 412_000_000, "not_on_discord": False},
-        })
+        s = _make_session(
+            team="A",
+            members={
+                "1": {
+                    "key": "1",
+                    "name": "Alice",
+                    "discord_id": "1",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         s.assignments["Power Tower"].append("1")
         embed = srb._render_builder_embed(s)
         assert "Filled:" in embed.description
@@ -4754,17 +5789,23 @@ class TestRostersTabPhaseColumn:
         assert "Stage" in srb._ROSTERS_HEADER
         # Stage sits between Team and Zone so the columns read in the
         # natural left-to-right order an officer scans.
-        assert (srb._ROSTERS_HEADER.index("Stage")
-                == srb._ROSTERS_HEADER.index("Team") + 1)
-        assert (srb._ROSTERS_HEADER.index("Zone")
-                == srb._ROSTERS_HEADER.index("Stage") + 1)
+        assert srb._ROSTERS_HEADER.index("Stage") == srb._ROSTERS_HEADER.index("Team") + 1
+        assert srb._ROSTERS_HEADER.index("Zone") == srb._ROSTERS_HEADER.index("Stage") + 1
 
     def test_flat_preset_writes_phase_one(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.assignments["Power Tower"].append("1001")
@@ -4779,22 +5820,41 @@ class TestRostersTabPhaseColumn:
     def test_phase_aware_preset_writes_correct_phase_per_row(self, fake_env):
         fake, gid = fake_env
         zones = [
-            ss.ZoneRow(zone="Power Tower", max_players=0,
-                       max_phase1=2, max_phase2=1,
-                       min_power_a=100_000_000, min_power_b=50_000_000),
+            ss.ZoneRow(
+                zone="Power Tower",
+                max_players=0,
+                max_phase1=2,
+                max_phase2=1,
+                min_power_a=100_000_000,
+                min_power_b=50_000_000,
+            ),
         ]
-        preset = ss.PresetBuffer(name="Phased", event_type="DS",
-                                 zones=zones, uses_phases=True)
+        preset = ss.PresetBuffer(name="Phased", event_type="DS", zones=zones, uses_phases=True)
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "2",
-                  "power": 400_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "2",
+                "power": 400_000_000,
+                "not_on_discord": False,
+            },
         }
         session = srb.RosterBuilderSession(
-            guild_id=gid, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
+            guild_id=gid,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[],
+            power_band_rules=[],
             sub_mode="pool",
         )
         session.event_date = "2026-05-18"
@@ -4813,10 +5873,18 @@ class TestRostersTabPhaseColumn:
 
     def test_subs_have_empty_phase_cell(self, fake_env):
         fake, gid = fake_env
-        session = _make_session(team="A", members={
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 280_000_000, "not_on_discord": False},
-        })
+        session = _make_session(
+            team="A",
+            members={
+                "1003": {
+                    "key": "1003",
+                    "name": "Carol",
+                    "discord_id": "1003",
+                    "power": 280_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
         session.guild_id = gid
         session.event_date = "2026-05-18"
         session.subs.append("1003")
@@ -4841,10 +5909,20 @@ class TestDraftSerialization:
 
     def test_serialize_captures_intent_fields(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"] = ["1001"]
@@ -4855,6 +5933,7 @@ class TestDraftSerialization:
         session.team_plan_applied = True
 
         import json
+
         payload = json.loads(srb._serialize_session(session))
         assert payload["version"] == 1
         assert payload["assignments_p1"]["Power Tower"] == ["1001"]
@@ -4870,9 +5949,13 @@ class TestDraftSerialization:
 
     def test_round_trip_preserves_assignments_and_pairings(self):
         members = {
-            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
-                        "power": 400_000_000 - i * 10_000_000,
-                        "not_on_discord": False}
+            f"100{i}": {
+                "key": f"100{i}",
+                "name": f"M{i}",
+                "discord_id": f"100{i}",
+                "power": 400_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
             for i in range(4)
         }
         session1 = _make_session(team="A", members=members, sub_mode="paired")
@@ -4882,6 +5965,7 @@ class TestDraftSerialization:
         session1.below_floor_overrides.add("1003")
 
         import json
+
         payload = json.loads(srb._serialize_session(session1))
 
         session2 = _make_session(team="A", members=members, sub_mode="paired")
@@ -4897,10 +5981,20 @@ class TestDraftSerialization:
 
     def test_reconciliation_drops_keys_not_in_current_members(self):
         current_members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": False,
+            },
         }
         payload = {
             "version": 1,
@@ -4909,7 +6003,8 @@ class TestDraftSerialization:
             "subs": ["1002"],
             "below_floor_overrides_p1": [],
             "selected_preset_name": "Standard",
-            "selected_phase": 1, "selected_zone": "Power Tower",
+            "selected_phase": 1,
+            "selected_zone": "Power Tower",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
         }
@@ -4921,35 +6016,49 @@ class TestDraftSerialization:
 
     def test_reconciliation_drops_pairs_with_missing_keys(self):
         current_members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         payload = {
-            "version": 1, "assignments_p1": {},
+            "version": 1,
+            "assignments_p1": {},
             "paired_subs_p1": {"1001": "1003"},
-            "subs": [], "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
             "selected_preset_name": "Standard",
         }
-        session = _make_session(team="A", members=current_members,
-                                sub_mode="paired")
+        session = _make_session(team="A", members=current_members, sub_mode="paired")
         report = srb._apply_saved_state(session, payload)
         assert session.paired_subs == {}
         assert "1003" in report["dropped_members"]
 
     def test_reconciliation_drops_zones_not_in_current_preset(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         payload = {
             "version": 1,
             "assignments_p1": {"Phantom Zone": ["1001"]},
-            "paired_subs_p1": {}, "subs": [],
+            "paired_subs_p1": {},
+            "subs": [],
             "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
             "selected_preset_name": "Standard",
@@ -4961,13 +6070,22 @@ class TestDraftSerialization:
 
     def test_reconciliation_surfaces_stale_event_date(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         payload = {
-            "version": 1, "assignments_p1": {}, "paired_subs_p1": {},
-            "subs": [], "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "version": 1,
+            "assignments_p1": {},
+            "paired_subs_p1": {},
+            "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-15",
             "selected_preset_name": "Standard",
@@ -4979,13 +6097,22 @@ class TestDraftSerialization:
 
     def test_reconciliation_no_stale_flag_when_dates_match(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         payload = {
-            "version": 1, "assignments_p1": {}, "paired_subs_p1": {},
-            "subs": [], "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "version": 1,
+            "assignments_p1": {},
+            "paired_subs_p1": {},
+            "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
             "selected_preset_name": "Standard",
@@ -5003,15 +6130,26 @@ class TestDraftFollowupPolish:
 
     def test_serialize_emits_member_names_at_save(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 380_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 380_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"] = ["1001"]
         session.subs = ["1002"]
         import json
+
         payload = json.loads(srb._serialize_session(session))
         assert payload["member_names_at_save"]["1001"] == "Alice"
         assert payload["member_names_at_save"]["1002"] == "Bob"
@@ -5024,17 +6162,24 @@ class TestDraftFollowupPolish:
         payload = {
             "version": 1,
             "assignments_p1": {"Power Tower": ["1003"]},
-            "paired_subs_p1": {}, "subs": [],
+            "paired_subs_p1": {},
+            "subs": [],
             "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
             "selected_preset_name": "Standard",
             "member_names_at_save": {"1003": "Carol"},
         }
         current_members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=current_members)
         report = srb._apply_saved_state(session, payload)
@@ -5048,17 +6193,24 @@ class TestDraftFollowupPolish:
         payload = {
             "version": 1,
             "assignments_p1": {"Power Tower": ["1003"]},
-            "paired_subs_p1": {}, "subs": [],
+            "paired_subs_p1": {},
+            "subs": [],
             "below_floor_overrides_p1": [],
-            "selected_phase": 1, "selected_zone": "",
+            "selected_phase": 1,
+            "selected_zone": "",
             "show_below_floor": False,
             "saved_for_event_date": "2026-05-22",
             "selected_preset_name": "Standard",
             # No member_names_at_save.
         }
         current_members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=current_members)
         report = srb._apply_saved_state(session, payload)
@@ -5071,9 +6223,15 @@ class TestDraftFollowupPolish:
         freshly-loaded state with a current timestamp and create a
         "draft" from a mere open. The flag-gated autosave skips it."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"  # force is_structured=True
@@ -5092,9 +6250,15 @@ class TestDraftFollowupPolish:
         """When the autosave write raises, `session.autosave_failed`
         becomes True so the next embed render can warn the officer."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"
@@ -5107,9 +6271,15 @@ class TestDraftFollowupPolish:
         """A subsequent successful autosave clears the latched failure
         flag — officers see the warning until persistence recovers."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"
@@ -5123,8 +6293,13 @@ class TestDraftFollowupPolish:
         leads with a prominent warning so officers know to screenshot
         / be careful."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"  # structured mode
@@ -5134,8 +6309,13 @@ class TestDraftFollowupPolish:
 
     def test_embed_no_warning_when_autosave_healthy(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"
@@ -5145,8 +6325,13 @@ class TestDraftFollowupPolish:
 
     def test_embed_footer_shows_auto_save_hint_in_structured_mode(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"
@@ -5159,16 +6344,23 @@ class TestDraftFollowupPolish:
         """Free-tier (no event_date) doesn't persist drafts, so the
         Auto-saving hint would be misleading. Footer left empty."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         # event_date is None → free-tier
         embed = srb._render_builder_embed(session)
         # No footer text was set (or empty).
-        assert (embed.footer is None
-                or embed.footer.text is None
-                or "Auto-saving" not in embed.footer.text)
+        assert (
+            embed.footer is None
+            or embed.footer.text is None
+            or "Auto-saving" not in embed.footer.text
+        )
 
     def test_embed_truncates_oversized_description(self):
         """When the composed description exceeds Discord's 4096-char
@@ -5176,8 +6368,13 @@ class TestDraftFollowupPolish:
         letting the Discord API reject the edit. Use a huge single
         roster_error string since the embed only renders error[0]."""
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"
@@ -5193,17 +6390,22 @@ class TestDraftFollowupPolish:
         labels itself as 'Cancel' since the draft persists. New label
         signals that closing doesn't lose work."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-22"  # structured mode
         with patch.object(srb, "_autosave_draft"):
             view = srb.RosterBuilderView(session)
         labels = [getattr(c, "label", "") for c in view.children]
-        assert any("Close" in lab and "draft saved" in lab.lower()
-                   for lab in labels)
+        assert any("Close" in lab and "draft saved" in lab.lower() for lab in labels)
         # Old "Cancel" label gone.
         assert not any(lab == "❌ Cancel" for lab in labels)
 
@@ -5211,9 +6413,15 @@ class TestDraftFollowupPolish:
         """Free-tier (no draft persistence) keeps the original
         `✅ Done` label — no draft to communicate about."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         # event_date None → free-tier
@@ -5244,24 +6452,48 @@ class TestAssignConfirmView:
 
     def _full_session(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice",
-                     "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",
-                     "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol",
-                     "discord_id": "1003",
-                     "power": 305_000_000, "not_on_discord": False},
-            "1004": {"key": "1004", "name": "Dan",
-                     "discord_id": "1004",
-                     "power": 301_000_000, "not_on_discord": False},
-            "1005": {"key": "1005", "name": "Erin",
-                     "discord_id": "1005",
-                     "power": 300_500_000, "not_on_discord": False},
-            "1006": {"key": "1006", "name": "Frank",
-                     "discord_id": "1006",
-                     "power": 100_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 350_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 305_000_000,
+                "not_on_discord": False,
+            },
+            "1004": {
+                "key": "1004",
+                "name": "Dan",
+                "discord_id": "1004",
+                "power": 301_000_000,
+                "not_on_discord": False,
+            },
+            "1005": {
+                "key": "1005",
+                "name": "Erin",
+                "discord_id": "1005",
+                "power": 300_500_000,
+                "not_on_discord": False,
+            },
+            "1006": {
+                "key": "1006",
+                "name": "Frank",
+                "discord_id": "1006",
+                "power": 100_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"
@@ -5279,8 +6511,11 @@ class TestAssignConfirmView:
             member_label="Erin",
             zone="Power Tower",
             phase=1,
-            over_max=True, cap=4,
-            below_floor=False, member_power=300_500_000, floor_power=None,
+            over_max=True,
+            cap=4,
+            below_floor=False,
+            member_power=300_500_000,
+            floor_power=None,
         )
         inter = MagicMock()
         inter.user.id = 42
@@ -5303,9 +6538,11 @@ class TestAssignConfirmView:
             member_label="Frank",
             zone="Power Tower",
             phase=1,
-            over_max=False, cap=4,
+            over_max=False,
+            cap=4,
             below_floor=True,
-            member_power=100_000_000, floor_power=300_000_000,
+            member_power=100_000_000,
+            floor_power=300_000_000,
         )
         inter = MagicMock()
         inter.user.id = 42
@@ -5328,9 +6565,11 @@ class TestAssignConfirmView:
             member_label="Frank",
             zone="Power Tower",
             phase=1,
-            over_max=True, cap=4,
+            over_max=True,
+            cap=4,
             below_floor=True,
-            member_power=100_000_000, floor_power=300_000_000,
+            member_power=100_000_000,
+            floor_power=300_000_000,
         )
         inter = MagicMock()
         inter.user.id = 42
@@ -5353,8 +6592,11 @@ class TestAssignConfirmView:
             member_label="Erin",
             zone="Power Tower",
             phase=1,
-            over_max=True, cap=4,
-            below_floor=False, member_power=300_500_000, floor_power=None,
+            over_max=True,
+            cap=4,
+            below_floor=False,
+            member_power=300_500_000,
+            floor_power=None,
         )
         inter = MagicMock()
         inter.user.id = 42
@@ -5373,8 +6615,11 @@ class TestAssignConfirmView:
             member_label="Erin",
             zone="Power Tower",
             phase=1,
-            over_max=True, cap=4,
-            below_floor=False, member_power=300_500_000, floor_power=None,
+            over_max=True,
+            cap=4,
+            below_floor=False,
+            member_power=300_500_000,
+            floor_power=None,
         )
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
@@ -5384,16 +6629,27 @@ class TestAssignConfirmView:
         assert "1005" not in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         args = inter.response.send_message.call_args.args
-        assert "Only the builder's owner" in args[0]
+        assert "Only the user who opened this view" in args[0]
 
     def test_picker_no_longer_renders_toggle_button(self):
         """The 👁️ Show/Hide below-minimum button is retired."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 100_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 100_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"
@@ -5407,24 +6663,31 @@ class TestAssignConfirmView:
         """Below-floor members appear in the picker without needing a
         toggle — they get a 'below minimum' description instead."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 100_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 100_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"  # min A = 300M
         with patch.object(srb, "_autosave_draft"):
             view = srb.RosterBuilderView(session)
         # Find the member Select.
-        selects = [c for c in view.children
-                   if isinstance(c, discord.ui.Select)]
+        selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
         # The first select is the zone picker; the next is members.
-        member_select = next(
-            s for s in selects
-            if any(o.value == "1002" for o in s.options)
-        )
+        member_select = next(s for s in selects if any(o.value == "1002" for o in s.options))
         bob_option = next(o for o in member_select.options if o.value == "1002")
         assert bob_option.description == "below minimum"
 
@@ -5448,12 +6711,27 @@ class TestZoneMemberEditView:
 
     def _seeded_session(self):
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
-                     "power": 305_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+            "1002": {
+                "key": "1002",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 350_000_000,
+                "not_on_discord": False,
+            },
+            "1003": {
+                "key": "1003",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 305_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"
@@ -5468,7 +6746,9 @@ class TestZoneMemberEditView:
         session.assignments["Power Tower"] = []
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         selects = [c for c in v.children if isinstance(c, discord.ui.Select)]
         # No member select, no destination select.
@@ -5478,7 +6758,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         selects = [c for c in v.children if isinstance(c, discord.ui.Select)]
         # Member select only — destination select appears after a pick.
@@ -5490,7 +6772,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         v.selected_member = "1001"
         v._build()
@@ -5508,19 +6792,19 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         apply_btn = next(
-            c for c in v.children
-            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+            c for c in v.children if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
         )
         assert apply_btn.disabled is True
 
         v.selected_member = "1001"
         v._build()
         apply_btn = next(
-            c for c in v.children
-            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+            c for c in v.children if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
         )
         # Still disabled — destination not yet picked.
         assert apply_btn.disabled is True
@@ -5528,8 +6812,7 @@ class TestZoneMemberEditView:
         v.selected_destination = "Nuclear Silo"
         v._build()
         apply_btn = next(
-            c for c in v.children
-            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+            c for c in v.children if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
         )
         assert apply_btn.disabled is False
 
@@ -5538,7 +6821,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         v.selected_member = "1001"
         v.selected_destination = v.REMOVE_VALUE
@@ -5555,7 +6840,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         v.selected_member = "1001"
         v.selected_destination = "Nuclear Silo"
@@ -5575,7 +6862,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         v.selected_member = "1001"
         v.selected_destination = "Nuclear Silo"
@@ -5593,7 +6882,9 @@ class TestZoneMemberEditView:
         session = self._seeded_session()
         parent = self._parent_view_mock(session)
         v = srb._ZoneMemberEditView(
-            parent_view=parent, zone="Power Tower", phase=1,
+            parent_view=parent,
+            zone="Power Tower",
+            phase=1,
         )
         v.selected_member = "1001"
         v.selected_destination = v.REMOVE_VALUE
@@ -5604,15 +6895,21 @@ class TestZoneMemberEditView:
         # No state change; rejection sent.
         assert "1001" in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
-        assert "Only the builder's owner" in (
-            inter.response.send_message.call_args.args[0]
+        assert (
+            "Only the user who opened this view" in (inter.response.send_message.call_args.args[0])
         )
 
     def test_main_picker_renders_edit_button_when_zone_has_members(self):
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"
@@ -5621,9 +6918,11 @@ class TestZoneMemberEditView:
             view = srb.RosterBuilderView(session)
         labels = [getattr(c, "label", "") for c in view.children]
         edit_btn = next(
-            (c for c in view.children
-             if isinstance(c, discord.ui.Button)
-             and (c.label or "").startswith("✏️")),
+            (
+                c
+                for c in view.children
+                if isinstance(c, discord.ui.Button) and (c.label or "").startswith("✏️")
+            ),
             None,
         )
         assert edit_btn is not None
@@ -5631,9 +6930,15 @@ class TestZoneMemberEditView:
 
     def test_main_picker_edit_button_disabled_when_zone_empty(self):
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.selected_zone = "Power Tower"
@@ -5641,9 +6946,11 @@ class TestZoneMemberEditView:
         with patch.object(srb, "_autosave_draft"):
             view = srb.RosterBuilderView(session)
         edit_btn = next(
-            (c for c in view.children
-             if isinstance(c, discord.ui.Button)
-             and (c.label or "").startswith("✏️")),
+            (
+                c
+                for c in view.children
+                if isinstance(c, discord.ui.Button) and (c.label or "").startswith("✏️")
+            ),
             None,
         )
         assert edit_btn is not None
@@ -5653,9 +6960,15 @@ class TestZoneMemberEditView:
         """`Remove current zone assignees` was a destructive name that
         invited misclicks; it's now `🧹 Clear this zone`."""
         from unittest.mock import patch
+
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         with patch.object(srb, "_autosave_draft"):
@@ -5671,62 +6984,111 @@ class TestDmRosterAssignmentCollection:
 
     def test_primary_assignments_grouped_by_member(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
-                  "power": 400_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 400_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"].append("1")
         session.assignments["Nuclear Silo"].append("2")
         collected = dict(srb._collect_dm_assignments(session))
-        assert collected["1"] == [{
-            "role": "primary", "zone": "Power Tower",
-            "phase": 1, "pair_with": None,
-        }]
-        assert collected["2"] == [{
-            "role": "primary", "zone": "Nuclear Silo",
-            "phase": 1, "pair_with": None,
-        }]
+        assert collected["1"] == [
+            {
+                "role": "primary",
+                "zone": "Power Tower",
+                "phase": 1,
+                "pair_with": None,
+            }
+        ]
+        assert collected["2"] == [
+            {
+                "role": "primary",
+                "zone": "Nuclear Silo",
+                "phase": 1,
+                "pair_with": None,
+            }
+        ]
 
     def test_paired_sub_carries_primary_name_and_zone(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
-                  "power": 300_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
         }
-        session = _make_session(team="A", members=members,
-                                sub_mode="paired")
+        session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1")
         session.paired_subs["1"] = "2"
         collected = dict(srb._collect_dm_assignments(session))
         # Primary unchanged.
-        assert collected["1"] == [{
-            "role": "primary", "zone": "Power Tower",
-            "phase": 1, "pair_with": None,
-        }]
+        assert collected["1"] == [
+            {
+                "role": "primary",
+                "zone": "Power Tower",
+                "phase": 1,
+                "pair_with": None,
+            }
+        ]
         # Sub gets a paired_sub row pointing back to Alice's zone.
-        assert collected["2"] == [{
-            "role": "paired_sub", "zone": "Power Tower",
-            "phase": 1, "pair_with": "Alice",
-        }]
+        assert collected["2"] == [
+            {
+                "role": "paired_sub",
+                "zone": "Power Tower",
+                "phase": 1,
+                "pair_with": "Alice",
+            }
+        ]
 
     def test_pool_sub_collected_separately(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Carol", "discord_id": "1003",
-                  "power": 200_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Carol",
+                "discord_id": "1003",
+                "power": 200_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"].append("1")
         session.subs.append("2")
         collected = dict(srb._collect_dm_assignments(session))
-        assert collected["2"] == [{
-            "role": "pool_sub", "zone": None, "phase": None,
-            "pair_with": None,
-        }]
+        assert collected["2"] == [
+            {
+                "role": "pool_sub",
+                "zone": None,
+                "phase": None,
+                "pair_with": None,
+            }
+        ]
 
     def test_paired_sub_not_double_counted_as_pool_sub(self):
         """Paired-mode keeps the sub key in `session.subs` (the pairing
@@ -5734,13 +7096,22 @@ class TestDmRosterAssignmentCollection:
         (#224) must apply here: the sub gets a paired_sub row, NOT also
         a pool_sub row, or they'd get two DMs."""
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
-                  "power": 300_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
         }
-        session = _make_session(team="A", members=members,
-                                sub_mode="paired")
+        session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1")
         session.paired_subs["1"] = "2"
         session.subs.append("2")
@@ -5754,14 +7125,15 @@ class TestDmRosterAssignmentCollection:
         renders both lines so the recipient sees their full
         commitment in one message."""
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")     # Alice in P1
-        s.assignments_p2["Arsenal"].append("1")      # Alice in P2
+        s.assignments["Info Center"].append("1")  # Alice in P1
+        s.assignments_p2["Arsenal"].append("1")  # Alice in P2
         collected = dict(srb._collect_dm_assignments(s))
         # Alice's list spans both phases.
         roles = collected["1"]
         assert len(roles) == 2
         assert {(r["phase"], r["zone"]) for r in roles} == {
-            (1, "Info Center"), (2, "Arsenal"),
+            (1, "Info Center"),
+            (2, "Arsenal"),
         }
 
 
@@ -5779,21 +7151,25 @@ class TestDmRosterBody:
         pass
 
     def _ctx_labels(self):
-        return {"time_label": "4pm EDT (18:00 server time)",
-                "date_label": "Thursday, May 28, 2026"}
+        return {"time_label": "4pm EDT (18:00 server time)", "date_label": "Thursday, May 28, 2026"}
 
     def test_primary_body_uses_starter_template(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-28"
         session.assignments["Power Tower"].append("1")
         body = srb._build_dm_body(
-            session, members["1"],
-            [{"role": "primary", "zone": "Power Tower",
-              "phase": 1, "pair_with": None}],
+            session,
+            members["1"],
+            [{"role": "primary", "zone": "Power Tower", "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
         # New default copy: alliance voice + Starter role label,
@@ -5808,14 +7184,19 @@ class TestDmRosterBody:
 
     def test_flat_preset_drops_stage_prefix(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         body = srb._build_dm_body(
-            session, members["1"],
-            [{"role": "primary", "zone": "Power Tower",
-              "phase": 1, "pair_with": None}],
+            session,
+            members["1"],
+            [{"role": "primary", "zone": "Power Tower", "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
         # Flat preset → no "Stage 1:" prefix in the bullet line.
@@ -5826,24 +7207,28 @@ class TestDmRosterBody:
         s = _make_phase_aware_session()
         s.assignments["Info Center"].append("1")
         body = srb._build_dm_body(
-            s, s.members["1"],
-            [{"role": "primary", "zone": "Info Center",
-              "phase": 1, "pair_with": None}],
+            s,
+            s.members["1"],
+            [{"role": "primary", "zone": "Info Center", "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
         assert "Stage 1: Info Center" in body
 
     def test_paired_sub_body_names_primary(self):
         members = {
-            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
-                  "power": 300_000_000, "not_on_discord": False},
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "1002",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
         }
-        session = _make_session(team="A", members=members,
-                                sub_mode="paired")
+        session = _make_session(team="A", members=members, sub_mode="paired")
         body = srb._build_dm_body(
-            session, members["2"],
-            [{"role": "paired_sub", "zone": "Power Tower",
-              "phase": 1, "pair_with": "Alice"}],
+            session,
+            members["2"],
+            [{"role": "paired_sub", "zone": "Power Tower", "phase": 1, "pair_with": "Alice"}],
             **self._ctx_labels(),
         )
         assert "Hey Bob" in body
@@ -5856,14 +7241,19 @@ class TestDmRosterBody:
 
     def test_pool_sub_only_uses_pool_template(self):
         members = {
-            "9": {"key": "9", "name": "Carol", "discord_id": "1009",
-                  "power": 100_000_000, "not_on_discord": False},
+            "9": {
+                "key": "9",
+                "name": "Carol",
+                "discord_id": "1009",
+                "power": 100_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         body = srb._build_dm_body(
-            session, members["9"],
-            [{"role": "pool_sub", "zone": None,
-              "phase": None, "pair_with": None}],
+            session,
+            members["9"],
+            [{"role": "pool_sub", "zone": None, "phase": None, "pair_with": None}],
             **self._ctx_labels(),
         )
         # Default pool-sub template uses "Sub" framing and skips the
@@ -5879,23 +7269,31 @@ class TestDmRosterBody:
         unknown placeholders — a typo renders literally rather than
         crashing the fan-out."""
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-28"
-        with patch("config.get_roster_dm_templates", return_value={
-            "starter": (
-                "Yo {name}, you're on {event_label}{team_blurb}. "
-                "Zones:\n{assignments}\n— Leadership"
-            ),
-            "paired_sub": "",
-            "pool_sub": "",
-        }):
+        with patch(
+            "config.get_roster_dm_templates",
+            return_value={
+                "starter": (
+                    "Yo {name}, you're on {event_label}{team_blurb}. "
+                    "Zones:\n{assignments}\n— Leadership"
+                ),
+                "paired_sub": "",
+                "pool_sub": "",
+            },
+        ):
             body = srb._build_dm_body(
-                session, members["1"],
-                [{"role": "primary", "zone": "Power Tower",
-                  "phase": 1, "pair_with": None}],
+                session,
+                members["1"],
+                [{"role": "primary", "zone": "Power Tower", "phase": 1, "pair_with": None}],
                 **self._ctx_labels(),
             )
         assert body.startswith("Yo Alice")
@@ -5908,19 +7306,27 @@ class TestDmRosterBody:
         crash the DM build. Renders literally so the alliance sees
         their typo in the next DM and can fix it via the wizard."""
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
-        with patch("config.get_roster_dm_templates", return_value={
-            "starter": "Hi {nme}, see {assignments}.",
-            "paired_sub": "",
-            "pool_sub": "",
-        }):
+        with patch(
+            "config.get_roster_dm_templates",
+            return_value={
+                "starter": "Hi {nme}, see {assignments}.",
+                "paired_sub": "",
+                "pool_sub": "",
+            },
+        ):
             body = srb._build_dm_body(
-                session, members["1"],
-                [{"role": "primary", "zone": "Power Tower",
-                  "phase": 1, "pair_with": None}],
+                session,
+                members["1"],
+                [{"role": "primary", "zone": "Power Tower", "phase": 1, "pair_with": None}],
                 **self._ctx_labels(),
             )
         # Typo placeholder renders literally; the rest substitutes.
@@ -5942,12 +7348,27 @@ class TestDmRosterSendFlow:
     @pytest.mark.asyncio
     async def test_dm_send_groups_successes_and_failures(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
-            "2": {"key": "2", "name": "Bob", "discord_id": "",
-                  "power": 300_000_000, "not_on_discord": False},
-            "3": {"key": "3", "name": "Carol", "discord_id": "9999",
-                  "power": 200_000_000, "not_on_discord": True},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
+            "2": {
+                "key": "2",
+                "name": "Bob",
+                "discord_id": "",
+                "power": 300_000_000,
+                "not_on_discord": False,
+            },
+            "3": {
+                "key": "3",
+                "name": "Carol",
+                "discord_id": "9999",
+                "power": 200_000_000,
+                "not_on_discord": True,
+            },
         }
         session = _make_session(team="A", members=members)
         session.event_date = "2026-05-28"
@@ -5960,8 +7381,9 @@ class TestDmRosterSendFlow:
         bot = MagicMock()
         bot.fetch_user = AsyncMock(return_value=fake_user)
 
-        with patch.object(srb, "_resolve_dm_time_label",
-                          return_value="4pm EDT (18:00 server time)"):
+        with patch.object(
+            srb, "_resolve_dm_time_label", return_value="4pm EDT (18:00 server time)"
+        ):
             sent, failures = await srb._dm_rostered_members(session, bot)
 
         # Alice was DM'd; Bob has no Discord ID; Carol is marked
@@ -5974,23 +7396,27 @@ class TestDmRosterSendFlow:
     @pytest.mark.asyncio
     async def test_closed_dms_reported_as_failure(self):
         members = {
-            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
-                  "power": 500_000_000, "not_on_discord": False},
+            "1": {
+                "key": "1",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 500_000_000,
+                "not_on_discord": False,
+            },
         }
         session = _make_session(team="A", members=members)
         session.assignments["Power Tower"].append("1")
 
         fake_user = MagicMock()
         fake_user.send = AsyncMock(
-            side_effect=discord.Forbidden(MagicMock(status=403),
-                                          "Cannot send messages to this user"),
+            side_effect=discord.Forbidden(
+                MagicMock(status=403), "Cannot send messages to this user"
+            ),
         )
         bot = MagicMock()
         bot.fetch_user = AsyncMock(return_value=fake_user)
 
-        with patch.object(srb, "_resolve_dm_time_label",
-                          return_value="4pm EDT"):
+        with patch.object(srb, "_resolve_dm_time_label", return_value="4pm EDT"):
             sent, failures = await srb._dm_rostered_members(session, bot)
         assert sent == 0
         assert failures == [("Alice", "DMs closed by member")]
-

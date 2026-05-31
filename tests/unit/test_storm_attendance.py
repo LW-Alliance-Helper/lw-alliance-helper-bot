@@ -45,6 +45,7 @@ class _FakeWorksheet:
         the column-A anchor is parsed — sufficient for these tests.
         """
         import re
+
         m = re.match(r"^A(\d+)", str(range_))
         start_row = int(m.group(1)) - 1 if m else 0
         new_payload = [list(r) for r in values]
@@ -89,25 +90,38 @@ def fake_env(seeded_db):
     # production so a column-index regression is caught by these tests.
     rosters_ws = fake.add_worksheet("DS Rosters")
     rosters_ws._rows = [
-        ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Override Below Minimum",
-         "Posted At (UTC)"],
-        ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
-        ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
+        [
+            "Event Date",
+            "Team",
+            "Zone",
+            "Member",
+            "Role",
+            "Power at Assignment",
+            "Discord ID",
+            "Override Below Minimum",
+            "Posted At (UTC)",
+        ],
+        ["2026-05-18", "A", "Power Tower", "Alice", "primary", "412000000", "1001", "", ""],
+        ["2026-05-18", "A", "Power Tower", "Bob", "primary", "350000000", "1002", "", ""],
         ["2026-05-18", "A", "Nuclear Silo", "Carol", "primary", "280000000", "1003", "yes", ""],
-        ["2026-05-18", "A", "",             "Dan",   "sub",     "220000000", "1004", "",    ""],
+        ["2026-05-18", "A", "", "Dan", "sub", "220000000", "1004", "", ""],
         # Different event date — must NOT be included by the loader.
-        ["2026-05-25", "A", "Power Tower", "Erin", "primary", "200000000", "1005", "",    ""],
+        ["2026-05-25", "A", "Power Tower", "Erin", "primary", "200000000", "1005", "", ""],
     ]
 
     for et in ("DS", "CS"):
         config.save_storm_config(
-            TEST_GUILD_ID, et,
-            tab_name=f"{et} Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            et,
+            tab_name=f"{et} Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, et, structured_flow_enabled=True,
+            TEST_GUILD_ID,
+            et,
+            structured_flow_enabled=True,
         )
 
     with patch.object(config, "get_spreadsheet", return_value=fake):
@@ -165,10 +179,20 @@ class TestLoadAttendance:
 
     def test_empty_when_no_member_log_tab(self, fake_env):
         fake, gid = fake_env
-        slots = [{"team": "A", "zone": "Power Tower", "member": "Alice",
-                  "discord_id": "1", "role": "primary"}]
+        slots = [
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "discord_id": "1",
+                "role": "primary",
+            }
+        ]
         existing, errors = sa.load_attendance(
-            gid, "DS", "2026-05-18", slots=slots,
+            gid,
+            "DS",
+            "2026-05-18",
+            slots=slots,
         )
         assert existing == {}
         assert errors == []
@@ -182,19 +206,32 @@ class TestLoadAttendance:
         ml._rows = [
             ["Event Date", "Member", "showed_up"],
             ["2026-05-18", "Alice", "yes"],
-            ["2026-05-18", "Bob",   "no"],  # legacy "no" still readable
+            ["2026-05-18", "Bob", "no"],  # legacy "no" still readable
         ]
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "discord_id": "1", "role": "primary"},
-            {"team": "A", "zone": "Power Tower", "member": "Bob",
-             "discord_id": "2", "role": "primary"},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "discord_id": "1",
+                "role": "primary",
+            },
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Bob",
+                "discord_id": "2",
+                "role": "primary",
+            },
         ]
         existing, _errs = sa.load_attendance(
-            gid, "DS", "2026-05-18", slots=slots,
+            gid,
+            "DS",
+            "2026-05-18",
+            slots=slots,
         )
         assert existing[("A", "Power Tower", "Alice")]["status"] == "attended"
-        assert existing[("A", "Power Tower", "Bob")]["status"]   == "no_show"
+        assert existing[("A", "Power Tower", "Bob")]["status"] == "no_show"
 
     def test_isolates_event_dates(self, fake_env):
         fake, gid = fake_env
@@ -205,11 +242,19 @@ class TestLoadAttendance:
             ["2026-05-25", "Frank", "yes"],
         ]
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "discord_id": "1", "role": "primary"},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "discord_id": "1",
+                "role": "primary",
+            },
         ]
         existing, _errs = sa.load_attendance(
-            gid, "DS", "2026-05-18", slots=slots,
+            gid,
+            "DS",
+            "2026-05-18",
+            slots=slots,
         )
         keys = set(existing.keys())
         assert ("A", "Power Tower", "Alice") in keys
@@ -227,11 +272,19 @@ class TestLoadAttendance:
             ["2026-05-18", "Ghost", "yes"],
         ]
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Alice",
-             "discord_id": "1", "role": "primary"},
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "discord_id": "1",
+                "role": "primary",
+            },
         ]
         existing, _errs = sa.load_attendance(
-            gid, "DS", "2026-05-18", slots=slots,
+            gid,
+            "DS",
+            "2026-05-18",
+            slots=slots,
         )
         assert existing == {}
 
@@ -253,14 +306,17 @@ class TestSaveAttendanceWritesMemberLog:
         avoids inflating no-show counts in Trends queries)."""
         fake, gid = fake_env
         statuses = {
-            ("A", "Power Tower",  "Alice"): "attended",
-            ("A", "Power Tower",  "Bob"):   "no_show",       # → ""
+            ("A", "Power Tower", "Alice"): "attended",
+            ("A", "Power Tower", "Bob"): "no_show",  # → ""
             ("A", "Nuclear Silo", "Carol"): "sub_activated",  # legacy → ""
-            ("A", "",             "Dan"):   "",               # unrecorded → ""
+            ("A", "", "Dan"): "",  # unrecorded → ""
         }
         errors = sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
+            gid,
+            "DS",
+            "2026-05-18",
+            statuses=statuses,
+            officer_id=999,
         )
         assert errors == []
         ml = fake.worksheet("DS Member Log")
@@ -269,9 +325,9 @@ class TestSaveAttendanceWritesMemberLog:
         assert rows[0] == ["Event Date", "Member", "showed_up"]
         data = {r[1]: r[2] for r in rows[1:]}
         assert data["Alice"] == "yes"
-        assert data["Bob"]   == ""
+        assert data["Bob"] == ""
         assert data["Carol"] == ""
-        assert data["Dan"]   == ""
+        assert data["Dan"] == ""
 
     def test_legacy_attendance_tab_untouched(self, fake_env):
         """The legacy `DS Attendance` tab is not created or written
@@ -279,7 +335,9 @@ class TestSaveAttendanceWritesMemberLog:
         on the Sheet keep that history; the bot's writes go elsewhere."""
         fake, gid = fake_env
         sa.save_attendance(
-            gid, "DS", "2026-05-18",
+            gid,
+            "DS",
+            "2026-05-18",
             statuses={("A", "Power Tower", "Alice"): "attended"},
             officer_id=999,
         )
@@ -294,11 +352,13 @@ class TestSaveAttendanceWritesMemberLog:
         ml._rows = [
             ["Event Date", "Member", "showed_up"],
             ["2026-05-18", "Alice", "no"],
-            ["2026-05-18", "Bob",   "no"],
+            ["2026-05-18", "Bob", "no"],
             ["2026-05-25", "Alice", "yes"],
         ]
         sa.save_attendance(
-            gid, "DS", "2026-05-18",
+            gid,
+            "DS",
+            "2026-05-18",
             statuses={("A", "Power Tower", "Alice"): "attended"},
             officer_id=999,
         )
@@ -318,12 +378,15 @@ class TestSaveAttendanceWritesMemberLog:
         showed_up=yes. Aggregation rule: ANY attended → yes."""
         fake, gid = fake_env
         statuses = {
-            ("A", "Power Tower",  "Alice"): "attended",
-            ("A", "Nuclear Silo", "Alice"): "",          # unrecorded
+            ("A", "Power Tower", "Alice"): "attended",
+            ("A", "Nuclear Silo", "Alice"): "",  # unrecorded
         }
         sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
+            gid,
+            "DS",
+            "2026-05-18",
+            statuses=statuses,
+            officer_id=999,
         )
         ml = fake.worksheet("DS Member Log")
         rows = ml.get_all_values()
@@ -339,12 +402,15 @@ class TestSaveAttendanceWritesMemberLog:
         explicitly marked attended."""
         fake, gid = fake_env
         statuses = {
-            ("A", "Power Tower",  "Bob"): "no_show",
+            ("A", "Power Tower", "Bob"): "no_show",
             ("A", "Nuclear Silo", "Bob"): "",
         }
         sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
+            gid,
+            "DS",
+            "2026-05-18",
+            statuses=statuses,
+            officer_id=999,
         )
         ml = fake.worksheet("DS Member Log")
         rows = ml.get_all_values()
@@ -356,7 +422,11 @@ class TestSaveAttendanceWritesMemberLog:
         """No slots at all → nothing to write, no errors."""
         fake, gid = fake_env
         errors = sa.save_attendance(
-            gid, "DS", "2026-05-18", statuses={}, officer_id=999,
+            gid,
+            "DS",
+            "2026-05-18",
+            statuses={},
+            officer_id=999,
         )
         assert errors == []
         # No tab created when there's nothing to write.
@@ -367,37 +437,47 @@ class TestCollapseHelper:
     """Direct test of the per-slot → per-member status aggregation."""
 
     def test_attended_wins_over_no_show(self):
-        flags = sa._collapse_slot_statuses_to_member_flag({
-            ("A", "Z1", "Alice"): "attended",
-            ("A", "Z2", "Alice"): "no_show",
-        })
+        flags = sa._collapse_slot_statuses_to_member_flag(
+            {
+                ("A", "Z1", "Alice"): "attended",
+                ("A", "Z2", "Alice"): "no_show",
+            }
+        )
         assert flags["Alice"] == "yes"
 
     def test_no_show_only_collapses_to_blank(self):
         """`no_show` is no longer written as a "no" cell — see the
         collapse helper's docstring for why (member marked no_show
         may actually have sat out)."""
-        flags = sa._collapse_slot_statuses_to_member_flag({
-            ("A", "Z1", "Bob"): "no_show",
-        })
+        flags = sa._collapse_slot_statuses_to_member_flag(
+            {
+                ("A", "Z1", "Bob"): "no_show",
+            }
+        )
         assert flags["Bob"] == ""
 
     def test_unrecorded_only(self):
-        flags = sa._collapse_slot_statuses_to_member_flag({
-            ("A", "Z1", "Carol"): "",
-        })
+        flags = sa._collapse_slot_statuses_to_member_flag(
+            {
+                ("A", "Z1", "Carol"): "",
+            }
+        )
         assert flags["Carol"] == ""
 
     def test_legacy_sub_activated_treated_as_unrecorded(self):
-        flags = sa._collapse_slot_statuses_to_member_flag({
-            ("A", "Z1", "Dan"): "sub_activated",
-        })
+        flags = sa._collapse_slot_statuses_to_member_flag(
+            {
+                ("A", "Z1", "Dan"): "sub_activated",
+            }
+        )
         assert flags["Dan"] == ""
 
     def test_blank_member_skipped(self):
-        flags = sa._collapse_slot_statuses_to_member_flag({
-            ("A", "Z1", ""): "attended",
-        })
+        flags = sa._collapse_slot_statuses_to_member_flag(
+            {
+                ("A", "Z1", ""): "attended",
+            }
+        )
         assert flags == {}
 
 
@@ -406,10 +486,22 @@ class TestCollapseHelper:
 
 def _slots_fixture():
     return [
-        {"team": "A", "zone": "Power Tower",  "member": "Alice", "discord_id": "1", "role": "primary"},
-        {"team": "A", "zone": "Power Tower",  "member": "Bob",   "discord_id": "2", "role": "primary"},
-        {"team": "A", "zone": "Nuclear Silo", "member": "Carol", "discord_id": "3", "role": "primary"},
-        {"team": "A", "zone": "",             "member": "Dan",   "discord_id": "4", "role": "sub"},
+        {
+            "team": "A",
+            "zone": "Power Tower",
+            "member": "Alice",
+            "discord_id": "1",
+            "role": "primary",
+        },
+        {"team": "A", "zone": "Power Tower", "member": "Bob", "discord_id": "2", "role": "primary"},
+        {
+            "team": "A",
+            "zone": "Nuclear Silo",
+            "member": "Carol",
+            "discord_id": "3",
+            "role": "primary",
+        },
+        {"team": "A", "zone": "", "member": "Dan", "discord_id": "4", "role": "sub"},
     ]
 
 
@@ -417,11 +509,19 @@ class TestSession:
     def test_init_prefills_from_existing(self):
         slots = _slots_fixture()
         existing = {
-            ("A", "Power Tower", "Alice"): {"status": "attended", "recorded_by": "", "recorded_at": ""},
+            ("A", "Power Tower", "Alice"): {
+                "status": "attended",
+                "recorded_by": "",
+                "recorded_at": "",
+            },
         }
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing=existing,
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing=existing,
         )
         assert sess.statuses[("A", "Power Tower", "Alice")] == "attended"
         # Others default to unrecorded.
@@ -430,25 +530,35 @@ class TestSession:
     def test_counts(self):
         slots = _slots_fixture()
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         sess.statuses[("A", "Power Tower", "Alice")] = "attended"
-        sess.statuses[("A", "Power Tower", "Bob")]   = "no_show"
+        sess.statuses[("A", "Power Tower", "Bob")] = "no_show"
         sess.statuses[("A", "Nuclear Silo", "Carol")] = "sub_activated"
         # Dan stays unrecorded.
         counts = sess.counts()
-        assert counts["attended"]      == 1
-        assert counts["no_show"]       == 1
+        assert counts["attended"] == 1
+        assert counts["no_show"] == 1
         assert counts["sub_activated"] == 1
-        assert counts[""]              == 1
+        assert counts[""] == 1
 
     def test_pagination(self):
-        slots = [{"team": "A", "zone": "Z", "member": f"M{i}", "discord_id": str(i), "role": "primary"}
-                 for i in range(60)]
+        slots = [
+            {"team": "A", "zone": "Z", "member": f"M{i}", "discord_id": str(i), "role": "primary"}
+            for i in range(60)
+        ]
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         assert sess.total_pages() == 3
         assert len(sess.page_slots()) == 25
@@ -462,8 +572,12 @@ class TestSession:
 class TestRenderEmbed:
     def test_empty_slots_message(self):
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=[], existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=[],
+            existing={},
         )
         embed = sa._render_embed(sess)
         assert "No roster slots" in (embed.description or "")
@@ -471,8 +585,12 @@ class TestRenderEmbed:
     def test_renders_each_slot_with_status(self):
         slots = _slots_fixture()
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         sess.statuses[("A", "Power Tower", "Alice")] = "attended"
         embed = sa._render_embed(sess)
@@ -482,8 +600,12 @@ class TestRenderEmbed:
     def test_footer_summary(self):
         slots = _slots_fixture()
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         sess.statuses[("A", "Power Tower", "Alice")] = "attended"
         embed = sa._render_embed(sess)
@@ -498,8 +620,12 @@ class TestRenderEmbed:
         math stays correct, but the bare 🔄 column is gone."""
         slots = _slots_fixture()
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         sess.statuses[("A", "Power Tower", "Alice")] = "attended"
         sess.statuses[("A", "Power Tower", "Bob")] = "sub_activated"
@@ -522,8 +648,12 @@ class TestAttendanceViewInteractions:
     def _session(self):
         slots = _slots_fixture()
         return sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
 
     def test_status_picker_view_removed(self):
@@ -534,8 +664,12 @@ class TestAttendanceViewInteractions:
 
     def test_empty_state_hides_action_buttons(self):
         sess = sa._AttendanceSession(
-            guild_id=1, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=[], existing={},
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=[],
+            existing={},
         )
         view = sa._AttendanceView(sess)
         # Empty roster → no buttons or select.
@@ -596,8 +730,12 @@ class TestOverrideBelowFloorSurface:
         fake, gid = fake_env
         slots, _ = sa.load_rostered_slots(gid, "DS", "2026-05-18")
         sess = sa._AttendanceSession(
-            guild_id=gid, user_id=42, event_type="DS",
-            event_date="2026-05-18", slots=slots, existing={},
+            guild_id=gid,
+            user_id=42,
+            event_type="DS",
+            event_date="2026-05-18",
+            slots=slots,
+            existing={},
         )
         embed = sa._render_embed(sess)
         body = embed.description or ""
@@ -613,9 +751,9 @@ class TestOverrideBelowFloorSurface:
         # Officers may hand-edit the Sheet — accept the usual yes-set.
         fake, gid = fake_env
         rosters = fake.worksheet("DS Rosters")
-        rosters._rows[1][7] = "1"      # Alice
-        rosters._rows[2][7] = "TRUE"   # Bob
-        rosters._rows[4][7] = "x"      # Dan
+        rosters._rows[1][7] = "1"  # Alice
+        rosters._rows[2][7] = "TRUE"  # Bob
+        rosters._rows[4][7] = "x"  # Dan
         slots, _ = sa.load_rostered_slots(gid, "DS", "2026-05-18")
         by_name = {s["member"]: s for s in slots}
         assert by_name["Alice"]["override_below_floor"] is True
@@ -630,7 +768,9 @@ class TestSaveAttendanceMemberLogAtomicity:
     error rather than swallowing silently."""
 
     def test_member_log_write_failure_surfaces_soft_error(
-        self, fake_env, monkeypatch,
+        self,
+        fake_env,
+        monkeypatch,
     ):
         fake, gid = fake_env
 
@@ -639,7 +779,9 @@ class TestSaveAttendanceMemberLogAtomicity:
 
         with patch("storm_log.upsert_member_log_rows", _raise_upsert):
             errors = sa.save_attendance(
-                gid, "DS", "2026-05-18",
+                gid,
+                "DS",
+                "2026-05-18",
                 statuses={("A", "Power Tower", "Alice"): "attended"},
                 officer_id=999,
             )

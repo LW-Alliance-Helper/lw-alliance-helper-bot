@@ -14,6 +14,7 @@ Content authoring: each major/minor release fills in the
 `RELEASE_ANNOUNCEMENTS[version]` entry as part of release-PR prep,
 alongside the CHANGELOG entry. The dict starts empty for 1.3.4 itself.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ EMBED_COLOR = 0xF1C40F
 @dataclass
 class ReleaseAnnouncement:
     """The dict-entry shape for a single release's announcement copy."""
+
     description: str
     bullets: list[str]
     support_post_url: str
@@ -194,7 +196,9 @@ async def maybe_post_release_announcement(
         set_last_seen_version(guild.id, current_version)
         log.info(
             "[RELEASE-ANNOUNCE] Posted %s announcement to guild %s (%s)",
-            current_version, guild.id, guild.name,
+            current_version,
+            guild.id,
+            guild.name,
         )
 
     except discord.Forbidden:
@@ -210,6 +214,7 @@ async def maybe_post_release_announcement(
     except Exception as e:
         log.warning(
             "[RELEASE-ANNOUNCE] Failed for guild %s: %s",
-            guild.id, e,
+            guild.id,
+            e,
         )
         sentry_sdk.capture_exception(e)

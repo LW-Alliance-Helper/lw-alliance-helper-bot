@@ -69,38 +69,61 @@ def _coerce_iso(event_date: str) -> Optional[_dt.date]:
 # ── Permissive parser ──────────────────────────────────────────────────────
 
 _WEEKDAY_MAP = {
-    "monday": 0, "mon": 0,
-    "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2, "weds": 2,
-    "thursday": 3, "thu": 3, "thurs": 3, "thur": 3,
-    "friday": 4, "fri": 4,
-    "saturday": 5, "sat": 5,
-    "sunday": 6, "sun": 6,
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "tues": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "weds": 2,
+    "thursday": 3,
+    "thu": 3,
+    "thurs": 3,
+    "thur": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
 }
 
 # Fully-qualified formats (year present). Order matters — try ISO first
 # because it's the canonical storage form and the most-common officer input.
 _FORMATS_WITH_YEAR = (
-    "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",
-    "%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y",
-    "%B %d %Y", "%b %d %Y",
-    "%d %B %Y", "%d %b %Y",
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%m.%d.%Y",
+    "%B %d %Y",
+    "%b %d %Y",
+    "%d %B %Y",
+    "%d %b %Y",
 )
 
 # Year-less formats. Year is inferred as "next occurrence on or after today"
 # so a member typing "May 18" near the end of May 18 still gets May 18 of
 # THIS year, but typing "Jan 5" in November rolls to next year.
 _FORMATS_NO_YEAR = (
-    "%m/%d", "%m-%d", "%m.%d",
-    "%B %d", "%b %d",
-    "%d %B", "%d %b",
+    "%m/%d",
+    "%m-%d",
+    "%m.%d",
+    "%B %d",
+    "%b %d",
+    "%d %B",
+    "%d %b",
 )
 
 _ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
 
 
 def parse_event_date(
-    raw: str, *, today: Optional[_dt.date] = None,
+    raw: str,
+    *,
+    today: Optional[_dt.date] = None,
 ) -> Optional[_dt.date]:
     """Permissive parse of an officer-typed event date.
 
@@ -139,7 +162,8 @@ def parse_event_date(
         return _next_weekday(today, _WEEKDAY_MAP[parts[0]], same_day_rolls=True)
     if len(parts) == 2 and parts[0] in ("next", "this") and parts[1] in _WEEKDAY_MAP:
         return _next_weekday(
-            today, _WEEKDAY_MAP[parts[1]],
+            today,
+            _WEEKDAY_MAP[parts[1]],
             same_day_rolls=(parts[0] == "next"),
         )
 
@@ -180,7 +204,9 @@ def parse_event_date(
 
 
 def parse_event_date_iso(
-    raw: str, *, today: Optional[_dt.date] = None,
+    raw: str,
+    *,
+    today: Optional[_dt.date] = None,
 ) -> Optional[str]:
     """Convenience: parse and return the ISO string, or None.
 
@@ -191,7 +217,10 @@ def parse_event_date_iso(
 
 
 def _next_weekday(
-    today: _dt.date, target_dow: int, *, same_day_rolls: bool,
+    today: _dt.date,
+    target_dow: int,
+    *,
+    same_day_rolls: bool,
 ) -> _dt.date:
     """Next occurrence of `target_dow` (0=Mon..6=Sun). When today IS the
     target weekday, `same_day_rolls=True` advances a full week (the
@@ -214,7 +243,9 @@ _FIXED_EVENT_DOW = {"DS": 4, "CS": 3}
 
 
 def next_event_date(
-    guild_id: int, event_type: str, *,
+    guild_id: int,
+    event_type: str,
+    *,
     today: Optional[_dt.date] = None,
 ) -> str:
     """ISO event date the officer most likely meant when they omitted
@@ -344,7 +375,9 @@ def detect_last_updated_dmy_first(cells: list[str]) -> bool:
 
 
 def parse_last_updated(
-    raw: str, *, dmy_first: bool = False,
+    raw: str,
+    *,
+    dmy_first: bool = False,
 ) -> Optional[_dt.date]:
     """Parse a single Last-Updated cell into a date, or return None.
 
@@ -403,7 +436,9 @@ def parse_last_updated(
 
 
 def most_recent_event_date(
-    guild_id: int, event_type: str, *,
+    guild_id: int,
+    event_type: str,
+    *,
     today: Optional[_dt.date] = None,
 ) -> Optional[str]:
     """ISO event date for the most-recent past event (today inclusive),
@@ -417,6 +452,7 @@ def most_recent_event_date(
     today = today or _dt.date.today()
     try:
         import config
+
         with config._get_conn() as conn:
             row = conn.execute(
                 "SELECT event_date FROM storm_registration_posts "
@@ -426,9 +462,10 @@ def most_recent_event_date(
             ).fetchone()
     except Exception as e:
         logger.debug(
-            "[STORM DATE] most_recent_event_date query failed for "
-            "guild=%s event=%s: %s",
-            guild_id, event_type, e,
+            "[STORM DATE] most_recent_event_date query failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
         )
         return None
     if not row:

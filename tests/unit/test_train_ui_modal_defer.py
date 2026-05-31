@@ -32,20 +32,20 @@ GUILD_ID = 12345
 
 def _make_interaction():
     interaction = MagicMock()
-    interaction.user             = MagicMock()
-    interaction.user.id          = 9001
-    interaction.response         = MagicMock()
-    interaction.response.defer   = AsyncMock()
+    interaction.user = MagicMock()
+    interaction.user.id = 9001
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
     interaction.response.send_message = AsyncMock()
-    interaction.followup         = MagicMock()
-    interaction.followup.send    = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
 # ── AddEntryModal ─────────────────────────────────────────────────────────────
 
-class TestAddEntryModalDefer:
 
+class TestAddEntryModalDefer:
     @pytest.mark.asyncio
     async def test_defers_before_sheet_io_and_uses_followup(self):
         from train_ui import AddEntryModal
@@ -65,8 +65,10 @@ class TestAddEntryModalDefer:
         def fake_save(*_a, **_kw):
             call_order.append("save")
 
-        with patch("train_ui.load_schedule", side_effect=fake_load), \
-             patch("train_ui.save_schedule", side_effect=fake_save):
+        with (
+            patch("train_ui.load_schedule", side_effect=fake_load),
+            patch("train_ui.save_schedule", side_effect=fake_save),
+        ):
             await modal.on_submit(interaction)
 
         # Defer must come before either sheet call — that's the whole point.
@@ -86,8 +88,10 @@ class TestAddEntryModalDefer:
         modal.date_input._value = "not-a-date-xyz"
         modal.name_input._value = "Frank"
 
-        with patch("train_ui.load_schedule") as mock_load, \
-             patch("train_ui.save_schedule") as mock_save:
+        with (
+            patch("train_ui.load_schedule") as mock_load,
+            patch("train_ui.save_schedule") as mock_save,
+        ):
             await modal.on_submit(interaction)
 
         interaction.response.send_message.assert_awaited_once()
@@ -99,17 +103,26 @@ class TestAddEntryModalDefer:
 
 # ── UpdateEntryModal ──────────────────────────────────────────────────────────
 
-class TestUpdateEntryModalDefer:
 
+class TestUpdateEntryModalDefer:
     @pytest.mark.asyncio
     async def test_defers_before_sheet_io_and_uses_followup(self):
         from train_ui import UpdateEntryModal
 
-        original_entry = {"name": "OldName", "theme": "", "tone": "", "notes": "", "prompt_retrieved": False}
+        original_entry = {
+            "name": "OldName",
+            "theme": "",
+            "tone": "",
+            "notes": "",
+            "prompt_retrieved": False,
+        }
         interaction = _make_interaction()
         modal = UpdateEntryModal(
-            MagicMock(), GUILD_ID, blurbs_enabled=False,
-            original_date_iso="2026-04-05", original_entry=original_entry,
+            MagicMock(),
+            GUILD_ID,
+            blurbs_enabled=False,
+            original_date_iso="2026-04-05",
+            original_entry=original_entry,
         )
         modal.date_input._value = "4/5"
         modal.name_input._value = "NewName"
@@ -124,8 +137,10 @@ class TestUpdateEntryModalDefer:
         def fake_save(*_a, **_kw):
             call_order.append("save")
 
-        with patch("train_ui.load_schedule", side_effect=fake_load), \
-             patch("train_ui.save_schedule", side_effect=fake_save):
+        with (
+            patch("train_ui.load_schedule", side_effect=fake_load),
+            patch("train_ui.save_schedule", side_effect=fake_save),
+        ):
             await modal.on_submit(interaction)
 
         assert call_order == ["defer", "load", "save"]
@@ -137,17 +152,28 @@ class TestUpdateEntryModalDefer:
     async def test_parse_failure_path_still_uses_send_message(self):
         from train_ui import UpdateEntryModal
 
-        original_entry = {"name": "OldName", "theme": "", "tone": "", "notes": "", "prompt_retrieved": False}
+        original_entry = {
+            "name": "OldName",
+            "theme": "",
+            "tone": "",
+            "notes": "",
+            "prompt_retrieved": False,
+        }
         interaction = _make_interaction()
         modal = UpdateEntryModal(
-            MagicMock(), GUILD_ID, blurbs_enabled=False,
-            original_date_iso="2026-04-05", original_entry=original_entry,
+            MagicMock(),
+            GUILD_ID,
+            blurbs_enabled=False,
+            original_date_iso="2026-04-05",
+            original_entry=original_entry,
         )
         modal.date_input._value = "not-a-date-xyz"
         modal.name_input._value = "NewName"
 
-        with patch("train_ui.load_schedule") as mock_load, \
-             patch("train_ui.save_schedule") as mock_save:
+        with (
+            patch("train_ui.load_schedule") as mock_load,
+            patch("train_ui.save_schedule") as mock_save,
+        ):
             await modal.on_submit(interaction)
 
         interaction.response.send_message.assert_awaited_once()

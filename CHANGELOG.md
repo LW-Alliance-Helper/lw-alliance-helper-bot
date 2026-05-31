@@ -9,6 +9,19 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.6] — 2026-05-31
+
+### Added
+- `/events` is now a hub command with a preset library, matching the `/desertstorm` and `/canyonstorm` layout ([#249](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/249)).
+
+### Changed
+- More consistent wording across setup wizards, errors, timeouts, and confirmations ([#267](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/267), [#208](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/208)).
+
+### Fixed
+- Storm auto-fill **Strength to priority** balances squad power across buildings that share a priority instead of front-loading the first one ([#273](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/273)).
+- Storm roster builder lets you return a sub to the assignable pool, so you can swap a starter and a sub after building teams ([#274](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/274)).
+- Storm roster builder no longer offers a player on both teams' pools once they're placed on one ([#275](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/275)).
+
 ## [1.4.5] — 2026-05-29
 
 ### Fixed

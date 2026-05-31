@@ -1136,6 +1136,15 @@ def _fill_balanced(
             break
 
 
+def _zone_priority_value(session: RosterBuilderSession, z, phase: int) -> int:
+    """The effective priority of a zone for a phase, matching the sort key
+    used to order `zones_sorted`. priority=0 ("no priority set") sorts last
+    via 9999. Phase-aware presets read per-phase priority; flat presets use
+    the single `priority` field."""
+    prio = z.priority_for_phase(phase) if session.is_phase_aware else z.priority
+    return prio if prio > 0 else 9999
+
+
 def _fill_priority_greedy(
     session: RosterBuilderSession,
     remaining: list[str],
@@ -1144,20 +1153,48 @@ def _fill_priority_greedy(
     phase_assignments: dict,
     summary: dict,
 ) -> None:
-    """Priority-greedy fill: walk zones in priority asc, fill each
-    zone to capacity from the front of the power-desc starter list
-    before moving on. Concentrates the strongest members in
-    top-priority zones; low-priority zones get the weakest starters
-    (or stay empty if the team runs out). 0-cap zones are skipped by
-    the capacity guard."""
-    for z in zones_sorted:
+    """Priority-greedy fill, balanced within each priority tier (#273).
+
+    Walks zones in priority asc, but zones that share a priority form a
+    group and are balanced by total squad power instead of being filled
+    one-at-a-time. Within a group, each next-strongest starter goes to the
+    group zone with the lowest running power total that still has capacity
+    (longest-processing-time / greedy load balancing). Across groups the
+    pool is still consumed strongest-first, so higher-priority zones get
+    the strongest members overall — only the lopsided split between
+    equal-priority zones (e.g. Oil Refinery I taking the top 5 and II the
+    next 5) is fixed. 0-cap zones are skipped by the capacity guard.
+
+    `remaining` is assumed power-desc (the caller sorts it); members with
+    unknown power count as 0 for balancing purposes."""
+    from itertools import groupby
+
+    def _power(key: str) -> int:
+        return session.members.get(key, {}).get("power") or 0
+
+    # `zones_sorted` is already priority-asc, so consecutive equal-priority
+    # zones are adjacent and groupby yields one group per tier in order.
+    for _prio, grp in groupby(zones_sorted, key=lambda z: _zone_priority_value(session, z, phase)):
+        group = list(grp)
         if not remaining:
             break
+        # Seed each zone's running total from anything already placed
+        # there (e.g. per-member pins landed before the fill).
+        running = {z.zone: sum(_power(k) for k in phase_assignments.get(z.zone, [])) for z in group}
         while remaining:
-            if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
+            open_zones = [
+                z
+                for z in group
+                if session.zone_member_count(z.zone) < session.zone_capacity(z.zone)
+            ]
+            if not open_zones:
                 break
+            # Lowest running power first; ties keep group (priority-sort)
+            # order so the result is deterministic across re-runs.
+            target = min(open_zones, key=lambda z: running[z.zone])
             starter_key = remaining.pop(0)
-            _place_starter_in_zone(session, starter_key, z.zone, phase, summary)
+            _place_starter_in_zone(session, starter_key, target.zone, phase, summary)
+            running[target.zone] += _power(starter_key)
 
 
 def _auto_fill_session(
@@ -1189,8 +1226,9 @@ def _auto_fill_session(
       3. Per-phase zone fill (#226). Same starter pool across every
          phase the preset declares. The `strategy` parameter picks:
            "balanced" — round-robin (default; current behavior).
-           "priority_greedy" — fill top-priority zones to capacity
-             with the strongest members before moving on.
+           "priority_greedy" — feed the strongest members to the
+             highest-priority zones first, balancing power evenly
+             between zones that share a priority (#273).
          Both strategies share `_place_starter_in_zone` so floor
          handling and summary bookkeeping stay aligned, and both
          skip 0-cap zones via the capacity guard.
@@ -1396,20 +1434,15 @@ def _auto_fill_session(
             sub_pool.append(key)
 
     # ── 3. Per-phase fill via the selected strategy (#226) ──
-    # priority=0 means "no priority set" so it sorts to the end via 9999.
-    # Phase-aware presets read per-phase priority; flat presets use the
-    # single `priority` field.
-    def _phase_priority_key(p):
-        def key(z):
-            prio = z.priority_for_phase(p) if session.is_phase_aware else z.priority
-            return prio if prio > 0 else 9999
-
-        return key
-
+    # Zones order by priority asc via `_zone_priority_value` (priority=0
+    # sorts last; phase-aware presets read per-phase priority).
     for phase in session.iter_phases():
         session.selected_phase = phase
         phase_assignments = session.assignments_for_phase(phase)
-        zones_sorted = sorted(session.preset.zones, key=_phase_priority_key(phase))
+        zones_sorted = sorted(
+            session.preset.zones,
+            key=lambda z: _zone_priority_value(session, z, phase),
+        )
 
         # Members already placed in this phase (from per-member rules in
         # phase 1 only): they occupy a starter seat but were already put
@@ -2366,46 +2399,31 @@ class RosterBuilderView(discord.ui.View):
         unassign_btn.callback = _unassign
         self.add_item(unassign_btn)
 
-        move_to_subs_btn = discord.ui.Button(
-            label="🪑 Add all unassigned to Subs",
+        # 🪑 Manage subs (#274). Opens an ephemeral menu with both sub-pool
+        # directions: bulk "Add all unassigned to Subs" (the old one-click
+        # action) AND "Return a sub to available" so an officer can pull a
+        # member back out of the sub pool and make them a starter — the
+        # missing reverse that blocked starter/sub swaps. Combining them
+        # under one button keeps the action_row within Discord's 5-button
+        # cap (phase-aware structured paired mode is already full).
+        manage_subs_btn = discord.ui.Button(
+            label="🪑 Manage subs",
             style=discord.ButtonStyle.secondary,
             row=action_row,
         )
 
-        async def _move_to_subs(inter: discord.Interaction):
+        async def _manage_subs(inter: discord.Interaction):
             if not await self._guard_owner(inter):
                 return
-            # Bulk move: every member in this team's available pool who
-            # isn't already a primary in any phase + isn't already in
-            # subs (or paired with a primary, in paired mode) goes to
-            # the subs pool. Subs have no minimum power filter — this
-            # is a pure pool transfer, not an eligibility check.
-            primaries: set[str] = set()
-            for phase in s.iter_phases():
-                for zone_members in s.assignments_for_phase(phase).values():
-                    primaries.update(zone_members)
-            already_subs = set(s.subs)
-            paired_keys = set(s.paired_subs.values()) if s.is_paired else set()
-            to_move = [
-                key
-                for key in s.members.keys()
-                if key not in primaries and key not in already_subs and key not in paired_keys
-            ]
-            if not to_move:
-                await inter.response.send_message(
-                    "⚠️ No unassigned members to move. Everyone in this "
-                    "team's pool is already assigned as a primary or sub.",
-                    ephemeral=True,
-                )
-                return
-            s.subs.extend(to_move)
-            s.prune_stale_overrides()
-            s.prune_stale_pairings()
-            s.auto_fill_summary = None
-            await self._redraw(inter)
+            menu = _SubsManageView(parent_view=self)
+            await inter.response.send_message(
+                menu.render_content(),
+                view=menu,
+                ephemeral=True,
+            )
 
-        move_to_subs_btn.callback = _move_to_subs
-        self.add_item(move_to_subs_btn)
+        manage_subs_btn.callback = _manage_subs
+        self.add_item(manage_subs_btn)
 
         # Pair subs button (paired mode only). Opens an ephemeral view
         # with a running pair list + Primary Select + Sub Select +
@@ -2521,9 +2539,9 @@ class RosterBuilderView(discord.ui.View):
                     "\n"
                     "- ⚖️ **Balanced spread:** one starter per zone per "
                     "pass, power distributed across every zone.\n"
-                    "- 💪 **Strength to priority:** fill the top-priority "
-                    "zone fully with the strongest members before moving "
-                    "on."
+                    "- 💪 **Strength to priority:** send the strongest "
+                    "members to the highest-priority zones first, keeping "
+                    "power even between zones that share a priority."
                 )
                 if s.has_existing_assignments():
                     body = (
@@ -3057,6 +3075,231 @@ class _ZoneMemberEditView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content="↩️ Edit cancelled. No changes made.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+class _SubsManageView(discord.ui.View):
+    """Ephemeral menu for the sub pool (#274 tester ask). Two actions in
+    one place, opened by the main builder's 🪑 Manage subs button:
+
+      - 🪑 Add all unassigned to Subs — bulk-sweep every member who isn't
+        a primary and isn't already a sub into the sub pool (the old
+        one-click behaviour, now living here).
+      - ↩️ Return a sub to available — pull one member back OUT of the
+        sub pool so they can be assigned as a starter again. Before this,
+        moving to subs was a one-way trip: subs are hidden from the
+        zone-assign picker (`assigned_member_keys_in_phase` unions
+        `session.subs`), so an officer couldn't swap a starter and a sub.
+
+    Returning a sub clears any pairing where they're the sub side, in
+    every phase — `prune_stale_pairings` only drops pairings by the
+    PRIMARY leaving a zone, so the sub-side cleanup is done explicitly.
+    """
+
+    def __init__(self, *, parent_view: "RosterBuilderView"):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.selected_sub: Optional[str] = None
+        self._build()
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _unassigned_keys(self) -> list[str]:
+        """Members eligible for the bulk add: in this team's pool, not a
+        primary in any phase, not already a sub, and (paired mode) not
+        already paired with a primary."""
+        s = self.parent_view.session
+        primaries: set[str] = set()
+        for phase in s.iter_phases():
+            for zone_members in s.assignments_for_phase(phase).values():
+                primaries.update(zone_members)
+        already_subs = set(s.subs)
+        paired_keys = set(s.paired_subs.values()) if s.is_paired else set()
+        return [
+            key
+            for key in s.members.keys()
+            if key not in primaries and key not in already_subs and key not in paired_keys
+        ]
+
+    def render_content(self) -> str:
+        s = self.parent_view.session
+        sub_count = len(s.subs)
+        unassigned = len(self._unassigned_keys())
+        return (
+            "🪑 **Manage subs**\n"
+            f"Sub pool: **{sub_count}** | unassigned in pool: **{unassigned}**.\n\n"
+            "- **Add all unassigned to Subs** moves everyone not already a "
+            "primary or sub into the sub pool.\n"
+            "- **Return a sub to available** pulls one member back out so "
+            "you can make them a starter (then send the starter you're "
+            "replacing to subs)."
+        )
+
+    def _build(self) -> None:
+        self.clear_items()
+        s = self.parent_view.session
+
+        # Return-a-sub select (row 0) — only when there are subs.
+        if s.subs:
+            options = []
+            for k in s.subs[:_MAX_DROPDOWN_OPTIONS]:
+                m = s.members.get(k, {"name": k})
+                options.append(
+                    discord.SelectOption(
+                        label=_format_member_label(m)[:100],
+                        value=k[:100],
+                        default=(k == self.selected_sub),
+                    )
+                )
+            placeholder = (
+                f"Picked: {self._picked_sub_label()}"
+                if self.selected_sub
+                else "Pick a sub to return to available…"
+            )
+            overflow = len(s.subs) - len(options)
+            if overflow > 0:
+                placeholder = f"{placeholder} (+{overflow} more)"
+            sub_select = discord.ui.Select(
+                placeholder=placeholder[:150],
+                options=options,
+                min_values=1,
+                max_values=1,
+                row=0,
+            )
+
+            async def _on_sub_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                vals = inter.data.get("values") or []
+                self.selected_sub = vals[0] if vals else None
+                self._build()
+                try:
+                    await inter.response.edit_message(content=self.render_content(), view=self)
+                except discord.HTTPException:
+                    pass
+
+            sub_select.callback = _on_sub_pick
+            self.add_item(sub_select)
+
+        # Action buttons (row 1).
+        add_all_btn = discord.ui.Button(
+            label="🪑 Add all unassigned to Subs",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+            disabled=not self._unassigned_keys(),
+        )
+        add_all_btn.callback = self._on_add_all
+        self.add_item(add_all_btn)
+
+        return_btn = discord.ui.Button(
+            label="↩️ Return to available",
+            style=discord.ButtonStyle.primary,
+            row=1,
+            disabled=self.selected_sub is None,
+        )
+        return_btn.callback = self._on_return_sub
+        self.add_item(return_btn)
+
+        done_btn = discord.ui.Button(
+            label="✔ Done",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        done_btn.callback = self._on_done
+        self.add_item(done_btn)
+
+    def _picked_sub_label(self) -> str:
+        if not self.selected_sub:
+            return ""
+        m = self.parent_view.session.members.get(
+            self.selected_sub,
+            {"name": self.selected_sub},
+        )
+        return _format_member_label(m)
+
+    async def _refresh_parent(self) -> None:
+        """Rebuild + re-render the main builder so pool/sub changes show."""
+        s = self.parent_view.session
+        if self.parent_view.message is not None:
+            try:
+                self.parent_view._user_action_since_open = True
+                self.parent_view._rebuild()
+                await self.parent_view.message.edit(
+                    embed=_render_builder_embed(s),
+                    view=self.parent_view,
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _on_add_all(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        s = self.parent_view.session
+        to_move = self._unassigned_keys()
+        if not to_move:
+            await inter.response.send_message(
+                "⚠️ No unassigned members to move. Everyone in this team's "
+                "pool is already assigned as a primary or sub.",
+                ephemeral=True,
+            )
+            return
+        s.subs.extend(to_move)
+        s.prune_stale_overrides()
+        s.prune_stale_pairings()
+        s.auto_fill_summary = None
+        self.selected_sub = None
+        self._build()
+        try:
+            await inter.response.edit_message(content=self.render_content(), view=self)
+        except discord.HTTPException:
+            pass
+        await self._refresh_parent()
+
+    async def _on_return_sub(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        s = self.parent_view.session
+        key = self.selected_sub
+        if not key or key not in s.subs:
+            self.selected_sub = None
+            self._build()
+            try:
+                await inter.response.edit_message(content=self.render_content(), view=self)
+            except discord.HTTPException:
+                pass
+            return
+        s.subs.remove(key)
+        # Clear any pairing where this member is the SUB side, every phase.
+        for phase in s.iter_phases():
+            pairings = s.paired_subs_for_phase(phase)
+            for primary in [p for p, sub in pairings.items() if sub == key]:
+                del pairings[primary]
+        s.prune_stale_overrides()
+        s.auto_fill_summary = None
+        self.selected_sub = None
+        self._build()
+        try:
+            await inter.response.edit_message(content=self.render_content(), view=self)
+        except discord.HTTPException:
+            pass
+        await self._refresh_parent()
+
+    async def _on_done(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="✔ Done managing subs.",
                 view=None,
             )
         except discord.HTTPException:
@@ -5160,6 +5403,57 @@ def _team_plan_keys_or_signup_keys(
     return _signup_filter_keys(guild_id, event_type, event_date, team), False
 
 
+def _other_team_claimed_keys(
+    guild_id: int,
+    event_type: str,
+    team: str,
+) -> set[str]:
+    """Member keys already assigned on the OTHER team's saved draft (#275).
+
+    A player can only be on one storm team at a time (hard game rule), but
+    an "either time works" voter is eligible for both teams' pools. The
+    builder auto-saves each team's in-progress roster to `storm_roster_drafts`
+    on every edit, so when one team's pool is built we subtract everyone the
+    other team has already placed — even before Approve & Post.
+
+    "Claimed" = every member that appears as a zone primary, a flat sub, or a
+    paired sub in any phase of the other team's draft. Returns an empty set
+    when there's no other team's draft, the alliance isn't running both
+    teams, or the draft can't be read/parsed (best-effort — never blocks the
+    build). Single-team alliances (team == "") have no other team.
+    """
+    if team not in ("A", "B"):
+        return set()
+    other_team = "B" if team == "A" else "A"
+
+    import config
+    import json
+
+    try:
+        draft = config.get_roster_draft(guild_id, event_type, other_team)
+    except Exception:
+        return set()
+    if not draft or not draft.get("session_json"):
+        return set()
+    try:
+        payload = json.loads(draft["session_json"])
+    except (ValueError, TypeError):
+        return set()
+
+    claimed: set[str] = set()
+    for pkey in ("assignments_p1", "assignments_p2", "assignments_p3"):
+        for keys in (payload.get(pkey) or {}).values():
+            claimed.update(k for k in keys if k)
+    for pkey in ("paired_subs_p1", "paired_subs_p2", "paired_subs_p3"):
+        for primary, sub in (payload.get(pkey) or {}).items():
+            if primary:
+                claimed.add(primary)
+            if sub:
+                claimed.add(sub)
+    claimed.update(k for k in (payload.get("subs") or []) if k)
+    return claimed
+
+
 # ── Long-mail picker (#237) ─────────────────────────────────────────────────
 #
 # When the rendered mail body exceeds Discord's 2000-char per-message
@@ -6641,6 +6935,8 @@ async def open_roster_builder(
 
         members = {k: v for k, v in members.items() if _is_signed_up(k, v)}
         # Surface signup keys we couldn't reconcile to any roster row.
+        # Computed before cross-team exclusion so a member who's simply on
+        # the other team isn't mislabelled as "couldn't be matched."
         matched_names_ci = {(m.get("name") or "").strip().lower() for m in members.values()}
         missing = {
             sk for sk in signup_keys if sk not in members and sk.lower() not in matched_names_ci
@@ -6650,9 +6946,46 @@ async def open_roster_builder(
                 f"{len(missing)} signed-up member(s) couldn't be matched to a "
                 f"roster row: {', '.join(sorted(missing))[:200]}"
             )
+
+        # Cross-team exclusion (#275): a player can only be on one storm
+        # team at a time. An "either time works" voter is eligible for
+        # both pools, so drop anyone already assigned on the OTHER team's
+        # auto-saved draft — even before Approve & Post. To move someone
+        # A→B the officer pulls them off A first (autosave frees them).
+        other_claimed = _other_team_claimed_keys(
+            interaction.guild_id,
+            event_type,
+            team,
+        )
+        excluded_for_other_team: list[str] = []
+        if other_claimed:
+            excluded_for_other_team = [
+                m.get("name") or k for k, m in members.items() if k in other_claimed
+            ]
+            members = {k: v for k, v in members.items() if k not in other_claimed}
+            if excluded_for_other_team:
+                other_team = "B" if team == "A" else "A"
+                roster_errors.append(
+                    f"{len(excluded_for_other_team)} member(s) already on Team "
+                    f"{other_team}'s roster were hidden (a player can only be "
+                    f"on one team): {', '.join(sorted(excluded_for_other_team))[:200]}"
+                )
+
         if not members:
             from storm_date_helpers import format_event_date
 
+            if excluded_for_other_team:
+                # Pool emptied specifically because everyone who signed up
+                # for this team is already on the other team's roster.
+                other_team = "B" if team == "A" else "A"
+                await interaction.followup.send(
+                    f"⚠️ Everyone who signed up for team **{team or 'A'}** is "
+                    f"already on Team {other_team}'s roster (a player can only "
+                    f"be on one team). Move someone off Team {other_team} first, "
+                    f"or wait for more sign-ups.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
                 f"event **{format_event_date(event_date)}**. Run "

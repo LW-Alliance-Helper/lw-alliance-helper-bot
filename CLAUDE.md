@@ -365,8 +365,9 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Production (`main`) is on `1.4.5`;
-  `dev` / staging runs `1.4.6`. The headline release was 1.4.0 — the
+- 1.0.0 launched 2026-04-28. `release/1.4.6` is cut and PR'd into
+  `main` (production currently `1.4.5`; merging the PR ships `1.4.6`).
+  `dev` / staging also runs `1.4.6`. The headline release was 1.4.0 — the
   Premium Storm Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)):
   structured sign-up → roster builder → PNG mail with auto-fill,
   per-event team plan, per-team time slots, per-member assignment DMs,
@@ -377,15 +378,15 @@ These have been thought through. Reopening them needs a real reason:
   crash). See `CHANGELOG.md` and the Recent shipped highlights table
   for per-version detail.
 - ~2085 tests pass on the default (non-sheets) lane.
-- Dev-branch tooling (not yet on a release): pre-commit runs stock
+- Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
   large-files), ruff lint + format (line-length 100), codespell, a
   gitleaks staged-secret scan, and `actionlint` on the workflow files;
   the whole tree was formatted once at line-length 100. See the Working
   agreement for the deliberate F401/F811 caveat. A `.github/dependabot.yml`
-  (weekly pip + github-actions update PRs) also rides dev — Dependabot
-  reads its config from the default branch, so it stays dormant until dev
-  next merges to main.
+  (weekly pip + github-actions update PRs) also rides this release —
+  Dependabot reads its config from the default branch, so it activates
+  once 1.4.6 lands on main.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

@@ -182,6 +182,43 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_buddy_config — Profession Buddy System (#289). Pairs each
+        # War Leader with an Engineer (the Engineer's once-per-24h Skill goes
+        # to one War Leader). Opt-in: 0 until enabled in /setup.
+        #
+        # Profession's single source of truth stays the Squad Powers survey
+        # tab — `profession_tab` + `profession_col_header` point at it and are
+        # resolved by header at read time, so the buddy logic follows the
+        # survey's Profession column even if it's reordered. The buddy tab
+        # (`buddy_tab`) is bot-owned and member-centric (one row per War
+        # Leader, Engineers alongside); its Profession cells are live-lookup
+        # formulas against the Squad Powers tab, not stored values.
+        #
+        # `engineer_doubling` (default OFF) allows two Engineers to feed one
+        # War Leader (never two War Leaders to one Engineer).
+        # `scarcity_priority` decides which free War Leaders win scarce free
+        # Engineers: 'alphabetical' (default) or 'strongest_first' (orders by
+        # power read from the existing Power Data Source on guild_storm_config).
+        # `persistent_message_id`/`persistent_channel_id` track the single
+        # self-service profession message per guild (Premium), re-registered
+        # on on_ready like the storm sign-up views.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_buddy_config (
+                guild_id               INTEGER PRIMARY KEY,
+                enabled                INTEGER DEFAULT 0,
+                buddy_tab              TEXT    DEFAULT 'Buddies',
+                profession_tab         TEXT    DEFAULT 'Squad Powers',
+                profession_col_header  TEXT    DEFAULT 'Profession',
+                persistent_channel_id  INTEGER DEFAULT 0,
+                persistent_message_id  INTEGER DEFAULT 0,
+                notify_channel_id      INTEGER DEFAULT 0,
+                dm_enabled             INTEGER DEFAULT 0,
+                engineer_doubling      INTEGER DEFAULT 0,
+                scarcity_priority      TEXT    DEFAULT 'alphabetical'
+            )
+        """)
+        conn.commit()
+
         # guild_growth_config — per-guild growth tracking settings.
         # Breakdown columns (#34) classify members by % change between
         # snapshots. `breakdown_thresholds` / `breakdown_labels` are JSON
@@ -946,6 +983,26 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_train_config")
+            except Exception:
+                pass
+
+        # ── guild_buddy_config migrations (#289 Profession Buddy System) ───────
+        for col, definition in [
+            ("enabled", "INTEGER DEFAULT 0"),
+            ("buddy_tab", "TEXT    DEFAULT 'Buddies'"),
+            ("profession_tab", "TEXT    DEFAULT 'Squad Powers'"),
+            ("profession_col_header", "TEXT    DEFAULT 'Profession'"),
+            ("persistent_channel_id", "INTEGER DEFAULT 0"),
+            ("persistent_message_id", "INTEGER DEFAULT 0"),
+            ("notify_channel_id", "INTEGER DEFAULT 0"),
+            ("dm_enabled", "INTEGER DEFAULT 0"),
+            ("engineer_doubling", "INTEGER DEFAULT 0"),
+            ("scarcity_priority", "TEXT    DEFAULT 'alphabetical'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_buddy_config")
             except Exception:
                 pass
 
@@ -4378,6 +4435,82 @@ def update_train_config_field(guild_id: int, field: str, value):
             (value, guild_id),
         )
         conn.commit()
+
+
+# ── Profession Buddy System (#289) ────────────────────────────────────────────
+
+
+_BUDDY_DEFAULTS = {
+    "enabled": 0,
+    "buddy_tab": "Buddies",
+    "profession_tab": "Squad Powers",
+    "profession_col_header": "Profession",
+    "persistent_channel_id": 0,
+    "persistent_message_id": 0,
+    "notify_channel_id": 0,
+    "dm_enabled": 0,
+    "engineer_doubling": 0,
+    "scarcity_priority": "alphabetical",
+}
+
+_BUDDY_FIELDS = set(_BUDDY_DEFAULTS)
+
+
+def has_buddy_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_buddy_config` — i.e. they have run
+    the Buddy System setup at least once. `get_buddy_config` returns a fallback
+    dict on miss, so it can't distinguish "saved with all defaults" from "never
+    configured"; this helper exists for the setup-wizard summary embed."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_buddy_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def get_buddy_config(guild_id: int) -> dict:
+    """Return the Buddy System config for a guild, falling back to defaults."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_buddy_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {"guild_id": guild_id, **_BUDDY_DEFAULTS}
+
+
+def update_buddy_config_field(guild_id: int, field: str, value):
+    """Update a single Buddy System column without disturbing the others.
+    `field` is validated against an allowlist so the column name can't be
+    injected."""
+    if field not in _BUDDY_FIELDS:
+        raise ValueError(f"unknown buddy config field: {field!r}")
+    with _get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO guild_buddy_config (guild_id) VALUES (?)", (guild_id,))
+        conn.execute(
+            f"UPDATE guild_buddy_config SET {field} = ? WHERE guild_id = ?",
+            (value, guild_id),
+        )
+        conn.commit()
+
+
+def clear_buddy_config(guild_id: int) -> None:
+    """Delete the guild's buddy config row entirely (disable-with-clear)."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM guild_buddy_config WHERE guild_id = ?", (guild_id,))
+        conn.commit()
+
+
+def get_buddy_enabled_guilds() -> list[dict]:
+    """Rows for every guild with the Buddy System enabled and a posted
+    self-service message — used to re-register persistent profession views on
+    on_ready (mirrors get_recent_storm_registration_posts)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM guild_buddy_config WHERE enabled = 1 AND persistent_message_id != 0"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────

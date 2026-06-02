@@ -425,6 +425,7 @@ class TestSetupHubLaunchersGateNonAdmins:
             "_launch_event_setup",
             "_launch_survey_setup",
             "_launch_shiny_tasks_setup",
+            "_launch_buddy_setup",
         ],
     )
     async def test_launcher_rejects_non_privileged_caller(

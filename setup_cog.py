@@ -53,7 +53,11 @@ from storm_event_hub import (
 )
 from wizard_registry import wait_view_or_cancel
 
-WIZARD_TIMEOUT = 120  # 2 minutes per step
+# View timeout duration (seconds) for each wizard step. Distinct from the
+# imported `WIZARD_TIMEOUT` message template (messages.py) used by the
+# `.format(wizard=...)` timeout notices — they must not share a name, or the
+# int shadows the string and every timeout notice crashes (#290).
+WIZARD_STEP_TIMEOUT = 120  # 2 minutes per step
 
 
 def _parse_12h_time(raw: str) -> str:
@@ -214,7 +218,7 @@ class RoleSelectStep(discord.ui.View):
         current_name: str | None = None,
         guild: discord.Guild | None = None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected_role = None
         self.confirmed = False
         self._placeholder = placeholder
@@ -403,7 +407,7 @@ class ChannelSelectStep(discord.ui.View):
         current_id: int | None = None,
         current_name: str | None = None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected_channel = None
         self.confirmed = False
         self.suggested_name = suggested_name
@@ -746,7 +750,7 @@ class ChannelSelectStep(discord.ui.View):
 
 class ConfirmView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.confirmed = None
 
     @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success)
@@ -811,7 +815,7 @@ class ModalLaunchView(discord.ui.View):
         current_display: str | None = None,
         on_keep_current=None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.modal = modal
         self.confirmed = False
         self._current_value = current_value
@@ -898,7 +902,7 @@ async def ask_keep_or_change(
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.value = None
             self.confirmed = False
 
@@ -1194,7 +1198,7 @@ async def _manage_train_templates(
 
         class TemplateListView(discord.ui.View):
             def __init__(self, count: int, at_cap: bool):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.action: str | None = None
                 self.index: int | None = None
                 if at_cap:
@@ -1268,7 +1272,7 @@ async def _manage_train_templates(
 
             class PickView(discord.ui.View):
                 def __init__(self):
-                    super().__init__(timeout=WIZARD_TIMEOUT)
+                    super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                     self.idx = None
                     options = [
                         discord.SelectOption(label=t["name"][:100], value=str(i))
@@ -1739,7 +1743,7 @@ class TimezoneSelectView(discord.ui.View):
     """
 
     def __init__(self, *, current: str | None = None):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected = None
         self.confirmed = False
         self.current = current
@@ -2327,7 +2331,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
         reply = await wizard_registry.wait_or_cancel(
-            bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT),
+            bot.wait_for("message", check=check, timeout=WIZARD_STEP_TIMEOUT),
             cancel_event,
         )
         if reply is None:
@@ -2566,7 +2570,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         class MetricsActionView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.choice = None
                 if not metrics:
                     self.edit_btn.disabled = True
@@ -2623,7 +2627,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         # Pick which metric to edit/delete
         class PickMetricView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.index = None
                 options = [
                     discord.SelectOption(
@@ -2669,7 +2673,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         class EditLaunchView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.modal = MetricModal(
                     label_default=existing["label"], col_default=existing["col"]
                 )
@@ -2728,7 +2732,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     class FrequencyView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.selected = None
             if not custom_interval_unlocked:
                 self.custom.disabled = True
@@ -3040,7 +3044,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
         class BucketFilterView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.selected: list[str] | None = None
 
                 # Keep-current button on its own row when leadership
@@ -3186,7 +3190,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     class ThresholdsChoiceView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
             # Keep-current button when leadership saved custom thresholds
@@ -3293,7 +3297,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     class LabelsChoiceView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
             # Mirror ThresholdsChoiceView: when leadership has saved
@@ -4001,7 +4005,7 @@ class _WeekdaySelectView(discord.ui.View):
     """Mon-Sun picker for the weekly-draft day, with a Keep-current button."""
 
     def __init__(self, *, current: int | None = None):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected: int | None = None
         self.cancelled = False
         import train_rotation as tr
@@ -4054,7 +4058,7 @@ class _RuleTypePickerView(discord.ui.View):
     Done exits keeping whatever was assigned so far."""
 
     def __init__(self, assignments: dict, *, first_time: bool):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected: str | None = None
         self.done = False
         self.skipped = False
@@ -7494,7 +7498,7 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
         flip_label_yes: str = "↩️ Switch to: Yes",
         flip_label_no: str = "↩️ Switch to: No",
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.value: bool | None = None
         self.cancelled = False
 

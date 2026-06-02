@@ -148,6 +148,12 @@ def init_db():
         # `dm_message` is the body of the Premium DM-to-assignee that fires
         # alongside the channel reminder; empty string means "use the
         # hardcoded default in train_cog.py". Supports `{name}` placeholder.
+        #
+        # Train Conductor Rotation (#55) columns are appended after the legacy
+        # blurb/reminder columns. The rotation feature is opt-in: `rotation_enabled`
+        # is 0 until an alliance completes the rotation sub-flow of /setup_train,
+        # and the scheduler loops + draft/confirmation surfaces gate on it. Existing
+        # alliances keep the legacy manual + daily-reminder flow untouched.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_train_config (
                 guild_id             INTEGER PRIMARY KEY,
@@ -162,7 +168,16 @@ def init_db():
                 reminders_enabled    INTEGER DEFAULT 1,
                 reminder_channel_id  INTEGER DEFAULT 0,
                 reminder_time        TEXT    DEFAULT '22:00',
-                dm_message           TEXT    DEFAULT ''
+                dm_message           TEXT    DEFAULT '',
+                rotation_enabled              INTEGER DEFAULT 0,
+                history_tab                   TEXT    DEFAULT 'Train History',
+                member_rules_tab              TEXT    DEFAULT 'Train Member Rules',
+                day_rules_tab                 TEXT    DEFAULT 'Train Day Rules',
+                rotation_public_channel_id    INTEGER DEFAULT 0,
+                weekly_draft_day              INTEGER DEFAULT 6,
+                rule_type_roles               TEXT    DEFAULT '{}',
+                counted_reasons               TEXT    DEFAULT '',
+                active_schedule_preset        TEXT    DEFAULT 'Standard Week'
             )
         """)
         conn.commit()
@@ -908,6 +923,24 @@ def init_db():
             ("default_template", "TEXT DEFAULT 'Default'"),
             # Premium DM-to-assignee body (empty → hardcoded default in train_cog.py)
             ("dm_message", "TEXT DEFAULT ''"),
+            # ── Train Conductor Rotation (#55) ──────────────────────────────
+            # Opt-in: 0 until rotation is enabled in /setup_train. Rotation
+            # reuses the train `reminder_channel_id` + `reminder_time` for its
+            # weekly draft + daily confirmation; birthday behaviour is derived
+            # from the Birthday setup (enabled + train_integration), not stored
+            # here.
+            ("rotation_enabled", "INTEGER DEFAULT 0"),
+            ("history_tab", "TEXT DEFAULT 'Train History'"),
+            ("member_rules_tab", "TEXT DEFAULT 'Train Member Rules'"),
+            ("day_rules_tab", "TEXT DEFAULT 'Train Day Rules'"),
+            # 0 = don't post conductors publicly (confirmation just records them).
+            ("rotation_public_channel_id", "INTEGER DEFAULT 0"),
+            ("weekly_draft_day", "INTEGER DEFAULT 6"),
+            # JSON {rule_type: role_id} — scopes the candidate pool per rule type.
+            ("rule_type_roles", "TEXT DEFAULT '{}'"),
+            # comma-separated reason set; empty → DEFAULT_COUNTED_REASONS at read.
+            ("counted_reasons", "TEXT DEFAULT ''"),
+            ("active_schedule_preset", "TEXT DEFAULT 'Standard Week'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -4123,6 +4156,13 @@ def get_train_config(guild_id: int) -> dict:
         except (json.JSONDecodeError, TypeError):
             d["themes"] = DEFAULT_THEMES
             d["tones"] = DEFAULT_TONES
+        # rule_type_roles is a JSON map {rule_type: role_id} (#55). Parse to a
+        # dict so consumers don't each re-decode; empty/garbage → {}.
+        try:
+            rtr = json.loads(d.get("rule_type_roles") or "{}")
+            d["rule_type_roles"] = rtr if isinstance(rtr, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            d["rule_type_roles"] = {}
         return _normalize_train_templates(d)
     fallback = {
         "guild_id": guild_id,
@@ -4138,6 +4178,16 @@ def get_train_config(guild_id: int) -> dict:
         "reminder_channel_id": 0,
         "reminder_time": "22:00",
         "dm_message": "",
+        # Train Conductor Rotation (#55) — opt-in, off until configured.
+        "rotation_enabled": 0,
+        "history_tab": "Train History",
+        "member_rules_tab": "Train Member Rules",
+        "day_rules_tab": "Train Day Rules",
+        "rotation_public_channel_id": 0,
+        "weekly_draft_day": 6,
+        "rule_type_roles": {},
+        "counted_reasons": "",
+        "active_schedule_preset": "Standard Week",
     }
     return _normalize_train_templates(fallback)
 
@@ -4213,6 +4263,92 @@ def save_train_config(
                 reminder_time,
                 dm_message,
             ),
+        )
+        conn.commit()
+
+
+def save_train_rotation_config(
+    guild_id: int,
+    *,
+    rotation_enabled: int = 1,
+    history_tab: str = "Train History",
+    member_rules_tab: str = "Train Member Rules",
+    day_rules_tab: str = "Train Day Rules",
+    rotation_public_channel_id: int = 0,
+    weekly_draft_day: int = 6,
+    rule_type_roles: str = "{}",
+    counted_reasons: str = "",
+    active_schedule_preset: str = "Standard Week",
+):
+    """Upsert ONLY the Train Conductor Rotation (#55) columns of a guild's
+    train config.
+
+    Kept separate from `save_train_config` so the rotation flow doesn't have to
+    re-supply (and risk clobbering) the legacy blurb/themes/reminder fields, and
+    vice-versa. On a fresh row the legacy columns take their schema defaults; on
+    an existing row they're left untouched.
+
+    Rotation reuses the train `reminder_channel_id` + `reminder_time` (saved via
+    `save_train_config`) for its draft + daily confirmation, so no channel/time
+    is stored here. `rule_type_roles` is a JSON map {rule_type: role_id};
+    `counted_reasons` is a comma-separated string (empty → defaults at read)."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_train_config "
+            "(guild_id, rotation_enabled, history_tab, member_rules_tab, day_rules_tab, "
+            " rotation_public_channel_id, weekly_draft_day, rule_type_roles, "
+            " counted_reasons, active_schedule_preset) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            " rotation_enabled=excluded.rotation_enabled, "
+            " history_tab=excluded.history_tab, "
+            " member_rules_tab=excluded.member_rules_tab, "
+            " day_rules_tab=excluded.day_rules_tab, "
+            " rotation_public_channel_id=excluded.rotation_public_channel_id, "
+            " weekly_draft_day=excluded.weekly_draft_day, "
+            " rule_type_roles=excluded.rule_type_roles, "
+            " counted_reasons=excluded.counted_reasons, "
+            " active_schedule_preset=excluded.active_schedule_preset",
+            (
+                guild_id,
+                rotation_enabled,
+                history_tab,
+                member_rules_tab,
+                day_rules_tab,
+                rotation_public_channel_id,
+                weekly_draft_day,
+                rule_type_roles,
+                counted_reasons,
+                active_schedule_preset,
+            ),
+        )
+        conn.commit()
+
+
+_TRAIN_ROTATION_FIELDS = {
+    "rotation_enabled",
+    "history_tab",
+    "member_rules_tab",
+    "day_rules_tab",
+    "rotation_public_channel_id",
+    "weekly_draft_day",
+    "rule_type_roles",
+    "counted_reasons",
+    "active_schedule_preset",
+}
+
+
+def update_train_config_field(guild_id: int, field: str, value):
+    """Update a single Train Conductor Rotation column without disturbing the
+    others (e.g. switching the active preset). `field` is validated against an
+    allowlist so the column name can't be injected."""
+    if field not in _TRAIN_ROTATION_FIELDS:
+        raise ValueError(f"unknown train rotation field: {field!r}")
+    with _get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO guild_train_config (guild_id) VALUES (?)", (guild_id,))
+        conn.execute(
+            f"UPDATE guild_train_config SET {field} = ? WHERE guild_id = ?",
+            (value, guild_id),
         )
         conn.commit()
 

@@ -217,6 +217,36 @@ def parse_birthday(raw: str) -> tuple[int, int] | None:
     return None
 
 
+def birthday_lookup_for_dates(dates, guild_id: int = None) -> dict[str, list[str]]:
+    """Return {ISO date: [member names]} for members whose birthday (month/day)
+    falls on any of the given `dates`.
+
+    Used by the Train Conductor Rotation (#55) weekly-draft generator in
+    `override` birthday mode. Loads the birthday sheet once and matches by
+    month+day, ignoring year. Returns {} when birthdays aren't enabled or the
+    sheet has no usable rows — the draft generator then simply makes no
+    birthday placements (rotation fills every day)."""
+    from config import get_birthday_config
+
+    bcfg = get_birthday_config(guild_id) if guild_id else {}
+    if guild_id and not bcfg.get("enabled", 0):
+        return {}
+
+    tab_name = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+    members = load_birthdays(tab_name, guild_id)
+    if not members:
+        return {}
+
+    # Map (month, day) → ISO for the dates we care about, then bucket members.
+    want = {(d.month, d.day): d.isoformat() for d in dates}
+    out: dict[str, list[str]] = {}
+    for m in members:
+        iso = want.get((m.get("month"), m.get("day")))
+        if iso:
+            out.setdefault(iso, []).append(m["name"])
+    return out
+
+
 def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[str]]:
     """
     Look ahead lookahead_days from today (from guild birthday config).

@@ -192,6 +192,37 @@ class TestBuildChatgptPrompt:
         assert result  # Should return something even without template
 
 
+class TestBirthdayLookupForDates:
+    """Test birthday_lookup_for_dates — the #55 rotation birthday source."""
+
+    def test_buckets_members_onto_matching_dates(self, seeded_db):
+        from train_birthdays import birthday_lookup_for_dates
+        from config import save_birthday_config
+
+        save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
+        week = [date(2026, 6, 1) + timedelta(days=i) for i in range(7)]
+        members = [
+            {"name": "Eve", "month": 6, "day": 3},  # Wednesday
+            {"name": "Zoe", "month": 6, "day": 3},  # also Wednesday
+            {"name": "Far", "month": 12, "day": 25},  # outside the week
+        ]
+        with patch("train_birthdays.load_birthdays", return_value=members):
+            lookup = birthday_lookup_for_dates(week, guild_id=TEST_GUILD_ID)
+        assert lookup == {"2026-06-03": ["Eve", "Zoe"]}
+
+    def test_returns_empty_when_birthdays_disabled(self, seeded_db):
+        from train_birthdays import birthday_lookup_for_dates
+        from config import save_birthday_config
+
+        save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 0, 0, 0, 14)  # enabled=0
+        week = [date(2026, 6, 1) + timedelta(days=i) for i in range(7)]
+        with patch(
+            "train_birthdays.load_birthdays", return_value=[{"name": "Eve", "month": 6, "day": 3}]
+        ):
+            lookup = birthday_lookup_for_dates(week, guild_id=TEST_GUILD_ID)
+        assert lookup == {}
+
+
 class TestCheckAndAddBirthdays:
     """Test check_and_add_birthdays placement logic."""
 

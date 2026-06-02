@@ -125,6 +125,75 @@ class TestTrainConfig:
         assert cfg["reminder_time"] == "22:00"
 
 
+class TestTrainRotationConfig:
+    """Test the Train Conductor Rotation (#55) columns of guild_train_config."""
+
+    def test_rotation_defaults_off(self, temp_db):
+        import config
+
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["rotation_enabled"] == 0  # opt-in
+        assert cfg["history_tab"] == "Train History"
+        assert cfg["member_rules_tab"] == "Train Member Rules"
+        assert cfg["day_rules_tab"] == "Train Day Rules"
+        assert cfg["rotation_public_channel_id"] == 0  # public posts opt-in
+        assert cfg["rule_type_roles"] == {}
+        assert cfg["weekly_draft_day"] == 6
+        assert cfg["active_schedule_preset"] == "Standard Week"
+
+    def test_rotation_save_and_reload(self, temp_db):
+        import config
+        import json
+
+        config.save_train_rotation_config(
+            TEST_GUILD_ID,
+            rotation_enabled=1,
+            history_tab="Hist",
+            day_rules_tab="Days",
+            rotation_public_channel_id=222,
+            weekly_draft_day=0,
+            rule_type_roles=json.dumps({"vs": 999, "leadership": 888}),
+            counted_reasons="auto,vs",
+            active_schedule_preset="VS Save Week",
+        )
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["rotation_enabled"] == 1
+        assert cfg["history_tab"] == "Hist"
+        assert cfg["rotation_public_channel_id"] == 222
+        assert cfg["weekly_draft_day"] == 0
+        # rule_type_roles round-trips as a parsed dict.
+        assert cfg["rule_type_roles"] == {"vs": 999, "leadership": 888}
+        assert cfg["counted_reasons"] == "auto,vs"
+        assert cfg["active_schedule_preset"] == "VS Save Week"
+
+    def test_rotation_and_legacy_saves_do_not_clobber(self, temp_db):
+        """The two save paths touch disjoint columns — saving one must not
+        reset the other's fields."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1, history_tab="Hist")
+        # Legacy save afterwards must preserve the rotation columns.
+        config.save_train_config(
+            TEST_GUILD_ID,
+            tab_name="Legacy Tab",
+            themes=["A"],
+            tones=["B"],
+            prompt_template="t",
+            default_tone="B",
+        )
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"] == "Legacy Tab"
+        assert cfg["rotation_enabled"] == 1
+        assert cfg["history_tab"] == "Hist"
+
+        # And a rotation save afterwards must preserve the legacy columns.
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=0, day_rules_tab="Days2")
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"] == "Legacy Tab"  # legacy untouched
+        assert cfg["rotation_enabled"] == 0
+        assert cfg["day_rules_tab"] == "Days2"
+
+
 class TestBirthdayConfig:
     """Test guild_birthday_config save/load."""
 

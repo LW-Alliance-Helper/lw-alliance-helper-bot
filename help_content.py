@@ -83,22 +83,22 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Train Schedule",
         "description": (
             "Track who's assigned the alliance train each day; optionally "
-            "generate a personalised ChatGPT blurb prompt."
+            "generate a personalised ChatGPT blurb prompt, or let the bot "
+            "pick fair conductors with Conductor Rotation."
         ),
         "commands": [
             (
                 f"/setup → {HUB_BTN_TRAIN}",
-                "Configure the train tab, blurb generation, and reminders.",
+                "Configure the train tab, blurb generation, reminders, and "
+                "(optionally) turn on Conductor Rotation.",
             ),
             (
-                "/train overview",
-                "View the schedule with Add / Update / Generate Prompt / Clear buttons.",
+                "/train",
+                "Open the train hub. With rotation on: this week's draft, schedule "
+                "presets, member rules, assignment logs. With it off: the "
+                "schedule overview, prompt log, and birthday check.",
             ),
-            (
-                "/train log [date]",
-                "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days).",
-            ),
-            ("/train birthdays", "Manually run the birthday → train auto-population now."),
+            ("/birthdays", "Show upcoming birthdays from your member sheet."),
         ],
     },
     "birthdays": {

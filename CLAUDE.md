@@ -148,6 +148,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `setup_cog.py` | Every `/setup_*` wizard. Largest file. | ~5000 LOC |
 | `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. | ~970 LOC |
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
+| `train_rotation.py` / `train_rotation_ui.py` / `train_hub.py` | Train Conductor Rotation (#55, free, opt-in): deterministic selection algorithm + `Train History`/`Member Rules`/`Day Rules` Sheet I/O; UI = buffered preset editor, weekly draft view, daily confirmation view. `train_hub.py` is the single `/train` hub (embed + button grid, Events-hub pattern) that fronts both rotation and the legacy blurb surface. The `check_rotation` loop (weekly draft + daily confirm) lives in `train_cog.py`; rotation gates on the `rotation_enabled` train-config flag. No strategy axis — auto/manual is derived from rule type + role; per-rule-type roles scope candidate pools; birthday mode is derived from the Birthday setup. | ~2.8K total |
 | `storm.py` / `storm_log.py` | Desert/Canyon Storm: drafts, participation, reminders. | ~2.5K total |
 | `survey.py` | Squad-power surveys + scheduled reminders. | ~1.6K |
 | `growth.py` | Growth-tracking snapshots. | ~300 |

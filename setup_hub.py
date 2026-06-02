@@ -50,6 +50,7 @@ HUB_BTN_SHINY = "🌟 Shiny Tasks"
 HUB_BTN_MEMBERS = "👥 Member Sync"
 HUB_BTN_SURVEY = "📋 Survey"
 HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
+HUB_BTN_BUDDY = "🤝 Buddy System"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",
@@ -153,6 +154,10 @@ def _build_setup_hub_embed(
         members_on = bool((get_member_roster_config(guild.id) or {}).get("enabled"))
     except Exception:
         members_on = False
+    try:
+        buddy_on = bool((config.get_buddy_config(guild.id) or {}).get("enabled"))
+    except Exception:
+        buddy_on = False
 
     # Premium-gated features show 💎 on free tier instead of ⚪.
     def _free(state: bool) -> str:
@@ -178,6 +183,7 @@ def _build_setup_hub_embed(
         f"{_free(shiny_on)} Shiny Tasks",
         f"{_premium(survey_on)} Survey",
         f"{_premium(members_on)} Member Sync",
+        f"{_free(buddy_on)} Profession Buddy System",
     ]
     if not setup_done:
         description_lines.insert(
@@ -211,17 +217,18 @@ class _SetupHubView(discord.ui.View):
     wizard handler. Premium-gated buttons render disabled on the free
     tier with the 💎 prefix.
 
-    Layout (4 rows, 13 buttons total):
+    Layout (4 rows, 15 buttons total):
         Row 0 (foundations + utilities):
           ⚙️ Open setup wizard | 🗂️ View configuration | 🗑️ Reset configuration
+          | 📢 Release announcements
         Row 1 (free-tier features):
-          🚂 Train | 📈 Growth | 🎂 Birthdays | 📣 Events
+          🚂 Train | 📈 Growth | 🎂 Birthdays | 📣 Events | 🤝 Buddy System
         Row 2 (Premium event flow):
           ⚔️ Desert Storm | 🏜️ Canyon Storm | 🌟 Shiny Tasks
         Row 3 (Premium roster + survey + growth breakdown):
           👥 Member Sync 💎 | 📋 Survey 💎 | 📊 Growth Breakdown 💎
 
-    Discord caps the View at 25 components; 13 fits comfortably.
+    Discord caps the View at 25 components and 5 per row; 15 fits comfortably.
     """
 
     def __init__(self, bot, guild_id: int, owner_user_id: int, *, is_premium: bool):
@@ -361,6 +368,12 @@ class _SetupHubView(discord.ui.View):
         from setup_cog import _launch_event_setup
 
         await _launch_event_setup(inter, self.bot)
+
+    @discord.ui.button(label=HUB_BTN_BUDDY, style=discord.ButtonStyle.secondary, row=1)
+    async def btn_buddy(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from setup_cog import _launch_buddy_setup
+
+        await _launch_buddy_setup(inter, self.bot)
 
     # ── Row 2: Premium event flow (Storm + Shiny Tasks) ─────────────────────
 

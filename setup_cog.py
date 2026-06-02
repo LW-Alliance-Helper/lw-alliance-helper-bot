@@ -1529,6 +1529,20 @@ async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
     await run_train_setup(interaction, bot)
 
 
+async def _launch_buddy_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the buddy wizard."
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(
+        interaction, "⚙️ Starting Profession Buddy System setup — check the channel for prompts!"
+    )
+    await run_buddy_setup(interaction, bot)
+
+
 async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
         await _send_ack(
@@ -4310,6 +4324,260 @@ async def _run_train_rotation_extras(
         preset = tr.SchedulePreset.default(active_preset)
     await ui.post_preset_editor(channel, guild_id, user.id, preset, day_rules_tab)
     print(f"[SETUP] Train rotation enabled for guild {guild_id}")
+
+
+async def run_buddy_setup(interaction: discord.Interaction, bot):
+    """Walk leadership through configuring the Profession Buddy System (#289).
+
+    Enable → buddy tab → Engineer doubling → scarcity priority → leadership
+    alerts channel → buddy DMs. Profession is detected from the Squad Powers
+    survey question. Free to enable + manually pair; auto-assign, one-click
+    profession buttons, alerts, and DMs are Premium at runtime."""
+    import wizard_registry
+    from config import (
+        get_config,
+        get_buddy_config,
+        has_buddy_config,
+        update_buddy_config_field,
+        clear_buddy_config,
+        get_survey_config,
+    )
+
+    guild_id = interaction.guild_id
+    channel = interaction.channel
+    user = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+    timeout_msg = "⏰ Setup timed out. Run `/setup` → 🤝 Buddy System to start again."
+    nav = "setup → 🤝 Buddy System"
+
+    current = get_buddy_config(guild_id)
+    already_configured = has_buddy_config(guild_id)
+
+    # ── Already enabled? Offer edit or cancel ─────────────────────────────────
+    if already_configured and current.get("enabled"):
+        notify_id = current.get("notify_channel_id", 0) or 0
+        fields = [
+            ("Buddy Tab", current.get("buddy_tab") or "Buddies"),
+            (
+                "Two Engineers per War Leader",
+                "✅ Allowed" if current.get("engineer_doubling") else "❌ Off",
+            ),
+            (
+                "When Engineers are scarce",
+                "Strongest War Leaders first"
+                if current.get("scarcity_priority") == "strongest_first"
+                else "Alphabetical",
+            ),
+            ("Leadership alerts", f"<#{notify_id}>" if notify_id else "*off*"),
+            ("Buddy DMs", "✅ On" if current.get("dm_enabled") else "❌ Off"),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🤝 Current Buddy System Setup",
+            description="The Profession Buddy System is already on. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. The Buddy System is still active.",
+        )
+        if proceed is not True:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+    await channel.send(
+        "🤝 **Profession Buddy System Setup**\n"
+        "Pair your War Leaders with Engineers so the daily buff Skill always has a home."
+    )
+
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
+    enabled_view = YesNoView()
+    await channel.send("**Step 1 of 6 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if enabled_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not enabled_view.selected:
+        update_buddy_config_field(guild_id, "enabled", 0)
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Profession Buddy System",
+            setup_command=nav,
+            had_prior_config=already_configured,
+            clear_fn=lambda: clear_buddy_config(guild_id),
+            cancel_event=cancel_event,
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    # ── Profession source detection (Squad Powers survey) ─────────────────────
+    survey_cfg = get_survey_config(guild_id) or {}
+    questions = survey_cfg.get("questions") or []
+    prof_q = next(
+        (q for q in questions if (q.get("key") or "").lower() == "profession"),
+        None,
+    )
+    profession_tab = survey_cfg.get("tab_squad_powers") or "Squad Powers"
+    if prof_q:
+        profession_col_header = prof_q.get("label") or "Profession"
+        await channel.send(
+            f"✅ Found your **{profession_col_header}** survey question writing to the "
+            f"**{profession_tab}** tab. The Buddy System will read professions from there."
+        )
+    else:
+        profession_col_header = "Profession"
+        await channel.send(
+            "⚠️ I couldn't find a **Profession** question in your Squad Power Survey. "
+            "Members won't be able to self-report War Leader / Engineer until you add a "
+            "dropdown question with the key `profession` (options: War Leader, Engineer) "
+            "via `/setup` → 📋 Survey. You can still finish this setup and pair people "
+            "manually in the meantime."
+        )
+
+    # ── Step 2: Buddy tab name ────────────────────────────────────────────────
+    buddy_tab = await ask_keep_or_change(
+        channel,
+        "**Step 2 of 6 — Buddy List Tab**\n"
+        "Which tab in your Google Sheet should hold the buddy list? The bot owns "
+        "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
+        "⚠️ *The bot will create it if it doesn't exist.*",
+        default="Buddies",
+        current=current.get("buddy_tab", ""),
+        modal_title="Buddy Tab Name",
+        modal_label="Tab name",
+        timeout_cmd="setup_buddy",
+        cancel_event=cancel_event,
+    )
+    if buddy_tab is None:
+        return
+
+    # ── Step 3: Engineer doubling ─────────────────────────────────────────────
+    dbl_view = YesNoView()
+    await channel.send(
+        "**Step 3 of 6 — Two Engineers per War Leader?**\n"
+        "When you have more Engineers than War Leaders, may a War Leader receive from "
+        "**two** Engineers? (An Engineer always serves just one War Leader.)",
+        view=dbl_view,
+    )
+    await wait_view_or_cancel(dbl_view, cancel_event)
+    if dbl_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if dbl_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    engineer_doubling = 1 if dbl_view.selected else 0
+
+    # ── Step 4: Scarcity priority ─────────────────────────────────────────────
+    scarcity_view = YesNoView()
+    await channel.send(
+        "**Step 4 of 6 — When Engineers are scarce**\n"
+        "If you have more War Leaders than Engineers, should the bot give the Engineers "
+        "to your **strongest** War Leaders first? *(No = alphabetical order.)*\n"
+        "*Strongest-first reads power from your Power Data Source and never breaks an "
+        "existing pair.*",
+        view=scarcity_view,
+    )
+    await wait_view_or_cancel(scarcity_view, cancel_event)
+    if scarcity_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if scarcity_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    scarcity_priority = "strongest_first" if scarcity_view.selected else "alphabetical"
+
+    # ── Step 5: Leadership alerts channel ─────────────────────────────────────
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
+    alerts_view = YesNoView()
+    await channel.send(
+        "**Step 5 of 6 — Leadership alerts**\n"
+        "When a member swaps profession and the bot re-pairs people, should it post a "
+        "heads-up to a leadership channel? *(Premium feature — posts fire only while "
+        "Premium is active.)*",
+        view=alerts_view,
+    )
+    await wait_view_or_cancel(alerts_view, cancel_event)
+    if alerts_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if alerts_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    notify_channel_id = 0
+    if alerts_view.selected:
+        saved_notify = current.get("notify_channel_id", 0) or 0
+        notify_view = ChannelSelectStep(
+            "Select the leadership alerts channel...",
+            suggested_name="leadership",
+            include_threads=is_premium_flag,
+            guild=interaction.guild,
+            current_id=saved_notify,
+        )
+        if notify_view.is_current_stale:
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="leadership alerts"))
+        await channel.send("​", view=notify_view)
+        await wait_view_or_cancel(notify_view, cancel_event)
+        if notify_view.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if not notify_view.confirmed:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        notify_channel_id = notify_view.selected_channel.id
+
+    # ── Step 6: Buddy DMs ─────────────────────────────────────────────────────
+    dm_view = YesNoView()
+    await channel.send(
+        "**Step 6 of 6 — Buddy DMs**\n"
+        "Should the bot DM members their buddy when it changes? *(Premium feature — DMs "
+        "send only while Premium is active.)*",
+        view=dm_view,
+    )
+    await wait_view_or_cancel(dm_view, cancel_event)
+    if dm_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if dm_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    dm_enabled = 1 if dm_view.selected else 0
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    update_buddy_config_field(guild_id, "enabled", 1)
+    update_buddy_config_field(guild_id, "buddy_tab", buddy_tab)
+    update_buddy_config_field(guild_id, "profession_tab", profession_tab)
+    update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
+    update_buddy_config_field(guild_id, "engineer_doubling", engineer_doubling)
+    update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
+    update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
+    update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
+
+    summary = discord.Embed(
+        title="🤝 Buddy System configured",
+        color=discord.Color.green(),
+        description=(
+            f"**Buddy tab:** {buddy_tab}\n"
+            f"**Two Engineers per War Leader:** {'✅' if engineer_doubling else '❌'}\n"
+            f"**When Engineers are scarce:** "
+            f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
+            f"**Leadership alerts:** {f'<#{notify_channel_id}>' if notify_channel_id else 'off'}\n"
+            f"**Buddy DMs:** {'✅' if dm_enabled else '❌'}"
+        ),
+    )
+    summary.set_footer(text="Open /buddy to view the list, pair members, or auto-assign.")
+    await channel.send(embed=summary)
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Buddy System enabled for guild {guild_id}")
 
 
 async def run_create_new_extra_survey(interaction: discord.Interaction, bot):

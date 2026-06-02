@@ -16,6 +16,7 @@ import discord
 from setup_hub import (
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
+    HUB_BTN_BUDDY,
     HUB_BTN_EVENTS,
     HUB_BTN_GROWTH,
     HUB_BTN_MEMBERS,
@@ -203,6 +204,35 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "/survey remind",
                 "Send now or schedule. Free: channel post. 💎 Premium: also DM via roster.",
+            ),
+        ],
+    },
+    "buddy": {
+        "emoji": "🤝",
+        "label": "Profession Buddy System",
+        "description": (
+            "Pair your War Leaders with Engineers so the Engineer's daily buff "
+            "Skill always has a home. Professions come from your Squad Power "
+            "Survey, and the buddy list lives in its own sheet tab."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_BUDDY}",
+                "Turn it on, pick the buddy tab, choose whether two Engineers "
+                "can share a War Leader, set the scarcity priority, and pick the "
+                "leadership-alert channel.",
+            ),
+            (
+                "/buddy",
+                "**Buddy hub.** Everyone can tap 🔍 Who's my buddy? or 📋 View "
+                "buddy list. Leadership gets ✏️ Manage pairings (unpair / pair / "
+                "re-pair) and 📤 Post buddy list.",
+            ),
+            (
+                "💎 Auto-assign + self-service",
+                "Premium adds 🪄 Auto-assign (keeps existing pairs), ♻️ Re-pair "
+                "from scratch, 📌 one-click profession buttons members swap "
+                "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
     },

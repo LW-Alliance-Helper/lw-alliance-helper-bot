@@ -601,13 +601,22 @@ class TestPersistentViewRegistration:
     with "Interaction failed."""
 
     def test_walks_recent_posts_and_calls_add_view(self, seeded_db):
+        import datetime as _dt
+
         import config
 
-        # Two posts within the 14-day window.
+        # Two posts comfortably inside the 14-day window. Dates are
+        # computed relative to UTC today (the basis used by
+        # `get_recent_storm_registration_posts`) so they never age out;
+        # 2 and 9 days back keep both clear of the local-vs-UTC boundary
+        # skew at the cutoff edge.
+        _utc_today = _dt.datetime.now(_dt.timezone.utc).date()
+        d_recent = (_utc_today - _dt.timedelta(days=2)).isoformat()
+        d_older = (_utc_today - _dt.timedelta(days=9)).isoformat()
         config.record_storm_registration_post(
             TEST_GUILD_ID,
             "DS",
-            "2026-05-18",
+            d_older,
             channel_id=100,
             message_id=200,
             time_a_label="9pm ET",
@@ -616,7 +625,7 @@ class TestPersistentViewRegistration:
         config.record_storm_registration_post(
             TEST_GUILD_ID,
             "CS",
-            "2026-05-25",
+            d_recent,
             channel_id=100,
             message_id=300,
             time_a_label="12pm ET",
@@ -635,12 +644,20 @@ class TestPersistentViewRegistration:
             assert view.timeout is None
 
     def test_add_view_failure_is_logged_not_raised(self, seeded_db):
+        import datetime as _dt
+
         import config
 
+        # In-window date (relative to UTC today) so the post is actually
+        # walked and `add_view` fires — otherwise this test passes
+        # vacuously (count == 0 because nothing was in range) and stops
+        # exercising the add_view-raises path it was written to cover.
+        _utc_today = _dt.datetime.now(_dt.timezone.utc).date()
+        d_recent = (_utc_today - _dt.timedelta(days=2)).isoformat()
         config.record_storm_registration_post(
             TEST_GUILD_ID,
             "DS",
-            "2026-05-18",
+            d_recent,
             channel_id=100,
             message_id=200,
         )

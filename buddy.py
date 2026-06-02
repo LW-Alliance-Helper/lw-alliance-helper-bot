@@ -386,6 +386,58 @@ def load_pairs(guild_id: int, buddy_tab: str) -> list:
     return out
 
 
+def read_members_from_buddy_tab(guild_id: int, buddy_tab: str) -> list:
+    """Read the Buddies tab and return Members with a *position-implied*
+    profession (left block → War Leader, middle/right → Engineer), or the
+    block's Profession cell when it holds a real value.
+
+    This lets an alliance that already maintains a buddy list bootstrap the
+    feature with no survey data: their existing rows imply who's a War Leader
+    and who's an Engineer. Squad Powers stays authoritative — these are only a
+    fallback, merged under it by ``merge_members``. Returns [] on read failure.
+    """
+    ws = _open_tab(guild_id, buddy_tab, BUDDY_HEADER)
+    if ws is None:
+        return []
+    try:
+        values = ws.get_all_values()
+    except Exception as e:
+        print(f"[BUDDY] read_members_from_buddy_tab read failed for guild {guild_id}: {e}")
+        return []
+    out: list[Member] = []
+    # (id_col, name_col, prof_col, implied_profession)
+    blocks = ((0, 1, 2, WAR_LEADER), (3, 4, 5, ENGINEER), (6, 7, 8, ENGINEER))
+    for row in values[1:]:
+        for id_i, name_i, prof_i, implied in blocks:
+            did, nm, prof = _cell(row, id_i), _cell(row, name_i), _cell(row, prof_i)
+            if not (did or nm):
+                continue
+            profession = prof if _classify(prof) else implied
+            out.append(Member(name=nm, discord_id=did, profession=profession))
+    return out
+
+
+def merge_members(primary: list, fallback: list) -> list:
+    """Merge two member lists by identity key. ``primary`` (Squad Powers) wins
+    whenever it carries a classifiable profession or the member is absent from
+    ``fallback``; otherwise ``fallback`` (buddy-tab-implied) fills the gap.
+
+    Keeps Squad Powers as the source of truth while letting an imported buddy
+    list supply professions for members who haven't been surveyed yet."""
+    by_key: dict[str, Member] = {}
+    for m in fallback:
+        k = _member_key(m)
+        if k:
+            by_key[k] = m
+    for m in primary:
+        k = _member_key(m)
+        if not k:
+            continue
+        if _classify(m.profession) is not None or k not in by_key:
+            by_key[k] = m
+    return list(by_key.values())
+
+
 def _resolve_profession_columns(guild_id: int, profession_tab: str, profession_col_header: str):
     """Read the Squad Powers header and return ``(username_letter, id_letter,
     prof_letter)`` for building live-lookup formulas, or None when the header

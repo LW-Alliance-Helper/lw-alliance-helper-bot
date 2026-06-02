@@ -196,6 +196,20 @@ def test_profession_change_to_engineer_leaves_two_unpaired():
 # ── manual pair stickiness ────────────────────────────────────────────────────
 
 
+def test_merge_members_squad_wins_buddy_fills():
+    squad = [Member("Walt", "1", buddy.WAR_LEADER)]
+    fallback = [Member("Walt", "1", buddy.ENGINEER), Member("Eve", "3", buddy.ENGINEER)]
+    merged = {m.discord_id: m for m in buddy.merge_members(squad, fallback)}
+    assert merged["1"].profession == buddy.WAR_LEADER  # Squad Powers wins
+    assert merged["3"].profession == buddy.ENGINEER  # buddy-tab fills the gap
+
+
+def test_merge_members_buddy_fills_when_squad_profession_blank():
+    squad = [Member("Walt", "1", "")]  # surveyed but no profession set
+    merged = buddy.merge_members(squad, [Member("Walt", "1", buddy.WAR_LEADER)])
+    assert merged[0].profession == buddy.WAR_LEADER
+
+
 def test_manual_pair_survives_auto_run_and_keeps_source():
     members = [W("A", "1"), W("B", "2"), E("X", "3"), E("Y", "4")]
     manual = Pair("A", "1", "Y", "4", source="manual")

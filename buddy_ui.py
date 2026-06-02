@@ -66,10 +66,17 @@ def _wl_priority(cfg: dict) -> str:
 
 
 def _load_members(guild_id: int, cfg: dict) -> list:
-    """Read professions (and power when strongest_first) — sync, for to_thread."""
+    """Read professions (and power when strongest_first) — sync, for to_thread.
+
+    Squad Powers is authoritative; professions implied by the existing buddy
+    tab (left = War Leader, middle/right = Engineer) fill in members who
+    haven't been surveyed yet, so an alliance can bootstrap from an existing
+    buddy list."""
     members = buddy.read_all_professions(
         guild_id, cfg.get("profession_tab"), cfg.get("profession_col_header")
     )
+    fallback = buddy.read_members_from_buddy_tab(guild_id, cfg.get("buddy_tab"))
+    members = buddy.merge_members(members, fallback)
     if _wl_priority(cfg) == "power":
         buddy.read_power_for_members(guild_id, members)
     return members
@@ -259,9 +266,7 @@ def _apply_profession_change(
     dbl = bool(cfg.get("engineer_doubling"))
     prio = _wl_priority(cfg)
 
-    members_before = buddy.read_all_professions(guild_id, ptab, phdr)
-    if prio == "power":
-        buddy.read_power_for_members(guild_id, members_before)
+    members_before = _load_members(guild_id, cfg)
     pairs = buddy.load_pairs(guild_id, btab)
     before = buddy.assign_buddies(
         members_before, pairs, engineer_doubling=dbl, wl_priority=prio, fill=False
@@ -270,9 +275,7 @@ def _apply_profession_change(
     if not buddy.write_profession_cell(guild_id, ptab, phdr, actor_id, actor_name, new_prof):
         return {"ok": False}
 
-    members_after = buddy.read_all_professions(guild_id, ptab, phdr)
-    if prio == "power":
-        buddy.read_power_for_members(guild_id, members_after)
+    members_after = _load_members(guild_id, cfg)
     after = buddy.assign_buddies(
         members_after, pairs, engineer_doubling=dbl, wl_priority=prio, fill=True
     )

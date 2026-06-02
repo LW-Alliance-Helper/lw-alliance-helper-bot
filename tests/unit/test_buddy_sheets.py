@@ -190,6 +190,40 @@ def test_write_profession_cell_appends_bare_row_when_id_absent(sheets):
 # ── read professions by header (order-independent) ─────────────────────────────
 
 
+def test_read_members_from_buddy_tab_position_implied(sheets):
+    # Profession cells blank (formulas would render empty with no Squad Powers).
+    sheets["Buddy System"] = FakeWS(
+        [
+            list(buddy.BUDDY_HEADER),
+            ["1", "Walt", "", "3", "Eve", "", "", "", ""],
+            ["", "", "", "5", "Zed", "", "", "", ""],  # unpaired Engineer row
+        ]
+    )
+    members = buddy.read_members_from_buddy_tab(GID, "Buddy System")
+    by = {m.discord_id: m for m in members}
+    assert by["1"].profession == buddy.WAR_LEADER  # left block implies War Leader
+    assert by["3"].profession == buddy.ENGINEER  # middle block implies Engineer
+    assert by["5"].profession == buddy.ENGINEER  # extended middle = unpaired Engineer
+
+
+def test_bootstrap_from_existing_buddy_tab_with_empty_squad_powers(sheets):
+    # An alliance drops in their existing buddy list; Squad Powers is empty.
+    sheets["Buddy System"] = FakeWS(
+        [
+            list(buddy.BUDDY_HEADER),
+            ["1", "Walt", "", "3", "Eve", "", "", "", ""],
+        ]
+    )
+    squad = buddy.read_all_professions(GID, "Squad Powers", "Profession")  # empty tab
+    assert squad == []
+    merged = buddy.merge_members(squad, buddy.read_members_from_buddy_tab(GID, "Buddy System"))
+    pairs = buddy.load_pairs(GID, "Buddy System")
+    result = assign_buddies(merged, pairs)
+    # The imported pair survives even with no survey data.
+    assert pair_keys(result.pairs) == {("1", "3")}
+    assert not result.unpaired_wl and not result.unpaired_eng
+
+
 def test_read_all_professions_locates_columns_by_header(sheets):
     # Columns deliberately reordered from the survey default.
     sheets["Squad Powers"] = FakeWS(

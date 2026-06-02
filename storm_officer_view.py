@@ -2293,6 +2293,33 @@ class OfficerView(discord.ui.View):
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
+        # Clear-votes controls (#287). Both are destructive, so each
+        # routes through an ephemeral confirm before touching the tally.
+        # No explicit row — they auto-flow onto row 1 alongside 🙋 / 🔄
+        # (the filter Select fills row 0; rows 2-4 hold the team setup /
+        # plan buttons).
+        clear_all_btn = discord.ui.Button(
+            label="🗑️ Clear All Votes",
+            style=discord.ButtonStyle.danger,
+        )
+
+        async def _clear_all(inter: discord.Interaction):
+            await _confirm_clear_votes(inter, self, on_behalf_only=False)
+
+        clear_all_btn.callback = _clear_all
+        self.add_item(clear_all_btn)
+
+        clear_behalf_btn = discord.ui.Button(
+            label='🗑️ Clear "on behalf of" Votes',
+            style=discord.ButtonStyle.danger,
+        )
+
+        async def _clear_behalf(inter: discord.Interaction):
+            await _confirm_clear_votes(inter, self, on_behalf_only=True)
+
+        clear_behalf_btn.callback = _clear_behalf
+        self.add_item(clear_behalf_btn)
+
         # Team setup buttons (#129 + Rule A / #166) — opens the
         # structured roster builder filtered to signed-up members for
         # this team. Gated by `teams` config — applies identically to
@@ -2772,6 +2799,198 @@ class _DiscardDraftConfirmView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content=CANCEL_BACKPEDAL.format(detail="Your saved draft is still there."),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+
+async def _confirm_clear_votes(
+    inter: discord.Interaction,
+    officer_view: "OfficerView",
+    *,
+    on_behalf_only: bool,
+) -> None:
+    """#287: confirm step for the 🗑️ Clear-votes buttons. Counts the rows
+    that would be removed so the officer sees the blast radius, then shows a
+    two-button ephemeral confirm. `on_behalf_only=True` clears only
+    officer-entered votes (including corrections); `False` clears every vote
+    for the event.
+
+    Short-circuits with a plain "nothing to clear" notice when no matching
+    votes exist, so the officer doesn't get a confirm prompt that does
+    nothing.
+    """
+    if inter.user.id != officer_view.owner_user_id:
+        await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+        return
+
+    import config
+
+    signups = config.get_storm_signups(
+        officer_view.guild_id,
+        officer_view.event_type,
+        officer_view.event_date,
+    )
+    if on_behalf_only:
+        count = sum(1 for s in signups if s.get("is_on_behalf"))
+    else:
+        count = len(signups)
+
+    event_label = "Desert Storm" if officer_view.event_type == "DS" else "Canyon Storm"
+    if count == 0:
+        kind = "on-behalf " if on_behalf_only else ""
+        await inter.response.send_message(
+            f"Nothing to clear — there are no {kind}votes recorded for "
+            f"**{event_label}** on **{officer_view.event_date}**.",
+            ephemeral=True,
+        )
+        return
+
+    if on_behalf_only:
+        prompt = (
+            f"⚠️ This clears the **{count} on-behalf "
+            f"{'vote' if count == 1 else 'votes'}** for **{event_label}** on "
+            f"**{officer_view.event_date}** — the ones officers entered, "
+            f"including any corrections. Votes members cast for themselves "
+            f"stay. The matching rows on the sign-up Sheet tab are removed "
+            f"too. This can't be undone (the audit history is kept). Continue?"
+        )
+    else:
+        prompt = (
+            f"⚠️ This clears **all {count} "
+            f"{'vote' if count == 1 else 'votes'}** for **{event_label}** on "
+            f"**{officer_view.event_date}**, including votes members cast for "
+            f"themselves. The sign-up Sheet rows for this date are removed "
+            f"too. This can't be undone (the audit history is kept). Continue?"
+        )
+
+    confirm = _ClearVotesConfirmView(
+        owner_id=inter.user.id,
+        officer_view=officer_view,
+        on_behalf_only=on_behalf_only,
+    )
+    await inter.response.send_message(prompt, view=confirm, ephemeral=True)
+    try:
+        confirm.message = await inter.original_response()
+    except discord.HTTPException:
+        confirm.message = None
+
+
+class _ClearVotesConfirmView(discord.ui.View):
+    """Two-button confirm for the 🗑️ Clear-votes buttons (#287). Yes →
+    delete the live `storm_signups` rows + prune the matching Sheet rows +
+    refresh the officer post; Cancel → close, votes untouched."""
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        officer_view: "OfficerView",
+        on_behalf_only: bool,
+    ):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.officer_view = officer_view
+        self.on_behalf_only = on_behalf_only
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, clear them", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        import config
+        import storm_signup_view as sv
+
+        # Defer: the Sheet prune is a gspread round-trip that can exceed
+        # the 3-second initial-response window under rate-limit pressure.
+        try:
+            await inter.response.defer()
+        except discord.HTTPException:
+            pass
+
+        deleted = config.clear_storm_votes(
+            self.officer_view.guild_id,
+            self.officer_view.event_type,
+            self.officer_view.event_date,
+            on_behalf_only=self.on_behalf_only,
+        )
+
+        # Prune the Sheet log to match. A Sheet failure must not lose the
+        # already-applied DB clear — surface it instead of raising.
+        sheet_note = ""
+        try:
+            await asyncio.to_thread(
+                sv._prune_votes_from_sheet,
+                guild_id=self.officer_view.guild_id,
+                event_type=self.officer_view.event_type,
+                event_date=self.officer_view.event_date,
+                on_behalf_only=self.on_behalf_only,
+            )
+        except Exception as e:
+            logger.warning(
+                "[STORM CLEAR] Sheet prune failed for guild=%s event=%s/%s on_behalf_only=%s: %s",
+                self.officer_view.guild_id,
+                self.officer_view.event_type,
+                self.officer_view.event_date,
+                self.on_behalf_only,
+                e,
+            )
+            sheet_note = (
+                " (the sign-up Sheet tab couldn't be pruned just now — bot "
+                "logs have details; the vote tally above is already cleared.)"
+            )
+
+        # Refresh the officer post so the buckets reflect the clear.
+        try:
+            await self.officer_view.refresh_buckets()
+            self.officer_view._build_components()
+            if self.officer_view.message is not None:
+                await self.officer_view.message.edit(
+                    embed=_render_embed(
+                        self.officer_view.guild,
+                        self.officer_view.event_type,
+                        self.officer_view.event_date,
+                        self.officer_view.buckets,
+                        self.officer_view.bucket_filter,
+                    ),
+                    view=self.officer_view,
+                )
+        except discord.HTTPException:
+            pass
+
+        kind = "on-behalf " if self.on_behalf_only else ""
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.edit_original_response(
+                content=(
+                    f"🗑️ Cleared **{deleted} {kind}"
+                    f"{'vote' if deleted == 1 else 'votes'}**. The sign-up "
+                    f"view above has been refreshed.{sheet_note}"
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+    @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content=CANCEL_BACKPEDAL.format(detail="No votes were cleared."),
                 view=self,
             )
         except discord.HTTPException:

@@ -1072,6 +1072,128 @@ class TestStormSignups:
         assert recent in dates
         assert old not in dates
 
+    def test_clear_all_votes_removes_every_vote(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="Alice",
+            vote="b",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert deleted == 2
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+
+    def test_clear_on_behalf_keeps_self_votes(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="Alice",
+            vote="b",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18", on_behalf_only=True)
+        assert deleted == 1
+        rows = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(rows) == 1
+        assert rows[0]["target_member_id"] == "111"
+        assert rows[0]["is_on_behalf"] is False
+
+    def test_clear_on_behalf_clears_officer_correction_without_revert(self, temp_db):
+        # A member self-votes, an officer later overrides on-behalf (the
+        # override is now THE live vote). Clearing on-behalf removes it and
+        # must NOT revert to the member's earlier self-vote.
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="42",
+            vote="cannot",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18", on_behalf_only=True)
+        assert deleted == 1
+        # No live vote remains for member 42 — no auto-revert to "a".
+        assert config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "42") is None
+
+    def test_clear_leaves_history_intact(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        history = config.get_storm_signup_history(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(history) == 1  # audit trail survives the clear
+
+    def test_clear_isolates_other_events(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "CS",
+            "2026-05-18",
+            voter_user_id=222,
+            target_member_id="222",
+            vote="a",
+        )
+        config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+        assert len(config.get_storm_signups(TEST_GUILD_ID, "CS", "2026-05-18")) == 1
+
+    def test_clear_empty_event_returns_zero(self, temp_db):
+        import config
+
+        assert config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18") == 0
+
 
 class TestStormRosterImages:
     """Pointer to a saved roster-image message — written by the

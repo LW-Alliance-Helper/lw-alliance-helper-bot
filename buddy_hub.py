@@ -3,7 +3,8 @@
 One command opens a hub that adapts to tier and role:
 
 - **Everyone:** 🔍 Who's my buddy? · 📋 View buddy list
-- **Leadership:** ✏️ Manage pairings · 📤 Post buddy list · ⚙️ Open setup
+- **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📤 Post buddy
+  list · ⚙️ Open setup
 - **Premium leadership:** 🪄 Auto-assign · ♻️ Re-pair from scratch ·
   📌 Post self-service buttons
 
@@ -130,6 +131,9 @@ class _BuddyHubView(discord.ui.View):
         self._add("📋 View buddy list", discord.ButtonStyle.secondary, 0, self._view_list)
         if self.is_leader:
             self._add("✏️ Manage pairings", discord.ButtonStyle.success, 1, self._manage)
+            self._add(
+                "🔄 Refresh from sheet", discord.ButtonStyle.secondary, 1, self._refresh_sheet
+            )
             self._add("📤 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
             self._add("⚙️ Open setup", discord.ButtonStyle.secondary, 1, self._setup)
             self._add("🪄 Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
@@ -179,6 +183,32 @@ class _BuddyHubView(discord.ui.View):
         view = ui.BuddyManageView(self.bot, self.guild_id, inter.user.id)
         await inter.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await inter.original_response()
+
+    async def _refresh_sheet(self, inter: discord.Interaction):
+        """Re-read the Google Sheet (buddy tab + Squad Powers), normalize it into
+        the bot's layout, and update the list. For officers who edit the sheet by
+        hand and want the bot to pick up their changes without auto-pairing."""
+        if not self._leader_ok(inter):
+            await inter.response.send_message(_DENY_NOT_LEADER, ephemeral=True)
+            return
+        import config
+
+        await inter.response.defer(ephemeral=True)
+        cfg = config.get_buddy_config(self.guild_id)
+        # fill=False inside compute_current: keep exactly what's in the sheet
+        # (drop only invalid pairs); leave gap-filling to the Auto-assign button.
+        result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
+        await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
+        await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
+        embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
+        await inter.followup.send(
+            content=(
+                "🔄 Read your sheet and synced the buddy list. Invalid pairs (like two "
+                "Engineers together) were cleared. Use 🪄 Auto-assign to fill any gaps."
+            ),
+            embed=embed,
+            ephemeral=True,
+        )
 
     async def _post_list(self, inter: discord.Interaction):
         if not self._leader_ok(inter):

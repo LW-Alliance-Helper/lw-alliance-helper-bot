@@ -109,6 +109,7 @@ def test_hub_leadership_sees_management_and_premium_buttons():
     labels = [c.label for c in view.children]
     for needle in (
         "Manage pairings",
+        "Refresh from sheet",
         "Post buddy list",
         "Open setup",
         "Auto-assign",

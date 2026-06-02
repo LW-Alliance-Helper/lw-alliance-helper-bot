@@ -206,13 +206,14 @@ def init_db():
             CREATE TABLE IF NOT EXISTS guild_buddy_config (
                 guild_id               INTEGER PRIMARY KEY,
                 enabled                INTEGER DEFAULT 0,
-                buddy_tab              TEXT    DEFAULT 'Buddies',
+                buddy_tab              TEXT    DEFAULT 'Buddy System',
                 profession_tab         TEXT    DEFAULT 'Squad Powers',
                 profession_col_header  TEXT    DEFAULT 'Profession',
                 persistent_channel_id  INTEGER DEFAULT 0,
                 persistent_message_id  INTEGER DEFAULT 0,
                 notify_channel_id      INTEGER DEFAULT 0,
                 dm_enabled             INTEGER DEFAULT 0,
+                dm_template            TEXT    DEFAULT '',
                 engineer_doubling      INTEGER DEFAULT 0,
                 scarcity_priority      TEXT    DEFAULT 'alphabetical'
             )
@@ -989,13 +990,14 @@ def init_db():
         # ── guild_buddy_config migrations (#289 Profession Buddy System) ───────
         for col, definition in [
             ("enabled", "INTEGER DEFAULT 0"),
-            ("buddy_tab", "TEXT    DEFAULT 'Buddies'"),
+            ("buddy_tab", "TEXT    DEFAULT 'Buddy System'"),
             ("profession_tab", "TEXT    DEFAULT 'Squad Powers'"),
             ("profession_col_header", "TEXT    DEFAULT 'Profession'"),
             ("persistent_channel_id", "INTEGER DEFAULT 0"),
             ("persistent_message_id", "INTEGER DEFAULT 0"),
             ("notify_channel_id", "INTEGER DEFAULT 0"),
             ("dm_enabled", "INTEGER DEFAULT 0"),
+            ("dm_template", "TEXT    DEFAULT ''"),
             ("engineer_doubling", "INTEGER DEFAULT 0"),
             ("scarcity_priority", "TEXT    DEFAULT 'alphabetical'"),
         ]:
@@ -4442,13 +4444,14 @@ def update_train_config_field(guild_id: int, field: str, value):
 
 _BUDDY_DEFAULTS = {
     "enabled": 0,
-    "buddy_tab": "Buddies",
+    "buddy_tab": "Buddy System",
     "profession_tab": "Squad Powers",
     "profession_col_header": "Profession",
     "persistent_channel_id": 0,
     "persistent_message_id": 0,
     "notify_channel_id": 0,
     "dm_enabled": 0,
+    "dm_template": "",
     "engineer_doubling": 0,
     "scarcity_priority": "alphabetical",
 }

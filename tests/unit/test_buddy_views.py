@@ -67,6 +67,18 @@ def test_list_embed_shows_pairs_and_unpaired_sections():
     assert not embed.fields
 
 
+def test_render_buddy_dm_substitutes_and_tolerates_typos():
+    from defaults import DEFAULT_BUDDY_DM
+
+    out = buddy_ui._render_buddy_dm(
+        DEFAULT_BUDDY_DM, name="Walt", buddy="Eve", buddy_role="Engineer"
+    )
+    assert "Walt" in out and "Eve" in out and "Engineer" in out
+    # Unknown placeholder renders literally rather than crashing.
+    out2 = buddy_ui._render_buddy_dm("Hi {name}, ping {oops}", name="Walt", buddy="", buddy_role="")
+    assert out2 == "Hi Walt, ping {oops}"
+
+
 def test_describe_my_buddy_variants():
     r = _result()
     assert "Eve" in buddy_ui.describe_my_buddy(r, "1", "Walt")  # WL → engineer

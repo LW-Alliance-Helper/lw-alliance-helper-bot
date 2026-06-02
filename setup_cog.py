@@ -4361,10 +4361,10 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if already_configured and current.get("enabled"):
         notify_id = current.get("notify_channel_id", 0) or 0
         fields = [
-            ("Buddy Tab", current.get("buddy_tab") or "Buddies"),
+            ("Buddy Tab", current.get("buddy_tab") or "Buddy System"),
             (
                 "Two Engineers per War Leader",
-                "✅ Allowed" if current.get("engineer_doubling") else "❌ Off",
+                "✅ Yes" if current.get("engineer_doubling") else "❌ No",
             ),
             (
                 "When Engineers are scarce",
@@ -4373,7 +4373,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 else "Alphabetical",
             ),
             ("Leadership alerts", f"<#{notify_id}>" if notify_id else "*off*"),
-            ("Buddy DMs", "✅ On" if current.get("dm_enabled") else "❌ Off"),
+            ("Buddy DMs", "✅ Yes" if current.get("dm_enabled") else "❌ No"),
         ]
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -4447,7 +4447,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         "Which tab in your Google Sheet should hold the buddy list? The bot owns "
         "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
         "⚠️ *The bot will create it if it doesn't exist.*",
-        default="Buddies",
+        default="Buddy System",
         current=current.get("buddy_tab", ""),
         modal_title="Buddy Tab Name",
         modal_label="Tab name",
@@ -4461,8 +4461,8 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     dbl_view = YesNoView()
     await channel.send(
         "**Step 3 of 6 — Two Engineers per War Leader?**\n"
-        "When you have more Engineers than War Leaders, may a War Leader receive from "
-        "**two** Engineers? (An Engineer always serves just one War Leader.)",
+        "When you have more Engineers than War Leaders, should we allow War Leaders "
+        "to have 2 Engineers paired with them?",
         view=dbl_view,
     )
     await wait_view_or_cancel(dbl_view, cancel_event)
@@ -4476,24 +4476,45 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     engineer_doubling = 1 if dbl_view.selected else 0
 
     # ── Step 4: Scarcity priority ─────────────────────────────────────────────
-    scarcity_view = YesNoView()
-    await channel.send(
-        "**Step 4 of 6 — When Engineers are scarce**\n"
-        "If you have more War Leaders than Engineers, should the bot give the Engineers "
-        "to your **strongest** War Leaders first? *(No = alphabetical order.)*\n"
-        "*Strongest-first reads power from your Power Data Source and never breaks an "
-        "existing pair.*",
-        view=scarcity_view,
+    # Strongest-first reads power from the alliance's existing Power Data Source
+    # (Member Sync roster, or the storm Power Data Source). If neither is set up
+    # there's no power to read, so we skip the question and default to
+    # alphabetical rather than offer a setting that can't do anything (#289 test
+    # note 4).
+    from config import get_member_roster_config, get_storm_config
+
+    roster_cfg = get_member_roster_config(guild_id) or {}
+    storm_ds = get_storm_config(guild_id, "DS") or {}
+    power_source_available = (
+        bool(roster_cfg.get("enabled"))
+        or bool((storm_ds.get("power_metric_tab") or "").strip())
+        or bool(storm_ds.get("structured_flow_enabled"))
     )
-    await wait_view_or_cancel(scarcity_view, cancel_event)
-    if scarcity_view.cancelled:
-        wizard_registry.unregister(user.id, cancel_event)
-        return
-    if scarcity_view.selected is None:
-        await channel.send(timeout_msg)
-        wizard_registry.unregister(user.id, cancel_event)
-        return
-    scarcity_priority = "strongest_first" if scarcity_view.selected else "alphabetical"
+    scarcity_priority = "alphabetical"
+    if power_source_available:
+        scarcity_view = YesNoView()
+        await channel.send(
+            "**Step 4 of 6 — When Engineers are scarce**\n"
+            "If you have more War Leaders than Engineers, should we prioritize your "
+            "strongest War Leaders first? (Note that this will read from your existing "
+            "Power data source if you have one set up.)",
+            view=scarcity_view,
+        )
+        await wait_view_or_cancel(scarcity_view, cancel_event)
+        if scarcity_view.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if scarcity_view.selected is None:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        scarcity_priority = "strongest_first" if scarcity_view.selected else "alphabetical"
+    else:
+        await channel.send(
+            "ℹ️ *Skipping the strongest-first option: pairing the strongest War Leaders "
+            "first needs a Power data source. Set one up via Member Sync or Storm setup "
+            "and re-run this wizard to enable it. Using alphabetical order for now.*"
+        )
 
     # ── Step 5: Leadership alerts channel ─────────────────────────────────────
     is_premium_flag = await premium.is_premium(
@@ -4503,8 +4524,8 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 5 of 6 — Leadership alerts**\n"
         "When a member swaps profession and the bot re-pairs people, should it post a "
-        "heads-up to a leadership channel? *(Premium feature — posts fire only while "
-        "Premium is active.)*",
+        "heads-up to a leadership channel?\n"
+        "💎 Premium: these posts send only while Premium is active.",
         view=alerts_view,
     )
     await wait_view_or_cancel(alerts_view, cancel_event)
@@ -4539,11 +4560,13 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         notify_channel_id = notify_view.selected_channel.id
 
     # ── Step 6: Buddy DMs ─────────────────────────────────────────────────────
+    from defaults import DEFAULT_BUDDY_DM
+
     dm_view = YesNoView()
     await channel.send(
         "**Step 6 of 6 — Buddy DMs**\n"
-        "Should the bot DM members their buddy when it changes? *(Premium feature — DMs "
-        "send only while Premium is active.)*",
+        "Should the bot DM members their buddy when it changes?\n"
+        "💎 Premium: these DMs send only while Premium is active.",
         view=dm_view,
     )
     await wait_view_or_cancel(dm_view, cancel_event)
@@ -4556,6 +4579,26 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         return
     dm_enabled = 1 if dm_view.selected else 0
 
+    # If DMs are on, let leadership keep / use default / customize the body.
+    dm_template = current.get("dm_template", "") or ""
+    if dm_enabled:
+        dm_input = await ask_keep_or_change(
+            channel,
+            "**Buddy DM message**\n"
+            "What should the buddy DM say? Placeholders: `{name}` (the recipient), "
+            "`{buddy}` (their buddy), `{buddy_role}` (War Leader / Engineer).",
+            default=DEFAULT_BUDDY_DM,
+            current=current.get("dm_template", ""),
+            modal_title="Buddy DM message",
+            modal_label="DM body",
+            timeout_cmd="setup_buddy",
+            cancel_event=cancel_event,
+        )
+        if dm_input is None:
+            return
+        # Store empty when it matches the default, so the default can evolve.
+        dm_template = "" if dm_input == DEFAULT_BUDDY_DM else dm_input
+
     # ── Save ──────────────────────────────────────────────────────────────────
     update_buddy_config_field(guild_id, "enabled", 1)
     update_buddy_config_field(guild_id, "buddy_tab", buddy_tab)
@@ -4565,17 +4608,19 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
     update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
     update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
+    update_buddy_config_field(guild_id, "dm_template", dm_template)
 
     summary = discord.Embed(
         title="🤝 Buddy System configured",
         color=discord.Color.green(),
         description=(
             f"**Buddy tab:** {buddy_tab}\n"
-            f"**Two Engineers per War Leader:** {'✅' if engineer_doubling else '❌'}\n"
+            f"**Two Engineers per War Leader:** {'✅ Yes' if engineer_doubling else '❌ No'}\n"
             f"**When Engineers are scarce:** "
             f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
             f"**Leadership alerts:** {f'<#{notify_channel_id}>' if notify_channel_id else 'off'}\n"
-            f"**Buddy DMs:** {'✅' if dm_enabled else '❌'}"
+            f"**Buddy DMs:** {'✅ Yes' if dm_enabled else '❌ No'}"
+            f"{' (custom message)' if (dm_enabled and dm_template) else ''}"
         ),
     )
     summary.set_footer(text="Open /buddy to view the list, pair members, or auto-assign.")

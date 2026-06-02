@@ -401,14 +401,37 @@ async def _handle_profession_click(interaction: discord.Interaction, code: str):
 
     # Optional buddy DMs (Premium).
     if cfg.get("dm_enabled") and buds:
-        await _send_buddy_dms(interaction.client, guild_id, data)
+        await _send_buddy_dms(interaction.client, guild_id, cfg, data)
 
 
-async def _send_buddy_dms(bot, guild_id: int, data: dict) -> None:
+def _render_buddy_dm(template: str, *, name: str, buddy: str, buddy_role: str) -> str:
+    """Substitute {name} / {buddy} / {buddy_role} into the configured buddy DM
+    body. Tolerates missing/unknown placeholders so a typo renders literally
+    instead of crashing the DM path (same SafeDict idiom as storm/train DMs)."""
+
+    class _SafeDict(dict):
+        def __missing__(self, key):
+            return "{" + key + "}"
+
+    try:
+        return template.format_map(
+            _SafeDict(name=name or "", buddy=buddy or "", buddy_role=buddy_role or "")
+        )
+    except Exception:
+        return (
+            template.replace("{name}", name or "")
+            .replace("{buddy}", buddy or "")
+            .replace("{buddy_role}", buddy_role or "")
+        )
+
+
+async def _send_buddy_dms(bot, guild_id: int, cfg: dict, data: dict) -> None:
     import dm
+    from defaults import DEFAULT_BUDDY_DM
 
     after = data["after"]
     buds = data.get("buddies") or []
+    template = (cfg.get("dm_template") or "").strip() or DEFAULT_BUDDY_DM
     # Best-effort: DM both members of any pair that involves the actor's new buddy.
     affected = [p for p in after.pairs if p.engineer in buds or p.war_leader in buds]
     for p in affected:
@@ -418,14 +441,18 @@ async def _send_buddy_dms(bot, guild_id: int, data: dict) -> None:
                     bot,
                     guild_id,
                     p.wl_discord_id,
-                    content=f"🤝 Your Engineer buddy is **{p.engineer}**.",
+                    content=_render_buddy_dm(
+                        template, name=p.war_leader, buddy=p.engineer, buddy_role=buddy.ENGINEER
+                    ),
                 )
             if p.eng_discord_id:
                 await dm.send_dm_to_id(
                     bot,
                     guild_id,
                     p.eng_discord_id,
-                    content=f"🤝 Your War Leader buddy is **{p.war_leader}**.",
+                    content=_render_buddy_dm(
+                        template, name=p.engineer, buddy=p.war_leader, buddy_role=buddy.WAR_LEADER
+                    ),
                 )
         except Exception:
             pass

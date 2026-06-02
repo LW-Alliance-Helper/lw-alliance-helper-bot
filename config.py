@@ -2443,6 +2443,33 @@ def get_member_vote(
     return d
 
 
+def clear_storm_votes(
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    *,
+    on_behalf_only: bool = False,
+) -> int:
+    """Delete vote rows from the live ``storm_signups`` tally for an event.
+
+    With ``on_behalf_only=True`` only rows flagged ``is_on_behalf = 1``
+    (officer-entered votes, including corrections) are removed, leaving the
+    votes members cast for themselves. With the default
+    ``on_behalf_only=False`` every vote for the event is removed.
+
+    The append-only ``storm_signup_history`` audit table is intentionally
+    left untouched, so the record of who voted what (and any officer
+    overrides) survives a clear. Returns the number of rows deleted."""
+    sql = "DELETE FROM storm_signups WHERE guild_id = ? AND event_type = ? AND event_date = ?"
+    params: list = [int(guild_id), event_type, event_date]
+    if on_behalf_only:
+        sql += " AND is_on_behalf = 1"
+    with _get_conn() as conn:
+        deleted = conn.execute(sql, params).rowcount
+        conn.commit()
+    return deleted
+
+
 # ── Storm team plans (#239) ──────────────────────────────────────────────────
 #
 # Per-team, per-event record of the 30 players the officer committed to in

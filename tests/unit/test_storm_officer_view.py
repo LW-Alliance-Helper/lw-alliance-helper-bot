@@ -1999,3 +1999,133 @@ class TestOfficerViewTimeout:
         hint = kwargs.get("command_hint", "")
         assert "/desertstorm" in hint
         assert "View sign-ups" in hint
+
+
+class TestClearVotes:
+    """🗑️ Clear-votes officer controls (#287): button presence + the
+    confirm view's clear -> Sheet-prune -> refresh flow."""
+
+    def _save_cfg(self, event_type="DS"):
+        import config
+
+        config.save_storm_config(
+            TEST_GUILD_ID,
+            event_type,
+            tab_name=f"{event_type} Tab",
+            mail_template="",
+            timezone="America/New_York",
+            log_channel_id=0,
+            teams="both",
+        )
+
+    def _seed_two_votes(self):
+        """One member self-vote (target '1') + one on-behalf vote
+        (target 'Alice')."""
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=1,
+            target_member_id="1",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="Alice",
+            vote="b",
+            is_on_behalf=True,
+        )
+
+    def _owner_inter(self):
+        inter = MagicMock()
+        inter.user.id = 1
+        inter.response.defer = AsyncMock()
+        inter.response.send_message = AsyncMock()
+        inter.edit_original_response = AsyncMock()
+        return inter
+
+    def test_both_clear_buttons_present(self, seeded_db):
+        self._save_cfg()
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Clear All Votes" in lab for lab in labels)
+        assert any("on behalf of" in lab for lab in labels)
+
+    async def test_confirm_on_behalf_clears_only_officer_votes(self, seeded_db):
+        import config
+
+        self._save_cfg()
+        self._seed_two_votes()
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(1, "Self")])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        view.message = AsyncMock()
+        confirm = sov._ClearVotesConfirmView(owner_id=1, officer_view=view, on_behalf_only=True)
+        inter = self._owner_inter()
+        prune = MagicMock(return_value=1)
+        with patch("storm_signup_view._prune_votes_from_sheet", prune):
+            yes = next(c for c in confirm.children if "Yes" in getattr(c, "label", ""))
+            await yes.callback(inter)
+        rows = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert {r["target_member_id"] for r in rows} == {"1"}  # on-behalf gone
+        assert prune.call_args.kwargs["on_behalf_only"] is True
+        inter.edit_original_response.assert_awaited()
+        view.message.edit.assert_awaited()  # public post refreshed
+
+    async def test_confirm_clear_all_removes_everything(self, seeded_db):
+        import config
+
+        self._save_cfg()
+        self._seed_two_votes()
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        view.message = AsyncMock()
+        confirm = sov._ClearVotesConfirmView(owner_id=1, officer_view=view, on_behalf_only=False)
+        inter = self._owner_inter()
+        with patch("storm_signup_view._prune_votes_from_sheet", MagicMock(return_value=2)):
+            yes = next(c for c in confirm.children if "Yes" in getattr(c, "label", ""))
+            await yes.callback(inter)
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+
+    async def test_confirm_survives_sheet_prune_failure(self, seeded_db):
+        # A Sheet failure must not lose the already-applied DB clear.
+        import config
+
+        self._save_cfg()
+        self._seed_two_votes()
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        view.message = AsyncMock()
+        confirm = sov._ClearVotesConfirmView(owner_id=1, officer_view=view, on_behalf_only=False)
+        inter = self._owner_inter()
+        boom = MagicMock(side_effect=RuntimeError("sheet down"))
+        with patch("storm_signup_view._prune_votes_from_sheet", boom):
+            yes = next(c for c in confirm.children if "Yes" in getattr(c, "label", ""))
+            await yes.callback(inter)
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+        content = inter.edit_original_response.await_args.kwargs["content"]
+        assert "Sheet" in content  # officer told the prune didn't run
+
+    async def test_confirm_helper_short_circuits_when_nothing_to_clear(self, seeded_db):
+        self._save_cfg()
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        inter = self._owner_inter()
+        await sov._confirm_clear_votes(inter, view, on_behalf_only=False)
+        msg = inter.response.send_message.await_args.args[0]
+        assert "Nothing to clear" in msg
+
+    async def test_confirm_helper_denies_non_owner(self, seeded_db):
+        self._save_cfg()
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
+        inter = self._owner_inter()
+        inter.user.id = 2  # not the owner
+        await sov._confirm_clear_votes(inter, view, on_behalf_only=False)
+        msg = inter.response.send_message.await_args.args[0]
+        assert msg == sov.DENY_NOT_OWNER

@@ -7,7 +7,7 @@ actual click handler is integration territory — its data path is covered
 by `test_record_vote_round_trip` in test_config.py.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1574,3 +1574,171 @@ class TestPowerDmAckPrefix:
         assert body.startswith("✅ Your vote was recorded."), body
         # Header still surfaces so the member knows which column to fix.
         assert "Squad Power" in body
+
+
+_PRUNE_HEADER = [
+    "Event Date",
+    "Member",
+    "Vote",
+    "Voter Discord ID",
+    "On Behalf?",
+    "Voted At (UTC)",
+]
+
+
+class _FakeWorksheet:
+    def __init__(self, values, ws_id=12345):
+        self._values = values
+        self.id = ws_id
+        self.deleted_rows = []  # records delete_rows() fallback calls
+
+    def get_all_values(self):
+        return self._values
+
+    def delete_rows(self, idx):
+        self.deleted_rows.append(idx)
+
+
+class _FakeSpreadsheet:
+    def __init__(self, ws, tab_name):
+        self._ws = ws
+        self._tab_name = tab_name
+        self.batch_requests = []
+
+    def worksheet(self, name):
+        import gspread
+
+        if name == self._tab_name:
+            return self._ws
+        raise gspread.WorksheetNotFound(name)
+
+    def batch_update(self, body):
+        self.batch_requests.append(body)
+
+
+class TestPruneVotesFromSheet:
+    """`_prune_votes_from_sheet` (#287) deletes sign-up rows from the
+    configured Sheet tab so the append-only log doesn't keep stale or
+    conflicting rows after a clear."""
+
+    def _patches(self, sh):
+        return patch.multiple(
+            "config",
+            get_structured_storm_config=MagicMock(
+                return_value={"structured_flow_enabled": True, "signups_tab": "Sign-ups"}
+            ),
+            get_spreadsheet=MagicMock(return_value=sh),
+        )
+
+    def _values(self):
+        return [
+            _PRUNE_HEADER,
+            ["2026-05-18", "Alice", "Team A", "111", "no", "t1"],
+            ["2026-05-18", "Bob", "Team B", "999", "yes", "t2"],
+            ["2026-05-25", "Carol", "Team A", "222", "no", "t3"],  # other date
+        ]
+
+    def test_clear_all_deletes_matching_date_via_batch(self):
+        ws = _FakeWorksheet(self._values())
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=False,
+            )
+        assert deleted == 2
+        # One batch_update call, deleteDimension requests bottom-up so
+        # earlier deletes don't shift rows still pending.
+        assert len(sh.batch_requests) == 1
+        starts = [
+            r["deleteDimension"]["range"]["startIndex"] for r in sh.batch_requests[0]["requests"]
+        ]
+        assert starts == [2, 1]
+        assert ws.deleted_rows == []  # batch path, not the fallback
+
+    def test_on_behalf_only_deletes_yes_rows(self):
+        ws = _FakeWorksheet(self._values())
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=True,
+            )
+        assert deleted == 1
+        starts = [
+            r["deleteDimension"]["range"]["startIndex"] for r in sh.batch_requests[0]["requests"]
+        ]
+        assert starts == [2]  # only Bob's "yes" row (API row index 2)
+
+    def test_falls_back_to_delete_rows_without_numeric_sheet_id(self):
+        ws = _FakeWorksheet(self._values(), ws_id="not-an-int")
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=False,
+            )
+        assert deleted == 2
+        assert sh.batch_requests == []
+        # 1-indexed sheet rows, deleted bottom-up.
+        assert ws.deleted_rows == [3, 2]
+
+    def test_noop_when_structured_flow_off(self):
+        ws = _FakeWorksheet(self._values())
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with patch(
+            "config.get_structured_storm_config",
+            return_value={"structured_flow_enabled": False},
+        ):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=False,
+            )
+        assert deleted == 0
+        assert sh.batch_requests == []
+
+    def test_noop_when_tab_missing(self):
+        ws = _FakeWorksheet(self._values())
+        sh = _FakeSpreadsheet(ws, "Some Other Tab")  # worksheet("Sign-ups") raises
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=False,
+            )
+        assert deleted == 0
+
+    def test_noop_when_header_only(self):
+        ws = _FakeWorksheet([_PRUNE_HEADER])
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-05-18",
+                on_behalf_only=False,
+            )
+        assert deleted == 0
+        assert sh.batch_requests == []
+
+    def test_no_matching_date_returns_zero(self):
+        ws = _FakeWorksheet(self._values())
+        sh = _FakeSpreadsheet(ws, "Sign-ups")
+        with self._patches(sh):
+            deleted = sv._prune_votes_from_sheet(
+                guild_id=TEST_GUILD_ID,
+                event_type="DS",
+                event_date="2026-06-01",  # no rows on this date
+                on_behalf_only=False,
+            )
+        assert deleted == 0
+        assert sh.batch_requests == []

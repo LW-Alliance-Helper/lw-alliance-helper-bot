@@ -15,7 +15,6 @@ All Sheet I/O is in ``buddy`` and is driven off the event loop via
 
 import asyncio
 import logging
-import unicodedata
 from typing import Optional
 
 import discord
@@ -175,74 +174,56 @@ def _group_pairs(result) -> list:
     return [(info[k], engs[k]) for k in order]
 
 
-def _disp_width(s: str) -> int:
-    """Rendered width of a string in monospace cells (CJK/wide glyphs = 2).
-    Keeps the two columns aligned even with Korean/CJK names."""
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in (s or ""))
-
-
-def _clip(s: str, width: int) -> str:
-    """Truncate to a display width, adding an ellipsis if it overflows."""
-    s = s or ""
-    if _disp_width(s) <= width:
-        return s
-    out, w = "", 0
-    for c in s:
-        cw = 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
-        if w + cw > width - 1:
-            break
-        out += c
-        w += cw
-    return out + "…"
-
-
-def _pad(s: str, width: int) -> str:
-    """Right-pad ``s`` with spaces to a display width (monospace alignment)."""
-    gap = width - _disp_width(s)
-    return (s or "") + (" " * gap if gap > 0 else "")
-
-
-# Cap the War Leader column so one very long name doesn't push the table off a
-# mobile screen; longer names are clipped with an ellipsis.
-_WL_COL_CAP = 22
-_WL_HEADER = "War Leader"
-_ENG_HEADER = "Engineer"
+_FIELD_CHAR_CAP = 1000  # Discord field value cap is 1024; leave headroom.
 
 
 def build_buddy_list_embed(result, *, doubling: bool = False) -> discord.Embed:
     """The shareable buddy list.
 
-    Pairs render as a two-column **monospace table** inside a code block so the
-    columns actually line up (Discord's normal font is proportional, and the
-    ↔ arrow carries an emoji presentation that made the old one-line layout hard
-    to read). Unpaired members follow as plain label lines. ``doubling`` is
-    accepted for call-site stability."""
-    lines = [f"## {BUDDY_LIST_TITLE}", "🎖️ War Leader  ·  🔧 Engineer"]
+    Pairs render as **two side-by-side inline embed fields** (War Leader |
+    Engineer). Discord aligns the field columns for us, so row *i* of each
+    column lines up regardless of glyph width — including CJK names (준, 콜),
+    which a space-padded monospace table can't align pixel-perfectly. Unpaired
+    members follow as full-width fields. ``doubling`` is accepted for call-site
+    stability."""
+    embed = discord.Embed(title=BUDDY_LIST_TITLE, color=discord.Color.blurple())
 
     grouped = _group_pairs(result)
     if grouped:
-        rows = [(wl, ", ".join(eng_list)) for wl, eng_list in grouped]
-        col = min(max([_disp_width(wl) for wl, _ in rows] + [_disp_width(_WL_HEADER)]), _WL_COL_CAP)
-        gap = 2  # spaces between columns
-        table = [_pad(_WL_HEADER, col + gap) + _ENG_HEADER]
-        table.append("─" * (col + gap + _disp_width(_ENG_HEADER)))
-        for wl, eng in rows:
-            table.append(_pad(_clip(wl, col), col + gap) + eng)
-        block = "\n".join(table)
-        if len(block) > 3500:  # keep the whole embed under Discord's 4096 cap
-            block = block[:3500].rsplit("\n", 1)[0] + "\n… (list truncated)"
-        lines.append("```\n" + block + "\n```")
+        wl_lines: list[str] = []
+        eng_lines: list[str] = []
+        wl_len = eng_len = 0
+        dropped = 0
+        # Truncate by whole rows (not characters) so the two columns keep the
+        # same line count and stay aligned even on a very large roster.
+        for i, (wl, eng_list) in enumerate(grouped):
+            eng = ", ".join(eng_list) or "—"
+            if wl_len + len(wl) + 1 > _FIELD_CHAR_CAP or eng_len + len(eng) + 1 > _FIELD_CHAR_CAP:
+                dropped = len(grouped) - i
+                break
+            wl_lines.append(wl)
+            eng_lines.append(eng)
+            wl_len += len(wl) + 1
+            eng_len += len(eng) + 1
+        embed.add_field(name="🎖️ War Leader", value="\n".join(wl_lines) or "—", inline=True)
+        embed.add_field(name="🔧 Engineer", value="\n".join(eng_lines) or "—", inline=True)
+        if dropped:
+            embed.add_field(
+                name="​",
+                value=f"…and {dropped} more pairing(s) — see your buddy sheet tab.",
+                inline=False,
+            )
     else:
-        lines.append("*No buddy pairings yet.*")
+        embed.description = "*No buddy pairings yet.*"
 
     if result.unpaired_wl:
         names = ", ".join(m.name for m in result.unpaired_wl)
-        lines.append(f"🎖️ War Leaders without a buddy: {names}")
+        embed.add_field(name="🎖️ War Leaders without a buddy", value=names[:1024], inline=False)
     if result.unpaired_eng:
         names = ", ".join(m.name for m in result.unpaired_eng)
-        lines.append(f"🔧 Engineers without a buddy: {names}")
+        embed.add_field(name="🔧 Engineers without a buddy", value=names[:1024], inline=False)
 
-    return discord.Embed(description="\n".join(lines)[:4096], color=discord.Color.blurple())
+    return embed
 
 
 def describe_my_buddy(result, discord_id: str, name: str) -> str:

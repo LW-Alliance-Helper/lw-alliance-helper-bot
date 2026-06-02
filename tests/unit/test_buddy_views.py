@@ -55,35 +55,33 @@ def test_persistent_view_has_three_stable_buttons():
 # ── embed ─────────────────────────────────────────────────────────────────────
 
 
-def test_list_embed_shows_pairs_and_unpaired_sections():
+def test_list_embed_uses_two_aligned_inline_columns():
     embed = buddy_ui.build_buddy_list_embed(_result(), doubling=False)
-    desc = embed.description
-    # Header + monospace code-block table + unpaired label lines (no fields).
-    assert desc.startswith("## ")
-    assert "```" in desc  # pairs rendered in a code block for column alignment
-    assert "↔" not in desc  # arrows removed (they rendered as emoji)
-    assert "Walt" in desc and "Eve" in desc
-    assert "War Leaders without a buddy: Wanda" in desc
-    assert "Engineers without a buddy: Zed" in desc
-    assert not embed.fields
+    assert embed.title == buddy_ui.BUDDY_LIST_TITLE
+    wl = next(f for f in embed.fields if "War Leader" in f.name and f.inline)
+    eng = next(f for f in embed.fields if "Engineer" in f.name and f.inline)
+    assert "Walt" in wl.value and "Eve" in eng.value
+    # Same row count in both columns → rows line up.
+    assert len(wl.value.splitlines()) == len(eng.value.splitlines())
+    # Unpaired members are full-width fields, not inline columns.
+    assert any("War Leaders without a buddy" in f.name and not f.inline for f in embed.fields)
+    assert any("Engineers without a buddy" in f.name and not f.inline for f in embed.fields)
 
 
-def test_list_embed_columns_align_with_wide_cjk_names():
+def test_list_embed_columns_stay_in_lockstep_with_cjk_and_doubles():
     res = buddy.PairingResult(
         pairs=[
-            buddy.Pair("쁘INSH4F쁘", "1", "Chose", "3"),
-            buddy.Pair("Adrian", "2", "ChuckN0rr1s", "4"),
+            buddy.Pair("JON 준", "1", "CatieBlue", "3"),
+            buddy.Pair("LunarLion", "2", "Komm Bucket", "4"),
+            buddy.Pair("LunarLion", "2", "Lady Lav", "5"),  # doubled WL
         ],
     )
     embed = buddy_ui.build_buddy_list_embed(res)
-    lines = embed.description.splitlines()
-    row_cjk = next(ln for ln in lines if "Chose" in ln)
-    row_ascii = next(ln for ln in lines if "ChuckN0rr1s" in ln)
-    # The Engineer column starts at the same display offset on every row, even
-    # though the CJK name has fewer characters but more rendered width.
-    off_cjk = buddy_ui._disp_width(row_cjk[: row_cjk.index("Chose")])
-    off_ascii = buddy_ui._disp_width(row_ascii[: row_ascii.index("ChuckN0rr1s")])
-    assert off_cjk == off_ascii
+    wl = next(f for f in embed.fields if "War Leader" in f.name)
+    eng = next(f for f in embed.fields if "Engineer" in f.name)
+    assert wl.value.splitlines() == ["JON 준", "LunarLion"]
+    assert eng.value.splitlines() == ["CatieBlue", "Komm Bucket, Lady Lav"]
+    assert len(wl.value.splitlines()) == len(eng.value.splitlines())
 
 
 def test_render_buddy_dm_substitutes_and_tolerates_typos():

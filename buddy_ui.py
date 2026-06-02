@@ -326,7 +326,7 @@ async def _handle_profession_click(interaction: discord.Interaction, code: str):
         return
 
     try:
-        await interaction.response.defer(ephemeral=True, thinking=False)
+        await interaction.response.defer(ephemeral=True, thinking=True)
     except discord.HTTPException:
         pass
 
@@ -623,10 +623,11 @@ class BuddyManageView(discord.ui.View):
             pass
 
     async def _unpair(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = self._cfg()
         pairs = await asyncio.to_thread(buddy.load_pairs, self.guild_id, cfg.get("buddy_tab"))
         if not pairs:
-            await inter.response.send_message("ℹ️ There are no pairings to unpair.", ephemeral=True)
+            await inter.followup.send("ℹ️ There are no pairings to unpair.", ephemeral=True)
             return
         opts = [
             discord.SelectOption(label=f"{p.war_leader} ↔ {p.engineer}"[:100], value=_pair_value(p))
@@ -634,18 +635,20 @@ class BuddyManageView(discord.ui.View):
         ]
 
         async def _pick(i: discord.Interaction, value: str):
+            await i.response.defer(ephemeral=True, thinking=True)
             remaining = [p for p in pairs if _pair_value(p) != value]
             result = await self._save_pairs_list(cfg, remaining)
-            await i.response.send_message("🔓 Unpaired.", ephemeral=True)
+            await i.followup.send("🔓 Unpaired.", ephemeral=True)
             await self._refresh_editor(i, result, cfg)
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick a pairing to break:",
             view=_PickerView(opts, self.owner_id, _pick, placeholder="Pick a pairing…"),
             ephemeral=True,
         )
 
     async def _pair(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = self._cfg()
         result = await asyncio.to_thread(compute_current, self.guild_id, cfg)
         free_wl = result.unpaired_wl
@@ -662,7 +665,7 @@ class BuddyManageView(discord.ui.View):
             doublable = []
         wl_choices = list(free_wl) + doublable
         if not wl_choices or not free_eng:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "ℹ️ Need at least one free War Leader and one free Engineer to pair.",
                 ephemeral=True,
             )
@@ -677,6 +680,7 @@ class BuddyManageView(discord.ui.View):
             ]
 
             async def _pick_eng(i2: discord.Interaction, eng_value: str):
+                await i2.response.defer(ephemeral=True, thinking=True)
                 wl = next((m for m in wl_choices if _member_value(m) == wl_value), None)
                 eng = next((m for m in free_eng if _member_value(m) == eng_value), None)
                 pairs = await asyncio.to_thread(
@@ -686,11 +690,10 @@ class BuddyManageView(discord.ui.View):
                     buddy.Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, source="manual")
                 )
                 res = await self._save_pairs_list(cfg, pairs)
-                await i2.response.send_message(
-                    f"➕ Paired **{wl.name}** ↔ **{eng.name}**.", ephemeral=True
-                )
+                await i2.followup.send(f"➕ Paired **{wl.name}** ↔ **{eng.name}**.", ephemeral=True)
                 await self._refresh_editor(i2, res, cfg)
 
+            # Opening the next picker is instant (no I/O), so a plain response is fine.
             await i.response.send_message(
                 "Now pick the Engineer:",
                 view=_PickerView(
@@ -699,22 +702,23 @@ class BuddyManageView(discord.ui.View):
                 ephemeral=True,
             )
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick the War Leader:",
             view=_PickerView(wl_opts, self.owner_id, _pick_wl, placeholder="Pick a War Leader…"),
             ephemeral=True,
         )
 
     async def _repair(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = self._cfg()
         pairs = await asyncio.to_thread(buddy.load_pairs, self.guild_id, cfg.get("buddy_tab"))
         result = await asyncio.to_thread(compute_current, self.guild_id, cfg)
         free_eng = result.unpaired_eng
         if not pairs:
-            await inter.response.send_message("ℹ️ There are no pairings to change.", ephemeral=True)
+            await inter.followup.send("ℹ️ There are no pairings to change.", ephemeral=True)
             return
         if not free_eng:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "ℹ️ No free Engineers to swap in. Unpair someone first.", ephemeral=True
             )
             return
@@ -730,6 +734,7 @@ class BuddyManageView(discord.ui.View):
             ]
 
             async def _pick_eng(i2: discord.Interaction, eng_value: str):
+                await i2.response.defer(ephemeral=True, thinking=True)
                 eng = next((m for m in free_eng if _member_value(m) == eng_value), None)
                 new_pairs = [p for p in pairs if _pair_value(p) != value]
                 new_pairs.append(
@@ -742,12 +747,13 @@ class BuddyManageView(discord.ui.View):
                     )
                 )
                 res = await self._save_pairs_list(cfg, new_pairs)
-                await i2.response.send_message(
+                await i2.followup.send(
                     f"🔁 **{target.war_leader}** is now paired with **{eng.name}**.",
                     ephemeral=True,
                 )
                 await self._refresh_editor(i2, res, cfg)
 
+            # Opening the next picker is instant (no I/O), so a plain response is fine.
             await i.response.send_message(
                 "Pick the Engineer to swap in:",
                 view=_PickerView(
@@ -756,14 +762,15 @@ class BuddyManageView(discord.ui.View):
                 ephemeral=True,
             )
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick the pairing to change:",
             view=_PickerView(opts, self.owner_id, _pick_pair, placeholder="Pick a pairing…"),
             ephemeral=True,
         )
 
     async def _refresh(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = self._cfg()
         result = await asyncio.to_thread(compute_current, self.guild_id, cfg)
-        await inter.response.defer()
         await self._refresh_editor(inter, result, cfg)
+        await inter.followup.send("🔄 Refreshed.", ephemeral=True)

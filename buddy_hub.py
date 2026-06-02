@@ -147,7 +147,7 @@ class _BuddyHubView(discord.ui.View):
     async def _whoami(self, inter: discord.Interaction):
         import config
 
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
         await inter.followup.send(
@@ -158,7 +158,7 @@ class _BuddyHubView(discord.ui.View):
     async def _view_list(self, inter: discord.Interaction):
         import config
 
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
@@ -177,12 +177,12 @@ class _BuddyHubView(discord.ui.View):
             return
         import config
 
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         view = ui.BuddyManageView(self.bot, self.guild_id, inter.user.id)
-        await inter.response.send_message(embed=embed, view=view, ephemeral=True)
-        view.message = await inter.original_response()
+        view.message = await inter.followup.send(embed=embed, view=view, ephemeral=True)
 
     async def _refresh_sheet(self, inter: discord.Interaction):
         """Re-read the Google Sheet (buddy tab + Squad Powers), normalize it into
@@ -193,7 +193,7 @@ class _BuddyHubView(discord.ui.View):
             return
         import config
 
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         # fill=False inside compute_current: keep exactly what's in the sheet
         # (drop only invalid pairs); leave gap-filling to the Auto-assign button.
@@ -216,7 +216,7 @@ class _BuddyHubView(discord.ui.View):
             return
         import config
 
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
@@ -264,7 +264,7 @@ class _BuddyHubView(discord.ui.View):
             return
         import config
 
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(
             ui.compute_autofill, self.guild_id, cfg, from_scratch=False
@@ -283,7 +283,7 @@ class _BuddyHubView(discord.ui.View):
         async def _do(i: discord.Interaction):
             import config
 
-            await i.response.defer(ephemeral=True)
+            await i.response.defer(ephemeral=True, thinking=True)
             cfg = config.get_buddy_config(self.guild_id)
             result = await asyncio.to_thread(
                 ui.compute_autofill, self.guild_id, cfg, from_scratch=True
@@ -305,7 +305,7 @@ class _BuddyHubView(discord.ui.View):
     async def _post_buttons(self, inter: discord.Interaction):
         if not await self._premium_guard(inter, "buddy_self_service"):
             return
-        await inter.response.defer(ephemeral=True)
+        await inter.response.defer(ephemeral=True, thinking=True)
         msg = await ui.post_self_service_message(self.bot, inter.channel, self.guild_id)
         if msg is not None:
             await inter.followup.send(

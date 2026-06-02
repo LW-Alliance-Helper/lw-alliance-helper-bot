@@ -15,6 +15,7 @@ All Sheet I/O is in ``buddy`` and is driven off the event loop via
 
 import asyncio
 import logging
+import unicodedata
 from typing import Optional
 
 import discord
@@ -174,32 +175,72 @@ def _group_pairs(result) -> list:
     return [(info[k], engs[k]) for k in order]
 
 
-def build_buddy_list_embed(result, *, doubling: bool = False) -> discord.Embed:
-    """The shareable buddy list (mirrors the alliance's sheet layout).
+def _disp_width(s: str) -> int:
+    """Rendered width of a string in monospace cells (CJK/wide glyphs = 2).
+    Keeps the two columns aligned even with Korean/CJK names."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in (s or ""))
 
-    Rendered as a single markdown block: a ``##`` header, one line per War
-    Leader (with their Engineer(s)), then the unpaired members as plain
-    label lines. ``doubling`` is accepted for call-site stability; the per-row
-    ``(×2)`` tag already signals a doubled War Leader."""
-    lines = [f"## {BUDDY_LIST_TITLE}", ""]
+
+def _clip(s: str, width: int) -> str:
+    """Truncate to a display width, adding an ellipsis if it overflows."""
+    s = s or ""
+    if _disp_width(s) <= width:
+        return s
+    out, w = "", 0
+    for c in s:
+        cw = 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+        if w + cw > width - 1:
+            break
+        out += c
+        w += cw
+    return out + "…"
+
+
+def _pad(s: str, width: int) -> str:
+    """Right-pad ``s`` with spaces to a display width (monospace alignment)."""
+    gap = width - _disp_width(s)
+    return (s or "") + (" " * gap if gap > 0 else "")
+
+
+# Cap the War Leader column so one very long name doesn't push the table off a
+# mobile screen; longer names are clipped with an ellipsis.
+_WL_COL_CAP = 22
+_WL_HEADER = "War Leader"
+_ENG_HEADER = "Engineer"
+
+
+def build_buddy_list_embed(result, *, doubling: bool = False) -> discord.Embed:
+    """The shareable buddy list.
+
+    Pairs render as a two-column **monospace table** inside a code block so the
+    columns actually line up (Discord's normal font is proportional, and the
+    ↔ arrow carries an emoji presentation that made the old one-line layout hard
+    to read). Unpaired members follow as plain label lines. ``doubling`` is
+    accepted for call-site stability."""
+    lines = [f"## {BUDDY_LIST_TITLE}", "🎖️ War Leader  ·  🔧 Engineer"]
 
     grouped = _group_pairs(result)
     if grouped:
-        for wl, eng_list in grouped:
-            partners = ", ".join(eng_list)
-            tag = "  (×2)" if len(eng_list) >= 2 else ""
-            lines.append(f"🎖️ {wl} ↔ 🔧 {partners}{tag}")
+        rows = [(wl, ", ".join(eng_list)) for wl, eng_list in grouped]
+        col = min(max([_disp_width(wl) for wl, _ in rows] + [_disp_width(_WL_HEADER)]), _WL_COL_CAP)
+        gap = 2  # spaces between columns
+        table = [_pad(_WL_HEADER, col + gap) + _ENG_HEADER]
+        table.append("─" * (col + gap + _disp_width(_ENG_HEADER)))
+        for wl, eng in rows:
+            table.append(_pad(_clip(wl, col), col + gap) + eng)
+        block = "\n".join(table)
+        if len(block) > 3500:  # keep the whole embed under Discord's 4096 cap
+            block = block[:3500].rsplit("\n", 1)[0] + "\n… (list truncated)"
+        lines.append("```\n" + block + "\n```")
     else:
         lines.append("*No buddy pairings yet.*")
 
-    if result.unpaired_wl or result.unpaired_eng:
-        lines.append("")
-        if result.unpaired_wl:
-            names = ", ".join(m.name for m in result.unpaired_wl)
-            lines.append(f"🎖️ War Leaders without a buddy: {names}")
-        if result.unpaired_eng:
-            names = ", ".join(m.name for m in result.unpaired_eng)
-            lines.append(f"🔧 Engineers without a buddy: {names}")
+    if result.unpaired_wl:
+        names = ", ".join(m.name for m in result.unpaired_wl)
+        lines.append(f"🎖️ War Leaders without a buddy: {names}")
+    if result.unpaired_eng:
+        names = ", ".join(m.name for m in result.unpaired_eng)
+        lines.append(f"🔧 Engineers without a buddy: {names}")
 
     return discord.Embed(description="\n".join(lines)[:4096], color=discord.Color.blurple())
 

@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.7] — 2026-06-04
+
+### Fixed
+- **Today's events** opens the editor even when all your events are Manual, so you can add a one-off event to today's draft ([#291](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/291)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.4.6] — 2026-05-31
 
 ### Added

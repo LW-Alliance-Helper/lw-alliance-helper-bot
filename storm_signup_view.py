@@ -911,6 +911,113 @@ def _mirror_vote_to_sheet(
     )
 
 
+def _prune_votes_from_sheet(
+    *,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    on_behalf_only: bool,
+) -> int:
+    """Delete sign-up rows for an event from the alliance's configured
+    `signups_tab`, mirroring a `config.clear_storm_votes` call so the Sheet
+    log doesn't keep stale or conflicting rows after a clear.
+
+    With `on_behalf_only=True`, only rows whose `On Behalf?` column reads
+    "yes" are removed. No-op (returns 0) if the structured flow is off, the
+    tab/spreadsheet isn't configured, or the tab doesn't exist yet. Other
+    Sheet errors propagate; caller handles. Returns the number of rows
+    deleted.
+
+    The Sheet log is append-only (one row per vote/change), so a member who
+    self-voted and was later overridden on-behalf has two rows; an
+    on-behalf prune drops only the "yes" row, matching the DB-side intent of
+    keeping what members cast for themselves.
+    """
+    import gspread
+
+    import config
+
+    structured = config.get_structured_storm_config(guild_id, event_type)
+    if not structured.get("structured_flow_enabled"):
+        return 0
+    tab_name = structured.get("signups_tab")
+    if not tab_name:
+        return 0
+
+    sh = config.get_spreadsheet(guild_id)
+    if sh is None:
+        return 0
+    try:
+        ws = sh.worksheet(tab_name)
+    except gspread.WorksheetNotFound:
+        return 0  # No tab yet => nothing to prune.
+
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        return 0  # Header only (or empty) => nothing to prune.
+
+    # Locate the two columns we filter on by header name, falling back to
+    # the canonical positions written by `_mirror_vote_to_sheet`
+    # (Event Date = col 0, On Behalf? = col 4) if a header is missing.
+    header = [c.strip().lower() for c in rows[0]]
+    try:
+        date_col = header.index("event date")
+    except ValueError:
+        date_col = 0
+    try:
+        behalf_col = header.index("on behalf?")
+    except ValueError:
+        behalf_col = 4
+
+    # Collect 0-based row indices (matching the Sheets API row dimension,
+    # where index 0 is the header row) for every data row to drop.
+    to_delete: list[int] = []
+    for i, row in enumerate(rows[1:], start=1):
+        if (row[date_col].strip() if len(row) > date_col else "") != event_date:
+            continue
+        if on_behalf_only:
+            behalf = row[behalf_col].strip().lower() if len(row) > behalf_col else ""
+            if behalf != "yes":
+                continue
+        to_delete.append(i)
+
+    if not to_delete:
+        return 0
+
+    # Prefer a single spreadsheet-level batch_update with deleteDimension
+    # requests ordered bottom-up (so earlier deletes don't shift the rows
+    # still pending) — one API call instead of N, which matters under the
+    # Sheets write quota. Fall back to per-row delete_rows when the numeric
+    # sheet id isn't available (e.g. a test fake).
+    sheet_id_raw = getattr(ws, "id", None)
+    sheet_id_int = None
+    try:
+        sheet_id_int = int(sheet_id_raw) if sheet_id_raw is not None else None
+    except (TypeError, ValueError):
+        sheet_id_int = None
+
+    if sheet_id_int is not None:
+        requests = [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id_int,
+                        "dimension": "ROWS",
+                        "startIndex": idx,
+                        "endIndex": idx + 1,
+                    }
+                }
+            }
+            for idx in sorted(to_delete, reverse=True)
+        ]
+        sh.batch_update({"requests": requests})
+    else:
+        for idx in sorted(to_delete, reverse=True):
+            ws.delete_rows(idx + 1)  # delete_rows is 1-indexed
+
+    return len(to_delete)
+
+
 def register_persistent_signup_views(bot) -> int:
     """Called once at startup (after `on_ready`). Re-attaches a SignupView
     for every registration post within the recent window so buttons keep

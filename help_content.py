@@ -16,6 +16,7 @@ import discord
 from setup_hub import (
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
+    HUB_BTN_BUDDY,
     HUB_BTN_EVENTS,
     HUB_BTN_GROWTH,
     HUB_BTN_MEMBERS,
@@ -83,22 +84,22 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Train Schedule",
         "description": (
             "Track who's assigned the alliance train each day; optionally "
-            "generate a personalised ChatGPT blurb prompt."
+            "generate a personalised ChatGPT blurb prompt, or let the bot "
+            "pick fair conductors with Conductor Rotation."
         ),
         "commands": [
             (
                 f"/setup → {HUB_BTN_TRAIN}",
-                "Configure the train tab, blurb generation, and reminders.",
+                "Configure the train tab, blurb generation, reminders, and "
+                "(optionally) turn on Conductor Rotation.",
             ),
             (
-                "/train overview",
-                "View the schedule with Add / Update / Generate Prompt / Clear buttons.",
+                "/train",
+                "Open the train hub. With rotation on: this week's draft, schedule "
+                "presets, member rules, assignment logs. With it off: the "
+                "schedule overview, prompt log, and birthday check.",
             ),
-            (
-                "/train log [date]",
-                "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days).",
-            ),
-            ("/train birthdays", "Manually run the birthday → train auto-population now."),
+            ("/birthdays", "Show upcoming birthdays from your member sheet."),
         ],
     },
     "birthdays": {
@@ -203,6 +204,35 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "/survey remind",
                 "Send now or schedule. Free: channel post. 💎 Premium: also DM via roster.",
+            ),
+        ],
+    },
+    "buddy": {
+        "emoji": "🤝",
+        "label": "Profession Buddy System",
+        "description": (
+            "Pair your War Leaders with Engineers so the Engineer's daily buff "
+            "Skill always has a home. Professions come from your Squad Power "
+            "Survey, and the buddy list lives in its own sheet tab."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_BUDDY}",
+                "Turn it on, pick the buddy tab, choose whether two Engineers "
+                "can share a War Leader, set the scarcity priority, and pick the "
+                "leadership-alert channel.",
+            ),
+            (
+                "/buddy",
+                "**Buddy hub.** Everyone can tap 🔍 Who's my buddy? or 📋 View "
+                "buddy list. Leadership gets ✏️ Manage pairings (unpair / pair / "
+                "re-pair) and 📤 Post buddy list.",
+            ),
+            (
+                "💎 Auto-assign + self-service",
+                "Premium adds 🪄 Auto-assign (keeps existing pairs), ♻️ Re-pair "
+                "from scratch, 📌 one-click profession buttons members swap "
+                "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
     },

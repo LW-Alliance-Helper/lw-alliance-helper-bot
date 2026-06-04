@@ -58,10 +58,9 @@ EXPECTED_COG_COMMANDS = {
         "survey",
     },
     "TrainCog": {
-        # Top-level: /train group + the standalone /birthdays
-        # (member-facing list) and /cancel (wizard exit). Subcommands
-        # of /train (overview / log / birthdays) are introspected
-        # separately.
+        # Top-level: the /train hub command + the standalone /birthdays
+        # (member-facing list) and /cancel (wizard exit). /train is a single
+        # hub command (no subcommands) since #55's hub rework.
         "train",
         "birthdays",
         "cancel",
@@ -230,24 +229,24 @@ class TestCogRegistration:
                 pass
 
     @pytest.mark.asyncio
-    async def test_train_cog_train_group_has_expected_subcommands(self, seeded_db):
-        """/train is a top-level Group containing overview / log /
-        birthdays. /birthdays (standalone member-facing list) and
-        /cancel stay top-level and aren't part of the group."""
+    async def test_train_cog_train_is_single_hub_command(self, seeded_db):
+        """/train is now a single top-level hub command (not a group) — it opens
+        an embed + button grid via train_hub. The old overview/log/birthdays
+        subcommands and the #55 rotation subcommands were folded into the hub.
+        /birthdays (standalone list) and /cancel stay top-level."""
         from train_cog import TrainCog
 
         cog = _make_cog(TrainCog)
         try:
-            assert _subcommands_on(cog.train_group) == {
-                "overview",
-                "log",
-                "birthdays",
-            }
+            assert not hasattr(cog, "train_group")  # group collapsed into the hub
+            # `train` is a plain command leaf alongside birthdays + cancel.
+            assert _commands_on(cog) == {"train", "birthdays", "cancel"}
         finally:
-            try:
-                cog.check_reminder.cancel()
-            except Exception:
-                pass
+            for loop_name in ("check_reminder", "check_rotation"):
+                try:
+                    getattr(cog, loop_name).cancel()
+                except Exception:
+                    pass
 
     def test_member_roster_cog_registers_expected_commands(self, seeded_db):
         from member_roster import MemberRosterCog
@@ -426,6 +425,7 @@ class TestSetupHubLaunchersGateNonAdmins:
             "_launch_event_setup",
             "_launch_survey_setup",
             "_launch_shiny_tasks_setup",
+            "_launch_buddy_setup",
         ],
     )
     async def test_launcher_rejects_non_privileged_caller(
@@ -664,21 +664,12 @@ class TestSurveyCommandsGate:
 
 
 class TestTrainCommandsGate:
-    """Post-#198: the train commands live under the /train group as
-    `train_overview`, `train_log`, and `train_birthdays` on the cog;
-    /birthdays remains a standalone top-level command (member-facing
-    list of upcoming birthdays)."""
+    """Post-#55 hub rework: the train surface is the `/train` hub command plus
+    the standalone `/birthdays` and `/cancel`. All three are leadership-gated
+    via train._guard, so a caller without the leadership role is rejected."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "command_attr",
-        [
-            "train_overview",
-            "train_log",
-            "train_birthdays",
-            "birthdays",
-        ],
-    )
+    @pytest.mark.parametrize("command_attr", ["train", "birthdays", "cancel"])
     async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
         from train_cog import TrainCog
 
@@ -688,18 +679,16 @@ class TestTrainCommandsGate:
             interaction.user.roles = []  # no leadership role
 
             cmd = getattr(cog, command_attr)
-            try:
-                await cmd.callback(cog, interaction)
-            except TypeError:
-                await cmd.callback(cog, interaction, None)  # /train log [date]
+            await cmd.callback(cog, interaction)
 
             content, _ = _last_message(interaction)
             assert "leadership" in (content or "").lower()
         finally:
-            try:
-                cog.check_reminder.cancel()
-            except Exception:
-                pass
+            for loop_name in ("check_reminder", "check_rotation"):
+                try:
+                    getattr(cog, loop_name).cancel()
+                except Exception:
+                    pass
 
 
 # ── Donate / Upgrade are unguarded (anyone can run them) ─────────────────────

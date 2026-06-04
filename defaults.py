@@ -236,6 +236,19 @@ We have you as a Sub for our {event_label}{team_blurb} roster for {date} at {tim
 Please let us know if you aren't able to participate!"""
 
 
+# ── Profession Buddy System DM (#289, Premium) ──────────────────────────────
+#
+# Sent to a member when their profession buddy changes. `{name}` is the
+# recipient, `{buddy}` the partner's name, and `{buddy_role}` the partner's
+# profession (War Leader / Engineer). Unknown placeholders render literally
+# via the SafeDict-backed renderer, so a typo can't crash the DM loop.
+
+DEFAULT_BUDDY_DM = (
+    "🤝 Hey {name}, your profession buddy is now **{buddy}** ({buddy_role}). "
+    "Coordinate your daily Skill so it always gets used. Good luck out there!"
+)
+
+
 # ── Shiny Tasks daily announcement (free tier) ──────────────────────────────
 #
 # `{servers}` renders as a comma-separated list with an "and" before the

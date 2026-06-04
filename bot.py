@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.4.7"
+__version__ = "1.5.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -224,6 +224,9 @@ async def on_ready():
     if "storm_commands_root" not in bot.extensions:
         await bot.load_extension("storm_commands_root")
         print("[INFO] Storm commands root cog loaded")
+    if "buddy_cog" not in bot.extensions:
+        await bot.load_extension("buddy_cog")
+        print("[INFO] Buddy cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;
@@ -293,6 +296,17 @@ async def on_ready():
         register_persistent_signup_views(bot)
     except Exception as e:
         print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
+        sentry_sdk.capture_exception(e)
+
+    # Re-register persistent Profession Buddy System Views (#289) so the
+    # one-click profession buttons keep working after a restart. Fed from
+    # `guild_buddy_config` rows that have a posted self-service message.
+    try:
+        from buddy_ui import register_persistent_buddy_views
+
+        register_persistent_buddy_views(bot)
+    except Exception as e:
+        print(f"[BUDDY] Failed to re-register buddy views: {e}")
         sentry_sdk.capture_exception(e)
 
     # Refresh zone emoji IDs from the bot's own Application Emojis

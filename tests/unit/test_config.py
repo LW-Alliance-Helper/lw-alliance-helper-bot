@@ -125,6 +125,75 @@ class TestTrainConfig:
         assert cfg["reminder_time"] == "22:00"
 
 
+class TestTrainRotationConfig:
+    """Test the Train Conductor Rotation (#55) columns of guild_train_config."""
+
+    def test_rotation_defaults_off(self, temp_db):
+        import config
+
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["rotation_enabled"] == 0  # opt-in
+        assert cfg["history_tab"] == "Train History"
+        assert cfg["member_rules_tab"] == "Train Member Rules"
+        assert cfg["day_rules_tab"] == "Train Day Rules"
+        assert cfg["rotation_public_channel_id"] == 0  # public posts opt-in
+        assert cfg["rule_type_roles"] == {}
+        assert cfg["weekly_draft_day"] == 6
+        assert cfg["active_schedule_preset"] == "Standard Week"
+
+    def test_rotation_save_and_reload(self, temp_db):
+        import config
+        import json
+
+        config.save_train_rotation_config(
+            TEST_GUILD_ID,
+            rotation_enabled=1,
+            history_tab="Hist",
+            day_rules_tab="Days",
+            rotation_public_channel_id=222,
+            weekly_draft_day=0,
+            rule_type_roles=json.dumps({"vs": 999, "leadership": 888}),
+            counted_reasons="auto,vs",
+            active_schedule_preset="VS Save Week",
+        )
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["rotation_enabled"] == 1
+        assert cfg["history_tab"] == "Hist"
+        assert cfg["rotation_public_channel_id"] == 222
+        assert cfg["weekly_draft_day"] == 0
+        # rule_type_roles round-trips as a parsed dict.
+        assert cfg["rule_type_roles"] == {"vs": 999, "leadership": 888}
+        assert cfg["counted_reasons"] == "auto,vs"
+        assert cfg["active_schedule_preset"] == "VS Save Week"
+
+    def test_rotation_and_legacy_saves_do_not_clobber(self, temp_db):
+        """The two save paths touch disjoint columns — saving one must not
+        reset the other's fields."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1, history_tab="Hist")
+        # Legacy save afterwards must preserve the rotation columns.
+        config.save_train_config(
+            TEST_GUILD_ID,
+            tab_name="Legacy Tab",
+            themes=["A"],
+            tones=["B"],
+            prompt_template="t",
+            default_tone="B",
+        )
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"] == "Legacy Tab"
+        assert cfg["rotation_enabled"] == 1
+        assert cfg["history_tab"] == "Hist"
+
+        # And a rotation save afterwards must preserve the legacy columns.
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=0, day_rules_tab="Days2")
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"] == "Legacy Tab"  # legacy untouched
+        assert cfg["rotation_enabled"] == 0
+        assert cfg["day_rules_tab"] == "Days2"
+
+
 class TestBirthdayConfig:
     """Test guild_birthday_config save/load."""
 
@@ -1002,6 +1071,128 @@ class TestStormSignups:
         assert today in dates
         assert recent in dates
         assert old not in dates
+
+    def test_clear_all_votes_removes_every_vote(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="Alice",
+            vote="b",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert deleted == 2
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+
+    def test_clear_on_behalf_keeps_self_votes(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="Alice",
+            vote="b",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18", on_behalf_only=True)
+        assert deleted == 1
+        rows = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(rows) == 1
+        assert rows[0]["target_member_id"] == "111"
+        assert rows[0]["is_on_behalf"] is False
+
+    def test_clear_on_behalf_clears_officer_correction_without_revert(self, temp_db):
+        # A member self-votes, an officer later overrides on-behalf (the
+        # override is now THE live vote). Clearing on-behalf removes it and
+        # must NOT revert to the member's earlier self-vote.
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=42,
+            target_member_id="42",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=999,
+            target_member_id="42",
+            vote="cannot",
+            is_on_behalf=True,
+        )
+        deleted = config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18", on_behalf_only=True)
+        assert deleted == 1
+        # No live vote remains for member 42 — no auto-revert to "a".
+        assert config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "42") is None
+
+    def test_clear_leaves_history_intact(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        history = config.get_storm_signup_history(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(history) == 1  # audit trail survives the clear
+
+    def test_clear_isolates_other_events(self, temp_db):
+        import config
+
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-18",
+            voter_user_id=111,
+            target_member_id="111",
+            vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID,
+            "CS",
+            "2026-05-18",
+            voter_user_id=222,
+            target_member_id="222",
+            vote="a",
+        )
+        config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+        assert len(config.get_storm_signups(TEST_GUILD_ID, "CS", "2026-05-18")) == 1
+
+    def test_clear_empty_event_returns_zero(self, temp_db):
+        import config
+
+        assert config.clear_storm_votes(TEST_GUILD_ID, "DS", "2026-05-18") == 0
 
 
 class TestStormRosterImages:

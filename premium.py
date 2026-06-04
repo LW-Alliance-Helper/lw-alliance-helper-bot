@@ -135,6 +135,12 @@ PREMIUM_FEATURES: set[str] = {
     "survey_date",
     "multiple_surveys",
     "thread_destinations",
+    # Profession Buddy System (#289). Free tier keeps the shared list, the
+    # /buddy lookup, and manual pairing; these four gate the Premium layer.
+    "buddy_auto_assign",
+    "buddy_self_service",
+    "buddy_auto_repair",
+    "buddy_dm",
 }
 
 

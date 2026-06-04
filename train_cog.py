@@ -18,22 +18,18 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import get_config
-from messages import SETUP_POINTER_FOOTER, TIER_COMPARISON
+from messages import SETUP_POINTER_FOOTER
 from setup_hub import HUB_BTN_BIRTHDAYS
 from train import (
     ET,
-    BIRTHDAY_LOOKAHEAD,
     active_wizards,
     ReminderView,
     _guard,
     load_schedule,
     save_schedule,
-    load_blurb_log,
     load_birthdays,
     check_and_add_birthdays,
     get_member_tab_name,
-    parse_date_and_name,
-    build_train_view_embed,
 )
 
 
@@ -73,14 +69,12 @@ date_cls = date
 
 
 class TrainCog(commands.Cog):
-    # /train is a top-level slash-command group containing overview /
-    # log / birthdays. `/birthdays` (the standalone member list) and
-    # `/cancel` (the wizard-cancellation hatch) stay top-level — they
-    # serve different intent surfaces.
-    train_group = app_commands.Group(
-        name="train",
-        description="Alliance train schedule + birthday integration",
-    )
+    # `/train` is a single top-level hub command (it opens an embed + button
+    # grid via train_hub.handle_train_hub) — the same shape as `/events` and the
+    # storm hubs. It replaced the old `/train overview|log|birthdays` subcommands
+    # and the Train Conductor Rotation subcommands (#55). `/birthdays` (the
+    # standalone member list) and `/cancel` (the wizard escape hatch) stay
+    # top-level. The two background loops live here too.
 
     def __init__(self, bot):
         self.bot = bot
@@ -94,68 +88,33 @@ class TrainCog(commands.Cog):
         # redeploy. Dedup now lives on `guild_birthday_config
         # .last_train_population_date` (see #89), read fresh from
         # SQLite on every tick.
+        # ── Train Conductor Rotation (#55) ──────────────────────────────
+        # Separate per-minute loop for the rotation feature: the weekly
+        # draft (fires on the configured draft day) and the daily
+        # confirmation (fires every drive day). In-memory per-day dedup
+        # sets mirror `reminders_fired`; robust outage catch-up is #227's
+        # job (it will stamp this loop's heartbeat).
+        self.last_rotation_date = datetime.now(tz=ET).date()
+        self.rotation_draft_fired = set()  # guild_ids that posted a draft today
+        self.rotation_confirm_fired = set()  # guild_ids that posted a confirm today
         self.check_reminder.start()
+        self.check_rotation.start()
 
     def cog_unload(self):
         self.check_reminder.cancel()
+        self.check_rotation.cancel()
 
-    # ── /train birthdays ───────────────────────────────────────────────────────
+    # ── /train hub ───────────────────────────────────────────────────────────
 
-    @train_group.command(
-        name="birthdays",
-        description="Run the birthday check and add upcoming birthdays to the schedule",
+    @app_commands.command(
+        name="train",
+        description="Open the train hub for this alliance",
     )
-    async def train_birthdays(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
+    @app_commands.guild_only()
+    async def train(self, interaction: discord.Interaction):
+        from train_hub import handle_train_hub
 
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            current_schedule = load_schedule()
-            before_count = len(current_schedule)
-            updated_schedule, alerts = check_and_add_birthdays(
-                current_schedule,
-                guild_id=interaction.guild_id if hasattr(interaction, "guild_id") else None,
-            )
-            after_count = len(updated_schedule)
-            added = after_count - before_count
-
-            if added > 0 or alerts:
-                save_schedule(updated_schedule)
-
-            # Post any conflict alerts to the channel directly (high visibility)
-            channel = interaction.channel
-            for alert in alerts:
-                if channel:
-                    await channel.send(alert)
-
-            if added > 0 and not alerts:
-                await interaction.followup.send(
-                    f"✅ Birthday check complete — added **{added}** birthday entr{'y' if added == 1 else 'ies'} to the schedule.",
-                    ephemeral=True,
-                )
-            elif added > 0 and alerts:
-                await interaction.followup.send(
-                    f"✅ Birthday check complete — added **{added}** birthday entr{'y' if added == 1 else 'ies'} to the schedule. "
-                    f"⚠️ **{len(alerts)}** conflict(s) posted above require manual action.",
-                    ephemeral=True,
-                )
-            elif alerts:
-                await interaction.followup.send(
-                    f"⚠️ Birthday check complete — **{len(alerts)}** conflict(s) posted above require manual action.",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.followup.send(
-                    f"✅ Birthday check complete — no new entries to add within the next {BIRTHDAY_LOOKAHEAD} days.",
-                    ephemeral=True,
-                )
-        except Exception as e:
-            await interaction.followup.send(
-                f"⚠️ Birthday check failed: {e}",
-                ephemeral=True,
-            )
+        await handle_train_hub(self.bot, interaction)
 
     # ── /birthdays ─────────────────────────────────────────────────────────────
 
@@ -236,119 +195,6 @@ class TrainCog(commands.Cog):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── /train log ─────────────────────────────────────────────────────────────
-
-    @train_group.command(
-        name="log",
-        description="Show the train prompt log (window depends on your tier; pass a date to filter)",
-    )
-    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14'")
-    async def train_log(self, interaction: discord.Interaction, date: str = None):
-        if not await _guard(interaction):
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            schedule = await asyncio.get_event_loop().run_in_executor(None, load_schedule)
-        except Exception as e:
-            await interaction.followup.send(f"⚠️ Could not load schedule: {e}", ephemeral=True)
-            return
-
-        target_date = None
-        if date:
-            parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
-            if not parsed_d:
-                await interaction.followup.send(
-                    f"⚠️ Could not parse date **{date}**. Try a format like `April 14` or `4/14`.",
-                    ephemeral=True,
-                )
-                return
-            target_date = parsed_d
-
-        embed = discord.Embed(
-            title="🚂 Train Prompt Log",
-            color=discord.Color.blurple(),
-        )
-
-        from datetime import date as _date
-
-        today = _date.today()
-
-        if target_date:
-            entry = schedule.get(target_date.isoformat())
-            if not entry:
-                embed.description = f"*No train entry found for {target_date:%B} {target_date.day}, {target_date.year}.*"
-            else:
-                embed.add_field(
-                    name="Date",
-                    value=f"{target_date:%A, %B} {target_date.day}, {target_date.year}",
-                    inline=False,
-                )
-                embed.add_field(name="Name", value=entry.get("name") or "*not set*", inline=False)
-                embed.add_field(name="Theme", value=entry.get("theme") or "*not set*", inline=False)
-                embed.add_field(name="Tone", value=entry.get("tone") or "*not set*", inline=False)
-                embed.add_field(
-                    name="Notes", value=(entry.get("notes") or "*none*")[:1024], inline=False
-                )
-                embed.add_field(
-                    name="Prompt Retrieved",
-                    value="✅ Yes" if entry.get("prompt_retrieved") else "❌ No",
-                    inline=False,
-                )
-        else:
-            import premium
-
-            window_days = (
-                await premium.get_limit(
-                    "train_log_days",
-                    interaction.guild_id,
-                    interaction=interaction,
-                    bot=interaction.client,
-                )
-                or 30
-            )
-            cutoff = today - timedelta(days=window_days)
-            recent = []
-            for date_str, entry in schedule.items():
-                try:
-                    d = _date.fromisoformat(date_str)
-                except ValueError:
-                    continue
-                if cutoff <= d <= today + timedelta(days=window_days):
-                    recent.append((d, entry))
-            recent.sort(key=lambda t: t[0], reverse=True)
-
-            if not recent:
-                embed.description = f"*No train entries in the past {window_days} days.*"
-            else:
-                lines = []
-                for d, entry in recent[:20]:
-                    retrieved = "✅" if entry.get("prompt_retrieved") else "❌"
-                    name = entry.get("name") or "*unset*"
-                    theme = entry.get("theme") or ""
-                    bits = [f"**{d:%a %b} {d.day}** — {name}"]
-                    if theme:
-                        bits.append(theme)
-                    bits.append(f"prompt {retrieved}")
-                    lines.append("• " + " · ".join(bits))
-                embed.description = "\n".join(lines)[:4000]
-                if window_days < 30:
-                    embed.set_footer(
-                        text=TIER_COMPARISON.format(
-                            free_limit=f"{window_days}-day window",
-                            premium_limit="30 days",
-                        )
-                    )
-                else:
-                    embed.set_footer(
-                        text=f"Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter."
-                    )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    # ── /cancel ────────────────────────────────────────────────────────────────
-
     @app_commands.command(name="cancel", description="Cancel any active wizard or log session")
     async def cancel(self, interaction: discord.Interaction):
         if not await _guard(interaction):
@@ -378,34 +224,6 @@ class TrainCog(commands.Cog):
             await interaction.response.send_message(
                 "ℹ️ You don't have an active session running.", ephemeral=True
             )
-
-    # ── /train overview ────────────────────────────────────────────────────────
-
-    @train_group.command(
-        name="overview",
-        description="View the train schedule with Add / Update / Generate Prompt / Clear buttons",
-    )
-    async def train_overview(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-
-        from config import get_train_config
-
-        train_cfg = get_train_config(interaction.guild_id)
-        blurbs_on = bool(train_cfg.get("blurbs_enabled", 1))
-
-        await interaction.response.defer()
-
-        schedule = load_schedule(interaction.guild_id)
-        blurb_log = load_blurb_log(interaction.guild_id)
-        embed = build_train_view_embed(schedule, blurb_log)
-
-        # Lazy import to avoid the train ⇆ train_ui circular import at load time
-        from train_ui import TrainActionView
-
-        view = TrainActionView(self.bot, interaction.guild_id, blurbs_on)
-
-        await interaction.followup.send(embed=embed, view=view)
 
     # ── Reminder loop ──────────────────────────────────────────────────────────
 
@@ -585,6 +403,11 @@ class TrainCog(commands.Cog):
 
             if not cfg or not cfg.setup_complete:
                 continue
+            # Rotation-enabled guilds get the #55 daily confirmation instead of
+            # this legacy "today's train is for X" reminder — skip them here so
+            # they don't receive both.
+            if train_cfg.get("rotation_enabled"):
+                continue
             if not train_cfg.get("reminders_enabled", 1):
                 continue
 
@@ -664,4 +487,156 @@ class TrainCog(commands.Cog):
 
     @check_reminder.before_loop
     async def before_check_reminder(self):
+        await self.bot.wait_until_ready()
+
+    # ── Train Conductor Rotation loop (#55) ──────────────────────────────────
+
+    @tasks.loop(minutes=1)
+    async def check_rotation(self):
+        """Per-minute tick driving the two rotation surfaces: the weekly draft
+        (on the configured draft day/time) and the daily confirmation (every
+        drive day at the reminder time). Both are gated on `rotation_enabled`,
+        so guilds that haven't opted into rotation are untouched. Per-guild
+        try/except isolates one misconfigured guild from the rest."""
+        from config import get_config, get_train_config
+
+        today = datetime.now(tz=ET).date()
+        if self.last_rotation_date != today:
+            self.last_rotation_date = today
+            self.rotation_draft_fired = set()
+            self.rotation_confirm_fired = set()
+
+        for guild in self.bot.guilds:
+            try:
+                cfg = get_config(guild.id)
+                tcfg = get_train_config(guild.id)
+                if not cfg or not cfg.setup_complete or not tcfg.get("rotation_enabled"):
+                    continue
+                try:
+                    guild_tz = ZoneInfo(cfg.timezone or "America/New_York")
+                except ZoneInfoNotFoundError:
+                    guild_tz = ZoneInfo("America/New_York")
+                guild_now = datetime.now(tz=guild_tz)
+                await self._maybe_post_weekly_draft(guild, cfg, tcfg, guild_now)
+                await self._maybe_post_daily_confirm(guild, cfg, tcfg, guild_now)
+            except Exception as e:
+                import traceback
+
+                print(f"[TRAIN ROTATION] check_rotation failed for guild {guild.id}: {e}")
+                print(traceback.format_exc())
+
+    @staticmethod
+    def _hm(value: str, default: str) -> tuple[int, int]:
+        """Parse 'HH:MM' → (hour, minute), falling back to `default`."""
+        try:
+            h, m = (value or default).split(":")
+            return int(h), int(m)
+        except (ValueError, AttributeError):
+            h, m = default.split(":")
+            return int(h), int(m)
+
+    async def _maybe_post_weekly_draft(self, guild, cfg, tcfg, guild_now):
+        """Generate + post the weekly draft when the draft day/time hits.
+
+        Posts to the train reminder channel (the rotation reuses it, falling
+        back to the leadership channel) at the train reminder time. The draft
+        covers this week when it fires on a Monday, otherwise the upcoming week
+        (so a Sunday draft previews the week that starts the next day)."""
+        import train_rotation_ui as ui
+
+        draft_day = int(tcfg.get("weekly_draft_day", 6))
+        r_h, r_m = self._hm(tcfg.get("reminder_time"), "22:00")
+        if guild_now.weekday() != draft_day or guild_now.hour != r_h or guild_now.minute != r_m:
+            return
+        if guild.id in self.rotation_draft_fired:
+            return
+
+        channel_id = tcfg.get("reminder_channel_id") or cfg.leadership_channel_id
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            print(
+                f"[TRAIN ROTATION] draft channel {channel_id} not resolvable for "
+                f"guild {guild.id} — weekly draft skipped"
+            )
+            self.rotation_draft_fired.add(guild.id)
+            return
+
+        today = guild_now.date()
+        week_start = (
+            today if today.weekday() == 0 else today + timedelta(days=(7 - today.weekday()))
+        )
+        preset_name = tcfg.get("active_schedule_preset") or "Standard Week"
+
+        draft = await asyncio.get_event_loop().run_in_executor(
+            None, ui.regenerate_week, self.bot, guild.id, week_start
+        )
+        view = ui.WeeklyDraftView(self.bot, guild.id, draft, week_start, preset_name)
+        try:
+            view.message = await channel.send(
+                embed=ui.build_weekly_draft_embed(draft, week_start, preset_name), view=view
+            )
+        except discord.Forbidden:
+            print(
+                f"[TRAIN ROTATION] missing perms to post draft in {channel_id} for guild {guild.id}"
+            )
+        self.rotation_draft_fired.add(guild.id)
+        print(f"[TRAIN ROTATION] weekly draft posted for guild {guild.id} (week of {week_start})")
+
+    async def _maybe_post_daily_confirm(self, guild, cfg, tcfg, guild_now):
+        """Post today's conductor confirmation when the reminder time hits.
+
+        Posts to the train reminder channel (reused by rotation). Reads today's
+        scheduled row from Train History; skips silently if the day was already
+        posted, skipped, or has no scheduled conductor."""
+        import train_rotation as tr
+        import train_rotation_ui as ui
+
+        r_h, r_m = self._hm(tcfg.get("reminder_time"), "22:00")
+        if guild_now.hour != r_h or guild_now.minute != r_m:
+            return
+        if guild.id in self.rotation_confirm_fired:
+            return
+        self.rotation_confirm_fired.add(guild.id)  # mark first — one attempt/day
+
+        today_iso = guild_now.date().isoformat()
+        history = await asyncio.get_event_loop().run_in_executor(
+            None, tr.load_history, guild.id, tcfg.get("history_tab") or ""
+        )
+        row = next((h for h in history if h.date == today_iso), None)
+        if row is None or row.status != tr.STATUS_SCHEDULED:
+            # No draft covers today, or it's already posted/skipped — nothing to do.
+            return
+
+        channel_id = tcfg.get("reminder_channel_id") or cfg.leadership_channel_id
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            print(
+                f"[TRAIN ROTATION] confirm channel {channel_id} not resolvable for "
+                f"guild {guild.id} — daily confirmation skipped"
+            )
+            return
+
+        dd = tr.DraftDay(
+            date=row.date,
+            weekday=date_cls.fromisoformat(row.date).weekday(),
+            rule_type=row.reason if row.reason in tr.RULE_LABELS else tr.RULE_AUTO,
+            member=row.member or None,
+            reason=row.reason,
+            needs_picking=not bool(row.member),
+        )
+        # 0 = alliance opted out of public posts; the confirmation just records.
+        public_channel_id = tcfg.get("rotation_public_channel_id") or 0
+        view = ui.DailyConfirmView(self.bot, guild.id, dd, public_channel_id)
+        try:
+            view.message = await channel.send(embed=ui.build_daily_confirm_embed(dd), view=view)
+        except discord.Forbidden:
+            print(
+                f"[TRAIN ROTATION] missing perms to post confirmation in {channel_id} "
+                f"for guild {guild.id}"
+            )
+            return
+        print(f"[TRAIN ROTATION] daily confirmation posted for guild {guild.id} ({today_iso})")
+
+    @check_rotation.before_loop
+    async def before_check_rotation(self):
         await self.bot.wait_until_ready()

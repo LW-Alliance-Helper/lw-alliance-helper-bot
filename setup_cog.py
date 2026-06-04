@@ -53,7 +53,11 @@ from storm_event_hub import (
 )
 from wizard_registry import wait_view_or_cancel
 
-WIZARD_TIMEOUT = 120  # 2 minutes per step
+# View timeout duration (seconds) for each wizard step. Distinct from the
+# imported `WIZARD_TIMEOUT` message template (messages.py) used by the
+# `.format(wizard=...)` timeout notices — they must not share a name, or the
+# int shadows the string and every timeout notice crashes (#290).
+WIZARD_STEP_TIMEOUT = 120  # 2 minutes per step
 
 
 def _parse_12h_time(raw: str) -> str:
@@ -214,7 +218,7 @@ class RoleSelectStep(discord.ui.View):
         current_name: str | None = None,
         guild: discord.Guild | None = None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected_role = None
         self.confirmed = False
         self._placeholder = placeholder
@@ -403,7 +407,7 @@ class ChannelSelectStep(discord.ui.View):
         current_id: int | None = None,
         current_name: str | None = None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected_channel = None
         self.confirmed = False
         self.suggested_name = suggested_name
@@ -746,7 +750,7 @@ class ChannelSelectStep(discord.ui.View):
 
 class ConfirmView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.confirmed = None
 
     @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success)
@@ -811,7 +815,7 @@ class ModalLaunchView(discord.ui.View):
         current_display: str | None = None,
         on_keep_current=None,
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.modal = modal
         self.confirmed = False
         self._current_value = current_value
@@ -898,7 +902,7 @@ async def ask_keep_or_change(
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.value = None
             self.confirmed = False
 
@@ -1194,7 +1198,7 @@ async def _manage_train_templates(
 
         class TemplateListView(discord.ui.View):
             def __init__(self, count: int, at_cap: bool):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.action: str | None = None
                 self.index: int | None = None
                 if at_cap:
@@ -1268,7 +1272,7 @@ async def _manage_train_templates(
 
             class PickView(discord.ui.View):
                 def __init__(self):
-                    super().__init__(timeout=WIZARD_TIMEOUT)
+                    super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                     self.idx = None
                     options = [
                         discord.SelectOption(label=t["name"][:100], value=str(i))
@@ -1529,6 +1533,20 @@ async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
     await run_train_setup(interaction, bot)
 
 
+async def _launch_buddy_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the buddy wizard."
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(
+        interaction, "⚙️ Starting Profession Buddy System setup — check the channel for prompts!"
+    )
+    await run_buddy_setup(interaction, bot)
+
+
 async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
         await _send_ack(
@@ -1725,7 +1743,7 @@ class TimezoneSelectView(discord.ui.View):
     """
 
     def __init__(self, *, current: str | None = None):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected = None
         self.confirmed = False
         self.current = current
@@ -2313,7 +2331,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
         reply = await wizard_registry.wait_or_cancel(
-            bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT),
+            bot.wait_for("message", check=check, timeout=WIZARD_STEP_TIMEOUT),
             cancel_event,
         )
         if reply is None:
@@ -2552,7 +2570,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         class MetricsActionView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.choice = None
                 if not metrics:
                     self.edit_btn.disabled = True
@@ -2609,7 +2627,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         # Pick which metric to edit/delete
         class PickMetricView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.index = None
                 options = [
                     discord.SelectOption(
@@ -2655,7 +2673,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         class EditLaunchView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.modal = MetricModal(
                     label_default=existing["label"], col_default=existing["col"]
                 )
@@ -2714,7 +2732,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     class FrequencyView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.selected = None
             if not custom_interval_unlocked:
                 self.custom.disabled = True
@@ -3026,7 +3044,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
         class BucketFilterView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
                 self.selected: list[str] | None = None
 
                 # Keep-current button on its own row when leadership
@@ -3172,7 +3190,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     class ThresholdsChoiceView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
             # Keep-current button when leadership saved custom thresholds
@@ -3279,7 +3297,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     class LabelsChoiceView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=WIZARD_TIMEOUT)
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
             # Mirror ThresholdsChoiceView: when leadership has saved
@@ -3716,11 +3734,42 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             templates[0]["template"] if templates else "",
         )
 
+    # ── Auto Rotation toggle (#55) ─────────────────────────────────────────────
+    # Optional. When on, the bot drafts a fair weekly conductor rotation and
+    # posts a daily confirmation, reusing the reminder channel + time below
+    # (instead of the manual "today's train is for X" reminder). The rest of the
+    # rotation config (public posts, rule-type roles, the weekly pattern) runs
+    # after the shared steps, in `_run_train_rotation_extras`.
+    rotation_was_on = bool(current.get("rotation_enabled"))
+    rotation_view = YesNoView()
+    await channel.send(
+        "**Auto Rotation** *(optional)*\n"
+        "Want the bot to auto-pick fair conductors from a weekly pattern? It drafts the "
+        "week for leadership to review, then confirms and (optionally) posts each day's "
+        "conductor. You can always override any day by hand."
+        + ("\n\n*Rotation is currently on, continue to adjust it.*" if rotation_was_on else ""),
+        view=rotation_view,
+    )
+    await wait_view_or_cancel(rotation_view, cancel_event)
+    if rotation_view.cancelled:
+        return
+    if rotation_view.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return
+    rotation_on = bool(rotation_view.selected)
+
     # ── Step 7: Reminders ─────────────────────────────────────────────────────
     reminder_view = YesNoView()
+    rotation_note = (
+        " *(Auto Rotation also uses this channel + time for its weekly draft and "
+        "daily confirmation.)*"
+        if rotation_on
+        else ""
+    )
     await channel.send(
         "**Step 7 of 8 — Train Reminders**\n"
-        "Should the bot post a reminder to leadership when someone is assigned the train each day?",
+        "Should the bot post a reminder to leadership when someone is assigned the train each day?"
+        + rotation_note,
         view=reminder_view,
     )
     await wait_view_or_cancel(reminder_view, cancel_event)
@@ -3730,9 +3779,12 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
         return
     reminders_enabled = 1 if reminder_view.selected else 0
-    reminder_channel_id = 0
-    reminder_time = "22:00"
-    if not reminders_enabled:
+    reminder_channel_id = current.get("reminder_channel_id", 0) or 0
+    reminder_time = current.get("reminder_time", "22:00") or "22:00"
+    # The reminder channel + time are needed when EITHER the legacy reminder OR
+    # Auto Rotation is on (rotation reuses them).
+    need_reminder_setup = bool(reminders_enabled) or rotation_on
+    if not reminders_enabled and not rotation_on:
         had_prior_reminders = train_already_configured and current.get("reminders_enabled")
         if had_prior_reminders:
             await channel.send(
@@ -3741,10 +3793,10 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             )
         else:
             await channel.send(
-                "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
+                "ℹ️ *Skipping the reminder channel and time — train reminders are off.*"
             )
 
-    if reminders_enabled:
+    if need_reminder_setup:
         # ── Step 7a: Reminder channel ──────────────────────────────────────────
         saved_reminder_ch = current.get("reminder_channel_id", 0) or 0
         reminder_ch_view = ChannelSelectStep(
@@ -3815,6 +3867,25 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 )
                 return
             await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
+
+    # ── Weekly draft day (Auto Rotation only) ──────────────────────────────────
+    weekly_draft_day = current.get("weekly_draft_day", 6)
+    if rotation_on:
+        day_view = _WeekdaySelectView(current=current.get("weekly_draft_day", 6))
+        await channel.send(
+            "**Weekly Draft Day**\n"
+            "Which day should the bot post the upcoming week's draft for leadership to "
+            "review? *(Sunday is typical: it previews the week starting Monday. The "
+            "draft posts at your reminder time above.)*",
+            view=day_view,
+        )
+        await wait_view_or_cancel(day_view, cancel_event)
+        if day_view.cancelled:
+            return
+        if day_view.selected is None:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return
+        weekly_draft_day = day_view.selected
 
     # ── Step 8: Train DM body (💎 Premium) ────────────────────────────────────
     # Customisable body of the DM that fires alongside the channel
@@ -3900,8 +3971,662 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
     embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_TRAIN))
     await channel.send(embed=embed)
+
+    # ── Train Conductor Rotation (#55) ─────────────────────────────────────────
+    # The toggle + shared channel/time/draft-day were handled in the main flow
+    # above. When rotation is on, run the rotation-specific extras (public-post
+    # opt-in, per-rule-type roles, counted reasons, tabs) and open the preset
+    # editor. When the user turned a previously-on rotation off, disable it.
+    if rotation_on:
+        await _run_train_rotation_extras(
+            bot=bot,
+            interaction=interaction,
+            channel=channel,
+            user=user,
+            guild_id=guild_id,
+            cancel_event=cancel_event,
+            guild_tz=guild_tz,
+            weekly_draft_day=weekly_draft_day,
+        )
+    elif rotation_was_on:
+        from config import update_train_config_field
+
+        update_train_config_field(guild_id, "rotation_enabled", 0)
+        await channel.send(
+            "🚂 Auto Rotation turned off. Your presets and member rules stay saved, so "
+            "you can re-enable any time from `/setup` → 🚂 Train."
+        )
+
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
+
+
+class _WeekdaySelectView(discord.ui.View):
+    """Mon-Sun picker for the weekly-draft day, with a Keep-current button."""
+
+    def __init__(self, *, current: int | None = None):
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+        self.selected: int | None = None
+        self.cancelled = False
+        import train_rotation as tr
+
+        if current is not None and 0 <= int(current) <= 6:
+            keep = discord.ui.Button(
+                label=f"✅ Keep current: {tr.WEEKDAY_NAMES[int(current)]}",
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep(inter: discord.Interaction):
+                self.selected = int(current)
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content=f"✅ Draft day: **{tr.WEEKDAY_NAMES[int(current)]}**", view=self
+                )
+                self.stop()
+
+            keep.callback = _keep
+            self.add_item(keep)
+
+        select = discord.ui.Select(
+            placeholder="Pick the weekly draft day…",
+            options=[
+                discord.SelectOption(label=tr.WEEKDAY_NAMES[wd], value=str(wd)) for wd in range(7)
+            ],
+            row=1 if current is not None else 0,
+        )
+
+        async def _cb(inter: discord.Interaction):
+            self.selected = int(select.values[0])
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Draft day: **{tr.WEEKDAY_NAMES[self.selected]}**", view=self
+            )
+            self.stop()
+
+        select.callback = _cb
+        self.add_item(select)
+
+
+class _RuleTypePickerView(discord.ui.View):
+    """One view: a dropdown of the role-assignable rule types (leadership / vs /
+    contest / event) plus Done and Skip. Looped by the rotation setup so
+    officers can attach a role to any of those rule types — that role then
+    scopes who's eligible on those days. Skip exits without assigning any;
+    Done exits keeping whatever was assigned so far."""
+
+    def __init__(self, assignments: dict, *, first_time: bool):
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+        self.selected: str | None = None
+        self.done = False
+        self.skipped = False
+        self.cancelled = False
+        import train_rotation as tr
+
+        assignable = [tr.RULE_LEADERSHIP, tr.RULE_VS, tr.RULE_CONTEST, tr.RULE_EVENT]
+        sel = discord.ui.Select(
+            placeholder="Pick a rule type to assign a role…",
+            options=[
+                discord.SelectOption(
+                    label=tr.RULE_LABELS[rt],
+                    value=rt,
+                    description="role set ✓" if assignments.get(rt) else "no role yet",
+                )
+                for rt in assignable
+            ],
+        )
+
+        async def _pick(inter: discord.Interaction):
+            self.selected = sel.values[0]
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        sel.callback = _pick
+        self.add_item(sel)
+
+        done_btn = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.success)
+
+        async def _done(inter: discord.Interaction):
+            self.done = True
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        done_btn.callback = _done
+        self.add_item(done_btn)
+
+        # Skip appears the first time through (when nothing's been assigned yet)
+        # so "I don't want any roles" is a one-click out.
+        if first_time:
+            skip_btn = discord.ui.Button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
+
+            async def _skip(inter: discord.Interaction):
+                self.skipped = True
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+            skip_btn.callback = _skip
+            self.add_item(skip_btn)
+
+
+async def _run_train_rotation_extras(
+    *, bot, interaction, channel, user, guild_id, cancel_event, guild_tz, weekly_draft_day
+):
+    """Rotation-specific config run after the shared train steps when Auto
+    Rotation is on: public-post opt-in, per-rule-type roles, counted reasons,
+    and sheet tabs. Saves the rotation config with rotation_enabled=1 and opens
+    the schedule-preset editor so leadership lays out the week.
+
+    Channel + time + draft day come from the main flow (rotation reuses the
+    reminder channel/time); birthday behaviour is derived from the Birthday
+    setup. Neither is asked here."""
+    import json
+
+    import train_rotation as tr
+    import train_rotation_ui as ui
+    from config import get_train_config, save_train_rotation_config
+
+    current = get_train_config(guild_id)
+
+    # ── Public posts (opt-in) ──────────────────────────────────────────────────
+    rotation_public_channel_id = 0
+    pub_offer = YesNoView()
+    await channel.send(
+        "**Rotation: Public Posts**\n"
+        "When you confirm each day's conductor, should the bot also announce them "
+        "publicly for the whole alliance to see? *(No = the confirmation just records "
+        "who drove, with no public post.)*",
+        view=pub_offer,
+    )
+    await wait_view_or_cancel(pub_offer, cancel_event)
+    if pub_offer.cancelled:
+        return
+    if pub_offer.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return
+    if pub_offer.selected:
+        saved_pub = current.get("rotation_public_channel_id", 0) or 0
+        pub_view = ChannelSelectStep(
+            "Select the public announcement channel…",
+            suggested_name="general",
+            guild=interaction.guild,
+            current_id=saved_pub,
+        )
+        if pub_view.is_current_stale:
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="public post"))
+        await channel.send(
+            "Which channel should confirmed conductors be announced in?",
+            view=pub_view,
+        )
+        await wait_view_or_cancel(pub_view, cancel_event)
+        if pub_view.cancelled:
+            return
+        if not pub_view.confirmed:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return
+        rotation_public_channel_id = pub_view.selected_channel.id
+
+    # ── Per-rule-type roles (opt-in) ───────────────────────────────────────────
+    # One dropdown of the role-assignable rule types + Done/Skip, looped: pick a
+    # type → assign a role → back to the dropdown. By default leadership days use
+    # the main leadership role and vs/contest/event are leadership-picks; a role
+    # here scopes that rule's candidate pool. (specific_member isn't listed — its
+    # member is pinned per-day in the preset editor, not via a role.)
+    rule_type_roles = dict(current.get("rule_type_roles") or {})
+    await channel.send(
+        "**Rotation: Rule Type Roles** *(optional)*\n"
+        "Your day rules can include **leadership**, **vs**, **contest**, and **event**. "
+        "By default, leadership days use your main leadership role and the others let "
+        "leadership pick by hand. Want the bot to pull from a specific role on any of "
+        "these? Pick a rule type to assign its role, or **Skip**."
+    )
+    first_time = True
+    while True:
+        picker = _RuleTypePickerView(rule_type_roles, first_time=first_time)
+        await channel.send(
+            "Assign a role to a rule type, or hit **Done**:"
+            if not first_time
+            else "Pick a rule type, or **Skip** if you don't want any:",
+            view=picker,
+        )
+        await wait_view_or_cancel(picker, cancel_event)
+        if picker.cancelled:
+            return
+        if picker.skipped or picker.done or picker.selected is None:
+            break
+        first_time = False
+        rt = picker.selected
+        role_view = RoleSelectStep(
+            f"Pick the role for {tr.RULE_LABELS.get(rt, rt)} days…",
+            current_id=int(rule_type_roles.get(rt) or 0),
+            guild=interaction.guild,
+        )
+        await channel.send(
+            f"Which role should **{tr.RULE_LABELS.get(rt, rt)}** days pull from?",
+            view=role_view,
+        )
+        await wait_view_or_cancel(role_view, cancel_event)
+        if role_view.cancelled:
+            return
+        if role_view.confirmed and role_view.selected_role:
+            rule_type_roles[rt] = role_view.selected_role.id
+            await channel.send(
+                f"✅ **{tr.RULE_LABELS.get(rt, rt)}** days will pull from "
+                f"**@{role_view.selected_role.name}**."
+            )
+
+    # ── Counted reasons (advanced) ─────────────────────────────────────────────
+    counted_raw = await ask_keep_or_change(
+        channel,
+        "**Rotation: Counted Reasons** *(advanced, most keep the default)*\n"
+        "Which reasons count toward a member's fair-rotation tally? The default "
+        "excludes birthday / welcome / event so bonus drives don't penalise anyone. "
+        f"Comma-separated; valid: `{', '.join(tr.REASONS)}`.",
+        default=", ".join(tr.DEFAULT_COUNTED_REASONS),
+        current=current.get("counted_reasons") or "",
+        modal_title="Counted Reasons",
+        modal_label="Reasons (comma-separated)",
+        timeout_cmd="setup_train",
+        cancel_event=cancel_event,
+    )
+    if counted_raw is None:
+        return
+    valid = {r.strip().lower() for r in counted_raw.split(",") if r.strip()} & set(tr.REASONS)
+    counted_reasons = ",".join(sorted(valid)) if valid else ""
+
+    # ── Sheet tabs (defaults; optional customise) ──────────────────────────────
+    history_tab = current.get("history_tab") or "Train History"
+    member_rules_tab = current.get("member_rules_tab") or "Train Member Rules"
+    day_rules_tab = current.get("day_rules_tab") or "Train Day Rules"
+    tabs_offer = YesNoView()
+    await channel.send(
+        "**Rotation: Sheet Tabs**\n"
+        f"Rotation uses three tabs (auto-created if missing): **{history_tab}**, "
+        f"**{member_rules_tab}**, **{day_rules_tab}**. Customise these names?",
+        view=tabs_offer,
+    )
+    await wait_view_or_cancel(tabs_offer, cancel_event)
+    if tabs_offer.cancelled:
+        return
+    if tabs_offer.selected:
+        tab_vals = {
+            "history_tab": history_tab,
+            "member_rules_tab": member_rules_tab,
+            "day_rules_tab": day_rules_tab,
+        }
+        for label, key in [
+            ("History", "history_tab"),
+            ("Member Rules", "member_rules_tab"),
+            ("Day Rules", "day_rules_tab"),
+        ]:
+            val = await ask_keep_or_change(
+                channel,
+                f"**{label} tab name**",
+                default=tab_vals[key],
+                current=current.get(key, ""),
+                modal_title=f"{label} Tab",
+                modal_label="Tab name",
+                timeout_cmd="setup_train",
+                cancel_event=cancel_event,
+            )
+            if val is None:
+                return
+            tab_vals[key] = val
+        history_tab = tab_vals["history_tab"]
+        member_rules_tab = tab_vals["member_rules_tab"]
+        day_rules_tab = tab_vals["day_rules_tab"]
+
+    active_preset = current.get("active_schedule_preset") or tr.DEFAULT_PRESET_NAME
+    save_train_rotation_config(
+        guild_id,
+        rotation_enabled=1,
+        history_tab=history_tab,
+        member_rules_tab=member_rules_tab,
+        day_rules_tab=day_rules_tab,
+        rotation_public_channel_id=rotation_public_channel_id,
+        weekly_draft_day=weekly_draft_day,
+        rule_type_roles=json.dumps(rule_type_roles),
+        counted_reasons=counted_reasons,
+        active_schedule_preset=active_preset,
+    )
+
+    summary = discord.Embed(title="✅ Train Rotation Enabled", color=discord.Color.green())
+    summary.add_field(
+        name="Public Posts",
+        value=(
+            f"<#{rotation_public_channel_id}>"
+            if rotation_public_channel_id
+            else "Off (record only)"
+        ),
+        inline=True,
+    )
+    summary.add_field(
+        name="Weekly Draft Day", value=tr.WEEKDAY_NAMES[int(weekly_draft_day)], inline=True
+    )
+    if rule_type_roles:
+        summary.add_field(
+            name="Rule Type Roles",
+            value=", ".join(
+                f"{tr.RULE_LABELS.get(k, k)} → <@&{v}>" for k, v in rule_type_roles.items()
+            ),
+            inline=False,
+        )
+    summary.set_footer(text="Last step: lay out your weekly pattern below, then 💾 Save preset.")
+    await channel.send(embed=summary)
+
+    preset = await asyncio.get_event_loop().run_in_executor(
+        None, tr.load_preset, guild_id, day_rules_tab, active_preset
+    )
+    if preset is None:
+        preset = tr.SchedulePreset.default(active_preset)
+    await ui.post_preset_editor(channel, guild_id, user.id, preset, day_rules_tab)
+    print(f"[SETUP] Train rotation enabled for guild {guild_id}")
+
+
+async def run_buddy_setup(interaction: discord.Interaction, bot):
+    """Walk leadership through configuring the Profession Buddy System (#289).
+
+    Enable → buddy tab → Engineer doubling → scarcity priority → leadership
+    alerts channel → buddy DMs. Profession is detected from the Squad Powers
+    survey question. Free to enable + manually pair; auto-assign, one-click
+    profession buttons, alerts, and DMs are Premium at runtime."""
+    import wizard_registry
+    from config import (
+        get_config,
+        get_buddy_config,
+        has_buddy_config,
+        update_buddy_config_field,
+        clear_buddy_config,
+        get_survey_config,
+    )
+
+    guild_id = interaction.guild_id
+    channel = interaction.channel
+    user = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+    timeout_msg = "⏰ Setup timed out. Run `/setup` → 🤝 Buddy System to start again."
+    nav = "setup → 🤝 Buddy System"
+
+    current = get_buddy_config(guild_id)
+    already_configured = has_buddy_config(guild_id)
+
+    # ── Already enabled? Offer edit or cancel ─────────────────────────────────
+    if already_configured and current.get("enabled"):
+        notify_id = current.get("notify_channel_id", 0) or 0
+        fields = [
+            ("Buddy Tab", current.get("buddy_tab") or "Buddy System"),
+            (
+                "Two Engineers per War Leader",
+                "✅ Yes" if current.get("engineer_doubling") else "❌ No",
+            ),
+            (
+                "When Engineers are scarce",
+                "Strongest War Leaders first"
+                if current.get("scarcity_priority") == "strongest_first"
+                else "Alphabetical",
+            ),
+            ("Leadership alerts", f"<#{notify_id}>" if notify_id else "*off*"),
+            ("Buddy DMs", "✅ Yes" if current.get("dm_enabled") else "❌ No"),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🤝 Current Buddy System Setup",
+            description="The Profession Buddy System is already on. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. The Buddy System is still active.",
+        )
+        if proceed is not True:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+    await channel.send(
+        "🤝 **Profession Buddy System Setup**\n"
+        "Pair your War Leaders with Engineers so the daily buff Skill always has a home."
+    )
+
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
+    enabled_view = YesNoView()
+    await channel.send("**Step 1 of 6 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if enabled_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not enabled_view.selected:
+        update_buddy_config_field(guild_id, "enabled", 0)
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Profession Buddy System",
+            setup_command=nav,
+            had_prior_config=already_configured,
+            clear_fn=lambda: clear_buddy_config(guild_id),
+            cancel_event=cancel_event,
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    # ── Profession source detection (Squad Powers survey) ─────────────────────
+    survey_cfg = get_survey_config(guild_id) or {}
+    questions = survey_cfg.get("questions") or []
+    prof_q = next(
+        (q for q in questions if (q.get("key") or "").lower() == "profession"),
+        None,
+    )
+    profession_tab = survey_cfg.get("tab_squad_powers") or "Squad Powers"
+    if prof_q:
+        profession_col_header = prof_q.get("label") or "Profession"
+        await channel.send(
+            f"✅ Found your **{profession_col_header}** survey question writing to the "
+            f"**{profession_tab}** tab. The Buddy System will read professions from there."
+        )
+    else:
+        profession_col_header = "Profession"
+        await channel.send(
+            "⚠️ I couldn't find a **Profession** question in your Squad Power Survey. "
+            "Members won't be able to self-report War Leader / Engineer until you add a "
+            "dropdown question with the key `profession` (options: War Leader, Engineer) "
+            "via `/setup` → 📋 Survey. You can still finish this setup and pair people "
+            "manually in the meantime."
+        )
+
+    # ── Step 2: Buddy tab name ────────────────────────────────────────────────
+    buddy_tab = await ask_keep_or_change(
+        channel,
+        "**Step 2 of 6 — Buddy List Tab**\n"
+        "Which tab in your Google Sheet should hold the buddy list? The bot owns "
+        "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
+        "⚠️ *The bot will create it if it doesn't exist.*",
+        default="Buddy System",
+        current=current.get("buddy_tab", ""),
+        modal_title="Buddy Tab Name",
+        modal_label="Tab name",
+        timeout_cmd="setup_buddy",
+        cancel_event=cancel_event,
+    )
+    if buddy_tab is None:
+        return
+
+    # ── Step 3: Engineer doubling ─────────────────────────────────────────────
+    dbl_view = YesNoView()
+    await channel.send(
+        "**Step 3 of 6 — Two Engineers per War Leader?**\n"
+        "When you have more Engineers than War Leaders, should we allow War Leaders "
+        "to have 2 Engineers paired with them?",
+        view=dbl_view,
+    )
+    await wait_view_or_cancel(dbl_view, cancel_event)
+    if dbl_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if dbl_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    engineer_doubling = 1 if dbl_view.selected else 0
+
+    # ── Step 4: Scarcity priority ─────────────────────────────────────────────
+    # Strongest-first reads power from the alliance's existing Power Data Source
+    # (Member Sync roster, or the storm Power Data Source). If neither is set up
+    # there's no power to read, so we skip the question and default to
+    # alphabetical rather than offer a setting that can't do anything (#289 test
+    # note 4).
+    from config import get_member_roster_config, get_storm_config
+
+    roster_cfg = get_member_roster_config(guild_id) or {}
+    storm_ds = get_storm_config(guild_id, "DS") or {}
+    power_source_available = (
+        bool(roster_cfg.get("enabled"))
+        or bool((storm_ds.get("power_metric_tab") or "").strip())
+        or bool(storm_ds.get("structured_flow_enabled"))
+    )
+    scarcity_priority = "alphabetical"
+    if power_source_available:
+        scarcity_view = YesNoView()
+        await channel.send(
+            "**Step 4 of 6 — When Engineers are scarce**\n"
+            "If you have more War Leaders than Engineers, should we prioritize your "
+            "strongest War Leaders first? (Note that this will read from your existing "
+            "Power data source if you have one set up.)",
+            view=scarcity_view,
+        )
+        await wait_view_or_cancel(scarcity_view, cancel_event)
+        if scarcity_view.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if scarcity_view.selected is None:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        scarcity_priority = "strongest_first" if scarcity_view.selected else "alphabetical"
+    else:
+        await channel.send(
+            "ℹ️ *Skipping the strongest-first option: pairing the strongest War Leaders "
+            "first needs a Power data source. Set one up via Member Sync or Storm setup "
+            "and re-run this wizard to enable it. Using alphabetical order for now.*"
+        )
+
+    # ── Step 5: Leadership alerts channel ─────────────────────────────────────
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
+    alerts_view = YesNoView()
+    await channel.send(
+        "**Step 5 of 6 — Leadership alerts**\n"
+        "When a member swaps profession and the bot re-pairs people, should it post a "
+        "heads-up to a leadership channel?\n"
+        "💎 Premium: these posts send only while Premium is active.",
+        view=alerts_view,
+    )
+    await wait_view_or_cancel(alerts_view, cancel_event)
+    if alerts_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if alerts_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    notify_channel_id = 0
+    if alerts_view.selected:
+        saved_notify = current.get("notify_channel_id", 0) or 0
+        notify_view = ChannelSelectStep(
+            "Select the leadership alerts channel...",
+            suggested_name="leadership",
+            include_threads=is_premium_flag,
+            guild=interaction.guild,
+            current_id=saved_notify,
+        )
+        if notify_view.is_current_stale:
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="leadership alerts"))
+        await channel.send("​", view=notify_view)
+        await wait_view_or_cancel(notify_view, cancel_event)
+        if notify_view.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if not notify_view.confirmed:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        notify_channel_id = notify_view.selected_channel.id
+
+    # ── Step 6: Buddy DMs ─────────────────────────────────────────────────────
+    from defaults import DEFAULT_BUDDY_DM
+
+    dm_view = YesNoView()
+    await channel.send(
+        "**Step 6 of 6 — Buddy DMs**\n"
+        "Should the bot DM members their buddy when it changes?\n"
+        "💎 Premium: these DMs send only while Premium is active.",
+        view=dm_view,
+    )
+    await wait_view_or_cancel(dm_view, cancel_event)
+    if dm_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if dm_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    dm_enabled = 1 if dm_view.selected else 0
+
+    # If DMs are on, let leadership keep / use default / customize the body.
+    dm_template = current.get("dm_template", "") or ""
+    if dm_enabled:
+        dm_input = await ask_keep_or_change(
+            channel,
+            "**Buddy DM message**\n"
+            "What should the buddy DM say? Placeholders: `{name}` (the recipient), "
+            "`{buddy}` (their buddy), `{buddy_role}` (War Leader / Engineer).",
+            default=DEFAULT_BUDDY_DM,
+            current=current.get("dm_template", ""),
+            modal_title="Buddy DM message",
+            modal_label="DM body",
+            timeout_cmd="setup_buddy",
+            cancel_event=cancel_event,
+        )
+        if dm_input is None:
+            return
+        # Store empty when it matches the default, so the default can evolve.
+        dm_template = "" if dm_input == DEFAULT_BUDDY_DM else dm_input
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    update_buddy_config_field(guild_id, "enabled", 1)
+    update_buddy_config_field(guild_id, "buddy_tab", buddy_tab)
+    update_buddy_config_field(guild_id, "profession_tab", profession_tab)
+    update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
+    update_buddy_config_field(guild_id, "engineer_doubling", engineer_doubling)
+    update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
+    update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
+    update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
+    update_buddy_config_field(guild_id, "dm_template", dm_template)
+
+    summary = discord.Embed(
+        title="🤝 Buddy System configured",
+        color=discord.Color.green(),
+        description=(
+            f"**Buddy tab:** {buddy_tab}\n"
+            f"**Two Engineers per War Leader:** {'✅ Yes' if engineer_doubling else '❌ No'}\n"
+            f"**When Engineers are scarce:** "
+            f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
+            f"**Leadership alerts:** {f'<#{notify_channel_id}>' if notify_channel_id else 'off'}\n"
+            f"**Buddy DMs:** {'✅ Yes' if dm_enabled else '❌ No'}"
+            f"{' (custom message)' if (dm_enabled and dm_template) else ''}"
+        ),
+    )
+    summary.set_footer(text="Open /buddy to view the list, pair members, or auto-assign.")
+    await channel.send(embed=summary)
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Buddy System enabled for guild {guild_id}")
 
 
 async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
@@ -6818,7 +7543,7 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
         flip_label_yes: str = "↩️ Switch to: Yes",
         flip_label_no: str = "↩️ Switch to: No",
     ):
-        super().__init__(timeout=WIZARD_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.value: bool | None = None
         self.cancelled = False
 

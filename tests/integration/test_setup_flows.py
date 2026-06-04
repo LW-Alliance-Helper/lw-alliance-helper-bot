@@ -291,10 +291,12 @@ class TestRunTrainSetup:
         bot = AsyncMock()
 
         blurb_view = MagicMock(selected=False, wait=AsyncMock())
+        rotation_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         remind_view = MagicMock(selected=False, wait=AsyncMock())
 
+        # YesNoView order in the main flow: blurbs → Auto Rotation → reminders.
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
             patch_keep_or_change(["My Train Tab"]),
         ):
             make_send_handler(interaction.channel)
@@ -303,6 +305,8 @@ class TestRunTrainSetup:
         cfg = config.get_train_config(TEST_GUILD_ID)
         assert cfg["tab_name"] == "My Train Tab"
         assert cfg["blurbs_enabled"] == 0
+        # Declining Auto Rotation leaves it off (dedicated decline coverage).
+        assert cfg["rotation_enabled"] == 0
 
     @pytest.mark.asyncio
     async def test_train_setup_reminders_enabled(self, seeded_db):
@@ -315,11 +319,12 @@ class TestRunTrainSetup:
         reminder_channel = MagicMock(id=777777777)
 
         blurb_view = MagicMock(selected=False, wait=AsyncMock())
+        rotation_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         remind_view = MagicMock(selected=True, wait=AsyncMock())
         ch_view = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
             patch("setup_cog.ChannelSelectStep", return_value=ch_view),
             patch_keep_or_change(["Train Schedule", "10:00pm"]),
         ):
@@ -401,8 +406,9 @@ class TestRunTrainSetup:
             wait=AsyncMock(),
         )
 
-        # Wizard step views: blurbs=No, reminders=Yes.
+        # Wizard step views: blurbs=No, Auto Rotation=No, reminders=Yes.
         blurb_view = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        rotation_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         remind_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
         ch_call_kwargs = []
@@ -412,7 +418,7 @@ class TestRunTrainSetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["My Tab", "10:00pm", ""]),
         ):
@@ -1831,8 +1837,10 @@ class TestPremiumCaps:
         interaction = make_mock_interaction()
         bot = AsyncMock()
 
+        # YesNoView order: blurbs=Yes, Auto Rotation=No, reminders=No.
         yn_views = [
             MagicMock(selected=True, wait=AsyncMock()),
+            MagicMock(selected=False, cancelled=False, wait=AsyncMock()),
             MagicMock(selected=False, wait=AsyncMock()),
         ]
 

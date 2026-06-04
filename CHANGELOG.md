@@ -9,6 +9,16 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.0] — 2026-06-04
+
+### Added
+- **Train Conductor Rotation** (free, opt-in): the bot fairly rotates each day's conductor, with presets, per-member and per-day rules, a weekly draft, and daily confirmation in the `/train` hub ([#55](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/55)).
+- **Profession Buddy System**: pair your War Leaders with Engineers; members look up their buddy any time for free, and 💎 Premium adds auto-assign, re-pairing, and customizable buddy DMs ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- Storm sign-ups: officer buttons to clear all votes or just on-behalf votes, so you can reset a poll without deleting it ([#287](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/287)).
+
+### Fixed
+- Setup wizard step-timeout messages no longer crash ([#290](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/290)).
+
 ## [1.4.7] — 2026-06-04
 
 ### Fixed

@@ -342,10 +342,30 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
             groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
 
     if not groups:
-        await interaction.followup.send(
-            "ℹ️ No repeating events configured. The event editor only "
-            "applies to events with a recurring schedule.",
-            ephemeral=True,
+        # Manual-only alliance: no repeating event anchors a date, so open
+        # the editor on today with an empty draft. Leadership then uses the
+        # editor's "Add to today's draft" button (which already offers every
+        # configured event, manual included) to drop in a manual event.
+        # Without this, manual events were a dead end — the hub tells users
+        # to add them "from the editor" but the editor never opened.
+        draft_channel_id = 0
+        announce_channel_id = 0
+        five_min_warn = False
+        for ev in events:
+            draft_channel_id = ev["draft_channel_id"] or draft_channel_id
+            announce_channel_id = ev["announcement_channel_id"] or announce_channel_id
+            if ev["five_min_warning"]:
+                five_min_warn = True
+        event_key = f"event-{guild_id}-{today.isoformat()}-hub"
+        await post_editor(
+            bot,
+            [],
+            event_key,
+            today,
+            cfg=cfg,
+            draft_channel_id=draft_channel_id,
+            announcement_channel_id=announce_channel_id,
+            five_min_warning=five_min_warn,
         )
         return
 

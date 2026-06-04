@@ -241,7 +241,10 @@ class TestEventsHubErrorBranches:
         mock_post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_only_manual_events(self, seeded_db):
+    async def test_only_manual_events_opens_empty_editor_today(self, seeded_db):
+        """Manual-only alliances are not a dead end: the editor opens on
+        today with an empty draft so leadership can Add a manual event
+        from inside the editor. (#291)"""
         _seed_leadership_setup()
         import config
 
@@ -256,10 +259,10 @@ class TestEventsHubErrorBranches:
                 "schedule_type": "manual",
                 "anchor_date": "",
                 "interval_days": 0,
-                "draft_channel_id": 0,
-                "announcement_channel_id": 0,
+                "draft_channel_id": 333333333333333333,
+                "announcement_channel_id": 444444444444444444,
                 "draft_time": "12:00",
-                "five_min_warning": 0,
+                "five_min_warning": 1,
                 "active": 1,
             },
         )
@@ -267,11 +270,19 @@ class TestEventsHubErrorBranches:
         interaction = _make_events_interaction()
         mock_post = await _run_today_editor(interaction, date_cls(2026, 4, 5))
 
-        followups = [c for c, _ in _captured_followups(interaction)]
-        assert any(c and "No repeating events" in c for c in followups), (
-            f"Expected 'No repeating events' message; got {followups}"
-        )
-        mock_post.assert_not_called()
+        mock_post.assert_called_once()
+        call_args, call_kwargs = mock_post.call_args
+        event_list = call_args[1]
+        event_key = call_args[2]
+        run_date = call_args[3]
+        # Empty draft on today — the officer fills it via Add to today's draft.
+        assert event_list == []
+        assert run_date == date_cls(2026, 4, 5)
+        assert event_key == f"event-{TEST_GUILD_ID}-2026-04-05-hub"
+        # Channel + warning config carries over from the manual event.
+        assert call_kwargs["draft_channel_id"] == 333333333333333333
+        assert call_kwargs["announcement_channel_id"] == 444444444444444444
+        assert call_kwargs["five_min_warning"] is True
 
     @pytest.mark.asyncio
     async def test_invalid_anchor_date(self, seeded_db):

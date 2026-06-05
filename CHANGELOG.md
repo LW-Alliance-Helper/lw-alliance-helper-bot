@@ -9,6 +9,15 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.1] — 2026-06-05
+
+### Fixed
+- Profession Buddy: changing your own profession sends one DM listing all your buddies, instead of a separate DM for each pairing.
+- `/setup` no longer errors when run in a direct message ([#271](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/271)).
+- Storm sign-up and roster screens no longer hit the Google Sheets read limit when officers click through them quickly ([#269](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/269)).
+- The storm roster builder no longer hides players because of a leftover draft from a previous event ([#277](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/277)).
+- Daily Shiny Tasks keeps posting from your saved server list; a broken background data refresh no longer errors ([#293](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/293)).
+
 ## [1.5.0] — 2026-06-04
 
 ### Added

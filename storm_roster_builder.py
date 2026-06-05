@@ -383,16 +383,12 @@ def _read_roster_powers(
         return {}, errors
 
     try:
-        ws = config.get_member_roster_sheet(
+        # Short-TTL cached read so rapid officer clicks don't each fire a
+        # Sheets read and blow the 60/min quota (#269).
+        values = config.read_member_roster_values(
             guild_id,
             roster_cfg.get("tab_name") or "Member Roster",
         )
-    except Exception as e:
-        errors.append(f"roster-sheet open failed: {e}")
-        return {}, errors
-
-    try:
-        values = ws.get_all_values()
     except Exception as e:
         errors.append(f"roster-sheet read failed: {e}")
         return {}, errors
@@ -5407,6 +5403,7 @@ def _other_team_claimed_keys(
     guild_id: int,
     event_type: str,
     team: str,
+    event_date: Optional[str] = None,
 ) -> set[str]:
     """Member keys already assigned on the OTHER team's saved draft (#275).
 
@@ -5421,6 +5418,12 @@ def _other_team_claimed_keys(
     when there's no other team's draft, the alliance isn't running both
     teams, or the draft can't be read/parsed (best-effort — never blocks the
     build). Single-team alliances (team == "") have no other team.
+
+    #277: only honour the other team's draft when it was saved for the SAME
+    `event_date`. A leftover draft from a previous event would otherwise
+    over-exclude this event's pool. When staleness can't be positively
+    determined (no current `event_date`, or an older draft that didn't
+    serialize `saved_for_event_date`), fall through to the #275 exclusion.
     """
     if team not in ("A", "B"):
         return set()
@@ -5438,6 +5441,13 @@ def _other_team_claimed_keys(
     try:
         payload = json.loads(draft["session_json"])
     except (ValueError, TypeError):
+        return set()
+
+    # Stale-draft guard (#277): the other team's draft only constrains this
+    # build if it belongs to the same event. Mirror the current-team
+    # staleness check (saved_for_event_date vs the live event_date).
+    saved_for = payload.get("saved_for_event_date", "") or ""
+    if event_date and saved_for and saved_for != event_date:
         return set()
 
     claimed: set[str] = set()
@@ -6956,6 +6966,7 @@ async def open_roster_builder(
             interaction.guild_id,
             event_type,
             team,
+            event_date,
         )
         excluded_for_other_team: list[str] = []
         if other_claimed:

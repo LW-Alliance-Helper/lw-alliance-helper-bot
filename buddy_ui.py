@@ -454,31 +454,49 @@ async def _send_buddy_dms(bot, guild_id: int, cfg: dict, data: dict) -> None:
     import dm
     from defaults import DEFAULT_BUDDY_DM
 
+    before = data.get("before")
     after = data["after"]
     buds = data.get("buddies") or []
     template = (cfg.get("dm_template") or "").strip() or DEFAULT_BUDDY_DM
+
     # Best-effort: DM both members of any pair that involves the actor's new buddy.
     affected = [p for p in after.pairs if p.engineer in buds or p.war_leader in buds]
+
+    # Collapse to one DM per recipient: an Engineer paired with two War Leaders
+    # gets a single DM naming both buddies, not one DM per pairing.
+    recipients: dict[str, dict] = {}
     for p in affected:
+        if p.wl_discord_id:
+            r = recipients.setdefault(
+                p.wl_discord_id,
+                {"name": p.war_leader, "buddy_role": buddy.ENGINEER, "buddies": []},
+            )
+            r["buddies"].append(p.engineer)
+        if p.eng_discord_id:
+            r = recipients.setdefault(
+                p.eng_discord_id,
+                {"name": p.engineer, "buddy_role": buddy.WAR_LEADER, "buddies": []},
+            )
+            r["buddies"].append(p.war_leader)
+
+    for rid, info in recipients.items():
+        # Stay silent when nothing changed: clicking the self-service button while
+        # already paired with the same buddy must not re-send the DM.
+        _, prior = buddies_of(before, rid, info["name"]) if before is not None else (None, [])
+        if {buddy._norm(b) for b in prior} == {buddy._norm(b) for b in info["buddies"]}:
+            continue
         try:
-            if p.wl_discord_id:
-                await dm.send_dm_to_id(
-                    bot,
-                    guild_id,
-                    p.wl_discord_id,
-                    content=_render_buddy_dm(
-                        template, name=p.war_leader, buddy=p.engineer, buddy_role=buddy.ENGINEER
-                    ),
-                )
-            if p.eng_discord_id:
-                await dm.send_dm_to_id(
-                    bot,
-                    guild_id,
-                    p.eng_discord_id,
-                    content=_render_buddy_dm(
-                        template, name=p.engineer, buddy=p.war_leader, buddy_role=buddy.WAR_LEADER
-                    ),
-                )
+            await dm.send_dm_to_id(
+                bot,
+                guild_id,
+                rid,
+                content=_render_buddy_dm(
+                    template,
+                    name=info["name"],
+                    buddy=buddy._join_and(info["buddies"]),
+                    buddy_role=info["buddy_role"],
+                ),
+            )
         except Exception:
             pass
 

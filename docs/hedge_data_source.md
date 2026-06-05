@@ -3,6 +3,18 @@
 Reference for `shiny_tasks.fetch_server_table` and the weekly refresh
 loop. Documents *how* we get the server list and *what* it looks like.
 
+> **Status (2026-06, #293): refresh DISABLED.** The site moved its server
+> data behind an API key (the `/servers` page no longer inlines records in
+> the page chunk, and `/api/servers` now returns `401 "Invalid or missing
+> API key"`). An access request to the maintainer went unanswered, and the
+> site itself notes that newer servers' day values are crowd-corrected
+> estimates. So `shiny_tasks.SERVER_REFRESH_ENABLED` is `False`: the weekly
+> refresh and startup seed are no-ops, and the feature serves the frozen
+> `shiny_task_servers` snapshot already in the DB. The endpoint-discovery
+> and parsing notes below describe the **old** working scrape, kept for
+> reference. To re-enable, repoint `fetch_server_table` at an authenticated
+> endpoint and flip the flag.
+
 ## Endpoint discovery
 
 `https://cpt-hedge.com/servers` is a Next.js app. The server table is

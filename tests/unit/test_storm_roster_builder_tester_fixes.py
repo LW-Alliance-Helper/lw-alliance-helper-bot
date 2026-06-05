@@ -132,6 +132,52 @@ class TestOtherTeamClaimedKeys:
         with patch("config.get_roster_draft", side_effect=Exception("db down")):
             assert srb._other_team_claimed_keys(123, "DS", "A") == set()
 
+    # ── #277: stale-draft event_date scoping ───────────────────────────────
+
+    @staticmethod
+    def _draft_for(payload, saved_for_event_date):
+        p = dict(payload)
+        p["saved_for_event_date"] = saved_for_event_date
+        return {
+            "session_json": json.dumps(p),
+            "event_date": saved_for_event_date,
+            "updated_at": f"{saved_for_event_date}T00:00:00",
+        }
+
+    def test_stale_other_team_draft_is_ignored(self):
+        # Other team's draft was saved for a PRIOR event; building this
+        # event's pool must not exclude anyone from it (#277).
+        payload = {"assignments_p1": {"Z": ["alice", "bob"]}}
+        draft = self._draft_for(payload, "2026-06-01")
+        with patch("config.get_roster_draft", return_value=draft):
+            claimed = srb._other_team_claimed_keys(123, "DS", "B", "2026-06-08")
+        assert claimed == set()
+
+    def test_matching_event_date_still_excludes(self):
+        # Same event_date -> the #275 cross-team exclusion still applies.
+        payload = {"assignments_p1": {"Z": ["alice", "bob"]}}
+        draft = self._draft_for(payload, "2026-06-08")
+        with patch("config.get_roster_draft", return_value=draft):
+            claimed = srb._other_team_claimed_keys(123, "DS", "B", "2026-06-08")
+        assert claimed == {"alice", "bob"}
+
+    def test_missing_saved_date_falls_through_to_exclusion(self):
+        # Older draft with no saved_for_event_date: can't prove staleness,
+        # so keep the #275 behaviour rather than silently dropping it.
+        payload = {"assignments_p1": {"Z": ["alice"]}}
+        draft = self._draft(payload)  # no saved_for_event_date key
+        with patch("config.get_roster_draft", return_value=draft):
+            claimed = srb._other_team_claimed_keys(123, "DS", "B", "2026-06-08")
+        assert claimed == {"alice"}
+
+    def test_no_current_event_date_falls_through_to_exclusion(self):
+        # event_date unknown -> can't compare, keep #275 behaviour.
+        payload = {"assignments_p1": {"Z": ["alice"]}}
+        draft = self._draft_for(payload, "2026-06-01")
+        with patch("config.get_roster_draft", return_value=draft):
+            claimed = srb._other_team_claimed_keys(123, "DS", "B", None)
+        assert claimed == {"alice"}
+
 
 class TestSubsManageReturnSub:
     """#274: returning a sub pulls them out of the sub pool (and clears

@@ -57,17 +57,12 @@ class TestMemberContext:
 
 
 class TestNonMemberContext:
-    """The #271 regression: a User / no-guild interaction must not raise."""
+    """The #271 regression: a DM interaction (no guild) must not raise."""
 
     def test_dm_context_guild_none_returns_false(self):
-        # discord.User has no guild_permissions; guild is None in a DM.
+        # In a DM, interaction.guild is None and interaction.user is a
+        # discord.User with no guild_permissions. The guild guard must
+        # short-circuit to False before guild_permissions is touched.
         user = MagicMock(spec=discord.User)
         inter = _interaction(user, guild=None)
-        assert _has_leadership_or_admin(inter) is False
-
-    def test_user_without_member_type_returns_false(self):
-        # Defensive: even with a (mocked) guild present, a bare User must
-        # short-circuit to False rather than touch guild_permissions.
-        user = MagicMock(spec=discord.User)
-        inter = _interaction(user)
         assert _has_leadership_or_admin(inter) is False

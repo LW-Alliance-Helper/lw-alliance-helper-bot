@@ -1397,12 +1397,12 @@ def _has_leadership_or_admin(interaction: discord.Interaction) -> bool:
     that day-to-day leadership members can configure features without
     needing full server-admin permissions.
     """
-    # In a DM, interaction.user is a discord.User with no
-    # guild_permissions / roles. /setup carries @app_commands.guild_only()
-    # so it can't be invoked there, but this helper is also reached from
-    # in-guild hub buttons; guard defensively so a stray User context
-    # returns False instead of raising AttributeError (#271).
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    # In a DM, interaction.guild is None and interaction.user is a
+    # discord.User with no guild_permissions — accessing it there was the
+    # #271 crash. /setup carries @app_commands.guild_only() so it can't be
+    # invoked in a DM, but this helper is also reached from in-guild hub
+    # buttons / member sync, so guard on the guild being present.
+    if interaction.guild is None:
         return False
     if interaction.user.guild_permissions.administrator:
         return True

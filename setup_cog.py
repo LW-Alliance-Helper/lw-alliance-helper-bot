@@ -1397,6 +1397,13 @@ def _has_leadership_or_admin(interaction: discord.Interaction) -> bool:
     that day-to-day leadership members can configure features without
     needing full server-admin permissions.
     """
+    # In a DM, interaction.user is a discord.User with no
+    # guild_permissions / roles. /setup carries @app_commands.guild_only()
+    # so it can't be invoked there, but this helper is also reached from
+    # in-guild hub buttons; guard defensively so a stray User context
+    # returns False instead of raising AttributeError (#271).
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        return False
     if interaction.user.guild_permissions.administrator:
         return True
     cfg = get_config(interaction.guild_id)
@@ -1491,6 +1498,7 @@ class SetupCog(commands.Cog):
         name="setup",
         description="Open the setup hub — foundations + every feature wizard, in one place",
     )
+    @app_commands.guild_only()
     async def setup(self, interaction: discord.Interaction):
         from setup_hub import handle_setup_hub
 

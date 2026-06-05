@@ -161,7 +161,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `donate.py` | `/donate` and `/upgrade` commands. | ~135 |
 | `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. Also owns the `guild_install_metadata` table — operational record (guild name, owner, installer, install/last-seen timestamps) for support triage, refreshed on every `on_ready`. | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
-| `shiny_tasks.py` | Daily Shiny Tasks announcement (cpt-hedge fetch + 3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. See `docs/hedge_data_source.md`. | ~250 |
+| `shiny_tasks.py` | Daily Shiny Tasks announcement (3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. **Refresh is disabled (`SERVER_REFRESH_ENABLED=False`, #293)** — the upstream source gated its data behind an API key, so the feature serves the frozen `shiny_task_servers` snapshot and new servers are added manually. See `docs/hedge_data_source.md`. | ~250 |
 
 Tests: `tests/unit/` and `tests/integration/`. 1958 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI

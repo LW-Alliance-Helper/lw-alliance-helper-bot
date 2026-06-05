@@ -677,3 +677,35 @@ class TestShinyTasksRefreshTask:
         with patch.object(shiny_tasks, "refresh_servers", mock_refresh):
             await bot_module.shiny_tasks_refresh_task.coro()
         mock_refresh.assert_awaited_once()
+
+
+class TestRefreshDisabled:
+    """#293: the upstream source gated its data behind an API key, so the
+    refresh is a clean no-op (no scrape, no Sentry raise) until re-enabled.
+    The daily post loop keeps serving the frozen DB snapshot."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_refresh_is_noop_and_skips_fetch(self):
+        import shiny_tasks
+
+        assert shiny_tasks.SERVER_REFRESH_ENABLED is False, (
+            "guard test assumes the feature ships with refresh disabled"
+        )
+        with patch.object(shiny_tasks, "fetch_server_table", AsyncMock()) as mock_fetch:
+            n = await shiny_tasks.refresh_servers()
+        assert n == 0
+        mock_fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enabled_refresh_fetches_and_upserts(self):
+        import shiny_tasks
+
+        rows = [(1, "2025-01-01", "")]
+        with (
+            patch.object(shiny_tasks, "SERVER_REFRESH_ENABLED", True),
+            patch.object(shiny_tasks, "fetch_server_table", AsyncMock(return_value=rows)),
+            patch("config.upsert_shiny_task_servers", return_value=len(rows)) as mock_upsert,
+        ):
+            n = await shiny_tasks.refresh_servers()
+        assert n == 1
+        mock_upsert.assert_called_once()

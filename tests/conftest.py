@@ -48,6 +48,21 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip)
 
 
+# ── Roster read-cache isolation ───────────────────────────────────────────────
+#
+# config.read_member_roster_values (#269) keeps a short-TTL in-process cache
+# keyed by (guild_id, tab_name). Tests share TEST_GUILD_ID + "Member Roster"
+# and run within the TTL window, so without a reset one test's mocked rows
+# would leak into the next. Clear it around every test.
+@pytest.fixture(autouse=True)
+def _clear_roster_read_cache():
+    import config
+
+    config.clear_roster_read_cache()
+    yield
+    config.clear_roster_read_cache()
+
+
 # ── Temp database fixture ──────────────────────────────────────────────────────
 @pytest.fixture(scope="function")
 def temp_db(tmp_path, monkeypatch):

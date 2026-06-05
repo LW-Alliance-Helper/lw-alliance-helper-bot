@@ -383,16 +383,12 @@ def _read_roster_powers(
         return {}, errors
 
     try:
-        ws = config.get_member_roster_sheet(
+        # Short-TTL cached read so rapid officer clicks don't each fire a
+        # Sheets read and blow the 60/min quota (#269).
+        values = config.read_member_roster_values(
             guild_id,
             roster_cfg.get("tab_name") or "Member Roster",
         )
-    except Exception as e:
-        errors.append(f"roster-sheet open failed: {e}")
-        return {}, errors
-
-    try:
-        values = ws.get_all_values()
     except Exception as e:
         errors.append(f"roster-sheet read failed: {e}")
         return {}, errors

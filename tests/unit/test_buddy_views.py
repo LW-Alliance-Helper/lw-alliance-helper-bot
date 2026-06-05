@@ -96,6 +96,54 @@ def test_render_buddy_dm_substitutes_and_tolerates_typos():
     assert out2 == "Hi Walt, ping {oops}"
 
 
+@pytest.mark.asyncio
+async def test_send_buddy_dms_concatenates_double_pairing_into_one_dm():
+    """An Engineer paired with two War Leaders gets a single DM naming both
+    buddies, not one DM per pairing."""
+    after = buddy.PairingResult(
+        pairs=[buddy.Pair("Walt", "1", "Eve", "3"), buddy.Pair("Wanda", "2", "Eve", "3")],
+    )
+    data = {"before": buddy.PairingResult(), "after": after, "buddies": ["Walt", "Wanda"]}
+    spy = AsyncMock(return_value=True)
+    with patch("dm.send_dm_to_id", spy):
+        await buddy_ui._send_buddy_dms(MagicMock(), 99, {}, data)
+
+    # One DM each to Walt(1), Wanda(2), Eve(3) — Eve is not DM'd twice.
+    sent = {call.args[2]: call.kwargs["content"] for call in spy.await_args_list}
+    assert set(sent) == {"1", "2", "3"}
+    assert "Walt and Wanda" in sent["3"]
+
+
+@pytest.mark.asyncio
+async def test_send_buddy_dms_skips_when_assignment_unchanged():
+    """Clicking the self-service button while already paired with the same buddy
+    must not re-send the DM."""
+    pairs = [buddy.Pair("Walt", "1", "Eve", "3")]
+    data = {
+        "before": buddy.PairingResult(pairs=list(pairs)),
+        "after": buddy.PairingResult(pairs=list(pairs)),
+        "buddies": ["Eve"],
+    }
+    spy = AsyncMock(return_value=True)
+    with patch("dm.send_dm_to_id", spy):
+        await buddy_ui._send_buddy_dms(MagicMock(), 99, {}, data)
+    spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_buddy_dms_sends_when_buddy_changes():
+    """A genuinely new pairing still DMs both members."""
+    data = {
+        "before": buddy.PairingResult(pairs=[buddy.Pair("Walt", "1", "Zed", "5")]),
+        "after": buddy.PairingResult(pairs=[buddy.Pair("Walt", "1", "Eve", "3")]),
+        "buddies": ["Eve"],
+    }
+    spy = AsyncMock(return_value=True)
+    with patch("dm.send_dm_to_id", spy):
+        await buddy_ui._send_buddy_dms(MagicMock(), 99, {}, data)
+    assert {call.args[2] for call in spy.await_args_list} == {"1", "3"}
+
+
 def test_describe_my_buddy_variants():
     r = _result()
     assert "Eve" in buddy_ui.describe_my_buddy(r, "1", "Walt")  # WL → engineer

@@ -247,17 +247,44 @@ async def fetch_server_table() -> list[tuple[int, str, str]]:
     return rows
 
 
+# Whether the server refresh actually fetches the upstream source.
+#
+# The community site that fed `shiny_task_servers` moved its server data
+# behind an API key we don't have — the maintainer hasn't responded to an
+# access request, and the site itself notes that newer servers' day values
+# are crowd-corrected estimates, so freezing the data loses little (#293).
+# The feature now serves the snapshot already in the DB; the daily post
+# loop reads from `shiny_task_servers` and is unaffected. New servers are
+# added manually. With this False the weekly refresh and the startup seed
+# are clean no-ops instead of raising `HedgeFetchError` into Sentry every
+# run. To re-enable: repoint `fetch_server_table` at an authenticated
+# endpoint and set this True.
+SERVER_REFRESH_ENABLED = False
+
+
 async def refresh_servers() -> int:
-    """Fetch the latest cpt-hedge server list and upsert every row.
+    """Fetch the latest server list and upsert every row.
 
     Returns the number of rows upserted on success. Called from the
     weekly background loop, on first startup when the table is empty,
     and (manually) via the `/admin` group if a fast resync is ever needed.
 
-    Errors are propagated to the caller — the scheduler loop catches
-    them and routes to Sentry / logs. Don't swallow here; a silent
+    No-op returning 0 while `SERVER_REFRESH_ENABLED` is False (#293): the
+    upstream source is unavailable, so the existing `shiny_task_servers`
+    rows are left untouched rather than the scrape raising on every run.
+
+    When enabled, errors are propagated to the caller — the scheduler loop
+    catches them and routes to Sentry / logs. Don't swallow here; a silent
     no-op refresh is harder to diagnose than a logged failure.
     """
+    if not SERVER_REFRESH_ENABLED:
+        print(
+            "[SHINY] Server refresh disabled — upstream source requires "
+            "authenticated access we don't have (#293). Serving the frozen "
+            "shiny_task_servers snapshot; add new servers manually."
+        )
+        return 0
+
     from config import upsert_shiny_task_servers
 
     rows = await fetch_server_table()

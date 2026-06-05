@@ -13,6 +13,7 @@ particular alliance.
 import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import date
 from typing import Optional
@@ -4173,6 +4174,47 @@ def get_member_roster_sheet(guild_id: int, tab_name: str):
         return sh.worksheet(tab_name)
     except gspread.WorksheetNotFound:
         return sh.add_worksheet(title=tab_name, rows=200, cols=10)
+
+
+# ── Short-TTL roster read cache (#269) ──────────────────────────────────────
+#
+# Rapid officer iteration through the storm hub / roster builder / sign-up
+# views fired one uncached `get_all_values()` Sheets read per button click,
+# which blows Google's 60-reads/min-per-user quota with a 429. This small
+# in-process cache collapses a burst of clicks (within _ROSTER_READ_TTL_S)
+# into a single read. The Member Roster is read-only during storm flows —
+# `/members` sync is a separate explicit command — so there is no
+# write-after-read staleness within the window. Keyed by (guild_id,
+# tab_name); cleared between tests via clear_roster_read_cache().
+_ROSTER_READ_TTL_S = 8.0
+_roster_read_cache: dict[tuple[int, str], tuple[float, list]] = {}
+
+
+def clear_roster_read_cache() -> None:
+    """Drop every cached roster read. Called from test fixtures so cached
+    rows don't leak across tests that share a guild id + tab name."""
+    _roster_read_cache.clear()
+
+
+def read_member_roster_values(guild_id: int, tab_name: str, *, ttl: float = _ROSTER_READ_TTL_S):
+    """Return the roster tab's `get_all_values()`, served from a short-TTL
+    in-process cache keyed by (guild_id, tab_name).
+
+    Opens the sheet and reads on a cache miss (or once the cached entry is
+    older than `ttl` seconds); otherwise returns the cached rows with no
+    Sheets round-trip. Raises on open/read failure so callers keep their
+    existing soft-error handling. See the #269 note above for why this is
+    safe without write invalidation.
+    """
+    key = (guild_id, tab_name)
+    now = time.monotonic()
+    cached = _roster_read_cache.get(key)
+    if cached is not None and (now - cached[0]) < ttl:
+        return cached[1]
+    ws = get_member_roster_sheet(guild_id, tab_name)
+    values = ws.get_all_values()
+    _roster_read_cache[key] = (now, values)
+    return values
 
 
 def _normalize_train_templates(d: dict) -> dict:

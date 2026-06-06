@@ -324,7 +324,7 @@ class TestStormField:
             patch("storm_log.read_member_log_window", side_effect=[ds, cs]),
         ):
             val = ms._storm_field(GUILD, target, leadership_view=False)
-        assert "**Desert Storm:** attended 2 of 3 (67%)" in val
+        assert "**Desert Storm:**" in val and "Attended 2 of 3 (67%)" in val
         assert "Canyon Storm" not in val
 
     def test_signups_count_available_votes(self):
@@ -346,7 +346,7 @@ class TestStormField:
         ):
             val = ms._storm_field(GUILD, target, leadership_view=False)
         # "a" + "either" count as available, "cannot" does not -> 2 of 3
-        assert "**Desert Storm:** signed up 2 of 3 (67%)" in val
+        assert "Signed up 2 of 3 (67%)" in val
 
     def test_signups_and_attendance_combined(self):
         target = ms.Target(name="Bob", discord_id=111, joined="")
@@ -358,7 +358,7 @@ class TestStormField:
             patch("storm_log.read_member_log_window", side_effect=[ds_att, ([], {})]),
         ):
             val = ms._storm_field(GUILD, target, leadership_view=False)
-        assert "signed up 1 of 1 (100%)" in val and "attended 1 of 1 (100%)" in val
+        assert "Signed up 1 of 1 (100%)" in val and "Attended 1 of 1 (100%)" in val
 
     def test_manual_member_skips_signups(self):
         target = ms.Target(name="Charlie", discord_id=None, joined="")
@@ -390,7 +390,7 @@ class TestStormField:
             patch("storm_log.read_member_log_window", return_value=([], {})),
         ):
             val = ms._storm_field(GUILD, target, leadership_view=True)
-        assert "placed: 1 primary, 1 sub, 1 sat out" in val
+        assert "Placed: 1 primary, 1 sub, 1 sat out" in val
 
     def test_placement_skipped_for_manual_member(self):
         assert ms._storm_placement_for_member(GUILD, "DS", None) is None
@@ -418,9 +418,9 @@ class TestStormField:
             patch("storm_log.read_member_log_window", side_effect=[att, ([], {})]),
         ):
             val = ms._storm_field(GUILD, target, leadership_view=True)
-        assert "last vote May 29, 2026" in val
-        assert "last attended May 22, 2026" in val
-        assert "last sat out May 15, 2026" in val
+        assert "Last vote May 29, 2026" in val
+        assert "Last attended May 22, 2026" in val
+        assert "Last sat out May 15, 2026" in val
 
     def test_member_view_has_no_recency_dates(self):
         target = ms.Target(name="Bob", discord_id=111, joined="")
@@ -431,7 +431,7 @@ class TestStormField:
             patch("storm_log.read_member_log_window", return_value=([], {})),
         ):
             val = ms._storm_field(GUILD, target, leadership_view=False)
-        assert "last vote" not in val  # recency dates are leadership-only
+        assert "Last vote" not in val  # recency dates are leadership-only
 
     def test_fmt_date(self):
         assert ms._fmt_date("2026-05-29") == "May 29, 2026"

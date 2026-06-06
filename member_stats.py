@@ -462,44 +462,65 @@ def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
     return primary, sub, sat_out, last_sat_out
 
 
+def _storm_metric_line(stat: str, date_label: str, date_iso: str, *, leadership_view: bool) -> str:
+    """One indented metric line: the stat, plus (leadership view) its matching
+    recency date on the right."""
+    line = f"   {stat}"
+    if leadership_view and date_iso:
+        line += f"   ·   {date_label} {_fmt_date(date_iso)}"
+    return line
+
+
 def _storm_field(guild_id: int, target: Target, *, leadership_view: bool) -> Optional[str]:
-    """Storm participation per event type. Member view: sign-up rate + attendance.
-    Leadership view also gets placement counts and a recency sub-line (last vote,
-    last attended, last sat out) to spot disengagement at a glance."""
+    """Storm participation per event type, one metric per line. Member view:
+    sign-up rate + attendance. Leadership view also gets placement counts and,
+    on each line, the matching recency date (last vote / attended / sat out)
+    to spot disengagement at a glance."""
     n = target.name.strip().lower()
-    parts: list[str] = []
+    blocks: list[str] = []
     for event_type, label in (("DS", "Desert Storm"), ("CS", "Canyon Storm")):
-        bits: list[str] = []
-        dates_line: list[str] = []
+        lines: list[str] = []
 
         signups = _storm_signups_for_member(guild_id, event_type, target.discord_id)
         if signups:
             avail, total, last_vote = signups
-            bits.append(f"signed up {avail} of {total} ({_pct(avail, total)}%)")
-            if leadership_view and last_vote:
-                dates_line.append(f"last vote {_fmt_date(last_vote)}")
+            lines.append(
+                _storm_metric_line(
+                    f"Signed up {avail} of {total} ({_pct(avail, total)}%)",
+                    "Last vote",
+                    last_vote,
+                    leadership_view=leadership_view,
+                )
+            )
 
         attendance = _storm_attendance_for_member(guild_id, event_type, n)
         if attendance:
             attended, tracked, last_attended = attendance
-            bits.append(f"attended {attended} of {tracked} ({_pct(attended, tracked)}%)")
-            if leadership_view and last_attended:
-                dates_line.append(f"last attended {_fmt_date(last_attended)}")
+            lines.append(
+                _storm_metric_line(
+                    f"Attended {attended} of {tracked} ({_pct(attended, tracked)}%)",
+                    "Last attended",
+                    last_attended,
+                    leadership_view=leadership_view,
+                )
+            )
 
         if leadership_view:
             placement = _storm_placement_for_member(guild_id, event_type, target.discord_id)
             if placement:
                 primary, sub, sat_out, last_sat_out = placement
-                bits.append(f"placed: {primary} primary, {sub} sub, {sat_out} sat out")
-                if last_sat_out:
-                    dates_line.append(f"last sat out {_fmt_date(last_sat_out)}")
+                lines.append(
+                    _storm_metric_line(
+                        f"Placed: {primary} primary, {sub} sub, {sat_out} sat out",
+                        "Last sat out",
+                        last_sat_out,
+                        leadership_view=leadership_view,
+                    )
+                )
 
-        if bits:
-            entry = f"**{label}:** " + "; ".join(bits)
-            if dates_line:
-                entry += "\n_" + " · ".join(dates_line) + "_"
-            parts.append(entry)
-    return "\n".join(parts) if parts else None
+        if lines:
+            blocks.append(f"**{label}:**\n" + "\n".join(lines))
+    return "\n".join(blocks) if blocks else None
 
 
 def _survey_field(guild_id: int, target: Target) -> Optional[str]:

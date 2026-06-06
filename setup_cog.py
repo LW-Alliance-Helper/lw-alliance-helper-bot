@@ -3201,30 +3201,24 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
-            # Keep-current button when leadership saved custom thresholds
-            # on a previous run. Demoted "Use defaults" to a secondary
-            # revert in that case so Keep current is the visually
-            # primary action.
+            # Keep current renders first (leftmost), per the
+            # Keep-current-is-always-first convention. It only applies
+            # when leadership saved custom thresholds on a previous run —
+            # drop it on first run, and otherwise demote "Use defaults"
+            # to a secondary revert so Keep current is the primary action.
             if thresholds:
-                for child in self.children:
-                    if getattr(child, "label", None) == "✅ Use defaults":
-                        child.label = "↩️ Use defaults"
-                        child.style = discord.ButtonStyle.secondary
-                        break
-                keep_btn = discord.ui.Button(
-                    label="✅ Keep current values",
-                    style=discord.ButtonStyle.success,
-                )
+                self.defaults_btn.label = "↩️ Use defaults"
+                self.defaults_btn.style = discord.ButtonStyle.secondary
+            else:
+                self.remove_item(self.keep_btn)
 
-                async def _keep_cb(inter: discord.Interaction):
-                    self.choice = "keep"
-                    for item in self.children:
-                        item.disabled = True
-                    await wizard_registry.safe_edit_response(inter, view=self)
-                    self.stop()
-
-                keep_btn.callback = _keep_cb
-                self.add_item(keep_btn)
+        @discord.ui.button(label="✅ Keep current values", style=discord.ButtonStyle.success)
+        async def keep_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "keep"
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -3308,29 +3302,24 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.choice = None
 
-            # Mirror ThresholdsChoiceView: when leadership has saved
-            # custom bucket labels, surface Keep current as the primary
-            # action and demote Use defaults to a revert.
+            # Mirror ThresholdsChoiceView: Keep current renders first
+            # (leftmost). It only applies when leadership saved custom
+            # bucket labels on a previous run — drop it on first run, and
+            # otherwise demote Use defaults to a secondary revert so Keep
+            # current is the primary action.
             if labels:
-                for child in self.children:
-                    if getattr(child, "label", None) == "✅ Use defaults":
-                        child.label = "↩️ Use defaults"
-                        child.style = discord.ButtonStyle.secondary
-                        break
-                keep_btn = discord.ui.Button(
-                    label="✅ Keep current labels",
-                    style=discord.ButtonStyle.success,
-                )
+                self.defaults_btn.label = "↩️ Use defaults"
+                self.defaults_btn.style = discord.ButtonStyle.secondary
+            else:
+                self.remove_item(self.keep_btn)
 
-                async def _keep_cb(inter: discord.Interaction):
-                    self.choice = "keep"
-                    for item in self.children:
-                        item.disabled = True
-                    await wizard_registry.safe_edit_response(inter, view=self)
-                    self.stop()
-
-                keep_btn.callback = _keep_cb
-                self.add_item(keep_btn)
+        @discord.ui.button(label="✅ Keep current labels", style=discord.ButtonStyle.success)
+        async def keep_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "keep"
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -5862,6 +5851,27 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             super().__init__(timeout=120)
             self.selected = None
 
+        # Re-entry: keep the previously-saved choice without re-clicking.
+        # Defined first so it always renders as the leftmost button (the
+        # Keep-current-is-always-first convention). Surface the actual
+        # saved selection on the button label (set in post-construction
+        # below) so officers can see at a glance what "Keep current"
+        # would preserve. Removed entirely when the alliance has no saved
+        # value yet (fresh setup).
+        @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+        async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = saved_teams
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=(
+                    f"{team_prompt}\n\n✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
+                ),
+                view=self,
+            )
+            self.stop()
+
         @discord.ui.button(label="Team A & Team B", style=discord.ButtonStyle.primary)
         async def both(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "both"
@@ -5894,25 +5904,6 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"{team_prompt}\n\n✅ Teams: **Team B only**",
-                view=self,
-            )
-            self.stop()
-
-        # Re-entry: keep the previously-saved choice without re-clicking.
-        # Surface the actual saved selection on the button label (set in
-        # post-construction below) so officers can see at a glance what
-        # "Keep current" would preserve. Removed entirely when the
-        # alliance has no saved value yet (fresh setup).
-        @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
-        async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.selected = saved_teams
-            for item in self.children:
-                item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter,
-                content=(
-                    f"{team_prompt}\n\n✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
-                ),
                 view=self,
             )
             self.stop()
@@ -5962,6 +5953,23 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 super().__init__(timeout=180)
                 self.selected = None
 
+            # Defined first so Keep current always renders as the
+            # leftmost button (removed below when there's nothing saved).
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = saved_idx
+                for item in self.children:
+                    item.disabled = True
+                kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{slot_prompt}\n\n✅ Team {team_letter}: **{kept_label}** (kept current)"
+                    ),
+                    view=self,
+                )
+                self.stop()
+
             @discord.ui.button(label=slot_labels[0], style=discord.ButtonStyle.primary)
             async def slot1(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1
@@ -5982,21 +5990,6 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 await wizard_registry.safe_edit_response(
                     inter,
                     content=(f"{slot_prompt}\n\n✅ Team {team_letter}: **{slot_labels[1]}**"),
-                    view=self,
-                )
-                self.stop()
-
-            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
-            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.selected = saved_idx
-                for item in self.children:
-                    item.disabled = True
-                kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
-                await wizard_registry.safe_edit_response(
-                    inter,
-                    content=(
-                        f"{slot_prompt}\n\n✅ Team {team_letter}: **{kept_label}** (kept current)"
-                    ),
                     view=self,
                 )
                 self.stop()

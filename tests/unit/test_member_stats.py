@@ -308,26 +308,99 @@ class TestSurveyField:
         assert ms._parse_survey_ts("garbage") is None
 
 
-# ── Storm attendance (Per-Member Log) ────────────────────────────────────────
+# ── Storm sign-ups + attendance ──────────────────────────────────────────────
 
 
 class TestStormField:
-    def test_attendance_per_event_type(self):
+    def test_attendance_only(self):
         target = ms.Target(name="Bob", discord_id=111, joined="")
         ds = (
             ["2026-06-05", "2026-05-29", "2026-05-22"],
             {"Bob": {"2026-06-05": "yes", "2026-05-29": "no", "2026-05-22": "yes"}},
         )
         cs = ([], {})
-        with patch("storm_log.read_member_log_window", side_effect=[ds, cs]):
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=[]),
+            patch("storm_log.read_member_log_window", side_effect=[ds, cs]),
+        ):
             val = ms._storm_field(GUILD, target, leadership_view=False)
         assert "**Desert Storm:** attended 2 of 3 (67%)" in val
         assert "Canyon Storm" not in val
 
-    def test_member_not_in_log_hides(self):
+    def test_signups_count_available_votes(self):
         target = ms.Target(name="Bob", discord_id=111, joined="")
-        empty = ([], {})
-        with patch("storm_log.read_member_log_window", side_effect=[empty, empty]):
+        posts = [
+            {"guild_id": GUILD, "event_type": "DS", "event_date": "2026-06-05"},
+            {"guild_id": GUILD, "event_type": "DS", "event_date": "2026-05-29"},
+            {"guild_id": GUILD, "event_type": "DS", "event_date": "2026-05-22"},
+        ]
+        votes = {"2026-06-05": "a", "2026-05-29": "cannot", "2026-05-22": "either"}
+
+        def _vote(g, et, d, mid):
+            return {"vote": votes[d]}
+
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=posts),
+            patch("config.get_member_vote", side_effect=_vote),
+            patch("storm_log.read_member_log_window", return_value=([], {})),
+        ):
+            val = ms._storm_field(GUILD, target, leadership_view=False)
+        # "a" + "either" count as available, "cannot" does not -> 2 of 3
+        assert "**Desert Storm:** signed up 2 of 3 (67%)" in val
+
+    def test_signups_and_attendance_combined(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="")
+        posts = [{"guild_id": GUILD, "event_type": "DS", "event_date": "2026-06-05"}]
+        ds_att = (["2026-06-05"], {"Bob": {"2026-06-05": "yes"}})
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=posts),
+            patch("config.get_member_vote", return_value={"vote": "a"}),
+            patch("storm_log.read_member_log_window", side_effect=[ds_att, ([], {})]),
+        ):
+            val = ms._storm_field(GUILD, target, leadership_view=False)
+        assert "signed up 1 of 1 (100%)" in val and "attended 1 of 1 (100%)" in val
+
+    def test_manual_member_skips_signups(self):
+        target = ms.Target(name="Charlie", discord_id=None, joined="")
+        assert ms._storm_signups_for_member(GUILD, "DS", None) is None
+
+    def test_leadership_placement_counts(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="")
+        posts = [
+            {"guild_id": GUILD, "event_type": "DS", "event_date": d}
+            for d in ("d1", "d2", "d3", "d4")
+        ]
+        plans = {
+            "d1": {"A": {"primaries": ["111"], "subs": []}},  # primary
+            "d2": {"A": {"primaries": [], "subs": ["111"]}},  # sub
+            "d3": {"A": {"primaries": ["999"], "subs": []}},  # not placed
+            "d4": {},  # no plan for this event -> skipped
+        }
+
+        def _plans(g, et, d):
+            return plans.get(d, {})
+
+        def _vote(g, et, d, mid):
+            return {"vote": "a"} if d == "d3" else None  # available but unplaced on d3
+
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=posts),
+            patch("config.get_storm_team_plans_for_event", side_effect=_plans),
+            patch("config.get_member_vote", side_effect=_vote),
+            patch("storm_log.read_member_log_window", return_value=([], {})),
+        ):
+            val = ms._storm_field(GUILD, target, leadership_view=True)
+        assert "placed: 1 primary, 1 sub, 1 sat out" in val
+
+    def test_placement_skipped_for_manual_member(self):
+        assert ms._storm_placement_for_member(GUILD, "DS", None) is None
+
+    def test_nothing_tracked_hides(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="")
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=[]),
+            patch("storm_log.read_member_log_window", return_value=([], {})),
+        ):
             assert ms._storm_field(GUILD, target, leadership_view=False) is None
 
     def test_truthy_helper(self):

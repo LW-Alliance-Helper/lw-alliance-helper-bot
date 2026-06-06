@@ -14,10 +14,11 @@ Two embed views, chosen by the REQUESTER's role (not the target's):
 Self-lookup defaults to ephemeral with a Share button; leadership lookup of
 another member defaults to visible with an `ephemeral` override.
 
-Storm note: the storm section shows attendance, read from the Per-Member
-participation Log (the one clean per-member storm reader). Sign-up-vote counts
-and roster placement (primary/sub/sit-out) live in separate per-event SQLite /
-roster-tab sources and are not yet surfaced here.
+Storm section sources (each by a different key, so they degrade independently):
+sign-up rate from the poll votes (`storm_signups`, by Discord ID), attendance
+from the Per-Member participation Log (by name), and leadership-only placement
+(primary/sub from `storm_team_plans`, "sat out" derived as available-but-not-
+placed) over the recent-event window.
 """
 
 from __future__ import annotations
@@ -334,32 +335,132 @@ def _storm_truthy(v: str) -> bool:
     return bool(v) and str(v).strip().lower() not in ("no", "false", "0")
 
 
-def _storm_field(guild_id: int, target: Target, *, leadership_view: bool) -> Optional[str]:
-    """Storm attendance per event type, from the Per-Member participation Log
-    (the one clean per-member storm reader). Sign-up-vote counts and roster
-    placement (primary/sub/sit-out) live in separate per-event / roster
-    sources and are a tracked follow-up, not part of this reader."""
+# How far back to scan for storm sign-up events (weekly cadence, so ~180 days
+# covers a couple of seasons of history without an unbounded query).
+_STORM_SIGNUP_LOOKBACK_DAYS = 180
+# Sign-up votes that count as "available" (vs "cannot"). See storm_signup_view.
+_AVAILABLE_VOTES = {"a", "b", "either"}
+
+
+def _pct(n: int, d: int) -> int:
+    return round(n / d * 100) if d else 0
+
+
+def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
+    """(available_count, total_events) from the sign-up poll votes, or None.
+    Keyed by Discord ID, so manual (non-Discord) members are skipped."""
+    if not discord_id:
+        return None
+    import config
+
+    try:
+        posts = config.get_recent_storm_registration_posts(within_days=_STORM_SIGNUP_LOOKBACK_DAYS)
+    except Exception as e:
+        logger.warning("[MEMBERSTATS] storm signups read failed guild=%s: %s", guild_id, e)
+        return None
+    dates = sorted(
+        {
+            p["event_date"]
+            for p in posts
+            if p.get("guild_id") == guild_id and p.get("event_type") == event_type
+        }
+    )
+    if not dates:
+        return None
+    available = 0
+    for d in dates:
+        vote = config.get_member_vote(guild_id, event_type, d, str(discord_id))
+        if vote and vote.get("vote") in _AVAILABLE_VOTES:
+            available += 1
+    return available, len(dates)
+
+
+def _storm_attendance_for_member(guild_id: int, event_type: str, name_lower: str):
+    """(attended_count, tracked_events) from the Per-Member participation Log,
+    or None. Keyed by member name."""
     from storm_log import ATTENDANCE_QUESTION_KEY, read_member_log_window
 
+    try:
+        dates, by_member = read_member_log_window(guild_id, event_type, 50, ATTENDANCE_QUESTION_KEY)
+    except Exception as e:
+        logger.warning("[MEMBERSTATS] storm log read failed guild=%s: %s", guild_id, e)
+        return None
+    if not dates:
+        return None
+    rows = next((v for k, v in by_member.items() if k.strip().lower() == name_lower), None)
+    if not rows:
+        return None
+    attended = sum(1 for v in rows.values() if _storm_truthy(v))
+    return attended, len(rows)
+
+
+def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
+    """(primary, sub, sat_out) placement counts across recent events, or None.
+    Primary/sub come from the saved team plans (by Discord ID). "Sat out" is
+    derived as available-but-not-placed (the practical outcome — leadership's
+    explicit sit-out sheet has no per-member reader). Leadership-only."""
+    if not discord_id:
+        return None
+    import config
+
+    try:
+        posts = config.get_recent_storm_registration_posts(within_days=_STORM_SIGNUP_LOOKBACK_DAYS)
+    except Exception as e:
+        logger.warning("[MEMBERSTATS] storm placement read failed guild=%s: %s", guild_id, e)
+        return None
+    dates = sorted(
+        {
+            p["event_date"]
+            for p in posts
+            if p.get("guild_id") == guild_id and p.get("event_type") == event_type
+        }
+    )
+    if not dates:
+        return None
+    did = str(discord_id)
+    primary = sub = sat_out = 0
+    saw_plan = False
+    for d in dates:
+        plans = config.get_storm_team_plans_for_event(guild_id, event_type, d)
+        if not plans:
+            continue
+        saw_plan = True
+        if any(did in p.get("primaries", []) for p in plans.values()):
+            primary += 1
+        elif any(did in p.get("subs", []) for p in plans.values()):
+            sub += 1
+        else:
+            vote = config.get_member_vote(guild_id, event_type, d, did)
+            if vote and vote.get("vote") in _AVAILABLE_VOTES:
+                sat_out += 1
+    if not saw_plan:
+        return None
+    return primary, sub, sat_out
+
+
+def _storm_field(guild_id: int, target: Target, *, leadership_view: bool) -> Optional[str]:
+    """Storm participation per event type: sign-up rate (poll votes, by Discord
+    ID) and attendance (Per-Member participation Log, by name). Roster placement
+    (primary/sub/sit-out) is a tracked follow-up (#299)."""
     n = target.name.strip().lower()
     parts: list[str] = []
     for event_type, label in (("DS", "Desert Storm"), ("CS", "Canyon Storm")):
-        try:
-            dates, by_member = read_member_log_window(
-                guild_id, event_type, 50, ATTENDANCE_QUESTION_KEY
-            )
-        except Exception as e:
-            logger.warning("[MEMBERSTATS] storm log read failed guild=%s: %s", guild_id, e)
-            continue
-        if not dates:
-            continue
-        rows = next((v for k, v in by_member.items() if k.strip().lower() == n), None)
-        if not rows:
-            continue
-        tracked = len(rows)
-        attended = sum(1 for v in rows.values() if _storm_truthy(v))
-        pct = round(attended / tracked * 100) if tracked else 0
-        parts.append(f"**{label}:** attended {attended} of {tracked} ({pct}%)")
+        bits: list[str] = []
+        signups = _storm_signups_for_member(guild_id, event_type, target.discord_id)
+        if signups:
+            avail, total = signups
+            bits.append(f"signed up {avail} of {total} ({_pct(avail, total)}%)")
+        attendance = _storm_attendance_for_member(guild_id, event_type, n)
+        if attendance:
+            attended, tracked = attendance
+            bits.append(f"attended {attended} of {tracked} ({_pct(attended, tracked)}%)")
+        if leadership_view:
+            placement = _storm_placement_for_member(guild_id, event_type, target.discord_id)
+            if placement:
+                primary, sub, sat_out = placement
+                bits.append(f"placed: {primary} primary, {sub} sub, {sat_out} sat out")
+        if bits:
+            parts.append(f"**{label}:** " + "; ".join(bits))
     return "\n".join(parts) if parts else None
 
 

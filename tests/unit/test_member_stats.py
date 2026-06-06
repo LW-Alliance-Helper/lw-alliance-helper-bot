@@ -221,22 +221,48 @@ class TestTrainField:
 
 
 class TestBuildEmbed:
-    def test_identity_always_present(self):
-        target = ms.Target(name="Bob", discord_id=111, joined="2025-08-12")
-        with (
+    def _empty_patches(self):
+        return (
             patch("config.get_birthday_config", return_value={"enabled": 0}),
             patch("config.get_growth_config", return_value={"enabled": 0}),
+            patch("config.get_recent_storm_registration_posts", return_value=[]),
+            patch("storm_log.read_member_log_window", return_value=([], {})),
+            patch("config.list_surveys", return_value=[]),
             patch(
                 "config.get_train_config", return_value={"history_tab": "T", "counted_reasons": ""}
             ),
             patch("train_rotation.load_history", return_value=[]),
-        ):
+        )
+
+    def test_identity_always_present_with_hints(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="2025-08-12")
+        ps = self._empty_patches()
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
             embed = ms.build_embed(GUILD, target, leadership_view=False)
         assert embed.title == "👤 Bob's Member Stats"
         names = [f.name for f in embed.fields]
         assert "Identity" in names
-        # No tracked activity -> empty-state pointer field
-        assert any("Nothing tracked here yet" in (f.value or "") for f in embed.fields)
+        # Everything missing -> a "More you can track" field listing them
+        assert "💡 More you can track" in names
+        hint = next(f.value for f in embed.fields if f.name == "💡 More you can track")
+        assert "Power trends" in hint and "Storm participation" in hint and "Surveys" in hint
+        assert "Train history" not in hint  # leadership-only hint, not in member view
+
+    def test_hints_only_for_missing_sections(self):
+        # power present -> no power hint; storm/survey missing -> hinted
+        shown = {"power"}
+        hint = ms._missing_hints(shown, leadership_view=False)
+        assert "Power trends" not in hint
+        assert "Storm participation" in hint and "Surveys" in hint
+
+    def test_train_hint_leadership_only(self):
+        assert "Train history" not in (ms._missing_hints(set(), leadership_view=False) or "")
+        assert "Train history" in ms._missing_hints(set(), leadership_view=True)
+
+    def test_no_hints_when_all_present(self):
+        assert (
+            ms._missing_hints({"power", "storm", "survey", "train"}, leadership_view=True) is None
+        )
 
 
 # ── Surveys ──────────────────────────────────────────────────────────────────

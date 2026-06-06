@@ -597,13 +597,34 @@ def _fmt_num(v: float) -> str:
 # ── Embed assembly ───────────────────────────────────────────────────────────
 
 
-def _empty_state() -> str:
-    return (
-        "_Nothing tracked here yet. This fills in as your alliance uses the bot:_\n"
-        "• 📊 **Power:** monthly growth snapshots (set up via `/setup` → 📈 Growth tracking)\n"
-        "• ⚔️ **Storm:** your sign-ups and attendance from `/desertstorm` / `/canyonstorm`\n"
-        "• 📋 **Surveys:** your responses from `/survey`"
-    )
+# What each trackable section is + where its data comes from, for the "more you
+# can track" hints. Order matches the section order above. `train` only hints in
+# the leadership view (it's leadership-only).
+_SECTION_HINTS = [
+    (
+        "power",
+        False,
+        "📊 **Power trends:** monthly growth snapshots, set up via `/setup` → 📈 Growth",
+    ),
+    (
+        "storm",
+        False,
+        "⚔️ **Storm participation:** sign-ups and attendance from `/desertstorm` / `/canyonstorm`",
+    ),
+    ("survey", False, "📋 **Surveys:** responses from `/survey`"),
+    ("train", True, "🚂 **Train history:** conductor rotation from `/train`"),
+]
+
+
+def _missing_hints(shown: set[str], *, leadership_view: bool) -> Optional[str]:
+    """A bullet per trackable section the member has no data for yet, so even a
+    partly-filled card nudges toward what else the alliance could track."""
+    lines = [
+        text
+        for key, leadership_only, text in _SECTION_HINTS
+        if key not in shown and (leadership_view or not leadership_only)
+    ]
+    return "\n".join(lines) if lines else None
 
 
 def build_embed(guild_id: int, target: Target, *, leadership_view: bool) -> discord.Embed:
@@ -613,13 +634,17 @@ def build_embed(guild_id: int, target: Target, *, leadership_view: bool) -> disc
     )
     embed.add_field(name="Identity", value=_identity_field(guild_id, target), inline=False)
 
+    shown: set[str] = set()
+
     power = _power_field(guild_id, target)
     if power:
         embed.add_field(name="📊 Power & Growth", value=power, inline=False)
+        shown.add("power")
 
     storm = _storm_field(guild_id, target, leadership_view=leadership_view)
     if storm:
         embed.add_field(name="⚔️ Storm Participation", value=storm, inline=False)
+        shown.add("storm")
 
     # Train is LEADERSHIP-ONLY: conductor frequency is a leadership allocation,
     # and a member seeing "0 trains" invites a hurt-feelings conversation (#56).
@@ -627,13 +652,16 @@ def build_embed(guild_id: int, target: Target, *, leadership_view: bool) -> disc
         train = _train_field(guild_id, target, leadership_view=True)
         if train:
             embed.add_field(name="🚂 Train", value=train, inline=False)
+            shown.add("train")
 
     survey = _survey_field(guild_id, target)
     if survey:
         embed.add_field(name="📋 Surveys", value=survey, inline=False)
+        shown.add("survey")
 
-    if len(embed.fields) == 1:
-        embed.add_field(name="​", value=_empty_state(), inline=False)
+    hints = _missing_hints(shown, leadership_view=leadership_view)
+    if hints:
+        embed.add_field(name="💡 More you can track", value=hints, inline=False)
     return embed
 
 

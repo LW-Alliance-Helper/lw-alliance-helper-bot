@@ -190,7 +190,7 @@ class TestTrainField:
         ):
             val = ms._train_field(GUILD, target, leadership_view=False)
         assert "Conductor: **2** times" in val  # auto + vs counted, birthday excluded
-        assert "last drove 2026-05-01" in val
+        assert "last drove May 1, 2026" in val
         assert "Reason breakdown" not in val  # leadership-only
 
     def test_leadership_view_adds_reason_breakdown(self):

@@ -316,7 +316,7 @@ def _train_field(guild_id: int, target: Target, *, leadership_view: bool) -> Opt
 
     line = f"Conductor: **{count}** time{'s' if count != 1 else ''}"
     if last_drove:
-        line += f" · last drove {last_drove}"
+        line += f" · last drove {_fmt_date(last_drove)}"
     out = [line]
 
     if leadership_view:

@@ -156,7 +156,7 @@ def _build_upgrade_pitch_embed() -> discord.Embed:
             "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"
             "• 🧵 Use threads as destinations for any channel-pickable feature\n"
             "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"
-            "• 📅 30-day history windows on the `/events` log and `/train log`\n"
+            "• 📅 30-day history windows on the `/events` event log and the `/train` prompt log\n"
             "• 📜 Unlimited storm-log lookback\n\n"
             "**$4.99/month**, billed by Discord. Cancel anytime.\n\n"
             "🪪 Your subscription unlocks Premium in **one server at a time**. "

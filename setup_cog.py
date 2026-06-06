@@ -9994,8 +9994,8 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await channel.send(
             "ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** "
             "(on the bot's first tick after server-time midnight). If you need a "
-            "birthday reflected on the schedule sooner, run `/train birthdays` "
-            "to trigger the check on demand."
+            "birthday reflected on the schedule sooner, open `/train` and click "
+            "**🎂 Run birthday check** to trigger the check on demand."
         )
 
         # ── Step 6: Flexible placement ─────────────────────────────────────────

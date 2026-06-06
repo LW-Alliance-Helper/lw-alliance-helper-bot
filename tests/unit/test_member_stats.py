@@ -395,6 +395,48 @@ class TestStormField:
     def test_placement_skipped_for_manual_member(self):
         assert ms._storm_placement_for_member(GUILD, "DS", None) is None
 
+    def test_leadership_recency_dates(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="")
+        posts = [
+            {"guild_id": GUILD, "event_type": "DS", "event_date": d}
+            for d in ("2026-05-15", "2026-05-22", "2026-05-29")
+        ]
+        plans = {
+            "2026-05-15": {"A": {"primaries": [], "subs": []}},  # available, unplaced -> sat out
+            "2026-05-22": {"A": {"primaries": ["111"], "subs": []}},
+            "2026-05-29": {"A": {"primaries": ["111"], "subs": []}},
+        }
+        att = (["2026-05-22"], {"Bob": {"2026-05-22": "yes"}})
+
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=posts),
+            patch(
+                "config.get_storm_team_plans_for_event",
+                side_effect=lambda g, e, d: plans.get(d, {}),
+            ),
+            patch("config.get_member_vote", return_value={"vote": "a"}),
+            patch("storm_log.read_member_log_window", side_effect=[att, ([], {})]),
+        ):
+            val = ms._storm_field(GUILD, target, leadership_view=True)
+        assert "last vote May 29, 2026" in val
+        assert "last attended May 22, 2026" in val
+        assert "last sat out May 15, 2026" in val
+
+    def test_member_view_has_no_recency_dates(self):
+        target = ms.Target(name="Bob", discord_id=111, joined="")
+        posts = [{"guild_id": GUILD, "event_type": "DS", "event_date": "2026-05-29"}]
+        with (
+            patch("config.get_recent_storm_registration_posts", return_value=posts),
+            patch("config.get_member_vote", return_value={"vote": "a"}),
+            patch("storm_log.read_member_log_window", return_value=([], {})),
+        ):
+            val = ms._storm_field(GUILD, target, leadership_view=False)
+        assert "last vote" not in val  # recency dates are leadership-only
+
+    def test_fmt_date(self):
+        assert ms._fmt_date("2026-05-29") == "May 29, 2026"
+        assert ms._fmt_date("garbage") == "garbage"
+
     def test_nothing_tracked_hides(self):
         target = ms.Target(name="Bob", discord_id=111, joined="")
         with (

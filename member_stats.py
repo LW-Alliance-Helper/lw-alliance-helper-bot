@@ -346,38 +346,61 @@ def _pct(n: int, d: int) -> int:
     return round(n / d * 100) if d else 0
 
 
-def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
-    """(available_count, total_events) from the sign-up poll votes, or None.
-    Keyed by Discord ID, so manual (non-Discord) members are skipped."""
-    if not discord_id:
-        return None
-    import config
+def _fmt_date(iso: str) -> str:
+    """`2026-05-29` -> `May 29, 2026`; pass through anything unparseable."""
+    from datetime import datetime
 
     try:
-        posts = config.get_recent_storm_registration_posts(within_days=_STORM_SIGNUP_LOOKBACK_DAYS)
-    except Exception as e:
-        logger.warning("[MEMBERSTATS] storm signups read failed guild=%s: %s", guild_id, e)
-        return None
-    dates = sorted(
+        dt = datetime.strptime((iso or "").strip()[:10], "%Y-%m-%d")
+        return f"{dt:%b} {dt.day}, {dt.year}"
+    except (ValueError, AttributeError):
+        return iso
+
+
+def _storm_event_dates(guild_id: int, event_type: str) -> list[str]:
+    """Recent event dates for (guild, event_type), oldest first, from the
+    sign-up registration posts."""
+    import config
+
+    posts = config.get_recent_storm_registration_posts(within_days=_STORM_SIGNUP_LOOKBACK_DAYS)
+    return sorted(
         {
             p["event_date"]
             for p in posts
             if p.get("guild_id") == guild_id and p.get("event_type") == event_type
         }
     )
+
+
+def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
+    """(available_count, total_events, last_vote_date) from the sign-up poll
+    votes, or None. Keyed by Discord ID, so manual members are skipped.
+    `last_vote_date` is the most recent event they cast any vote on."""
+    if not discord_id:
+        return None
+    import config
+
+    try:
+        dates = _storm_event_dates(guild_id, event_type)
+    except Exception as e:
+        logger.warning("[MEMBERSTATS] storm signups read failed guild=%s: %s", guild_id, e)
+        return None
     if not dates:
         return None
     available = 0
-    for d in dates:
+    last_vote = ""
+    for d in dates:  # ascending, so the last hit is the most recent
         vote = config.get_member_vote(guild_id, event_type, d, str(discord_id))
-        if vote and vote.get("vote") in _AVAILABLE_VOTES:
-            available += 1
-    return available, len(dates)
+        if vote:
+            last_vote = d
+            if vote.get("vote") in _AVAILABLE_VOTES:
+                available += 1
+    return available, len(dates), last_vote
 
 
 def _storm_attendance_for_member(guild_id: int, event_type: str, name_lower: str):
-    """(attended_count, tracked_events) from the Per-Member participation Log,
-    or None. Keyed by member name."""
+    """(attended_count, tracked_events, last_attended_date) from the Per-Member
+    participation Log, or None. Keyed by member name."""
     from storm_log import ATTENDANCE_QUESTION_KEY, read_member_log_window
 
     try:
@@ -390,37 +413,37 @@ def _storm_attendance_for_member(guild_id: int, event_type: str, name_lower: str
     rows = next((v for k, v in by_member.items() if k.strip().lower() == name_lower), None)
     if not rows:
         return None
-    attended = sum(1 for v in rows.values() if _storm_truthy(v))
-    return attended, len(rows)
+    attended = 0
+    last_attended = ""
+    for d, v in rows.items():
+        if _storm_truthy(v):
+            attended += 1
+            if d > last_attended:
+                last_attended = d
+    return attended, len(rows), last_attended
 
 
 def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
-    """(primary, sub, sat_out) placement counts across recent events, or None.
-    Primary/sub come from the saved team plans (by Discord ID). "Sat out" is
-    derived as available-but-not-placed (the practical outcome — leadership's
-    explicit sit-out sheet has no per-member reader). Leadership-only."""
+    """(primary, sub, sat_out, last_sat_out_date) placement across recent events,
+    or None. Primary/sub from the saved team plans (by Discord ID). "Sat out"
+    is derived as available-but-not-placed (leadership's explicit sit-out sheet
+    has no per-member reader). Leadership-only."""
     if not discord_id:
         return None
     import config
 
     try:
-        posts = config.get_recent_storm_registration_posts(within_days=_STORM_SIGNUP_LOOKBACK_DAYS)
+        dates = _storm_event_dates(guild_id, event_type)
     except Exception as e:
         logger.warning("[MEMBERSTATS] storm placement read failed guild=%s: %s", guild_id, e)
         return None
-    dates = sorted(
-        {
-            p["event_date"]
-            for p in posts
-            if p.get("guild_id") == guild_id and p.get("event_type") == event_type
-        }
-    )
     if not dates:
         return None
     did = str(discord_id)
     primary = sub = sat_out = 0
+    last_sat_out = ""
     saw_plan = False
-    for d in dates:
+    for d in dates:  # ascending
         plans = config.get_storm_team_plans_for_event(guild_id, event_type, d)
         if not plans:
             continue
@@ -433,34 +456,49 @@ def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
             vote = config.get_member_vote(guild_id, event_type, d, did)
             if vote and vote.get("vote") in _AVAILABLE_VOTES:
                 sat_out += 1
+                last_sat_out = d
     if not saw_plan:
         return None
-    return primary, sub, sat_out
+    return primary, sub, sat_out, last_sat_out
 
 
 def _storm_field(guild_id: int, target: Target, *, leadership_view: bool) -> Optional[str]:
-    """Storm participation per event type: sign-up rate (poll votes, by Discord
-    ID) and attendance (Per-Member participation Log, by name). Roster placement
-    (primary/sub/sit-out) is a tracked follow-up (#299)."""
+    """Storm participation per event type. Member view: sign-up rate + attendance.
+    Leadership view also gets placement counts and a recency sub-line (last vote,
+    last attended, last sat out) to spot disengagement at a glance."""
     n = target.name.strip().lower()
     parts: list[str] = []
     for event_type, label in (("DS", "Desert Storm"), ("CS", "Canyon Storm")):
         bits: list[str] = []
+        dates_line: list[str] = []
+
         signups = _storm_signups_for_member(guild_id, event_type, target.discord_id)
         if signups:
-            avail, total = signups
+            avail, total, last_vote = signups
             bits.append(f"signed up {avail} of {total} ({_pct(avail, total)}%)")
+            if leadership_view and last_vote:
+                dates_line.append(f"last vote {_fmt_date(last_vote)}")
+
         attendance = _storm_attendance_for_member(guild_id, event_type, n)
         if attendance:
-            attended, tracked = attendance
+            attended, tracked, last_attended = attendance
             bits.append(f"attended {attended} of {tracked} ({_pct(attended, tracked)}%)")
+            if leadership_view and last_attended:
+                dates_line.append(f"last attended {_fmt_date(last_attended)}")
+
         if leadership_view:
             placement = _storm_placement_for_member(guild_id, event_type, target.discord_id)
             if placement:
-                primary, sub, sat_out = placement
+                primary, sub, sat_out, last_sat_out = placement
                 bits.append(f"placed: {primary} primary, {sub} sub, {sat_out} sat out")
+                if last_sat_out:
+                    dates_line.append(f"last sat out {_fmt_date(last_sat_out)}")
+
         if bits:
-            parts.append(f"**{label}:** " + "; ".join(bits))
+            entry = f"**{label}:** " + "; ".join(bits)
+            if dates_line:
+                entry += "\n_" + " · ".join(dates_line) + "_"
+            parts.append(entry)
     return "\n".join(parts) if parts else None
 
 

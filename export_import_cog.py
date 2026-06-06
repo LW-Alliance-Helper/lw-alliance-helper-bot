@@ -286,25 +286,9 @@ class _SheetIdView(discord.ui.View):
         #   None              — pending / cancelled
         self.decision: Optional[str] = None
 
-        use_exported_btn = discord.ui.Button(
-            label="Use exported",
-            style=discord.ButtonStyle.success,
-        )
-
-        async def _on_use_exported(inter: discord.Interaction):
-            self.decision = exported_id
-            for item in self.children:
-                item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter,
-                content=f"✅ Will use exported sheet ID `{exported_id}`.",
-                view=self,
-            )
-            self.stop()
-
-        use_exported_btn.callback = _on_use_exported
-        self.add_item(use_exported_btn)
-
+        # Keep current is added first so it renders as the leftmost
+        # button when the new guild already has a sheet ID configured
+        # (the Keep-current-is-always-first convention).
         if current_id:
             keep_btn = discord.ui.Button(
                 label="Keep current",
@@ -324,6 +308,25 @@ class _SheetIdView(discord.ui.View):
 
             keep_btn.callback = _on_keep_current
             self.add_item(keep_btn)
+
+        use_exported_btn = discord.ui.Button(
+            label="Use exported",
+            style=discord.ButtonStyle.success,
+        )
+
+        async def _on_use_exported(inter: discord.Interaction):
+            self.decision = exported_id
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Will use exported sheet ID `{exported_id}`.",
+                view=self,
+            )
+            self.stop()
+
+        use_exported_btn.callback = _on_use_exported
+        self.add_item(use_exported_btn)
 
         new_btn = discord.ui.Button(
             label="Enter a different ID",

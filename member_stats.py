@@ -747,10 +747,14 @@ class MemberPickerView(discord.ui.View):
             self.add_item(nxt)
 
     async def _on_pick(self, interaction: discord.Interaction):
-        # Building the embed does several Sheets reads; ack first so the 3s
-        # interaction token can't expire, and run the reads off the event loop.
-        await interaction.response.defer()
         name = interaction.data["values"][0]
+        # Building the embed does several Sheets reads (a few seconds), so show
+        # an immediate fetching state instead of a frozen-looking menu. Editing
+        # the message IS the interaction response (within the 3s window); the
+        # reads then run off the event loop and the result edits in after.
+        await interaction.response.edit_message(
+            content=f"⏳ Fetching **{name}**'s stats…", embed=None, view=None
+        )
         embed = await asyncio.to_thread(_build_leadership_embed, self.guild_id, name)
         await interaction.edit_original_response(content=self.notice(), embed=embed, view=self)
 

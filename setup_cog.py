@@ -3494,6 +3494,26 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                     _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*",
                 )
             )
+        # Conductor Rotation (#55) — surfaced so the summary reflects it like
+        # every other train setting (#302). DB-only reads, so no sheet round-trip.
+        if current.get("rotation_enabled"):
+            import train_rotation as _tr
+
+            _wd = int(current.get("weekly_draft_day", 6) or 6)
+            _draft_day = _tr.WEEKDAY_NAMES[_wd] if 0 <= _wd < len(_tr.WEEKDAY_NAMES) else "?"
+            _confirm = _format_time_with_tz(current.get("reminder_time"), guild_tz) or "not set"
+            _pub = current.get("rotation_public_channel_id", 0) or 0
+            fields.append(
+                (
+                    "Conductor Rotation",
+                    "✅ Enabled\n"
+                    f"Weekly draft: {_draft_day} at {_confirm}\n"
+                    f"Public posts: {f'<#{_pub}>' if _pub else 'off (record only)'}\n"
+                    f"Active preset: {current.get('active_schedule_preset') or 'default'}",
+                )
+            )
+        else:
+            fields.append(("Conductor Rotation", "❌ Disabled"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🚂 Current Train Setup",
@@ -4149,8 +4169,8 @@ async def _run_train_rotation_extras(
     await channel.send(
         "**Rotation: Public Posts**\n"
         "When you confirm each day's conductor, should the bot also announce them "
-        "publicly for the whole alliance to see? *(No = the confirmation just records "
-        "who drove, with no public post.)*",
+        "publicly for the whole alliance to see? *(Selecting No will record the "
+        "conductor with no public post.)*",
         view=pub_offer,
     )
     await wait_view_or_cancel(pub_offer, cancel_event)
@@ -4233,9 +4253,12 @@ async def _run_train_rotation_extras(
     # ── Counted reasons (advanced) ─────────────────────────────────────────────
     counted_raw = await ask_keep_or_change(
         channel,
-        "**Rotation: Counted Reasons** *(advanced, most keep the default)*\n"
-        "Which reasons count toward a member's fair-rotation tally? The default "
-        "excludes birthday / welcome / event so bonus drives don't penalise anyone. "
+        "**Rotation: Counted Reasons** *(most alliances keep the default)*\n"
+        "The rotation always picks whoever has driven the fewest *counted* trains, so "
+        "everyone takes a fair turn. Each reason you count here adds to a member's tally "
+        "when they drive for that reason. The default counts regular turns but leaves out "
+        "**birthday**, **welcome**, and **event** drives, so a one-off or bonus drive "
+        "doesn't push someone to the back of the line.\n"
         f"Comma-separated; valid: `{', '.join(tr.REASONS)}`.",
         default=", ".join(tr.DEFAULT_COUNTED_REASONS),
         current=current.get("counted_reasons") or "",

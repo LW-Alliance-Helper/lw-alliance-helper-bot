@@ -285,8 +285,8 @@ class DonateCog(commands.Cog):
                         title="⚠️ Couldn't claim this server",
                         description=(
                             "Another subscriber's claim on this server "
-                            "landed first. Run `/premium_assign` from a "
-                            "different server, or `/premium_status` to "
+                            "landed first. Run `/premium assign` from a "
+                            "different server, or `/premium overview` to "
                             "see your options."
                         ),
                         color=discord.Color.orange(),
@@ -535,8 +535,8 @@ class DonateCog(commands.Cog):
                         description=(
                             "Another subscriber claimed this server between "
                             "the time you confirmed and now. Run "
-                            "`/premium_assign` from a different server, or "
-                            "`/premium_status` to manage your subscription."
+                            "`/premium assign` from a different server, or "
+                            "`/premium overview` to manage your subscription."
                         ),
                         color=discord.Color.orange(),
                     ),
@@ -589,8 +589,8 @@ class DonateCog(commands.Cog):
                     description=(
                         "Another subscriber claimed this server between "
                         "the time you confirmed and now. Run "
-                        f"`/premium_status` to confirm **{prior_name}** is "
-                        "still your active server, or try `/premium_assign` "
+                        f"`/premium overview` to confirm **{prior_name}** is "
+                        "still your active server, or try `/premium assign` "
                         "from a different one."
                     ),
                     color=discord.Color.orange(),

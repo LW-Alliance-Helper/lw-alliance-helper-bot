@@ -146,7 +146,8 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 |---|---|---|
 | `bot.py` | Entry point. Gateway intents (`members` is privileged), slash command tree. | ~790 LOC |
 | `setup_cog.py` | Every `/setup_*` wizard. Largest file. | ~5000 LOC |
-| `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. | ~970 LOC |
+| `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. `iter_guild_event_drafts` (the per-guild draft computation) is extracted so the live loop and the #227 catch-up scan share one code path. | ~970 LOC |
+| `outage_catchup.py` | Outage catch-up digest (#227). Detects downtime from the per-minute loop heartbeats, scans every clock-driven surface (event draft, shiny, survey, birthday, train, storm sign-up) for posts missed during the window that are still in their catch-up window, and posts one leadership-channel digest with a multi-select + Send/Dismiss view for one-click recovery. Per-surface adapters; Premium re-checked at fire time for the paid paths. | ~840 LOC |
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
 | `train_rotation.py` / `train_rotation_ui.py` / `train_hub.py` | Train Conductor Rotation (#55, free, opt-in): deterministic selection algorithm + `Train History`/`Member Rules`/`Day Rules` Sheet I/O; UI = buffered preset editor, weekly draft view, daily confirmation view. `train_hub.py` is the single `/train` hub (embed + button grid, Events-hub pattern) that fronts both rotation and the legacy blurb surface. The `check_rotation` loop (weekly draft + daily confirm) lives in `train_cog.py`; rotation gates on the `rotation_enabled` train-config flag. No strategy axis — auto/manual is derived from rule type + role; per-rule-type roles scope candidate pools; birthday mode is derived from the Birthday setup. | ~2.8K total |
 | `storm.py` / `storm_log.py` | Desert/Canyon Storm: drafts, participation, reminders. | ~2.5K total |
@@ -159,11 +160,11 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
 | `dm.py` | DM helpers. | ~80 |
 | `donate.py` | `/donate` and `/upgrade` commands. | ~135 |
-| `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. Also owns the `guild_install_metadata` table — operational record (guild name, owner, installer, install/last-seen timestamps) for support triage, refreshed on every `on_ready`. | ~1.5K |
+| `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. Also owns the `guild_install_metadata` table — operational record (guild name, owner, installer, install/last-seen timestamps) for support triage, refreshed on every `on_ready` — and the `loop_heartbeat` table (one row per background loop, stamped at each clean tick; powers the #227 outage catch-up). | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 | `shiny_tasks.py` | Daily Shiny Tasks announcement (3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. **Refresh is disabled (`SERVER_REFRESH_ENABLED=False`, #293)** — the upstream source gated its data behind an API key, so the feature serves the frozen `shiny_task_servers` snapshot and new servers are added manually. See `docs/hedge_data_source.md`. | ~250 |
 
-Tests: `tests/unit/` and `tests/integration/`. 1958 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. 2334 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -230,6 +231,16 @@ These are deliberate and tested. Don't refactor away:
   dependencies. Don't try to start the loop in tests.
 - See `bot.growth_task`, `train_cog.check_reminder`,
   `survey.check_scheduled_reminders` for canonical examples.
+- **Clock-driven loops stamp a heartbeat** at the end of each clean tick
+  via `config.stamp_loop_heartbeat("<name>")` so the #227 outage catch-up
+  can detect downtime. The four per-minute loops (`shiny_post`,
+  `survey_reminder`, `train_reminder`, `storm_signup`) are the reliable
+  outage signal; `scheduler` stamps too but is excluded from window
+  detection (variable sleep). Adding a new clock-driven member-facing
+  post? Stamp a heartbeat **and** add a per-surface adapter to
+  `outage_catchup.SURFACE_ADAPTERS` so an outage doesn't silently eat it.
+  Tests that exercise a loop without a real DB must patch
+  `config.stamp_loop_heartbeat` to a no-op.
 
 ### Premium gating
 - Every check via `await premium.is_premium(guild_id, ...)`.
@@ -313,7 +324,7 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **1958 collected**, 18 skipped on the free-tier lane and
+Test suite: **2334 collected**, 18 skipped on the free-tier lane and
 35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~50K.
 
 ---

@@ -15,7 +15,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from defaults import (
@@ -729,6 +729,19 @@ def init_db():
                 creation_date TEXT    NOT NULL,
                 region        TEXT    DEFAULT '',
                 last_seen_at  TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
+        # loop_heartbeat — one row per background loop (NOT per guild). Each
+        # `@tasks.loop` body stamps `last_tick_at` (UTC ISO) at the end of a
+        # clean tick; on_ready compares the gap to detect outages and drive
+        # the catch-up digest (#227). last_tick_at is UTC ISO8601 like every
+        # other timestamp column.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS loop_heartbeat (
+                loop_name    TEXT PRIMARY KEY,
+                last_tick_at TEXT NOT NULL
             )
         """)
         conn.commit()
@@ -4026,6 +4039,50 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
             (date_iso, guild_id),
         )
         conn.commit()
+
+
+def stamp_loop_heartbeat(loop_name: str) -> None:
+    """Record that `loop_name` completed a clean tick just now (UTC ISO).
+
+    Called at the END of each background loop's body so that on_ready can
+    measure the gap since the last tick and detect an outage window for the
+    catch-up digest (#227). One row per loop, never per guild — if the
+    scheduler ticked at 8:12, every guild's scheduler-driven posts are
+    considered current up to 8:12."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO loop_heartbeat (loop_name, last_tick_at) VALUES (?, ?) "
+            "ON CONFLICT(loop_name) DO UPDATE SET last_tick_at = excluded.last_tick_at",
+            (loop_name, now_iso),
+        )
+        conn.commit()
+
+
+def get_loop_heartbeat(loop_name: str) -> Optional[datetime]:
+    """Return the last clean-tick time for `loop_name` as a tz-aware UTC
+    datetime, or `None` when the loop has never stamped (fresh DB, or a loop
+    that hasn't ticked since this column shipped). The catch-up scan treats
+    `None` as "no baseline, don't infer an outage" so a first-ever boot
+    doesn't fire a spurious digest."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_tick_at FROM loop_heartbeat WHERE loop_name = ?",
+            (loop_name,),
+        ).fetchone()
+    if row is None:
+        return None
+    raw = dict(row).get("last_tick_at") or ""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    # Older rows could be naive; treat naive as UTC.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def has_member_roster_config(guild_id: int) -> bool:

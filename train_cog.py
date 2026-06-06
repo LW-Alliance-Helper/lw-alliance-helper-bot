@@ -229,7 +229,7 @@ class TrainCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def check_reminder(self):
-        from config import get_config, get_train_config
+        from config import get_config, get_train_config, stamp_loop_heartbeat
         from zoneinfo import ZoneInfo
 
         now = datetime.now(tz=ET)
@@ -484,6 +484,11 @@ class TrainCog(commands.Cog):
                 name,
                 content=_render_dm_body(train_dm_tmpl, name=name),
             )
+
+        # Clean tick — stamp liveness for the outage catch-up scan (#227).
+        # One heartbeat covers both surfaces in this loop (the birthday
+        # Discord announcement and the train daily reminder).
+        stamp_loop_heartbeat("train_reminder")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

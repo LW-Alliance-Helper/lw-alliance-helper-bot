@@ -846,6 +846,122 @@ class ApprovalView(discord.ui.View):
 # ── Main scheduler loop ────────────────────────────────────────────────────────
 
 
+def iter_guild_event_drafts(cfg, today: date) -> list[dict]:
+    """Compute every upcoming event-draft occurrence for one guild as of
+    `today`.
+
+    Shared by the live `run_scheduler` loop (which turns each into a timed
+    draft trigger) and the outage catch-up scan (#227, which checks whether a
+    draft's post time fell inside an outage window and is still worth
+    re-posting). Extracted verbatim from the scheduler loop so the two paths
+    can't drift.
+
+    Returns one dict per draft occurrence with the rendered `event_list`, the
+    `draft_dt` the editor should post at, the resolved channels, the
+    `five_min_warning` flag, and the `event_key`. Only grouped repeating
+    events produce drafts (one-off manual events are not auto-drafted — same
+    as the scheduler has always behaved)."""
+    from collections import defaultdict
+    from datetime import date as _date
+    from zoneinfo import ZoneInfo as _ZI
+
+    from config import get_guild_events
+
+    events = get_guild_events(cfg.guild_id, active_only=True)
+    if not events:
+        return []
+
+    # Group events that share the same anchor/interval — same in-game day = same draft.
+    groups = defaultdict(list)
+    for ev in events:
+        if ev["schedule_type"] == "repeating" and ev["anchor_date"]:
+            groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
+
+    drafts: list[dict] = []
+    for (anchor_str, interval), group_events in groups.items():
+        try:
+            anchor = _date.fromisoformat(anchor_str)
+        except ValueError:
+            continue
+
+        event_dates = next_event_dates(from_date=today, count=4, anchor=anchor, cycle=interval)
+
+        for event_date in event_dates:
+            event_list = []
+            draft_channel_id = 0
+            announcement_chan_id = 0
+            draft_h, draft_m = 12, 0
+            five_min_warn = False
+            tz_str = "America/New_York"
+
+            for ev in group_events:
+                try:
+                    ev_tz = _ZI(ev["timezone"])
+                    t_h, t_m = (
+                        int(ev["default_time"].split(":")[0]),
+                        int(ev["default_time"].split(":")[1]),
+                    )
+                    ev_dt = datetime(
+                        event_date.year,
+                        event_date.month,
+                        event_date.day,
+                        t_h,
+                        t_m,
+                        tzinfo=ev_tz,
+                    )
+                    event_list.append(
+                        {
+                            "key": ev["short_key"],
+                            "name": ev["name"],
+                            "dt": ev_dt,
+                            "blurb": ev["announcement_blurb"],
+                        }
+                    )
+                    draft_channel_id = ev["draft_channel_id"] or draft_channel_id
+                    announcement_chan_id = ev["announcement_channel_id"] or announcement_chan_id
+                    if ev["draft_time"]:
+                        draft_h = int(ev["draft_time"].split(":")[0])
+                        draft_m = int(ev["draft_time"].split(":")[1])
+                    if ev["five_min_warning"]:
+                        five_min_warn = True
+                    tz_str = ev["timezone"]
+                except Exception as e:
+                    print(f"[SCHEDULER] Error processing event {ev['short_key']}: {e}")
+
+            if not event_list:
+                continue
+
+            event_list.sort(key=lambda x: x["dt"])
+
+            try:
+                ev_tz2 = _ZI(tz_str)
+                draft_dt = datetime(
+                    event_date.year,
+                    event_date.month,
+                    event_date.day,
+                    draft_h,
+                    draft_m,
+                    tzinfo=ev_tz2,
+                )
+            except Exception:
+                draft_dt = datetime(
+                    event_date.year, event_date.month, event_date.day, 12, 0, tzinfo=ET
+                )
+
+            drafts.append(
+                {
+                    "event_list": event_list,
+                    "draft_dt": draft_dt,
+                    "event_date": event_date,
+                    "event_key": f"event-{cfg.guild_id}-{event_date.isoformat()}",
+                    "draft_channel_id": draft_channel_id,
+                    "announcement_channel_id": announcement_chan_id,
+                    "five_min_warning": five_min_warn,
+                }
+            )
+    return drafts
+
+
 async def run_scheduler(bot: discord.ext.commands.Bot):
     await bot.wait_until_ready()
     print("[SCHEDULER] Started.")
@@ -853,6 +969,16 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
     while not bot.is_closed():
         now = datetime.now(tz=ET)
         today = now.date()
+
+        # Liveness stamp for the outage catch-up scan (#227). NOTE: unlike
+        # the per-minute @tasks.loop loops, this scheduler sleeps a variable
+        # amount (up to an hour when nothing is upcoming), so its gap is NOT
+        # a reliable outage signal and is deliberately excluded from the
+        # outage-window computation in outage_catchup.py — the per-minute
+        # loops define the window. We stamp anyway for observability.
+        from config import stamp_loop_heartbeat
+
+        stamp_loop_heartbeat("scheduler")
 
         triggers = []
 
@@ -865,128 +991,28 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
             rows = conn.execute("SELECT * FROM guild_configs WHERE setup_complete = 1").fetchall()
 
         for row in rows:
-            from config import GuildConfig, get_guild_events
+            from config import GuildConfig
 
             cfg = GuildConfig(**dict(row))
-            events = get_guild_events(cfg.guild_id, active_only=True)
 
-            if not events:
-                continue
-
-            # Group events that share the same anchor/interval — same in-game day = same draft
-            # Key: (anchor_date, interval_days) → list of event configs
-            from collections import defaultdict
-
-            groups = defaultdict(list)
-            manual_events = []
-            for ev in events:
-                if ev["schedule_type"] == "repeating" and ev["anchor_date"]:
-                    groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
-                else:
-                    manual_events.append(ev)
-
-            for (anchor_str, interval), group_events in groups.items():
-                try:
-                    from datetime import date as _date
-
-                    anchor = _date.fromisoformat(anchor_str)
-                except ValueError:
-                    continue
-
-                event_dates = next_event_dates(
-                    from_date=today, count=4, anchor=anchor, cycle=interval
-                )
-
-                for event_date in event_dates:
-                    # Build event list for this date from all events in the group
-                    event_list = []
-                    draft_channel_id = 0
-                    announcement_chan_id = 0
-                    draft_h, draft_m = 12, 0
-                    five_min_warn = False
-                    tz_str = "America/New_York"
-
-                    for ev in group_events:
-                        try:
-                            from zoneinfo import ZoneInfo as _ZI
-
-                            ev_tz = _ZI(ev["timezone"])
-                            t_h, t_m = (
-                                int(ev["default_time"].split(":")[0]),
-                                int(ev["default_time"].split(":")[1]),
-                            )
-                            ev_dt = datetime(
-                                event_date.year,
-                                event_date.month,
-                                event_date.day,
-                                t_h,
-                                t_m,
-                                tzinfo=ev_tz,
-                            )
-                            event_list.append(
-                                {
-                                    "key": ev["short_key"],
-                                    "name": ev["name"],
-                                    "dt": ev_dt,
-                                    "blurb": ev["announcement_blurb"],
-                                }
-                            )
-                            draft_channel_id = ev["draft_channel_id"] or draft_channel_id
-                            announcement_chan_id = (
-                                ev["announcement_channel_id"] or announcement_chan_id
-                            )
-                            if ev["draft_time"]:
-                                draft_h = int(ev["draft_time"].split(":")[0])
-                                draft_m = int(ev["draft_time"].split(":")[1])
-                            if ev["five_min_warning"]:
-                                five_min_warn = True
-                            tz_str = ev["timezone"]
-                        except Exception as e:
-                            print(f"[SCHEDULER] Error processing event {ev['short_key']}: {e}")
-
-                    if not event_list:
-                        continue
-
-                    event_list.sort(key=lambda x: x["dt"])
-
-                    try:
-                        from zoneinfo import ZoneInfo as _ZI2
-
-                        ev_tz2 = _ZI2(tz_str)
-                        draft_dt = datetime(
-                            event_date.year,
-                            event_date.month,
-                            event_date.day,
-                            draft_h,
-                            draft_m,
-                            tzinfo=ev_tz2,
-                        )
-                    except Exception:
-                        draft_dt = datetime(
-                            event_date.year, event_date.month, event_date.day, 12, 0, tzinfo=ET
-                        )
-
-                    event_key = f"event-{cfg.guild_id}-{event_date.isoformat()}"
-
-                    # Draft trigger
-                    triggers.append(
-                        (
-                            draft_dt,
-                            f"event-draft-{cfg.guild_id}-{event_date}",
-                            lambda el=event_list, k=event_key, rd=event_date, dc=draft_channel_id, ac=announcement_chan_id, fw=five_min_warn, c=cfg: (
-                                post_editor(
-                                    bot,
-                                    el,
-                                    k,
-                                    rd,
-                                    c,
-                                    draft_channel_id=dc,
-                                    announcement_channel_id=ac,
-                                    five_min_warning=fw,
-                                )
-                            ),
-                        )
+            for d in iter_guild_event_drafts(cfg, today):
+                # Draft trigger
+                triggers.append(
+                    (
+                        d["draft_dt"],
+                        f"event-draft-{cfg.guild_id}-{d['event_date']}",
+                        lambda d=d, c=cfg: post_editor(
+                            bot,
+                            d["event_list"],
+                            d["event_key"],
+                            d["event_date"],
+                            c,
+                            draft_channel_id=d["draft_channel_id"],
+                            announcement_channel_id=d["announcement_channel_id"],
+                            five_min_warning=d["five_min_warning"],
+                        ),
                     )
+                )
 
         # Pending 5-minute warnings
         for key, val in list(pending_warnings.items()):

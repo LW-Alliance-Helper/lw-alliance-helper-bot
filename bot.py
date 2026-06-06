@@ -328,6 +328,15 @@ async def on_ready():
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
+
+        # Snapshot the loop heartbeats BEFORE the loops start and overwrite
+        # them, so the outage catch-up scan (#227) sees the pre-restart state.
+        # init_db() ran earlier in on_ready, so loop_heartbeat exists.
+        import outage_catchup
+
+        _catchup_snapshot = outage_catchup.snapshot_heartbeats()
+        _catchup_at = datetime.now(timezone.utc)
+
         bot.loop.create_task(run_scheduler(bot))
         print("[INFO] Event scheduler started")
         growth_task.start()
@@ -346,6 +355,19 @@ async def on_ready():
         except Exception as e:
             print(f"[STORM SCHEDULER] Failed to start: {e}")
             sentry_sdk.capture_exception(e)
+
+        # After a short settle delay (guild cache + channels ready), scan the
+        # captured heartbeats for an outage and post catch-up digests (#227).
+        async def _delayed_outage_catchup():
+            await asyncio.sleep(outage_catchup.SETTLE_DELAY_SECONDS)
+            try:
+                await outage_catchup.run_catchup_scan(bot, _catchup_snapshot, _catchup_at)
+            except Exception as e:
+                print(f"[CATCHUP] Outage catch-up scan failed: {e}")
+                sentry_sdk.capture_exception(e)
+
+        bot.loop.create_task(_delayed_outage_catchup())
+        print("[INFO] Outage catch-up scan scheduled")
 
 
 @bot.event
@@ -681,6 +703,7 @@ async def shiny_tasks_post_task():
         get_shiny_task_servers_in_range,
         list_shiny_enabled_guild_ids,
         mark_shiny_tasks_posted,
+        stamp_loop_heartbeat,
     )
     from shiny_tasks import build_announcement_for_guild
 
@@ -760,6 +783,11 @@ async def shiny_tasks_post_task():
         except Exception as e:
             print(f"[SHINY] Per-minute loop error for guild {gid}: {e}")
             sentry_sdk.capture_exception(e)
+
+    # Mark a clean tick so the outage catch-up scan (#227) can tell this
+    # loop was alive up to now. Per-guild failures above are isolated and
+    # don't count as an outage.
+    stamp_loop_heartbeat("shiny_post")
 
 
 @shiny_tasks_post_task.before_loop

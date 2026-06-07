@@ -24,6 +24,7 @@ and PR description.
 
 ### Fixed
 - Refreshed stale slash-command and button references across setup, help, and DM copy after the `/train`, events, and storm hub consolidations ([#298](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/298)).
+- Train schedule editing: **Assign someone** uses a roster dropdown, **Re-draft** refreshes the draft and clears its prompt, and **Go to next person** advances on Leadership days ([#308](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/308)).
 
 ## [1.5.1] — 2026-06-05
 

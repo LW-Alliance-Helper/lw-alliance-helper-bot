@@ -610,6 +610,150 @@ def _roster_member_names(guild_id: int) -> list[str]:
     return out
 
 
+def _resolve_name_from_list(names: list[str], typed: str) -> str:
+    """Resolve a hand-typed name against a known name list — exact match wins,
+    then a unique substring match, else the typed string as-is (so leadership can
+    still assign someone off-roster). The list-based sibling of
+    `_resolve_roster_name`, for callers that already hold the roster names."""
+    t = (typed or "").strip()
+    if not t:
+        return t
+    tl = t.lower()
+    for n in names:
+        if n.lower() == tl:
+            return n
+    hits = [n for n in names if tl in n.lower()]
+    return hits[0] if len(hits) == 1 else t
+
+
+class _RosterPickerView(discord.ui.View):
+    """Reusable roster-backed conductor picker (dropdown + Save / Cancel / Type a
+    name instead), shown ephemerally wherever leadership assigns someone by hand.
+
+    The dropdown only stages a *pending* choice (Discord won't re-fire the change
+    event when you re-pick the already-selected member), so **💾 Save** commits.
+    On commit it calls `on_commit(name)` — which owns updating the parent view's
+    message — and never touches the parent interaction, so the parent refresh and
+    this picker's own ack stay independent. An empty roster collapses to just
+    Cancel + Type a name instead, preserving the off-roster path."""
+
+    PAGE = 25
+
+    def __init__(self, names: list[str], *, current: str, prompt: str, modal_title: str, on_commit):
+        super().__init__(timeout=180)
+        self.names = names
+        self.prompt = prompt
+        self.modal_title = modal_title
+        self.on_commit = on_commit  # async (name: str) -> None
+        self.page = 0
+        self.pending = current or ""
+        self._build()
+
+    @property
+    def total_pages(self) -> int:
+        return max(1, (len(self.names) + self.PAGE - 1) // self.PAGE)
+
+    def content(self) -> str:
+        if self.pending:
+            return f"{self.prompt}\nSelected: **{self.pending}** — hit **💾 Save** to confirm."
+        if self.names:
+            return f"{self.prompt}\nPick a member, then **💾 Save**."
+        return f"{self.prompt}\nNo roster is set up — use **✏️ Type a name instead**."
+
+    def _build(self):
+        self.clear_items()
+        if self.names:
+            start = self.page * self.PAGE
+            page_names = self.names[start : start + self.PAGE]
+            sel = discord.ui.Select(
+                placeholder="Pick the member…",
+                options=[
+                    discord.SelectOption(label=n[:100], value=n[:100], default=(n == self.pending))
+                    for n in page_names
+                ],
+                row=0,
+            )
+            sel.callback = self._on_select
+            self.add_item(sel)
+            if self.total_pages > 1:
+                prev = discord.ui.Button(
+                    label="◀ Prev",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page == 0,
+                    row=1,
+                )
+                prev.callback = self._prev
+                self.add_item(prev)
+                nxt = discord.ui.Button(
+                    label="Next ▶",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page >= self.total_pages - 1,
+                    row=1,
+                )
+                nxt.callback = self._next
+                self.add_item(nxt)
+            save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
+            save.callback = self._on_save
+            self.add_item(save)
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=2)
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+        typ = discord.ui.Button(
+            label="✏️ Type a name instead", style=discord.ButtonStyle.secondary, row=2
+        )
+        typ.callback = self._on_type
+        self.add_item(typ)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        self.pending = interaction.data["values"][0]
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _on_save(self, interaction: discord.Interaction):
+        if not self.pending:
+            await interaction.response.send_message(
+                "Pick a member first, or use **✏️ Type a name instead**.", ephemeral=True
+            )
+            return
+        name = self.pending
+        self.stop()
+        try:
+            await interaction.response.edit_message(content=f"✅ Assigned **{name}**.", view=None)
+        except discord.HTTPException:
+            pass
+        await self.on_commit(name)
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        self.stop()
+        try:
+            await interaction.response.edit_message(
+                content="Cancelled — nothing changed.", view=None
+            )
+        except discord.HTTPException:
+            pass
+
+    async def _on_type(self, interaction: discord.Interaction):
+        self.stop()
+
+        async def _typed(inter: discord.Interaction, typed: str):
+            await inter.response.defer()  # ack the modal; on_commit owns the refresh
+            await self.on_commit(_resolve_name_from_list(self.names, typed))
+
+        await interaction.response.send_modal(
+            _MemberNameModal(self.modal_title, _typed, current=self.pending or "")
+        )
+
+
 class _SpecificMemberPickerView(discord.ui.View):
     """Roster-backed picker for a Specific-member day pin (#302). The dropdown
     only sets a *pending* choice (Discord won't fire the change event if you
@@ -1200,19 +1344,36 @@ class WeeklyDraftView(discord.ui.View):
         dd = await self._guard_day(interaction)
         if dd is None:
             return
+        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+        day_label = f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}"
 
-        async def _assign_name(inter: discord.Interaction, typed: str):
-            await inter.response.defer()
-            state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
-            dd.member = _resolve_roster_name(state, typed)
+        async def _commit(name: str):
+            dd.member = name
             dd.reason = "manual"
             dd.needs_picking = False
             dd.note = ""
             await asyncio.to_thread(self._persist_day, dd)
-            await self._refresh(inter)
+            self._rebuild()
+            if self.message:
+                try:
+                    await self.message.edit(
+                        embed=build_weekly_draft_embed(
+                            self.draft, self.week_start, self.preset_name
+                        ),
+                        view=self,
+                    )
+                except discord.HTTPException:
+                    pass
 
-        await interaction.response.send_modal(
-            _MemberNameModal("Assign conductor", _assign_name, current=dd.member or "")
+        picker = _RosterPickerView(
+            names,
+            current=dd.member or "",
+            prompt=f"Who drives **{day_label}**?",
+            modal_title="Assign conductor",
+            on_commit=_commit,
+        )
+        await interaction.response.send_message(
+            content=picker.content(), view=picker, ephemeral=True
         )
 
     async def _on_set_manual(self, interaction: discord.Interaction):
@@ -1241,28 +1402,52 @@ class WeeklyDraftView(discord.ui.View):
 
         async def _do(ci: discord.Interaction):
             await ci.response.defer()
-            self.draft = await asyncio.to_thread(
-                regenerate_week, self.bot, self.guild_id, self.week_start
-            )
-            self._rebuild()
-            if self.message:
+            try:
+                self.draft = await asyncio.to_thread(
+                    regenerate_week, self.bot, self.guild_id, self.week_start
+                )
+            except Exception as e:
+                print(f"[TRAIN ROTATION] re-draft failed for guild {self.guild_id}: {e}")
                 try:
-                    await self.message.edit(
-                        embed=build_weekly_draft_embed(
-                            self.draft, self.week_start, self.preset_name
-                        ),
-                        view=self,
+                    await ci.edit_original_response(
+                        content="⚠️ Re-draft failed — please try again.", view=None
                     )
                 except discord.HTTPException:
                     pass
-            for c in confirm.children:
-                c.disabled = True
+                return
+            self.selected_iso = None
+            self._rebuild()
+            embed = build_weekly_draft_embed(self.draft, self.week_start, self.preset_name)
+            # Refresh the live draft in place; if its message is gone or its token
+            # expired, re-post a fresh editable draft so leadership can keep going.
+            refreshed = False
+            if self.message:
+                try:
+                    await self.message.edit(embed=embed, view=self)
+                    refreshed = True
+                except discord.HTTPException:
+                    refreshed = False
+            if not refreshed:
+                try:
+                    self.message = await ci.channel.send(embed=embed, view=self)
+                    refreshed = True
+                except discord.HTTPException:
+                    pass
+            # Remove the ephemeral confirm so it doesn't linger as a stale "nothing
+            # happened" artifact — the refreshed draft above is the live surface.
             try:
-                await ci.edit_original_response(
-                    content="🔄 Re-drafted the week with fresh picks.", view=confirm
-                )
+                await ci.delete_original_response()
             except discord.HTTPException:
                 pass
+            if not refreshed:
+                try:
+                    await ci.followup.send(
+                        "🔄 Re-drafted, but I couldn't refresh the draft here — reopen it "
+                        "with `/train`.",
+                        ephemeral=True,
+                    )
+                except discord.HTTPException:
+                    pass
 
         async def _cancel(ci: discord.Interaction):
             for c in confirm.children:
@@ -1481,17 +1666,28 @@ class DailyConfirmView(discord.ui.View):
             await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
             return
 
-        async def _assign_name(inter: discord.Interaction, typed: str):
-            await inter.response.defer()
-            state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
-            self.dd.member = _resolve_roster_name(state, typed)
+        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+
+        async def _commit(name: str):
+            self.dd.member = name
             self.dd.reason = "manual"
             self.dd.needs_picking = False
             await asyncio.to_thread(self._persist_scheduled)
-            await self._refresh(inter)
+            if self.message:
+                try:
+                    await self.message.edit(embed=build_daily_confirm_embed(self.dd), view=self)
+                except discord.HTTPException:
+                    pass
 
-        await interaction.response.send_modal(
-            _MemberNameModal("Assign today's conductor", _assign_name, current=self.dd.member or "")
+        picker = _RosterPickerView(
+            names,
+            current=self.dd.member or "",
+            prompt="Who drives today's train?",
+            modal_title="Assign today's conductor",
+            on_commit=_commit,
+        )
+        await interaction.response.send_message(
+            content=picker.content(), view=picker, ephemeral=True
         )
 
     def _persist_scheduled(self):

@@ -702,9 +702,13 @@ def reroll_day(
         pool = list(eligible_pool)
     reason = RULE_TO_REASON.get(rt, "auto")
     eligible = [m for m in pool if not is_blocked_by_member_rule(m, member_rules, target_date)]
-    # Soft no-duplicates: prefer someone not elsewhere this week, but wrap around
-    # the pool when it's exhausted rather than refuse to suggest anyone.
-    fresh = [m for m in eligible if _norm(m) not in other_scheduled]
+    # "Go to next person" must ADVANCE off the current pick — exclude them (and
+    # anyone already placed elsewhere this week) so a repeat click rotates instead
+    # of re-selecting the same fairest member. This matters most for small role
+    # pools (e.g. Leadership) where everyone is tied and the pick is otherwise
+    # stable. Fall back to the full eligible pool only when no one else is free.
+    current = _norm(draft_day.member or "")
+    fresh = [m for m in eligible if _norm(m) not in other_scheduled and _norm(m) != current]
     candidates = fresh or eligible
     if not candidates:
         return None, reason, True

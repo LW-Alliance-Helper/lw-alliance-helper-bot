@@ -156,7 +156,7 @@ def _build_upgrade_pitch_embed() -> discord.Embed:
             "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"
             "• 🧵 Use threads as destinations for any channel-pickable feature\n"
             "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"
-            "• 📅 30-day history windows on the `/events` log and `/train log`\n"
+            "• 📅 30-day history windows on the `/events` event log and the `/train` prompt log\n"
             "• 📜 Unlimited storm-log lookback\n\n"
             "**$4.99/month**, billed by Discord. Cancel anytime.\n\n"
             "🪪 Your subscription unlocks Premium in **one server at a time**. "
@@ -285,8 +285,8 @@ class DonateCog(commands.Cog):
                         title="⚠️ Couldn't claim this server",
                         description=(
                             "Another subscriber's claim on this server "
-                            "landed first. Run `/premium_assign` from a "
-                            "different server, or `/premium_status` to "
+                            "landed first. Run `/premium assign` from a "
+                            "different server, or `/premium overview` to "
                             "see your options."
                         ),
                         color=discord.Color.orange(),
@@ -535,8 +535,8 @@ class DonateCog(commands.Cog):
                         description=(
                             "Another subscriber claimed this server between "
                             "the time you confirmed and now. Run "
-                            "`/premium_assign` from a different server, or "
-                            "`/premium_status` to manage your subscription."
+                            "`/premium assign` from a different server, or "
+                            "`/premium overview` to manage your subscription."
                         ),
                         color=discord.Color.orange(),
                     ),
@@ -589,8 +589,8 @@ class DonateCog(commands.Cog):
                     description=(
                         "Another subscriber claimed this server between "
                         "the time you confirmed and now. Run "
-                        f"`/premium_status` to confirm **{prior_name}** is "
-                        "still your active server, or try `/premium_assign` "
+                        f"`/premium overview` to confirm **{prior_name}** is "
+                        "still your active server, or try `/premium assign` "
                         "from a different one."
                     ),
                     color=discord.Color.orange(),

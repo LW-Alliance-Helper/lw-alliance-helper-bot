@@ -1186,7 +1186,7 @@ async def _manage_train_templates(
             listing.append(f"`{i + 1}.` **{t['name']}**{star}{preview_suffix}")
 
         embed = discord.Embed(
-            title="**Step 6 of 8 — Prompt Templates**",
+            title="**Step 6 of 9 — Prompt Templates**",
             description=(
                 "Saved ChatGPT prompt templates. The default ⭐ is the one used "
                 "by the blurb wizard unless a member's day overrides it.\n\n"
@@ -3494,6 +3494,26 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                     _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*",
                 )
             )
+        # Conductor Rotation (#55) — surfaced so the summary reflects it like
+        # every other train setting (#302). DB-only reads, so no sheet round-trip.
+        if current.get("rotation_enabled"):
+            import train_rotation as _tr
+
+            _wd = int(current.get("weekly_draft_day", 6) or 6)
+            _draft_day = _tr.WEEKDAY_NAMES[_wd] if 0 <= _wd < len(_tr.WEEKDAY_NAMES) else "?"
+            _confirm = _format_time_with_tz(current.get("reminder_time"), guild_tz) or "not set"
+            _pub = current.get("rotation_public_channel_id", 0) or 0
+            fields.append(
+                (
+                    "Conductor Rotation",
+                    "✅ Enabled\n"
+                    f"Weekly draft: {_draft_day} at {_confirm}\n"
+                    f"Public posts: {f'<#{_pub}>' if _pub else 'off (record only)'}\n"
+                    f"Active preset: {current.get('active_schedule_preset') or 'default'}",
+                )
+            )
+        else:
+            fields.append(("Conductor Rotation", "❌ Disabled"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🚂 Current Train Setup",
@@ -3512,7 +3532,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
     tab_name = await ask_keep_or_change(
         channel,
-        "**Step 1 of 8 — Schedule Sheet Tab**\n"
+        "**Step 1 of 9 — Schedule Sheet Tab**\n"
         "Which tab in your Google Sheet stores the train schedule?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
         default="Train Schedule",
@@ -3528,7 +3548,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Generate blurbs? ───────────────────────────────────────────────
     blurb_view = YesNoView()
     await channel.send(
-        "**Step 2 of 8 — ChatGPT Blurb Generation**\n"
+        "**Step 2 of 9 — ChatGPT Blurb Generation**\n"
         "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
         "This lets you quickly produce a personalised announcement blurb for the member.\n"
         f"*(You can always set this up later by running `/setup` → {HUB_BTN_TRAIN} again)*",
@@ -3632,7 +3652,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         # ── Step 3: Themes ─────────────────────────────────────────────────────
         themes = await _ask_csv_keep_or_change(
-            step_label="**Step 3 of 8 — Themes**",
+            step_label="**Step 3 of 9 — Themes**",
             label="themes",
             current_list=current["themes"],
             default_list=DEFAULT_THEMES,
@@ -3643,7 +3663,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         # ── Step 4: Tones ──────────────────────────────────────────────────────
         tones = await _ask_csv_keep_or_change(
-            step_label="**Step 4 of 8 — Tones**",
+            step_label="**Step 4 of 9 — Tones**",
             label="tones",
             current_list=current["tones"],
             default_list=DEFAULT_TONES,
@@ -3704,7 +3724,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         tone_default_view = ToneDefaultView(tones, current=current.get("default_tone"))
         await channel.send(
-            "**Step 5 of 8 — Default Tone**\nWhich tone should be pre-selected by default?",
+            "**Step 5 of 9 — Default Tone**\nWhich tone should be pre-selected by default?",
             view=tone_default_view,
         )
         await wait_view_or_cancel(tone_default_view, cancel_event)
@@ -3742,42 +3762,15 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             templates[0]["template"] if templates else "",
         )
 
-    # ── Auto Rotation toggle (#55) ─────────────────────────────────────────────
-    # Optional. When on, the bot drafts a fair weekly conductor rotation and
-    # posts a daily confirmation, reusing the reminder channel + time below
-    # (instead of the manual "today's train is for X" reminder). The rest of the
-    # rotation config (public posts, rule-type roles, the weekly pattern) runs
-    # after the shared steps, in `_run_train_rotation_extras`.
-    rotation_was_on = bool(current.get("rotation_enabled"))
-    rotation_view = YesNoView()
-    await channel.send(
-        "**Auto Rotation** *(optional)*\n"
-        "Want the bot to auto-pick fair conductors from a weekly pattern? It drafts the "
-        "week for leadership to review, then confirms and (optionally) posts each day's "
-        "conductor. You can always override any day by hand."
-        + ("\n\n*Rotation is currently on, continue to adjust it.*" if rotation_was_on else ""),
-        view=rotation_view,
-    )
-    await wait_view_or_cancel(rotation_view, cancel_event)
-    if rotation_view.cancelled:
-        return
-    if rotation_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
-        return
-    rotation_on = bool(rotation_view.selected)
+    # Conductor Rotation (#55) is now its own final step (Step 9), run after the
+    # save below via `_run_train_rotation_step` — it owns the toggle, the weekly
+    # draft day, public posts, rule-type roles, counted reasons, and presets.
 
     # ── Step 7: Reminders ─────────────────────────────────────────────────────
     reminder_view = YesNoView()
-    rotation_note = (
-        " *(Auto Rotation also uses this channel + time for its weekly draft and "
-        "daily confirmation.)*"
-        if rotation_on
-        else ""
-    )
     await channel.send(
-        "**Step 7 of 8 — Train Reminders**\n"
-        "Should the bot post a reminder to leadership when someone is assigned the train each day?"
-        + rotation_note,
+        "**Step 7 of 9 — Train Reminders**\n"
+        "Should the bot post a reminder to leadership when someone is assigned the train each day?",
         view=reminder_view,
     )
     await wait_view_or_cancel(reminder_view, cancel_event)
@@ -3789,10 +3782,11 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     reminders_enabled = 1 if reminder_view.selected else 0
     reminder_channel_id = current.get("reminder_channel_id", 0) or 0
     reminder_time = current.get("reminder_time", "22:00") or "22:00"
-    # The reminder channel + time are needed when EITHER the legacy reminder OR
-    # Auto Rotation is on (rotation reuses them).
-    need_reminder_setup = bool(reminders_enabled) or rotation_on
-    if not reminders_enabled and not rotation_on:
+    # Rotation (Step 9) reuses the reminder channel + time when they're set, and
+    # asks for its own if reminders are off — so this step only collects them
+    # when the legacy reminder is enabled.
+    need_reminder_setup = bool(reminders_enabled)
+    if not reminders_enabled:
         had_prior_reminders = train_already_configured and current.get("reminders_enabled")
         if had_prior_reminders:
             await channel.send(
@@ -3817,7 +3811,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if reminder_ch_view.is_current_stale:
             await channel.send(PREV_CHANNEL_GONE.format(channel_label="reminder"))
         await channel.send(
-            "**Step 7a of 8 — Reminder Channel**\n"
+            "**Step 7a of 9 — Reminder Channel**\n"
             "Which channel should the train reminder be posted to?",
             view=reminder_ch_view,
         )
@@ -3844,7 +3838,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         while True:
             time_raw = await ask_keep_or_change(
                 channel,
-                f"**Step 7b of 8 — Reminder Time**\n"
+                f"**Step 7b of 9 — Reminder Time**\n"
                 f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
                 f"*(e.g. `10:00pm`, `9:00am`)*",
                 default="10:00pm",
@@ -3876,25 +3870,6 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 return
             await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
-    # ── Weekly draft day (Auto Rotation only) ──────────────────────────────────
-    weekly_draft_day = current.get("weekly_draft_day", 6)
-    if rotation_on:
-        day_view = _WeekdaySelectView(current=current.get("weekly_draft_day", 6))
-        await channel.send(
-            "**Weekly Draft Day**\n"
-            "Which day should the bot post the upcoming week's draft for leadership to "
-            "review? *(Sunday is typical: it previews the week starting Monday. The "
-            "draft posts at your reminder time above.)*",
-            view=day_view,
-        )
-        await wait_view_or_cancel(day_view, cancel_event)
-        if day_view.cancelled:
-            return
-        if day_view.selected is None:
-            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
-            return
-        weekly_draft_day = day_view.selected
-
     # ── Step 8: Train DM body (💎 Premium) ────────────────────────────────────
     # Customisable body of the DM that fires alongside the channel
     # reminder when the assigned member is on Premium. Free guilds can
@@ -3907,7 +3882,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         saved_train_dm = (current.get("dm_message") or "").strip()
         train_dm_input = await ask_keep_or_change(
             channel,
-            "**Step 8 of 8 — Train DM Body (💎 Premium)**\n"
+            "**Step 8 of 9 — Train DM Body (💎 Premium)**\n"
             "When the train reminder fires, the bot also DMs the assigned member directly. "
             "Free guilds can configure it now — it just won't fire until you have Premium "
             "+ Member Sync.\n\n"
@@ -3978,34 +3953,47 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
             embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
     embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_TRAIN))
-    await channel.send(embed=embed)
 
-    # ── Train Conductor Rotation (#55) ─────────────────────────────────────────
-    # The toggle + shared channel/time/draft-day were handled in the main flow
-    # above. When rotation is on, run the rotation-specific extras (public-post
-    # opt-in, per-rule-type roles, counted reasons, tabs) and open the preset
-    # editor. When the user turned a previously-on rotation off, disable it.
-    if rotation_on:
-        await _run_train_rotation_extras(
-            bot=bot,
-            interaction=interaction,
-            channel=channel,
-            user=user,
-            guild_id=guild_id,
-            cancel_event=cancel_event,
-            guild_tz=guild_tz,
-            weekly_draft_day=weekly_draft_day,
-        )
-    elif rotation_was_on:
-        from config import update_train_config_field
-
-        update_train_config_field(guild_id, "rotation_enabled", 0)
-        await channel.send(
-            "🚂 Auto Rotation turned off. Your presets and member rules stay saved, so "
-            "you can re-enable any time from `/setup` → 🚂 Train."
-        )
-
+    # ── Step 9: Conductor Rotation (#55) ───────────────────────────────────────
+    # Run rotation BEFORE sending the summary so the embed reflects it, and so
+    # the preset editor (if opened) is the last thing posted rather than buried
+    # above this summary (#302).
+    rot = await _run_train_rotation_step(
+        bot=bot,
+        interaction=interaction,
+        channel=channel,
+        user=user,
+        guild_id=guild_id,
+        cancel_event=cancel_event,
+        guild_tz=guild_tz,
+    )
+    if rot is None:
+        # Cancelled / timed out inside Step 9 — it already messaged the user.
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    # The message-driven wizard is done; the preset editor below is a
+    # self-contained component view, so release the wizard registration now.
     wizard_registry.unregister(user.id, cancel_event)
+    embed.add_field(
+        name="Conductor Rotation",
+        value=rot["summary"] if rot.get("enabled") else "Disabled",
+        inline=not rot.get("enabled"),
+    )
+
+    # When a preset editor is opening, it's the active surface — let leadership
+    # finish (or close) it BEFORE the "Train Schedule Configured" summary lands,
+    # so the summary doesn't pop up above the thing they're still editing (#302).
+    if rot.get("open_editor"):
+        import train_rotation_ui as ui
+
+        await channel.send("Lay out your weekly pattern below, then 💾 Save preset:")
+        editor_view = await ui.post_preset_editor(
+            channel, guild_id, user.id, rot["preset"], rot["day_rules_tab"]
+        )
+        if editor_view is not None:
+            await editor_view.wait()
+
+    await channel.send(embed=embed)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
 
@@ -4058,107 +4046,239 @@ class _WeekdaySelectView(discord.ui.View):
         self.add_item(select)
 
 
-class _RuleTypePickerView(discord.ui.View):
-    """One view: a dropdown of the role-assignable rule types (leadership / vs /
-    contest / event) plus Done and Skip. Looped by the rotation setup so
-    officers can attach a role to any of those rule types — that role then
-    scopes who's eligible on those days. Skip exits without assigning any;
-    Done exits keeping whatever was assigned so far."""
+class _RuleRoleAttachView(discord.ui.View):
+    """Roles opt-in (#302): pick a rule type + a Discord role, hit "Attach role
+    to this rule", repeat for as many as you like, then Done. Replaces the
+    looped one-at-a-time picker that overwhelmed leadership. Attachments
+    accumulate in `rule_type_roles`; `wait_view_or_cancel` flips `.cancelled`."""
 
-    def __init__(self, assignments: dict, *, first_time: bool):
+    def __init__(self, rule_type_roles: dict):
         super().__init__(timeout=WIZARD_STEP_TIMEOUT)
-        self.selected: str | None = None
-        self.done = False
-        self.skipped = False
-        self.cancelled = False
         import train_rotation as tr
 
-        assignable = [tr.RULE_LEADERSHIP, tr.RULE_VS, tr.RULE_CONTEST, tr.RULE_EVENT]
-        sel = discord.ui.Select(
-            placeholder="Pick a rule type to assign a role…",
-            options=[
-                discord.SelectOption(
-                    label=tr.RULE_LABELS[rt],
-                    value=rt,
-                    description="role set ✓" if assignments.get(rt) else "no role yet",
-                )
-                for rt in assignable
-            ],
+        self.rule_type_roles = dict(rule_type_roles)
+        self.cancelled = False
+        self.done = False
+        self.message = None
+        self._labels = tr.RULE_LABELS
+        self._pending_rule: str | None = None
+        self._pending_role = None  # (id, name)
+
+        rule_opts = [
+            discord.SelectOption(label=tr.RULE_LABELS[rt], value=rt)
+            for rt in (tr.RULE_LEADERSHIP, tr.RULE_VS, tr.RULE_CONTEST, tr.RULE_EVENT)
+        ]
+        self._rule_sel = discord.ui.Select(
+            placeholder="1) Pick a rule type…", options=rule_opts, row=0
+        )
+        self._rule_sel.callback = self._on_rule
+        self.add_item(self._rule_sel)
+
+        self._role_sel = discord.ui.RoleSelect(
+            placeholder="2) Pick a role…", min_values=1, max_values=1, row=1
+        )
+        self._role_sel.callback = self._on_role
+        self.add_item(self._role_sel)
+
+        attach = discord.ui.Button(
+            label="Attach role to this rule", style=discord.ButtonStyle.primary, row=2
+        )
+        attach.callback = self._on_attach
+        self.add_item(attach)
+
+        done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.success, row=2)
+        done.callback = self._on_done
+        self.add_item(done)
+
+    def summary(self) -> str:
+        if not self.rule_type_roles:
+            return "_No roles attached yet._"
+        return "\n".join(
+            f"• {self._labels.get(k, k)} → <@&{v}>" for k, v in self.rule_type_roles.items()
         )
 
-        async def _pick(inter: discord.Interaction):
-            self.selected = sel.values[0]
-            for c in self.children:
-                c.disabled = True
-            await wizard_registry.safe_edit_response(inter, view=self)
-            self.stop()
+    async def _on_rule(self, interaction: discord.Interaction):
+        self._pending_rule = self._rule_sel.values[0]
+        await interaction.response.defer()
 
-        sel.callback = _pick
-        self.add_item(sel)
+    async def _on_role(self, interaction: discord.Interaction):
+        role = self._role_sel.values[0]
+        self._pending_role = (role.id, role.name)
+        await interaction.response.defer()
 
-        done_btn = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.success)
+    async def _on_attach(self, interaction: discord.Interaction):
+        if not self._pending_rule or not self._pending_role:
+            await interaction.response.send_message(
+                "Pick both a rule type and a role first, then hit Attach.", ephemeral=True
+            )
+            return
+        self.rule_type_roles[self._pending_rule] = self._pending_role[0]
+        label = self._labels.get(self._pending_rule, self._pending_rule)
+        role_name = self._pending_role[1]
+        self._pending_rule = None
+        self._pending_role = None
+        await interaction.response.edit_message(
+            content=(
+                f"✅ **{label}** days will pull from **@{role_name}**.\n\n"
+                f"**Attached so far:**\n{self.summary()}\n\n"
+                "Attach another rule, or hit **Done**."
+            ),
+            view=self,
+        )
 
-        async def _done(inter: discord.Interaction):
-            self.done = True
-            for c in self.children:
-                c.disabled = True
-            await wizard_registry.safe_edit_response(inter, view=self)
-            self.stop()
-
-        done_btn.callback = _done
-        self.add_item(done_btn)
-
-        # Skip appears the first time through (when nothing's been assigned yet)
-        # so "I don't want any roles" is a one-click out.
-        if first_time:
-            skip_btn = discord.ui.Button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
-
-            async def _skip(inter: discord.Interaction):
-                self.skipped = True
-                for c in self.children:
-                    c.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            skip_btn.callback = _skip
-            self.add_item(skip_btn)
+    async def _on_done(self, interaction: discord.Interaction):
+        self.done = True
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
 
 
-async def _run_train_rotation_extras(
-    *, bot, interaction, channel, user, guild_id, cancel_event, guild_tz, weekly_draft_day
+async def _run_train_rotation_step(
+    *, bot, interaction, channel, user, guild_id, cancel_event, guild_tz
 ):
-    """Rotation-specific config run after the shared train steps when Auto
-    Rotation is on: public-post opt-in, per-rule-type roles, counted reasons,
-    and sheet tabs. Saves the rotation config with rotation_enabled=1 and opens
-    the schedule-preset editor so leadership lays out the week.
+    """Step 9 — Conductor Rotation (#302). Owns the on/off toggle and, when on,
+    every rotation setting as its own lettered, gated sub-step (9a..9h) so it
+    never floods the user. Reuses the reminder channel/time when set; asks for
+    its own when reminders are off. Turning a previously-on rotation off
+    disables it (presets + member rules stay saved).
 
-    Channel + time + draft day come from the main flow (rotation reuses the
-    reminder channel/time); birthday behaviour is derived from the Birthday
-    setup. Neither is asked here."""
+    Returns None on cancel/timeout (caller bails), `{"enabled": False}` when
+    rotation ends up off, or, when on, a dict with the summary string, whether
+    to open the preset editor, the preset, and the day-rules tab — so the caller
+    can post one combined summary and open the editor last (#302)."""
     import json
 
     import train_rotation as tr
-    import train_rotation_ui as ui
-    from config import get_train_config, save_train_rotation_config
+    from config import get_train_config, save_train_rotation_config, update_train_config_field
 
     current = get_train_config(guild_id)
+    was_on = bool(current.get("rotation_enabled"))
 
-    # ── Public posts (opt-in) ──────────────────────────────────────────────────
+    def _check(m):
+        return m.author == user and m.channel == channel
+
+    # ── Step 9: toggle ─────────────────────────────────────────────────────────
+    toggle = YesNoView()
+    await channel.send(
+        "**Step 9 of 9 — Conductor Rotation** *(optional)*\n"
+        "Want the bot to auto-pick fair conductors from a weekly pattern? It drafts the "
+        "upcoming week for leadership to review, then confirms (and optionally announces) "
+        "each day's conductor, always rotating to whoever has driven least. You can "
+        "override any day by hand."
+        + ("\n\n*Rotation is currently on. Choose Yes to review or adjust it.*" if was_on else ""),
+        view=toggle,
+    )
+    await wait_view_or_cancel(toggle, cancel_event)
+    if toggle.cancelled:
+        return None
+    if toggle.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return None
+    if not toggle.selected:
+        if was_on:
+            update_train_config_field(guild_id, "rotation_enabled", 0)
+            await channel.send(
+                "🚂 Conductor Rotation turned off. Your presets and member rules stay saved, "
+                "so you can re-enable any time from `/setup` → 🚂 Train."
+            )
+        return {"enabled": False}
+
+    # ── Steps 9a/9b: draft + confirmation channel/time (reuse reminders, or ask) ─
+    reminder_channel_id = current.get("reminder_channel_id", 0) or 0
+    reminder_time = current.get("reminder_time", "22:00") or "22:00"
+    if reminder_channel_id:
+        await channel.send(
+            "🗓️ Rotation will post the weekly draft and daily confirmation in "
+            f"<#{reminder_channel_id}> at **{_format_time_with_tz(reminder_time, guild_tz)}** "
+            "(reusing your reminder channel and time)."
+        )
+    else:
+        ch_view = ChannelSelectStep(
+            "Select the rotation channel…",
+            suggested_name="leadership",
+            guild=interaction.guild,
+            current_id=0,
+        )
+        await channel.send(
+            "**Step 9a of 9 — Rotation Channel**\n"
+            "Rotation posts a weekly draft and a daily confirmation. Which channel should "
+            "they go in? *(Your train reminders are off, so this is just for rotation.)*",
+            view=ch_view,
+        )
+        await wait_view_or_cancel(ch_view, cancel_event)
+        if ch_view.cancelled:
+            return None
+        if not ch_view.confirmed:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return None
+        reminder_channel_id = ch_view.selected_channel.id
+
+        tz_label = TIMEZONE_LABELS.get(
+            guild_tz if isinstance(guild_tz, str) else "America/New_York", "ET"
+        )
+        time_raw = await ask_keep_or_change(
+            channel,
+            "**Step 9b of 9 — Rotation Time**\n"
+            "What time should the draft and daily confirmation fire? "
+            f"*(in your timezone: {tz_label})*\n*(e.g. `10:00pm`, `9:00am`)*",
+            default="10:00pm",
+            current="",
+            modal_title="Rotation Time",
+            modal_label="Time",
+            timeout_cmd="setup_train",
+            cancel_event=cancel_event,
+        )
+        if time_raw is None:
+            return None
+        parsed = _parse_12h_time(time_raw)
+        if parsed:
+            reminder_time = parsed
+        elif len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
+            reminder_time = time_raw
+        else:
+            reminder_time = "22:00"
+            await channel.send(
+                "⚠️ Couldn't read that time, so I'll use 10:00pm. You can change it later "
+                "from `/setup` → 🚂 Train."
+            )
+        # Persist so the rotation loops (and the summary) have the channel + time.
+        update_train_config_field(guild_id, "reminder_channel_id", reminder_channel_id)
+        update_train_config_field(guild_id, "reminder_time", reminder_time)
+
+    # ── Step 9c: weekly draft day ───────────────────────────────────────────────
+    day_view = _WeekdaySelectView(current=current.get("weekly_draft_day", 6))
+    await channel.send(
+        "**Step 9c of 9 — Weekly Draft Day**\n"
+        "Which day should the bot post the upcoming week's draft for leadership to review? "
+        "*(Sunday is typical: it previews the week starting Monday. The draft posts at the "
+        "time above.)*",
+        view=day_view,
+    )
+    await wait_view_or_cancel(day_view, cancel_event)
+    if day_view.cancelled:
+        return None
+    if day_view.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return None
+    weekly_draft_day = day_view.selected
+
+    # ── Step 9d: public posts (opt-in) ──────────────────────────────────────────
     rotation_public_channel_id = 0
     pub_offer = YesNoView()
     await channel.send(
-        "**Rotation: Public Posts**\n"
-        "When you confirm each day's conductor, should the bot also announce them "
-        "publicly for the whole alliance to see? *(No = the confirmation just records "
-        "who drove, with no public post.)*",
+        "**Step 9d of 9 — Public Posts**\n"
+        "When you confirm each day's conductor, should the bot also announce them publicly "
+        "for the whole alliance to see? *(Selecting No will record the conductor with no "
+        "public post.)*",
         view=pub_offer,
     )
     await wait_view_or_cancel(pub_offer, cancel_event)
     if pub_offer.cancelled:
-        return
+        return None
     if pub_offer.selected is None:
         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
-        return
+        return None
     if pub_offer.selected:
         saved_pub = current.get("rotation_public_channel_id", 0) or 0
         pub_view = ChannelSelectStep(
@@ -4170,72 +4290,55 @@ async def _run_train_rotation_extras(
         if pub_view.is_current_stale:
             await channel.send(PREV_CHANNEL_GONE.format(channel_label="public post"))
         await channel.send(
-            "Which channel should confirmed conductors be announced in?",
-            view=pub_view,
+            "Which channel should confirmed conductors be announced in?", view=pub_view
         )
         await wait_view_or_cancel(pub_view, cancel_event)
         if pub_view.cancelled:
-            return
+            return None
         if not pub_view.confirmed:
             await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
-            return
+            return None
         rotation_public_channel_id = pub_view.selected_channel.id
 
-    # ── Per-rule-type roles (opt-in) ───────────────────────────────────────────
-    # One dropdown of the role-assignable rule types + Done/Skip, looped: pick a
-    # type → assign a role → back to the dropdown. By default leadership days use
-    # the main leadership role and vs/contest/event are leadership-picks; a role
-    # here scopes that rule's candidate pool. (specific_member isn't listed — its
-    # member is pinned per-day in the preset editor, not via a role.)
+    # ── Step 9e: rule-type roles (opt-in) ───────────────────────────────────────
     rule_type_roles = dict(current.get("rule_type_roles") or {})
+    roles_offer = YesNoView()
     await channel.send(
-        "**Rotation: Rule Type Roles** *(optional)*\n"
-        "Your day rules can include **leadership**, **vs**, **contest**, and **event**. "
-        "By default, leadership days use your main leadership role and the others let "
-        "leadership pick by hand. Want the bot to pull from a specific role on any of "
-        "these? Pick a rule type to assign its role, or **Skip**."
+        "**Step 9e of 9 — Rule-Type Roles** *(optional)*\n"
+        "Day rules can be **leadership**, **vs**, **contest**, or **event** days. By default "
+        "leadership days use your main leadership role and the rest are picked by hand. Want "
+        "to tie any of these to a specific Discord role, so the bot only rotates members in "
+        "that role on those days?",
+        view=roles_offer,
     )
-    first_time = True
-    while True:
-        picker = _RuleTypePickerView(rule_type_roles, first_time=first_time)
+    await wait_view_or_cancel(roles_offer, cancel_event)
+    if roles_offer.cancelled:
+        return None
+    if roles_offer.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return None
+    if roles_offer.selected:
+        attach_view = _RuleRoleAttachView(rule_type_roles)
         await channel.send(
-            "Assign a role to a rule type, or hit **Done**:"
-            if not first_time
-            else "Pick a rule type, or **Skip** if you don't want any:",
-            view=picker,
+            "Pick a rule type and a role, then **Attach role to this rule**. Repeat for as "
+            "many as you like, then hit **Done**.\n\n"
+            f"**Attached so far:**\n{attach_view.summary()}",
+            view=attach_view,
         )
-        await wait_view_or_cancel(picker, cancel_event)
-        if picker.cancelled:
-            return
-        if picker.skipped or picker.done or picker.selected is None:
-            break
-        first_time = False
-        rt = picker.selected
-        role_view = RoleSelectStep(
-            f"Pick the role for {tr.RULE_LABELS.get(rt, rt)} days…",
-            current_id=int(rule_type_roles.get(rt) or 0),
-            guild=interaction.guild,
-        )
-        await channel.send(
-            f"Which role should **{tr.RULE_LABELS.get(rt, rt)}** days pull from?",
-            view=role_view,
-        )
-        await wait_view_or_cancel(role_view, cancel_event)
-        if role_view.cancelled:
-            return
-        if role_view.confirmed and role_view.selected_role:
-            rule_type_roles[rt] = role_view.selected_role.id
-            await channel.send(
-                f"✅ **{tr.RULE_LABELS.get(rt, rt)}** days will pull from "
-                f"**@{role_view.selected_role.name}**."
-            )
+        await wait_view_or_cancel(attach_view, cancel_event)
+        if attach_view.cancelled:
+            return None
+        rule_type_roles = attach_view.rule_type_roles
 
-    # ── Counted reasons (advanced) ─────────────────────────────────────────────
+    # ── Step 9f: counted reasons ────────────────────────────────────────────────
     counted_raw = await ask_keep_or_change(
         channel,
-        "**Rotation: Counted Reasons** *(advanced, most keep the default)*\n"
-        "Which reasons count toward a member's fair-rotation tally? The default "
-        "excludes birthday / welcome / event so bonus drives don't penalise anyone. "
+        "**Step 9f of 9 — Counted Reasons** *(most alliances keep the default)*\n"
+        "The rotation always picks whoever has driven the fewest *counted* trains, so "
+        "everyone takes a fair turn. Each reason you count here adds to a member's tally "
+        "when they drive for that reason. The default counts regular turns but leaves out "
+        "**birthday**, **welcome**, and **event** drives, so a one-off or bonus drive "
+        "doesn't push someone to the back of the line.\n"
         f"Comma-separated; valid: `{', '.join(tr.REASONS)}`.",
         default=", ".join(tr.DEFAULT_COUNTED_REASONS),
         current=current.get("counted_reasons") or "",
@@ -4245,53 +4348,161 @@ async def _run_train_rotation_extras(
         cancel_event=cancel_event,
     )
     if counted_raw is None:
-        return
+        return None
     valid = {r.strip().lower() for r in counted_raw.split(",") if r.strip()} & set(tr.REASONS)
     counted_reasons = ",".join(sorted(valid)) if valid else ""
 
-    # ── Sheet tabs (defaults; optional customise) ──────────────────────────────
-    history_tab = current.get("history_tab") or "Train History"
-    member_rules_tab = current.get("member_rules_tab") or "Train Member Rules"
-    day_rules_tab = current.get("day_rules_tab") or "Train Day Rules"
-    tabs_offer = YesNoView()
-    await channel.send(
-        "**Rotation: Sheet Tabs**\n"
-        f"Rotation uses three tabs (auto-created if missing): **{history_tab}**, "
-        f"**{member_rules_tab}**, **{day_rules_tab}**. Customise these names?",
-        view=tabs_offer,
+    # ── Step 9g: sheet tabs (one question; Keep / Default / Define my own) ───────
+    _DEF_HIST, _DEF_MR, _DEF_DR = "Train History", "Train Member Rules", "Train Day Rules"
+    history_tab = current.get("history_tab") or _DEF_HIST
+    member_rules_tab = current.get("member_rules_tab") or _DEF_MR
+    day_rules_tab = current.get("day_rules_tab") or _DEF_DR
+    saved_custom = (
+        history_tab != _DEF_HIST or member_rules_tab != _DEF_MR or day_rules_tab != _DEF_DR
     )
-    await wait_view_or_cancel(tabs_offer, cancel_event)
-    if tabs_offer.cancelled:
-        return
-    if tabs_offer.selected:
-        tab_vals = {
-            "history_tab": history_tab,
-            "member_rules_tab": member_rules_tab,
-            "day_rules_tab": day_rules_tab,
-        }
-        for label, key in [
-            ("History", "history_tab"),
-            ("Member Rules", "member_rules_tab"),
-            ("Day Rules", "day_rules_tab"),
-        ]:
-            val = await ask_keep_or_change(
-                channel,
-                f"**{label} tab name**",
-                default=tab_vals[key],
-                current=current.get(key, ""),
-                modal_title=f"{label} Tab",
-                modal_label="Tab name",
-                timeout_cmd="setup_train",
-                cancel_event=cancel_event,
-            )
-            if val is None:
-                return
-            tab_vals[key] = val
-        history_tab = tab_vals["history_tab"]
-        member_rules_tab = tab_vals["member_rules_tab"]
-        day_rules_tab = tab_vals["day_rules_tab"]
 
+    class _TabsModal(discord.ui.Modal):
+        def __init__(self):
+            super().__init__(title="Rotation Sheet Tabs")
+            self.out = None
+            self._h = discord.ui.TextInput(label="History tab", default=history_tab, max_length=100)
+            self._m = discord.ui.TextInput(
+                label="Member Rules tab", default=member_rules_tab, max_length=100
+            )
+            self._d = discord.ui.TextInput(
+                label="Day Rules tab", default=day_rules_tab, max_length=100
+            )
+            for i in (self._h, self._m, self._d):
+                self.add_item(i)
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.out = (
+                self._h.value.strip() or _DEF_HIST,
+                self._m.value.strip() or _DEF_MR,
+                self._d.value.strip() or _DEF_DR,
+            )
+            await inter.response.defer()
+            self.stop()
+
+    class _TabsChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+            self.choice = None
+            self.cancelled = False
+            self.modal_out = None
+            if saved_custom:
+                keep = discord.ui.Button(label="✅ Keep current", style=discord.ButtonStyle.success)
+
+                async def _keep(inter: discord.Interaction):
+                    self.choice = "keep"
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                keep.callback = _keep
+                self.add_item(keep)
+
+            use_def = discord.ui.Button(
+                label="↩️ Use default" if saved_custom else "✅ Use default",
+                style=discord.ButtonStyle.secondary
+                if saved_custom
+                else discord.ButtonStyle.success,
+            )
+
+            async def _use_default(inter: discord.Interaction):
+                self.choice = "default"
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+            use_def.callback = _use_default
+            self.add_item(use_def)
+
+            custom = discord.ui.Button(label="✏️ Define my own", style=discord.ButtonStyle.primary)
+
+            async def _custom(inter: discord.Interaction):
+                modal = _TabsModal()
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                if modal.out:
+                    self.choice = "custom"
+                    self.modal_out = modal.out
+                for c in self.children:
+                    c.disabled = True
+                try:
+                    await inter.edit_original_response(view=self)
+                except Exception:
+                    pass
+                self.stop()
+
+            custom.callback = _custom
+            self.add_item(custom)
+
+    def _tab_line(label, val, default):
+        return f"{label}: **{val}**" + (" (default)" if val == default else "")
+
+    tabs_view = _TabsChoiceView()
+    await channel.send(
+        "**Step 9g of 9 — Sheet Tabs**\n"
+        "Rotation reads and writes three tabs. The bot creates them automatically if they "
+        "don't exist yet:\n"
+        f"{_tab_line('History tab', history_tab, _DEF_HIST)}\n"
+        f"{_tab_line('Member Rules', member_rules_tab, _DEF_MR)}\n"
+        f"{_tab_line('Day Rules', day_rules_tab, _DEF_DR)}\n\n"
+        "Keep these, or define your own?",
+        view=tabs_view,
+    )
+    await wait_view_or_cancel(tabs_view, cancel_event)
+    if tabs_view.cancelled:
+        return None
+    if tabs_view.choice is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return None
+    if tabs_view.choice == "default":
+        history_tab, member_rules_tab, day_rules_tab = _DEF_HIST, _DEF_MR, _DEF_DR
+    elif tabs_view.choice == "custom":
+        history_tab, member_rules_tab, day_rules_tab = tabs_view.modal_out
+    # "keep" leaves the loaded values as-is.
+
+    # ── Step 9h: weekly pattern / preset (opt-in + naming) ──────────────────────
     active_preset = current.get("active_schedule_preset") or tr.DEFAULT_PRESET_NAME
+    open_editor = False
+    preset_offer = YesNoView()
+    await channel.send(
+        "**Step 9h of 9 — Weekly Pattern** *(recommended)*\n"
+        "A weekly pattern (preset) sets what *kind* of day each weekday is, e.g. Monday = "
+        "auto rotation, Friday = VS, Sunday = leadership. The bot fills in conductors from "
+        "the pattern each week. Want to set one up now?",
+        view=preset_offer,
+    )
+    await wait_view_or_cancel(preset_offer, cancel_event)
+    if preset_offer.cancelled:
+        return None
+    if preset_offer.selected is None:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+        return None
+    if preset_offer.selected:
+        await channel.send(
+            "What should we name this pattern? *(e.g. `Standard Week`, `Season 6`. Type a "
+            "name, or `skip` to use the default.)*"
+        )
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=_check, timeout=300), cancel_event
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send(CANCEL_PLAIN)
+            else:
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return None
+        name_in = reply.content.strip()[:80]
+        if name_in and name_in.lower() != "skip":
+            active_preset = name_in
+        open_editor = True
+
+    # ── Save + build the result (caller posts the summary + opens the editor) ───
     save_train_rotation_config(
         guild_id,
         rotation_enabled=1,
@@ -4305,44 +4516,50 @@ async def _run_train_rotation_extras(
         active_schedule_preset=active_preset,
     )
 
-    summary = discord.Embed(title="✅ Train Rotation Enabled", color=discord.Color.green())
-    summary.add_field(
-        name="Public Posts",
-        value=(
+    summary_lines = [
+        f"Draft + confirm: <#{reminder_channel_id}> at "
+        f"{_format_time_with_tz(reminder_time, guild_tz)}",
+        f"Weekly draft day: {tr.WEEKDAY_NAMES[int(weekly_draft_day)]}",
+        "Public posts: "
+        + (
             f"<#{rotation_public_channel_id}>"
             if rotation_public_channel_id
-            else "Off (record only)"
+            else "off (record only)"
         ),
-        inline=True,
-    )
-    summary.add_field(
-        name="Weekly Draft Day", value=tr.WEEKDAY_NAMES[int(weekly_draft_day)], inline=True
-    )
+        f"Active preset: {active_preset}",
+    ]
     if rule_type_roles:
-        summary.add_field(
-            name="Rule Type Roles",
-            value=", ".join(
-                f"{tr.RULE_LABELS.get(k, k)} → <@&{v}>" for k, v in rule_type_roles.items()
-            ),
-            inline=False,
+        summary_lines.append(
+            "Rule-type roles: "
+            + ", ".join(f"{tr.RULE_LABELS.get(k, k)} → <@&{v}>" for k, v in rule_type_roles.items())
         )
-    summary.set_footer(text="Last step: lay out your weekly pattern below, then 💾 Save preset.")
-    await channel.send(embed=summary)
 
-    preset = await asyncio.get_event_loop().run_in_executor(
-        None, tr.load_preset, guild_id, day_rules_tab, active_preset
-    )
-    if preset is None:
-        preset = tr.SchedulePreset.default(active_preset)
-    await ui.post_preset_editor(channel, guild_id, user.id, preset, day_rules_tab)
+    result = {
+        "enabled": True,
+        "summary": "\n".join(summary_lines),
+        "open_editor": open_editor,
+        "preset": None,
+        "day_rules_tab": day_rules_tab,
+    }
+    if open_editor:
+        preset = await asyncio.get_event_loop().run_in_executor(
+            None, tr.load_preset, guild_id, day_rules_tab, active_preset
+        )
+        result["preset"] = preset or tr.SchedulePreset.default(active_preset)
+    else:
+        await channel.send(
+            "ℹ️ No weekly pattern set yet, so the bot uses a default until you build one from "
+            "`/train` → 📅 Schedule presets (you can set member rules there too)."
+        )
     print(f"[SETUP] Train rotation enabled for guild {guild_id}")
+    return result
 
 
 async def run_buddy_setup(interaction: discord.Interaction, bot):
     """Walk leadership through configuring the Profession Buddy System (#289).
 
-    Enable → buddy tab → Engineer doubling → scarcity priority → leadership
-    alerts channel → buddy DMs. Profession is detected from the Squad Powers
+    Enable → buddy tab → Engineer doubling → scarcity priority → reliability
+    ranking → leadership alerts channel → buddy DMs. Profession is detected from the Squad Powers
     survey question. Free to enable + manually pair; auto-assign, one-click
     profession buttons, alerts, and DMs are Premium at runtime."""
     import wizard_registry
@@ -4380,6 +4597,10 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 if current.get("scarcity_priority") == "strongest_first"
                 else "Alphabetical",
             ),
+            (
+                "Rank Engineers by reliability",
+                "✅ Yes" if current.get("reliability_enabled") else "❌ No",
+            ),
             ("Leadership alerts", f"<#{notify_id}>" if notify_id else "*off*"),
             ("Buddy DMs", "✅ Yes" if current.get("dm_enabled") else "❌ No"),
         ]
@@ -4402,7 +4623,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
-    await channel.send("**Step 1 of 6 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await channel.send("**Step 1 of 7 — Turn on the Profession Buddy System?**", view=enabled_view)
     await wait_view_or_cancel(enabled_view, cancel_event)
     if enabled_view.cancelled:
         wizard_registry.unregister(user.id, cancel_event)
@@ -4451,7 +4672,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Buddy tab name ────────────────────────────────────────────────
     buddy_tab = await ask_keep_or_change(
         channel,
-        "**Step 2 of 6 — Buddy List Tab**\n"
+        "**Step 2 of 7 — Buddy List Tab**\n"
         "Which tab in your Google Sheet should hold the buddy list? The bot owns "
         "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
         "⚠️ *The bot will create it if it doesn't exist.*",
@@ -4468,7 +4689,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 3: Engineer doubling ─────────────────────────────────────────────
     dbl_view = YesNoView()
     await channel.send(
-        "**Step 3 of 6 — Two Engineers per War Leader?**\n"
+        "**Step 3 of 7 — Two Engineers per War Leader?**\n"
         "When you have more Engineers than War Leaders, should we allow War Leaders "
         "to have 2 Engineers paired with them?",
         view=dbl_view,
@@ -4502,7 +4723,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if power_source_available:
         scarcity_view = YesNoView()
         await channel.send(
-            "**Step 4 of 6 — When Engineers are scarce**\n"
+            "**Step 4 of 7 — When Engineers are scarce**\n"
             "If you have more War Leaders than Engineers, should we prioritize your "
             "strongest War Leaders first? (Note that this will read from your existing "
             "Power data source if you have one set up.)",
@@ -4524,13 +4745,179 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
             "and re-run this wizard to enable it. Using alphabetical order for now.*"
         )
 
-    # ── Step 5: Leadership alerts channel ─────────────────────────────────────
+    # ── Step 5: Engineer reliability ranking ──────────────────────────────────
+    # Optional sibling to strongest-first. When on, the bot reads a 1-5 score the
+    # alliance maintains in their Sheet and orders Engineers most-reliable-first,
+    # so the best Engineers land on the top War Leaders. Off = alphabetical (#303).
+    reliability_enabled = 1 if current.get("reliability_enabled") else 0
+    reliability_tab = current.get("reliability_tab", "") or ""
+    reliability_column = current.get("reliability_column", "") or ""
+
+    rel_view = YesNoView()
+    await channel.send(
+        "**Step 5 of 7 — Rank Engineers by reliability?**\n"
+        "Keep a 1-5 reliability score for your Engineers somewhere in your Google "
+        "Sheet (higher = more dependable) and the bot will pair your most reliable "
+        "Engineers with your top War Leaders. Leave this off to order Engineers "
+        "alphabetically. You maintain the scores; the bot only reads them.",
+        view=rel_view,
+    )
+    await wait_view_or_cancel(rel_view, cancel_event)
+    if rel_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if rel_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    reliability_enabled = 1 if rel_view.selected else 0
+
+    if reliability_enabled:
+        # ── Step 5a: reliability source (Keep current / Use default / custom) ──
+        # Default tab mirrors the Power Data Source (then Member Roster); default
+        # score column is a placeholder "D" so leadership picks their real column.
+        # Matching reuses the Power Data Source match column (read_reliability_for_members).
+        default_rel_tab = (
+            (storm_ds.get("power_metric_tab") or "").strip()
+            or (roster_cfg.get("tab_name") or "").strip()
+            or "Member Roster"
+        )
+        DEFAULT_REL_COL = "D"
+        saved_custom = bool(reliability_tab and reliability_column)
+        # Fall back to the defaults for display when nothing is saved yet (mirrors
+        # how the rotation Sheet Tabs step renders).
+        disp_tab = reliability_tab or default_rel_tab
+        disp_col = reliability_column or DEFAULT_REL_COL
+        current_is_default = (disp_tab, disp_col) == (default_rel_tab, DEFAULT_REL_COL)
+
+        class _RelModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="Reliability Source")
+                self.out = None
+                self._tab = discord.ui.TextInput(
+                    label="Tab name",
+                    default=reliability_tab or default_rel_tab,
+                    max_length=100,
+                )
+                self._col = discord.ui.TextInput(
+                    label="Reliability score column (letter)",
+                    default=reliability_column or DEFAULT_REL_COL,
+                    max_length=4,
+                )
+                self.add_item(self._tab)
+                self.add_item(self._col)
+
+            async def on_submit(self, inter: discord.Interaction):
+                self.out = (self._tab.value.strip(), self._col.value.strip().upper())
+                await inter.response.defer()
+                self.stop()
+
+        class _RelChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+                self.choice = None
+                self.modal_out = None
+                if saved_custom:
+                    keep = discord.ui.Button(
+                        label="✅ Keep current", style=discord.ButtonStyle.success
+                    )
+
+                    async def _keep(inter: discord.Interaction):
+                        self.choice = "keep"
+                        for c in self.children:
+                            c.disabled = True
+                        await wizard_registry.safe_edit_response(inter, view=self)
+                        self.stop()
+
+                    keep.callback = _keep
+                    self.add_item(keep)
+
+                # Spell out the actual defaults when what's saved isn't already them.
+                use_def_label = (
+                    f"↩️ Use default ({default_rel_tab}; {DEFAULT_REL_COL})"
+                    if saved_custom and not current_is_default
+                    else "✅ Use default"
+                )
+                use_def = discord.ui.Button(
+                    label=use_def_label[:80],
+                    style=discord.ButtonStyle.secondary
+                    if saved_custom
+                    else discord.ButtonStyle.success,
+                )
+
+                async def _use_default(inter: discord.Interaction):
+                    self.choice = "default"
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                use_def.callback = _use_default
+                self.add_item(use_def)
+
+                custom = discord.ui.Button(
+                    label="✏️ Define my own", style=discord.ButtonStyle.primary
+                )
+
+                async def _custom(inter: discord.Interaction):
+                    modal = _RelModal()
+                    await inter.response.send_modal(modal)
+                    await modal.wait()
+                    if modal.out:
+                        self.choice = "custom"
+                        self.modal_out = modal.out
+                    for c in self.children:
+                        c.disabled = True
+                    try:
+                        await inter.edit_original_response(view=self)
+                    except Exception:
+                        pass
+                    self.stop()
+
+                custom.callback = _custom
+                self.add_item(custom)
+
+        def _rel_line(label, val, default):
+            return f"{label}: **{val}**" + (" (default)" if val == default else "")
+
+        rel_choice = _RelChoiceView()
+        await channel.send(
+            "**Step 5a of 7 — Where are your reliability scores?**\n"
+            "The bot reads each Engineer's 1-5 score from here (it never writes to it) "
+            "and matches members the same way it reads power:\n"
+            f"{_rel_line('Tab name', disp_tab, default_rel_tab)}\n"
+            f"{_rel_line('Column', disp_col, DEFAULT_REL_COL)}\n\n"
+            "Keep these, or define your own?",
+            view=rel_choice,
+        )
+        await wait_view_or_cancel(rel_choice, cancel_event)
+        if rel_choice.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if rel_choice.choice is None:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if rel_choice.choice == "default":
+            reliability_tab, reliability_column = default_rel_tab, DEFAULT_REL_COL
+        elif rel_choice.choice == "custom":
+            reliability_tab, reliability_column = rel_choice.modal_out
+        # "keep" leaves the loaded values as-is.
+
+        if not reliability_tab or not reliability_column:
+            reliability_enabled = 0
+            await channel.send(
+                "⚠️ I need both a tab and a column letter to read reliability. Leaving it "
+                "off for now — re-run setup to set it. Using alphabetical Engineer order."
+            )
+
+    # ── Step 6: Leadership alerts channel ─────────────────────────────────────
     is_premium_flag = await premium.is_premium(
         guild_id, interaction=interaction, bot=interaction.client
     )
     alerts_view = YesNoView()
     await channel.send(
-        "**Step 5 of 6 — Leadership alerts**\n"
+        "**Step 6 of 7 — Leadership alerts**\n"
         "When a member swaps profession and the bot re-pairs people, should it post a "
         "heads-up to a leadership channel?\n"
         "💎 Premium: these posts send only while Premium is active.",
@@ -4572,7 +4959,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     dm_view = YesNoView()
     await channel.send(
-        "**Step 6 of 6 — Buddy DMs**\n"
+        "**Step 7 of 7 — Buddy DMs**\n"
         "Should the bot DM members their buddy when it changes?\n"
         "💎 Premium: these DMs send only while Premium is active.",
         view=dm_view,
@@ -4614,6 +5001,9 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
     update_buddy_config_field(guild_id, "engineer_doubling", engineer_doubling)
     update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
+    update_buddy_config_field(guild_id, "reliability_enabled", reliability_enabled)
+    update_buddy_config_field(guild_id, "reliability_tab", reliability_tab)
+    update_buddy_config_field(guild_id, "reliability_column", reliability_column)
     update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
     update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
     update_buddy_config_field(guild_id, "dm_template", dm_template)
@@ -4626,6 +5016,8 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
             f"**Two Engineers per War Leader:** {'✅ Yes' if engineer_doubling else '❌ No'}\n"
             f"**When Engineers are scarce:** "
             f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
+            f"**Rank Engineers by reliability:** "
+            f"{f'✅ Yes (column {reliability_column} on {reliability_tab})' if reliability_enabled else '❌ No'}\n"
             f"**Leadership alerts:** {f'<#{notify_channel_id}>' if notify_channel_id else 'off'}\n"
             f"**Buddy DMs:** {'✅ Yes' if dm_enabled else '❌ No'}"
             f"{' (custom message)' if (dm_enabled and dm_template) else ''}"
@@ -9994,8 +10386,8 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await channel.send(
             "ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** "
             "(on the bot's first tick after server-time midnight). If you need a "
-            "birthday reflected on the schedule sooner, run `/train birthdays` "
-            "to trigger the check on demand."
+            "birthday reflected on the schedule sooner, open `/train` and click "
+            "**🎂 Run birthday check** to trigger the check on demand."
         )
 
         # ── Step 6: Flexible placement ─────────────────────────────────────────

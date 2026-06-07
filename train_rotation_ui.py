@@ -110,7 +110,11 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
             )
 
     member_rules = tr.load_member_rules(guild_id, cfg.get("member_rules_tab") or "")
-    history = tr.load_history(guild_id, cfg.get("history_tab") or "")
+    # Canonicalize ID-tagged history rows to the roster's current names so a
+    # renamed member keeps one record (name-only rows fall back as-is).
+    history = tr.canonicalize_history(
+        tr.load_history(guild_id, cfg.get("history_tab") or ""), roster
+    )
     counted = tr.parse_counted_reasons(cfg.get("counted_reasons"))
 
     return RotationState(
@@ -127,6 +131,20 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
 def week_start_for(d: date) -> date:
     """The Monday on or before `d` (weekday() 0 = Monday)."""
     return d - timedelta(days=d.weekday())
+
+
+def default_draft_week(today: date, draft_day: int) -> date:
+    """The week (Monday) the draft view should open to by default.
+
+    The current week, except on the configured weekly draft day (Sunday by
+    default), where it previews the **upcoming** week — matching the auto-posted
+    draft. This is the fix for opening `/train` on a Sunday and getting the week
+    that's ending instead of the one being planned (#304). Leadership can still
+    step to any week with the view's ◀ / ▶ buttons."""
+    cur = week_start_for(today)
+    if today.weekday() == draft_day:
+        return cur + timedelta(days=7)
+    return cur
 
 
 def _guild_today(bot, guild_id: int) -> date:
@@ -579,6 +597,151 @@ class _MemberNameModal(discord.ui.Modal):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _roster_member_names(guild_id: int) -> list[str]:
+    """Distinct roster display names for the Specific-member picker. Empty when
+    no roster is configured / readable (caller falls back to free text)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in tr.load_roster_members(guild_id):
+        name = (r.get("name") or "").strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return out
+
+
+class _SpecificMemberPickerView(discord.ui.View):
+    """Roster-backed picker for a Specific-member day pin (#302). The dropdown
+    only sets a *pending* choice (Discord won't fire the change event if you
+    re-pick the already-selected member, so selection alone can't be the commit);
+    **💾 Save** commits it, **Cancel** closes with no change, and **✏️ Type a
+    name instead** handles anyone not on the roster. The pending choice defaults
+    to the current pin, so confirming an unchanged member is a single Save."""
+
+    PAGE = 25
+
+    def __init__(
+        self, editor: "TrainPresetEditorView", names: list[str], *, current: str, day_name: str
+    ):
+        super().__init__(timeout=180)
+        self.editor = editor
+        self.names = names
+        self.day_name = day_name
+        self.page = 0
+        self.pending = current or ""
+        self._build()
+
+    @property
+    def total_pages(self) -> int:
+        return max(1, (len(self.names) + self.PAGE - 1) // self.PAGE)
+
+    def content(self) -> str:
+        base = f"Who drives the train every **{self.day_name}**?"
+        if self.pending:
+            return f"{base}\nSelected: **{self.pending}** — hit **💾 Save** to confirm."
+        if self.names:
+            return f"{base}\nPick a member, then **💾 Save**."
+        return f"{base}\nNo roster is set up — use **✏️ Type a name instead**."
+
+    def _build(self):
+        self.clear_items()
+        if self.names:
+            start = self.page * self.PAGE
+            page_names = self.names[start : start + self.PAGE]
+            sel = discord.ui.Select(
+                placeholder="Pick the member…",
+                options=[
+                    discord.SelectOption(label=n[:100], value=n[:100], default=(n == self.pending))
+                    for n in page_names
+                ],
+                row=0,
+            )
+            sel.callback = self._on_select
+            self.add_item(sel)
+            if self.total_pages > 1:
+                prev = discord.ui.Button(
+                    label="◀ Prev",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page == 0,
+                    row=1,
+                )
+                prev.callback = self._prev
+                self.add_item(prev)
+                nxt = discord.ui.Button(
+                    label="Next ▶",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page >= self.total_pages - 1,
+                    row=1,
+                )
+                nxt.callback = self._next
+                self.add_item(nxt)
+            save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
+            save.callback = self._on_save
+            self.add_item(save)
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=2)
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+        typ = discord.ui.Button(
+            label="✏️ Type a name instead", style=discord.ButtonStyle.secondary, row=2
+        )
+        typ.callback = self._on_type
+        self.add_item(typ)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        self.pending = interaction.data["values"][0]
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _on_save(self, interaction: discord.Interaction):
+        if not self.pending:
+            await interaction.response.send_message(
+                "Pick a member first, or use **✏️ Type a name instead**.", ephemeral=True
+            )
+            return
+        name = self.pending
+        for c in self.children:
+            c.disabled = True
+        self.stop()
+        try:
+            await interaction.response.edit_message(
+                content=f"📌 Pinned **{name}** to drive every {self.day_name}.", view=None
+            )
+        except discord.HTTPException:
+            pass
+        await self.editor._apply_specific_member(name)
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        for c in self.children:
+            c.disabled = True
+        self.stop()
+        try:
+            await interaction.response.edit_message(
+                content="Cancelled — the specific member was left unchanged.", view=None
+            )
+        except discord.HTTPException:
+            pass
+
+    async def _on_type(self, interaction: discord.Interaction):
+        self.stop()
+        await interaction.response.send_modal(
+            _MemberNameModal(
+                f"Specific member for every {self.day_name}",
+                self.editor._apply_from_modal,
+                current=self.pending,
+            )
+        )
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+
 class TrainPresetEditorView(discord.ui.View):
     """Owner-locked live editor for one schedule preset. State held in
     `self.preset`; persisted to the Day Rules tab on Save."""
@@ -590,6 +753,9 @@ class TrainPresetEditorView(discord.ui.View):
         self.preset = preset
         self.day_rules_tab = day_rules_tab
         self.dirty = False
+        # True once any edit has been made this session — gates the "Done making
+        # changes" exit so a fresh editor just shows "Cancel (no changes needed)".
+        self.ever_changed = False
         self.editing_day: int | None = None
         self.message: discord.Message | None = None
         self._rebuild()
@@ -643,15 +809,36 @@ class TrainPresetEditorView(discord.ui.View):
             pin_btn.callback = self._on_set_pin
             self.add_item(pin_btn)
 
+        # Save never locks the editor: it commits and says "saved" but leaves
+        # the controls live so leadership can keep tweaking. Exit paths depend
+        # on state: Cancel before any edit, Abandon to drop unsaved edits, and
+        # "Done making changes" once anything has been touched (it saves first
+        # if there are unsaved edits, so nothing is lost). (#302)
         save_btn = discord.ui.Button(
             label="💾 Save preset", style=discord.ButtonStyle.success, disabled=not self.dirty
         )
         save_btn.callback = self._on_save
         self.add_item(save_btn)
 
-        abandon_btn = discord.ui.Button(label="🔙 Abandon", style=discord.ButtonStyle.danger)
-        abandon_btn.callback = self._on_abandon
-        self.add_item(abandon_btn)
+        if self.dirty:
+            abandon_btn = discord.ui.Button(
+                label="🗑️ Abandon (no changes will be saved)", style=discord.ButtonStyle.danger
+            )
+            abandon_btn.callback = self._on_abandon
+            self.add_item(abandon_btn)
+
+        if not self.ever_changed:
+            cancel_btn = discord.ui.Button(
+                label="Cancel (no changes needed)", style=discord.ButtonStyle.secondary
+            )
+            cancel_btn.callback = self._on_cancel
+            self.add_item(cancel_btn)
+        else:
+            done_btn = discord.ui.Button(
+                label="✅ Done making changes", style=discord.ButtonStyle.primary, row=2
+            )
+            done_btn.callback = self._on_done
+            self.add_item(done_btn)
 
     async def _guard(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -689,6 +876,7 @@ class TrainPresetEditorView(discord.ui.View):
             rule.specific_member = ""
         self.preset.days[self.editing_day] = rule
         self.dirty = True
+        self.ever_changed = True
         await self._refresh(interaction)
 
     async def _on_set_pin(self, interaction: discord.Interaction):
@@ -696,20 +884,40 @@ class TrainPresetEditorView(discord.ui.View):
             return
         day_name = tr.WEEKDAY_NAMES[self.editing_day]
         cur = self.preset.rule_for(self.editing_day).specific_member
+        # Defer first (the roster read is a Sheets round-trip), then offer a
+        # picker built from the roster, with a type-a-name escape (#302).
+        await interaction.response.defer(ephemeral=True)
+        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+        view = _SpecificMemberPickerView(self, names, current=cur, day_name=day_name)
+        await interaction.followup.send(view.content(), view=view, ephemeral=True)
 
-        async def _save_name(inter: discord.Interaction, name: str):
-            rule = self.preset.rule_for(self.editing_day)
-            rule.specific_member = name
-            self.preset.days[self.editing_day] = rule
-            self.dirty = True
-            await self._refresh(
-                inter,
-                content=f"📌 **{name}** will drive the train every **{day_name}**.",
+    async def _apply_specific_member(self, name: str):
+        """Pin `name` to the day being edited and refresh the editor message.
+        Called by the roster picker (no triggering interaction of its own)."""
+        rule = self.preset.rule_for(self.editing_day)
+        rule.specific_member = name
+        self.preset.days[self.editing_day] = rule
+        self.dirty = True
+        self.ever_changed = True
+        self._rebuild()
+        if self.message:
+            try:
+                await self.message.edit(
+                    embed=build_preset_editor_embed(self.preset, dirty=self.dirty), view=self
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _apply_from_modal(self, interaction: discord.Interaction, name: str):
+        """Type-a-name path: ack the modal submit, then apply the pin."""
+        try:
+            await interaction.response.send_message(
+                f"📌 Pinned **{name}** to drive every {tr.WEEKDAY_NAMES[self.editing_day]}.",
+                ephemeral=True,
             )
-
-        await interaction.response.send_modal(
-            _MemberNameModal(f"Specific member for every {day_name}", _save_name, current=cur)
-        )
+        except discord.HTTPException:
+            pass
+        await self._apply_specific_member(name)
 
     async def _on_save(self, interaction: discord.Interaction):
         if not await self._guard(interaction):
@@ -717,23 +925,14 @@ class TrainPresetEditorView(discord.ui.View):
         await interaction.response.defer()
         ok = await asyncio.to_thread(tr.save_preset, self.guild_id, self.day_rules_tab, self.preset)
         if ok:
+            # Stay open so leadership can keep editing; just clear the dirty
+            # flag and confirm. "Done making changes" is how they exit.
             self.dirty = False
-            for item in self.children:
-                item.disabled = True
-            try:
-                await interaction.followup.send(
-                    f"✅ Saved preset **{self.preset.name}**.", ephemeral=False
-                )
-            except discord.HTTPException:
-                pass
-            if self.message:
-                try:
-                    await self.message.edit(
-                        embed=build_preset_editor_embed(self.preset, dirty=False), view=self
-                    )
-                except discord.HTTPException:
-                    pass
-            self.stop()
+            await self._refresh(
+                interaction,
+                content=f"✅ Saved **{self.preset.name}**. Keep editing, or hit "
+                "**Done making changes** when you're finished.",
+            )
         else:
             await interaction.followup.send(
                 "⚠️ Couldn't save the preset. Check that your Google Sheet is configured "
@@ -741,20 +940,60 @@ class TrainPresetEditorView(discord.ui.View):
                 ephemeral=True,
             )
 
-    async def _on_abandon(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
+    async def _close(self, interaction: discord.Interaction, content: str):
         for item in self.children:
             item.disabled = True
         try:
             await interaction.response.edit_message(
-                content="🔙 Abandoned. Changes were not saved.",
-                embed=build_preset_editor_embed(self.preset, dirty=False),
+                content=content,
+                embed=build_preset_editor_embed(self.preset, dirty=self.dirty),
                 view=self,
             )
         except discord.HTTPException:
             pass
         self.stop()
+
+    async def _on_abandon(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await self._close(interaction, "🗑️ Abandoned. Your unsaved changes were not saved.")
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await self._close(interaction, "👍 Closed. No changes were needed.")
+
+    async def _on_done(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        # Save any pending edits first so "Done" never silently drops work.
+        if self.dirty:
+            await interaction.response.defer()
+            ok = await asyncio.to_thread(
+                tr.save_preset, self.guild_id, self.day_rules_tab, self.preset
+            )
+            if not ok:
+                await interaction.followup.send(
+                    "⚠️ Couldn't save your latest changes. Check the Google Sheet and try "
+                    "Save preset again.",
+                    ephemeral=True,
+                )
+                return
+            self.dirty = False
+            for item in self.children:
+                item.disabled = True
+            if self.message:
+                try:
+                    await self.message.edit(
+                        content=f"✅ Saved **{self.preset.name}**. All set!",
+                        embed=build_preset_editor_embed(self.preset, dirty=False),
+                        view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+            self.stop()
+        else:
+            await self._close(interaction, f"✅ All set! **{self.preset.name}** is saved.")
 
     async def on_timeout(self):
         await wizard_registry.expire_view_message(
@@ -829,8 +1068,23 @@ class WeeklyDraftView(discord.ui.View):
 
     def _rebuild(self):
         self.clear_items()
+        # Week navigation (row 0) — pick which week to view / draft. Opening the
+        # hub on a Sunday lands on the upcoming week (see the hub default), and
+        # these let leadership step to any week from there.
+        prev_btn = discord.ui.Button(
+            label="◀ Previous week", style=discord.ButtonStyle.secondary, row=0
+        )
+        prev_btn.callback = self._on_prev_week
+        self.add_item(prev_btn)
+        next_btn = discord.ui.Button(
+            label="Next week ▶", style=discord.ButtonStyle.secondary, row=0
+        )
+        next_btn.callback = self._on_next_week
+        self.add_item(next_btn)
+
         day_select = discord.ui.Select(
             placeholder="📅 Pick a day to adjust…",
+            row=1,
             options=[
                 discord.SelectOption(
                     label=f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}",
@@ -851,9 +1105,30 @@ class WeeklyDraftView(discord.ui.View):
             ("✋ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
             ("🔄 Re-draft the whole week", discord.ButtonStyle.danger, self._on_regen),
         ]:
-            btn = discord.ui.Button(label=label, style=style)
+            btn = discord.ui.Button(label=label, style=style, row=2)
             btn.callback = cb
             self.add_item(btn)
+
+    async def _on_prev_week(self, interaction: discord.Interaction):
+        await self._shift_week(interaction, -7)
+
+    async def _on_next_week(self, interaction: discord.Interaction):
+        await self._shift_week(interaction, 7)
+
+    async def _shift_week(self, interaction: discord.Interaction, days: int):
+        """Move the view to another week and reload that week's draft. Existing
+        weeks reconstruct from their saved rows; an empty future week generates a
+        fresh draft (load_week_draft handles both)."""
+        if not _is_leader(interaction):
+            await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
+            return
+        await interaction.response.defer()
+        self.week_start = self.week_start + timedelta(days=days)
+        self.selected_iso = None
+        self.draft = await asyncio.to_thread(
+            load_week_draft, self.bot, self.guild_id, self.week_start
+        )
+        await self._refresh(interaction)
 
     async def _guard_day(self, interaction: discord.Interaction) -> tr.DraftDay | None:
         if not _is_leader(interaction):

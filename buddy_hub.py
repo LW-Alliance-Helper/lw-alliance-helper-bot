@@ -272,8 +272,11 @@ class _BuddyHubView(discord.ui.View):
         await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
         await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
+        rel_note = " Engineers ordered by reliability." if cfg.get("reliability_enabled") else ""
         await inter.followup.send(
-            content="🪄 Buddies assigned (existing pairs kept).", embed=embed, ephemeral=True
+            content=f"🪄 Buddies assigned (existing pairs kept).{rel_note}",
+            embed=embed,
+            ephemeral=True,
         )
 
     async def _from_scratch(self, inter: discord.Interaction):
@@ -291,8 +294,15 @@ class _BuddyHubView(discord.ui.View):
             await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
             await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
             embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
+            rel_note = (
+                " Most reliable Engineers paired with your top War Leaders."
+                if cfg.get("reliability_enabled")
+                else ""
+            )
             await i.followup.send(
-                content="♻️ Rebuilt every pairing from scratch.", embed=embed, ephemeral=True
+                content=f"♻️ Rebuilt every pairing from scratch.{rel_note}",
+                embed=embed,
+                ephemeral=True,
             )
 
         await inter.response.send_message(

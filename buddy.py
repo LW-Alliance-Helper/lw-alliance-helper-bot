@@ -70,6 +70,9 @@ class Member:
     discord_id: str = ""
     profession: str = ""
     power: float = 0.0
+    # Engineer reliability (#303): higher = more reliable. Only read/used when
+    # the alliance turns on reliability ranking; 0.0 = unranked (sorts last).
+    reliability: float = 0.0
 
 
 @dataclass
@@ -103,6 +106,7 @@ def assign_buddies(
     *,
     engineer_doubling: bool = False,
     wl_priority: str = "name",
+    eng_priority: str = "name",
     fill: bool = True,
 ) -> PairingResult:
     """Stability-first 1:1 pairing of War Leaders and Engineers.
@@ -117,6 +121,12 @@ def assign_buddies(
       * ``"power"`` — strongest free War Leaders take scarce Engineers first
         (weaker fall to ``unpaired_wl``). Subordinate to stability — an
         established pair is never broken for a stronger newcomer.
+
+    ``eng_priority``:
+      * ``"name"`` (default) — free Engineers are offered in name order.
+      * ``"reliability"`` — free Engineers are offered most-reliable first
+        (ties broken by name). With ``wl_priority="power"`` this lands the most
+        reliable Engineers on the strongest War Leaders (#303).
 
     ``fill=False`` validates and preserves ``existing_pairs`` and computes the
     free pools, but creates **no** new pairings — used by the manual editor so
@@ -182,12 +192,16 @@ def assign_buddies(
             return (-float(m.power or 0), _norm(m.name))
         return (_norm(m.name),)
 
+    def eng_sort_key(m: Member):
+        if eng_priority == "reliability":
+            # Most reliable first; alphabetical within a reliability tier.
+            return (-float(m.reliability or 0), _norm(m.name))
+        return (_norm(m.name),)
+
     unpaired_wl_pool = sorted(
         [m for m in all_wl if wl_load.get(_member_key(m), 0) == 0], key=wl_sort_key
     )
-    free_eng = sorted(
-        [m for m in all_eng if _member_key(m) not in eng_used], key=lambda m: _norm(m.name)
-    )
+    free_eng = sorted([m for m in all_eng if _member_key(m) not in eng_used], key=eng_sort_key)
 
     new_pairs: list[Pair] = []
 
@@ -647,6 +661,47 @@ def read_power_for_members(guild_id: int, members: list) -> None:
             m.power = float(val or 0)
     except Exception as e:
         print(f"[BUDDY] power read failed for guild {guild_id}: {e}")
+
+
+def read_reliability_for_members(guild_id: int, members: list) -> None:
+    """In-place: set ``Member.reliability`` from the alliance's configured
+    reliability column (#303).
+
+    Mirrors ``read_power_for_members`` — reads the buddy-config reliability
+    tab + column (a 1-5 number, higher = more reliable) and matches members with
+    the same Power Data Source match column power reading uses. Only needed when
+    ``reliability_enabled`` is on. Any failure (or a blank/non-numeric cell)
+    leaves reliability at 0.0 — the engineer sinks to the bottom of their tier
+    order."""
+    try:
+        import config
+        from storm_roster_builder import _build_cross_tab_power_index, _lookup_power_in_index
+
+        bcfg = config.get_buddy_config(guild_id)
+        tab = (bcfg.get("reliability_tab") or "").strip()
+        col_letter = (bcfg.get("reliability_column") or "").strip()
+        if not tab or not col_letter:
+            return
+        rel_col = config.power_column_letter_to_index(col_letter)
+        # Match members the same way power reading does — reuse the alliance's
+        # Power Data Source match column, falling back to the roster's Discord ID
+        # column. No separate per-buddy match setting (#303).
+        scfg = config.get_storm_config(guild_id, "DS")
+        rcfg = config.get_member_roster_config(guild_id)
+        match_letter = (scfg.get("power_match_column") or "").strip()
+        match_col = (
+            config.power_column_letter_to_index(match_letter)
+            if match_letter
+            else int(rcfg.get("discord_id_col", 0))
+        )
+        by_id, by_name, _errs = _build_cross_tab_power_index(guild_id, tab, rel_col, match_col)
+        for m in members:
+            val = _lookup_power_in_index(
+                {"discord_id": m.discord_id, "name": m.name}, by_id, by_name
+            )
+            m.reliability = float(val or 0)
+    except Exception as e:
+        print(f"[BUDDY] reliability read failed for guild {guild_id}: {e}")
 
 
 def write_profession_cell(

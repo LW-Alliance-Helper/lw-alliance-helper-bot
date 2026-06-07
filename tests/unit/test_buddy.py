@@ -15,8 +15,14 @@ def W(name, did=None, power=0.0):
     return Member(name=name, discord_id=did or "", profession=buddy.WAR_LEADER, power=power)
 
 
-def E(name, did=None, power=0.0):
-    return Member(name=name, discord_id=did or "", profession=buddy.ENGINEER, power=power)
+def E(name, did=None, power=0.0, reliability=0.0):
+    return Member(
+        name=name,
+        discord_id=did or "",
+        profession=buddy.ENGINEER,
+        power=power,
+        reliability=reliability,
+    )
 
 
 def _key(did, name):
@@ -138,6 +144,47 @@ def test_scarcity_alphabetical_default_ignores_power():
     r = assign_buddies(members, [], wl_priority="name")
     paired_wl = {p.wl_discord_id for p in r.pairs}
     assert paired_wl == {"2", "3"}  # Alice + Bob (alphabetical), not by power
+
+
+def test_eng_reliability_pairs_most_reliable_with_strongest_wl():
+    members = [
+        W("Strong", "1", power=900),
+        W("Mid", "2", power=500),
+        E("LowRel", "3", reliability=1),
+        E("HighRel", "4", reliability=5),
+        E("MidRel", "5", reliability=3),
+    ]
+    r = assign_buddies(members, [], wl_priority="power", eng_priority="reliability")
+    pairs = {p.wl_discord_id: p.eng_discord_id for p in r.pairs}
+    assert pairs["1"] == "4"  # strongest WL -> most reliable engineer
+    assert pairs["2"] == "5"  # next WL -> next reliable
+    assert {m.discord_id for m in r.unpaired_eng} == {"3"}  # least reliable left over
+
+
+def test_eng_reliability_ties_break_alphabetically():
+    members = [
+        W("WL1", "1", power=900),
+        W("WL2", "2", power=500),
+        E("Bravo", "3", reliability=5),
+        E("Alpha", "4", reliability=5),
+    ]
+    r = assign_buddies(members, [], wl_priority="power", eng_priority="reliability")
+    pairs = {p.wl_discord_id: p.engineer for p in r.pairs}
+    assert pairs["1"] == "Alpha"  # same tier -> alphabetical, Alpha to the strongest WL
+    assert pairs["2"] == "Bravo"
+
+
+def test_eng_name_priority_ignores_reliability():
+    members = [
+        W("WL1", "1", power=900),
+        W("WL2", "2", power=500),
+        E("Bravo", "3", reliability=5),
+        E("Alpha", "4", reliability=1),
+    ]
+    r = assign_buddies(members, [], wl_priority="power", eng_priority="name")
+    pairs = {p.wl_discord_id: p.engineer for p in r.pairs}
+    assert pairs["1"] == "Alpha"  # default name order, reliability ignored
+    assert pairs["2"] == "Bravo"
 
 
 def test_scarcity_stability_dominates_power():

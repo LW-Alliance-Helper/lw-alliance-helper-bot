@@ -191,9 +191,9 @@ A few specific things that *might* surprise existing users:
   upgrade or trim manually.
 - **Storm log lookups**: free tier shows only the 4 most-recent log
   entries. The data isn't deleted from the sheet — it's just not
-  surfaced via `/desertstorm log` for older dates. Premium users see
-  everything.
-- **`/events log` and `/train log` windows**: free tier shows 7 days of
+  surfaced via `/desertstorm` → 📜 View past participation logs for older
+  dates. Premium users see everything.
+- **`/events` event log and `/train` prompt log windows**: free tier shows 7 days of
   history; premium shows 30. Same principle — the data isn't deleted,
   just filtered on read.
 

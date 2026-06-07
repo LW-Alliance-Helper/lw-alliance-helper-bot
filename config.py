@@ -15,7 +15,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from defaults import (
@@ -216,7 +216,10 @@ def init_db():
                 dm_enabled             INTEGER DEFAULT 0,
                 dm_template            TEXT    DEFAULT '',
                 engineer_doubling      INTEGER DEFAULT 0,
-                scarcity_priority      TEXT    DEFAULT 'alphabetical'
+                scarcity_priority      TEXT    DEFAULT 'alphabetical',
+                reliability_enabled       INTEGER DEFAULT 0,
+                reliability_tab           TEXT    DEFAULT '',
+                reliability_column        TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -733,6 +736,19 @@ def init_db():
         """)
         conn.commit()
 
+        # loop_heartbeat — one row per background loop (NOT per guild). Each
+        # `@tasks.loop` body stamps `last_tick_at` (UTC ISO) at the end of a
+        # clean tick; on_ready compares the gap to detect outages and drive
+        # the catch-up digest (#227). last_tick_at is UTC ISO8601 like every
+        # other timestamp column.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS loop_heartbeat (
+                loop_name    TEXT PRIMARY KEY,
+                last_tick_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -1001,6 +1017,12 @@ def init_db():
             ("dm_template", "TEXT    DEFAULT ''"),
             ("engineer_doubling", "INTEGER DEFAULT 0"),
             ("scarcity_priority", "TEXT    DEFAULT 'alphabetical'"),
+            # Engineer reliability ranking (#303): optional 1-5 column the
+            # alliance maintains (anywhere they like), used to order engineers
+            # so the most reliable pair with the strongest War Leaders.
+            ("reliability_enabled", "INTEGER DEFAULT 0"),
+            ("reliability_tab", "TEXT    DEFAULT ''"),
+            ("reliability_column", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -1008,6 +1030,14 @@ def init_db():
                 print(f"[CONFIG] Added {col} to guild_buddy_config")
             except Exception:
                 pass
+        # Reliability matching mirrors the Power Data Source's match column, so the
+        # short-lived per-buddy reliability_match_column (dev-only, #303) is dropped.
+        try:
+            conn.execute("ALTER TABLE guild_buddy_config DROP COLUMN reliability_match_column")
+            conn.commit()
+            print("[CONFIG] Dropped reliability_match_column from guild_buddy_config")
+        except Exception:
+            pass
 
         # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
         for col, definition in [
@@ -4028,6 +4058,50 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
         conn.commit()
 
 
+def stamp_loop_heartbeat(loop_name: str) -> None:
+    """Record that `loop_name` completed a clean tick just now (UTC ISO).
+
+    Called at the END of each background loop's body so that on_ready can
+    measure the gap since the last tick and detect an outage window for the
+    catch-up digest (#227). One row per loop, never per guild — if the
+    scheduler ticked at 8:12, every guild's scheduler-driven posts are
+    considered current up to 8:12."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO loop_heartbeat (loop_name, last_tick_at) VALUES (?, ?) "
+            "ON CONFLICT(loop_name) DO UPDATE SET last_tick_at = excluded.last_tick_at",
+            (loop_name, now_iso),
+        )
+        conn.commit()
+
+
+def get_loop_heartbeat(loop_name: str) -> Optional[datetime]:
+    """Return the last clean-tick time for `loop_name` as a tz-aware UTC
+    datetime, or `None` when the loop has never stamped (fresh DB, or a loop
+    that hasn't ticked since this column shipped). The catch-up scan treats
+    `None` as "no baseline, don't infer an outage" so a first-ever boot
+    doesn't fire a spurious digest."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_tick_at FROM loop_heartbeat WHERE loop_name = ?",
+            (loop_name,),
+        ).fetchone()
+    if row is None:
+        return None
+    raw = dict(row).get("last_tick_at") or ""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    # Older rows could be naive; treat naive as UTC.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def has_member_roster_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_member_roster_config` —
     i.e. they have run `the Member Roster setup wizard` at least once.
@@ -4463,6 +4537,10 @@ _TRAIN_ROTATION_FIELDS = {
     "rule_type_roles",
     "counted_reasons",
     "active_schedule_preset",
+    # Rotation reuses the reminder channel + time; the train setup rotation step
+    # may set them when legacy reminders are off (#302).
+    "reminder_channel_id",
+    "reminder_time",
 }
 
 
@@ -4496,6 +4574,9 @@ _BUDDY_DEFAULTS = {
     "dm_template": "",
     "engineer_doubling": 0,
     "scarcity_priority": "alphabetical",
+    "reliability_enabled": 0,
+    "reliability_tab": "",
+    "reliability_column": "",
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

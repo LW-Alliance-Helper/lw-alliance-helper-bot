@@ -2,9 +2,9 @@
 train.py — Train schedule blurb generator + schedule management
 
 Slash commands (leadership role + channel only):
-  /train overview     — View the schedule with Add / Update / Generate Prompt / Clear buttons
-  /train log [date]   — Show recent prompt log entries (defaults to last 14 days)
-  /train birthdays    — Manually run the birthday check now
+  /train              — Train hub (📋 Schedule overview, 📜 Prompt log,
+                        🎂 Run birthday check; rotation guilds also get
+                        📋 This week's draft / 📅 Schedule presets / 👤 Member rules)
   /birthdays          — Show upcoming birthdays in the next 14 days (standalone)
   /cancel             — Cancel any active wizard session (standalone)
 
@@ -535,7 +535,10 @@ class ReminderView(discord.ui.View):
         view stopped listening — clicks fail with 'Interaction failed'."""
         from wizard_registry import expire_view_message
 
-        await expire_view_message(self.message, command_hint="/train overview")
+        await expire_view_message(
+            self.message,
+            command_hint="`/train` → 📋 Schedule overview → 📋 Generate Prompt",
+        )
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):

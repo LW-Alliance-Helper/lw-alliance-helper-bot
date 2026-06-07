@@ -1018,6 +1018,7 @@ class SurveyCog(commands.Cog):
             list_scheduled_survey_reminders,
             update_survey_reminder_last_fired,
             get_config as _get_config,
+            stamp_loop_heartbeat,
         )
         import premium as _prem
 
@@ -1118,6 +1119,9 @@ class SurveyCog(commands.Cog):
                 # attributed to the offending row.
                 gid = entry.get("guild_id", "?")
                 print(f"[SURVEY] Error firing scheduled reminder for guild {gid}: {e}")
+
+        # Clean tick — stamp liveness for the outage catch-up scan (#227).
+        stamp_loop_heartbeat("survey_reminder")
 
     @check_scheduled_reminders.before_loop
     async def _before_check_scheduled(self):

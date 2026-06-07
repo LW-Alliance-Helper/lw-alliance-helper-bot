@@ -1964,10 +1964,10 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         embed.set_footer(
             text=(
                 "💾 Auto-saving as you go. Close anytime; resume from "
-                "/desertstorm signups → ♻️ Resume Team X."
+                "/desertstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
                 if session.event_type == "DS"
                 else "💾 Auto-saving as you go. Close anytime; resume from "
-                "/canyonstorm signups → ♻️ Resume Team X."
+                "/canyonstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
             )
         )
     return embed
@@ -2713,10 +2713,10 @@ class RosterBuilderView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             if s.is_structured:
-                hub_cmd = "/desertstorm signups" if s.event_type == "DS" else "/canyonstorm signups"
+                hub_cmd = "/desertstorm" if s.event_type == "DS" else "/canyonstorm"
                 close_msg = (
                     f"👋 Builder closed. **Your draft is saved** — "
-                    f"come back via `{hub_cmd}` and click "
+                    f"come back via `{hub_cmd}` → **👁️ View sign-ups + set up teams** and click "
                     f"**♻️ Resume Team {s.team}** to pick up where "
                     f"you left off."
                 )

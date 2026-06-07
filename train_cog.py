@@ -2,8 +2,8 @@
 train_cog.py — TrainCog (slash commands + reminder loop) for the train module.
 
 Hosts:
-  /train overview, /train log, /train birthdays   (the /train group)
-  /birthdays, /cancel                             (standalone top-level)
+  /train                          (the train hub — schedule, prompt log, birthdays)
+  /birthdays, /cancel             (standalone top-level)
   + check_reminder background task
 
 Kept separate from train.py to keep that file at a manageable size.
@@ -229,7 +229,7 @@ class TrainCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def check_reminder(self):
-        from config import get_config, get_train_config
+        from config import get_config, get_train_config, stamp_loop_heartbeat
         from zoneinfo import ZoneInfo
 
         now = datetime.now(tz=ET)
@@ -261,8 +261,8 @@ class TrainCog(commands.Cog):
                 # lines up with 00:00 server time, the alliance's nightly
                 # reset. Exact-minute trigger matches the Discord birthday
                 # announcement pattern below; if Railway is restarting
-                # across that minute, /train birthdays is the manual
-                # escape hatch. Dedup persists in
+                # across that minute, the /train hub's 🎂 Run birthday
+                # check button is the manual escape hatch. Dedup persists in
                 # `guild_birthday_config.last_train_population_date` so
                 # Railway redeploys at 22:00 don't re-fire — the previous
                 # in-memory set was wiped on every restart (#89).
@@ -299,8 +299,8 @@ class TrainCog(commands.Cog):
                                         await alert_channel.send(alert)
                             # Stamp *after* a successful run so a mid-fire
                             # crash leaves the day un-stamped and a manual
-                            # `/train birthdays` (or the next deploy)
-                            # can retry.
+                            # /train → 🎂 Run birthday check (or the next
+                            # deploy) can retry.
                             mark_birthday_population_fired(guild.id, today_iso)
                         except Exception as e:
                             import traceback
@@ -463,7 +463,7 @@ class TrainCog(commands.Cog):
                     f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
-                    f"⚠️ *If the button stops working after a bot restart, use `/train overview` → 📋 Generate Prompt instead.*"
+                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Schedule overview → 📋 Generate Prompt instead.*"
                 )
                 view.message = await channel.send(msg, view=view)
             else:
@@ -484,6 +484,11 @@ class TrainCog(commands.Cog):
                 name,
                 content=_render_dm_body(train_dm_tmpl, name=name),
             )
+
+        # Clean tick — stamp liveness for the outage catch-up scan (#227).
+        # One heartbeat covers both surfaces in this loop (the birthday
+        # Discord announcement and the train daily reminder).
+        stamp_loop_heartbeat("train_reminder")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

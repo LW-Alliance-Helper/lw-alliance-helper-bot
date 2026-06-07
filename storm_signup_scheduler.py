@@ -203,6 +203,11 @@ async def storm_signup_loop_task():
         await _run_one_tick(bot)
     except Exception as e:
         logger.exception("[STORM SCHEDULER] tick crashed: %s", e)
+        return
+    # Clean tick — stamp liveness for the outage catch-up scan (#227).
+    from config import stamp_loop_heartbeat
+
+    stamp_loop_heartbeat("storm_signup")
 
 
 @storm_signup_loop_task.before_loop

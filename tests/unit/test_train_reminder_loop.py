@@ -161,6 +161,9 @@ async def _run_loop(
         patch("train_cog.load_schedule", return_value=schedule),
         patch("dm.send_dm", send_dm_spy),
         patch("dm.mention_or_name", mention_fn),
+        # The loop stamps a heartbeat at the end of each tick (#227); these
+        # tests run without a real DB, so no-op it.
+        patch("config.stamp_loop_heartbeat"),
     ):
         await type(cog).check_reminder.coro(cog)
 

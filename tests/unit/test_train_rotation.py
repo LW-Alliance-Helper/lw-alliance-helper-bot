@@ -35,17 +35,40 @@ def _posted(member, d, reason="auto"):
 # ── rotation_counts ──────────────────────────────────────────────────────────
 
 
-def test_rotation_counts_only_posted_and_counted():
+def test_rotation_counts_whole_sheet_is_fact_excludes_only_named_noncounted():
+    # The whole sheet counts as fact: posted AND scheduled rows count. Only a
+    # named non-counted reason (birthday) is excluded.
     history = [
         _posted("Alice", "2026-05-01", "auto"),
         _posted("Alice", "2026-05-08", "auto"),
-        _posted("Alice", "2026-05-15", "birthday"),  # non-counted reason
-        HistoryRow("2026-05-22", "Alice", "auto", STATUS_SCHEDULED),  # not posted
+        _posted("Alice", "2026-05-15", "birthday"),  # named non-counted reason → excluded
+        HistoryRow("2026-05-22", "Alice", "auto", STATUS_SCHEDULED),  # scheduled still counts
         _posted("Bob", "2026-05-02", "leadership"),
     ]
     counts = tr.rotation_counts(history, COUNTED)
-    assert counts["alice"] == 2  # birthday + scheduled excluded
+    assert counts["alice"] == 3  # 2 posted + 1 scheduled; birthday excluded
     assert counts["bob"] == 1
+
+
+def test_rotation_counts_backfill_blank_reason_and_status_count():
+    # Leadership back-fill: just Date + Member, no reason or status. Counts.
+    history = [
+        HistoryRow("2026-05-01", "Alice", "", ""),
+        HistoryRow("2026-05-08", "Alice", "", ""),
+        HistoryRow("2026-05-02", "Bob", "", ""),
+    ]
+    counts = tr.rotation_counts(history, COUNTED)
+    assert counts["alice"] == 2
+    assert counts["bob"] == 1
+
+
+def test_rotation_counts_before_excludes_drafted_week_and_future():
+    history = [
+        HistoryRow("2026-05-25", "Alice", "", ""),  # before the drafted week → counts
+        HistoryRow("2026-06-01", "Alice", "", ""),  # the drafted week itself → excluded
+        HistoryRow("2026-06-10", "Alice", "", ""),  # future → excluded
+    ]
+    assert tr.rotation_counts(history, COUNTED, before=MONDAY)["alice"] == 1
 
 
 def test_rotation_counts_case_insensitive_member_key():
@@ -53,12 +76,38 @@ def test_rotation_counts_case_insensitive_member_key():
     assert tr.rotation_counts(history, COUNTED)["alice"] == 2
 
 
-def test_last_driven_uses_all_posted_reasons():
+def test_last_driven_uses_all_reasons():
     history = [
         _posted("Alice", "2026-05-01", "auto"),
         _posted("Alice", "2026-05-20", "birthday"),  # non-counted but still drove
     ]
     assert tr.last_driven_dates(history)["alice"] == "2026-05-20"
+
+
+# ── identity: Discord-ID-first, name fallback ─────────────────────────────────
+
+
+def test_canonicalize_history_maps_id_to_current_name():
+    roster = [{"name": "NewName", "discord_id": "111"}]
+    history = [HistoryRow("2026-05-01", "OldName", "auto", STATUS_POSTED, discord_id="111")]
+    assert tr.canonicalize_history(history, roster)[0].member == "NewName"
+
+
+def test_canonicalize_history_name_fallback_when_no_id():
+    roster = [{"name": "NewName", "discord_id": "111"}]
+    history = [HistoryRow("2026-05-01", "SomeName", "auto", STATUS_POSTED, discord_id="")]
+    assert tr.canonicalize_history(history, roster)[0].member == "SomeName"
+
+
+def test_renamed_member_record_unified_by_id():
+    # A member who changed display name keeps one record via their Discord ID.
+    roster = [{"name": "Current", "discord_id": "111"}]
+    history = [
+        HistoryRow("2026-05-01", "Old", "auto", STATUS_POSTED, discord_id="111"),
+        HistoryRow("2026-05-08", "Current", "auto", STATUS_POSTED, discord_id="111"),
+    ]
+    canon = tr.canonicalize_history(history, roster)
+    assert tr.rotation_counts(canon, COUNTED)["current"] == 2  # not split across names
 
 
 # ── member-rule filtering ────────────────────────────────────────────────────
@@ -164,9 +213,32 @@ def test_tie_broken_by_oldest_last_driven():
     assert member == "Bob"
 
 
-def test_tie_fully_equal_breaks_by_name_deterministically():
-    member, _, _ = _select_auto(["Bravo", "Alpha"], [])
-    assert member == "Alpha"  # deterministic, name tiebreak
+def test_tie_fully_equal_is_stable_random_not_alphabetical():
+    # Genuine dead heat (empty history). The pick is stable for a given day and
+    # independent of candidate order, but NOT alphabetical.
+    a = _select_auto(["Bravo", "Alpha"], [])[0]
+    b = _select_auto(["Alpha", "Bravo"], [])[0]
+    assert a == b  # same day → same pick regardless of incoming order
+    assert a in {"Alpha", "Bravo"}
+    assert a == "Bravo"  # 2026-06-01 resolves to Bravo — proves it's not name order
+
+
+def test_tie_random_varies_across_days():
+    # Seeded by the date, so different days resolve differently across a pool —
+    # a new alliance gets a varied week, not the same alphabetical name daily.
+    def pick(day):
+        return tr.select_conductor(
+            DayRule(0, tr.RULE_AUTO),
+            target_date=date(2026, 6, day),
+            eligible_pool=["Alpha", "Bravo"],
+            role_pools={},
+            member_rules=[],
+            history=[],
+            counted_reasons=COUNTED,
+            already_scheduled=set(),
+        )[0]
+
+    assert {pick(d) for d in range(1, 15)} == {"Alpha", "Bravo"}
 
 
 def test_already_scheduled_excluded():

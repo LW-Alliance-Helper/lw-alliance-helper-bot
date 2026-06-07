@@ -18,14 +18,24 @@ Two layers live here:
 Free tier — there is no premium gating anywhere in this module. Rotation
 tracking is baseline alliance management; see #55's tier-strategy note.
 
-The selection algorithm is deliberately **deterministic**: the `random`
-day rule means "pick the next person by rotation fairness", not a coin
-flip. Equal rotation counts break by oldest last-driven date, then by name,
-so the same inputs always produce the same draft (which is what makes it
-testable and what makes the weekly draft reproducible if regenerated).
+The selection algorithm picks the **fairest** conductor: fewest counted
+drives first, ties broken by the oldest last-driven date. A remaining tie
+(a brand-new alliance where everyone is at zero, or a genuine dead heat)
+is broken by a **stable random** draw — seeded by the day's date so the
+same day always resolves to the same person (the draft doesn't reshuffle
+when you reopen or re-draft it), but new alliances no longer collapse to
+alphabetical order.
+
+Fairness counts the **whole** Train History sheet as fact: every row with a
+member counts as a drive (no "posted" confirmation or reason required — a
+blank reason counts), so leadership can back-fill past drives just by adding
+rows. Only the week currently being drafted (and anything dated on/after it)
+is excluded so a week can't skew its own selection. Members are matched
+**Discord-ID-first, name-as-fallback**, so a renamed member keeps one record.
 """
 
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 # ── Day-of-week ──────────────────────────────────────────────────────────────
@@ -169,7 +179,10 @@ BIRTHDAY_DISABLED = "disabled"  # birthdays don't drive train selection (default
 BIRTHDAY_MODES = [BIRTHDAY_OVERRIDE, BIRTHDAY_DISABLED]
 
 # ── Sheet headers ────────────────────────────────────────────────────────────
-HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At", "Notes"]
+# "Discord ID" is appended (not inserted) so existing six-column sheets keep
+# working untouched — old rows just have a blank seventh cell. It's the
+# identity key (name is the fallback) so a renamed member keeps one record.
+HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At", "Notes", "Discord ID"]
 MEMBER_RULES_HEADER = ["Member", "Rule Type", "Value", "Notes"]
 DAY_RULES_HEADER = [
     "Preset Name",
@@ -236,6 +249,7 @@ class HistoryRow:
     status: str
     posted_at: str = ""
     notes: str = ""
+    discord_id: str = ""  # identity key; blank → match by name (older / hand-typed rows)
 
 
 @dataclass
@@ -289,40 +303,87 @@ def _parse_iso(value: str) -> date | None:
         return None
 
 
+# ── Identity (Discord-ID-first, name fallback) ───────────────────────────────
+
+
+def canonicalize_history(history: list[HistoryRow], roster: list[dict]) -> list[HistoryRow]:
+    """Rewrite each history row's member to the roster's current name when the
+    row carries a Discord ID that matches a roster member.
+
+    This is what makes matching Discord-ID-first: a member who changed their
+    display name keeps one unbroken record because every ID-tagged row maps to
+    the same canonical name the rotation pools use. Rows with no ID (older rows,
+    or a quick name-only back-fill) keep their stored name and fall back to
+    name matching, exactly as before."""
+    id_to_name = {
+        str(m["discord_id"]).strip(): m["name"]
+        for m in roster
+        if str(m.get("discord_id") or "").strip() and m.get("name")
+    }
+    if not id_to_name:
+        return list(history)
+    out: list[HistoryRow] = []
+    for r in history:
+        did = str(r.discord_id or "").strip()
+        if did and did in id_to_name:
+            out.append(replace(r, member=id_to_name[did]))
+        else:
+            out.append(r)
+    return out
+
+
+def _counts_as_drive(row: HistoryRow, counted_reasons: set[str], before: date | None) -> bool:
+    """True if a history row counts as a real, past drive toward fairness.
+
+    The whole sheet is fact: any row with a member counts — no `posted` status
+    or reason required, and a blank reason counts as a normal drive. Only a
+    *named* non-counted reason (birthday / welcome) is excluded, and only rows
+    dated before `before` count when a boundary is given (so the week being
+    drafted, and any future-dated rows, can't skew the selection)."""
+    if not _norm(row.member):
+        return False
+    if before is not None and row.date and row.date >= before.isoformat():
+        return False
+    # Blank reason → counts. A named reason must be in the counted set.
+    if row.reason and row.reason not in counted_reasons:
+        return False
+    return True
+
+
 # ── Rotation counting ────────────────────────────────────────────────────────
 
 
-def rotation_counts(history: list[HistoryRow], counted_reasons: set[str]) -> dict[str, int]:
-    """How many counted, posted trains each member has driven.
+def rotation_counts(
+    history: list[HistoryRow], counted_reasons: set[str], *, before: date | None = None
+) -> dict[str, int]:
+    """How many counted trains each member has driven, keyed by norm name.
 
-    Keyed by normalised name. Only `posted` rows whose reason is in
-    `counted_reasons` count — that's what excludes birthday / welcome / event
-    trains from the fairness rotation."""
+    Counts the whole sheet as fact: every row with a member is a drive (no
+    `posted` status or reason required, blank reason counts) except named
+    non-counted reasons (birthday / welcome). `before` excludes the week being
+    drafted and any future-dated rows so a week can't skew its own selection."""
     counts: dict[str, int] = {}
     for row in history:
-        if row.status != STATUS_POSTED:
-            continue
-        if row.reason not in counted_reasons:
+        if not _counts_as_drive(row, counted_reasons, before):
             continue
         key = _norm(row.member)
-        if not key:
-            continue
         counts[key] = counts.get(key, 0) + 1
     return counts
 
 
-def last_driven_dates(history: list[HistoryRow]) -> dict[str, str]:
-    """Most recent `posted` date per member (any reason), keyed by norm name.
+def last_driven_dates(history: list[HistoryRow], *, before: date | None = None) -> dict[str, str]:
+    """Most recent drive date per member (any reason), keyed by norm name.
 
-    Uses ALL posted rows — including non-counted reasons — for the tie-break,
-    because a member who drove a birthday train yesterday has still *driven*
-    recently and shouldn't be first in line again over someone who hasn't."""
+    Uses ALL drives — including non-counted reasons — for the tie-break, because
+    a member who drove a birthday train yesterday has still *driven* recently and
+    shouldn't be first in line again over someone who hasn't. `before` excludes
+    the drafted week and future rows, matching `rotation_counts`."""
     last: dict[str, str] = {}
     for row in history:
-        if row.status != STATUS_POSTED:
-            continue
         key = _norm(row.member)
         if not key or not row.date:
+            continue
+        if before is not None and row.date >= before.isoformat():
             continue
         if key not in last or row.date > last[key]:
             last[key] = row.date
@@ -358,19 +419,33 @@ def _lowest_rotation(
     candidates: list[str],
     history: list[HistoryRow],
     counted_reasons: set[str],
+    *,
+    before: date | None = None,
+    seed: str | None = None,
 ) -> str:
-    """Pick the fairest candidate: lowest rotation count, ties broken by oldest
-    last-driven date, then by name for determinism. Never-driven members sort
-    first (count 0, empty last-driven date)."""
-    counts = rotation_counts(history, counted_reasons)
-    last = last_driven_dates(history)
+    """Pick the fairest candidate: fewest drives, ties broken by oldest
+    last-driven date, then a **stable random** draw among whoever is still tied.
 
-    def sort_key(m: str):
+    Never-driven members rank first (count 0, empty last-driven date). When two
+    or more candidates are genuinely equal (a new alliance, or a real dead heat)
+    the winner is drawn with an RNG seeded by `seed` (the day's date) — so the
+    pick is random across days but stable for any given day, instead of always
+    falling to the alphabetically-first name."""
+    counts = rotation_counts(history, counted_reasons, before=before)
+    last = last_driven_dates(history, before=before)
+
+    def rank(m: str):
         key = _norm(m)
         # last.get → "" for never-driven, which sorts before any ISO date.
-        return (counts.get(key, 0), last.get(key, ""), key)
+        return (counts.get(key, 0), last.get(key, ""))
 
-    return min(candidates, key=sort_key)
+    best = min(rank(m) for m in candidates)
+    # Sort the tied set by name first so the RNG draw is reproducible regardless
+    # of the candidate list's incoming order.
+    tied = sorted((m for m in candidates if rank(m) == best), key=_norm)
+    if len(tied) == 1:
+        return tied[0]
+    return random.Random(seed).choice(tied)
 
 
 def select_conductor(
@@ -383,6 +458,7 @@ def select_conductor(
     history: list[HistoryRow],
     counted_reasons: set[str],
     already_scheduled: set[str],
+    before: date | None = None,
 ) -> tuple[str | None, str, bool]:
     """Resolve a single day's conductor.
 
@@ -443,7 +519,13 @@ def select_conductor(
     if not candidates:
         return None, reason, True
 
-    return _lowest_rotation(candidates, history, counted_reasons), reason, False
+    return (
+        _lowest_rotation(
+            candidates, history, counted_reasons, before=before, seed=target_date.isoformat()
+        ),
+        reason,
+        False,
+    )
 
 
 # ── Weekly draft generation ──────────────────────────────────────────────────
@@ -577,6 +659,7 @@ def generate_week_draft(
             history=history,
             counted_reasons=counted,
             already_scheduled=already,
+            before=week_start,
         )
         if member:
             already.add(_norm(member))
@@ -625,24 +708,40 @@ def reroll_day(
     candidates = fresh or eligible
     if not candidates:
         return None, reason, True
-    return _lowest_rotation(candidates, history, counted_reasons), reason, False
+    # Exclude the drafted week (and future) from counting, matching the weekly
+    # draft, and seed the tie-break by the day so re-rolls are stable.
+    before = target_date - timedelta(days=target_date.weekday())
+    return (
+        _lowest_rotation(
+            candidates, history, counted_reasons, before=before, seed=target_date.isoformat()
+        ),
+        reason,
+        False,
+    )
 
 
-def leaderboard(history: list[HistoryRow], counted_reasons: set[str]) -> list[tuple[str, int, str]]:
+def leaderboard(
+    history: list[HistoryRow], counted_reasons: set[str], *, before: date | None = None
+) -> list[tuple[str, int, str]]:
     """Build a leaderboard: (member, count, last_driven_iso) sorted by count
-    desc then most-recent. Member names are the display form from history."""
+    desc then most-recent. Member names are the display form from history.
+
+    Counts the whole sheet as fact, matching `rotation_counts` (any membered row
+    counts, blank reason included; named non-counted reasons excluded). The
+    last-driven column uses all drives regardless of reason. `before` excludes
+    future-dated rows so the all-time view shows what's actually happened."""
     counted = set(counted_reasons)
     counts: dict[str, int] = {}
     last: dict[str, str] = {}
     display: dict[str, str] = {}  # norm → first-seen display name
     for row in history:
-        if row.status != STATUS_POSTED:
-            continue
         key = _norm(row.member)
         if not key:
             continue
+        if before is not None and row.date and row.date >= before.isoformat():
+            continue
         display.setdefault(key, row.member)
-        if row.reason in counted:
+        if _counts_as_drive(row, counted, before):
             counts[key] = counts.get(key, 0) + 1
         if row.date and (key not in last or row.date > last[key]):
             last[key] = row.date
@@ -667,7 +766,9 @@ def member_tally(
     point of the "fewest trains" view. Opted-out / skip_until members are omitted
     *unless* they already appear in history (they did drive, so the record of it
     stays honest). Unsorted; callers pick a sort via `sort_tally`."""
-    rows = list(leaderboard(history, counted_reasons))
+    # before = tomorrow → count through today, exclude future-dated (scheduled
+    # next-week) rows so they don't inflate the all-time "fewest trains" view.
+    rows = list(leaderboard(history, counted_reasons, before=today + timedelta(days=1)))
     seen = {_norm(name) for (name, _c, _l) in rows}
     for name in roster_names:
         key = _norm(name)
@@ -802,6 +903,20 @@ def roster_names(roster: list[dict]) -> list[str]:
     return [m["name"] for m in roster if m.get("name")]
 
 
+def roster_id_map(guild_id: int) -> dict[str, str]:
+    """Norm-name → Discord ID for the alliance roster.
+
+    Used to stamp the Discord ID on history rows the bot writes, so a member's
+    record survives a later display-name change (the ID becomes the match key,
+    the name the fallback). A name not on the roster maps to "" — name-only, as
+    before."""
+    return {
+        _norm(m["name"]): str(m.get("discord_id") or "")
+        for m in load_roster_members(guild_id)
+        if m.get("name")
+    }
+
+
 def role_pool_from_roster(roster: list[dict], role_discord_ids: set[str]) -> list[str]:
     """Roster members whose Discord ID carries a given role.
 
@@ -839,13 +954,14 @@ def load_history(guild_id: int, tab_name: str) -> list[HistoryRow]:
                 status=_cell(row, 3).lower(),
                 posted_at=_cell(row, 4),
                 notes=_cell(row, 5),
+                discord_id=_cell(row, 6),
             )
         )
     return out
 
 
 def _history_to_row(h: HistoryRow) -> list[str]:
-    return [h.date, h.member, h.reason, h.status, h.posted_at, h.notes]
+    return [h.date, h.member, h.reason, h.status, h.posted_at, h.notes, h.discord_id]
 
 
 def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> bool:
@@ -864,6 +980,7 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
         print(f"[TRAIN ROTATION] write_draft read-back failed for guild {guild_id}: {e}")
         return False
 
+    id_map = roster_id_map(guild_id)
     draft_dates = {dd.date for dd in draft}
     kept = [row for row in values[1:] if _cell(row, 0) and _cell(row, 0) not in draft_dates]
     new_rows = [
@@ -875,6 +992,7 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
                 status=STATUS_SCHEDULED,
                 posted_at="",
                 notes=dd.note,
+                discord_id=id_map.get(_norm(dd.member or ""), ""),
             )
         )
         for dd in draft
@@ -915,6 +1033,7 @@ def set_day_status(
             status=status,
             posted_at=posted_at,
             notes=notes,
+            discord_id=roster_id_map(guild_id).get(_norm(member), ""),
         )
     )
     body = values[1:]

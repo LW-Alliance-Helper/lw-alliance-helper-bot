@@ -110,7 +110,11 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
             )
 
     member_rules = tr.load_member_rules(guild_id, cfg.get("member_rules_tab") or "")
-    history = tr.load_history(guild_id, cfg.get("history_tab") or "")
+    # Canonicalize ID-tagged history rows to the roster's current names so a
+    # renamed member keeps one record (name-only rows fall back as-is).
+    history = tr.canonicalize_history(
+        tr.load_history(guild_id, cfg.get("history_tab") or ""), roster
+    )
     counted = tr.parse_counted_reasons(cfg.get("counted_reasons"))
 
     return RotationState(
@@ -127,6 +131,20 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
 def week_start_for(d: date) -> date:
     """The Monday on or before `d` (weekday() 0 = Monday)."""
     return d - timedelta(days=d.weekday())
+
+
+def default_draft_week(today: date, draft_day: int) -> date:
+    """The week (Monday) the draft view should open to by default.
+
+    The current week, except on the configured weekly draft day (Sunday by
+    default), where it previews the **upcoming** week — matching the auto-posted
+    draft. This is the fix for opening `/train` on a Sunday and getting the week
+    that's ending instead of the one being planned (#304). Leadership can still
+    step to any week with the view's ◀ / ▶ buttons."""
+    cur = week_start_for(today)
+    if today.weekday() == draft_day:
+        return cur + timedelta(days=7)
+    return cur
 
 
 def _guild_today(bot, guild_id: int) -> date:
@@ -1050,8 +1068,23 @@ class WeeklyDraftView(discord.ui.View):
 
     def _rebuild(self):
         self.clear_items()
+        # Week navigation (row 0) — pick which week to view / draft. Opening the
+        # hub on a Sunday lands on the upcoming week (see the hub default), and
+        # these let leadership step to any week from there.
+        prev_btn = discord.ui.Button(
+            label="◀ Previous week", style=discord.ButtonStyle.secondary, row=0
+        )
+        prev_btn.callback = self._on_prev_week
+        self.add_item(prev_btn)
+        next_btn = discord.ui.Button(
+            label="Next week ▶", style=discord.ButtonStyle.secondary, row=0
+        )
+        next_btn.callback = self._on_next_week
+        self.add_item(next_btn)
+
         day_select = discord.ui.Select(
             placeholder="📅 Pick a day to adjust…",
+            row=1,
             options=[
                 discord.SelectOption(
                     label=f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}",
@@ -1072,9 +1105,30 @@ class WeeklyDraftView(discord.ui.View):
             ("✋ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
             ("🔄 Re-draft the whole week", discord.ButtonStyle.danger, self._on_regen),
         ]:
-            btn = discord.ui.Button(label=label, style=style)
+            btn = discord.ui.Button(label=label, style=style, row=2)
             btn.callback = cb
             self.add_item(btn)
+
+    async def _on_prev_week(self, interaction: discord.Interaction):
+        await self._shift_week(interaction, -7)
+
+    async def _on_next_week(self, interaction: discord.Interaction):
+        await self._shift_week(interaction, 7)
+
+    async def _shift_week(self, interaction: discord.Interaction, days: int):
+        """Move the view to another week and reload that week's draft. Existing
+        weeks reconstruct from their saved rows; an empty future week generates a
+        fresh draft (load_week_draft handles both)."""
+        if not _is_leader(interaction):
+            await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
+            return
+        await interaction.response.defer()
+        self.week_start = self.week_start + timedelta(days=days)
+        self.selected_iso = None
+        self.draft = await asyncio.to_thread(
+            load_week_draft, self.bot, self.guild_id, self.week_start
+        )
+        await self._refresh(interaction)
 
     async def _guard_day(self, interaction: discord.Interaction) -> tr.DraftDay | None:
         if not _is_leader(interaction):

@@ -195,12 +195,16 @@ class _TrainHubView(discord.ui.View):
 async def _open_week_draft(bot, interaction: discord.Interaction):
     await interaction.response.defer()
     guild_id = interaction.guild_id
-    today = ui._guild_today(bot, guild_id)
-    week_start = ui.week_start_for(today)
-    draft = await asyncio.to_thread(ui.load_week_draft, bot, guild_id, week_start)
     from config import get_train_config
 
-    preset_name = get_train_config(guild_id).get("active_schedule_preset") or "Standard Week"
+    tcfg = get_train_config(guild_id)
+    today = ui._guild_today(bot, guild_id)
+    # Default to the week leadership is most likely planning: the current week,
+    # but the upcoming week once it's the configured draft day (#304).
+    week_start = ui.default_draft_week(today, int(tcfg.get("weekly_draft_day", 6)))
+    draft = await asyncio.to_thread(ui.load_week_draft, bot, guild_id, week_start)
+
+    preset_name = tcfg.get("active_schedule_preset") or "Standard Week"
     view = ui.WeeklyDraftView(bot, guild_id, draft, week_start, preset_name)
     view.message = await interaction.followup.send(
         embed=ui.build_weekly_draft_embed(draft, week_start, preset_name), view=view

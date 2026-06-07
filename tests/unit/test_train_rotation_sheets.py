@@ -77,6 +77,27 @@ def test_history_write_draft_and_load_roundtrip(patched_tab):
     assert loaded[1].member == ""  # needs-picking row written with empty member
 
 
+def test_history_write_stamps_discord_id_from_roster(patched_tab):
+    # The bot resolves the conductor's Discord ID from the roster on write, so
+    # the row carries the identity key (name is only the fallback).
+    roster = [{"name": "Alice", "discord_id": "999"}]
+    with patch("train_rotation.load_roster_members", return_value=roster):
+        tr.write_draft_rows(
+            GID, "Train History", [DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Alice", "auto")]
+        )
+        tr.set_day_status(
+            GID,
+            "Train History",
+            "2026-06-02",
+            member="Alice",
+            reason="auto",
+            status=tr.STATUS_POSTED,
+        )
+    loaded = {h.date: h for h in tr.load_history(GID, "Train History")}
+    assert loaded["2026-06-01"].discord_id == "999"  # stamped on the scheduled draft row
+    assert loaded["2026-06-02"].discord_id == "999"  # and on the confirmed/posted row
+
+
 def test_history_write_draft_replaces_week_keeps_other_rows(patched_tab):
     # Seed an older posted row outside the draft week.
     tr.set_day_status(

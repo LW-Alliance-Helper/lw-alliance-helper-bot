@@ -579,6 +579,114 @@ class _MemberNameModal(discord.ui.Modal):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _roster_member_names(guild_id: int) -> list[str]:
+    """Distinct roster display names for the Specific-member picker. Empty when
+    no roster is configured / readable (caller falls back to free text)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in tr.load_roster_members(guild_id):
+        name = (r.get("name") or "").strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return out
+
+
+class _SpecificMemberPickerView(discord.ui.View):
+    """Roster-backed picker for a Specific-member day pin (#302): a dropdown of
+    roster members (25/page), plus a "Type a name instead" escape for anyone not
+    on the roster. Selecting applies the pin to the editor's preset and refreshes
+    it; the dropdown is hidden entirely when there's no roster to read."""
+
+    PAGE = 25
+
+    def __init__(
+        self, editor: "TrainPresetEditorView", names: list[str], *, current: str, day_name: str
+    ):
+        super().__init__(timeout=180)
+        self.editor = editor
+        self.names = names
+        self.current = current
+        self.day_name = day_name
+        self.page = 0
+        self._build()
+
+    @property
+    def total_pages(self) -> int:
+        return max(1, (len(self.names) + self.PAGE - 1) // self.PAGE)
+
+    def _build(self):
+        self.clear_items()
+        if self.names:
+            start = self.page * self.PAGE
+            page_names = self.names[start : start + self.PAGE]
+            sel = discord.ui.Select(
+                placeholder="Pick the member…",
+                options=[
+                    discord.SelectOption(label=n[:100], value=n[:100], default=(n == self.current))
+                    for n in page_names
+                ],
+                row=0,
+            )
+            sel.callback = self._on_select
+            self.add_item(sel)
+            if self.total_pages > 1:
+                prev = discord.ui.Button(
+                    label="◀ Prev",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page == 0,
+                    row=1,
+                )
+                prev.callback = self._prev
+                self.add_item(prev)
+                nxt = discord.ui.Button(
+                    label="Next ▶",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.page >= self.total_pages - 1,
+                    row=1,
+                )
+                nxt.callback = self._next
+                self.add_item(nxt)
+        typ = discord.ui.Button(
+            label="✏️ Type a name instead", style=discord.ButtonStyle.secondary, row=2
+        )
+        typ.callback = self._on_type
+        self.add_item(typ)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        name = interaction.data["values"][0]
+        for c in self.children:
+            c.disabled = True
+        self.stop()
+        try:
+            await interaction.response.edit_message(
+                content=f"📌 Pinned **{name}** to drive every {self.day_name}.", view=None
+            )
+        except discord.HTTPException:
+            pass
+        await self.editor._apply_specific_member(name)
+
+    async def _on_type(self, interaction: discord.Interaction):
+        self.stop()
+        await interaction.response.send_modal(
+            _MemberNameModal(
+                f"Specific member for every {self.day_name}",
+                self.editor._apply_from_modal,
+                current=self.current,
+            )
+        )
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+
 class TrainPresetEditorView(discord.ui.View):
     """Owner-locked live editor for one schedule preset. State held in
     `self.preset`; persisted to the Day Rules tab on Save."""
@@ -721,21 +829,46 @@ class TrainPresetEditorView(discord.ui.View):
             return
         day_name = tr.WEEKDAY_NAMES[self.editing_day]
         cur = self.preset.rule_for(self.editing_day).specific_member
-
-        async def _save_name(inter: discord.Interaction, name: str):
-            rule = self.preset.rule_for(self.editing_day)
-            rule.specific_member = name
-            self.preset.days[self.editing_day] = rule
-            self.dirty = True
-            self.ever_changed = True
-            await self._refresh(
-                inter,
-                content=f"📌 **{name}** will drive the train every **{day_name}**.",
-            )
-
-        await interaction.response.send_modal(
-            _MemberNameModal(f"Specific member for every {day_name}", _save_name, current=cur)
+        # Defer first (the roster read is a Sheets round-trip), then offer a
+        # picker built from the roster, with a type-a-name escape (#302).
+        await interaction.response.defer(ephemeral=True)
+        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+        view = _SpecificMemberPickerView(self, names, current=cur, day_name=day_name)
+        prompt = (
+            f"Pick who drives the train every **{day_name}**:"
+            if names
+            else "No roster is set up yet, so pick **Type a name instead** to enter the "
+            f"conductor for every **{day_name}**. (Set up Member Sync for a picker.)"
         )
+        await interaction.followup.send(prompt, view=view, ephemeral=True)
+
+    async def _apply_specific_member(self, name: str):
+        """Pin `name` to the day being edited and refresh the editor message.
+        Called by the roster picker (no triggering interaction of its own)."""
+        rule = self.preset.rule_for(self.editing_day)
+        rule.specific_member = name
+        self.preset.days[self.editing_day] = rule
+        self.dirty = True
+        self.ever_changed = True
+        self._rebuild()
+        if self.message:
+            try:
+                await self.message.edit(
+                    embed=build_preset_editor_embed(self.preset, dirty=self.dirty), view=self
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _apply_from_modal(self, interaction: discord.Interaction, name: str):
+        """Type-a-name path: ack the modal submit, then apply the pin."""
+        try:
+            await interaction.response.send_message(
+                f"📌 Pinned **{name}** to drive every {tr.WEEKDAY_NAMES[self.editing_day]}.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        await self._apply_specific_member(name)
 
     async def _on_save(self, interaction: discord.Interaction):
         if not await self._guard(interaction):

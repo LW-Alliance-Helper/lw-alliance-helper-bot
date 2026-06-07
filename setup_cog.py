@@ -3971,20 +3971,29 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         # Cancelled / timed out inside Step 9 — it already messaged the user.
         wizard_registry.unregister(user.id, cancel_event)
         return
+    # The message-driven wizard is done; the preset editor below is a
+    # self-contained component view, so release the wizard registration now.
+    wizard_registry.unregister(user.id, cancel_event)
     embed.add_field(
         name="Conductor Rotation",
         value=rot["summary"] if rot.get("enabled") else "Disabled",
         inline=not rot.get("enabled"),
     )
-    await channel.send(embed=embed)
 
+    # When a preset editor is opening, it's the active surface — let leadership
+    # finish (or close) it BEFORE the "Train Schedule Configured" summary lands,
+    # so the summary doesn't pop up above the thing they're still editing (#302).
     if rot.get("open_editor"):
         import train_rotation_ui as ui
 
-        await channel.send("Now lay out your weekly pattern below, then 💾 Save preset:")
-        await ui.post_preset_editor(channel, guild_id, user.id, rot["preset"], rot["day_rules_tab"])
+        await channel.send("Lay out your weekly pattern below, then 💾 Save preset:")
+        editor_view = await ui.post_preset_editor(
+            channel, guild_id, user.id, rot["preset"], rot["day_rules_tab"]
+        )
+        if editor_view is not None:
+            await editor_view.wait()
 
-    wizard_registry.unregister(user.id, cancel_event)
+    await channel.send(embed=embed)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
 

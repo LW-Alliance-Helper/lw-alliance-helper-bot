@@ -4520,6 +4520,10 @@ _TRAIN_ROTATION_FIELDS = {
     "rule_type_roles",
     "counted_reasons",
     "active_schedule_preset",
+    # Rotation reuses the reminder channel + time; the train setup rotation step
+    # may set them when legacy reminders are off (#302).
+    "reminder_channel_id",
+    "reminder_time",
 }
 
 

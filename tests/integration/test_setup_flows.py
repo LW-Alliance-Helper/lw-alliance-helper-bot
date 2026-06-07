@@ -294,9 +294,9 @@ class TestRunTrainSetup:
         rotation_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         remind_view = MagicMock(selected=False, wait=AsyncMock())
 
-        # YesNoView order in the main flow: blurbs → Auto Rotation → reminders.
+        # YesNoView order: blurbs → reminders → Conductor Rotation (Step 9).
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
             patch_keep_or_change(["My Train Tab"]),
         ):
             make_send_handler(interaction.channel)
@@ -324,7 +324,7 @@ class TestRunTrainSetup:
         ch_view = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
             patch("setup_cog.ChannelSelectStep", return_value=ch_view),
             patch_keep_or_change(["Train Schedule", "10:00pm"]),
         ):
@@ -406,7 +406,7 @@ class TestRunTrainSetup:
             wait=AsyncMock(),
         )
 
-        # Wizard step views: blurbs=No, Auto Rotation=No, reminders=Yes.
+        # Wizard step views: blurbs=No, reminders=Yes, Conductor Rotation=No.
         blurb_view = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         rotation_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
         remind_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
@@ -418,7 +418,7 @@ class TestRunTrainSetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, rotation_no, remind_view]),
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["My Tab", "10:00pm", ""]),
         ):

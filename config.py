@@ -216,7 +216,11 @@ def init_db():
                 dm_enabled             INTEGER DEFAULT 0,
                 dm_template            TEXT    DEFAULT '',
                 engineer_doubling      INTEGER DEFAULT 0,
-                scarcity_priority      TEXT    DEFAULT 'alphabetical'
+                scarcity_priority      TEXT    DEFAULT 'alphabetical',
+                reliability_enabled       INTEGER DEFAULT 0,
+                reliability_tab           TEXT    DEFAULT '',
+                reliability_column        TEXT    DEFAULT '',
+                reliability_match_column  TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -1014,6 +1018,13 @@ def init_db():
             ("dm_template", "TEXT    DEFAULT ''"),
             ("engineer_doubling", "INTEGER DEFAULT 0"),
             ("scarcity_priority", "TEXT    DEFAULT 'alphabetical'"),
+            # Engineer reliability ranking (#303): optional 1-5 column the
+            # alliance maintains (anywhere they like), used to order engineers
+            # so the most reliable pair with the strongest War Leaders.
+            ("reliability_enabled", "INTEGER DEFAULT 0"),
+            ("reliability_tab", "TEXT    DEFAULT ''"),
+            ("reliability_column", "TEXT    DEFAULT ''"),
+            ("reliability_match_column", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -4557,6 +4568,10 @@ _BUDDY_DEFAULTS = {
     "dm_template": "",
     "engineer_doubling": 0,
     "scarcity_priority": "alphabetical",
+    "reliability_enabled": 0,
+    "reliability_tab": "",
+    "reliability_column": "",
+    "reliability_match_column": "",
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

@@ -65,8 +65,13 @@ def _wl_priority(cfg: dict) -> str:
     return "power" if (cfg.get("scarcity_priority") == "strongest_first") else "name"
 
 
+def _eng_priority(cfg: dict) -> str:
+    return "reliability" if cfg.get("reliability_enabled") else "name"
+
+
 def _load_members(guild_id: int, cfg: dict) -> list:
-    """Read professions (and power when strongest_first) — sync, for to_thread.
+    """Read professions (plus power when strongest_first, reliability when the
+    reliability ranking is on) — sync, for to_thread.
 
     Squad Powers is authoritative; professions implied by the existing buddy
     tab (left = War Leader, middle/right = Engineer) fill in members who
@@ -79,6 +84,8 @@ def _load_members(guild_id: int, cfg: dict) -> list:
     members = buddy.merge_members(members, fallback)
     if _wl_priority(cfg) == "power":
         buddy.read_power_for_members(guild_id, members)
+    if _eng_priority(cfg) == "reliability":
+        buddy.read_reliability_for_members(guild_id, members)
     return members
 
 
@@ -91,6 +98,7 @@ def compute_current(guild_id: int, cfg: dict):
         pairs,
         engineer_doubling=bool(cfg.get("engineer_doubling")),
         wl_priority=_wl_priority(cfg),
+        eng_priority=_eng_priority(cfg),
         fill=False,
     )
 
@@ -104,6 +112,7 @@ def compute_autofill(guild_id: int, cfg: dict, *, from_scratch: bool = False):
         existing,
         engineer_doubling=bool(cfg.get("engineer_doubling")),
         wl_priority=_wl_priority(cfg),
+        eng_priority=_eng_priority(cfg),
         fill=True,
     )
 
@@ -287,11 +296,17 @@ def _apply_profession_change(
     btab = cfg.get("buddy_tab")
     dbl = bool(cfg.get("engineer_doubling"))
     prio = _wl_priority(cfg)
+    eprio = _eng_priority(cfg)
 
     members_before = _load_members(guild_id, cfg)
     pairs = buddy.load_pairs(guild_id, btab)
     before = buddy.assign_buddies(
-        members_before, pairs, engineer_doubling=dbl, wl_priority=prio, fill=False
+        members_before,
+        pairs,
+        engineer_doubling=dbl,
+        wl_priority=prio,
+        eng_priority=eprio,
+        fill=False,
     )
 
     if not buddy.write_profession_cell(guild_id, ptab, phdr, actor_id, actor_name, new_prof):
@@ -299,7 +314,7 @@ def _apply_profession_change(
 
     members_after = _load_members(guild_id, cfg)
     after = buddy.assign_buddies(
-        members_after, pairs, engineer_doubling=dbl, wl_priority=prio, fill=True
+        members_after, pairs, engineer_doubling=dbl, wl_priority=prio, eng_priority=eprio, fill=True
     )
     save_result(guild_id, cfg, after)
 
@@ -648,6 +663,7 @@ class BuddyManageView(discord.ui.View):
             pairs,
             engineer_doubling=bool(cfg.get("engineer_doubling")),
             wl_priority=_wl_priority(cfg),
+            eng_priority=_eng_priority(cfg),
             fill=False,
         )
         await asyncio.to_thread(save_result, self.guild_id, cfg, result)

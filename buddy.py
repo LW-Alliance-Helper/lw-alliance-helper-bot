@@ -667,11 +667,12 @@ def read_reliability_for_members(guild_id: int, members: list) -> None:
     """In-place: set ``Member.reliability`` from the alliance's configured
     reliability column (#303).
 
-    Mirrors ``read_power_for_members`` but reads the buddy-config reliability
-    tab/column/match the alliance maintains (a 1-5 number, higher = more
-    reliable). Only needed when ``reliability_enabled`` is on. Any failure (or a
-    blank/non-numeric cell) leaves reliability at 0.0 — the engineer sinks to
-    the bottom of their tier order."""
+    Mirrors ``read_power_for_members`` — reads the buddy-config reliability
+    tab + column (a 1-5 number, higher = more reliable) and matches members with
+    the same Power Data Source match column power reading uses. Only needed when
+    ``reliability_enabled`` is on. Any failure (or a blank/non-numeric cell)
+    leaves reliability at 0.0 — the engineer sinks to the bottom of their tier
+    order."""
     try:
         import config
         from storm_roster_builder import _build_cross_tab_power_index, _lookup_power_in_index
@@ -681,9 +682,13 @@ def read_reliability_for_members(guild_id: int, members: list) -> None:
         col_letter = (bcfg.get("reliability_column") or "").strip()
         if not tab or not col_letter:
             return
-        rcfg = config.get_member_roster_config(guild_id)
         rel_col = config.power_column_letter_to_index(col_letter)
-        match_letter = (bcfg.get("reliability_match_column") or "").strip()
+        # Match members the same way power reading does — reuse the alliance's
+        # Power Data Source match column, falling back to the roster's Discord ID
+        # column. No separate per-buddy match setting (#303).
+        scfg = config.get_storm_config(guild_id, "DS")
+        rcfg = config.get_member_roster_config(guild_id)
+        match_letter = (scfg.get("power_match_column") or "").strip()
         match_col = (
             config.power_column_letter_to_index(match_letter)
             if match_letter

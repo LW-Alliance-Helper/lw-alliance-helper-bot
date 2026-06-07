@@ -219,8 +219,7 @@ def init_db():
                 scarcity_priority      TEXT    DEFAULT 'alphabetical',
                 reliability_enabled       INTEGER DEFAULT 0,
                 reliability_tab           TEXT    DEFAULT '',
-                reliability_column        TEXT    DEFAULT '',
-                reliability_match_column  TEXT    DEFAULT ''
+                reliability_column        TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -1024,7 +1023,6 @@ def init_db():
             ("reliability_enabled", "INTEGER DEFAULT 0"),
             ("reliability_tab", "TEXT    DEFAULT ''"),
             ("reliability_column", "TEXT    DEFAULT ''"),
-            ("reliability_match_column", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -1032,6 +1030,14 @@ def init_db():
                 print(f"[CONFIG] Added {col} to guild_buddy_config")
             except Exception:
                 pass
+        # Reliability matching mirrors the Power Data Source's match column, so the
+        # short-lived per-buddy reliability_match_column (dev-only, #303) is dropped.
+        try:
+            conn.execute("ALTER TABLE guild_buddy_config DROP COLUMN reliability_match_column")
+            conn.commit()
+            print("[CONFIG] Dropped reliability_match_column from guild_buddy_config")
+        except Exception:
+            pass
 
         # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
         for col, definition in [
@@ -4571,7 +4577,6 @@ _BUDDY_DEFAULTS = {
     "reliability_enabled": 0,
     "reliability_tab": "",
     "reliability_column": "",
-    "reliability_match_column": "",
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

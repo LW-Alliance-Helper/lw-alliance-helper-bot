@@ -4752,7 +4752,6 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     reliability_enabled = 1 if current.get("reliability_enabled") else 0
     reliability_tab = current.get("reliability_tab", "") or ""
     reliability_column = current.get("reliability_column", "") or ""
-    reliability_match_column = current.get("reliability_match_column", "") or ""
 
     rel_view = YesNoView()
     await channel.send(
@@ -4774,6 +4773,17 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     reliability_enabled = 1 if rel_view.selected else 0
 
     if reliability_enabled:
+        # ── Step 5a: reliability source (Keep current / Use default / custom) ──
+        # Default tab mirrors the Power Data Source (then Member Roster); default
+        # score column is a placeholder "D" so leadership picks their real column.
+        # Matching reuses the Power Data Source match column (read_reliability_for_members).
+        default_rel_tab = (
+            (storm_ds.get("power_metric_tab") or "").strip()
+            or (roster_cfg.get("tab_name") or "").strip()
+            or "Member Roster"
+        )
+        DEFAULT_REL_COL = "D"
+        saved_custom = bool(reliability_tab and reliability_column)
 
         class _RelModal(discord.ui.Modal):
             def __init__(self):
@@ -4781,51 +4791,70 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 self.out = None
                 self._tab = discord.ui.TextInput(
                     label="Tab name",
-                    placeholder="e.g. Member Roster",
-                    default=reliability_tab,
+                    default=reliability_tab or default_rel_tab,
                     max_length=100,
                 )
                 self._col = discord.ui.TextInput(
-                    label="Reliability column (letter)",
-                    placeholder="e.g. F",
-                    default=reliability_column,
+                    label="Reliability score column (letter)",
+                    default=reliability_column or DEFAULT_REL_COL,
                     max_length=4,
                 )
-                self._match = discord.ui.TextInput(
-                    label="Name/ID column to match on (letter)",
-                    placeholder="Optional — blank matches by Discord ID",
-                    default=reliability_match_column,
-                    required=False,
-                    max_length=4,
-                )
-                for i in (self._tab, self._col, self._match):
-                    self.add_item(i)
+                self.add_item(self._tab)
+                self.add_item(self._col)
 
             async def on_submit(self, inter: discord.Interaction):
-                self.out = (
-                    self._tab.value.strip(),
-                    self._col.value.strip().upper(),
-                    self._match.value.strip().upper(),
-                )
+                self.out = (self._tab.value.strip(), self._col.value.strip().upper())
                 await inter.response.defer()
                 self.stop()
 
-        class _RelLaunch(discord.ui.View):
+        class _RelChoiceView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=WIZARD_STEP_TIMEOUT)
-                self.out = None
-                self.done = False
-                btn = discord.ui.Button(
-                    label="✏️ Set reliability source", style=discord.ButtonStyle.primary
+                self.choice = None
+                self.modal_out = None
+                if saved_custom:
+                    keep = discord.ui.Button(
+                        label="✅ Keep current", style=discord.ButtonStyle.success
+                    )
+
+                    async def _keep(inter: discord.Interaction):
+                        self.choice = "keep"
+                        for c in self.children:
+                            c.disabled = True
+                        await wizard_registry.safe_edit_response(inter, view=self)
+                        self.stop()
+
+                    keep.callback = _keep
+                    self.add_item(keep)
+
+                use_def = discord.ui.Button(
+                    label="↩️ Use default" if saved_custom else "✅ Use default",
+                    style=discord.ButtonStyle.secondary
+                    if saved_custom
+                    else discord.ButtonStyle.success,
                 )
 
-                async def _cb(inter: discord.Interaction):
+                async def _use_default(inter: discord.Interaction):
+                    self.choice = "default"
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                use_def.callback = _use_default
+                self.add_item(use_def)
+
+                custom = discord.ui.Button(
+                    label="✏️ Define my own", style=discord.ButtonStyle.primary
+                )
+
+                async def _custom(inter: discord.Interaction):
                     modal = _RelModal()
                     await inter.response.send_modal(modal)
                     await modal.wait()
                     if modal.out:
-                        self.out = modal.out
-                        self.done = True
+                        self.choice = "custom"
+                        self.modal_out = modal.out
                     for c in self.children:
                         c.disabled = True
                     try:
@@ -4834,26 +4863,43 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                         pass
                     self.stop()
 
-                btn.callback = _cb
-                self.add_item(btn)
+                custom.callback = _custom
+                self.add_item(custom)
 
-        rel_launch = _RelLaunch()
-        await channel.send("Point me at your reliability column.", view=rel_launch)
-        await wait_view_or_cancel(rel_launch, cancel_event)
-        if rel_launch.cancelled:
+        rel_choice = _RelChoiceView()
+        cur_line = (
+            f"\nYour current source: column **{reliability_column}** on **{reliability_tab}**."
+            if saved_custom
+            else ""
+        )
+        await channel.send(
+            "**Step 5a of 7 — Where are your reliability scores?**\n"
+            f"Default: column **{DEFAULT_REL_COL}** on **{default_rel_tab}**. The bot "
+            "matches members the same way it reads power, so you only choose the tab and "
+            "the column that holds each Engineer's 1-5 score."
+            f"{cur_line}\n\n"
+            "Use the default, or define your own?",
+            view=rel_choice,
+        )
+        await wait_view_or_cancel(rel_choice, cancel_event)
+        if rel_choice.cancelled:
             wizard_registry.unregister(user.id, cancel_event)
             return
-        if not rel_launch.done:
+        if rel_choice.choice is None:
             await channel.send(timeout_msg)
             wizard_registry.unregister(user.id, cancel_event)
             return
-        reliability_tab, reliability_column, reliability_match_column = rel_launch.out
+        if rel_choice.choice == "default":
+            reliability_tab, reliability_column = default_rel_tab, DEFAULT_REL_COL
+        elif rel_choice.choice == "custom":
+            reliability_tab, reliability_column = rel_choice.modal_out
+        # "keep" leaves the loaded values as-is.
+
         if not reliability_tab or not reliability_column:
             reliability_enabled = 0
             await channel.send(
-                "⚠️ I need both a tab name and a column letter to read reliability. "
-                "Leaving reliability ranking off for now — re-run setup once you know "
-                "where the scores live. Using alphabetical Engineer order in the meantime."
+                "⚠️ I need both a tab and a column letter to read reliability. Leaving it "
+                "off for now — re-run setup to set it. Using alphabetical Engineer order."
             )
 
     # ── Step 6: Leadership alerts channel ─────────────────────────────────────
@@ -4949,7 +4995,6 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     update_buddy_config_field(guild_id, "reliability_enabled", reliability_enabled)
     update_buddy_config_field(guild_id, "reliability_tab", reliability_tab)
     update_buddy_config_field(guild_id, "reliability_column", reliability_column)
-    update_buddy_config_field(guild_id, "reliability_match_column", reliability_match_column)
     update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
     update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
     update_buddy_config_field(guild_id, "dm_template", dm_template)

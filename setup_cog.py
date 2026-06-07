@@ -4784,6 +4784,11 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         )
         DEFAULT_REL_COL = "D"
         saved_custom = bool(reliability_tab and reliability_column)
+        # Fall back to the defaults for display when nothing is saved yet (mirrors
+        # how the rotation Sheet Tabs step renders).
+        disp_tab = reliability_tab or default_rel_tab
+        disp_col = reliability_column or DEFAULT_REL_COL
+        current_is_default = (disp_tab, disp_col) == (default_rel_tab, DEFAULT_REL_COL)
 
         class _RelModal(discord.ui.Modal):
             def __init__(self):
@@ -4827,8 +4832,14 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                     keep.callback = _keep
                     self.add_item(keep)
 
+                # Spell out the actual defaults when what's saved isn't already them.
+                use_def_label = (
+                    f"↩️ Use default ({default_rel_tab}; {DEFAULT_REL_COL})"
+                    if saved_custom and not current_is_default
+                    else "✅ Use default"
+                )
                 use_def = discord.ui.Button(
-                    label="↩️ Use default" if saved_custom else "✅ Use default",
+                    label=use_def_label[:80],
                     style=discord.ButtonStyle.secondary
                     if saved_custom
                     else discord.ButtonStyle.success,
@@ -4866,19 +4877,17 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 custom.callback = _custom
                 self.add_item(custom)
 
+        def _rel_line(label, val, default):
+            return f"{label}: **{val}**" + (" (default)" if val == default else "")
+
         rel_choice = _RelChoiceView()
-        cur_line = (
-            f"\nYour current source: column **{reliability_column}** on **{reliability_tab}**."
-            if saved_custom
-            else ""
-        )
         await channel.send(
             "**Step 5a of 7 — Where are your reliability scores?**\n"
-            f"Default: column **{DEFAULT_REL_COL}** on **{default_rel_tab}**. The bot "
-            "matches members the same way it reads power, so you only choose the tab and "
-            "the column that holds each Engineer's 1-5 score."
-            f"{cur_line}\n\n"
-            "Use the default, or define your own?",
+            "The bot reads each Engineer's 1-5 score from here (it never writes to it) "
+            "and matches members the same way it reads power:\n"
+            f"{_rel_line('Tab name', disp_tab, default_rel_tab)}\n"
+            f"{_rel_line('Column', disp_col, DEFAULT_REL_COL)}\n\n"
+            "Keep these, or define your own?",
             view=rel_choice,
         )
         await wait_view_or_cancel(rel_choice, cancel_event)

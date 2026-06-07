@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.3] — 2026-06-07
+
+### Fixed
+- Train schedule editing: **Assign someone** uses a roster dropdown, **Re-draft** refreshes the draft and clears its prompt, and **Go to next person** advances on Leadership days ([#308](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/308)).
+
 ## [1.5.2] — 2026-06-07
 
 ### Added

@@ -57,6 +57,31 @@ def test_resolve_roster_name_ambiguous_passes_through():
     assert ui._resolve_roster_name(state, "alex") == "Alex"
 
 
+def test_resolve_name_from_list():
+    names = ["Alice", "Bob Smith"]
+    assert ui._resolve_name_from_list(names, "alice") == "Alice"  # exact, case-insensitive
+    assert ui._resolve_name_from_list(names, "smith") == "Bob Smith"  # unique substring
+    assert ui._resolve_name_from_list(names, "Nonmember") == "Nonmember"  # off-roster passthrough
+
+
+def test_roster_picker_populated_has_dropdown_empty_is_type_only():
+    async def _noop(_name):
+        return None
+
+    populated = ui._RosterPickerView(
+        ["Alice", "Bob"], current="", prompt="?", modal_title="x", on_commit=_noop
+    )
+    assert any(isinstance(c, discord.ui.Select) for c in populated.children)  # roster dropdown
+    empty = ui._RosterPickerView([], current="", prompt="?", modal_title="x", on_commit=_noop)
+    assert not any(isinstance(c, discord.ui.Select) for c in empty.children)  # type-a-name only
+
+
+def test_default_draft_week_jumps_to_upcoming_on_draft_day():
+    # Draft day = Sunday (6). On Sunday, default to next week; other days, current.
+    assert ui.default_draft_week(date(2026, 6, 7), 6) == date(2026, 6, 8)  # Sun → next Monday
+    assert ui.default_draft_week(date(2026, 6, 3), 6) == date(2026, 6, 1)  # Wed → current Monday
+
+
 def _draft():
     return [
         tr.DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Alice", "auto"),

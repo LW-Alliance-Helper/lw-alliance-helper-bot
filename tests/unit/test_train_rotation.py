@@ -246,6 +246,53 @@ def test_already_scheduled_excluded():
     assert member == "Bob"
 
 
+def test_reroll_advances_off_current_member():
+    # "Go to next person" must move off the current pick, even on a small tied
+    # pool (the Leadership case) where the fairness pick is otherwise stable.
+    role_pools = {tr.RULE_LEADERSHIP: ["Alice", "Bob"]}
+    dd = tr.DraftDay("2026-06-01", 0, tr.RULE_LEADERSHIP, "Alice", "leadership")
+    m1, _, _ = tr.reroll_day(
+        dd,
+        eligible_pool=["Alice", "Bob"],
+        role_pools=role_pools,
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        other_scheduled=set(),
+        target_date=MONDAY,
+    )
+    assert m1 == "Bob"  # advanced off Alice
+    dd.member = "Bob"
+    m2, _, _ = tr.reroll_day(
+        dd,
+        eligible_pool=["Alice", "Bob"],
+        role_pools=role_pools,
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        other_scheduled=set(),
+        target_date=MONDAY,
+    )
+    assert m2 == "Alice"  # advanced off Bob
+
+
+def test_reroll_single_person_pool_keeps_them():
+    # Only one eligible member → "next" stays on them (not needs-picking).
+    dd = tr.DraftDay("2026-06-01", 0, tr.RULE_LEADERSHIP, "Solo", "leadership")
+    member, _, needs = tr.reroll_day(
+        dd,
+        eligible_pool=["Solo"],
+        role_pools={tr.RULE_LEADERSHIP: ["Solo"]},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        other_scheduled=set(),
+        target_date=MONDAY,
+    )
+    assert member == "Solo"
+    assert needs is False
+
+
 def test_pool_exhausted_wraps_to_repeat():
     # Alice is the only eligible member and already scheduled this week → wrap
     # around and reuse her rather than leave the day empty.

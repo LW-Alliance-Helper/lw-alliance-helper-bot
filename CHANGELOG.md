@@ -9,6 +9,19 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.2] — 2026-06-07
+
+### Added
+- **Outage catch-up**: after downtime, the bot posts one leadership-channel digest of every scheduled post it missed, with one click to send or dismiss each ([#227](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/227)).
+- **Member stats**: `/my_stats` shows anyone their own power, storm, and survey history; leadership's `/member_stats` adds a member picker, train history, and storm placement ([#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56), [#299](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/299)).
+- **Profession Buddy reliability ranking**: keep an optional 1-5 score in your sheet and the bot pairs your most reliable Engineers with your top War Leaders ([#303](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/303)).
+
+### Changed
+- **Train Conductor Rotation setup** is clearer and fully opt-in: rotation is its own step you can skip, with simpler sheet-tab and preset questions and a roster-based conductor picker ([#302](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/302)).
+
+### Fixed
+- Refreshed stale slash-command and button references across setup, help, and DM copy after the `/train`, events, and storm hub consolidations ([#298](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/298)).
+
 ## [1.5.1] — 2026-06-05
 
 ### Fixed

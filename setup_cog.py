@@ -4558,8 +4558,8 @@ async def _run_train_rotation_step(
 async def run_buddy_setup(interaction: discord.Interaction, bot):
     """Walk leadership through configuring the Profession Buddy System (#289).
 
-    Enable → buddy tab → Engineer doubling → scarcity priority → leadership
-    alerts channel → buddy DMs. Profession is detected from the Squad Powers
+    Enable → buddy tab → Engineer doubling → scarcity priority → reliability
+    ranking → leadership alerts channel → buddy DMs. Profession is detected from the Squad Powers
     survey question. Free to enable + manually pair; auto-assign, one-click
     profession buttons, alerts, and DMs are Premium at runtime."""
     import wizard_registry
@@ -4597,6 +4597,10 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 if current.get("scarcity_priority") == "strongest_first"
                 else "Alphabetical",
             ),
+            (
+                "Rank Engineers by reliability",
+                "✅ Yes" if current.get("reliability_enabled") else "❌ No",
+            ),
             ("Leadership alerts", f"<#{notify_id}>" if notify_id else "*off*"),
             ("Buddy DMs", "✅ Yes" if current.get("dm_enabled") else "❌ No"),
         ]
@@ -4619,7 +4623,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
-    await channel.send("**Step 1 of 6 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await channel.send("**Step 1 of 7 — Turn on the Profession Buddy System?**", view=enabled_view)
     await wait_view_or_cancel(enabled_view, cancel_event)
     if enabled_view.cancelled:
         wizard_registry.unregister(user.id, cancel_event)
@@ -4668,7 +4672,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Buddy tab name ────────────────────────────────────────────────
     buddy_tab = await ask_keep_or_change(
         channel,
-        "**Step 2 of 6 — Buddy List Tab**\n"
+        "**Step 2 of 7 — Buddy List Tab**\n"
         "Which tab in your Google Sheet should hold the buddy list? The bot owns "
         "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
         "⚠️ *The bot will create it if it doesn't exist.*",
@@ -4685,7 +4689,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 3: Engineer doubling ─────────────────────────────────────────────
     dbl_view = YesNoView()
     await channel.send(
-        "**Step 3 of 6 — Two Engineers per War Leader?**\n"
+        "**Step 3 of 7 — Two Engineers per War Leader?**\n"
         "When you have more Engineers than War Leaders, should we allow War Leaders "
         "to have 2 Engineers paired with them?",
         view=dbl_view,
@@ -4719,7 +4723,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if power_source_available:
         scarcity_view = YesNoView()
         await channel.send(
-            "**Step 4 of 6 — When Engineers are scarce**\n"
+            "**Step 4 of 7 — When Engineers are scarce**\n"
             "If you have more War Leaders than Engineers, should we prioritize your "
             "strongest War Leaders first? (Note that this will read from your existing "
             "Power data source if you have one set up.)",
@@ -4741,13 +4745,124 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
             "and re-run this wizard to enable it. Using alphabetical order for now.*"
         )
 
-    # ── Step 5: Leadership alerts channel ─────────────────────────────────────
+    # ── Step 5: Engineer reliability ranking ──────────────────────────────────
+    # Optional sibling to strongest-first. When on, the bot reads a 1-5 score the
+    # alliance maintains in their Sheet and orders Engineers most-reliable-first,
+    # so the best Engineers land on the top War Leaders. Off = alphabetical (#303).
+    reliability_enabled = 1 if current.get("reliability_enabled") else 0
+    reliability_tab = current.get("reliability_tab", "") or ""
+    reliability_column = current.get("reliability_column", "") or ""
+    reliability_match_column = current.get("reliability_match_column", "") or ""
+
+    rel_view = YesNoView()
+    await channel.send(
+        "**Step 5 of 7 — Rank Engineers by reliability?**\n"
+        "Keep a 1-5 reliability score for your Engineers somewhere in your Google "
+        "Sheet (higher = more dependable) and the bot will pair your most reliable "
+        "Engineers with your top War Leaders. Leave this off to order Engineers "
+        "alphabetically. You maintain the scores; the bot only reads them.",
+        view=rel_view,
+    )
+    await wait_view_or_cancel(rel_view, cancel_event)
+    if rel_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if rel_view.selected is None:
+        await channel.send(timeout_msg)
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    reliability_enabled = 1 if rel_view.selected else 0
+
+    if reliability_enabled:
+
+        class _RelModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="Reliability Source")
+                self.out = None
+                self._tab = discord.ui.TextInput(
+                    label="Tab name",
+                    placeholder="e.g. Member Roster",
+                    default=reliability_tab,
+                    max_length=100,
+                )
+                self._col = discord.ui.TextInput(
+                    label="Reliability column (letter)",
+                    placeholder="e.g. F",
+                    default=reliability_column,
+                    max_length=4,
+                )
+                self._match = discord.ui.TextInput(
+                    label="Name/ID column to match on (letter)",
+                    placeholder="Optional — blank matches by Discord ID",
+                    default=reliability_match_column,
+                    required=False,
+                    max_length=4,
+                )
+                for i in (self._tab, self._col, self._match):
+                    self.add_item(i)
+
+            async def on_submit(self, inter: discord.Interaction):
+                self.out = (
+                    self._tab.value.strip(),
+                    self._col.value.strip().upper(),
+                    self._match.value.strip().upper(),
+                )
+                await inter.response.defer()
+                self.stop()
+
+        class _RelLaunch(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+                self.out = None
+                self.done = False
+                btn = discord.ui.Button(
+                    label="✏️ Set reliability source", style=discord.ButtonStyle.primary
+                )
+
+                async def _cb(inter: discord.Interaction):
+                    modal = _RelModal()
+                    await inter.response.send_modal(modal)
+                    await modal.wait()
+                    if modal.out:
+                        self.out = modal.out
+                        self.done = True
+                    for c in self.children:
+                        c.disabled = True
+                    try:
+                        await inter.edit_original_response(view=self)
+                    except Exception:
+                        pass
+                    self.stop()
+
+                btn.callback = _cb
+                self.add_item(btn)
+
+        rel_launch = _RelLaunch()
+        await channel.send("Point me at your reliability column.", view=rel_launch)
+        await wait_view_or_cancel(rel_launch, cancel_event)
+        if rel_launch.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if not rel_launch.done:
+            await channel.send(timeout_msg)
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        reliability_tab, reliability_column, reliability_match_column = rel_launch.out
+        if not reliability_tab or not reliability_column:
+            reliability_enabled = 0
+            await channel.send(
+                "⚠️ I need both a tab name and a column letter to read reliability. "
+                "Leaving reliability ranking off for now — re-run setup once you know "
+                "where the scores live. Using alphabetical Engineer order in the meantime."
+            )
+
+    # ── Step 6: Leadership alerts channel ─────────────────────────────────────
     is_premium_flag = await premium.is_premium(
         guild_id, interaction=interaction, bot=interaction.client
     )
     alerts_view = YesNoView()
     await channel.send(
-        "**Step 5 of 6 — Leadership alerts**\n"
+        "**Step 6 of 7 — Leadership alerts**\n"
         "When a member swaps profession and the bot re-pairs people, should it post a "
         "heads-up to a leadership channel?\n"
         "💎 Premium: these posts send only while Premium is active.",
@@ -4789,7 +4904,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     dm_view = YesNoView()
     await channel.send(
-        "**Step 6 of 6 — Buddy DMs**\n"
+        "**Step 7 of 7 — Buddy DMs**\n"
         "Should the bot DM members their buddy when it changes?\n"
         "💎 Premium: these DMs send only while Premium is active.",
         view=dm_view,
@@ -4831,6 +4946,10 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
     update_buddy_config_field(guild_id, "engineer_doubling", engineer_doubling)
     update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
+    update_buddy_config_field(guild_id, "reliability_enabled", reliability_enabled)
+    update_buddy_config_field(guild_id, "reliability_tab", reliability_tab)
+    update_buddy_config_field(guild_id, "reliability_column", reliability_column)
+    update_buddy_config_field(guild_id, "reliability_match_column", reliability_match_column)
     update_buddy_config_field(guild_id, "notify_channel_id", notify_channel_id)
     update_buddy_config_field(guild_id, "dm_enabled", dm_enabled)
     update_buddy_config_field(guild_id, "dm_template", dm_template)
@@ -4843,6 +4962,8 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
             f"**Two Engineers per War Leader:** {'✅ Yes' if engineer_doubling else '❌ No'}\n"
             f"**When Engineers are scarce:** "
             f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
+            f"**Rank Engineers by reliability:** "
+            f"{f'✅ Yes (column {reliability_column} on {reliability_tab})' if reliability_enabled else '❌ No'}\n"
             f"**Leadership alerts:** {f'<#{notify_channel_id}>' if notify_channel_id else 'off'}\n"
             f"**Buddy DMs:** {'✅ Yes' if dm_enabled else '❌ No'}"
             f"{' (custom message)' if (dm_enabled and dm_template) else ''}"

@@ -593,10 +593,12 @@ def _roster_member_names(guild_id: int) -> list[str]:
 
 
 class _SpecificMemberPickerView(discord.ui.View):
-    """Roster-backed picker for a Specific-member day pin (#302): a dropdown of
-    roster members (25/page), plus a "Type a name instead" escape for anyone not
-    on the roster. Selecting applies the pin to the editor's preset and refreshes
-    it; the dropdown is hidden entirely when there's no roster to read."""
+    """Roster-backed picker for a Specific-member day pin (#302). The dropdown
+    only sets a *pending* choice (Discord won't fire the change event if you
+    re-pick the already-selected member, so selection alone can't be the commit);
+    **💾 Save** commits it, **Cancel** closes with no change, and **✏️ Type a
+    name instead** handles anyone not on the roster. The pending choice defaults
+    to the current pin, so confirming an unchanged member is a single Save."""
 
     PAGE = 25
 
@@ -606,14 +608,22 @@ class _SpecificMemberPickerView(discord.ui.View):
         super().__init__(timeout=180)
         self.editor = editor
         self.names = names
-        self.current = current
         self.day_name = day_name
         self.page = 0
+        self.pending = current or ""
         self._build()
 
     @property
     def total_pages(self) -> int:
         return max(1, (len(self.names) + self.PAGE - 1) // self.PAGE)
+
+    def content(self) -> str:
+        base = f"Who drives the train every **{self.day_name}**?"
+        if self.pending:
+            return f"{base}\nSelected: **{self.pending}** — hit **💾 Save** to confirm."
+        if self.names:
+            return f"{base}\nPick a member, then **💾 Save**."
+        return f"{base}\nNo roster is set up — use **✏️ Type a name instead**."
 
     def _build(self):
         self.clear_items()
@@ -623,7 +633,7 @@ class _SpecificMemberPickerView(discord.ui.View):
             sel = discord.ui.Select(
                 placeholder="Pick the member…",
                 options=[
-                    discord.SelectOption(label=n[:100], value=n[:100], default=(n == self.current))
+                    discord.SelectOption(label=n[:100], value=n[:100], default=(n == self.pending))
                     for n in page_names
                 ],
                 row=0,
@@ -647,6 +657,12 @@ class _SpecificMemberPickerView(discord.ui.View):
                 )
                 nxt.callback = self._next
                 self.add_item(nxt)
+            save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
+            save.callback = self._on_save
+            self.add_item(save)
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=2)
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
         typ = discord.ui.Button(
             label="✏️ Type a name instead", style=discord.ButtonStyle.secondary, row=2
         )
@@ -654,7 +670,17 @@ class _SpecificMemberPickerView(discord.ui.View):
         self.add_item(typ)
 
     async def _on_select(self, interaction: discord.Interaction):
-        name = interaction.data["values"][0]
+        self.pending = interaction.data["values"][0]
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _on_save(self, interaction: discord.Interaction):
+        if not self.pending:
+            await interaction.response.send_message(
+                "Pick a member first, or use **✏️ Type a name instead**.", ephemeral=True
+            )
+            return
+        name = self.pending
         for c in self.children:
             c.disabled = True
         self.stop()
@@ -666,25 +692,36 @@ class _SpecificMemberPickerView(discord.ui.View):
             pass
         await self.editor._apply_specific_member(name)
 
+    async def _on_cancel(self, interaction: discord.Interaction):
+        for c in self.children:
+            c.disabled = True
+        self.stop()
+        try:
+            await interaction.response.edit_message(
+                content="Cancelled — the specific member was left unchanged.", view=None
+            )
+        except discord.HTTPException:
+            pass
+
     async def _on_type(self, interaction: discord.Interaction):
         self.stop()
         await interaction.response.send_modal(
             _MemberNameModal(
                 f"Specific member for every {self.day_name}",
                 self.editor._apply_from_modal,
-                current=self.current,
+                current=self.pending,
             )
         )
 
     async def _prev(self, interaction: discord.Interaction):
         self.page = max(0, self.page - 1)
         self._build()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(content=self.content(), view=self)
 
     async def _next(self, interaction: discord.Interaction):
         self.page = min(self.total_pages - 1, self.page + 1)
         self._build()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(content=self.content(), view=self)
 
 
 class TrainPresetEditorView(discord.ui.View):
@@ -834,13 +871,7 @@ class TrainPresetEditorView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         names = await asyncio.to_thread(_roster_member_names, self.guild_id)
         view = _SpecificMemberPickerView(self, names, current=cur, day_name=day_name)
-        prompt = (
-            f"Pick who drives the train every **{day_name}**:"
-            if names
-            else "No roster is set up yet, so pick **Type a name instead** to enter the "
-            f"conductor for every **{day_name}**. (Set up Member Sync for a picker.)"
-        )
-        await interaction.followup.send(prompt, view=view, ephemeral=True)
+        await interaction.followup.send(view.content(), view=view, ephemeral=True)
 
     async def _apply_specific_member(self, name: str):
         """Pin `name` to the day being edited and refresh the editor message.

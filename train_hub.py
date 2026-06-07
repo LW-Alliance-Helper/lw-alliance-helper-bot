@@ -85,7 +85,7 @@ def _build_train_hub_embed(bot, guild_id: int) -> discord.Embed:
             f"**Daily confirmation:** {time_str} → {_ch(rem_ch)}",
             f"**Public posts:** {_ch(pub) if pub else 'off (record only)'}",
         ]
-        embed.add_field(name="Rotation", value="\n".join(lines), inline=False)
+        embed.add_field(name="✅ Conductor Rotation", value="\n".join(lines), inline=False)
     else:
         embed.description = (
             "Manage your alliance's train schedule. Turn on **Conductor "

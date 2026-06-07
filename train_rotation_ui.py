@@ -590,6 +590,9 @@ class TrainPresetEditorView(discord.ui.View):
         self.preset = preset
         self.day_rules_tab = day_rules_tab
         self.dirty = False
+        # True once any edit has been made this session — gates the "Done making
+        # changes" exit so a fresh editor just shows "Cancel (no changes needed)".
+        self.ever_changed = False
         self.editing_day: int | None = None
         self.message: discord.Message | None = None
         self._rebuild()
@@ -643,15 +646,36 @@ class TrainPresetEditorView(discord.ui.View):
             pin_btn.callback = self._on_set_pin
             self.add_item(pin_btn)
 
+        # Save never locks the editor: it commits and says "saved" but leaves
+        # the controls live so leadership can keep tweaking. Exit paths depend
+        # on state: Cancel before any edit, Abandon to drop unsaved edits, and
+        # "Done making changes" once anything has been touched (it saves first
+        # if there are unsaved edits, so nothing is lost). (#302)
         save_btn = discord.ui.Button(
             label="💾 Save preset", style=discord.ButtonStyle.success, disabled=not self.dirty
         )
         save_btn.callback = self._on_save
         self.add_item(save_btn)
 
-        abandon_btn = discord.ui.Button(label="🔙 Abandon", style=discord.ButtonStyle.danger)
-        abandon_btn.callback = self._on_abandon
-        self.add_item(abandon_btn)
+        if self.dirty:
+            abandon_btn = discord.ui.Button(
+                label="🗑️ Abandon (no changes will be saved)", style=discord.ButtonStyle.danger
+            )
+            abandon_btn.callback = self._on_abandon
+            self.add_item(abandon_btn)
+
+        if not self.ever_changed:
+            cancel_btn = discord.ui.Button(
+                label="Cancel (no changes needed)", style=discord.ButtonStyle.secondary
+            )
+            cancel_btn.callback = self._on_cancel
+            self.add_item(cancel_btn)
+        else:
+            done_btn = discord.ui.Button(
+                label="✅ Done making changes", style=discord.ButtonStyle.primary, row=2
+            )
+            done_btn.callback = self._on_done
+            self.add_item(done_btn)
 
     async def _guard(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -689,6 +713,7 @@ class TrainPresetEditorView(discord.ui.View):
             rule.specific_member = ""
         self.preset.days[self.editing_day] = rule
         self.dirty = True
+        self.ever_changed = True
         await self._refresh(interaction)
 
     async def _on_set_pin(self, interaction: discord.Interaction):
@@ -702,6 +727,7 @@ class TrainPresetEditorView(discord.ui.View):
             rule.specific_member = name
             self.preset.days[self.editing_day] = rule
             self.dirty = True
+            self.ever_changed = True
             await self._refresh(
                 inter,
                 content=f"📌 **{name}** will drive the train every **{day_name}**.",
@@ -717,23 +743,14 @@ class TrainPresetEditorView(discord.ui.View):
         await interaction.response.defer()
         ok = await asyncio.to_thread(tr.save_preset, self.guild_id, self.day_rules_tab, self.preset)
         if ok:
+            # Stay open so leadership can keep editing; just clear the dirty
+            # flag and confirm. "Done making changes" is how they exit.
             self.dirty = False
-            for item in self.children:
-                item.disabled = True
-            try:
-                await interaction.followup.send(
-                    f"✅ Saved preset **{self.preset.name}**.", ephemeral=False
-                )
-            except discord.HTTPException:
-                pass
-            if self.message:
-                try:
-                    await self.message.edit(
-                        embed=build_preset_editor_embed(self.preset, dirty=False), view=self
-                    )
-                except discord.HTTPException:
-                    pass
-            self.stop()
+            await self._refresh(
+                interaction,
+                content=f"✅ Saved **{self.preset.name}**. Keep editing, or hit "
+                "**Done making changes** when you're finished.",
+            )
         else:
             await interaction.followup.send(
                 "⚠️ Couldn't save the preset. Check that your Google Sheet is configured "
@@ -741,20 +758,60 @@ class TrainPresetEditorView(discord.ui.View):
                 ephemeral=True,
             )
 
-    async def _on_abandon(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
+    async def _close(self, interaction: discord.Interaction, content: str):
         for item in self.children:
             item.disabled = True
         try:
             await interaction.response.edit_message(
-                content="🔙 Abandoned. Changes were not saved.",
-                embed=build_preset_editor_embed(self.preset, dirty=False),
+                content=content,
+                embed=build_preset_editor_embed(self.preset, dirty=self.dirty),
                 view=self,
             )
         except discord.HTTPException:
             pass
         self.stop()
+
+    async def _on_abandon(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await self._close(interaction, "🗑️ Abandoned. Your unsaved changes were not saved.")
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await self._close(interaction, "👍 Closed. No changes were needed.")
+
+    async def _on_done(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        # Save any pending edits first so "Done" never silently drops work.
+        if self.dirty:
+            await interaction.response.defer()
+            ok = await asyncio.to_thread(
+                tr.save_preset, self.guild_id, self.day_rules_tab, self.preset
+            )
+            if not ok:
+                await interaction.followup.send(
+                    "⚠️ Couldn't save your latest changes. Check the Google Sheet and try "
+                    "Save preset again.",
+                    ephemeral=True,
+                )
+                return
+            self.dirty = False
+            for item in self.children:
+                item.disabled = True
+            if self.message:
+                try:
+                    await self.message.edit(
+                        content=f"✅ Saved **{self.preset.name}**. All set!",
+                        embed=build_preset_editor_embed(self.preset, dirty=False),
+                        view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+            self.stop()
+        else:
+            await self._close(interaction, f"✅ All set! **{self.preset.name}** is saved.")
 
     async def on_timeout(self):
         await wizard_registry.expire_view_message(

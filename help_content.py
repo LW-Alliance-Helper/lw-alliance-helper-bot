@@ -219,8 +219,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 f"/setup → {HUB_BTN_BUDDY}",
                 "Turn it on, pick the buddy tab, choose whether two Engineers "
-                "can share a War Leader, set the scarcity priority, and pick the "
-                "leadership-alert channel.",
+                "can share a War Leader, set the scarcity priority, optionally "
+                "rank Engineers by a reliability score you keep in your sheet, and "
+                "pick the leadership-alert channel.",
             ),
             (
                 "/buddy",

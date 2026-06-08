@@ -1460,14 +1460,31 @@ class WeeklyDraftView(discord.ui.View):
         yes = discord.ui.Button(label="🔄 Yes, re-draft", style=discord.ButtonStyle.danger)
         no = discord.ui.Button(label="↩️ Keep current draft", style=discord.ButtonStyle.secondary)
 
+        redrafting = {"on": False}
+
         async def _do(ci: discord.Interaction):
-            await ci.response.defer()
+            if redrafting["on"]:
+                # Already running from an earlier click — ack and ignore so
+                # repeated clicks don't fire concurrent regenerates (which raced
+                # the Sheet reads and could wipe day rules).
+                try:
+                    await ci.response.defer()
+                except discord.HTTPException:
+                    pass
+                return
+            redrafting["on"] = True
+            # Disable the confirm buttons + show progress IMMEDIATELY (not a bare
+            # defer) so the re-draft can't be clicked two or three more times.
+            for c in confirm.children:
+                c.disabled = True
+            await ci.response.edit_message(content="🔄 Re-drafting the whole week…", view=confirm)
             try:
                 self.draft = await asyncio.to_thread(
                     regenerate_week, self.bot, self.guild_id, self.week_start
                 )
             except Exception as e:
                 print(f"[TRAIN ROTATION] re-draft failed for guild {self.guild_id}: {e}")
+                redrafting["on"] = False
                 try:
                     await ci.edit_original_response(
                         content="⚠️ Re-draft failed — please try again.", view=None

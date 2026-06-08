@@ -1162,16 +1162,27 @@ def list_presets(guild_id: int, tab_name: str) -> list[str]:
 
 
 def load_preset(guild_id: int, tab_name: str, name: str) -> SchedulePreset | None:
-    """Load a named preset. Returns None if it doesn't exist. Missing weekdays
-    are backfilled with random/auto so the preset always has all 7 days."""
-    ws = _open_tab(guild_id, tab_name, DAY_RULES_HEADER)
-    if ws is None:
+    """Load a named preset. Returns None when the Day Rules tab has no row for
+    `name` — a genuine not-found, so the caller may fall back to the all-auto
+    default. Missing weekdays are backfilled with auto so the preset always has
+    all 7 days.
+
+    RAISES on a Sheets open/read failure rather than returning None, so a
+    transient error (e.g. a rate-limited read during a double-clicked re-draft)
+    can't be mistaken for 'no preset' and clobber a real schedule with the
+    default. The caller aborts the re-draft and leaves the existing draft intact.
+    """
+    import config
+
+    if not (tab_name or "").strip():
+        return None  # rotation isn't pointed at a Day Rules tab yet
+    sh = config.get_spreadsheet(guild_id)
+    if sh is None:
         return None
-    try:
-        values = ws.get_all_values()
-    except Exception as e:
-        print(f"[TRAIN ROTATION] load_preset failed for guild {guild_id}: {e}")
-        return None
+    ws = config.get_or_create_worksheet(
+        sh, tab_name, header_row=DAY_RULES_HEADER, rows=2000, cols=max(8, len(DAY_RULES_HEADER))
+    )
+    values = ws.get_all_values()
     days: dict[int, DayRule] = {}
     found = False
     for row in values[1:]:

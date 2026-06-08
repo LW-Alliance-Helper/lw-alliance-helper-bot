@@ -239,6 +239,25 @@ def test_preset_delete(patched_tab):
     assert tr.load_preset(GID, "Train Day Rules", "Holiday Week") is None
 
 
+def test_load_preset_not_found_returns_none(patched_tab):
+    # Read succeeds, no row for the name → genuine not-found → None (caller may
+    # use the all-auto default).
+    tr.save_preset(GID, "Train Day Rules", SchedulePreset.default("Standard Week"))
+    assert tr.load_preset(GID, "Train Day Rules", "Nope") is None
+
+
+def test_load_preset_raises_on_read_failure(patched_tab):
+    # A transient Sheets read failure must PROPAGATE, not become None — otherwise
+    # the caller treats it as "no preset" and clobbers the schedule with all-auto.
+    with patch("config.get_or_create_worksheet", side_effect=RuntimeError("429 rate limited")):
+        with pytest.raises(RuntimeError):
+            tr.load_preset(GID, "Train Day Rules", "Standard Week")
+
+
+def test_load_preset_empty_tab_returns_none():
+    assert tr.load_preset(GID, "", "Standard Week") is None
+
+
 # ── Graceful degradation ─────────────────────────────────────────────────────
 
 

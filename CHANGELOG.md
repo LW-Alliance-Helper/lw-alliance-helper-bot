@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.5] — 2026-06-08
+
+### Fixed
+- Re-drafting the train week takes a single click and can no longer wipe a day's rule (e.g. Leadership back to auto) if Google Sheets is briefly slow ([#312](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/312)).
+
 ## [1.5.4] — 2026-06-07
 
 ### Fixed

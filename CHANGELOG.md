@@ -9,6 +9,12 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.4] — 2026-06-07
+
+### Fixed
+- `/train` buttons (This week's draft, View logs, and more) now show a loading state instead of looking hung while they read your sheet ([#310](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/310)).
+- Assigning a conductor on a role day (Leadership, VS, Contest, Event) lists just that role's members, with a 🔁 toggle to switch to the full roster ([#310](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/310)).
+
 ## [1.5.3] — 2026-06-07
 
 ### Fixed

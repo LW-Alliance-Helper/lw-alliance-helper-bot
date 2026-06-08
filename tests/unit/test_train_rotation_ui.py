@@ -76,6 +76,64 @@ def test_roster_picker_populated_has_dropdown_empty_is_type_only():
     assert not any(isinstance(c, discord.ui.Select) for c in empty.children)  # type-a-name only
 
 
+def test_roster_picker_toggle_swaps_role_and_full_roster():
+    async def _noop(_name):
+        return None
+
+    p = ui._RosterPickerView(
+        ["Bob", "Carol"],
+        current="",
+        prompt="?",
+        modal_title="x",
+        on_commit=_noop,
+        full_names=["Alice", "Bob", "Carol"],
+        scope="\nrole",
+        full_scope="\nfull",
+    )
+    labels = [getattr(c, "label", "") or "" for c in p.children]
+    assert any("full roster" in low.lower() for low in labels)  # toggle present
+    assert p.names == ["Bob", "Carol"]  # starts on the role pool
+    p.showing_full = True
+    assert p.names == ["Alice", "Bob", "Carol"]  # toggled to the full roster
+
+
+def test_roster_picker_no_toggle_when_full_equals_filtered():
+    async def _noop(_name):
+        return None
+
+    # full_names equal to names (an auto/manual day) → nothing to switch to.
+    p = ui._RosterPickerView(
+        ["Alice", "Bob"],
+        current="",
+        prompt="?",
+        modal_title="x",
+        on_commit=_noop,
+        full_names=["Alice", "Bob"],
+    )
+    labels = [getattr(c, "label", "") or "" for c in p.children]
+    assert not any("full roster" in low.lower() for low in labels)
+
+
+def test_assign_pool_filters_to_role_for_role_days():
+    state = ui.RotationState(
+        cfg={},
+        roster=[{"name": "Alice"}, {"name": "Bob"}, {"name": "Carol"}],
+        eligible_pool=["Alice", "Bob", "Carol"],
+        role_pools={tr.RULE_LEADERSHIP: ["Bob", "Carol"]},
+        member_rules=[],
+        history=[],
+        counted_reasons=set(),
+    )
+    # A Leadership day offers only the leadership pool, with a scope note.
+    names, scope = ui._assign_pool_for_day(state, tr.RULE_LEADERSHIP)
+    assert names == ["Bob", "Carol"]
+    assert "Leadership" in scope
+    # An auto day (no role pool) offers the full roster and no scope note.
+    names, scope = ui._assign_pool_for_day(state, tr.RULE_AUTO)
+    assert names == ["Alice", "Bob", "Carol"]
+    assert scope == ""
+
+
 def test_default_draft_week_jumps_to_upcoming_on_draft_day():
     # Draft day = Sunday (6). On Sunday, default to next week; other days, current.
     assert ui.default_draft_week(date(2026, 6, 7), 6) == date(2026, 6, 8)  # Sun → next Monday

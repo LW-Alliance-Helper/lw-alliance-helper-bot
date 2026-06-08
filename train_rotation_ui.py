@@ -610,6 +610,21 @@ def _roster_member_names(guild_id: int) -> list[str]:
     return out
 
 
+def _assign_pool_for_day(state: "RotationState", rule_type: str) -> tuple[list[str], str]:
+    """Names to offer when assigning a conductor by hand, plus a scope note.
+
+    A role-scoped day (Leadership / VS / Contest / Event with an assigned role)
+    offers just that role's members — what leadership expects when they pick a
+    day tied to a role, rather than the whole roster. Every other day offers the
+    full roster. Either way the picker's **Type a name instead** still covers
+    anyone off the list."""
+    pool = state.role_pools.get(rule_type)
+    if pool:
+        names = list(dict.fromkeys(pool))  # dedupe, preserve order
+        return names, f"\nShowing the **{tr.RULE_LABELS.get(rule_type, rule_type)}** pool."
+    return tr.roster_names(state.roster), ""
+
+
 def _resolve_name_from_list(names: list[str], typed: str) -> str:
     """Resolve a hand-typed name against a known name list — exact match wins,
     then a unique substring match, else the typed string as-is (so leadership can
@@ -639,26 +654,49 @@ class _RosterPickerView(discord.ui.View):
 
     PAGE = 25
 
-    def __init__(self, names: list[str], *, current: str, prompt: str, modal_title: str, on_commit):
+    def __init__(
+        self,
+        names: list[str],
+        *,
+        current: str,
+        prompt: str,
+        modal_title: str,
+        on_commit,
+        full_names: list[str] | None = None,
+        scope: str = "",
+        full_scope: str = "",
+    ):
         super().__init__(timeout=180)
-        self.names = names
+        self._names = names
+        # A real toggle target only when the full roster is a different (larger)
+        # set than the filtered list — otherwise there's nothing to switch to.
+        self._full_names = full_names if (full_names and full_names != names) else None
+        self.scope = scope  # note shown for the filtered list (e.g. the role pool)
+        self.full_scope = full_scope  # note shown once switched to the full roster
         self.prompt = prompt
         self.modal_title = modal_title
         self.on_commit = on_commit  # async (name: str) -> None
         self.page = 0
+        self.showing_full = False
         self.pending = current or ""
         self._build()
+
+    @property
+    def names(self) -> list[str]:
+        """The active list — the full roster once toggled, else the filtered one."""
+        return self._full_names if (self.showing_full and self._full_names) else self._names
 
     @property
     def total_pages(self) -> int:
         return max(1, (len(self.names) + self.PAGE - 1) // self.PAGE)
 
     def content(self) -> str:
+        base = f"{self.prompt}{self.full_scope if self.showing_full else self.scope}"
         if self.pending:
-            return f"{self.prompt}\nSelected: **{self.pending}** — hit **💾 Save** to confirm."
+            return f"{base}\nSelected: **{self.pending}** — hit **💾 Save** to confirm."
         if self.names:
-            return f"{self.prompt}\nPick a member, then **💾 Save**."
-        return f"{self.prompt}\nNo roster is set up — use **✏️ Type a name instead**."
+            return f"{base}\nPick a member, then **💾 Save**."
+        return f"{base}\nNo roster is set up — use **✏️ Type a name instead**."
 
     def _build(self):
         self.clear_items()
@@ -698,11 +736,26 @@ class _RosterPickerView(discord.ui.View):
         cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=2)
         cancel.callback = self._on_cancel
         self.add_item(cancel)
+        # Pop out to the full roster (and back) when a role filter is in effect.
+        if self._full_names:
+            tog = discord.ui.Button(
+                label="🔁 Show role only" if self.showing_full else "🔁 Show full roster",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+            )
+            tog.callback = self._on_toggle
+            self.add_item(tog)
         typ = discord.ui.Button(
             label="✏️ Type a name instead", style=discord.ButtonStyle.secondary, row=2
         )
         typ.callback = self._on_type
         self.add_item(typ)
+
+    async def _on_toggle(self, interaction: discord.Interaction):
+        self.showing_full = not self.showing_full
+        self.page = 0
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
 
     async def _on_select(self, interaction: discord.Interaction):
         self.pending = interaction.data["values"][0]
@@ -747,7 +800,9 @@ class _RosterPickerView(discord.ui.View):
 
         async def _typed(inter: discord.Interaction, typed: str):
             await inter.response.defer()  # ack the modal; on_commit owns the refresh
-            await self.on_commit(_resolve_name_from_list(self.names, typed))
+            # Resolve against the widest pool so a typed name matches even when the
+            # role filter is showing.
+            await self.on_commit(_resolve_name_from_list(self._full_names or self._names, typed))
 
         await interaction.response.send_modal(
             _MemberNameModal(self.modal_title, _typed, current=self.pending or "")
@@ -1344,7 +1399,11 @@ class WeeklyDraftView(discord.ui.View):
         dd = await self._guard_day(interaction)
         if dd is None:
             return
-        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+        # thinking=True so the button shows it's working during the roster read.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        names, scope = _assign_pool_for_day(state, dd.rule_type)
+        full_names = tr.roster_names(state.roster)
         day_label = f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}"
 
         async def _commit(name: str):
@@ -1371,10 +1430,11 @@ class WeeklyDraftView(discord.ui.View):
             prompt=f"Who drives **{day_label}**?",
             modal_title="Assign conductor",
             on_commit=_commit,
+            full_names=full_names,
+            scope=scope,
+            full_scope="\nShowing the **full roster**.",
         )
-        await interaction.response.send_message(
-            content=picker.content(), view=picker, ephemeral=True
-        )
+        await interaction.followup.send(content=picker.content(), view=picker, ephemeral=True)
 
     async def _on_set_manual(self, interaction: discord.Interaction):
         # Leave the day for leadership to assign on the day (they get prompted by
@@ -1665,8 +1725,10 @@ class DailyConfirmView(discord.ui.View):
         if not _is_leader(interaction):
             await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
             return
-
-        names = await asyncio.to_thread(_roster_member_names, self.guild_id)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        names, scope = _assign_pool_for_day(state, self.dd.rule_type)
+        full_names = tr.roster_names(state.roster)
 
         async def _commit(name: str):
             self.dd.member = name
@@ -1685,10 +1747,11 @@ class DailyConfirmView(discord.ui.View):
             prompt="Who drives today's train?",
             modal_title="Assign today's conductor",
             on_commit=_commit,
+            full_names=full_names,
+            scope=scope,
+            full_scope="\nShowing the **full roster**.",
         )
-        await interaction.response.send_message(
-            content=picker.content(), view=picker, ephemeral=True
-        )
+        await interaction.followup.send(content=picker.content(), view=picker, ephemeral=True)
 
     def _persist_scheduled(self):
         from config import get_train_config

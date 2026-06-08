@@ -133,6 +133,70 @@ class TestResolveColumns:
         assert res["notes"] == 0
 
 
+class TestSuggestColumnMap:
+    # The real server-wide Form_Responses header row (#16 design conversation).
+    FORM_HEADER = [
+        "Timestamp",
+        "In Game Username",
+        "Current Server",
+        "Current Alliance",
+        "Total Hero Power",
+        "Arena Total Hero Power",
+        "Main March Power",
+        "Main March Type",
+        "Total Kills",
+        "Anticipated Seat Color",
+        "Where are you currently located? (city, state, country)",
+        "What timezone are you in? (PST, MST, CST, EST)",
+        "Have you transferred servers before?",
+        "Why are you interested in transferring?",
+        "Requested Landing Alliance",
+        "Are you a part of any pairs or groups applying",
+        "Do you know anyone currently playing in 738",
+        "Long time gamer or rookie?",
+    ]
+
+    def test_maps_identity_columns_on_real_sheet(self):
+        s = transfer.suggest_column_map(self.FORM_HEADER)
+        assert s["member"] == "In Game Username"
+        assert s["server"] == "Current Server"
+        assert s["alliance"] == "Current Alliance"
+        assert s["tier"] == "Anticipated Seat Color"
+
+    def test_strongest_power_column_wins(self):
+        # Three power-ish columns; only the best (exact "Total Hero Power")
+        # is claimed — the others are left for the recruiter to add as extras.
+        s = transfer.suggest_column_map(self.FORM_HEADER)
+        assert s["power"] == "Total Hero Power"
+
+    def test_intake_sheet_has_no_status_columns(self):
+        # A form/intake sheet carries no want/confirmed/declined columns, and
+        # the prose "Why are you interested in transferring?" must NOT be
+        # mistaken for a "want" status column.
+        s = transfer.suggest_column_map(self.FORM_HEADER)
+        assert "want" not in s
+        assert "confirmed" not in s
+        assert "declined" not in s
+
+    def test_alliance_curated_sheet_maps_status(self):
+        header = ["Name", "Total Power", "Want?", "Confirmed", "Declined", "Notes"]
+        s = transfer.suggest_column_map(header)
+        assert s["member"] == "Name"
+        assert s["want"] == "Want?"
+        assert s["confirmed"] == "Confirmed"
+        assert s["declined"] == "Declined"
+        assert s["notes"] == "Notes"
+
+    def test_no_match_omits_key(self):
+        s = transfer.suggest_column_map(["Foo", "Bar", "Baz"])
+        assert s == {}
+
+    def test_each_header_claimed_once(self):
+        # "Server" shouldn't be claimed by two keys.
+        s = transfer.suggest_column_map(["Server", "Server"])
+        assert list(s.values()).count("Server") == 1
+
+
 class TestCellValue:
     ROW = ["Bad Pew", "Pioneer", "199M", "TRUE", "", "", "note", "Pink Cat"]
 
@@ -167,12 +231,25 @@ class TestCoerceNumber:
             (100, 100),
             (43.27, 43.27),
             ("  55.4 M ", 55_400_000),
+            # Real-world messy formats pulled from a live transfer sheet.
+            ("125 971 854", 125_971_854),  # space-separated thousands
+            ("216,976,226", 216_976_226),
+            ("168,359,484 as of 5/5", 168_359_484),  # trailing prose
+            ("100M as of 5/5/26", 100_000_000),  # suffix + trailing prose
+            ("271m", 271_000_000),
+            ("186M", 186_000_000),
+            ("69", 69),
         ],
     )
     def test_parses(self, value, expected):
         assert transfer.coerce_number(value) == pytest.approx(expected)
 
-    @pytest.mark.parametrize("bad", ["", "  ", "abc", None, "M", [1]])
+    def test_euro_decimal_is_known_limitation(self):
+        # "174,5" (174.5 in EU notation) is read as thousands → 1745. Pinned
+        # so the behavior is intentional, not an accident.
+        assert transfer.coerce_number("174,5") == 1745
+
+    @pytest.mark.parametrize("bad", ["", "  ", "abc", None, "M", [1], "as of 5/5", "N/A"])
     def test_unparseable_returns_none(self, bad):
         assert transfer.coerce_number(bad) is None
 

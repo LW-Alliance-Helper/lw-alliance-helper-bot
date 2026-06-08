@@ -181,6 +181,75 @@ def cell_value(row: list, resolved: dict, key: str) -> str | None:
     return value.strip() if isinstance(value, str) else str(value).strip()
 
 
+# Header-text synonyms used to auto-suggest a column map from a sheet's
+# header row (longest/most-specific synonym wins a tie). Word-boundary
+# matched, so "name" won't false-match inside "username" — only a real
+# "...name..." word does. Status keys (want/confirmed/declined) only match a
+# header that literally contains that word, so an intake/form sheet (which has
+# no status columns) simply leaves them unmapped.
+_HEADER_SYNONYMS = {
+    "member": [
+        "in game username",
+        "in-game username",
+        "in game name",
+        "player name",
+        "username",
+        "ign",
+        "player",
+        "name",
+    ],
+    "power": ["total hero power", "hero power", "total power", "power"],
+    "tier": ["anticipated seat color", "seat color", "tier", "rank", "seat"],
+    "want": ["do we want them", "do we want", "want them", "want"],
+    "confirmed": ["confirmed", "confirm", "approved", "accepted"],
+    "declined": ["declined", "decline", "rejected", "denied"],
+    "notes": ["notes", "comments", "note", "comment"],
+    "server": ["current server", "home server", "server"],
+    "alliance": ["current alliance", "alliance tag", "alliance"],
+}
+
+
+def _synonym_score(synonym: str, header_norm: str) -> int:
+    """How well ``synonym`` matches a normalised header. Exact match wins big;
+    a whole-word (phrase) hit scores by length so the most specific synonym
+    wins; no match is 0. Word-boundary matching avoids substring false
+    positives (``"name"`` inside ``"username"``)."""
+    if synonym == header_norm:
+        return 1000 + len(synonym)
+    if re.search(rf"\b{re.escape(synonym)}\b", header_norm):
+        return 10 + len(synonym)
+    return 0
+
+
+def suggest_column_map(header_row: list) -> dict:
+    """Best-guess header-name column map from a sheet's header row, as
+    ``{logical_key: header_text}``. Each logical key claims its best-matching
+    *unused* header (priority follows ``TOP_LEVEL_KEYS``); a header is claimed
+    by at most one key, so three power-ish columns don't all map to ``power``
+    — the strongest match wins and the rest are left for the recruiter to add
+    as extras. Keys with no decent match are omitted.
+
+    This drives the wizard's "I read your sheet — does this mapping look
+    right?" pre-fill; the recruiter confirms or overrides every field.
+    """
+    norm = [(i, _norm_header(h)) for i, h in enumerate(header_row)]
+    suggestion: dict = {}
+    used: set = set()
+    for key in TOP_LEVEL_KEYS:
+        synonyms = _HEADER_SYNONYMS.get(key, [])
+        best = None  # (score, index)
+        for i, header_norm in norm:
+            if i in used or not header_norm:
+                continue
+            score = max((_synonym_score(s, header_norm) for s in synonyms), default=0)
+            if score > 0 and (best is None or score > best[0]):
+                best = (score, i)
+        if best:
+            suggestion[key] = header_row[best[1]]
+            used.add(best[1])
+    return suggestion
+
+
 # ── Value coercion ───────────────────────────────────────────────────────────
 
 _NUM_SUFFIX = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
@@ -188,31 +257,52 @@ _TRUTHY = {"true", "yes", "y", "x", "1", "✓", "✔", "✅", "confirmed", "done
 _FALSY = {"false", "no", "n", "0", "", "✗", "✘", "❌"}
 
 
+# Leading numeric token: digits with comma/space thousands separators and an
+# optional decimal, then an optional K/M/B suffix. Anchored at the start so we
+# read the *number* out of a messy cell and ignore trailing prose.
+_NUM_TOKEN = re.compile(r"\s*(\d[\d,\s]*(?:\.\d+)?)\s*([kmb])?", re.IGNORECASE)
+
+
 def coerce_number(value) -> float | None:
-    """Parse a numeric value tolerant of recruiter shorthand: thousands
-    commas and ``K`` / ``M`` / ``B`` magnitude suffixes (``"199M"`` →
-    199000000, ``"1.2b"`` → 1200000000, ``"304,743,912"`` → that integer).
-    Returns ``None`` when the value can't be read as a number.
+    """Parse a numeric value out of the messy real-world formats a transfer
+    sheet collects. Tolerates:
+
+    - magnitude suffixes — ``"199M"`` → 199000000, ``"1.2b"`` → 1.2e9
+    - thousands separators, comma *or* space — ``"304,743,912"`` and
+      ``"125 971 854"`` both parse
+    - trailing prose — ``"168,359,484 as of 5/5"`` → 168359484,
+      ``"100M as of 5/5/26"`` → 1e8 (reads the leading number, drops the rest)
+
+    Returns ``None`` when there's no leading number to read.
 
     Both sides of a numeric filter comparison go through this, so the
     recruiter can type the threshold in the same units the sheet displays
-    (``100M``) and it lines up with a stored ``199M`` cell.
+    (``100M``) and it lines up with a stored ``199M`` cell — and the filter
+    works on a messy sheet *in place*, without the bot rewriting the data.
+
+    Known limitation: a European decimal comma (``"174,5"`` meaning 174.5) is
+    read as thousands (1745) — it's indistinguishable from a thousands group
+    without locale knowledge, and the comma-as-thousands case dominates real
+    sheets.
     """
     if isinstance(value, (int, float)):
         return float(value)
     if not isinstance(value, str):
         return None
-    s = value.strip().lower().replace(",", "")
-    if not s:
+    m = _NUM_TOKEN.match(value.strip())
+    if not m:
         return None
-    mult = 1
-    if s[-1] in _NUM_SUFFIX:
-        mult = _NUM_SUFFIX[s[-1]]
-        s = s[:-1].strip()
+    digits = m.group(1).replace(",", "").replace(" ", "")
+    if not digits or digits == ".":
+        return None
     try:
-        return float(s) * mult
+        number = float(digits)
     except ValueError:
         return None
+    suffix = m.group(2)
+    if suffix:
+        number *= _NUM_SUFFIX[suffix.lower()]
+    return number
 
 
 def coerce_bool(value) -> bool | None:

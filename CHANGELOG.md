@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.6] — 2026-06-08
+
+### Changed
+- The weekly train draft shows each day's conductor as a Discord @mention with shorter rule labels, replacing the code block that wrapped on mobile ([#314](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/314)).
+
 ## [1.5.5] — 2026-06-08
 
 ### Fixed

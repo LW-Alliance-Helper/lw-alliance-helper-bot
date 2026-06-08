@@ -7,26 +7,31 @@ core: column-map addressing, the AND-only filter DSL, change detection
 rendering. It imports nothing from ``discord`` so it stays trivially
 unit-testable.
 
-The Discord-facing wiring (the ``/setup_transfers`` wizard, the poll
-loop, notification embeds, the ``/transfers`` viewer) lives in
-``setup_cog.py`` / ``transfer_cog.py`` and calls into here.
+The Discord-facing wiring (the ``/transfers`` hub + its Setup Transfers
+wizard, the poll loop, notification embeds, the applicant viewer) lives
+in ``transfers_hub.py`` / ``setup_cog.py`` / ``transfer_cog.py`` and
+calls into here.
 
-Design ground rules (see ``notes/DESIGN_transfer_management.md``):
+Design ground rules (see ``notes/DESIGN_transfer_management.md`` — read
+the 2026-06-08 reconciliation addendum first):
 
 - **The bot is a watcher, not a replacement.** It never writes tracking
   columns back to the alliance sheet. Change detection is therefore
   done from row content alone (Option A — content hashing), not from a
   bot-written marker column.
 - **Only the Member name column is required.** Every other column is
-  optional; behaviour scales to whatever the alliance maps. A column map
-  is a dict like::
+  optional; behaviour scales to whatever the alliance maps. Columns are
+  addressed by *header name* (resolved to a live index each poll, so an
+  inserted/moved column doesn't break the mapping). A column map is a
+  dict like::
 
-      {"member": "A", "power": "G", "tier": "B", "want": "F",
-       "confirmed": "I", "declined": "K", "notes": "Z",
-       "extras": [{"label": "Bear vs Lion", "letter": "Y"}, ...]}
+      {"member": "Name", "power": "Total Power", "tier": "Tier",
+       "want": "Want?", "confirmed": "Confirmed", "declined": "Declined",
+       "notes": "Notes", "server": "Server",
+       "extras": [{"label": "Bear vs Lion", "header": "BvL"}, ...]}
 
-- **Degrade soft.** A filter that references a column which is no longer
-  mapped (or whose cell is blank/unparseable) errs toward *notifying*
+- **Degrade soft.** A filter that references a column which no longer
+  resolves (or whose cell is blank/unparseable) errs toward *notifying*
   rather than silently dropping an applicant — for a recruiting tool,
   over-notifying beats missing someone.
 """
@@ -40,22 +45,35 @@ from typing import NamedTuple
 
 from defaults import DEFAULT_TRANSFER_TEMPLATES
 
-# Logical column keys that live at the top level of a column map. Anything
-# else a filter references is looked up among the free-form ``extras``.
+# Logical status columns whose value changes drive a status-change notice.
 STATUS_KEYS = ("want", "confirmed", "declined")
-KNOWN_KEYS = ("member", "power", "tier", *STATUS_KEYS, "notes")
+# Top-level logical keys a column map may carry. ``server`` / ``alliance``
+# feed the identity hash (not user-status); the rest are display/filter
+# columns. Anything else a filter references is a free-form ``extras`` label.
+TOP_LEVEL_KEYS = ("member", "power", "tier", *STATUS_KEYS, "notes", "server", "alliance")
 
 
-# ── Column addressing ────────────────────────────────────────────────────────
+# ── Column addressing (header-name → live index) ──────────────────────────────
+#
+# A column map stores *header names*, not letters:
+#   {"member": "Name", "power": "Total Power", "confirmed": "Confirmed",
+#    "server": "Server",
+#    "extras": [{"label": "Bear vs Lion", "header": "BvL"}, ...]}
+# On each poll we resolve those header names against the sheet's live header
+# row into a ``{normalised-logical-key: 0-based-index}`` dict (``resolve_columns``)
+# and every downstream lookup goes through that resolved dict. Resolving per
+# poll is what makes the mapping survive an inserted/moved column — the index
+# is recomputed from the header text, never cached as a brittle letter.
 
 
 def col_letter_to_index(letter: str) -> int | None:
     """Spreadsheet column letter → 0-based index (``A`` → 0, ``Z`` → 25,
-    ``AA`` → 26). Returns ``None`` for an empty / non-alphabetic value so
-    callers can treat "no column" distinctly from "column A".
+    ``AA`` → 26). Returns ``None`` for an empty / non-alphabetic value.
 
-    A local copy of the AA+-aware converter (rather than importing
-    ``setup_cog``) keeps this module free of the Discord dependency.
+    Retained as the fallback in :func:`resolve_columns` (a configured value
+    that matches no header but looks like a bare letter is treated as a
+    literal column — a power-user escape hatch) and as a general utility.
+    A local copy of the AA+-aware converter keeps this module Discord-free.
     """
     if not letter:
         return None
@@ -80,11 +98,19 @@ def col_index_to_letter(idx: int) -> str:
     return out
 
 
+def _norm_header(value) -> str:
+    """Normalise a header / key for matching: trim, collapse internal
+    whitespace, casefold. So ``"Total  Power"`` and ``"total power"`` match."""
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value).strip()).casefold()
+
+
 def parse_column_map(raw) -> dict:
     """Decode a stored ``*_column_map_json`` value into a dict. Tolerates
     ``None`` / empty / malformed JSON by returning ``{}`` so a corrupt
-    saved map degrades to "only the rows, no addressable columns" rather
-    than crashing the poll loop."""
+    saved map degrades to "no addressable columns" rather than crashing the
+    poll loop."""
     if isinstance(raw, dict):
         return raw
     if not raw:
@@ -96,31 +122,59 @@ def parse_column_map(raw) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def column_index(column_map: dict, key: str) -> int | None:
-    """0-based sheet index for a logical column ``key`` in a column map,
-    or ``None`` if the key isn't mapped. Checks the top-level keys first
-    (``member``/``power``/``tier``/status/``notes``), then the free-form
-    ``extras`` list by case-insensitive label match."""
-    if not key:
-        return None
-    letter = column_map.get(key)
-    if isinstance(letter, str) and letter.strip():
-        return col_letter_to_index(letter)
-    target = key.strip().lower()
+def resolve_columns(header_row: list, column_map: dict) -> dict:
+    """Resolve a header-name column map against a sheet's live header row
+    into ``{normalised-logical-key: 0-based-index}``.
+
+    Top-level keys are stored under their own normalised name (``member``,
+    ``power``, …); each extra is stored under its normalised *label* so a
+    filter clause can reference it by the user-given label. A configured
+    header that matches no column in ``header_row`` is dropped (degrade
+    soft — a renamed/removed column simply disappears from the map); as a
+    last resort a value that looks like a bare column letter is taken
+    literally. Top-level keys win over a colliding extra label.
+    """
+    headers: dict = {}
+    for i, h in enumerate(header_row):
+        key = _norm_header(h)
+        if key and key not in headers:
+            headers[key] = i  # first occurrence wins on duplicate headers
+
+    def _lookup(value):
+        if value is None:
+            return None
+        norm = _norm_header(value)
+        if not norm:
+            return None
+        if norm in headers:
+            return headers[norm]
+        return col_letter_to_index(str(value))  # literal-letter escape hatch
+
+    resolved: dict = {}
+    for key in TOP_LEVEL_KEYS:
+        idx = _lookup(column_map.get(key))
+        if idx is not None:
+            resolved[key] = idx
     for extra in column_map.get("extras", []) or []:
         if not isinstance(extra, dict):
             continue
-        if str(extra.get("label", "")).strip().lower() == target:
-            return col_letter_to_index(str(extra.get("letter", "")))
-    return None
+        label = _norm_header(extra.get("label", ""))
+        if not label or label in resolved:
+            continue
+        # New maps store "header"; tolerate a legacy "letter" key too.
+        idx = _lookup(extra.get("header", extra.get("letter")))
+        if idx is not None:
+            resolved[label] = idx
+    return resolved
 
 
-def cell_value(row: list, column_map: dict, key: str) -> str | None:
-    """The trimmed string in ``row`` for logical column ``key``, or
-    ``None`` when the key isn't mapped or the row is too short to reach it.
-    ``None`` is the "can't address this" signal that filter and snapshot
-    logic treat as soft-degrade."""
-    idx = column_index(column_map, key)
+def cell_value(row: list, resolved: dict, key: str) -> str | None:
+    """The trimmed string in ``row`` for logical column ``key`` (looked up in
+    a :func:`resolve_columns` result), or ``None`` when the key isn't
+    resolved or the row is too short to reach it. ``None`` is the
+    "can't address this" signal that filter and snapshot logic soft-degrade
+    on."""
+    idx = resolved.get(_norm_header(key))
     if idx is None or idx < 0 or idx >= len(row):
         return None
     value = row[idx]
@@ -202,7 +256,7 @@ def parse_filter(raw) -> dict | None:
     return None
 
 
-def _eval_clause(clause: dict, row: list, column_map: dict) -> bool:
+def _eval_clause(clause: dict, row: list, resolved: dict) -> bool:
     """Evaluate one filter clause. Unaddressable column or unparseable
     value → ``True`` (soft pass: don't drop the applicant)."""
     if not isinstance(clause, dict):
@@ -211,9 +265,9 @@ def _eval_clause(clause: dict, row: list, column_map: dict) -> bool:
     op = clause.get("op", "")
     target = clause.get("value")
 
-    cell = cell_value(row, column_map, col)
+    cell = cell_value(row, resolved, col)
     if cell is None:
-        # Column no longer mapped / row too short — degrade soft.
+        # Column no longer resolves / row too short — degrade soft.
         return True
 
     if op in (">=", ">", "<=", "<", "==", "!="):
@@ -253,16 +307,16 @@ def _eval_clause(clause: dict, row: list, column_map: dict) -> bool:
     return True
 
 
-def evaluate_filter(filter_obj, row: list, column_map: dict) -> bool:
+def evaluate_filter(filter_obj, row: list, resolved: dict) -> bool:
     """``True`` if ``row`` passes the (AND-of-clauses) filter. A falsy
     filter passes everything. ``filter_obj`` may be the parsed dict or the
-    raw stored JSON string."""
+    raw stored JSON string; ``resolved`` is a :func:`resolve_columns` map."""
     if isinstance(filter_obj, str):
         filter_obj = parse_filter(filter_obj)
     if not filter_obj:
         return True
     clauses = filter_obj.get("and") or []
-    return all(_eval_clause(c, row, column_map) for c in clauses)
+    return all(_eval_clause(c, row, resolved) for c in clauses)
 
 
 # ── Change detection (Option A — row-content hashing) ────────────────────────
@@ -286,32 +340,43 @@ def identity_hash(member: str, alliance: str = "", server: str = "") -> str:
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
 
 
-def row_identity(
-    row: list, column_map: dict, *, alliance: str = "", server: str = ""
-) -> str | None:
+def row_identity(row: list, resolved: dict, *, alliance: str = "", server: str = "") -> str | None:
     """Identity hash for a sheet row, or ``None`` when the row has no
     member name (a blank/spacer row we should skip). ``alliance`` and
     ``server`` are supplied by the caller — the alliance is constant for an
     alliance's own sheet, and a server value comes from a mapped column
     when present."""
-    member = cell_value(row, column_map, "member")
+    member = cell_value(row, resolved, "member")
     if not member:
         return None
     return identity_hash(member, alliance, server)
 
 
-def status_snapshot(row: list, column_map: dict) -> dict:
+def status_snapshot(row: list, resolved: dict) -> dict:
     """Snapshot of a row's mapped status columns, keyed by logical name.
     Stores the raw trimmed cell text (not a coerced bool) so any change —
     ``""`` → ``"Confirmed"``, ``false`` → ``true`` — is detected without
-    depending on truthiness interpretation. Only keys actually mapped on
+    depending on truthiness interpretation. Only keys actually resolved on
     the sheet are included."""
     snap = {}
     for key in STATUS_KEYS:
-        value = cell_value(row, column_map, key)
+        value = cell_value(row, resolved, key)
         if value is not None:
             snap[key] = value
     return snap
+
+
+def status_was_set(snapshot: dict) -> bool:
+    """``True`` if a status snapshot records a real decision — any status
+    field whose value is non-empty and not a falsy marker (``""`` / ``no`` /
+    ``false`` / ``0`` …). Used to decide whether a *deleted* row is worth a
+    removal notice: a pending applicant cleaned off the sheet shouldn't
+    notify, but one that had been marked Confirmed / Declined should."""
+    for value in (snapshot or {}).values():
+        s = str(value).strip()
+        if s and s.lower() not in _FALSY:
+            return True
+    return False
 
 
 def diff_status(old: dict, new: dict) -> list[tuple[str, str, str]]:
@@ -352,15 +417,27 @@ class StatusChange(NamedTuple):
     snapshot: dict
 
 
+class Deletion(NamedTuple):
+    """A previously-seen applicant that's no longer on the sheet and *had a
+    status set* (``status_was_set``). ``snapshot`` is the last-seen status.
+    Surfaced only so the cog can post a removal notice when the alliance
+    opted into ``notify_on_delete``; the row is dropped from ``next_state``
+    either way."""
+
+    hash: str
+    snapshot: dict
+
+
 class PollDiff(NamedTuple):
     new_applicants: list  # list[NewApplicant]
     status_changes: list  # list[StatusChange]
+    deletions: list  # list[Deletion] — status-bearing rows that vanished
     next_state: dict  # {hash: status_snapshot} to persist
 
 
 def compute_poll_diff(
     rows: list,
-    column_map: dict,
+    resolved: dict,
     *,
     prior_state: dict,
     filter_obj=None,
@@ -369,9 +446,11 @@ def compute_poll_diff(
 ) -> PollDiff:
     """Diff one poll of an alliance sheet against the last-seen state.
 
-    ``rows`` are the data rows (header already stripped). Returns a
-    :class:`PollDiff` of the new applicants to announce, the status changes
-    to announce, and the ``next_state`` to persist.
+    ``rows`` are the data rows (header already stripped); ``resolved`` is a
+    :func:`resolve_columns` map for that sheet's live header row. Returns a
+    :class:`PollDiff` of the new applicants and status changes to announce,
+    the status-bearing deletions to optionally announce, and the
+    ``next_state`` to persist.
 
     Behaviour (see ``DESIGN_transfer_management.md`` §7, §11):
 
@@ -387,11 +466,13 @@ def compute_poll_diff(
     - **Seen hash, changed status snapshot** → status change. Status changes
       are *not* filtered — a low-power applicant being marked Confirmed is
       exactly the event leadership wants to see.
-    - **Seen last time, absent now** → row deleted; quietly forgotten (left
-      out of ``next_state``, no notification).
+    - **Seen last time, absent now** → row deleted; dropped from
+      ``next_state``. Returned in ``deletions`` only when a status had been
+      set (so the opt-in removal notice never fires for cleaned-up pending
+      rows). The cog decides whether to actually post it (``notify_on_delete``).
     - **baseline=True** → bookmark every current row into ``next_state`` and
-      announce nothing. Used for the silent first read at setup so existing
-      rows don't flood the channel.
+      announce nothing (no new/changed/deleted). Used for the silent first
+      read at setup so existing rows don't flood the channel.
 
     Blank rows (no member name) and exact duplicate identities collapse
     safely (last snapshot wins).
@@ -402,32 +483,38 @@ def compute_poll_diff(
     status_changes: list = []
 
     for row in rows:
-        member = cell_value(row, column_map, "member")
+        member = cell_value(row, resolved, "member")
         if not member:
             continue  # blank / spacer row
-        server = cell_value(row, column_map, "server") or ""
-        row_alliance = cell_value(row, column_map, "alliance") or alliance
+        server = cell_value(row, resolved, "server") or ""
+        row_alliance = cell_value(row, resolved, "alliance") or alliance
         h = identity_hash(member, row_alliance, server)
-        snap = status_snapshot(row, column_map)
+        snap = status_snapshot(row, resolved)
         seen_before = h in prior_state
         next_state[h] = snap
 
         if baseline:
             continue
         if not seen_before:
-            if evaluate_filter(filter_obj, row, column_map):
+            if evaluate_filter(filter_obj, row, resolved):
                 new_applicants.append(NewApplicant(h, row, snap))
         else:
             changes = diff_status(prior_state[h], snap)
             if changes:
                 status_changes.append(StatusChange(h, row, changes, snap))
 
-    return PollDiff(new_applicants, status_changes, next_state)
+    deletions: list = []
+    if not baseline:
+        for h, snap in prior_state.items():
+            if h not in next_state and status_was_set(snap):
+                deletions.append(Deletion(h, snap))
+
+    return PollDiff(new_applicants, status_changes, deletions, next_state)
 
 
 def select_rows_to_copy(
     source_rows: list,
-    source_map: dict,
+    source_resolved: dict,
     *,
     already_copied: set,
     filter_obj=None,
@@ -436,11 +523,13 @@ def select_rows_to_copy(
     """Pick rows from an optional source sheet (server-wide pool or intake
     form) that should be copied into the alliance's own sheet.
 
-    Returns ``(rows_to_copy, updated_copied)`` where ``rows_to_copy`` are the
-    source rows that pass ``filter_obj`` and whose identity hash isn't in
-    ``already_copied``, and ``updated_copied`` is ``already_copied`` plus the
-    hashes of the rows being copied. The hash set dedups across polls so a
-    matching row is copied once even though it lingers in the source sheet.
+    ``source_resolved`` is a :func:`resolve_columns` map for the source
+    sheet. Returns ``(rows_to_copy, updated_copied)`` where ``rows_to_copy``
+    are the source rows that pass ``filter_obj`` and whose identity hash
+    isn't in ``already_copied``, and ``updated_copied`` is ``already_copied``
+    plus the hashes of the rows being copied. The hash set dedups across
+    polls so a matching row is copied once even though it lingers in the
+    source sheet.
 
     The bot only ever copies *into the alliance's own* sheet — never into a
     sheet shared with other alliances (DESIGN §1).
@@ -448,15 +537,15 @@ def select_rows_to_copy(
     rows_to_copy: list = []
     updated = set(already_copied)
     for row in source_rows:
-        member = cell_value(row, source_map, "member")
+        member = cell_value(row, source_resolved, "member")
         if not member:
             continue
-        server = cell_value(row, source_map, "server") or ""
-        row_alliance = cell_value(row, source_map, "alliance") or alliance
+        server = cell_value(row, source_resolved, "server") or ""
+        row_alliance = cell_value(row, source_resolved, "alliance") or alliance
         h = identity_hash(member, row_alliance, server)
         if h in updated:
             continue
-        if not evaluate_filter(filter_obj, row, source_map):
+        if not evaluate_filter(filter_obj, row, source_resolved):
             continue
         rows_to_copy.append(row)
         updated.add(h)

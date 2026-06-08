@@ -338,15 +338,22 @@ def init_db():
         # the alliance sheet.
         #
         # The `*_column_map_json` fields hold the flexible column mapping
-        # (only Member name is required) as JSON, so any alliance's sheet
-        # structure works without schema changes:
-        #   {"member": "A", "power": "G", "tier": "B", "want": "G",
-        #    "confirmed": "I", "declined": "K", "notes": "Z",
-        #    "extras": [{"label": "Bear vs Lion", "letter": "Y"}, ...]}
+        # (only Member name is required) as JSON. Columns are addressed by
+        # *header name* (resolved to a live index on each poll — see
+        # transfer.resolve_columns), so inserting/moving a column doesn't
+        # break the mapping:
+        #   {"member": "Name", "power": "Total Power", "tier": "Tier",
+        #    "want": "Want?", "confirmed": "Confirmed", "declined": "Declined",
+        #    "notes": "Notes", "server": "Server",
+        #    "extras": [{"label": "Bear vs Lion", "header": "BvL"}, ...]}
         # The `*_filter_json` fields hold the AND-only filter DSL
         # (see transfer.evaluate_filter). `last_seen_state_json` is the
-        # change-detection state: identity-hash → status snapshot.
-        # Empty-string template fields mean "use the defaults.py default".
+        # watch state (identity-hash → status snapshot); `copied_state_json`
+        # is the separate dedup set for rows already copied in from the
+        # optional server-wide / form sources. `notify_on_delete` is the
+        # opt-in for "applicant removed from your sheet" notices (only fired
+        # when a status had been set). Empty-string template fields mean
+        # "use the defaults.py default".
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_transfer_config (
                 guild_id                       INTEGER PRIMARY KEY,
@@ -359,6 +366,7 @@ def init_db():
                 poll_frequency_minutes         INTEGER DEFAULT 60,
                 notification_channel_id        INTEGER DEFAULT 0,
                 notification_filter_json       TEXT    DEFAULT '',
+                notify_on_delete               INTEGER DEFAULT 0,
 
                 server_wide_enabled            INTEGER DEFAULT 0,
                 server_wide_sheet_id           TEXT    DEFAULT '',
@@ -372,13 +380,14 @@ def init_db():
                 alliance_form_column_map_json  TEXT    DEFAULT '{}',
                 alliance_form_filter_json      TEXT    DEFAULT '',
 
-                package_column_letter          TEXT    DEFAULT '',
+                package_column                 TEXT    DEFAULT '',
 
                 template_apply_invitation      TEXT    DEFAULT '',
                 template_confirm_request       TEXT    DEFAULT '',
                 template_decline               TEXT    DEFAULT '',
 
                 last_seen_state_json           TEXT    DEFAULT '{}',
+                copied_state_json              TEXT    DEFAULT '{}',
                 last_polled_at                 TEXT    DEFAULT ''
             )
         """)
@@ -1104,6 +1113,7 @@ def init_db():
             ("poll_frequency_minutes", "INTEGER DEFAULT 60"),
             ("notification_channel_id", "INTEGER DEFAULT 0"),
             ("notification_filter_json", "TEXT    DEFAULT ''"),
+            ("notify_on_delete", "INTEGER DEFAULT 0"),
             ("server_wide_enabled", "INTEGER DEFAULT 0"),
             ("server_wide_sheet_id", "TEXT    DEFAULT ''"),
             ("server_wide_sheet_tab", "TEXT    DEFAULT ''"),
@@ -1114,11 +1124,12 @@ def init_db():
             ("alliance_form_sheet_tab", "TEXT    DEFAULT ''"),
             ("alliance_form_column_map_json", "TEXT    DEFAULT '{}'"),
             ("alliance_form_filter_json", "TEXT    DEFAULT ''"),
-            ("package_column_letter", "TEXT    DEFAULT ''"),
+            ("package_column", "TEXT    DEFAULT ''"),
             ("template_apply_invitation", "TEXT    DEFAULT ''"),
             ("template_confirm_request", "TEXT    DEFAULT ''"),
             ("template_decline", "TEXT    DEFAULT ''"),
             ("last_seen_state_json", "TEXT    DEFAULT '{}'"),
+            ("copied_state_json", "TEXT    DEFAULT '{}'"),
             ("last_polled_at", "TEXT    DEFAULT ''"),
         ]:
             try:
@@ -4738,6 +4749,7 @@ _TRANSFER_DEFAULTS = {
     "poll_frequency_minutes": 60,
     "notification_channel_id": 0,
     "notification_filter_json": "",
+    "notify_on_delete": 0,
     "server_wide_enabled": 0,
     "server_wide_sheet_id": "",
     "server_wide_sheet_tab": "",
@@ -4748,11 +4760,12 @@ _TRANSFER_DEFAULTS = {
     "alliance_form_sheet_tab": "",
     "alliance_form_column_map_json": "{}",
     "alliance_form_filter_json": "",
-    "package_column_letter": "",
+    "package_column": "",
     "template_apply_invitation": "",
     "template_confirm_request": "",
     "template_decline": "",
     "last_seen_state_json": "{}",
+    "copied_state_json": "{}",
     "last_polled_at": "",
 }
 

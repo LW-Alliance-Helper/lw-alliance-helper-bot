@@ -355,3 +355,146 @@ class TestResolveTemplate:
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError):
             transfer.resolve_template({}, "bogus")
+
+
+# ── Poll orchestration ───────────────────────────────────────────────────────
+
+# Map with a "Server" extra so identity can vary per row.
+SRV_MAP = {
+    "member": "A",
+    "tier": "B",
+    "power": "C",
+    "confirmed": "D",
+    "extras": [{"label": "Server", "letter": "E"}],
+}
+
+
+def _identity(member, server="", alliance="OGV"):
+    return transfer.identity_hash(member, alliance, server)
+
+
+class TestComputePollDiff:
+    def test_baseline_announces_nothing_but_records_state(self):
+        rows = [
+            ["Bad Pew", "Pioneer", "199M", "", "738"],
+            ["Spartan Ghost", "Elite", "250M", "TRUE", "739"],
+        ]
+        diff = transfer.compute_poll_diff(
+            rows, SRV_MAP, prior_state={}, alliance="OGV", baseline=True
+        )
+        assert diff.new_applicants == []
+        assert diff.status_changes == []
+        assert set(diff.next_state) == {
+            _identity("Bad Pew", "738"),
+            _identity("Spartan Ghost", "739"),
+        }
+
+    def test_new_applicant_fires(self):
+        rows = [["Bad Pew", "Pioneer", "199M", "", "738"]]
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state={}, alliance="OGV")
+        assert len(diff.new_applicants) == 1
+        assert diff.new_applicants[0].hash == _identity("Bad Pew", "738")
+        assert diff.new_applicants[0].row == rows[0]
+
+    def test_new_applicant_filtered_out_still_bookmarked(self):
+        rows = [["Low Guy", "Pioneer", "10M", "", "738"]]
+        filt = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
+        diff = transfer.compute_poll_diff(
+            rows, SRV_MAP, prior_state={}, filter_obj=filt, alliance="OGV"
+        )
+        # Filtered out → no notification...
+        assert diff.new_applicants == []
+        # ...but recorded so it won't re-fire if the filter later loosens.
+        assert _identity("Low Guy", "738") in diff.next_state
+
+    def test_status_change_fires(self):
+        rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
+        h = _identity("Bad Pew", "738")
+        prior = {h: {"confirmed": "FALSE"}}
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state=prior, alliance="OGV")
+        assert diff.new_applicants == []
+        assert len(diff.status_changes) == 1
+        sc = diff.status_changes[0]
+        assert sc.changes == [("confirmed", "FALSE", "TRUE")]
+
+    def test_status_change_not_filtered(self):
+        # A low-power applicant marked Confirmed must still notify even when a
+        # new-applicant power filter is set — status changes bypass the filter.
+        rows = [["Low Guy", "Pioneer", "10M", "TRUE", "738"]]
+        h = _identity("Low Guy", "738")
+        prior = {h: {"confirmed": ""}}
+        filt = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
+        diff = transfer.compute_poll_diff(
+            rows, SRV_MAP, prior_state=prior, filter_obj=filt, alliance="OGV"
+        )
+        assert len(diff.status_changes) == 1
+
+    def test_no_change_is_quiet(self):
+        rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
+        h = _identity("Bad Pew", "738")
+        prior = {h: {"confirmed": "TRUE"}}
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state=prior, alliance="OGV")
+        assert diff.new_applicants == []
+        assert diff.status_changes == []
+
+    def test_deleted_row_is_forgotten_silently(self):
+        # Prior state has a row that's no longer present → dropped from
+        # next_state, no notification.
+        rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
+        gone = _identity("Old Applicant", "700")
+        keep = _identity("Bad Pew", "738")
+        prior = {gone: {"confirmed": ""}, keep: {"confirmed": "TRUE"}}
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state=prior, alliance="OGV")
+        assert gone not in diff.next_state
+        assert keep in diff.next_state
+        assert diff.status_changes == []
+
+    def test_blank_rows_skipped(self):
+        rows = [["", "", "", "", ""], ["Bad Pew", "Pioneer", "199M", "", "738"]]
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state={}, alliance="OGV")
+        assert len(diff.new_applicants) == 1
+        assert len(diff.next_state) == 1
+
+    def test_same_name_different_server_are_distinct(self):
+        rows = [
+            ["Bad Pew", "Pioneer", "199M", "", "738"],
+            ["Bad Pew", "Pioneer", "199M", "", "739"],
+        ]
+        diff = transfer.compute_poll_diff(rows, SRV_MAP, prior_state={}, alliance="OGV")
+        assert len(diff.new_applicants) == 2
+        assert len(diff.next_state) == 2
+
+
+class TestSelectRowsToCopy:
+    SRC_MAP = {
+        "member": "A",
+        "power": "B",
+        "extras": [{"label": "Preferred Alliance", "letter": "C"}],
+    }
+
+    def test_copies_matching_uncopied_rows(self):
+        rows = [["Bad Pew", "199M", "OGV"], ["Other", "50M", "XYZ"]]
+        filt = {"and": [{"column": "Preferred Alliance", "op": "contains", "value": "OGV"}]}
+        to_copy, copied = transfer.select_rows_to_copy(
+            rows, self.SRC_MAP, already_copied=set(), filter_obj=filt
+        )
+        assert to_copy == [["Bad Pew", "199M", "OGV"]]
+        assert transfer.identity_hash("Bad Pew") in copied
+
+    def test_dedups_already_copied(self):
+        rows = [["Bad Pew", "199M", "OGV"]]
+        seen = {transfer.identity_hash("Bad Pew")}
+        to_copy, copied = transfer.select_rows_to_copy(rows, self.SRC_MAP, already_copied=seen)
+        assert to_copy == []
+        assert copied == seen
+
+    def test_no_filter_copies_all_new(self):
+        rows = [["A", "1M", "X"], ["B", "2M", "Y"]]
+        to_copy, copied = transfer.select_rows_to_copy(rows, self.SRC_MAP, already_copied=set())
+        assert len(to_copy) == 2
+        assert len(copied) == 2
+
+    def test_blank_member_skipped(self):
+        rows = [["", "1M", "X"], ["B", "2M", "Y"]]
+        to_copy, _ = transfer.select_rows_to_copy(rows, self.SRC_MAP, already_copied=set())
+        assert to_copy == [["B", "2M", "Y"]]

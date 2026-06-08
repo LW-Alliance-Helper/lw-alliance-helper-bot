@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from typing import NamedTuple
 
 from defaults import DEFAULT_TRANSFER_TEMPLATES
 
@@ -327,6 +328,139 @@ def diff_status(old: dict, new: dict) -> list[tuple[str, str, str]]:
         if before != after:
             changes.append((key, before, after))
     return changes
+
+
+# ── Poll orchestration ───────────────────────────────────────────────────────
+
+
+class NewApplicant(NamedTuple):
+    """A row whose identity is unseen since the last poll and which passes
+    the new-applicant filter."""
+
+    hash: str
+    row: list
+    snapshot: dict
+
+
+class StatusChange(NamedTuple):
+    """A previously-seen row whose mapped status columns changed. ``changes``
+    is the ``diff_status`` list of ``(field, old, new)`` tuples."""
+
+    hash: str
+    row: list
+    changes: list
+    snapshot: dict
+
+
+class PollDiff(NamedTuple):
+    new_applicants: list  # list[NewApplicant]
+    status_changes: list  # list[StatusChange]
+    next_state: dict  # {hash: status_snapshot} to persist
+
+
+def compute_poll_diff(
+    rows: list,
+    column_map: dict,
+    *,
+    prior_state: dict,
+    filter_obj=None,
+    alliance: str = "",
+    baseline: bool = False,
+) -> PollDiff:
+    """Diff one poll of an alliance sheet against the last-seen state.
+
+    ``rows`` are the data rows (header already stripped). Returns a
+    :class:`PollDiff` of the new applicants to announce, the status changes
+    to announce, and the ``next_state`` to persist.
+
+    Behaviour (see ``DESIGN_transfer_management.md`` §7, §11):
+
+    - **Identity** is ``member + alliance + server``. ``alliance`` defaults
+      to the guild's alliance (a column labelled "Alliance" overrides it
+      per-row, for server-wide sources); ``server`` comes from a column
+      labelled "Server" when mapped, else blank. Power/tier never feed the
+      hash — they legitimately change between polls.
+    - **New hash** → new applicant, but only announced when it passes
+      ``filter_obj``. Either way the row is recorded in ``next_state``, so a
+      filtered-out applicant is bookmarked and won't re-fire if the filter
+      later loosens.
+    - **Seen hash, changed status snapshot** → status change. Status changes
+      are *not* filtered — a low-power applicant being marked Confirmed is
+      exactly the event leadership wants to see.
+    - **Seen last time, absent now** → row deleted; quietly forgotten (left
+      out of ``next_state``, no notification).
+    - **baseline=True** → bookmark every current row into ``next_state`` and
+      announce nothing. Used for the silent first read at setup so existing
+      rows don't flood the channel.
+
+    Blank rows (no member name) and exact duplicate identities collapse
+    safely (last snapshot wins).
+    """
+    prior_state = prior_state or {}
+    next_state: dict = {}
+    new_applicants: list = []
+    status_changes: list = []
+
+    for row in rows:
+        member = cell_value(row, column_map, "member")
+        if not member:
+            continue  # blank / spacer row
+        server = cell_value(row, column_map, "server") or ""
+        row_alliance = cell_value(row, column_map, "alliance") or alliance
+        h = identity_hash(member, row_alliance, server)
+        snap = status_snapshot(row, column_map)
+        seen_before = h in prior_state
+        next_state[h] = snap
+
+        if baseline:
+            continue
+        if not seen_before:
+            if evaluate_filter(filter_obj, row, column_map):
+                new_applicants.append(NewApplicant(h, row, snap))
+        else:
+            changes = diff_status(prior_state[h], snap)
+            if changes:
+                status_changes.append(StatusChange(h, row, changes, snap))
+
+    return PollDiff(new_applicants, status_changes, next_state)
+
+
+def select_rows_to_copy(
+    source_rows: list,
+    source_map: dict,
+    *,
+    already_copied: set,
+    filter_obj=None,
+    alliance: str = "",
+) -> tuple[list, set]:
+    """Pick rows from an optional source sheet (server-wide pool or intake
+    form) that should be copied into the alliance's own sheet.
+
+    Returns ``(rows_to_copy, updated_copied)`` where ``rows_to_copy`` are the
+    source rows that pass ``filter_obj`` and whose identity hash isn't in
+    ``already_copied``, and ``updated_copied`` is ``already_copied`` plus the
+    hashes of the rows being copied. The hash set dedups across polls so a
+    matching row is copied once even though it lingers in the source sheet.
+
+    The bot only ever copies *into the alliance's own* sheet — never into a
+    sheet shared with other alliances (DESIGN §1).
+    """
+    rows_to_copy: list = []
+    updated = set(already_copied)
+    for row in source_rows:
+        member = cell_value(row, source_map, "member")
+        if not member:
+            continue
+        server = cell_value(row, source_map, "server") or ""
+        row_alliance = cell_value(row, source_map, "alliance") or alliance
+        h = identity_hash(member, row_alliance, server)
+        if h in updated:
+            continue
+        if not evaluate_filter(filter_obj, row, source_map):
+            continue
+        rows_to_copy.append(row)
+        updated.add(h)
+    return rows_to_copy, updated
 
 
 # ── In-game message templates ────────────────────────────────────────────────

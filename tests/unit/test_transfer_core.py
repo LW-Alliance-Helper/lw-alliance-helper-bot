@@ -1,9 +1,12 @@
 """Unit tests for transfer.py — the Transfer Management (#16) pure-logic
-core: header-name column resolution, the AND-only filter DSL, change
-detection (identity hashing + status snapshots/diffs/deletions), value
-coercion, and in-game message template rendering.
+core: header-name addressing, auto-suggest, the AND-only filter DSL, change
+detection (identity hashing + status snapshots/diffs/deletions), display
+fields, value coercion, and template rendering.
 
-All side-effect-free; no DB / Discord needed.
+Column model: only a Name column is special-and-required. ``status`` and
+``display`` are free-choice header lists; identity = Name + chosen
+``identity_extra`` columns; filters target any column by header. All
+side-effect-free; no DB / Discord needed.
 """
 
 from __future__ import annotations
@@ -19,18 +22,10 @@ import transfer
 from defaults import DEFAULT_TRANSFER_TEMPLATES
 
 
-# A resolved column map (what resolve_columns produces): normalised logical
-# key / extra label → 0-based column index. Rows below are aligned to it.
-RES = {
-    "member": 0,
-    "tier": 1,
-    "power": 2,
-    "want": 3,
-    "confirmed": 4,
-    "declined": 5,
-    "notes": 6,
-    "bear vs lion": 7,
-}
+# An alliance-curated sheet: Name + a few stats + status columns + an extra.
+HEADER = ["Name", "Tier", "Total Power", "Want?", "Confirmed", "Declined", "Notes", "Bear vs Lion"]
+HIDX = transfer.header_index(HEADER)
+ROW = ["Bad Pew", "Pioneer", "199M", "TRUE", "", "", "note", "Pink Cat"]
 
 
 # ── Column-letter utilities ──────────────────────────────────────────────────
@@ -57,80 +52,58 @@ class TestColumnLetters:
             assert transfer.col_letter_to_index(transfer.col_index_to_letter(i)) == i
 
 
-# ── Column-map decode + header resolution ────────────────────────────────────
+# ── Column-map decode + header addressing ────────────────────────────────────
 
 
 class TestParseColumnMap:
-    MAP = {"member": "Name"}
+    MAP = {"name": "Name"}
 
     def test_passthrough_dict(self):
         assert transfer.parse_column_map(self.MAP) is self.MAP
 
     def test_json_string(self):
-        assert transfer.parse_column_map('{"member": "Name"}') == {"member": "Name"}
+        assert transfer.parse_column_map('{"name": "Name"}') == {"name": "Name"}
 
     @pytest.mark.parametrize("bad", ["", None, "{not json", "[]", "42"])
     def test_bad_input_returns_empty(self, bad):
         assert transfer.parse_column_map(bad) == {}
 
 
-class TestResolveColumns:
-    HEADER = ["Name", "Tier", "Total Power", "Want?", "Confirmed", "Server", "Notes"]
-    MAP = {
-        "member": "Name",
-        "tier": "Tier",
-        "power": "total power",  # case-insensitive match
-        "want": "Want?",
-        "confirmed": "Confirmed",
-        "server": "Server",
-        "notes": "Notes",
-        "extras": [{"label": "Bear vs Lion", "header": "BvL (missing)"}],
-    }
+class TestHeaderIndex:
+    def test_basic(self):
+        assert transfer.header_index(["A", "B", "C"]) == {"a": 0, "b": 1, "c": 2}
 
-    def test_resolves_top_level_keys(self):
-        res = transfer.resolve_columns(self.HEADER, self.MAP)
-        assert res["member"] == 0
-        assert res["tier"] == 1
-        assert res["power"] == 2  # matched case-insensitively
-        assert res["confirmed"] == 4
-        assert res["server"] == 5
+    def test_case_and_whitespace_insensitive(self):
+        assert transfer.header_index(["  Total  Power "]) == {"total power": 0}
 
-    def test_missing_header_is_dropped(self):
-        # "BvL (missing)" isn't in the header row → the extra disappears.
-        res = transfer.resolve_columns(self.HEADER, self.MAP)
-        assert "bear vs lion" not in res
+    def test_duplicate_header_first_wins(self):
+        assert transfer.header_index(["X", "X"]) == {"x": 0}
 
-    def test_extra_resolved_by_label(self):
-        header = ["Name", "BvL Result"]
-        m = {"member": "Name", "extras": [{"label": "Bear vs Lion", "header": "BvL Result"}]}
-        res = transfer.resolve_columns(header, m)
-        assert res["bear vs lion"] == 1
+    def test_blank_headers_skipped(self):
+        assert transfer.header_index(["A", "", "C"]) == {"a": 0, "c": 2}
 
-    def test_whitespace_and_case_insensitive(self):
-        header = ["  NAME  ", "total   power"]
-        m = {"member": "name", "power": "Total Power"}
-        res = transfer.resolve_columns(header, m)
-        assert res == {"member": 0, "power": 1}
 
-    def test_letter_fallback_when_no_header_match(self):
-        # A configured value that matches no header but looks like a bare
-        # column letter is taken literally (power-user escape hatch).
-        header = ["Col0", "Col1", "Col2"]
-        m = {"member": "C"}
-        res = transfer.resolve_columns(header, m)
-        assert res["member"] == 2
+class TestCellFor:
+    def test_resolves_by_header(self):
+        assert transfer.cell_for(ROW, HIDX, "Name") == "Bad Pew"
+        assert transfer.cell_for(ROW, HIDX, "Total Power") == "199M"
+        assert transfer.cell_for(ROW, HIDX, "bear vs lion") == "Pink Cat"  # case-insensitive
 
-    def test_legacy_letter_key_on_extra(self):
-        header = ["Name", "Whatever"]
-        m = {"member": "Name", "extras": [{"label": "X", "letter": "B"}]}
-        res = transfer.resolve_columns(header, m)
-        assert res["x"] == 1
+    def test_unknown_header_returns_none(self):
+        assert transfer.cell_for(ROW, HIDX, "Missing") is None
 
-    def test_top_level_wins_over_colliding_extra(self):
-        header = ["Notes Col"]
-        m = {"notes": "Notes Col", "extras": [{"label": "notes", "header": "Notes Col"}]}
-        res = transfer.resolve_columns(header, m)
-        assert res["notes"] == 0
+    def test_row_too_short_returns_none(self):
+        assert transfer.cell_for(["only one"], HIDX, "Total Power") is None
+
+    def test_letter_fallback(self):
+        # No header_index entry, but "C" reads as a literal column letter.
+        assert transfer.cell_for(["a", "b", "c"], {}, "C") == "c"
+
+    def test_strips_whitespace(self):
+        assert transfer.cell_for(["  spaced  "], {"name": 0}, "name") == "spaced"
+
+
+# ── Auto-suggest ─────────────────────────────────────────────────────────────
 
 
 class TestSuggestColumnMap:
@@ -147,73 +120,48 @@ class TestSuggestColumnMap:
         "Total Kills",
         "Anticipated Seat Color",
         "Where are you currently located? (city, state, country)",
-        "What timezone are you in? (PST, MST, CST, EST)",
-        "Have you transferred servers before?",
         "Why are you interested in transferring?",
         "Requested Landing Alliance",
-        "Are you a part of any pairs or groups applying",
-        "Do you know anyone currently playing in 738",
-        "Long time gamer or rookie?",
     ]
 
-    def test_maps_identity_columns_on_real_sheet(self):
+    def test_name_and_identity_on_real_sheet(self):
         s = transfer.suggest_column_map(self.FORM_HEADER)
-        assert s["member"] == "In Game Username"
-        assert s["server"] == "Current Server"
-        assert s["alliance"] == "Current Alliance"
-        assert s["tier"] == "Anticipated Seat Color"
+        assert s["name"] == "In Game Username"
+        assert s["identity_extra"] == ["Current Server"]
 
-    def test_strongest_power_column_wins(self):
-        # Three power-ish columns; only the best (exact "Total Hero Power")
-        # is claimed — the others are left for the recruiter to add as extras.
+    def test_intake_sheet_has_no_status(self):
+        # No want/confirmed/declined columns, and the prose "Why are you
+        # interested in transferring?" must not be mistaken for status.
         s = transfer.suggest_column_map(self.FORM_HEADER)
-        assert s["power"] == "Total Hero Power"
+        assert "status" not in s
 
-    def test_intake_sheet_has_no_status_columns(self):
-        # A form/intake sheet carries no want/confirmed/declined columns, and
-        # the prose "Why are you interested in transferring?" must NOT be
-        # mistaken for a "want" status column.
+    def test_display_seeds_all_power_stats(self):
         s = transfer.suggest_column_map(self.FORM_HEADER)
-        assert "want" not in s
-        assert "confirmed" not in s
-        assert "declined" not in s
+        d = s["display"]
+        assert "Total Hero Power" in d
+        assert "Arena Total Hero Power" in d
+        assert "Main March Power" in d
+        assert "Anticipated Seat Color" in d
+        assert "Total Kills" in d
+        # Categorical "Main March Type" isn't a stat → not seeded.
+        assert "Main March Type" not in d
 
     def test_alliance_curated_sheet_maps_status(self):
         header = ["Name", "Total Power", "Want?", "Confirmed", "Declined", "Notes"]
         s = transfer.suggest_column_map(header)
-        assert s["member"] == "Name"
-        assert s["want"] == "Want?"
-        assert s["confirmed"] == "Confirmed"
-        assert s["declined"] == "Declined"
-        assert s["notes"] == "Notes"
+        assert s["name"] == "Name"
+        assert s["status"] == ["Want?", "Confirmed", "Declined"]
+        assert s["display"] == ["Total Power"]
+        assert "identity_extra" not in s  # no server column here
 
-    def test_no_match_omits_key(self):
-        s = transfer.suggest_column_map(["Foo", "Bar", "Baz"])
-        assert s == {}
+    def test_no_match_returns_empty(self):
+        assert transfer.suggest_column_map(["Foo", "Bar", "Baz"]) == {}
 
     def test_each_header_claimed_once(self):
-        # "Server" shouldn't be claimed by two keys.
-        s = transfer.suggest_column_map(["Server", "Server"])
-        assert list(s.values()).count("Server") == 1
-
-
-class TestCellValue:
-    ROW = ["Bad Pew", "Pioneer", "199M", "TRUE", "", "", "note", "Pink Cat"]
-
-    def test_mapped(self):
-        assert transfer.cell_value(self.ROW, RES, "member") == "Bad Pew"
-        assert transfer.cell_value(self.ROW, RES, "power") == "199M"
-        # Extra lookup is case-insensitive against the normalised label.
-        assert transfer.cell_value(self.ROW, RES, "Bear vs Lion") == "Pink Cat"
-
-    def test_unmapped_returns_none(self):
-        assert transfer.cell_value(self.ROW, RES, "missing") is None
-
-    def test_row_too_short_returns_none(self):
-        assert transfer.cell_value(["only one"], RES, "power") is None
-
-    def test_strips_whitespace(self):
-        assert transfer.cell_value(["  spaced  "], {"member": 0}, "member") == "spaced"
+        # A "Server" header is identity, not also display/status.
+        s = transfer.suggest_column_map(["Name", "Server"])
+        assert s["name"] == "Name"
+        assert s["identity_extra"] == ["Server"]
 
 
 # ── Value coercion ───────────────────────────────────────────────────────────
@@ -231,7 +179,7 @@ class TestCoerceNumber:
             (100, 100),
             (43.27, 43.27),
             ("  55.4 M ", 55_400_000),
-            # Real-world messy formats pulled from a live transfer sheet.
+            # Real-world messy formats from a live transfer sheet.
             ("125 971 854", 125_971_854),  # space-separated thousands
             ("216,976,226", 216_976_226),
             ("168,359,484 as of 5/5", 168_359_484),  # trailing prose
@@ -245,8 +193,6 @@ class TestCoerceNumber:
         assert transfer.coerce_number(value) == pytest.approx(expected)
 
     def test_euro_decimal_is_known_limitation(self):
-        # "174,5" (174.5 in EU notation) is read as thousands → 1745. Pinned
-        # so the behavior is intentional, not an accident.
         assert transfer.coerce_number("174,5") == 1745
 
     @pytest.mark.parametrize("bad", ["", "  ", "abc", None, "M", [1], "as of 5/5", "N/A"])
@@ -283,193 +229,180 @@ class TestParseFilter:
         assert transfer.parse_filter('{"or": []}') is None
 
     def test_valid(self):
-        f = transfer.parse_filter('{"and": [{"column": "power", "op": ">=", "value": 100}]}')
-        assert f == {"and": [{"column": "power", "op": ">=", "value": 100}]}
+        f = transfer.parse_filter('{"and": [{"column": "Total Power", "op": ">=", "value": 100}]}')
+        assert f == {"and": [{"column": "Total Power", "op": ">=", "value": 100}]}
 
 
 class TestEvaluateFilter:
-    # Row aligned to RES: Bad Pew, Pioneer, 199M, want=TRUE, ...
-    ROW = ["Bad Pew", "Pioneer", "199M", "TRUE", "", "", "", ""]
-
     def test_no_filter_passes_everything(self):
-        assert transfer.evaluate_filter(None, self.ROW, RES) is True
-        assert transfer.evaluate_filter({}, self.ROW, RES) is True
-        assert transfer.evaluate_filter("", self.ROW, RES) is True
+        assert transfer.evaluate_filter(None, ROW, HIDX) is True
+        assert transfer.evaluate_filter({}, ROW, HIDX) is True
+        assert transfer.evaluate_filter("", ROW, HIDX) is True
 
-    def test_numeric_ge_pass(self):
-        f = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
-
-    def test_numeric_ge_fail(self):
-        f = {"and": [{"column": "power", "op": ">=", "value": "250M"}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is False
+    def test_numeric_ge(self):
+        f = {"and": [{"column": "Total Power", "op": ">=", "value": "100M"}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
+        f["and"][0]["value"] = "250M"
+        assert transfer.evaluate_filter(f, ROW, HIDX) is False
 
     def test_in_list(self):
-        f = {"and": [{"column": "tier", "op": "in", "value": ["Pioneer", "Contributor"]}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
-        f2 = {"and": [{"column": "tier", "op": "in", "value": ["Elite"]}]}
-        assert transfer.evaluate_filter(f2, self.ROW, RES) is False
+        f = {"and": [{"column": "Tier", "op": "in", "value": ["Pioneer", "Contributor"]}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
+        f["and"][0]["value"] = ["Elite"]
+        assert transfer.evaluate_filter(f, ROW, HIDX) is False
 
     def test_contains(self):
-        f = {"and": [{"column": "tier", "op": "contains", "value": "ion"}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
+        f = {"and": [{"column": "Tier", "op": "contains", "value": "ion"}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
 
     def test_equals_case_insensitive(self):
-        f = {"and": [{"column": "tier", "op": "equals", "value": "pioneer"}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
+        f = {"and": [{"column": "Tier", "op": "equals", "value": "pioneer"}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
 
-    def test_is_true(self):
-        f = {"and": [{"column": "want", "op": "is_true", "value": None}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
-
-    def test_is_false_on_true_cell_fails(self):
-        f = {"and": [{"column": "want", "op": "is_false", "value": None}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is False
-
-    def test_and_of_multiple(self):
-        f = {
-            "and": [
-                {"column": "power", "op": ">=", "value": "100M"},
-                {"column": "tier", "op": "in", "value": ["Pioneer"]},
-            ]
-        }
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
-        f["and"][1]["value"] = ["Elite"]
-        assert transfer.evaluate_filter(f, self.ROW, RES) is False
+    def test_is_true_false(self):
+        assert (
+            transfer.evaluate_filter({"and": [{"column": "Want?", "op": "is_true"}]}, ROW, HIDX)
+            is True
+        )
+        assert (
+            transfer.evaluate_filter({"and": [{"column": "Want?", "op": "is_false"}]}, ROW, HIDX)
+            is False
+        )
 
     def test_two_numeric_columns_anded(self):
         # The real ask: "≥ 250M Total Hero Power AND ≥ 75M Main March Power."
-        # Two numeric clauses on two different columns, ANDed.
-        res = {"total hero power": 0, "main march power": 1}
+        hidx = transfer.header_index(["Total Hero Power", "Main March Power"])
         f = {
             "and": [
                 {"column": "Total Hero Power", "op": ">=", "value": "250M"},
                 {"column": "Main March Power", "op": ">=", "value": "75M"},
             ]
         }
-        assert transfer.evaluate_filter(f, ["260M", "80M"], res) is True
-        assert transfer.evaluate_filter(f, ["260M", "50M"], res) is False  # march too low
-        assert transfer.evaluate_filter(f, ["200M", "80M"], res) is False  # power too low
+        assert transfer.evaluate_filter(f, ["260M", "80M"], hidx) is True
+        assert transfer.evaluate_filter(f, ["260M", "50M"], hidx) is False  # march too low
+        assert transfer.evaluate_filter(f, ["200M", "80M"], hidx) is False  # power too low
 
     def test_missing_column_soft_passes(self):
-        # Filter references a column that isn't resolved → don't drop the row.
-        f = {"and": [{"column": "ghost", "op": ">=", "value": 1}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
+        f = {"and": [{"column": "Ghost", "op": ">=", "value": 1}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
 
     def test_unparseable_numeric_soft_passes(self):
         row = ["Bad Pew", "Pioneer", "n/a"]
-        f = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
-        assert transfer.evaluate_filter(f, row, RES) is True
+        f = {"and": [{"column": "Total Power", "op": ">=", "value": "100M"}]}
+        assert transfer.evaluate_filter(f, row, HIDX) is True
 
     def test_raw_json_string_input(self):
-        f = '{"and": [{"column": "power", "op": ">=", "value": "250M"}]}'
-        assert transfer.evaluate_filter(f, self.ROW, RES) is False
+        f = '{"and": [{"column": "Total Power", "op": ">=", "value": "250M"}]}'
+        assert transfer.evaluate_filter(f, ROW, HIDX) is False
 
     def test_unknown_operator_soft_passes(self):
-        f = {"and": [{"column": "tier", "op": "regex", "value": ".*"}]}
-        assert transfer.evaluate_filter(f, self.ROW, RES) is True
+        f = {"and": [{"column": "Tier", "op": "regex", "value": ".*"}]}
+        assert transfer.evaluate_filter(f, ROW, HIDX) is True
 
 
 # ── Change detection ─────────────────────────────────────────────────────────
 
+# A sheet with a Server column so identity can vary per row.
+SRV_HEADER = ["Name", "Tier", "Total Power", "Confirmed", "Server"]
+SRV_HIDX = transfer.header_index(SRV_HEADER)
+SRV_MAP = {"name": "Name", "identity_extra": ["Server"], "status": ["Confirmed"]}
+
+
+def _id(name, server=""):
+    return transfer.identity_hash(name, server)
+
 
 class TestIdentityHash:
     def test_stable(self):
-        a = transfer.identity_hash("Bad Pew", "FSU", "738")
-        b = transfer.identity_hash("Bad Pew", "FSU", "738")
-        assert a == b
+        assert transfer.identity_hash("Bad Pew", "738") == transfer.identity_hash("Bad Pew", "738")
 
     def test_normalizes_case_and_space(self):
-        a = transfer.identity_hash("Bad  Pew ", "fsu", "738")
-        b = transfer.identity_hash("bad pew", "FSU", "738")
-        assert a == b
+        assert transfer.identity_hash("Bad  Pew ") == transfer.identity_hash("bad pew")
 
     def test_distinct_members_differ(self):
         assert transfer.identity_hash("Bad Pew") != transfer.identity_hash("Spartan Ghost")
 
-    def test_excludes_power_and_tier(self):
-        # Same identity, different power/tier → same hash.
-        row_a = ["Bad Pew", "Pioneer", "199M"]
-        row_b = ["Bad Pew", "Elite", "250M"]
-        assert transfer.row_identity(row_a, RES) == transfer.row_identity(row_b, RES)
-
     def test_server_distinguishes(self):
-        assert transfer.identity_hash("Bad Pew", "FSU", "738") != transfer.identity_hash(
-            "Bad Pew", "FSU", "739"
-        )
+        assert transfer.identity_hash("Bad Pew", "738") != transfer.identity_hash("Bad Pew", "739")
 
 
 class TestRowIdentity:
-    def test_blank_member_returns_none(self):
-        assert transfer.row_identity(["", "Pioneer"], RES) is None
-        assert transfer.row_identity([], RES) is None
+    def test_name_plus_identity_extra(self):
+        row = ["Bad Pew", "Pioneer", "199M", "", "738"]
+        assert transfer.row_identity(row, SRV_HIDX, SRV_MAP) == _id("Bad Pew", "738")
 
-    def test_passes_alliance_server(self):
-        h = transfer.row_identity(["Bad Pew"], {"member": 0}, alliance="FSU", server="738")
-        assert h == transfer.identity_hash("Bad Pew", "FSU", "738")
+    def test_blank_name_returns_none(self):
+        assert transfer.row_identity(["", "Pioneer"], SRV_HIDX, SRV_MAP) is None
+        assert transfer.row_identity([], SRV_HIDX, SRV_MAP) is None
+
+    def test_excludes_power_and_tier(self):
+        a = ["Bad Pew", "Pioneer", "199M", "", "738"]
+        b = ["Bad Pew", "Elite", "250M", "", "738"]
+        assert transfer.row_identity(a, SRV_HIDX, SRV_MAP) == transfer.row_identity(
+            b, SRV_HIDX, SRV_MAP
+        )
 
 
 class TestStatusSnapshot:
-    def test_only_mapped_status_keys(self):
-        row = ["Bad Pew", "Pioneer", "199M", "TRUE", "yes", "", "note", "Pink Cat"]
-        snap = transfer.status_snapshot(row, RES)
-        assert snap == {"want": "TRUE", "confirmed": "yes", "declined": ""}
+    def test_keys_by_configured_header(self):
+        snap = transfer.status_snapshot(ROW, HIDX, ["Want?", "Confirmed", "Declined"])
+        assert snap == {"Want?": "TRUE", "Confirmed": "", "Declined": ""}
 
-    def test_omits_unmapped_status(self):
-        snap = transfer.status_snapshot(["Bad Pew"], {"member": 0})
-        assert snap == {}
+    def test_unresolved_status_header_skipped(self):
+        assert transfer.status_snapshot(ROW, HIDX, ["Nonexistent"]) == {}
+
+    def test_empty_status_list(self):
+        assert transfer.status_snapshot(ROW, HIDX, []) == {}
 
 
-class TestDiffStatus:
-    def test_detects_change(self):
-        old = {"confirmed": "false", "want": "true"}
-        new = {"confirmed": "true", "want": "true"}
-        assert transfer.diff_status(old, new) == [("confirmed", "false", "true")]
+class TestDisplayFields:
+    def test_ordered_pairs(self):
+        fields = transfer.display_fields(ROW, HIDX, ["Tier", "Total Power", "Bear vs Lion"])
+        assert fields == [
+            ("Tier", "Pioneer"),
+            ("Total Power", "199M"),
+            ("Bear vs Lion", "Pink Cat"),
+        ]
 
-    def test_no_change(self):
-        snap = {"confirmed": "true"}
-        assert transfer.diff_status(snap, dict(snap)) == []
-
-    def test_added_key_counts_as_change(self):
-        assert transfer.diff_status({}, {"confirmed": "true"}) == [("confirmed", "", "true")]
-
-    def test_handles_none(self):
-        assert transfer.diff_status(None, None) == []
+    def test_skips_unresolved(self):
+        fields = transfer.display_fields(ROW, HIDX, ["Tier", "Ghost"])
+        assert fields == [("Tier", "Pioneer")]
 
 
 class TestStatusWasSet:
     @pytest.mark.parametrize(
         "snap",
-        [
-            {"confirmed": "TRUE"},
-            {"declined": "Them"},
-            {"want": "yes", "confirmed": ""},
-        ],
+        [{"Confirmed": "TRUE"}, {"Declined": "Them"}, {"Want?": "yes", "Confirmed": ""}],
     )
     def test_set(self, snap):
         assert transfer.status_was_set(snap) is True
 
     @pytest.mark.parametrize(
         "snap",
-        [
-            {},
-            None,
-            {"confirmed": ""},
-            {"want": "false", "confirmed": "no", "declined": "0"},
-        ],
+        [{}, None, {"Confirmed": ""}, {"Want?": "false", "Confirmed": "no", "Declined": "0"}],
     )
     def test_not_set(self, snap):
         assert transfer.status_was_set(snap) is False
 
 
+class TestDiffStatus:
+    def test_detects_change(self):
+        old = {"Confirmed": "false", "Want?": "true"}
+        new = {"Confirmed": "true", "Want?": "true"}
+        assert transfer.diff_status(old, new) == [("Confirmed", "false", "true")]
+
+    def test_no_change(self):
+        snap = {"Confirmed": "true"}
+        assert transfer.diff_status(snap, dict(snap)) == []
+
+    def test_added_key_counts_as_change(self):
+        assert transfer.diff_status({}, {"Confirmed": "true"}) == [("Confirmed", "", "true")]
+
+    def test_handles_none(self):
+        assert transfer.diff_status(None, None) == []
+
+
 # ── Poll orchestration ───────────────────────────────────────────────────────
-
-# Resolved map with a "server" column so identity can vary per row.
-SRV = {"member": 0, "tier": 1, "power": 2, "confirmed": 3, "server": 4}
-
-
-def _identity(member, server="", alliance="OGV"):
-    return transfer.identity_hash(member, alliance, server)
 
 
 class TestComputePollDiff:
@@ -478,109 +411,101 @@ class TestComputePollDiff:
             ["Bad Pew", "Pioneer", "199M", "", "738"],
             ["Spartan Ghost", "Elite", "250M", "TRUE", "739"],
         ]
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state={}, alliance="OGV", baseline=True)
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={}, baseline=True)
         assert diff.new_applicants == []
         assert diff.status_changes == []
         assert diff.deletions == []
-        assert set(diff.next_state) == {
-            _identity("Bad Pew", "738"),
-            _identity("Spartan Ghost", "739"),
-        }
+        assert set(diff.next_state) == {_id("Bad Pew", "738"), _id("Spartan Ghost", "739")}
 
     def test_new_applicant_fires(self):
         rows = [["Bad Pew", "Pioneer", "199M", "", "738"]]
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state={}, alliance="OGV")
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={})
         assert len(diff.new_applicants) == 1
-        assert diff.new_applicants[0].hash == _identity("Bad Pew", "738")
-        assert diff.new_applicants[0].row == rows[0]
+        assert diff.new_applicants[0].hash == _id("Bad Pew", "738")
 
     def test_new_applicant_filtered_out_still_bookmarked(self):
         rows = [["Low Guy", "Pioneer", "10M", "", "738"]]
-        filt = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
-        diff = transfer.compute_poll_diff(
-            rows, SRV, prior_state={}, filter_obj=filt, alliance="OGV"
-        )
+        f = {"and": [{"column": "Total Power", "op": ">=", "value": "100M"}]}
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={}, filter_obj=f)
         assert diff.new_applicants == []
-        assert _identity("Low Guy", "738") in diff.next_state
+        assert _id("Low Guy", "738") in diff.next_state
 
     def test_status_change_fires(self):
         rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
-        h = _identity("Bad Pew", "738")
-        prior = {h: {"confirmed": "FALSE"}}
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state=prior, alliance="OGV")
-        assert diff.new_applicants == []
+        h = _id("Bad Pew", "738")
+        diff = transfer.compute_poll_diff(
+            rows, SRV_HIDX, SRV_MAP, prior_state={h: {"Confirmed": "FALSE"}}
+        )
         assert len(diff.status_changes) == 1
-        assert diff.status_changes[0].changes == [("confirmed", "FALSE", "TRUE")]
+        assert diff.status_changes[0].changes == [("Confirmed", "FALSE", "TRUE")]
 
     def test_status_change_not_filtered(self):
         rows = [["Low Guy", "Pioneer", "10M", "TRUE", "738"]]
-        h = _identity("Low Guy", "738")
-        prior = {h: {"confirmed": ""}}
-        filt = {"and": [{"column": "power", "op": ">=", "value": "100M"}]}
+        h = _id("Low Guy", "738")
+        f = {"and": [{"column": "Total Power", "op": ">=", "value": "100M"}]}
         diff = transfer.compute_poll_diff(
-            rows, SRV, prior_state=prior, filter_obj=filt, alliance="OGV"
+            rows, SRV_HIDX, SRV_MAP, prior_state={h: {"Confirmed": ""}}, filter_obj=f
         )
         assert len(diff.status_changes) == 1
 
     def test_no_change_is_quiet(self):
         rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
-        h = _identity("Bad Pew", "738")
-        prior = {h: {"confirmed": "TRUE"}}
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state=prior, alliance="OGV")
+        h = _id("Bad Pew", "738")
+        diff = transfer.compute_poll_diff(
+            rows, SRV_HIDX, SRV_MAP, prior_state={h: {"Confirmed": "TRUE"}}
+        )
         assert diff.new_applicants == []
         assert diff.status_changes == []
 
     def test_blank_rows_skipped(self):
         rows = [["", "", "", "", ""], ["Bad Pew", "Pioneer", "199M", "", "738"]]
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state={}, alliance="OGV")
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={})
         assert len(diff.new_applicants) == 1
         assert len(diff.next_state) == 1
 
-    def test_same_name_different_server_are_distinct(self):
+    def test_same_name_different_server_distinct(self):
         rows = [
             ["Bad Pew", "Pioneer", "199M", "", "738"],
             ["Bad Pew", "Pioneer", "199M", "", "739"],
         ]
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state={}, alliance="OGV")
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={})
         assert len(diff.new_applicants) == 2
-        assert len(diff.next_state) == 2
 
 
 class TestDeletions:
     def test_status_bearing_deletion_surfaces(self):
         rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
-        keep = _identity("Bad Pew", "738")
-        gone = _identity("Old Guy", "700")
-        prior = {keep: {"confirmed": "TRUE"}, gone: {"confirmed": "TRUE"}}
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state=prior, alliance="OGV")
+        keep, gone = _id("Bad Pew", "738"), _id("Old Guy", "700")
+        prior = {keep: {"Confirmed": "TRUE"}, gone: {"Confirmed": "TRUE"}}
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state=prior)
         assert [d.hash for d in diff.deletions] == [gone]
         assert gone not in diff.next_state
         assert keep in diff.next_state
 
     def test_pending_deletion_not_surfaced(self):
-        # A removed row that never had a status set → forgotten silently.
         rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
-        gone = _identity("Pending Guy", "700")
-        prior = {_identity("Bad Pew", "738"): {"confirmed": "TRUE"}, gone: {"confirmed": ""}}
-        diff = transfer.compute_poll_diff(rows, SRV, prior_state=prior, alliance="OGV")
+        gone = _id("Pending Guy", "700")
+        prior = {_id("Bad Pew", "738"): {"Confirmed": "TRUE"}, gone: {"Confirmed": ""}}
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state=prior)
         assert diff.deletions == []
         assert gone not in diff.next_state
 
     def test_baseline_never_surfaces_deletions(self):
-        prior = {_identity("Old Guy", "700"): {"confirmed": "TRUE"}}
-        diff = transfer.compute_poll_diff([], SRV, prior_state=prior, baseline=True)
+        prior = {_id("Old Guy", "700"): {"Confirmed": "TRUE"}}
+        diff = transfer.compute_poll_diff([], SRV_HIDX, SRV_MAP, prior_state=prior, baseline=True)
         assert diff.deletions == []
 
 
 class TestSelectRowsToCopy:
-    # Resolved map for a server-wide source sheet.
-    SRC = {"member": 0, "power": 1, "preferred alliance": 2}
+    SRC_HEADER = ["Name", "Power", "Preferred Alliance"]
+    SRC_HIDX = transfer.header_index(SRC_HEADER)
+    SRC_MAP = {"name": "Name"}
 
     def test_copies_matching_uncopied_rows(self):
         rows = [["Bad Pew", "199M", "OGV"], ["Other", "50M", "XYZ"]]
-        filt = {"and": [{"column": "Preferred Alliance", "op": "contains", "value": "OGV"}]}
+        f = {"and": [{"column": "Preferred Alliance", "op": "contains", "value": "OGV"}]}
         to_copy, copied = transfer.select_rows_to_copy(
-            rows, self.SRC, already_copied=set(), filter_obj=filt
+            rows, self.SRC_HIDX, self.SRC_MAP, already_copied=set(), filter_obj=f
         )
         assert to_copy == [["Bad Pew", "199M", "OGV"]]
         assert transfer.identity_hash("Bad Pew") in copied
@@ -588,57 +513,71 @@ class TestSelectRowsToCopy:
     def test_dedups_already_copied(self):
         rows = [["Bad Pew", "199M", "OGV"]]
         seen = {transfer.identity_hash("Bad Pew")}
-        to_copy, copied = transfer.select_rows_to_copy(rows, self.SRC, already_copied=seen)
+        to_copy, copied = transfer.select_rows_to_copy(
+            rows, self.SRC_HIDX, self.SRC_MAP, already_copied=seen
+        )
         assert to_copy == []
         assert copied == seen
 
     def test_no_filter_copies_all_new(self):
         rows = [["A", "1M", "X"], ["B", "2M", "Y"]]
-        to_copy, copied = transfer.select_rows_to_copy(rows, self.SRC, already_copied=set())
+        to_copy, copied = transfer.select_rows_to_copy(
+            rows, self.SRC_HIDX, self.SRC_MAP, already_copied=set()
+        )
         assert len(to_copy) == 2
         assert len(copied) == 2
 
-    def test_blank_member_skipped(self):
+    def test_blank_name_skipped(self):
         rows = [["", "1M", "X"], ["B", "2M", "Y"]]
-        to_copy, _ = transfer.select_rows_to_copy(rows, self.SRC, already_copied=set())
+        to_copy, _ = transfer.select_rows_to_copy(
+            rows, self.SRC_HIDX, self.SRC_MAP, already_copied=set()
+        )
         assert to_copy == [["B", "2M", "Y"]]
 
 
 # ── Templates ────────────────────────────────────────────────────────────────
 
 
+class TestFieldToken:
+    @pytest.mark.parametrize(
+        "header,token",
+        [
+            ("Total Hero Power", "total_hero_power"),
+            ("Tier", "tier"),
+            ("  Arena  Power ", "arena_power"),
+        ],
+    )
+    def test_token(self, header, token):
+        assert transfer.field_token(header) == token
+
+
 class TestRenderTemplate:
     def test_name_substitution(self):
         assert transfer.render_transfer_template("Hi {name}!", name="Bad Pew") == "Hi Bad Pew!"
 
-    def test_multiple_placeholders(self):
+    def test_display_column_token(self):
         out = transfer.render_transfer_template(
-            "{name} ({tier}) for {alliance_name}",
-            name="Bad Pew",
-            tier="Pioneer",
-            alliance_name="OGV",
+            "{name}: {total_hero_power}", name="Bad Pew", total_hero_power="199M"
         )
-        assert out == "Bad Pew (Pioneer) for OGV"
+        assert out == "Bad Pew: 199M"
 
     def test_unknown_placeholder_renders_literally(self):
         assert transfer.render_transfer_template("Hi {nme}", name="Bad Pew") == "Hi {nme}"
 
-    def test_missing_key_renders_blank(self):
-        assert transfer.render_transfer_template("Hi {name}{tier}", name="Bad Pew") == "Hi Bad Pew"
+    def test_missing_known_key_renders_blank(self):
+        assert transfer.render_transfer_template("Hi {name}{alliance_name}", name="X") == "Hi X"
 
     def test_none_value_renders_blank(self):
         assert transfer.render_transfer_template("Hi {name}", name=None) == "Hi "
 
     def test_stray_brace_does_not_crash(self):
-        out = transfer.render_transfer_template("100% {name", name="X")
-        assert isinstance(out, str)
+        assert isinstance(transfer.render_transfer_template("100% {name", name="X"), str)
 
 
 class TestResolveTemplate:
     def test_uses_default_when_blank(self):
-        cfg = {"template_apply_invitation": ""}
         assert (
-            transfer.resolve_template(cfg, "apply_invitation")
+            transfer.resolve_template({"template_apply_invitation": ""}, "apply_invitation")
             == (DEFAULT_TRANSFER_TEMPLATES["apply_invitation"])
         )
 
@@ -647,9 +586,8 @@ class TestResolveTemplate:
         assert transfer.resolve_template(cfg, "decline") == "Custom decline {name}"
 
     def test_whitespace_only_falls_back(self):
-        cfg = {"template_confirm_request": "   "}
         assert (
-            transfer.resolve_template(cfg, "confirm_request")
+            transfer.resolve_template({"template_confirm_request": "   "}, "confirm_request")
             == (DEFAULT_TRANSFER_TEMPLATES["confirm_request"])
         )
 

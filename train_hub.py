@@ -193,7 +193,9 @@ class _TrainHubView(discord.ui.View):
 
 
 async def _open_week_draft(bot, interaction: discord.Interaction):
-    await interaction.response.defer()
+    # thinking=True so the button shows a loading state during the Sheet read
+    # instead of looking hung.
+    await interaction.response.defer(thinking=True)
     guild_id = interaction.guild_id
     from config import get_train_config
 
@@ -212,7 +214,7 @@ async def _open_week_draft(bot, interaction: discord.Interaction):
 
 
 async def _render_logs(bot, interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
     guild_id = interaction.guild_id
     # Full state gives the roster, so "fewest trains" can surface members who've
     # driven zero times and therefore have no history rows at all.
@@ -236,7 +238,7 @@ async def _open_overview(bot, interaction: discord.Interaction):
     from train import load_schedule, load_blurb_log, build_train_view_embed
     from train_ui import TrainActionView
 
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
     guild_id = interaction.guild_id
     blurbs_on = bool(get_train_config(guild_id).get("blurbs_enabled", 1))
     schedule = await asyncio.to_thread(load_schedule, guild_id)
@@ -250,7 +252,7 @@ async def _render_prompt_log(bot, interaction: discord.Interaction):
     import premium
     from train import load_schedule
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
     guild_id = interaction.guild_id
     schedule = await asyncio.to_thread(load_schedule, guild_id)
     window = (
@@ -288,7 +290,7 @@ async def _render_prompt_log(bot, interaction: discord.Interaction):
 async def _run_birthday_check(bot, interaction: discord.Interaction):
     from train import load_schedule, save_schedule, check_and_add_birthdays, BIRTHDAY_LOOKAHEAD
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
     guild_id = interaction.guild_id
     schedule = await asyncio.to_thread(load_schedule, guild_id)
     before = len(schedule)

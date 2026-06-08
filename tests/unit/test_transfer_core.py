@@ -337,6 +337,20 @@ class TestEvaluateFilter:
         f["and"][1]["value"] = ["Elite"]
         assert transfer.evaluate_filter(f, self.ROW, RES) is False
 
+    def test_two_numeric_columns_anded(self):
+        # The real ask: "≥ 250M Total Hero Power AND ≥ 75M Main March Power."
+        # Two numeric clauses on two different columns, ANDed.
+        res = {"total hero power": 0, "main march power": 1}
+        f = {
+            "and": [
+                {"column": "Total Hero Power", "op": ">=", "value": "250M"},
+                {"column": "Main March Power", "op": ">=", "value": "75M"},
+            ]
+        }
+        assert transfer.evaluate_filter(f, ["260M", "80M"], res) is True
+        assert transfer.evaluate_filter(f, ["260M", "50M"], res) is False  # march too low
+        assert transfer.evaluate_filter(f, ["200M", "80M"], res) is False  # power too low
+
     def test_missing_column_soft_passes(self):
         # Filter references a column that isn't resolved → don't drop the row.
         f = {"and": [{"column": "ghost", "op": ">=", "value": 1}]}

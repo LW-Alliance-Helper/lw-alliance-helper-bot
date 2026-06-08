@@ -152,8 +152,25 @@ def test_weekly_draft_embed_renders():
     embed = ui.build_weekly_draft_embed(_draft(), date(2026, 6, 1), "Standard Week")
     assert "Week of" in embed.title
     assert "Standard Week" in [f.value for f in embed.fields]
-    # the VS-with-no-role day is manual by design → "Manual assignment"
-    assert ui.MANUAL_LABEL in embed.description
+    # the VS-with-no-role day is manual by design → compact "✏️ Manual" marker
+    assert "✏️ Manual" in embed.description
+
+
+def test_weekly_draft_embed_mentions_ids_names_fallback_no_codeblock():
+    draft = [
+        tr.DraftDay(
+            "2026-06-01", 0, tr.RULE_LEADERSHIP, "pinkcatboi", "leadership", discord_id="111"
+        ),
+        tr.DraftDay("2026-06-02", 1, tr.RULE_AUTO, "OffRoster", "auto"),  # no id → plain name
+        tr.DraftDay("2026-06-03", 2, tr.RULE_VS, None, "vs", needs_picking=True),  # manual marker
+    ]
+    desc = ui.build_weekly_draft_embed(draft, date(2026, 6, 1), "Standard Week").description
+    assert "<@111>" in desc  # known ID → @mention
+    assert "OffRoster" in desc  # no ID → plain name
+    assert "Leadership" in desc and "Auto" in desc  # short labels, not "Auto (fair rotation)"
+    assert "(fair rotation)" not in desc
+    assert "```" not in desc  # no code block (so mentions render)
+    assert "✏️ Manual" in desc
 
 
 def test_weekly_draft_embed_requires_selection_for_unresolved_auto():

@@ -236,21 +236,37 @@ def build_preset_editor_embed(preset: tr.SchedulePreset, *, dirty: bool) -> disc
     return embed
 
 
+def _conductor_mention(dd: tr.DraftDay) -> str:
+    """The conductor as a Discord @mention when we know their ID, else their
+    name (off-roster / hand-typed), else the manual / needs-picking marker.
+
+    Mentions render as the person's real Discord account so leadership recognizes
+    them; inside an embed they don't ping. Requires no code block — that's the
+    whole point of the markdown draft list."""
+    if dd.member:
+        bday = " 🎂" if dd.reason == "birthday" else ""
+        did = (dd.discord_id or "").strip()
+        return (f"<@{did}>" if did else dd.member) + bday
+    if dd.reason in tr.MANUAL_RULES:
+        return "✏️ Manual"  # compact marker for the one-line draft list
+    return tr.NEEDS_PICKING_LABEL
+
+
 def build_weekly_draft_embed(
     draft: list[tr.DraftDay], week_start: date, preset_name: str
 ) -> discord.Embed:
     week_end = week_start + timedelta(days=6)
-    lines = []
-    for dd in draft:
-        d = date.fromisoformat(dd.date)
-        rule_label = tr.RULE_LABELS.get(dd.rule_type, dd.rule_type)
-        lines.append(
-            f"{d:%a} {d:%b} {d.day:<2}  {_short(rule_label, 20):<20}  {_conductor_cell(dd)}"
-        )
-    body = "```\n" + "\n".join(lines) + "\n```"
+    # One markdown line per day (no code block) so conductors render as real
+    # @mentions and nothing wraps mid-cell. `·` separates day · rule · conductor.
+    lines = [
+        f"**{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}** · "
+        f"{tr.RULE_LABELS_SHORT.get(dd.rule_type, tr.RULE_LABELS.get(dd.rule_type, dd.rule_type))} · "
+        f"{_conductor_mention(dd)}"
+        for dd in draft
+    ]
     embed = discord.Embed(
         title=f"🚂 Train Schedule: Week of {week_start:%a %b} {week_start.day} to {week_end:%a %b} {week_end.day}",
-        description=body,
+        description="\n".join(lines),
         color=discord.Color.gold(),
     )
     embed.add_field(name="Preset", value=preset_name, inline=True)
@@ -623,6 +639,18 @@ def _assign_pool_for_day(state: "RotationState", rule_type: str) -> tuple[list[s
         names = list(dict.fromkeys(pool))  # dedupe, preserve order
         return names, f"\nShowing the **{tr.RULE_LABELS.get(rule_type, rule_type)}** pool."
     return tr.roster_names(state.roster), ""
+
+
+def _id_for_name(state: "RotationState", name: str) -> str:
+    """The roster's Discord ID for a conductor name (for @mention rendering in
+    the draft embed), or "" when off-roster / unknown."""
+    key = tr._norm(name or "")
+    if not key:
+        return ""
+    for m in state.roster:
+        if tr._norm(m.get("name") or "") == key:
+            return str(m.get("discord_id") or "")
+    return ""
 
 
 def _resolve_name_from_list(names: list[str], typed: str) -> str:
@@ -1392,6 +1420,7 @@ class WeeklyDraftView(discord.ui.View):
         )
         dd.member, dd.reason, dd.needs_picking = member, reason, needs
         dd.note = "" if member else "needs picking"
+        dd.discord_id = _id_for_name(state, member) if member else ""
         await asyncio.to_thread(self._persist_day, dd)
         await self._refresh(interaction)
 
@@ -1411,6 +1440,7 @@ class WeeklyDraftView(discord.ui.View):
             dd.reason = "manual"
             dd.needs_picking = False
             dd.note = ""
+            dd.discord_id = _id_for_name(state, name)
             await asyncio.to_thread(self._persist_day, dd)
             self._rebuild()
             if self.message:
@@ -1447,6 +1477,7 @@ class WeeklyDraftView(discord.ui.View):
         dd.reason = tr.RULE_MANUAL
         dd.needs_picking = True
         dd.note = ""
+        dd.discord_id = ""
         await asyncio.to_thread(self._persist_day, dd)
         await self._refresh(interaction)
 
@@ -1591,6 +1622,14 @@ def regenerate_week(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
         birthday_mode=birthday_mode,
         birthdays_on_date=birthdays,
     )
+    # Stamp each conductor's Discord ID from the roster so the draft embed can
+    # render them as @mentions.
+    id_by_name = {
+        tr._norm(m["name"]): str(m.get("discord_id") or "") for m in state.roster if m.get("name")
+    }
+    for dd in draft:
+        if dd.member:
+            dd.discord_id = id_by_name.get(tr._norm(dd.member), "")
     tr.write_draft_rows(guild_id, cfg.get("history_tab") or "", draft)
     return draft
 
@@ -1638,6 +1677,7 @@ def load_week_draft(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
                     reason=h.reason,
                     needs_picking=not bool(h.member),
                     note=h.notes,
+                    discord_id=h.discord_id,  # carried for the @mention render
                 )
             )
     return draft

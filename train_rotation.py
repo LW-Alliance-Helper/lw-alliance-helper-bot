@@ -101,6 +101,19 @@ RULE_LABELS = {
     RULE_SPECIFIC: "Specific member",
 }
 
+# Compact labels for the weekly-draft list, where each day is one markdown line
+# (no code block) and screen width is tight — full labels wrapped on mobile.
+RULE_LABELS_SHORT = {
+    RULE_AUTO: "Auto",
+    RULE_LEADERSHIP: "Leadership",
+    RULE_MANUAL: "Manual",
+    RULE_BIRTHDAY: "Birthday",
+    RULE_VS: "VS",
+    RULE_CONTEST: "Contest",
+    RULE_EVENT: "Event",
+    RULE_SPECIFIC: "Pinned",
+}
+
 # ── Auto vs manual is derived, not stored ────────────────────────────────────
 # There is no separate strategy axis (dropped per Kevin). Whether a day
 # auto-picks or "needs picking" falls out of the rule type + whether a pool
@@ -273,6 +286,7 @@ class DraftDay:
     reason: str
     needs_picking: bool = False
     note: str = ""  # surfaced in the draft embed, e.g. "birthday 🎂"
+    discord_id: str = ""  # for rendering the conductor as an @mention; "" → show the name
 
 
 # ── Small helpers ────────────────────────────────────────────────────────────

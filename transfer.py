@@ -527,6 +527,20 @@ def row_identity(row: list, hidx: dict, column_map: dict) -> str | None:
     return identity_hash(*parts)
 
 
+def find_row_index(rows: list, hidx: dict, column_map: dict, target_hash: str) -> int | None:
+    """0-based index into ``rows`` of the row whose identity hash equals
+    ``target_hash``, or ``None`` if it's no longer there. Used by decision
+    write-back to locate the cell to update at click time (the sheet row is
+    ``index + 2``, accounting for the header) — the row may have moved since
+    the notice was posted, so it's re-found by identity, never by position."""
+    for i, row in enumerate(rows):
+        if not cell_for(row, hidx, column_map.get("name")):
+            continue
+        if row_identity(row, hidx, column_map) == target_hash:
+            return i
+    return None
+
+
 def status_snapshot(row: list, hidx: dict, status_headers) -> dict:
     """Snapshot of a row's configured status columns, keyed by header. Stores
     the raw trimmed cell text (not a coerced bool) so any change — ``""`` →

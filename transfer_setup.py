@@ -1082,6 +1082,46 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             await channel.send(_TIMEOUT_MSG)
             return
 
+        # ── Step 10: decision write-back (optional; needs status columns) ─────
+        status_cols = transfer.parse_column_map(
+            config.get_transfer_config(guild_id).get("alliance_column_map_json")
+        ).get("status", [])
+        if status_cols:
+            wb_choice = YesNoView()
+            await channel.send(
+                "**Step 10 — Decision write-back?**\n"
+                f"Add buttons to each notification so you can mark an applicant "
+                f"(**{', '.join(status_cols)}**) right from Discord — the bot writes it back to "
+                "your sheet. Leave off to keep the bot read-only.",
+                view=wb_choice,
+            )
+            await wizard_registry.wait_view_or_cancel(wb_choice, cancel_event)
+            if wb_choice.cancelled:
+                return
+            if wb_choice.selected is None:
+                await channel.send(_TIMEOUT_MSG)
+                return
+            if wb_choice.selected:
+                wb_value = await ask_keep_or_change(
+                    channel,
+                    "**Write-back value**\n"
+                    "What should the bot write when you click a Set button? Google Sheets "
+                    "checkboxes use **TRUE** (so the box ticks); use your own word if your sheet "
+                    "expects e.g. `Yes`.",
+                    default="TRUE",
+                    current=current.get("writeback_value", ""),
+                    modal_title="Write-back value",
+                    modal_label="Value to write",
+                    cancel_event=cancel_event,
+                )
+                if wb_value is None:
+                    return
+                config.update_transfer_config_fields(
+                    guild_id, writeback_enabled=1, writeback_value=wb_value or "TRUE"
+                )
+            else:
+                config.update_transfer_config_field(guild_id, "writeback_enabled", 0)
+
         # ── Finish: silent baseline read + go live ────────────────────────────
         await channel.send("⏳ Capturing your current applicants as a baseline…")
         try:

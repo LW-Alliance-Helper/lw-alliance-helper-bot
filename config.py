@@ -383,6 +383,9 @@ def init_db():
 
                 package_column                 TEXT    DEFAULT '',
 
+                writeback_enabled              INTEGER DEFAULT 0,
+                writeback_value                TEXT    DEFAULT 'TRUE',
+
                 template_apply_invitation      TEXT    DEFAULT '',
                 template_confirm_request       TEXT    DEFAULT '',
                 template_decline               TEXT    DEFAULT '',
@@ -1127,6 +1130,8 @@ def init_db():
             ("alliance_form_column_map_json", "TEXT    DEFAULT '{}'"),
             ("alliance_form_filter_json", "TEXT    DEFAULT ''"),
             ("package_column", "TEXT    DEFAULT ''"),
+            ("writeback_enabled", "INTEGER DEFAULT 0"),
+            ("writeback_value", "TEXT    DEFAULT 'TRUE'"),
             ("template_apply_invitation", "TEXT    DEFAULT ''"),
             ("template_confirm_request", "TEXT    DEFAULT ''"),
             ("template_decline", "TEXT    DEFAULT ''"),
@@ -4789,6 +4794,8 @@ _TRANSFER_DEFAULTS = {
     "alliance_form_column_map_json": "{}",
     "alliance_form_filter_json": "",
     "package_column": "",
+    "writeback_enabled": 0,
+    "writeback_value": "TRUE",
     "template_apply_invitation": "",
     "template_confirm_request": "",
     "template_decline": "",

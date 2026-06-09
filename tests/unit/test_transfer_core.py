@@ -416,6 +416,24 @@ class TestRowIdentity:
         )
 
 
+class TestFindRowIndex:
+    def test_finds_by_identity(self):
+        rows = [
+            ["Spartan Ghost", "Elite", "250M", "", "739"],
+            ["Bad Pew", "Pioneer", "199M", "", "738"],
+        ]
+        h = _id("Bad Pew", "738")
+        assert transfer.find_row_index(rows, SRV_HIDX, SRV_MAP, h) == 1
+
+    def test_returns_none_when_absent(self):
+        rows = [["Bad Pew", "Pioneer", "199M", "", "738"]]
+        assert transfer.find_row_index(rows, SRV_HIDX, SRV_MAP, _id("Ghost", "700")) is None
+
+    def test_skips_blank_rows(self):
+        rows = [["", "", "", "", ""], ["Bad Pew", "Pioneer", "199M", "", "738"]]
+        assert transfer.find_row_index(rows, SRV_HIDX, SRV_MAP, _id("Bad Pew", "738")) == 1
+
+
 class TestStatusSnapshot:
     def test_keys_by_configured_header(self):
         snap = transfer.status_snapshot(ROW, HIDX, ["Want?", "Confirmed", "Declined"])

@@ -112,14 +112,83 @@ def _full_details_embed(name: str, header: list, row: list) -> discord.Embed:
 # ── Notice view (full details + draft-a-message) ──────────────────────────────
 
 
+class _WriteConfirmView(discord.ui.View):
+    """Ephemeral confirm → write a status cell back to the alliance sheet. The
+    row is re-found by identity at click time (it may have moved since the
+    notice posted), then the configured value is written to the status
+    column's cell."""
+
+    def __init__(self, *, name: str, status_col: str, writeback: dict):
+        super().__init__(timeout=120)
+        self.name = name
+        self.status_col = status_col
+        self.wb = writeback
+        confirm = discord.ui.Button(
+            label=f"✅ Write {writeback['value']}"[:80], style=discord.ButtonStyle.success
+        )
+        confirm.callback = self._do
+        self.add_item(confirm)
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        cancel.callback = self._cancel
+        self.add_item(cancel)
+
+    async def _cancel(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="Cancelled — nothing written.", view=None)
+
+    async def _do(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        wb = self.wb
+        try:
+            header, rows = await asyncio.to_thread(
+                transfer_sheets.read_sheet, wb["sheet_id"], wb["tab"]
+            )
+        except Exception as e:  # noqa: BLE001
+            await interaction.followup.send(
+                f"⚠️ Couldn't reach the sheet: {config.describe_sheet_error(e)}", ephemeral=True
+            )
+            return
+        hidx = transfer.header_index(header)
+        idx = transfer.find_row_index(rows, hidx, wb["column_map"], wb["hash"])
+        if idx is None:
+            await interaction.followup.send(
+                f"⚠️ Couldn't find **{self.name}** on the sheet anymore (row moved or removed).",
+                ephemeral=True,
+            )
+            return
+        col_idx = hidx.get(transfer._norm_header(self.status_col))
+        if col_idx is None:
+            await interaction.followup.send(
+                f"⚠️ The **{self.status_col}** column isn't on the sheet anymore.", ephemeral=True
+            )
+            return
+        try:
+            await asyncio.to_thread(
+                transfer_sheets.write_cell, wb["sheet_id"], wb["tab"], idx + 2, col_idx, wb["value"]
+            )
+        except Exception as e:  # noqa: BLE001
+            await interaction.followup.send(
+                f"⚠️ Couldn't write to the sheet: {config.describe_sheet_error(e)} "
+                "(the bot's service account needs edit access).",
+                ephemeral=True,
+            )
+            _capture(e)
+            return
+        await interaction.followup.send(
+            f"✅ Set **{self.status_col} = {wb['value']}** for **{self.name}**.", ephemeral=True
+        )
+
+
 class _NoticeView(discord.ui.View):
-    def __init__(self, *, guild_id, name, header, row, display_pairs, template_kinds):
+    def __init__(
+        self, *, guild_id, name, header, row, display_pairs, template_kinds, writeback=None
+    ):
         super().__init__(timeout=_NOTICE_TIMEOUT)
         self.guild_id = guild_id
         self.name = name
         self.header = header
         self.row = row
         self.display_pairs = display_pairs
+        self.writeback = writeback
         self.message: discord.Message | None = None
 
         details = discord.ui.Button(label="📄 Full details", style=discord.ButtonStyle.secondary)
@@ -131,6 +200,15 @@ class _NoticeView(discord.ui.View):
             )
             btn.callback = self._make_template_cb(kind)
             self.add_item(btn)
+        # Decision write-back: one button per status column (capped to keep the
+        # view within Discord's limits). Only when the alliance opted in.
+        if writeback:
+            for status_col in (writeback.get("status_cols") or [])[:3]:
+                btn = discord.ui.Button(
+                    label=f"✅ Set {status_col}"[:80], style=discord.ButtonStyle.success
+                )
+                btn.callback = self._make_writeback_cb(status_col)
+                self.add_item(btn)
 
     async def on_timeout(self) -> None:
         await wizard_registry.expire_view_message(self.message, command_hint="`/transfers`")
@@ -151,6 +229,20 @@ class _NoticeView(discord.ui.View):
             rendered = transfer.render_transfer_template(body, **context)
             await interaction.response.send_message(
                 f"📋 Copy this into game chat:\n>>> {rendered}", ephemeral=True
+            )
+
+        return _cb
+
+    def _make_writeback_cb(self, status_col: str):
+        async def _cb(interaction: discord.Interaction):
+            view = _WriteConfirmView(
+                name=self.name, status_col=status_col, writeback=self.writeback
+            )
+            await interaction.response.send_message(
+                f"Write **{self.writeback['value']}** to **{status_col}** for "
+                f"**{self.name}** in your sheet?",
+                view=view,
+                ephemeral=True,
             )
 
         return _cb
@@ -262,6 +354,16 @@ class TransferCog(commands.Cog):
             )
             return
 
+        wb_base = None
+        if cfg.get("writeback_enabled") and column_map.get("status"):
+            wb_base = {
+                "value": cfg.get("writeback_value") or "TRUE",
+                "sheet_id": sheet_id,
+                "tab": tab,
+                "column_map": column_map,
+                "status_cols": column_map.get("status", []),
+            }
+
         await self._post(
             channel,
             gid,
@@ -271,6 +373,7 @@ class TransferCog(commands.Cog):
             diff,
             cfg.get("notification_style") or "each",
             bool(cfg.get("notify_on_delete")),
+            wb_base,
         )
         config.update_transfer_config_fields(
             gid,
@@ -335,7 +438,9 @@ class TransferCog(commands.Cog):
             )
         return total
 
-    async def _post(self, channel, gid, header, hidx, column_map, diff, style, notify_on_delete):
+    async def _post(
+        self, channel, gid, header, hidx, column_map, diff, style, notify_on_delete, wb_base=None
+    ):
         display_headers = column_map.get("display", []) or []
         name_header = column_map.get("name")
         deletions = list(diff.deletions) if notify_on_delete else []
@@ -361,6 +466,7 @@ class TransferCog(commands.Cog):
                 row=na.row,
                 display_pairs=pairs,
                 template_kinds=["apply_invitation"],
+                writeback=({**wb_base, "hash": na.hash} if wb_base else None),
             )
             view.message = await channel.send(embed=_new_applicant_embed(name, pairs), view=view)
             posted += 1
@@ -375,6 +481,7 @@ class TransferCog(commands.Cog):
                 row=sc.row,
                 display_pairs=pairs,
                 template_kinds=["confirm_request", "decline"],
+                writeback=({**wb_base, "hash": sc.hash} if wb_base else None),
             )
             view.message = await channel.send(
                 embed=_status_change_embed(name, sc.changes), view=view

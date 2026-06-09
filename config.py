@@ -1475,6 +1475,31 @@ def get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
+def get_spreadsheet_by_id(sheet_id: str):
+    """Return an authenticated gspread Spreadsheet for an arbitrary sheet ID.
+
+    Like :func:`get_spreadsheet` but opens a sheet the guild doesn't own —
+    Transfer Management (#16) watches a separate transfer sheet (and optional
+    server-wide / form sheets) whose IDs aren't the guild's configured
+    spreadsheet. Same credential bootstrap. Raises on a bad ID / no access so
+    the caller can surface a friendly "couldn't reach that sheet" message.
+    """
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(sheet_id)
+
+
 def get_or_create_worksheet(
     spreadsheet,
     tab_name: str,

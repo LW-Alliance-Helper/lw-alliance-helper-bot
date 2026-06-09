@@ -198,6 +198,22 @@ def _synonym_score(synonym: str, header_norm: str) -> int:
     return 0
 
 
+def summarize_column_map(column_map: dict) -> str:
+    """Human-readable one-block summary of a column map for the wizard's
+    review embed and the hub. Lists the Name column, any also-identity
+    columns, the watched status columns, and the columns shown in notices."""
+    name = column_map.get("name") or "*not set*"
+    identity = column_map.get("identity_extra") or []
+    status = column_map.get("status") or []
+    display = column_map.get("display") or []
+    lines = [f"**Name:** {name}"]
+    if identity:
+        lines.append(f"**Also-identity:** {', '.join(identity)}")
+    lines.append(f"**Status watched:** {', '.join(status) if status else '*none*'}")
+    lines.append(f"**Shown in notices:** {', '.join(display) if display else '*none*'}")
+    return "\n".join(lines)
+
+
 def suggest_column_map(header_row: list) -> dict:
     """Best-guess column map from a sheet's header row, in the
     ``name`` / ``identity_extra`` / ``status`` / ``display`` shape. A head

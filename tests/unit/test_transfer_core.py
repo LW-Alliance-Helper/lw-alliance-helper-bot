@@ -83,6 +83,31 @@ class TestHeaderIndex:
         assert transfer.header_index(["A", "", "C"]) == {"a": 0, "c": 2}
 
 
+class TestSummarizeColumnMap:
+    def test_full_map(self):
+        m = {
+            "name": "In Game Username",
+            "identity_extra": ["Current Server"],
+            "status": ["Want?", "Confirmed"],
+            "display": ["Total Hero Power", "Anticipated Seat Color"],
+        }
+        out = transfer.summarize_column_map(m)
+        assert "**Name:** In Game Username" in out
+        assert "Also-identity:** Current Server" in out
+        assert "Want?, Confirmed" in out
+        assert "Total Hero Power, Anticipated Seat Color" in out
+
+    def test_minimal_map(self):
+        out = transfer.summarize_column_map({"name": "Name"})
+        assert "**Name:** Name" in out
+        assert "Status watched:** *none*" in out
+        assert "Shown in notices:** *none*" in out
+        assert "Also-identity" not in out  # omitted when empty
+
+    def test_empty_map(self):
+        assert "*not set*" in transfer.summarize_column_map({})
+
+
 class TestCellFor:
     def test_resolves_by_header(self):
         assert transfer.cell_for(ROW, HIDX, "Name") == "Bad Pew"

@@ -141,6 +141,8 @@ PREMIUM_FEATURES: set[str] = {
     "buddy_self_service",
     "buddy_auto_repair",
     "buddy_dm",
+    # Transfer Management (#16) — entirely Premium (no free slice).
+    "transfers",
 }
 
 

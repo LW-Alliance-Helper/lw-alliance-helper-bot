@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -448,6 +449,12 @@ class TestComputePollDiff:
         assert len(diff.new_applicants) == 1
         assert diff.new_applicants[0].hash == _id("Bad Pew", "738")
 
+    def test_next_state_carries_name_and_status(self):
+        rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
+        diff = transfer.compute_poll_diff(rows, SRV_HIDX, SRV_MAP, prior_state={})
+        entry = diff.next_state[_id("Bad Pew", "738")]
+        assert entry == {"name": "Bad Pew", "status": {"Confirmed": "TRUE"}}
+
     def test_new_applicant_filtered_out_still_bookmarked(self):
         rows = [["Low Guy", "Pioneer", "10M", "", "738"]]
         f = {"and": [{"column": "Total Power", "op": ">=", "value": "100M"}]}
@@ -519,6 +526,47 @@ class TestDeletions:
         prior = {_id("Old Guy", "700"): {"Confirmed": "TRUE"}}
         diff = transfer.compute_poll_diff([], SRV_HIDX, SRV_MAP, prior_state=prior, baseline=True)
         assert diff.deletions == []
+
+    def test_deletion_carries_name_from_state(self):
+        # New-shape prior state ({name, status}) → the removal notice can name them.
+        gone = _id("Old Guy", "700")
+        prior = {gone: {"name": "Old Guy", "status": {"Confirmed": "TRUE"}}}
+        diff = transfer.compute_poll_diff([], SRV_HIDX, SRV_MAP, prior_state=prior)
+        assert len(diff.deletions) == 1
+        assert diff.deletions[0].name == "Old Guy"
+        assert diff.deletions[0].snapshot == {"Confirmed": "TRUE"}
+
+    def test_legacy_bare_snapshot_state_still_diffs(self):
+        # A state written by an older build (bare snapshot, no name) still works.
+        h = _id("Bad Pew", "738")
+        rows = [["Bad Pew", "Pioneer", "199M", "TRUE", "738"]]
+        diff = transfer.compute_poll_diff(
+            rows, SRV_HIDX, SRV_MAP, prior_state={h: {"Confirmed": "FALSE"}}
+        )
+        assert diff.status_changes[0].changes == [("Confirmed", "FALSE", "TRUE")]
+
+
+class TestPollIsDue:
+    NOW = datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_never_polled_is_due(self):
+        assert transfer.poll_is_due("", 60, self.NOW) is True
+        assert transfer.poll_is_due(None, 60, self.NOW) is True
+
+    def test_bad_timestamp_is_due(self):
+        assert transfer.poll_is_due("not-a-date", 60, self.NOW) is True
+
+    def test_recent_is_not_due(self):
+        last = (self.NOW - timedelta(minutes=30)).isoformat()
+        assert transfer.poll_is_due(last, 60, self.NOW) is False
+
+    def test_elapsed_is_due(self):
+        last = (self.NOW - timedelta(minutes=61)).isoformat()
+        assert transfer.poll_is_due(last, 60, self.NOW) is True
+
+    def test_naive_timestamp_treated_as_utc(self):
+        last = (self.NOW - timedelta(minutes=90)).replace(tzinfo=None).isoformat()
+        assert transfer.poll_is_due(last, 60, self.NOW) is True
 
 
 class TestSelectRowsToCopy:

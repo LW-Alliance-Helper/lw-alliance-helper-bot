@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 from defaults import DEFAULT_TRANSFER_TEMPLATES
@@ -519,6 +520,23 @@ def diff_status(old: dict, new: dict) -> list[tuple[str, str, str]]:
 # ── Poll orchestration ───────────────────────────────────────────────────────
 
 
+def poll_is_due(last_polled_at: str, freq_minutes, now: datetime) -> bool:
+    """Whether a guild is due for a poll. ``True`` if it has never polled, the
+    stored timestamp is unparseable, or at least ``freq_minutes`` have elapsed
+    since ``last_polled_at``. ``now`` (a timezone-aware UTC ``datetime``) is
+    passed in so this stays pure and testable; a naive stored timestamp is
+    treated as UTC."""
+    if not last_polled_at:
+        return True
+    try:
+        last = datetime.fromisoformat(last_polled_at)
+    except (ValueError, TypeError):
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(minutes=max(1, int(freq_minutes or 1)))
+
+
 class NewApplicant(NamedTuple):
     """A row whose identity is unseen since the last poll and which passes the
     new-applicant filter."""
@@ -540,12 +558,14 @@ class StatusChange(NamedTuple):
 
 class Deletion(NamedTuple):
     """A previously-seen applicant that's no longer on the sheet and *had a
-    status set* (``status_was_set``). ``snapshot`` is the last-seen status.
-    Surfaced only so the cog can post a removal notice when the alliance
-    opted into ``notify_on_delete``; the row drops from ``next_state``
-    regardless."""
+    status set* (``status_was_set``). ``name`` is the last-seen applicant name
+    (the row is gone, so it can only come from the stored state — which is why
+    state carries the name); ``snapshot`` is the last-seen status. Surfaced
+    only so the cog can post a removal notice when the alliance opted into
+    ``notify_on_delete``; the entry drops from ``next_state`` regardless."""
 
     hash: str
+    name: str
     snapshot: dict
 
 
@@ -553,7 +573,21 @@ class PollDiff(NamedTuple):
     new_applicants: list  # list[NewApplicant]
     status_changes: list  # list[StatusChange]
     deletions: list  # list[Deletion] — status-bearing rows that vanished
-    next_state: dict  # {hash: status_snapshot} to persist
+    next_state: dict  # {hash: {"name": str, "status": snapshot}} to persist
+
+
+def _state_snapshot(entry) -> dict:
+    """Status snapshot out of a stored state entry. Tolerates the current
+    ``{"name", "status"}`` shape and a legacy bare-snapshot dict, so a state
+    written by an older build still diffs cleanly."""
+    if isinstance(entry, dict) and isinstance(entry.get("status"), dict):
+        return entry["status"]
+    return entry if isinstance(entry, dict) else {}
+
+
+def _state_name(entry) -> str:
+    """Applicant name out of a stored state entry (``""`` for legacy shape)."""
+    return entry.get("name", "") if isinstance(entry, dict) else ""
 
 
 def compute_poll_diff(
@@ -594,12 +628,13 @@ def compute_poll_diff(
     status_changes: list = []
 
     for row in rows:
-        h = row_identity(row, hidx, column_map)
-        if h is None:
+        name = cell_for(row, hidx, column_map.get("name"))
+        if not name:
             continue  # blank / spacer row
+        h = row_identity(row, hidx, column_map)
         snap = status_snapshot(row, hidx, status_headers)
         seen_before = h in prior_state
-        next_state[h] = snap
+        next_state[h] = {"name": name, "status": snap}
 
         if baseline:
             continue
@@ -607,15 +642,17 @@ def compute_poll_diff(
             if evaluate_filter(filter_obj, row, hidx):
                 new_applicants.append(NewApplicant(h, row, snap))
         else:
-            changes = diff_status(prior_state[h], snap)
+            changes = diff_status(_state_snapshot(prior_state[h]), snap)
             if changes:
                 status_changes.append(StatusChange(h, row, changes, snap))
 
     deletions: list = []
     if not baseline:
-        for h, snap in prior_state.items():
-            if h not in next_state and status_was_set(snap):
-                deletions.append(Deletion(h, snap))
+        for h, entry in prior_state.items():
+            if h not in next_state:
+                snap = _state_snapshot(entry)
+                if status_was_set(snap):
+                    deletions.append(Deletion(h, _state_name(entry), snap))
 
     return PollDiff(new_applicants, status_changes, deletions, next_state)
 

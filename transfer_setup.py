@@ -6,12 +6,13 @@ module rather than bloating ``setup_cog.py`` (mirrors
 ``member_roster.run_member_roster_setup``); reuses the shared wizard
 helpers (`ask_proceed_with_existing_config`, cancel registry, premium gate).
 
-Build status: this slice covers the entry + Step 1 (the transfer sheet) +
-Step 2 (column mapping with auto-map review). The notification channel /
-style / filter, optional sources, write-back, and templates steps — plus
-the silent baseline read that enables the watcher — are layered on next.
-The wizard saves the sheet + column map incrementally, so a partial run
-leaves a coherent (still-disabled) config.
+Build status: the spine is complete — sheet → column mapping → notification
+channel → style → removal toggle → templates → silent baseline read that
+flips the watcher live. Each step saves incrementally, so a bail-out mid-way
+leaves a coherent (still-disabled) config and a re-run resumes. Still to
+layer on (all re-entrant, all optional): the new-applicant filter builder,
+the server-wide / intake-form sources, and decision write-back. The poll
+loop that consumes this config lives in ``transfer_cog.py``.
 """
 
 from __future__ import annotations
@@ -314,6 +315,91 @@ def _map_embed(column_map: dict, truncated: bool) -> discord.Embed:
     return embed
 
 
+# ── Step 3: notification channel ──────────────────────────────────────────────
+
+
+class _ChannelStepView(discord.ui.View):
+    """Pick the text channel new-applicant / status-change notices post to."""
+
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.selected_id: int | None = None
+        self.confirmed = False
+        self.message: discord.Message | None = None
+        self._sel = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Pick the notifications channel",
+            min_values=1,
+            max_values=1,
+        )
+        self._sel.callback = self._cb
+        self.add_item(self._sel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _cb(self, interaction: discord.Interaction):
+        self.selected_id = self._sel.values[0].id
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
+
+
+# ── Step 4: notification style ────────────────────────────────────────────────
+
+
+class _StyleStepView(discord.ui.View):
+    """Per-applicant message vs a batched digest when several land at once."""
+
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.style: str | None = None
+        self.confirmed = False
+
+        each = discord.ui.Button(
+            label="📨 A message per applicant", style=discord.ButtonStyle.primary
+        )
+        each.callback = self._make("each")
+        self.add_item(each)
+        digest = discord.ui.Button(
+            label="📋 One digest when several arrive", style=discord.ButtonStyle.secondary
+        )
+        digest.callback = self._make("digest")
+        self.add_item(digest)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _make(self, value: str):
+        async def _cb(interaction: discord.Interaction):
+            self.style = value
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(interaction, view=self)
+            self.stop()
+
+        return _cb
+
+
+# Template kinds walked at the end of setup, in order.
+_TEMPLATE_STEPS = [
+    ("apply_invitation", "Initial outreach"),
+    ("confirm_request", "Confirmation request"),
+    ("decline", "Decline"),
+]
+
+
 # ── Wizard ────────────────────────────────────────────────────────────────────
 
 
@@ -401,12 +487,129 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             alliance_sheet_tab=tab,
             alliance_column_map_json=json.dumps(column_map),
         )
+        await channel.send(f"✅ **Mapping saved.**\n{transfer.summarize_column_map(column_map)}")
+
+        # ── Step 3: notification channel ──────────────────────────────────────
+        chan_view = _ChannelStepView(owner_id=user.id)
+        chan_view.message = await channel.send(
+            "**Step 3 — Notification channel**\n"
+            "Where should new-applicant and status-change notices post? A dedicated "
+            "recruiting channel works well.",
+            view=chan_view,
+        )
+        await wizard_registry.wait_view_or_cancel(chan_view, cancel_event)
+        if chan_view.cancelled:
+            return
+        if not chan_view.confirmed or not chan_view.selected_id:
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(
+            guild_id, "notification_channel_id", chan_view.selected_id
+        )
+
+        # ── Step 4: notification style ────────────────────────────────────────
+        style_view = _StyleStepView(owner_id=user.id)
         await channel.send(
-            "✅ **Saved your sheet and column mapping.**\n\n"
-            f"{transfer.summarize_column_map(column_map)}\n\n"
-            "*Next up (coming in the next build step): notification channel + style, the "
-            "new-applicant filter, optional server-wide / form sources, decision write-back, "
-            "and your message templates — then the watcher goes live.*"
+            "**Step 4 — How should notifications arrive?**\n"
+            "• **A message per applicant** — richest; great for a dedicated channel where you "
+            "watch people arrive.\n"
+            "• **One digest** — a single batched message when several land in the same check "
+            "(tidier on a busy day).",
+            view=style_view,
+        )
+        await wizard_registry.wait_view_or_cancel(style_view, cancel_event)
+        if style_view.cancelled:
+            return
+        if not style_view.confirmed or not style_view.style:
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(guild_id, "notification_style", style_view.style)
+
+        # ── Step 5: removal notices (opt-in) ──────────────────────────────────
+        from setup_cog import YesNoView
+
+        removal_view = YesNoView()
+        await channel.send(
+            "**Step 5 — Removal notices?**\n"
+            "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your "
+            "sheet, want a heads-up? Pending rows that never had a status set never notify.",
+            view=removal_view,
+        )
+        await wizard_registry.wait_view_or_cancel(removal_view, cancel_event)
+        if removal_view.cancelled:
+            return
+        if removal_view.selected is None:
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(
+            guild_id, "notify_on_delete", 1 if removal_view.selected else 0
+        )
+
+        # ── Step 6: message templates ─────────────────────────────────────────
+        from setup_cog import ask_keep_or_change
+        from defaults import DEFAULT_TRANSFER_TEMPLATES
+
+        await channel.send(
+            "**Step 6 — In-game message templates**\n"
+            "These are the messages you copy into game chat. Use `{name}` for the applicant, "
+            "`{alliance_name}` for your alliance, or any display column as `{token}` "
+            "(e.g. `{total_hero_power}`)."
+        )
+        for kind, label in _TEMPLATE_STEPS:
+            default_body = DEFAULT_TRANSFER_TEMPLATES[kind]
+            chosen = await ask_keep_or_change(
+                channel,
+                f"**{label} template**",
+                default=default_body,
+                current=current.get(f"template_{kind}", ""),
+                modal_title=label[:45],
+                modal_label="Message text",
+                cancel_event=cancel_event,
+            )
+            if chosen is None:
+                return  # cancelled / timed out (ask_keep_or_change posts its own notice)
+            # Empty string == "use the default" (storage convention).
+            stored = "" if chosen.strip() == default_body.strip() else chosen
+            config.update_transfer_config_field(guild_id, f"template_{kind}", stored)
+
+        # ── Finish: silent baseline read + go live ────────────────────────────
+        await channel.send("⏳ Capturing your current applicants as a baseline…")
+        try:
+            baseline_count = await _finalize_and_enable(guild_id, sheet_id, tab, column_map)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] baseline read failed for guild %s: %s", guild_id, e)
+            await channel.send(
+                f"⚠️ Saved your settings, but couldn't read the sheet for the baseline: "
+                f"{config.describe_sheet_error(e)}\n"
+                "The watcher is **not active yet** — re-run setup once the sheet is reachable."
+            )
+            return
+
+        ch_mention = f"<#{chan_view.selected_id}>"
+        await channel.send(
+            "🎉 **Transfer Management is live!**\n"
+            f"Captured **{baseline_count}** current applicant(s) as your baseline — no flood. "
+            f"From now on, new applicants and status changes post to {ch_mention}.\n\n"
+            "Optional extras you can add by re-running setup later: a new-applicant filter, "
+            "server-wide / intake-form pulls, and decision write-back."
         )
     finally:
         wizard_registry.unregister(user.id, cancel_event)
+
+
+async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_map: dict) -> int:
+    """Read the alliance sheet, bookmark every current row as the baseline
+    (so existing applicants don't flood the channel), persist that state, and
+    flip the watcher on. Returns the baseline applicant count."""
+    from datetime import datetime, timezone
+
+    header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+    hidx = transfer.header_index(header)
+    diff = transfer.compute_poll_diff(rows, hidx, column_map, prior_state={}, baseline=True)
+    config.update_transfer_config_fields(
+        guild_id,
+        enabled=1,
+        last_seen_state_json=json.dumps(diff.next_state),
+        last_polled_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return len(diff.next_state)

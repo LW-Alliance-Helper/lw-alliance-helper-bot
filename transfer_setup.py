@@ -400,6 +400,267 @@ _TEMPLATE_STEPS = [
 ]
 
 
+# ── Step 5: new-applicant filter builder ──────────────────────────────────────
+
+# Comparison label → operator for the numeric-column control.
+_FILTER_OPS = [("≥", ">="), ("≤", "<="), ("=", "=="), (">", ">"), ("<", "<")]
+
+
+class _ButtonChoiceView(discord.ui.View):
+    """Generic labelled-button row → ``value`` (+ ``confirmed`` / ``cancelled``).
+    Reused for yes/no, operator pick, and add-another."""
+
+    def __init__(self, owner_id: int, options: list):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.value = None
+        self.confirmed = False
+        for label, value, style in options:
+            btn = discord.ui.Button(label=label[:80], style=style)
+            btn.callback = self._make(value)
+            self.add_item(btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _make(self, value):
+        async def _cb(interaction: discord.Interaction):
+            self.value = value
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(interaction, view=self)
+            self.stop()
+
+        return _cb
+
+
+class _FilterColumnView(discord.ui.View):
+    """Single-select of the sheet's columns to filter on."""
+
+    def __init__(self, owner_id: int, header: list):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.column = None
+        self.confirmed = False
+        opts = [discord.SelectOption(label=h[:100], value=h) for h in header[:25] if str(h).strip()]
+        self._sel = discord.ui.Select(
+            placeholder="Pick a column to filter on", min_values=1, max_values=1, options=opts
+        )
+        self._sel.callback = self._cb
+        self.add_item(self._sel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _cb(self, interaction: discord.Interaction):
+        self.column = self._sel.values[0]
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
+
+
+class _FilterMultiView(discord.ui.View):
+    """Multi-select of a column's distinct values (the ``in`` control)."""
+
+    def __init__(self, owner_id: int, distinct: list):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.values = None
+        self.confirmed = False
+        opts = [discord.SelectOption(label=v[:100], value=v) for v in distinct[:25]]
+        self._sel = discord.ui.Select(
+            placeholder="Pick the value(s) to match",
+            min_values=1,
+            max_values=len(opts),
+            options=opts,
+        )
+        self._sel.callback = self._cb
+        self.add_item(self._sel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _cb(self, interaction: discord.Interaction):
+        self.values = list(self._sel.values)
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
+
+
+class _FilterValueModal(discord.ui.Modal):
+    def __init__(self, *, title: str, label: str, on_submit):
+        super().__init__(title=title[:45])
+        self._on_submit = on_submit
+        self.value_input = discord.ui.TextInput(label=label[:45], required=True, max_length=100)
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self._on_submit(interaction, self.value_input.value.strip())
+
+
+class _FilterValueView(discord.ui.View):
+    """Button → modal for a free-text / numeric-threshold filter value."""
+
+    def __init__(self, owner_id: int, *, prompt_title: str, prompt_label: str):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.value = None
+        self.confirmed = False
+        self.message: discord.Message | None = None
+        self._title = prompt_title
+        self._label = prompt_label
+        btn = discord.ui.Button(label="✏️ Enter value", style=discord.ButtonStyle.primary)
+        btn.callback = self._enter
+        self.add_item(btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _enter(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            _FilterValueModal(title=self._title, label=self._label, on_submit=self._save)
+        )
+
+    async def _save(self, interaction: discord.Interaction, value: str):
+        self.value = value
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        await interaction.response.send_message(f"✅ Using **{value}**", ephemeral=True)
+        self.stop()
+
+
+async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
+    """One filter clause for column ``col``, control chosen by ``kind``.
+    Returns a clause dict, or the ``"CANCEL"`` / ``"TIMEOUT"`` sentinel."""
+    if kind == "numeric":
+        opv = _ButtonChoiceView(
+            owner_id, [(lbl, op, discord.ButtonStyle.secondary) for lbl, op in _FILTER_OPS]
+        )
+        await channel.send(f"**{col}** — comparison?", view=opv)
+        await wizard_registry.wait_view_or_cancel(opv, cancel_event)
+        if opv.cancelled:
+            return "CANCEL"
+        if not opv.confirmed:
+            return "TIMEOUT"
+        valv = _FilterValueView(owner_id, prompt_title=col, prompt_label="Threshold (e.g. 250M)")
+        valv.message = await channel.send(
+            f"Enter the threshold for **{col}** (e.g. `250M`):", view=valv
+        )
+        await wizard_registry.wait_view_or_cancel(valv, cancel_event)
+        if valv.cancelled:
+            return "CANCEL"
+        if not valv.confirmed:
+            return "TIMEOUT"
+        return {"column": col, "op": opv.value, "value": valv.value}
+
+    if kind == "choice":
+        mv = _FilterMultiView(owner_id, distinct)
+        await channel.send(f"**{col}** — match which value(s)?", view=mv)
+        await wizard_registry.wait_view_or_cancel(mv, cancel_event)
+        if mv.cancelled:
+            return "CANCEL"
+        if not mv.confirmed:
+            return "TIMEOUT"
+        return {"column": col, "op": "in", "value": mv.values}
+
+    # free text → contains
+    valv = _FilterValueView(owner_id, prompt_title=col, prompt_label="Contains text")
+    valv.message = await channel.send(
+        f"**{col}** — match rows that *contain* what text?", view=valv
+    )
+    await wizard_registry.wait_view_or_cancel(valv, cancel_event)
+    if valv.cancelled:
+        return "CANCEL"
+    if not valv.confirmed:
+        return "TIMEOUT"
+    return {"column": col, "op": "contains", "value": valv.value}
+
+
+async def _build_filter(channel, owner_id, header, rows, cancel_event):
+    """Walk the recruiter through an AND filter. Returns the filter dict,
+    ``None`` (notify on every new applicant), or a ``"CANCEL"`` / ``"TIMEOUT"``
+    sentinel for the wizard to act on."""
+    start = _ButtonChoiceView(
+        owner_id,
+        [
+            ("✅ Every new applicant", "none", discord.ButtonStyle.secondary),
+            ("🔎 Only ones matching a filter", "build", discord.ButtonStyle.primary),
+        ],
+    )
+    await channel.send(
+        "**Step 5 — New-applicant filter**\n"
+        "Get pinged for *every* new applicant, or only the ones matching a filter? "
+        "(Status changes always notify, filter or not.)",
+        view=start,
+    )
+    await wizard_registry.wait_view_or_cancel(start, cancel_event)
+    if start.cancelled:
+        return "CANCEL"
+    if not start.confirmed:
+        return "TIMEOUT"
+    if start.value == "none":
+        return None
+
+    hidx = transfer.header_index(header)
+    clauses: list = []
+    while True:
+        colv = _FilterColumnView(owner_id, header)
+        await channel.send("Pick a column to filter on:", view=colv)
+        await wizard_registry.wait_view_or_cancel(colv, cancel_event)
+        if colv.cancelled:
+            return "CANCEL"
+        if not colv.confirmed:
+            return "TIMEOUT"
+        col = colv.column
+        idx = hidx.get(transfer._norm_header(col))
+        samples = [r[idx] for r in rows if idx is not None and idx < len(r)]
+        kind, distinct = transfer.column_value_kind(samples)
+        clause = await _build_clause(channel, owner_id, col, kind, distinct, cancel_event)
+        if clause in ("CANCEL", "TIMEOUT"):
+            return clause
+        if isinstance(clause, dict):
+            clauses.append(clause)
+        more = _ButtonChoiceView(
+            owner_id,
+            [
+                ("➕ Add another", "more", discord.ButtonStyle.primary),
+                ("✅ Done", "done", discord.ButtonStyle.success),
+            ],
+        )
+        await channel.send(
+            f"**Filter so far:** {transfer.describe_filter({'and': clauses})}", view=more
+        )
+        await wizard_registry.wait_view_or_cancel(more, cancel_event)
+        if more.cancelled:
+            return "CANCEL"
+        if not more.confirmed or more.value == "done":
+            break
+    return {"and": clauses} if clauses else None
+
+
 # ── Wizard ────────────────────────────────────────────────────────────────────
 
 
@@ -465,7 +726,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         if not sheet_view.confirmed or not sheet_view.result:
             await channel.send(_TIMEOUT_MSG)
             return
-        sheet_id, tab, header, _rows = sheet_view.result
+        sheet_id, tab, header, rows = sheet_view.result
 
         # ── Step 2: column mapping ────────────────────────────────────────────
         initial_map = saved_map or transfer.suggest_column_map(header)
@@ -525,12 +786,24 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             return
         config.update_transfer_config_field(guild_id, "notification_style", style_view.style)
 
-        # ── Step 5: removal notices (opt-in) ──────────────────────────────────
+        # ── Step 5: new-applicant filter ──────────────────────────────────────
+        filt = await _build_filter(channel, user.id, header, rows, cancel_event)
+        if filt == "CANCEL":
+            return
+        if filt == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(
+            guild_id, "notification_filter_json", json.dumps(filt) if filt else ""
+        )
+        await channel.send(f"✅ Filter: {transfer.describe_filter(filt)}")
+
+        # ── Step 6: removal notices (opt-in) ──────────────────────────────────
         from setup_cog import YesNoView
 
         removal_view = YesNoView()
         await channel.send(
-            "**Step 5 — Removal notices?**\n"
+            "**Step 6 — Removal notices?**\n"
             "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your "
             "sheet, want a heads-up? Pending rows that never had a status set never notify.",
             view=removal_view,
@@ -550,7 +823,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         from defaults import DEFAULT_TRANSFER_TEMPLATES
 
         await channel.send(
-            "**Step 6 — In-game message templates**\n"
+            "**Step 7 — In-game message templates**\n"
             "These are the messages you copy into game chat. Use `{name}` for the applicant, "
             "`{alliance_name}` for your alliance, or any display column as `{token}` "
             "(e.g. `{total_hero_power}`)."

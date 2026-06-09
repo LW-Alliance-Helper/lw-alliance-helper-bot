@@ -226,6 +226,33 @@ class TestCoerceNumber:
         assert transfer.coerce_number(bad) is None
 
 
+class TestColumnValueKind:
+    def test_numeric_column(self):
+        kind, distinct = transfer.column_value_kind(["199M", "250M", "1.2b", "", "n/a"])
+        assert kind == "numeric"
+        assert distinct == []
+
+    def test_choice_column(self):
+        vals = ["Blue - Pioneer", "Purple - Contributor", "White - Follower", "Blue - Pioneer"]
+        kind, distinct = transfer.column_value_kind(vals)
+        assert kind == "choice"
+        assert distinct == ["Blue - Pioneer", "Purple - Contributor", "White - Follower"]
+
+    def test_text_column_when_high_cardinality(self):
+        vals = [f"unique note {i}" for i in range(30)]
+        kind, distinct = transfer.column_value_kind(vals, max_choices=20)
+        assert kind == "text"
+        assert distinct == []
+
+    def test_empty_column_is_text(self):
+        assert transfer.column_value_kind(["", "  ", ""]) == ("text", [])
+
+    def test_mostly_numeric_with_some_junk_is_numeric(self):
+        # 4 of 5 parse → numeric (>= 60%).
+        kind, _ = transfer.column_value_kind(["100", "200", "300", "abc", "400"])
+        assert kind == "numeric"
+
+
 class TestCoerceBool:
     @pytest.mark.parametrize("v", ["TRUE", "yes", "x", "1", "✅", "confirmed"])
     def test_truthy(self, v):
@@ -257,6 +284,26 @@ class TestParseFilter:
     def test_valid(self):
         f = transfer.parse_filter('{"and": [{"column": "Total Power", "op": ">=", "value": 100}]}')
         assert f == {"and": [{"column": "Total Power", "op": ">=", "value": 100}]}
+
+
+class TestDescribeFilter:
+    def test_no_filter(self):
+        assert "every new applicant" in transfer.describe_filter(None)
+        assert "every new applicant" in transfer.describe_filter("")
+
+    def test_numeric_and_in(self):
+        f = {
+            "and": [
+                {"column": "Total Hero Power", "op": ">=", "value": "250M"},
+                {"column": "Tier", "op": "in", "value": ["Pioneer", "Elite"]},
+            ]
+        }
+        out = transfer.describe_filter(f)
+        assert out == "Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"
+
+    def test_contains_and_raw_json(self):
+        f = '{"and": [{"column": "Requested Landing Alliance", "op": "contains", "value": "OGV"}]}'
+        assert transfer.describe_filter(f) == "Requested Landing Alliance contains OGV"
 
 
 class TestEvaluateFilter:

@@ -329,6 +329,30 @@ def coerce_number(value) -> float | None:
     return number
 
 
+def column_value_kind(values, *, max_choices: int = 20) -> tuple[str, list]:
+    """Pick the filter control for a column from sampled cell values:
+
+    - ``"numeric"`` if most non-empty values parse as numbers → the wizard
+      offers a ``≥ / ≤ / =`` threshold (no value list).
+    - ``"choice"`` if there's a small set of distinct non-empty values
+      (``<= max_choices``) → a multi-select (``in`` operator). Returns the
+      sorted distinct values.
+    - ``"text"`` otherwise → a free-text ``contains`` match.
+
+    Drives the setup filter builder so each column gets a sensible control
+    without the recruiter choosing an operator type by hand."""
+    non_empty = [str(v).strip() for v in values if str(v).strip()]
+    if not non_empty:
+        return "text", []
+    numeric = sum(1 for v in non_empty if coerce_number(v) is not None)
+    if numeric >= max(1, int(len(non_empty) * 0.6)):
+        return "numeric", []
+    distinct = sorted({v for v in non_empty}, key=str.lower)
+    if len(distinct) <= max_choices:
+        return "choice", distinct
+    return "text", []
+
+
 def coerce_bool(value) -> bool | None:
     """Interpret a status cell as a boolean. Returns ``None`` for values that
     aren't clearly true or false, so ``is_true`` / ``is_false`` can err toward
@@ -415,6 +439,46 @@ def _eval_clause(clause: dict, row: list, hidx: dict) -> bool:
         return coerce_bool(cell) is not True
 
     return True  # unknown operator — don't silently drop the row
+
+
+_OP_LABELS = {
+    ">=": "≥",
+    ">": ">",
+    "<=": "≤",
+    "<": "<",
+    "==": "=",
+    "!=": "≠",
+    "contains": "contains",
+    "equals": "=",
+    "in": "in",
+    "is_true": "is set",
+    "is_false": "is not set",
+}
+
+
+def describe_filter(filter_obj) -> str:
+    """Human-readable one-line summary of a filter for setup/hub embeds, e.g.
+    ``"Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"``. A falsy filter
+    reads as "every new applicant"."""
+    if isinstance(filter_obj, str):
+        filter_obj = parse_filter(filter_obj)
+    if not filter_obj:
+        return "every new applicant (no filter)"
+    parts = []
+    for clause in filter_obj.get("and", []):
+        if not isinstance(clause, dict):
+            continue
+        col = clause.get("column", "")
+        op = clause.get("op", "")
+        val = clause.get("value")
+        label = _OP_LABELS.get(op, op)
+        if op == "in" and isinstance(val, (list, tuple)):
+            parts.append(f"{col} in [{', '.join(str(v) for v in val)}]")
+        elif op in ("is_true", "is_false"):
+            parts.append(f"{col} {label}")
+        else:
+            parts.append(f"{col} {label} {val}")
+    return " AND ".join(parts) if parts else "every new applicant (no filter)"
 
 
 def evaluate_filter(filter_obj, row: list, hidx: dict) -> bool:

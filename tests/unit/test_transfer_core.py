@@ -616,6 +616,23 @@ class TestPollIsDue:
         assert transfer.poll_is_due(last, 60, self.NOW) is True
 
 
+class TestAlignRow:
+    def test_reorders_by_header(self):
+        src_header = ["Name", "Power", "Server"]
+        tgt_header = ["Server", "Name", "Tier", "Power"]
+        out = transfer.align_row(src_header, ["Bad Pew", "199M", "738"], tgt_header)
+        # Server, Name, Tier(missing→""), Power
+        assert out == ["738", "Bad Pew", "", "199M"]
+
+    def test_case_insensitive_match(self):
+        out = transfer.align_row(["NAME"], ["Bad Pew"], ["name", "Extra"])
+        assert out == ["Bad Pew", ""]
+
+    def test_short_source_row(self):
+        out = transfer.align_row(["Name", "Power"], ["Bad Pew"], ["Power", "Name"])
+        assert out == ["", "Bad Pew"]
+
+
 class TestSelectRowsToCopy:
     SRC_HEADER = ["Name", "Power", "Preferred Alliance"]
     SRC_HIDX = transfer.header_index(SRC_HEADER)

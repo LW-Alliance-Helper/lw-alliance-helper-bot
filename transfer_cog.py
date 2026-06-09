@@ -13,8 +13,11 @@ notice. They're non-persistent (timeout + ``expire_view_message`` cleanup) —
 for acting on older applicants, the `/transfers` hub viewer is the durable
 surface.
 
-Source-copy (server-wide / form pulls) and decision write-back attach here
-once the wizard configures them; this slice covers the alliance-sheet watch.
+Optional server-wide / intake-form sources are pulled in at the top of each
+poll: matching, not-yet-copied rows are aligned to the alliance sheet's
+columns and appended, then the sheet is re-read so they surface as new
+applicants the same poll. Decision write-back attaches once the wizard
+configures it.
 """
 
 from __future__ import annotations
@@ -225,6 +228,25 @@ class TransferCog(commands.Cog):
             logger.warning("[TRANSFER] guild %s: sheet read failed: %s", gid, e)
             _capture(e)
             return
+
+        # Optional source pulls (server-wide / intake form): copy matching whole
+        # rows into the alliance sheet, aligned to its columns and deduped across
+        # polls, then re-read so the copied rows surface as new applicants now.
+        try:
+            copied = await self._copy_sources(cfg, header)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] guild %s: source copy failed: %s", gid, e)
+            _capture(e)
+            copied = 0
+        if copied:
+            try:
+                header, data_rows = await asyncio.to_thread(
+                    transfer_sheets.read_sheet, sheet_id, tab
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[TRANSFER] guild %s: re-read after copy failed: %s", gid, e)
+                _capture(e)
+
         hidx = transfer.header_index(header)
         diff = transfer.compute_poll_diff(
             data_rows, hidx, column_map, prior_state=prior_state, filter_obj=filter_obj
@@ -255,6 +277,63 @@ class TransferCog(commands.Cog):
             last_seen_state_json=json.dumps(diff.next_state),
             last_polled_at=now_iso,
         )
+
+    async def _copy_sources(self, cfg: dict, target_header: list) -> int:
+        """Copy filter-matching, not-yet-copied rows from the optional
+        server-wide / intake-form sources into the alliance sheet, each
+        aligned to the alliance sheet's column order. Dedup hashes persist in
+        ``copied_state_json`` so a row is copied once. Returns the count
+        copied this poll."""
+        gid = cfg["guild_id"]
+        alliance_id = (cfg.get("alliance_sheet_id") or "").strip()
+        alliance_tab = (cfg.get("alliance_sheet_tab") or "").strip()
+        if not alliance_id or not alliance_tab:
+            return 0
+        try:
+            copied_set = set(json.loads(cfg.get("copied_state_json") or "[]"))
+        except (ValueError, TypeError):
+            copied_set = set()
+
+        total = 0
+        for prefix in ("server_wide", "alliance_form"):
+            if not cfg.get(f"{prefix}_enabled"):
+                continue
+            s_id = (cfg.get(f"{prefix}_sheet_id") or "").strip()
+            s_tab = (cfg.get(f"{prefix}_sheet_tab") or "").strip()
+            s_map = transfer.parse_column_map(cfg.get(f"{prefix}_column_map_json"))
+            if not s_id or not s_tab or not s_map.get("name"):
+                continue
+            s_filter = transfer.parse_filter(cfg.get(f"{prefix}_filter_json"))
+            try:
+                s_header, s_rows = await asyncio.to_thread(transfer_sheets.read_sheet, s_id, s_tab)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[TRANSFER] guild %s: %s source read failed: %s", gid, prefix, e)
+                _capture(e)
+                continue
+            s_hidx = transfer.header_index(s_header)
+            to_copy, updated = transfer.select_rows_to_copy(
+                s_rows, s_hidx, s_map, already_copied=copied_set, filter_obj=s_filter
+            )
+            if not to_copy:
+                continue
+            aligned = [transfer.align_row(s_header, r, target_header) for r in to_copy]
+            try:
+                await asyncio.to_thread(
+                    transfer_sheets.append_rows, alliance_id, alliance_tab, aligned
+                )
+            except Exception as e:  # noqa: BLE001
+                # Don't advance copied_set, so we retry these next poll.
+                logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
+                _capture(e)
+                continue
+            total += len(aligned)
+            copied_set = updated
+
+        if total:
+            config.update_transfer_config_field(
+                gid, "copied_state_json", json.dumps(sorted(copied_set))
+            )
+        return total
 
     async def _post(self, channel, gid, header, hidx, column_map, diff, style, notify_on_delete):
         display_headers = column_map.get("display", []) or []

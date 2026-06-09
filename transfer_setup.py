@@ -599,23 +599,35 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
     return {"column": col, "op": "contains", "value": valv.value}
 
 
-async def _build_filter(channel, owner_id, header, rows, cancel_event):
+async def _build_filter(
+    channel,
+    owner_id,
+    header,
+    rows,
+    cancel_event,
+    *,
+    intro: str | None = None,
+    none_label: str = "✅ Every new applicant",
+    build_label: str = "🔎 Only ones matching a filter",
+):
     """Walk the recruiter through an AND filter. Returns the filter dict,
-    ``None`` (notify on every new applicant), or a ``"CANCEL"`` / ``"TIMEOUT"``
-    sentinel for the wizard to act on."""
+    ``None`` (no filter), or a ``"CANCEL"`` / ``"TIMEOUT"`` sentinel. Reused
+    for both the new-applicant notification filter and the source pull
+    filter — the labels/intro adapt via the keyword args."""
+    if intro is None:
+        intro = (
+            "**Step 5 — New-applicant filter**\n"
+            "Get pinged for *every* new applicant, or only the ones matching a filter? "
+            "(Status changes always notify, filter or not.)"
+        )
     start = _ButtonChoiceView(
         owner_id,
         [
-            ("✅ Every new applicant", "none", discord.ButtonStyle.secondary),
-            ("🔎 Only ones matching a filter", "build", discord.ButtonStyle.primary),
+            (none_label, "none", discord.ButtonStyle.secondary),
+            (build_label, "build", discord.ButtonStyle.primary),
         ],
     )
-    await channel.send(
-        "**Step 5 — New-applicant filter**\n"
-        "Get pinged for *every* new applicant, or only the ones matching a filter? "
-        "(Status changes always notify, filter or not.)",
-        view=start,
-    )
+    await channel.send(intro, view=start)
     await wizard_registry.wait_view_or_cancel(start, cancel_event)
     if start.cancelled:
         return "CANCEL"
@@ -659,6 +671,190 @@ async def _build_filter(channel, owner_id, header, rows, cancel_event):
         if not more.confirmed or more.value == "done":
             break
     return {"and": clauses} if clauses else None
+
+
+# ── Steps 8–9: optional source sheets (server-wide / intake form) ─────────────
+
+
+class _SourceMapView(discord.ui.View):
+    """A lighter mapping for a *source* sheet: just Name (required) + any
+    Also-identity columns, used to dedup which rows get copied. Display /
+    status don't apply — the whole row is copied, aligned to the alliance
+    sheet's columns."""
+
+    def __init__(self, *, owner_id: int, headers: list, initial_map: dict):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.headers = headers[:25]
+        self.saved = False
+        self.sel_name = initial_map.get("name") or None
+        self.sel_identity = list(initial_map.get("identity_extra") or [])
+
+        name_sel = discord.ui.Select(
+            placeholder="Name column (required)",
+            min_values=1,
+            max_values=1,
+            row=0,
+            options=[
+                discord.SelectOption(label=h[:100], value=h, default=(h == self.sel_name))
+                for h in self.headers
+            ],
+        )
+        name_sel.callback = self._on_name
+        self.add_item(name_sel)
+
+        id_sel = discord.ui.Select(
+            placeholder="Also-identity columns, e.g. Server (optional)",
+            min_values=0,
+            max_values=len(self.headers),
+            row=1,
+            options=[
+                discord.SelectOption(label=h[:100], value=h, default=(h in self.sel_identity))
+                for h in self.headers
+            ],
+        )
+        id_sel.callback = self._on_identity
+        self.add_item(id_sel)
+
+        save = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=2)
+        save.callback = self._on_save
+        self.add_item(save)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _on_name(self, interaction: discord.Interaction):
+        self.sel_name = interaction.data["values"][0]
+        await interaction.response.defer()
+
+    async def _on_identity(self, interaction: discord.Interaction):
+        picked = set(interaction.data["values"])
+        self.sel_identity = [h for h in self.headers if h in picked]
+        await interaction.response.defer()
+
+    def column_map(self) -> dict:
+        out: dict = {"name": self.sel_name}
+        if self.sel_identity:
+            out["identity_extra"] = self.sel_identity
+        return out
+
+    async def _on_save(self, interaction: discord.Interaction):
+        if not self.sel_name:
+            await interaction.response.send_message(
+                "⚠️ Pick a **Name** column — it's required to avoid copying the same person twice.",
+                ephemeral=True,
+            )
+            return
+        self.saved = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
+
+
+def _source_map_embed(column_map: dict) -> discord.Embed:
+    return discord.Embed(
+        title="🔁 Source sheet — identity",
+        color=discord.Color.blurple(),
+        description=(
+            "Pick the **Name** column (and any **Also-identity** like Server) so the bot can "
+            "tell applicants apart and not copy the same person twice. The *whole* matching row "
+            "gets copied into your sheet.\n\n" + transfer.summarize_column_map(column_map)
+        ),
+    )
+
+
+async def _run_source_step(
+    channel, guild_id, user_id, *, step_label, intro_text, prefix, current, cancel_event
+):
+    """Configure one optional source (``server_wide`` / ``alliance_form``).
+    Returns ``"OK"`` / ``"SKIP"`` / ``"CANCEL"`` / ``"TIMEOUT"`` and saves the
+    ``{prefix}_*`` config fields."""
+    choice = _ButtonChoiceView(
+        user_id,
+        [
+            ("⏭️ Skip", "skip", discord.ButtonStyle.secondary),
+            ("➕ Connect a sheet", "connect", discord.ButtonStyle.primary),
+        ],
+    )
+    await channel.send(f"**{step_label}**\n{intro_text}", view=choice)
+    await wizard_registry.wait_view_or_cancel(choice, cancel_event)
+    if choice.cancelled:
+        return "CANCEL"
+    if not choice.confirmed:
+        return "TIMEOUT"
+    if choice.value == "skip":
+        config.update_transfer_config_field(guild_id, f"{prefix}_enabled", 0)
+        await channel.send("⏭️ Skipped.")
+        return "SKIP"
+
+    sheet_view = _SheetStepView(
+        owner_id=user_id,
+        default_id=current.get(f"{prefix}_sheet_id") or "",
+        default_tab=current.get(f"{prefix}_sheet_tab") or "",
+    )
+    sheet_view.message = await channel.send(
+        "Enter the source sheet (Sheet ID + tab). The bot's service account needs read access.",
+        view=sheet_view,
+    )
+    await wizard_registry.wait_view_or_cancel(sheet_view, cancel_event)
+    if sheet_view.cancelled:
+        return "CANCEL"
+    if not sheet_view.confirmed or not sheet_view.result:
+        return "TIMEOUT"
+    s_id, s_tab, s_header, s_rows = sheet_view.result
+
+    existing = (
+        transfer.parse_column_map(current.get(f"{prefix}_column_map_json"))
+        if current.get(f"{prefix}_sheet_id")
+        else {}
+    )
+    initial = existing or transfer.suggest_column_map(s_header)
+    map_view = _SourceMapView(owner_id=user_id, headers=s_header, initial_map=initial)
+    map_view.message = await channel.send(embed=_source_map_embed(initial), view=map_view)
+    await wizard_registry.wait_view_or_cancel(map_view, cancel_event)
+    if map_view.cancelled:
+        return "CANCEL"
+    if not map_view.saved:
+        return "TIMEOUT"
+    src_map = map_view.column_map()
+
+    filt = await _build_filter(
+        channel,
+        user_id,
+        s_header,
+        s_rows,
+        cancel_event,
+        intro=(
+            "**Which rows should the bot pull in?**\n"
+            "For example: only rows where *Requested Landing Alliance* contains your tag."
+        ),
+        none_label="📥 Pull every row",
+        build_label="🔎 Only rows matching a filter",
+    )
+    if filt == "CANCEL":
+        return "CANCEL"
+    if filt == "TIMEOUT":
+        return "TIMEOUT"
+
+    config.update_transfer_config_fields(
+        guild_id,
+        **{
+            f"{prefix}_enabled": 1,
+            f"{prefix}_sheet_id": s_id,
+            f"{prefix}_sheet_tab": s_tab,
+            f"{prefix}_column_map_json": json.dumps(src_map),
+            f"{prefix}_filter_json": json.dumps(filt) if filt else "",
+        },
+    )
+    await channel.send(
+        f"✅ Connected. Rows matching **{transfer.describe_filter(filt)}** will be copied into "
+        "your sheet (whole row, aligned to your columns)."
+    )
+    return "OK"
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -844,6 +1040,47 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             # Empty string == "use the default" (storage convention).
             stored = "" if chosen.strip() == default_body.strip() else chosen
             config.update_transfer_config_field(guild_id, f"template_{kind}", stored)
+
+        # ── Step 8: server-wide pull (optional) ───────────────────────────────
+        sw = await _run_source_step(
+            channel,
+            guild_id,
+            user.id,
+            step_label="Step 8 — Server-wide pull (optional)",
+            intro_text=(
+                "Pull applicants who fit from a server-wide sheet into your own, automatically "
+                "(the highest-leverage piece — it catches people who asked for you). Skip if you "
+                "only watch your own sheet."
+            ),
+            prefix="server_wide",
+            current=current,
+            cancel_event=cancel_event,
+        )
+        if sw == "CANCEL":
+            return
+        if sw == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+
+        # ── Step 9: intake form (optional) ────────────────────────────────────
+        fm = await _run_source_step(
+            channel,
+            guild_id,
+            user.id,
+            step_label="Step 9 — Intake form (optional)",
+            intro_text=(
+                "If your alliance runs its own Google Form, pull each submission into your sheet. "
+                "Skip if you don't."
+            ),
+            prefix="alliance_form",
+            current=current,
+            cancel_event=cancel_event,
+        )
+        if fm == "CANCEL":
+            return
+        if fm == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
 
         # ── Finish: silent baseline read + go live ────────────────────────────
         await channel.send("⏳ Capturing your current applicants as a baseline…")

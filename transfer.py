@@ -721,6 +721,24 @@ def compute_poll_diff(
     return PollDiff(new_applicants, status_changes, deletions, next_state)
 
 
+def align_row(source_header: list, source_row: list, target_header: list) -> list:
+    """Reorder a source row into the *target* sheet's column order by matching
+    header names (case-insensitive). Target columns with no matching source
+    header get ``""``. So a server-wide / form row copies into the alliance
+    sheet's own layout cleanly even when the two sheets order (or name) their
+    columns differently — "copy the whole row" without scrambling it."""
+    src_idx = header_index(source_header)
+    out = []
+    for h in target_header:
+        i = src_idx.get(_norm_header(h))
+        if i is not None and i < len(source_row):
+            cell = source_row[i]
+            out.append(cell if isinstance(cell, str) else str(cell))
+        else:
+            out.append("")
+    return out
+
+
 def select_rows_to_copy(
     source_rows: list,
     source_hidx: dict,

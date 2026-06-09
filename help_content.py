@@ -23,6 +23,7 @@ from setup_hub import (
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
     HUB_BTN_TRAIN,
+    HUB_BTN_TRANSFERS,
     STORM_SETUP_NAV,
 )
 
@@ -274,6 +275,34 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 f"/setup → {HUB_BTN_SHINY}",
                 "Configure the announcement channel, server range, post time, and message body.",
+            ),
+        ],
+    },
+    "transfers": {
+        "emoji": "🔁",
+        "label": "Transfer Management 💎",
+        "description": (
+            "💎 Premium. Watches your recruiting sheet and pings you when new "
+            "applicants land or their status changes, drafts your in-game "
+            "messages, and (optionally) pulls matching players from a "
+            "server-wide sheet. Your sheet stays the source of truth. Open "
+            "`/transfers` to see everything in one place."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_TRANSFERS}",
+                "💎 Run the setup wizard: point the bot at your transfer sheet, "
+                "auto-map the columns, pick a notification channel + style, "
+                "build a new-applicant filter, connect optional server-wide / "
+                "intake-form sources, and turn on decision write-back.",
+            ),
+            (
+                "/transfers",
+                "💎 **Transfer hub.** Shows the watch status (sheet, channel, "
+                "filter, sources) plus 📋 View applicants and ⚙️ Setup "
+                "Transfers. New-applicant / status-change notices post to your "
+                "chosen channel with 📄 Full details, draft-a-message buttons, "
+                "and (if enabled) ✅ Set-status write-back.",
             ),
         ],
     },

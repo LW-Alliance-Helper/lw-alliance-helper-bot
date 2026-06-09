@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timezone
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
@@ -162,6 +163,13 @@ class TransferCog(commands.Cog):
 
     def cog_unload(self):
         self.poll.cancel()
+
+    @app_commands.command(name="transfers", description="Open the Transfer Management hub")
+    @app_commands.guild_only()
+    async def transfers(self, interaction: discord.Interaction):
+        from transfers_hub import handle_transfers_hub
+
+        await handle_transfers_hub(self.bot, interaction)
 
     @tasks.loop(minutes=1)
     async def poll(self):

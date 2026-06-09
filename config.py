@@ -367,6 +367,7 @@ def init_db():
                 notification_channel_id        INTEGER DEFAULT 0,
                 notification_filter_json       TEXT    DEFAULT '',
                 notify_on_delete               INTEGER DEFAULT 0,
+                notification_style             TEXT    DEFAULT 'each',
 
                 server_wide_enabled            INTEGER DEFAULT 0,
                 server_wide_sheet_id           TEXT    DEFAULT '',
@@ -1114,6 +1115,7 @@ def init_db():
             ("notification_channel_id", "INTEGER DEFAULT 0"),
             ("notification_filter_json", "TEXT    DEFAULT ''"),
             ("notify_on_delete", "INTEGER DEFAULT 0"),
+            ("notification_style", "TEXT    DEFAULT 'each'"),
             ("server_wide_enabled", "INTEGER DEFAULT 0"),
             ("server_wide_sheet_id", "TEXT    DEFAULT ''"),
             ("server_wide_sheet_tab", "TEXT    DEFAULT ''"),
@@ -4750,6 +4752,7 @@ _TRANSFER_DEFAULTS = {
     "notification_channel_id": 0,
     "notification_filter_json": "",
     "notify_on_delete": 0,
+    "notification_style": "each",
     "server_wide_enabled": 0,
     "server_wide_sheet_id": "",
     "server_wide_sheet_tab": "",

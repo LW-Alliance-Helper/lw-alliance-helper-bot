@@ -49,7 +49,7 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
         else "a digest"
     )
     embed.description = (
-        f"{'✅ **Active**' if enabled else '⏸️ **Set up but not active**'} — watching "
+        f"{'✅ **Active**' if enabled else '⏸️ **Set up but not active**'}. Watching "
         f"**{cfg.get('alliance_sheet_tab') or '?'}** every {freq} min, posting to "
         f"{f'<#{chan}>' if chan else '*no channel set*'} as {style}."
     )
@@ -79,7 +79,7 @@ def _applicants_embed(header, rows, hidx, name_header, display_headers) -> disco
         if count <= 25:
             pairs = transfer.display_fields(row, hidx, display_headers)
             summary = " · ".join(str(v) for _h, v in pairs[:3])
-            lines.append(f"**{name}**" + (f" — {summary}" if summary else ""))
+            lines.append(f"**{name}**" + (f": {summary}" if summary else ""))
     if not count:
         embed.description = "*No applicants on the sheet right now.*"
         return embed
@@ -189,7 +189,7 @@ async def handle_transfers_hub(bot, interaction: discord.Interaction) -> None:
                     "Transfer Management watches your recruiting sheet, pings you on new "
                     "applicants and status changes, pulls matching players from a server-wide "
                     "sheet, and drafts your in-game messages. It's part of LW Alliance Helper "
-                    "Premium — run `/upgrade` to unlock it."
+                    "Premium. Run `/upgrade` to unlock it."
                 ),
             ),
             view=premium.upgrade_view(),

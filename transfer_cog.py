@@ -77,7 +77,7 @@ def _new_applicant_embed(name: str, display_pairs: list) -> discord.Embed:
 
 
 def _status_change_embed(name: str, changes: list) -> discord.Embed:
-    embed = discord.Embed(title=f"🔔 {name} — status changed"[:256], color=discord.Color.blue())
+    embed = discord.Embed(title=f"🔔 {name}: status changed"[:256], color=discord.Color.blue())
     lines = [
         f"**{field}:** {(old or '(blank)')} → {(new or '(blank)')}" for field, old, new in changes
     ]
@@ -88,13 +88,13 @@ def _status_change_embed(name: str, changes: list) -> discord.Embed:
 def _removal_embed(name: str, snapshot: dict) -> discord.Embed:
     embed = discord.Embed(title=f"🗑️ {name} removed from the sheet"[:256], color=discord.Color.red())
     last = ", ".join(f"{k}: {v}" for k, v in (snapshot or {}).items() if str(v).strip())
-    embed.description = f"They'd been marked — {last}." if last else "Removed from your sheet."
+    embed.description = f"They'd been marked: {last}." if last else "Removed from your sheet."
     return embed
 
 
 def _full_details_embed(name: str, header: list, row: list) -> discord.Embed:
     """Every column of the sheet row, one field per line (Decision J)."""
-    embed = discord.Embed(title=f"📄 {name} — full record"[:256], color=discord.Color.greyple())
+    embed = discord.Embed(title=f"📄 {name}: full record"[:256], color=discord.Color.greyple())
     lines = []
     for i, h in enumerate(header):
         if not str(h).strip():
@@ -104,7 +104,7 @@ def _full_details_embed(name: str, header: list, row: list) -> discord.Embed:
             val = cell.strip() if isinstance(cell, str) else str(cell)
         else:
             val = ""
-        lines.append(f"**{h}:** {val or '—'}")
+        lines.append(f"**{h}:** {val or '·'}")
     embed.description = "\n".join(lines)[:4000]
     return embed
 
@@ -133,7 +133,7 @@ class _WriteConfirmView(discord.ui.View):
         self.add_item(cancel)
 
     async def _cancel(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content="Cancelled — nothing written.", view=None)
+        await interaction.response.edit_message(content="Cancelled. Nothing written.", view=None)
 
     async def _do(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -501,7 +501,7 @@ class TransferCog(commands.Cog):
                 name = transfer.cell_for(na.row, hidx, name_header) or "(unknown)"
                 pairs = transfer.display_fields(na.row, hidx, display_headers)
                 summary = " · ".join(str(v) for _, v in pairs[:3])
-                lines.append(f"• **{name}**" + (f" — {summary}" if summary else ""))
+                lines.append(f"• **{name}**" + (f": {summary}" if summary else ""))
             if len(diff.new_applicants) > 25:
                 lines.append(f"… +{len(diff.new_applicants) - 25} more")
             embed.add_field(
@@ -515,7 +515,7 @@ class TransferCog(commands.Cog):
             for sc in diff.status_changes[:25]:
                 name = transfer.cell_for(sc.row, hidx, name_header) or "(unknown)"
                 chg = ", ".join(f"{f}: {n or '(blank)'}" for f, _o, n in sc.changes)
-                lines.append(f"• **{name}** — {chg}")
+                lines.append(f"• **{name}**: {chg}")
             embed.add_field(
                 name=f"Status changes ({len(diff.status_changes)})",
                 value="\n".join(lines)[:1024],

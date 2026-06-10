@@ -97,7 +97,7 @@ async def _launch_transfer_setup(interaction: discord.Interaction, bot) -> None:
                     "Transfer Management watches your recruiting sheet, pings you on new "
                     "applicants and status changes, pulls matching players from a server-wide "
                     "sheet, and drafts your in-game messages. It's part of LW Alliance Helper "
-                    "Premium — run `/upgrade` to unlock it."
+                    "Premium. Run `/upgrade` to unlock it."
                 ),
             ),
             view=premium.upgrade_view(),
@@ -109,7 +109,7 @@ async def _launch_transfer_setup(interaction: discord.Interaction, bot) -> None:
         return
 
     await interaction.response.send_message(
-        "⚙️ Starting Transfer Management setup — check the channel for prompts.",
+        "⚙️ Starting Transfer Management setup. Check the channel for prompts.",
         ephemeral=True,
     )
     await run_transfer_setup(interaction, bot)
@@ -214,14 +214,14 @@ class _SheetStepView(discord.ui.View):
             try:
                 await self.message.edit(
                     content=(
-                        f"✅ Read **{tab}** — {len(header)} columns, {len(rows)} rows. "
+                        f"✅ Read **{tab}**: {len(header)} columns, {len(rows)} rows. "
                         "Mapping below."
                     ),
                     view=self,
                 )
             except discord.HTTPException:
                 pass
-        await interaction.followup.send("✅ Got it — continuing below.", ephemeral=True)
+        await interaction.followup.send("✅ Got it, continuing below.", ephemeral=True)
         self.stop()
 
 
@@ -245,8 +245,13 @@ class _ColumnMapView(discord.ui.View):
         self.sel_display = list(initial_map.get("display") or [])
         self.sel_identity = list(initial_map.get("identity_extra") or [])
 
+        # Dropdowns are numbered ①–④ and pre-filled with the guess so the
+        # selected values stay visible. Discord hides a select's placeholder
+        # once anything is selected, so the embed carries a numbered legend
+        # (top-to-bottom) saying what each dropdown is; an *empty* category
+        # falls back to showing its numbered placeholder.
         name_sel = discord.ui.Select(
-            placeholder="Name column (required)",
+            placeholder="① Name column (required)",
             min_values=1,
             max_values=1,
             row=0,
@@ -255,12 +260,12 @@ class _ColumnMapView(discord.ui.View):
         name_sel.callback = self._on_name
         self.add_item(name_sel)
 
-        self._add_multi("Status columns to watch (optional)", 1, self.sel_status, self._on_status)
+        self._add_multi("② Status columns to watch (optional)", 1, self.sel_status, self._on_status)
         self._add_multi(
-            "Columns to show in notices (optional)", 2, self.sel_display, self._on_display
+            "③ Columns to show in notices (optional)", 2, self.sel_display, self._on_display
         )
         self._add_multi(
-            "Also-identity columns, e.g. Server (optional)", 3, self.sel_identity, self._on_identity
+            "④ Also-identity, e.g. Server (optional)", 3, self.sel_identity, self._on_identity
         )
 
         save = discord.ui.Button(label="✅ Save mapping", style=discord.ButtonStyle.success, row=4)
@@ -315,7 +320,7 @@ class _ColumnMapView(discord.ui.View):
     async def _on_save(self, interaction: discord.Interaction):
         if not self.sel_name:
             await interaction.response.send_message(
-                "⚠️ Pick a **Name** column — it's the one required field.", ephemeral=True
+                "⚠️ Pick a **Name** column. It's the one required field.", ephemeral=True
             )
             return
         self.saved = True
@@ -327,16 +332,17 @@ class _ColumnMapView(discord.ui.View):
 
 def _map_embed(column_map: dict, truncated: bool) -> discord.Embed:
     embed = discord.Embed(
-        title="🔁 Step 2 — Map your columns",
+        title="🔁 Step 2: Map your columns",
         color=discord.Color.blurple(),
         description=(
-            "I read your sheet and pre-filled my best guess below. Adjust the dropdowns, "
-            "then **Save mapping**.\n\n"
-            "• **Name** is the only required column (it identifies each applicant).\n"
-            "• **Status** columns are watched — a change posts a status-change notice.\n"
-            "• **Display** columns show in your notifications (pick as many as you like).\n"
-            "• **Also-identity** columns (like Server) tell apart two people with the same name.\n\n"
-            f"My guess:\n{transfer.summarize_column_map(column_map)}"
+            "I read your sheet and pre-filled my best guess. The four dropdowns below are, "
+            "top to bottom:\n"
+            "① **Name** (required): identifies each applicant\n"
+            "② **Status to watch**: a change here posts a status-change notice\n"
+            "③ **Show in notices**: the columns shown in each ping (pick as many as you like)\n"
+            "④ **Also-identity** (e.g. Server): tells apart two people with the same name\n\n"
+            "Change a dropdown to override, then **Save mapping**.\n\n"
+            f"**My guess:**\n{transfer.summarize_column_map(column_map)}"
         ),
     )
     if truncated:
@@ -431,8 +437,15 @@ _TEMPLATE_STEPS = [
 
 # ── Step 5: new-applicant filter builder ──────────────────────────────────────
 
-# Comparison label → operator for the numeric-column control.
-_FILTER_OPS = [("≥", ">="), ("≤", "<="), ("=", "=="), (">", ">"), ("<", "<")]
+# Comparison label → operator for the numeric-column control. Labels spell out
+# the symbol so it's unambiguous.
+_FILTER_OPS = [
+    ("≥ (at least)", ">="),
+    ("≤ (at most)", "<="),
+    ("= (equals)", "=="),
+    ("> (greater than)", ">"),
+    ("< (less than)", "<"),
+]
 
 
 class _ButtonChoiceView(discord.ui.View):
@@ -604,7 +617,7 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
         opv = _ButtonChoiceView(
             owner_id, [(lbl, op, discord.ButtonStyle.secondary) for lbl, op in _FILTER_OPS]
         )
-        await channel.send(f"**{col}** — comparison?", view=opv)
+        await channel.send(f"How should **{col}** compare?", view=opv)
         await wizard_registry.wait_view_or_cancel(opv, cancel_event)
         if opv.cancelled:
             return "CANCEL"
@@ -621,9 +634,29 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             return "TIMEOUT"
         return {"column": col, "op": opv.value, "value": valv.value}
 
-    if kind == "choice":
+    # Non-numeric. The sampled values are NOT the full set of what could ever
+    # appear (a cell might be "t0s, OGV, open to sponsorship"), so "contains
+    # text" is always offered, not just an exact-value pick.
+    match = "contains"
+    if distinct:
+        how = _ButtonChoiceView(
+            owner_id,
+            [
+                ("🔤 Contains text", "contains", discord.ButtonStyle.primary),
+                ("🎯 Is one of specific values", "in", discord.ButtonStyle.secondary),
+            ],
+        )
+        await channel.send(f"How should **{col}** match?", view=how)
+        await wizard_registry.wait_view_or_cancel(how, cancel_event)
+        if how.cancelled:
+            return "CANCEL"
+        if not how.confirmed:
+            return "TIMEOUT"
+        match = how.value
+
+    if match == "in":
         mv = _FilterMultiView(owner_id, distinct)
-        await channel.send(f"**{col}** — match which value(s)?", view=mv)
+        await channel.send(f"Pick the value(s) **{col}** must be one of:", view=mv)
         await wizard_registry.wait_view_or_cancel(mv, cancel_event)
         if mv.cancelled:
             return "CANCEL"
@@ -631,10 +664,9 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             return "TIMEOUT"
         return {"column": col, "op": "in", "value": mv.values}
 
-    # free text → contains
     valv = _FilterValueView(owner_id, prompt_title=col, prompt_label="Contains text")
     valv.message = await channel.send(
-        f"**{col}** — match rows that *contain* what text?", view=valv
+        f"What text should **{col}** contain? (e.g. `OGV`)", view=valv
     )
     await wizard_registry.wait_view_or_cancel(valv, cancel_event)
     if valv.cancelled:
@@ -661,7 +693,7 @@ async def _build_filter(
     filter — the labels/intro adapt via the keyword args."""
     if intro is None:
         intro = (
-            "**Step 5 — New-applicant filter**\n"
+            "**Step 5: New-applicant filter**\n"
             "Get pinged for *every* new applicant, or only the ones matching a filter? "
             "(Status changes always notify, filter or not.)"
         )
@@ -736,7 +768,7 @@ class _SourceMapView(discord.ui.View):
         self.sel_identity = list(initial_map.get("identity_extra") or [])
 
         name_sel = discord.ui.Select(
-            placeholder="Name column (required)",
+            placeholder="① Name column (required)",
             min_values=1,
             max_values=1,
             row=0,
@@ -747,7 +779,7 @@ class _SourceMapView(discord.ui.View):
 
         id_opts = _header_options(self.headers, self.sel_identity)
         id_sel = discord.ui.Select(
-            placeholder="Also-identity columns, e.g. Server (optional)",
+            placeholder="② Also-identity, e.g. Server (optional)",
             min_values=0,
             max_values=max(1, len(id_opts)),
             row=1,
@@ -797,7 +829,7 @@ class _SourceMapView(discord.ui.View):
 
 def _source_map_embed(column_map: dict) -> discord.Embed:
     return discord.Embed(
-        title="🔁 Source sheet — identity",
+        title="🔁 Source sheet: identity",
         color=discord.Color.blurple(),
         description=(
             "Pick the **Name** column (and any **Also-identity** like Server) so the bot can "
@@ -928,7 +960,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             ]
             proceed = await ask_proceed_with_existing_config(
                 channel,
-                title="💎 Transfer Management — current setup",
+                title="💎 Transfer Management: current setup",
                 description="Transfer Management is already set up. Edit the sheet + column mapping?",
                 fields=fields,
                 cancel_event=cancel_event,
@@ -939,21 +971,26 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
 
         await channel.send(
             "💎 **Transfer Management setup**\n"
-            "Point the bot at your recruiting sheet and it'll watch for new applicants and "
-            "status changes. We'll start with the sheet and how to read it; notifications, "
-            "sources, and templates come after."
+            "This watches **your alliance's own recruiting sheet**: the one you edit and mark "
+            "applicants on. Later (Step 8) you can optionally pull matching players into it from "
+            "a **server-wide** sheet. We'll start with your own sheet."
         )
 
-        # ── Step 1: the transfer sheet ────────────────────────────────────────
+        # ── Step 1: the alliance's own sheet ──────────────────────────────────
         sheet_view = _SheetStepView(
             owner_id=user.id,
             default_id=current.get("alliance_sheet_id") or "",
             default_tab=current.get("alliance_sheet_tab") or "",
         )
         sheet_view.message = await channel.send(
-            "**Step 1 — Your transfer sheet**\n"
-            "Click **Enter sheet** and paste the Google Sheet ID + the tab your applicants "
-            "live on. The bot's service account needs at least read access.",
+            "**Step 1: Your alliance's own sheet**\n"
+            "This is *your* recruiting sheet, the one you (not the whole server) edit and mark "
+            "statuses on. The bot watches it for new applicants and status changes.\n"
+            "⚠️ If you only have a shared / server-wide sheet, **don't put it here**. Point this at "
+            "your alliance's own sheet (or a fresh tab) and connect the server-wide one in **Step "
+            "8**.\n"
+            "Click **Enter sheet** and paste the sheet link (or ID) + the tab your applicants "
+            "live on.",
             view=sheet_view,
         )
         await wizard_registry.wait_view_or_cancel(sheet_view, cancel_event)
@@ -989,7 +1026,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         # ── Step 3: notification channel ──────────────────────────────────────
         chan_view = _ChannelStepView(owner_id=user.id)
         chan_view.message = await channel.send(
-            "**Step 3 — Notification channel**\n"
+            "**Step 3: Notification channel**\n"
             "Where should new-applicant and status-change notices post? A dedicated "
             "recruiting channel works well.",
             view=chan_view,
@@ -1007,10 +1044,10 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         # ── Step 4: notification style ────────────────────────────────────────
         style_view = _StyleStepView(owner_id=user.id)
         await channel.send(
-            "**Step 4 — How should notifications arrive?**\n"
-            "• **A message per applicant** — richest; great for a dedicated channel where you "
+            "**Step 4: How should notifications arrive?**\n"
+            "• **A message per applicant**: richest; great for a dedicated channel where you "
             "watch people arrive.\n"
-            "• **One digest** — a single batched message when several land in the same check "
+            "• **One digest**: a single batched message when several land in the same check "
             "(tidier on a busy day).",
             view=style_view,
         )
@@ -1039,7 +1076,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
 
         removal_view = YesNoView()
         await channel.send(
-            "**Step 6 — Removal notices?**\n"
+            "**Step 6: Removal notices?**\n"
             "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your "
             "sheet, want a heads-up? Pending rows that never had a status set never notify.",
             view=removal_view,
@@ -1054,12 +1091,12 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             guild_id, "notify_on_delete", 1 if removal_view.selected else 0
         )
 
-        # ── Step 6: message templates ─────────────────────────────────────────
+        # ── Step 7: message templates ─────────────────────────────────────────
         from setup_cog import ask_keep_or_change
         from defaults import DEFAULT_TRANSFER_TEMPLATES
 
         await channel.send(
-            "**Step 7 — In-game message templates**\n"
+            "**Step 7: In-game message templates**\n"
             "These are the messages you copy into game chat. Use `{name}` for the applicant, "
             "`{alliance_name}` for your alliance, or any display column as `{token}` "
             "(e.g. `{total_hero_power}`)."
@@ -1086,11 +1123,11 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             channel,
             guild_id,
             user.id,
-            step_label="Step 8 — Server-wide pull (optional)",
+            step_label="Step 8: Server-wide pull (optional)",
             intro_text=(
-                "Pull applicants who fit from a server-wide sheet into your own, automatically "
-                "(the highest-leverage piece — it catches people who asked for you). Skip if you "
-                "only watch your own sheet."
+                "Pull applicants who fit from a server-wide sheet into your own, automatically. "
+                "This is the highest-leverage piece: it catches people who asked for you. Skip if "
+                "you only watch your own sheet."
             ),
             prefix="server_wide",
             current=current,
@@ -1107,7 +1144,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             channel,
             guild_id,
             user.id,
-            step_label="Step 9 — Intake form (optional)",
+            step_label="Step 9: Intake form (optional)",
             intro_text=(
                 "If your alliance runs its own Google Form, pull each submission into your sheet. "
                 "Skip if you don't."
@@ -1129,9 +1166,9 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         if status_cols:
             wb_choice = YesNoView()
             await channel.send(
-                "**Step 10 — Decision write-back?**\n"
+                "**Step 10: Decision write-back?**\n"
                 f"Add buttons to each notification so you can mark an applicant "
-                f"(**{', '.join(status_cols)}**) right from Discord — the bot writes it back to "
+                f"(**{', '.join(status_cols)}**) right from Discord, and the bot writes it back to "
                 "your sheet. Leave off to keep the bot read-only.",
                 view=wb_choice,
             )

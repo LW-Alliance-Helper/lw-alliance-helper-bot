@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 TRANSFERS_HUB_CMD = "/transfers"
 _DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
+# Mirrors transfer_setup._MODE_LABELS (kept local to avoid importing the wizard
+# module at hub-load time; the wizard is imported lazily on the Setup button).
+_MODE_LABELS = {
+    "source_to_own": "A shared sheet that populates my own sheet",
+    "own": "My own sheet",
+    "watch": "A shared sheet I watch",
+}
+
 
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
@@ -53,12 +61,15 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
         f"**{cfg.get('alliance_sheet_tab') or '?'}** every {freq} min, posting to "
         f"{f'<#{chan}>' if chan else '*no channel set*'} as {style}."
     )
+    mode_label = _MODE_LABELS.get(cfg.get("setup_mode") or "")
+    if mode_label:
+        embed.add_field(name="Setup type", value=mode_label, inline=False)
     embed.add_field(name="Columns", value=transfer.summarize_column_map(column_map), inline=False)
     extras = []
     if cfg.get("server_wide_enabled"):
-        extras.append("server-wide pull ✅")
+        extras.append("shared-sheet pull ✅")
     if cfg.get("alliance_form_enabled"):
-        extras.append("intake form ✅")
+        extras.append("form pull ✅")
     if cfg.get("notify_on_delete"):
         extras.append("removal notices ✅")
     if extras:

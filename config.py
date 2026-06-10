@@ -337,15 +337,21 @@ def init_db():
         # optional server-wide / form sources *do* copy matching rows into
         # the alliance sheet.
         #
+        # `setup_mode` records which Step-1 shape the alliance picked
+        # ('source_to_own' = a read-only shared sheet copies into their own
+        # sheet; 'own' = a single read-write sheet; 'watch' = a read-only
+        # shared sheet they only watch). It drives the wizard flow + hub copy;
+        # the poll loop keys off the enable flags it sets, not this field.
+        #
         # The `*_column_map_json` fields hold the flexible column mapping
-        # (only Member name is required) as JSON. Columns are addressed by
+        # (only the Name column is required) as JSON. Columns are addressed by
         # *header name* (resolved to a live index on each poll — see
-        # transfer.resolve_columns), so inserting/moving a column doesn't
-        # break the mapping:
-        #   {"member": "Name", "power": "Total Power", "tier": "Tier",
-        #    "want": "Want?", "confirmed": "Confirmed", "declined": "Declined",
-        #    "notes": "Notes", "server": "Server",
-        #    "extras": [{"label": "Bear vs Lion", "header": "BvL"}, ...]}
+        # transfer.header_index), so inserting/moving a column doesn't break
+        # the mapping:
+        #   {"name": "In Game Username",            # required (identity + {name})
+        #    "identity_extra": ["Current Server"],   # optional identity fallback
+        #    "status": ["Want?", "Confirmed"],       # optional watched + write-back
+        #    "display": ["Total Hero Power", ...]}   # optional, shown in notices
         # The `*_filter_json` fields hold the AND-only filter DSL
         # (see transfer.evaluate_filter). `last_seen_state_json` is the
         # watch state (identity-hash → status snapshot); `copied_state_json`
@@ -362,6 +368,8 @@ def init_db():
                 alliance_sheet_id              TEXT    DEFAULT '',
                 alliance_sheet_tab             TEXT    DEFAULT '',
                 alliance_column_map_json       TEXT    DEFAULT '{}',
+
+                setup_mode                     TEXT    DEFAULT '',
 
                 poll_frequency_minutes         INTEGER DEFAULT 60,
                 notification_channel_id        INTEGER DEFAULT 0,
@@ -1114,6 +1122,7 @@ def init_db():
             ("alliance_sheet_id", "TEXT    DEFAULT ''"),
             ("alliance_sheet_tab", "TEXT    DEFAULT ''"),
             ("alliance_column_map_json", "TEXT    DEFAULT '{}'"),
+            ("setup_mode", "TEXT    DEFAULT ''"),
             ("poll_frequency_minutes", "INTEGER DEFAULT 60"),
             ("notification_channel_id", "INTEGER DEFAULT 0"),
             ("notification_filter_json", "TEXT    DEFAULT ''"),
@@ -4778,6 +4787,7 @@ _TRANSFER_DEFAULTS = {
     "alliance_sheet_id": "",
     "alliance_sheet_tab": "",
     "alliance_column_map_json": "{}",
+    "setup_mode": "",
     "poll_frequency_minutes": 60,
     "notification_channel_id": 0,
     "notification_filter_json": "",

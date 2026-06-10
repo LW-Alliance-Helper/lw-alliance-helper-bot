@@ -6,13 +6,26 @@ module rather than bloating ``setup_cog.py`` (mirrors
 ``member_roster.run_member_roster_setup``); reuses the shared wizard
 helpers (`ask_proceed_with_existing_config`, cancel registry, premium gate).
 
-Build status: the spine is complete — sheet → column mapping → notification
-channel → style → removal toggle → templates → silent baseline read that
-flips the watcher live. Each step saves incrementally, so a bail-out mid-way
-leaves a coherent (still-disabled) config and a re-run resumes. Still to
-layer on (all re-entrant, all optional): the new-applicant filter builder,
-the server-wide / intake-form sources, and decision write-back. The poll
-loop that consumes this config lives in ``transfer_cog.py``.
+Step 1 is a **setup-shape picker** built around each sheet's *role*, not
+its owner (see ``notes/DESIGN_transfer_management.md`` — the 2026-06-08
+reconciliation addendum + the role-model follow-up). The real distinction
+is "a read-only sheet the bot copies *from*" vs "a sheet the bot reads
+*and* can write to", which may be one sheet or two:
+
+- ``source_to_own`` — a read-only shared/intake sheet feeds a separate
+  sheet the alliance edits. The bot copies matching rows in, watches the
+  alliance's own sheet, and (opt-in) writes status back to it.
+- ``own`` — a single read-write sheet. Applicants are already in it; the
+  bot watches + (opt-in) writes back. Optional intake sources (a form, a
+  shared sheet) can feed it.
+- ``watch`` — a single read-only sheet the alliance only watches. The bot
+  pings on new applicants and never edits it (no status / removal /
+  write-back).
+
+Internally the alliance's *watched/tracked* sheet is always
+``alliance_sheet_*``; the two intake-source slots are ``server_wide_*``
+(a shared sheet) and ``alliance_form_*`` (the alliance's own form). The
+poll loop that consumes this config lives in ``transfer_cog.py``.
 """
 
 from __future__ import annotations
@@ -34,6 +47,16 @@ logger = logging.getLogger(__name__)
 _STEP_TIMEOUT = 300
 _DENY_NOT_OWNER = "⛔ Only the person who started setup can use these controls."
 _TIMEOUT_MSG = "⏰ Timed out. Run `/transfers` → **⚙️ Setup Transfers** to start again."
+
+# Setup-shape modes (stored in `setup_mode`).
+_MODE_SOURCE_TO_OWN = "source_to_own"
+_MODE_OWN = "own"
+_MODE_WATCH = "watch"
+_MODE_LABELS = {
+    _MODE_SOURCE_TO_OWN: "A shared sheet that populates my own sheet",
+    _MODE_OWN: "My own sheet",
+    _MODE_WATCH: "A shared sheet I watch",
+}
 
 
 # ── Select-option helpers ─────────────────────────────────────────────────────
@@ -115,11 +138,11 @@ async def _launch_transfer_setup(interaction: discord.Interaction, bot) -> None:
     await run_transfer_setup(interaction, bot)
 
 
-# ── Step 1: the transfer sheet ────────────────────────────────────────────────
+# ── Sheet entry (a single Sheet ID + tab) ─────────────────────────────────────
 
 
 class _SheetModal(discord.ui.Modal, title="Transfer sheet"):
-    """Collects the Google Sheet ID + tab name."""
+    """Collects one Google Sheet ID + tab name."""
 
     def __init__(self, *, default_id: str, default_tab: str, on_submit):
         super().__init__()
@@ -146,8 +169,9 @@ class _SheetModal(discord.ui.Modal, title="Transfer sheet"):
 
 
 class _SheetStepView(discord.ui.View):
-    """Enter (or keep) the transfer sheet, verifying read access before
-    advancing. On success ``result`` is ``(sheet_id, tab, header, rows)``."""
+    """Enter (or keep) a sheet, verifying read access before advancing. On
+    success ``result`` is ``(sheet_id, tab, header, rows)``. Used for the
+    optional intake-source sheets."""
 
     def __init__(self, *, owner_id: int, default_id: str, default_tab: str):
         super().__init__(timeout=_STEP_TIMEOUT)
@@ -215,7 +239,7 @@ class _SheetStepView(discord.ui.View):
                 await self.message.edit(
                     content=(
                         f"✅ Read **{tab}**: {len(header)} columns, {len(rows)} rows. "
-                        "Mapping below."
+                        "Continuing below."
                     ),
                     view=self,
                 )
@@ -225,21 +249,232 @@ class _SheetStepView(discord.ui.View):
         self.stop()
 
 
-# ── Step 2: column mapping (four category pickers) ────────────────────────────
+# ── Step 1: setup-shape picker ────────────────────────────────────────────────
+
+
+class _Mode1Modal(discord.ui.Modal, title="Your two sheets"):
+    """The two-sheet (``source_to_own``) modal: the read-only intake sheet on
+    top (the entry point), the alliance's own editable sheet below."""
+
+    def __init__(self, *, current: dict, on_submit):
+        super().__init__()
+        self._on_submit = on_submit
+        self.intake_id = discord.ui.TextInput(
+            label="Shared (intake) Sheet ID or link",
+            default=current.get("server_wide_sheet_id") or None,
+            placeholder="The read-only sheet applicants come in on",
+            required=True,
+            max_length=300,
+        )
+        self.intake_tab = discord.ui.TextInput(
+            label="Shared sheet tab name",
+            default=current.get("server_wide_sheet_tab") or None,
+            placeholder="e.g. Applications",
+            required=True,
+            max_length=100,
+        )
+        self.own_id = discord.ui.TextInput(
+            label="Your Sheet ID or link",
+            default=current.get("alliance_sheet_id") or None,
+            placeholder="The sheet you edit and track in",
+            required=True,
+            max_length=300,
+        )
+        self.own_tab = discord.ui.TextInput(
+            label="Your sheet tab name",
+            default=current.get("alliance_sheet_tab") or None,
+            placeholder="e.g. Applicants",
+            required=True,
+            max_length=100,
+        )
+        for item in (self.intake_id, self.intake_tab, self.own_id, self.own_tab):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self._on_submit(
+            interaction,
+            self.intake_id.value.strip(),
+            self.intake_tab.value.strip(),
+            self.own_id.value.strip(),
+            self.own_tab.value.strip(),
+        )
+
+
+class _ModeStepView(discord.ui.View):
+    """Three setup shapes. Each button opens the right modal; on submit the
+    sheet(s) are read to verify access, and ``mode`` + ``result`` carry the
+    choice. ``result`` maps a role (``"intake"`` / ``"alliance"``) to a
+    ``(sheet_id, tab, header, rows)`` tuple."""
+
+    def __init__(self, *, owner_id: int, current: dict):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.current = current
+        self.message: discord.Message | None = None
+        self.mode: str | None = None
+        self.result: dict | None = None
+        self.confirmed = False
+
+        b1 = discord.ui.Button(
+            label="🔀 A shared sheet that populates my own sheet",
+            style=discord.ButtonStyle.primary,
+            row=0,
+        )
+        b1.callback = self._pick_source_to_own
+        self.add_item(b1)
+        b2 = discord.ui.Button(label="🏠 My own sheet", style=discord.ButtonStyle.primary, row=1)
+        b2.callback = self._pick_own
+        self.add_item(b2)
+        b3 = discord.ui.Button(
+            label="👀 A shared sheet that I watch", style=discord.ButtonStyle.primary, row=2
+        )
+        b3.callback = self._pick_watch
+        self.add_item(b3)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _pick_source_to_own(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            _Mode1Modal(current=self.current, on_submit=self._on_mode1)
+        )
+
+    async def _pick_own(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            _SheetModal(
+                default_id=self.current.get("alliance_sheet_id") or "",
+                default_tab=self.current.get("alliance_sheet_tab") or "",
+                on_submit=self._on_single(_MODE_OWN),
+            )
+        )
+
+    async def _pick_watch(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            _SheetModal(
+                default_id=self.current.get("alliance_sheet_id") or "",
+                default_tab=self.current.get("alliance_sheet_tab") or "",
+                on_submit=self._on_single(_MODE_WATCH),
+            )
+        )
+
+    def _on_single(self, mode: str):
+        async def _cb(interaction: discord.Interaction, sheet_id: str, tab: str):
+            await self._verify(interaction, mode, [("alliance", sheet_id, tab)])
+
+        return _cb
+
+    async def _on_mode1(self, interaction, intake_id, intake_tab, own_id, own_tab):
+        await self._verify(
+            interaction,
+            _MODE_SOURCE_TO_OWN,
+            [("intake", intake_id, intake_tab), ("alliance", own_id, own_tab)],
+        )
+
+    async def _verify(self, interaction: discord.Interaction, mode: str, sheets: list):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        labels = {
+            "intake": "shared (intake)",
+            "alliance": "watched" if mode == _MODE_WATCH else "your",
+        }
+        read: dict = {}
+        for role, sid, tab in sheets:
+            sid = transfer.extract_sheet_id(sid)
+            try:
+                header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sid, tab)
+            except Exception as e:  # noqa: BLE001
+                await interaction.followup.send(
+                    f"⚠️ Couldn't read the {labels.get(role, role)} sheet/tab: "
+                    f"{config.describe_sheet_error(e)}\n"
+                    "Check the Sheet ID + tab and that the bot's service account has access, "
+                    "then click the button again.",
+                    ephemeral=True,
+                )
+                return
+            if not header:
+                await interaction.followup.send(
+                    f"⚠️ The {labels.get(role, role)} tab has no header row. Put your column "
+                    "headers in row 1, then click the button again.",
+                    ephemeral=True,
+                )
+                return
+            read[role] = (sid, tab, header, rows)
+
+        self.mode = mode
+        self.result = read
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                summary = " · ".join(f"{labels.get(r, r)}: {len(read[r][2])} cols" for r in read)
+                await self.message.edit(
+                    content=f"✅ Connected ({summary}). Continuing below.", view=self
+                )
+            except discord.HTTPException:
+                pass
+        await interaction.followup.send("✅ Got it, continuing below.", ephemeral=True)
+        self.stop()
+
+
+def _mode_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🔁 Step 1: How is your applicant data set up?",
+        color=discord.Color.blurple(),
+        description=(
+            "Pick the shape that matches how your alliance handles transfer applicants. "
+            "You can re-run setup to change it later."
+        ),
+    )
+    embed.add_field(
+        name="🔀 A shared sheet that populates my own sheet",
+        value=(
+            "This is a two-sheet setup where you have one that is the entry point for data and "
+            "then one that you edit separately. (E.g. your entire server shares a sheet but your "
+            "alliance needs to add notes and track statuses of your own applicants)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🏠 My own sheet",
+        value=(
+            "This is when you have a single sheet that you add transfers to, record statuses, and "
+            "make edits all in one place."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="👀 A shared sheet that I watch",
+        value=(
+            "This is when there is a sheet you have access to see, but you do not make any edits "
+            "and do not want to make edits. (E.g. you can see your server-wide sheet but don't "
+            "track anything yourself in sheets)"
+        ),
+        inline=False,
+    )
+    return embed
+
+
+# ── Column mapping (category pickers) ─────────────────────────────────────────
 
 
 class _ColumnMapView(discord.ui.View):
-    """Name (required) + Status / Display / Also-identity multi-selects, all
-    seeded from the auto-map guess. ``saved`` + the ``sel_*`` attrs carry the
-    result. Only the first 25 headers are pickable (Discord's select cap)."""
+    """Name (required) + optional Status / Display / Identity-Fallback
+    multi-selects, all seeded from the auto-map guess. ``include_status=False``
+    drops the Status picker (a read-only watched sheet has nothing to write or
+    track changes on). Only the first 25 headers are pickable (Discord's
+    select cap)."""
 
-    def __init__(self, *, owner_id: int, headers: list, initial_map: dict):
+    def __init__(self, *, owner_id: int, headers: list, initial_map: dict, include_status=True):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
         self.headers = headers[:25]
         self.truncated = len(headers) > 25
         self.message: discord.Message | None = None
         self.saved = False
+        self.include_status = include_status
         self.sel_name = initial_map.get("name") or None
         self.sel_status = list(initial_map.get("status") or [])
         self.sel_display = list(initial_map.get("display") or [])
@@ -260,12 +495,27 @@ class _ColumnMapView(discord.ui.View):
         name_sel.callback = self._on_name
         self.add_item(name_sel)
 
-        self._add_multi("② Status columns to watch (optional)", 1, self.sel_status, self._on_status)
+        row = 1
+        if include_status:
+            self._add_multi(
+                "② Status columns to watch (optional)", row, self.sel_status, self._on_status
+            )
+            row += 1
+            disp_num, id_num = "③", "④"
+        else:
+            disp_num, id_num = "②", "③"
         self._add_multi(
-            "③ Columns to show in notices (optional)", 2, self.sel_display, self._on_display
+            f"{disp_num} Columns to show in notices (optional)",
+            row,
+            self.sel_display,
+            self._on_display,
         )
+        row += 1
         self._add_multi(
-            "④ Also-identity, e.g. Server (optional)", 3, self.sel_identity, self._on_identity
+            f"{id_num} Identity Fallback, e.g. Server (optional)",
+            row,
+            self.sel_identity,
+            self._on_identity,
         )
 
         save = discord.ui.Button(label="✅ Save mapping", style=discord.ButtonStyle.success, row=4)
@@ -311,7 +561,7 @@ class _ColumnMapView(discord.ui.View):
         out: dict = {"name": self.sel_name}
         if self.sel_identity:
             out["identity_extra"] = self.sel_identity
-        if self.sel_status:
+        if self.include_status and self.sel_status:
             out["status"] = self.sel_status
         if self.sel_display:
             out["display"] = self.sel_display
@@ -330,17 +580,27 @@ class _ColumnMapView(discord.ui.View):
         self.stop()
 
 
-def _map_embed(column_map: dict, truncated: bool) -> discord.Embed:
-    embed = discord.Embed(
-        title="🔁 Step 2: Map your columns",
-        color=discord.Color.blurple(),
-        description=(
-            "I read your sheet and pre-filled my best guess. The four dropdowns below are, "
-            "top to bottom:\n"
+def _map_embed(column_map: dict, truncated: bool, include_status: bool = True) -> discord.Embed:
+    if include_status:
+        legend = (
             "① **Name** (required): identifies each applicant\n"
             "② **Status to watch**: a change here posts a status-change notice\n"
             "③ **Show in notices**: the columns shown in each ping (pick as many as you like)\n"
-            "④ **Also-identity** (e.g. Server): tells apart two people with the same name\n\n"
+            "④ **Identity Fallback** (e.g. Server): tells apart two people with the same name"
+        )
+    else:
+        legend = (
+            "① **Name** (required): identifies each applicant\n"
+            "② **Show in notices**: the columns shown in each ping (pick as many as you like)\n"
+            "③ **Identity Fallback** (e.g. Server): tells apart two people with the same name"
+        )
+    embed = discord.Embed(
+        title="🔁 Map your columns",
+        color=discord.Color.blurple(),
+        description=(
+            "I read your sheet and pre-filled my best guess. The dropdowns below are, top to "
+            "bottom:\n"
+            f"{legend}\n\n"
             "Change a dropdown to override, then **Save mapping**.\n\n"
             f"**My guess:**\n{transfer.summarize_column_map(column_map)}"
         ),
@@ -350,7 +610,35 @@ def _map_embed(column_map: dict, truncated: bool) -> discord.Embed:
     return embed
 
 
-# ── Step 3: notification channel ──────────────────────────────────────────────
+async def _map_step(
+    channel, guild_id, owner_id, header, saved_map, *, include_status, cancel_event
+):
+    """Run the column-mapping step against ``header``, save it to
+    ``alliance_column_map_json``, and return the column map (or a
+    ``"CANCEL"`` / ``"TIMEOUT"`` sentinel)."""
+    initial_map = saved_map or transfer.suggest_column_map(header)
+    if not include_status:
+        initial_map = {k: v for k, v in initial_map.items() if k != "status"}
+    view = _ColumnMapView(
+        owner_id=owner_id, headers=header, initial_map=initial_map, include_status=include_status
+    )
+    view.message = await channel.send(
+        embed=_map_embed(initial_map, len(header) > 25, include_status=include_status), view=view
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if not view.saved:
+        return "TIMEOUT"
+    column_map = view.column_map()
+    config.update_transfer_config_field(
+        guild_id, "alliance_column_map_json", json.dumps(column_map)
+    )
+    await channel.send(f"✅ **Mapping saved.**\n{transfer.summarize_column_map(column_map)}")
+    return column_map
+
+
+# ── Notification channel / style ──────────────────────────────────────────────
 
 
 class _ChannelStepView(discord.ui.View):
@@ -384,9 +672,6 @@ class _ChannelStepView(discord.ui.View):
             item.disabled = True
         await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
-
-
-# ── Step 4: notification style ────────────────────────────────────────────────
 
 
 class _StyleStepView(discord.ui.View):
@@ -435,7 +720,7 @@ _TEMPLATE_STEPS = [
 ]
 
 
-# ── Step 5: new-applicant filter builder ──────────────────────────────────────
+# ── New-applicant / pull filter builder ───────────────────────────────────────
 
 # Comparison label → operator for the numeric-column control. Labels spell out
 # the symbol so it's unambiguous.
@@ -689,11 +974,11 @@ async def _build_filter(
 ):
     """Walk the recruiter through an AND filter. Returns the filter dict,
     ``None`` (no filter), or a ``"CANCEL"`` / ``"TIMEOUT"`` sentinel. Reused
-    for both the new-applicant notification filter and the source pull
-    filter — the labels/intro adapt via the keyword args."""
+    for the new-applicant notification filter, the "for us" watch filter, and
+    the source pull filter — the labels/intro adapt via the keyword args."""
     if intro is None:
         intro = (
-            "**Step 5: New-applicant filter**\n"
+            "**New-applicant filter**\n"
             "Get pinged for *every* new applicant, or only the ones matching a filter? "
             "(Status changes always notify, filter or not.)"
         )
@@ -750,12 +1035,12 @@ async def _build_filter(
     return {"and": clauses} if clauses else None
 
 
-# ── Steps 8–9: optional source sheets (server-wide / intake form) ─────────────
+# ── Intake sources (a shared sheet / the alliance's own form) ─────────────────
 
 
 class _SourceMapView(discord.ui.View):
     """A lighter mapping for a *source* sheet: just Name (required) + any
-    Also-identity columns, used to dedup which rows get copied. Display /
+    Identity-Fallback columns, used to dedup which rows get copied. Display /
     status don't apply — the whole row is copied, aligned to the alliance
     sheet's columns."""
 
@@ -779,7 +1064,7 @@ class _SourceMapView(discord.ui.View):
 
         id_opts = _header_options(self.headers, self.sel_identity)
         id_sel = discord.ui.Select(
-            placeholder="② Also-identity, e.g. Server (optional)",
+            placeholder="② Identity Fallback, e.g. Server (optional)",
             min_values=0,
             max_values=max(1, len(id_opts)),
             row=1,
@@ -832,19 +1117,86 @@ def _source_map_embed(column_map: dict) -> discord.Embed:
         title="🔁 Source sheet: identity",
         color=discord.Color.blurple(),
         description=(
-            "Pick the **Name** column (and any **Also-identity** like Server) so the bot can "
+            "Pick the **Name** column (and any **Identity Fallback** like Server) so the bot can "
             "tell applicants apart and not copy the same person twice. The *whole* matching row "
             "gets copied into your sheet.\n\n" + transfer.summarize_column_map(column_map)
         ),
     )
 
 
+async def _configure_source(
+    channel,
+    guild_id,
+    user_id,
+    *,
+    prefix,
+    sheet_id,
+    tab,
+    header,
+    rows,
+    current,
+    cancel_event,
+    filter_intro=None,
+):
+    """Map + filter an already-entered source sheet and save its ``{prefix}_*``
+    config (enabled). Returns ``"OK"`` / ``"CANCEL"`` / ``"TIMEOUT"``. Used
+    inline when the source sheet was already read (the two-sheet mode's intake
+    sheet), and by :func:`_run_source_step` after it reads an optional one."""
+    existing = (
+        transfer.parse_column_map(current.get(f"{prefix}_column_map_json"))
+        if current.get(f"{prefix}_sheet_id")
+        else {}
+    )
+    initial = existing or transfer.suggest_column_map(header)
+    map_view = _SourceMapView(owner_id=user_id, headers=header, initial_map=initial)
+    map_view.message = await channel.send(embed=_source_map_embed(initial), view=map_view)
+    await wizard_registry.wait_view_or_cancel(map_view, cancel_event)
+    if map_view.cancelled:
+        return "CANCEL"
+    if not map_view.saved:
+        return "TIMEOUT"
+    src_map = map_view.column_map()
+
+    filt = await _build_filter(
+        channel,
+        user_id,
+        header,
+        rows,
+        cancel_event,
+        intro=filter_intro
+        or (
+            "**Which rows should the bot pull into your sheet?**\n"
+            "For example: only rows where *Requested Landing Alliance* contains your tag."
+        ),
+        none_label="📥 Pull every row",
+        build_label="🔎 Only rows matching a filter",
+    )
+    if filt in ("CANCEL", "TIMEOUT"):
+        return filt
+
+    config.update_transfer_config_fields(
+        guild_id,
+        **{
+            f"{prefix}_enabled": 1,
+            f"{prefix}_sheet_id": sheet_id,
+            f"{prefix}_sheet_tab": tab,
+            f"{prefix}_column_map_json": json.dumps(src_map),
+            f"{prefix}_filter_json": json.dumps(filt) if filt else "",
+        },
+    )
+    await channel.send(
+        f"✅ Connected. Rows matching **{transfer.describe_filter(filt)}** will be copied into "
+        "your sheet (whole row, aligned to your columns)."
+    )
+    return "OK"
+
+
 async def _run_source_step(
     channel, guild_id, user_id, *, step_label, intro_text, prefix, current, cancel_event
 ):
-    """Configure one optional source (``server_wide`` / ``alliance_form``).
-    Returns ``"OK"`` / ``"SKIP"`` / ``"CANCEL"`` / ``"TIMEOUT"`` and saves the
-    ``{prefix}_*`` config fields."""
+    """Offer one *optional* intake source (``server_wide`` / ``alliance_form``):
+    skip, or enter a sheet then map + filter it. Returns ``"OK"`` / ``"SKIP"`` /
+    ``"CANCEL"`` / ``"TIMEOUT"`` and saves the ``{prefix}_*`` config."""
     choice = _ButtonChoiceView(
         user_id,
         [
@@ -878,54 +1230,141 @@ async def _run_source_step(
     if not sheet_view.confirmed or not sheet_view.result:
         return "TIMEOUT"
     s_id, s_tab, s_header, s_rows = sheet_view.result
-
-    existing = (
-        transfer.parse_column_map(current.get(f"{prefix}_column_map_json"))
-        if current.get(f"{prefix}_sheet_id")
-        else {}
-    )
-    initial = existing or transfer.suggest_column_map(s_header)
-    map_view = _SourceMapView(owner_id=user_id, headers=s_header, initial_map=initial)
-    map_view.message = await channel.send(embed=_source_map_embed(initial), view=map_view)
-    await wizard_registry.wait_view_or_cancel(map_view, cancel_event)
-    if map_view.cancelled:
-        return "CANCEL"
-    if not map_view.saved:
-        return "TIMEOUT"
-    src_map = map_view.column_map()
-
-    filt = await _build_filter(
+    return await _configure_source(
         channel,
-        user_id,
-        s_header,
-        s_rows,
-        cancel_event,
-        intro=(
-            "**Which rows should the bot pull in?**\n"
-            "For example: only rows where *Requested Landing Alliance* contains your tag."
-        ),
-        none_label="📥 Pull every row",
-        build_label="🔎 Only rows matching a filter",
-    )
-    if filt == "CANCEL":
-        return "CANCEL"
-    if filt == "TIMEOUT":
-        return "TIMEOUT"
-
-    config.update_transfer_config_fields(
         guild_id,
-        **{
-            f"{prefix}_enabled": 1,
-            f"{prefix}_sheet_id": s_id,
-            f"{prefix}_sheet_tab": s_tab,
-            f"{prefix}_column_map_json": json.dumps(src_map),
-            f"{prefix}_filter_json": json.dumps(filt) if filt else "",
-        },
+        user_id,
+        prefix=prefix,
+        sheet_id=s_id,
+        tab=s_tab,
+        header=s_header,
+        rows=s_rows,
+        current=current,
+        cancel_event=cancel_event,
     )
+
+
+# ── Shared tail steps (channel / style / templates / removal / write-back) ────
+
+
+async def _step_channel(channel, owner_id, cancel_event):
+    view = _ChannelStepView(owner_id=owner_id)
+    view.message = await channel.send(
+        "**Notification channel**\n"
+        "Where should new-applicant and status-change notices post? A dedicated recruiting "
+        "channel works well.",
+        view=view,
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return ("CANCEL", None)
+    if not view.confirmed or not view.selected_id:
+        return ("TIMEOUT", None)
+    return ("OK", view.selected_id)
+
+
+async def _step_style(channel, owner_id, cancel_event):
+    view = _StyleStepView(owner_id=owner_id)
     await channel.send(
-        f"✅ Connected. Rows matching **{transfer.describe_filter(filt)}** will be copied into "
-        "your sheet (whole row, aligned to your columns)."
+        "**How should notifications arrive?**\n"
+        "• **A message per applicant**: richest; great for a dedicated channel where you watch "
+        "people arrive.\n"
+        "• **One digest**: a single batched message when several land in the same check (tidier "
+        "on a busy day).",
+        view=view,
     )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return ("CANCEL", None)
+    if not view.confirmed or not view.style:
+        return ("TIMEOUT", None)
+    return ("OK", view.style)
+
+
+async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
+    """Walk the three in-game message templates. Returns ``"OK"`` or
+    ``"ABORT"`` (``ask_keep_or_change`` posts its own cancel/timeout notice)."""
+    from setup_cog import ask_keep_or_change
+    from defaults import DEFAULT_TRANSFER_TEMPLATES
+
+    await channel.send(
+        "**In-game message templates**\n"
+        "These are the messages you copy into game chat. Use `{name}` for the applicant, "
+        "`{alliance_name}` for your alliance, or any column you show in notices as `{token}` "
+        "(e.g. `{total_hero_power}`)."
+    )
+    for kind, label in _TEMPLATE_STEPS:
+        default_body = DEFAULT_TRANSFER_TEMPLATES[kind]
+        chosen = await ask_keep_or_change(
+            channel,
+            f"**{label} template**",
+            default=default_body,
+            current=current.get(f"template_{kind}", ""),
+            modal_title=label[:45],
+            modal_label="Message text",
+            cancel_event=cancel_event,
+        )
+        if chosen is None:
+            return "ABORT"
+        stored = "" if chosen.strip() == default_body.strip() else chosen
+        config.update_transfer_config_field(guild_id, f"template_{kind}", stored)
+    return "OK"
+
+
+async def _step_removal(channel, guild_id, owner_id, cancel_event):
+    from setup_cog import YesNoView
+
+    view = YesNoView()
+    await channel.send(
+        "**Removal notices?**\n"
+        "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your sheet, "
+        "want a heads-up? Pending rows that never had a status set never notify.",
+        view=view,
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if view.selected is None:
+        return "TIMEOUT"
+    config.update_transfer_config_field(guild_id, "notify_on_delete", 1 if view.selected else 0)
+    return "OK"
+
+
+async def _step_writeback(channel, guild_id, owner_id, current, cancel_event, status_cols):
+    from setup_cog import YesNoView, ask_keep_or_change
+
+    view = YesNoView()
+    await channel.send(
+        "**Decision write-back?**\n"
+        f"Add buttons to each notification so you can mark an applicant "
+        f"(**{', '.join(status_cols)}**) right from Discord, and the bot writes it back to your "
+        "sheet. Leave off to keep the bot read-only.",
+        view=view,
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if view.selected is None:
+        return "TIMEOUT"
+    if view.selected:
+        wb_value = await ask_keep_or_change(
+            channel,
+            "**Write-back value**\n"
+            "What should the bot write when you click a Set button? Google Sheets checkboxes use "
+            "**TRUE** (so the box ticks); use your own word if your sheet expects e.g. `Yes`.",
+            default="TRUE",
+            current=current.get("writeback_value", ""),
+            modal_title="Write-back value",
+            modal_label="Value to write",
+            cancel_event=cancel_event,
+        )
+        if wb_value is None:
+            return "ABORT"
+        config.update_transfer_config_fields(
+            guild_id, writeback_enabled=1, writeback_value=wb_value or "TRUE"
+        )
+    else:
+        config.update_transfer_config_field(guild_id, "writeback_enabled", 0)
     return "OK"
 
 
@@ -933,7 +1372,8 @@ async def _run_source_step(
 
 
 async def run_transfer_setup(interaction: discord.Interaction, bot):
-    """Walk leadership through the transfer sheet + column mapping."""
+    """Walk leadership through the setup-shape picker, sheet mapping, sources,
+    notifications, templates, and go-live."""
     from setup_cog import ask_proceed_with_existing_config
 
     guild_id = interaction.guild_id
@@ -950,8 +1390,9 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         if already and (current.get("alliance_sheet_id") or saved_map):
             sid = current.get("alliance_sheet_id") or ""
             fields = [
+                ("Setup type", _MODE_LABELS.get(current.get("setup_mode") or "", "—")),
                 (
-                    "Transfer sheet",
+                    "Tracked sheet",
                     f"`{sid[:18]}…` · tab **{current.get('alliance_sheet_tab') or '*not set*'}**"
                     if sid
                     else "*not set*",
@@ -961,7 +1402,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             proceed = await ask_proceed_with_existing_config(
                 channel,
                 title="💎 Transfer Management: current setup",
-                description="Transfer Management is already set up. Edit the sheet + column mapping?",
+                description="Transfer Management is already set up. Want to reconfigure it?",
                 fields=fields,
                 cancel_event=cancel_event,
                 no_changes_message="✅ No changes made. Your transfer setup is unchanged.",
@@ -971,235 +1412,247 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
 
         await channel.send(
             "💎 **Transfer Management setup**\n"
-            "This watches **your alliance's own recruiting sheet**: the one you edit and mark "
-            "applicants on. Later (Step 8) you can optionally pull matching players into it from "
-            "a **server-wide** sheet. We'll start with your own sheet."
+            "The bot watches a recruiting sheet, pings you on new applicants and status changes, "
+            "and drafts your in-game messages. First, tell it how your sheets are set up."
         )
 
-        # ── Step 1: the alliance's own sheet ──────────────────────────────────
-        sheet_view = _SheetStepView(
-            owner_id=user.id,
-            default_id=current.get("alliance_sheet_id") or "",
-            default_tab=current.get("alliance_sheet_tab") or "",
-        )
-        sheet_view.message = await channel.send(
-            "**Step 1: Your alliance's own sheet**\n"
-            "This is *your* recruiting sheet, the one you (not the whole server) edit and mark "
-            "statuses on. The bot watches it for new applicants and status changes.\n"
-            "⚠️ If you only have a shared / server-wide sheet, **don't put it here**. Point this at "
-            "your alliance's own sheet (or a fresh tab) and connect the server-wide one in **Step "
-            "8**.\n"
-            "Click **Enter sheet** and paste the sheet link (or ID) + the tab your applicants "
-            "live on.",
-            view=sheet_view,
-        )
-        await wizard_registry.wait_view_or_cancel(sheet_view, cancel_event)
-        if sheet_view.cancelled:
+        # ── Step 1: setup shape ───────────────────────────────────────────────
+        mode_view = _ModeStepView(owner_id=user.id, current=current)
+        mode_view.message = await channel.send(embed=_mode_embed(), view=mode_view)
+        await wizard_registry.wait_view_or_cancel(mode_view, cancel_event)
+        if mode_view.cancelled:
             return
-        if not sheet_view.confirmed or not sheet_view.result:
+        if not mode_view.confirmed or not mode_view.mode or not mode_view.result:
             await channel.send(_TIMEOUT_MSG)
             return
-        sheet_id, tab, header, rows = sheet_view.result
+        mode = mode_view.mode
+        config.update_transfer_config_field(guild_id, "setup_mode", mode)
 
-        # ── Step 2: column mapping ────────────────────────────────────────────
-        initial_map = saved_map or transfer.suggest_column_map(header)
-        map_view = _ColumnMapView(owner_id=user.id, headers=header, initial_map=initial_map)
-        map_view.message = await channel.send(
-            embed=_map_embed(initial_map, len(header) > 25), view=map_view
-        )
-        await wizard_registry.wait_view_or_cancel(map_view, cancel_event)
-        if map_view.cancelled:
-            return
-        if not map_view.saved:
-            await channel.send(_TIMEOUT_MSG)
-            return
+        # ── Sheets + mapping (per mode) ───────────────────────────────────────
+        if mode == _MODE_SOURCE_TO_OWN:
+            intake_id, intake_tab, intake_header, intake_rows = mode_view.result["intake"]
+            sheet_id, tab, header, rows = mode_view.result["alliance"]
+            config.update_transfer_config_fields(
+                guild_id, alliance_sheet_id=sheet_id, alliance_sheet_tab=tab
+            )
 
-        column_map = map_view.column_map()
-        config.update_transfer_config_fields(
-            guild_id,
-            alliance_sheet_id=sheet_id,
-            alliance_sheet_tab=tab,
-            alliance_column_map_json=json.dumps(column_map),
-        )
-        await channel.send(f"✅ **Mapping saved.**\n{transfer.summarize_column_map(column_map)}")
-
-        # ── Step 3: notification channel ──────────────────────────────────────
-        chan_view = _ChannelStepView(owner_id=user.id)
-        chan_view.message = await channel.send(
-            "**Step 3: Notification channel**\n"
-            "Where should new-applicant and status-change notices post? A dedicated "
-            "recruiting channel works well.",
-            view=chan_view,
-        )
-        await wizard_registry.wait_view_or_cancel(chan_view, cancel_event)
-        if chan_view.cancelled:
-            return
-        if not chan_view.confirmed or not chan_view.selected_id:
-            await channel.send(_TIMEOUT_MSG)
-            return
-        config.update_transfer_config_field(
-            guild_id, "notification_channel_id", chan_view.selected_id
-        )
-
-        # ── Step 4: notification style ────────────────────────────────────────
-        style_view = _StyleStepView(owner_id=user.id)
-        await channel.send(
-            "**Step 4: How should notifications arrive?**\n"
-            "• **A message per applicant**: richest; great for a dedicated channel where you "
-            "watch people arrive.\n"
-            "• **One digest**: a single batched message when several land in the same check "
-            "(tidier on a busy day).",
-            view=style_view,
-        )
-        await wizard_registry.wait_view_or_cancel(style_view, cancel_event)
-        if style_view.cancelled:
-            return
-        if not style_view.confirmed or not style_view.style:
-            await channel.send(_TIMEOUT_MSG)
-            return
-        config.update_transfer_config_field(guild_id, "notification_style", style_view.style)
-
-        # ── Step 5: new-applicant filter ──────────────────────────────────────
-        filt = await _build_filter(channel, user.id, header, rows, cancel_event)
-        if filt == "CANCEL":
-            return
-        if filt == "TIMEOUT":
-            await channel.send(_TIMEOUT_MSG)
-            return
-        config.update_transfer_config_field(
-            guild_id, "notification_filter_json", json.dumps(filt) if filt else ""
-        )
-        await channel.send(f"✅ Filter: {transfer.describe_filter(filt)}")
-
-        # ── Step 6: removal notices (opt-in) ──────────────────────────────────
-        from setup_cog import YesNoView
-
-        removal_view = YesNoView()
-        await channel.send(
-            "**Step 6: Removal notices?**\n"
-            "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your "
-            "sheet, want a heads-up? Pending rows that never had a status set never notify.",
-            view=removal_view,
-        )
-        await wizard_registry.wait_view_or_cancel(removal_view, cancel_event)
-        if removal_view.cancelled:
-            return
-        if removal_view.selected is None:
-            await channel.send(_TIMEOUT_MSG)
-            return
-        config.update_transfer_config_field(
-            guild_id, "notify_on_delete", 1 if removal_view.selected else 0
-        )
-
-        # ── Step 7: message templates ─────────────────────────────────────────
-        from setup_cog import ask_keep_or_change
-        from defaults import DEFAULT_TRANSFER_TEMPLATES
-
-        await channel.send(
-            "**Step 7: In-game message templates**\n"
-            "These are the messages you copy into game chat. Use `{name}` for the applicant, "
-            "`{alliance_name}` for your alliance, or any display column as `{token}` "
-            "(e.g. `{total_hero_power}`)."
-        )
-        for kind, label in _TEMPLATE_STEPS:
-            default_body = DEFAULT_TRANSFER_TEMPLATES[kind]
-            chosen = await ask_keep_or_change(
+            # Intake source first (the entry point): map + pull filter.
+            await channel.send(
+                "**Your shared (intake) sheet**\n"
+                "This is the read-only sheet applicants come in on. The bot copies matching rows "
+                "from it into your own sheet (it never edits the shared one)."
+            )
+            src = await _configure_source(
                 channel,
-                f"**{label} template**",
-                default=default_body,
-                current=current.get(f"template_{kind}", ""),
-                modal_title=label[:45],
-                modal_label="Message text",
+                guild_id,
+                user.id,
+                prefix="server_wide",
+                sheet_id=intake_id,
+                tab=intake_tab,
+                header=intake_header,
+                rows=intake_rows,
+                current=current,
                 cancel_event=cancel_event,
             )
-            if chosen is None:
-                return  # cancelled / timed out (ask_keep_or_change posts its own notice)
-            # Empty string == "use the default" (storage convention).
-            stored = "" if chosen.strip() == default_body.strip() else chosen
-            config.update_transfer_config_field(guild_id, f"template_{kind}", stored)
-
-        # ── Step 8: server-wide pull (optional) ───────────────────────────────
-        sw = await _run_source_step(
-            channel,
-            guild_id,
-            user.id,
-            step_label="Step 8: Server-wide pull (optional)",
-            intro_text=(
-                "Pull applicants who fit from a server-wide sheet into your own, automatically. "
-                "This is the highest-leverage piece: it catches people who asked for you. Skip if "
-                "you only watch your own sheet."
-            ),
-            prefix="server_wide",
-            current=current,
-            cancel_event=cancel_event,
-        )
-        if sw == "CANCEL":
-            return
-        if sw == "TIMEOUT":
-            await channel.send(_TIMEOUT_MSG)
-            return
-
-        # ── Step 9: intake form (optional) ────────────────────────────────────
-        fm = await _run_source_step(
-            channel,
-            guild_id,
-            user.id,
-            step_label="Step 9: Intake form (optional)",
-            intro_text=(
-                "If your alliance runs its own Google Form, pull each submission into your sheet. "
-                "Skip if you don't."
-            ),
-            prefix="alliance_form",
-            current=current,
-            cancel_event=cancel_event,
-        )
-        if fm == "CANCEL":
-            return
-        if fm == "TIMEOUT":
-            await channel.send(_TIMEOUT_MSG)
-            return
-
-        # ── Step 10: decision write-back (optional; needs status columns) ─────
-        status_cols = transfer.parse_column_map(
-            config.get_transfer_config(guild_id).get("alliance_column_map_json")
-        ).get("status", [])
-        if status_cols:
-            wb_choice = YesNoView()
-            await channel.send(
-                "**Step 10: Decision write-back?**\n"
-                f"Add buttons to each notification so you can mark an applicant "
-                f"(**{', '.join(status_cols)}**) right from Discord, and the bot writes it back to "
-                "your sheet. Leave off to keep the bot read-only.",
-                view=wb_choice,
-            )
-            await wizard_registry.wait_view_or_cancel(wb_choice, cancel_event)
-            if wb_choice.cancelled:
+            if src == "CANCEL":
                 return
-            if wb_choice.selected is None:
+            if src == "TIMEOUT":
                 await channel.send(_TIMEOUT_MSG)
                 return
-            if wb_choice.selected:
-                wb_value = await ask_keep_or_change(
-                    channel,
-                    "**Write-back value**\n"
-                    "What should the bot write when you click a Set button? Google Sheets "
-                    "checkboxes use **TRUE** (so the box ticks); use your own word if your sheet "
-                    "expects e.g. `Yes`.",
-                    default="TRUE",
-                    current=current.get("writeback_value", ""),
-                    modal_title="Write-back value",
-                    modal_label="Value to write",
-                    cancel_event=cancel_event,
-                )
-                if wb_value is None:
-                    return
-                config.update_transfer_config_fields(
-                    guild_id, writeback_enabled=1, writeback_value=wb_value or "TRUE"
-                )
-            else:
-                config.update_transfer_config_field(guild_id, "writeback_enabled", 0)
 
-        # ── Finish: silent baseline read + go live ────────────────────────────
+            await channel.send(
+                "**Your own sheet**\nNow map the sheet you edit and track applicants in."
+            )
+            cm = await _map_step(
+                channel,
+                guild_id,
+                user.id,
+                header,
+                saved_map,
+                include_status=True,
+                cancel_event=cancel_event,
+            )
+
+        elif mode == _MODE_OWN:
+            sheet_id, tab, header, rows = mode_view.result["alliance"]
+            config.update_transfer_config_fields(
+                guild_id, alliance_sheet_id=sheet_id, alliance_sheet_tab=tab
+            )
+            await channel.send(
+                "**Your sheet**\nMap the columns of the sheet you track applicants in."
+            )
+            cm = await _map_step(
+                channel,
+                guild_id,
+                user.id,
+                header,
+                saved_map,
+                include_status=True,
+                cancel_event=cancel_event,
+            )
+
+        else:  # _MODE_WATCH
+            sheet_id, tab, header, rows = mode_view.result["alliance"]
+            config.update_transfer_config_fields(
+                guild_id, alliance_sheet_id=sheet_id, alliance_sheet_tab=tab
+            )
+            # Read-only watch: never write back, no removal, no sources. Clear
+            # any stale opt-ins from a previous setup shape.
+            config.update_transfer_config_fields(
+                guild_id,
+                writeback_enabled=0,
+                notify_on_delete=0,
+                server_wide_enabled=0,
+                alliance_form_enabled=0,
+            )
+            await channel.send(
+                "**The sheet you watch**\nMap its columns. The bot only reads this sheet and "
+                "pings you; it never edits it, so there's no status-change tracking here."
+            )
+            cm = await _map_step(
+                channel,
+                guild_id,
+                user.id,
+                header,
+                saved_map,
+                include_status=False,
+                cancel_event=cancel_event,
+            )
+
+        if cm == "CANCEL":
+            return
+        if cm == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+        column_map = cm
+
+        # ── Notification channel + style (all modes) ──────────────────────────
+        st, chan_id = await _step_channel(channel, user.id, cancel_event)
+        if st == "CANCEL":
+            return
+        if st == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(guild_id, "notification_channel_id", chan_id)
+
+        st, style = await _step_style(channel, user.id, cancel_event)
+        if st == "CANCEL":
+            return
+        if st == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(guild_id, "notification_style", style)
+
+        # ── Filter ────────────────────────────────────────────────────────────
+        # Mode 1 has no notification filter: the source pull filter is the gate.
+        if mode == _MODE_OWN:
+            filt = await _build_filter(channel, user.id, header, rows, cancel_event)
+            if filt == "CANCEL":
+                return
+            if filt == "TIMEOUT":
+                await channel.send(_TIMEOUT_MSG)
+                return
+            config.update_transfer_config_field(
+                guild_id, "notification_filter_json", json.dumps(filt) if filt else ""
+            )
+            await channel.send(f"✅ Filter: {transfer.describe_filter(filt)}")
+        elif mode == _MODE_WATCH:
+            filt = await _build_filter(
+                channel,
+                user.id,
+                header,
+                rows,
+                cancel_event,
+                intro=(
+                    "**Which applicants should ping you?**\n"
+                    "This is a shared sheet, so it may hold applicants for other alliances too. "
+                    "Get pinged for every new row, or only the ones matching a filter (e.g. "
+                    "*Requested Alliance contains your tag*)?"
+                ),
+                none_label="✅ Every new applicant on the sheet",
+                build_label="🔎 Only ones matching a filter",
+            )
+            if filt == "CANCEL":
+                return
+            if filt == "TIMEOUT":
+                await channel.send(_TIMEOUT_MSG)
+                return
+            config.update_transfer_config_field(
+                guild_id, "notification_filter_json", json.dumps(filt) if filt else ""
+            )
+            await channel.send(f"✅ Filter: {transfer.describe_filter(filt)}")
+
+        # ── Optional intake sources ───────────────────────────────────────────
+        # A form feeds modes 1 + 2; an extra shared sheet feeds mode 2.
+        if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
+            fm = await _run_source_step(
+                channel,
+                guild_id,
+                user.id,
+                step_label="Your own form (optional)",
+                intro_text=(
+                    "If your alliance runs its own Google Form, the bot can copy each new response "
+                    "into your sheet. Only add this if you want the bot to copy responses over: if "
+                    "your form already writes straight into this sheet, skip it and the bot will "
+                    "see those rows on its own."
+                ),
+                prefix="alliance_form",
+                current=current,
+                cancel_event=cancel_event,
+            )
+            if fm == "CANCEL":
+                return
+            if fm == "TIMEOUT":
+                await channel.send(_TIMEOUT_MSG)
+                return
+
+        if mode == _MODE_OWN:
+            sw = await _run_source_step(
+                channel,
+                guild_id,
+                user.id,
+                step_label="Pull from a shared sheet (optional)",
+                intro_text=(
+                    "Also pull matching applicants in from a server-wide / shared sheet (read-only: "
+                    "the bot copies from it, never edits it). Skip if you only track your own sheet."
+                ),
+                prefix="server_wide",
+                current=current,
+                cancel_event=cancel_event,
+            )
+            if sw == "CANCEL":
+                return
+            if sw == "TIMEOUT":
+                await channel.send(_TIMEOUT_MSG)
+                return
+
+        # ── Templates (all modes) ─────────────────────────────────────────────
+        if await _step_templates(channel, guild_id, user.id, current, cancel_event) != "OK":
+            return  # cancel/timeout already messaged
+
+        # ── Removal + write-back (writable modes only) ────────────────────────
+        if mode != _MODE_WATCH:
+            rm = await _step_removal(channel, guild_id, user.id, cancel_event)
+            if rm == "CANCEL":
+                return
+            if rm == "TIMEOUT":
+                await channel.send(_TIMEOUT_MSG)
+                return
+
+            status_cols = transfer.parse_column_map(
+                config.get_transfer_config(guild_id).get("alliance_column_map_json")
+            ).get("status", [])
+            if status_cols:
+                wb = await _step_writeback(
+                    channel, guild_id, user.id, current, cancel_event, status_cols
+                )
+                if wb in ("CANCEL", "ABORT"):
+                    return
+                if wb == "TIMEOUT":
+                    await channel.send(_TIMEOUT_MSG)
+                    return
+
+        # ── Finish: silent baseline (seeds any source backlog) + go live ──────
         await channel.send("⏳ Capturing your current applicants as a baseline…")
         try:
             baseline_count = await _finalize_and_enable(guild_id, sheet_id, tab, column_map)
@@ -1212,25 +1665,43 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             )
             return
 
-        ch_mention = f"<#{chan_view.selected_id}>"
+        status_line = (
+            "new applicants" if mode == _MODE_WATCH else "new applicants and status changes"
+        )
         await channel.send(
             "🎉 **Transfer Management is live!**\n"
-            f"Captured **{baseline_count}** current applicant(s) as your baseline — no flood. "
-            f"From now on, new applicants and status changes post to {ch_mention}.\n\n"
-            "Optional extras you can add by re-running setup later: a new-applicant filter, "
-            "server-wide / intake-form pulls, and decision write-back."
+            f"Captured **{baseline_count}** current applicant(s) as your baseline, so no flood. "
+            f"From now on, {status_line} post to <#{chan_id}>.\n\n"
+            "Re-run setup any time to change your sheets, filters, templates, or extras."
         )
     finally:
         wizard_registry.unregister(user.id, cancel_event)
 
 
 async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_map: dict) -> int:
-    """Read the alliance sheet, bookmark every current row as the baseline
-    (so existing applicants don't flood the channel), persist that state, and
-    flip the watcher on. Returns the baseline applicant count."""
+    """Pull any current source backlog into the tracked sheet *silently*, then
+    bookmark every current row as the baseline (so existing applicants don't
+    flood the channel), persist that state, and flip the watcher on. Returns
+    the baseline applicant count.
+
+    The source seed means a two-sheet (or form-fed) setup doesn't dump its
+    whole matching backlog as new-applicant pings on the first poll — the rows
+    land in the sheet here and the baseline read below bookmarks them. A no-op
+    when no sources are enabled (own / watch modes)."""
     from datetime import datetime, timezone
 
+    cfg = config.get_transfer_config(guild_id)
     header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+    try:
+        from transfer_cog import copy_sources
+
+        copied = await copy_sources(cfg, header)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[TRANSFER] guild %s: go-live source seed failed: %s", guild_id, e)
+        copied = 0
+    if copied:
+        header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+
     hidx = transfer.header_index(header)
     diff = transfer.compute_poll_diff(rows, hidx, column_map, prior_state={}, baseline=True)
     config.update_transfer_config_fields(

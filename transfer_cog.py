@@ -248,6 +248,70 @@ class _NoticeView(discord.ui.View):
         return _cb
 
 
+# ── Source copy (shared by the poll loop and setup go-live) ──────────────────
+
+
+async def copy_sources(cfg: dict, target_header: list) -> int:
+    """Copy filter-matching, not-yet-copied rows from the optional intake
+    sources (``server_wide`` = a shared/server-wide sheet, ``alliance_form`` =
+    the alliance's own form responses) into the alliance's tracking sheet, each
+    aligned to its column order. Dedup hashes persist in ``copied_state_json``
+    so a row is copied once. Returns the count copied.
+
+    Called once per poll by the loop, and once at go-live by the setup wizard
+    so the existing matching backlog lands in the sheet *silently* (the baseline
+    read that follows bookmarks it without notifying) — only future arrivals
+    ping. The bot only ever appends to the alliance's *own* sheet."""
+    gid = cfg["guild_id"]
+    alliance_id = (cfg.get("alliance_sheet_id") or "").strip()
+    alliance_tab = (cfg.get("alliance_sheet_tab") or "").strip()
+    if not alliance_id or not alliance_tab:
+        return 0
+    try:
+        copied_set = set(json.loads(cfg.get("copied_state_json") or "[]"))
+    except (ValueError, TypeError):
+        copied_set = set()
+
+    total = 0
+    for prefix in ("server_wide", "alliance_form"):
+        if not cfg.get(f"{prefix}_enabled"):
+            continue
+        s_id = (cfg.get(f"{prefix}_sheet_id") or "").strip()
+        s_tab = (cfg.get(f"{prefix}_sheet_tab") or "").strip()
+        s_map = transfer.parse_column_map(cfg.get(f"{prefix}_column_map_json"))
+        if not s_id or not s_tab or not s_map.get("name"):
+            continue
+        s_filter = transfer.parse_filter(cfg.get(f"{prefix}_filter_json"))
+        try:
+            s_header, s_rows = await asyncio.to_thread(transfer_sheets.read_sheet, s_id, s_tab)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] guild %s: %s source read failed: %s", gid, prefix, e)
+            _capture(e)
+            continue
+        s_hidx = transfer.header_index(s_header)
+        to_copy, updated = transfer.select_rows_to_copy(
+            s_rows, s_hidx, s_map, already_copied=copied_set, filter_obj=s_filter
+        )
+        if not to_copy:
+            continue
+        aligned = [transfer.align_row(s_header, r, target_header) for r in to_copy]
+        try:
+            await asyncio.to_thread(transfer_sheets.append_rows, alliance_id, alliance_tab, aligned)
+        except Exception as e:  # noqa: BLE001
+            # Don't advance copied_set, so we retry these next poll.
+            logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
+            _capture(e)
+            continue
+        total += len(aligned)
+        copied_set = updated
+
+    if total:
+        config.update_transfer_config_field(
+            gid, "copied_state_json", json.dumps(sorted(copied_set))
+        )
+    return total
+
+
 # ── The cog ───────────────────────────────────────────────────────────────────
 
 
@@ -325,7 +389,7 @@ class TransferCog(commands.Cog):
         # rows into the alliance sheet, aligned to its columns and deduped across
         # polls, then re-read so the copied rows surface as new applicants now.
         try:
-            copied = await self._copy_sources(cfg, header)
+            copied = await copy_sources(cfg, header)
         except Exception as e:  # noqa: BLE001
             logger.warning("[TRANSFER] guild %s: source copy failed: %s", gid, e)
             _capture(e)
@@ -380,63 +444,6 @@ class TransferCog(commands.Cog):
             last_seen_state_json=json.dumps(diff.next_state),
             last_polled_at=now_iso,
         )
-
-    async def _copy_sources(self, cfg: dict, target_header: list) -> int:
-        """Copy filter-matching, not-yet-copied rows from the optional
-        server-wide / intake-form sources into the alliance sheet, each
-        aligned to the alliance sheet's column order. Dedup hashes persist in
-        ``copied_state_json`` so a row is copied once. Returns the count
-        copied this poll."""
-        gid = cfg["guild_id"]
-        alliance_id = (cfg.get("alliance_sheet_id") or "").strip()
-        alliance_tab = (cfg.get("alliance_sheet_tab") or "").strip()
-        if not alliance_id or not alliance_tab:
-            return 0
-        try:
-            copied_set = set(json.loads(cfg.get("copied_state_json") or "[]"))
-        except (ValueError, TypeError):
-            copied_set = set()
-
-        total = 0
-        for prefix in ("server_wide", "alliance_form"):
-            if not cfg.get(f"{prefix}_enabled"):
-                continue
-            s_id = (cfg.get(f"{prefix}_sheet_id") or "").strip()
-            s_tab = (cfg.get(f"{prefix}_sheet_tab") or "").strip()
-            s_map = transfer.parse_column_map(cfg.get(f"{prefix}_column_map_json"))
-            if not s_id or not s_tab or not s_map.get("name"):
-                continue
-            s_filter = transfer.parse_filter(cfg.get(f"{prefix}_filter_json"))
-            try:
-                s_header, s_rows = await asyncio.to_thread(transfer_sheets.read_sheet, s_id, s_tab)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("[TRANSFER] guild %s: %s source read failed: %s", gid, prefix, e)
-                _capture(e)
-                continue
-            s_hidx = transfer.header_index(s_header)
-            to_copy, updated = transfer.select_rows_to_copy(
-                s_rows, s_hidx, s_map, already_copied=copied_set, filter_obj=s_filter
-            )
-            if not to_copy:
-                continue
-            aligned = [transfer.align_row(s_header, r, target_header) for r in to_copy]
-            try:
-                await asyncio.to_thread(
-                    transfer_sheets.append_rows, alliance_id, alliance_tab, aligned
-                )
-            except Exception as e:  # noqa: BLE001
-                # Don't advance copied_set, so we retry these next poll.
-                logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
-                _capture(e)
-                continue
-            total += len(aligned)
-            copied_set = updated
-
-        if total:
-            config.update_transfer_config_field(
-                gid, "copied_state_json", json.dumps(sorted(copied_set))
-            )
-        return total
 
     async def _post(
         self, channel, gid, header, hidx, column_map, diff, style, notify_on_delete, wb_base=None

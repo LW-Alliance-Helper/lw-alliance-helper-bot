@@ -117,7 +117,7 @@ class TestSummarizeColumnMap:
         }
         out = transfer.summarize_column_map(m)
         assert "**Name:** In Game Username" in out
-        assert "Also-identity:** Current Server" in out
+        assert "Identity Fallback:** Current Server" in out
         assert "Want?, Confirmed" in out
         assert "Total Hero Power, Anticipated Seat Color" in out
 
@@ -126,7 +126,7 @@ class TestSummarizeColumnMap:
         assert "**Name:** Name" in out
         assert "Status watched:** *none*" in out
         assert "Shown in notices:** *none*" in out
-        assert "Also-identity" not in out  # omitted when empty
+        assert "Identity Fallback" not in out  # omitted when empty
 
     def test_empty_map(self):
         assert "*not set*" in transfer.summarize_column_map({})

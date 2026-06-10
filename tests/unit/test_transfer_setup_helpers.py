@@ -45,3 +45,58 @@ class TestHeadersFromValues:
 
     def test_empty(self):
         assert transfer_setup._headers_from_values(self.HEADERS, []) == []
+
+
+class TestColumnMapStatusFlag:
+    """The read-only watch mode (mode 3) drops the Status picker, so a watched
+    shared sheet never carries status columns to track changes on."""
+
+    HEADERS = ["In Game Username", "Current Server", "Confirmed", "Total Hero Power"]
+    FULL = {
+        "name": "In Game Username",
+        "status": ["Confirmed"],
+        "display": ["Total Hero Power"],
+        "identity_extra": ["Current Server"],
+    }
+
+    def test_include_status_true_keeps_status(self):
+        v = transfer_setup._ColumnMapView(
+            owner_id=1, headers=self.HEADERS, initial_map=self.FULL, include_status=True
+        )
+        cm = v.column_map()
+        assert cm["status"] == ["Confirmed"]
+        assert cm["identity_extra"] == ["Current Server"]
+
+    def test_include_status_false_drops_status(self):
+        # Even when the seed carries a status, the flag suppresses it.
+        v = transfer_setup._ColumnMapView(
+            owner_id=1, headers=self.HEADERS, initial_map=self.FULL, include_status=False
+        )
+        cm = v.column_map()
+        assert "status" not in cm
+        assert cm["name"] == "In Game Username"
+        assert cm["display"] == ["Total Hero Power"]
+
+
+class TestMapEmbedLegend:
+    def test_status_legend_present_when_included(self):
+        out = transfer_setup._map_embed({"name": "Name"}, False, include_status=True).description
+        assert "Status to watch" in out
+        assert "Identity Fallback" in out
+        assert "④" in out
+
+    def test_status_legend_dropped_when_excluded(self):
+        out = transfer_setup._map_embed({"name": "Name"}, False, include_status=False).description
+        assert "Status to watch" not in out
+        assert "Identity Fallback" in out
+        assert "④" not in out  # only three rows now
+
+
+class TestModeLabels:
+    def test_all_modes_have_labels(self):
+        for mode in (
+            transfer_setup._MODE_SOURCE_TO_OWN,
+            transfer_setup._MODE_OWN,
+            transfer_setup._MODE_WATCH,
+        ):
+            assert transfer_setup._MODE_LABELS[mode]

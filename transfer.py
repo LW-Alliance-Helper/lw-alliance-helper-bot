@@ -223,7 +223,7 @@ def summarize_column_map(column_map: dict) -> str:
     display = column_map.get("display") or []
     lines = [f"**Name:** {name}"]
     if identity:
-        lines.append(f"**Also-identity:** {', '.join(identity)}")
+        lines.append(f"**Identity Fallback:** {', '.join(identity)}")
     lines.append(f"**Status watched:** {', '.join(status) if status else '*none*'}")
     lines.append(f"**Shown in notices:** {', '.join(display) if display else '*none*'}")
     return "\n".join(lines)

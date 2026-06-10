@@ -153,3 +153,38 @@ class TestPaging:
         assert cm["name"] == "C40"
         assert cm["status"] == ["C50"]
         assert cm["display"] == ["C5"]
+
+
+class TestEditMenuSections:
+    """The re-entry menu shows sections appropriate to the setup mode."""
+
+    def _labels(self, mode):
+        v = transfer_setup._EditMenuView(owner_id=1, mode=mode)
+        return [c.label for c in v.children]
+
+    def test_own_shows_every_section(self):
+        labels = self._labels(transfer_setup._MODE_OWN)
+        for needle in (
+            "Column mapping",
+            "Channel",
+            "Style",
+            "Filter",
+            "Intake",
+            "Templates",
+            "Removal",
+            "Change sheets",
+            "Done",
+        ):
+            assert any(needle in label for label in labels), needle
+
+    def test_watch_hides_intake_and_removal_keeps_filter(self):
+        labels = self._labels(transfer_setup._MODE_WATCH)
+        assert not any("Intake" in label for label in labels)
+        assert not any("Removal" in label for label in labels)
+        assert any("Filter" in label for label in labels)
+
+    def test_source_to_own_hides_standalone_filter_keeps_intake(self):
+        labels = self._labels(transfer_setup._MODE_SOURCE_TO_OWN)
+        assert not any("Filter" in label for label in labels)
+        assert any("Intake" in label for label in labels)
+        assert any("Removal" in label for label in labels)

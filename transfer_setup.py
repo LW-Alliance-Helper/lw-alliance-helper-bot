@@ -1439,27 +1439,53 @@ async def _configure_source(
 
 
 async def _run_source_step(
-    channel, guild_id, user_id, *, step_label, intro_text, prefix, current, cancel_event
+    channel,
+    guild_id,
+    user_id,
+    *,
+    step_label,
+    intro_text,
+    prefix,
+    current,
+    cancel_event,
+    required=False,
 ):
-    """Offer one *optional* intake source (``server_wide`` / ``alliance_form``):
-    skip, or enter a sheet then map + filter it. Returns ``"OK"`` / ``"SKIP"`` /
+    """Offer one intake source (``server_wide`` / ``alliance_form``). When none
+    is configured yet: Skip vs Connect. When one already exists (edit menu):
+    Keep current / Replace / Remove (Remove hidden when ``required``). On
+    Connect/Replace, enter a sheet then map + filter it. Returns ``"OK"``
+    (added/replaced) / ``"SKIP"`` (skipped or removed) / ``"KEEP"`` (unchanged) /
     ``"CANCEL"`` / ``"TIMEOUT"`` and saves the ``{prefix}_*`` config."""
-    choice = _ButtonChoiceView(
-        user_id,
-        [
+    already = bool(current.get(f"{prefix}_enabled"))
+    if already:
+        opts = [
+            ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
+            ("✏️ Replace", "connect", discord.ButtonStyle.primary),
+        ]
+        if not required:
+            opts.append(("🗑️ Remove", "remove", discord.ButtonStyle.danger))
+    else:
+        opts = [
             ("⏭️ Skip", "skip", discord.ButtonStyle.secondary),
             ("➕ Connect a sheet", "connect", discord.ButtonStyle.primary),
-        ],
-    )
+        ]
+    choice = _ButtonChoiceView(user_id, opts)
     await channel.send(f"**{step_label}**\n{intro_text}", view=choice)
     await wizard_registry.wait_view_or_cancel(choice, cancel_event)
     if choice.cancelled:
         return "CANCEL"
     if not choice.confirmed:
         return "TIMEOUT"
+    if choice.value == "keep":
+        await channel.send("↩️ Kept as-is.")
+        return "KEEP"
     if choice.value == "skip":
         config.update_transfer_config_field(guild_id, f"{prefix}_enabled", 0)
         await channel.send("⏭️ Skipped.")
+        return "SKIP"
+    if choice.value == "remove":
+        config.update_transfer_config_field(guild_id, f"{prefix}_enabled", 0)
+        await channel.send("🗑️ Removed. The bot will stop copying from it.")
         return "SKIP"
 
     sheet_view = _SheetStepView(
@@ -1619,10 +1645,10 @@ async def _step_writeback(channel, guild_id, owner_id, current, cancel_event, st
 
 
 async def run_transfer_setup(interaction: discord.Interaction, bot):
-    """Walk leadership through the setup-shape picker, sheet mapping, sources,
-    notifications, templates, and go-live."""
-    from setup_cog import ask_proceed_with_existing_config
-
+    """First-time setup walks the linear wizard; a re-entry on an already-
+    configured guild opens the section edit menu instead, so leadership can
+    change one thing without redoing the whole flow. The menu's 'Change sheets
+    / setup type' option falls back through to the linear wizard."""
     guild_id = interaction.guild_id
     channel = interaction.channel
     user = interaction.user
@@ -1635,27 +1661,11 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         )
 
         if already and (current.get("alliance_sheet_id") or saved_map):
-            sid = current.get("alliance_sheet_id") or ""
-            fields = [
-                ("Setup type", _MODE_LABELS.get(current.get("setup_mode") or "", "—")),
-                (
-                    "Tracked sheet",
-                    f"`{sid[:18]}…` · tab **{current.get('alliance_sheet_tab') or '*not set*'}**"
-                    if sid
-                    else "*not set*",
-                ),
-                ("Columns", transfer.summarize_column_map(saved_map)),
-            ]
-            proceed = await ask_proceed_with_existing_config(
-                channel,
-                title="💎 Transfer Management: current setup",
-                description="Transfer Management is already set up. Want to reconfigure it?",
-                fields=fields,
-                cancel_event=cancel_event,
-                no_changes_message="✅ No changes made. Your transfer setup is unchanged.",
-            )
-            if proceed is not True:
+            if await _run_edit_menu(channel, guild_id, user, cancel_event) != "RESETUP":
                 return
+            # Full re-setup requested: refresh and fall through to the linear flow.
+            current = config.get_transfer_config(guild_id)
+            saved_map = transfer.parse_column_map(current.get("alliance_column_map_json"))
 
         await channel.send(
             "💎 **Transfer Management setup**\n"
@@ -1958,3 +1968,426 @@ async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_ma
         last_polled_at=datetime.now(timezone.utc).isoformat(),
     )
     return len(diff.next_state)
+
+
+# ── Re-entry edit menu ────────────────────────────────────────────────────────
+#
+# Re-running setup on a configured guild opens this section picker instead of
+# re-walking the whole wizard. Each section, once clicked, still offers a
+# "Keep current" escape (the gate shows the current value first — so it doubles
+# as a quick "let me just look" view). The menu re-posts itself at the bottom
+# after each edit so the actionable view stays the most-recent message.
+
+
+class _EditMenuView(discord.ui.View):
+    """Section picker. Each button records the chosen section in ``choice``;
+    the menu loop runs that section's editor then re-posts. Buttons shown
+    depend on the setup mode (watch hides Filter-as-notification, Intake, and
+    Removal/write-back; source_to_own hides the standalone notification
+    Filter — its filter lives on the intake source)."""
+
+    def __init__(self, *, owner_id: int, mode: str):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.choice: str | None = None
+        self.confirmed = False
+        self.message: discord.Message | None = None
+
+        specs = [
+            ("🗂️ Column mapping", "mapping", 0),
+            ("📢 Channel", "channel", 0),
+            ("🎚️ Style", "style", 0),
+        ]
+        if mode in (_MODE_OWN, _MODE_WATCH):
+            specs.append(("🔎 Filter", "filter", 1))
+        if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
+            specs.append(("📥 Intake sources", "intake", 1))
+        specs.append(("✉️ Templates", "templates", 1))
+        if mode != _MODE_WATCH:
+            specs.append(("🗑️ Removal & write-back", "removal", 2))
+        specs.append(("📑 Change sheets / setup type", "resetup", 2))
+        for label, value, row in specs:
+            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
+            btn.callback = self._make(value)
+            self.add_item(btn)
+        done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.success, row=3)
+        done.callback = self._make("done")
+        self.add_item(done)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _make(self, value: str):
+        async def _cb(interaction: discord.Interaction):
+            self.choice = value
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(interaction, view=self)
+            self.stop()
+
+        return _cb
+
+
+def _menu_embed(cfg: dict, mode: str) -> discord.Embed:
+    column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+    sid = cfg.get("alliance_sheet_id") or ""
+    chan = cfg.get("notification_channel_id") or 0
+    style = (
+        "a message per applicant"
+        if (cfg.get("notification_style") or "each") == "each"
+        else "a digest"
+    )
+    embed = discord.Embed(
+        title="💎 Transfer Management — what do you want to change?",
+        color=discord.Color.blurple(),
+        description=(
+            "Pick a section to edit. After clicking in you can still **Keep current** if you only "
+            "wanted to look. Hit **Done** when you're finished."
+        ),
+    )
+    embed.add_field(name="Setup type", value=_MODE_LABELS.get(mode, "—"), inline=False)
+    embed.add_field(
+        name="Tracked sheet",
+        value=(
+            f"`{sid[:18]}…` · tab **{cfg.get('alliance_sheet_tab') or '?'}**"
+            if sid
+            else "*not set*"
+        ),
+        inline=False,
+    )
+    embed.add_field(name="Columns", value=transfer.summarize_column_map(column_map), inline=False)
+    if mode in (_MODE_OWN, _MODE_WATCH):
+        embed.add_field(
+            name="Filter",
+            value=transfer.describe_filter(
+                transfer.parse_filter(cfg.get("notification_filter_json"))
+            ),
+            inline=False,
+        )
+    extras = []
+    if cfg.get("server_wide_enabled"):
+        extras.append("shared-sheet pull ✅")
+    if cfg.get("alliance_form_enabled"):
+        extras.append("form pull ✅")
+    if mode != _MODE_WATCH:
+        extras.append(f"removal {'on' if cfg.get('notify_on_delete') else 'off'}")
+        extras.append(f"write-back {'on' if cfg.get('writeback_enabled') else 'off'}")
+    if extras:
+        embed.add_field(name="Extras", value=" · ".join(extras), inline=False)
+    embed.add_field(
+        name="Notifications",
+        value=f"{f'<#{chan}>' if chan else '*no channel set*'} · {style}",
+        inline=False,
+    )
+    return embed
+
+
+async def _run_edit_menu(channel, guild_id, user, cancel_event) -> str:
+    """Loop the section picker. Returns ``"RESETUP"`` to ask the caller to run
+    the full linear wizard (Change sheets / setup type), else ``"DONE"``."""
+    msg = None
+    while True:
+        cfg = config.get_transfer_config(guild_id)
+        mode = cfg.get("setup_mode") or ""
+        view = _EditMenuView(owner_id=user.id, mode=mode)
+        # Re-post at the bottom so the menu stays the most-recent message.
+        if msg is not None:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+        msg = await channel.send(embed=_menu_embed(cfg, mode), view=view)
+        view.message = msg
+        await wizard_registry.wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
+            return "DONE"
+        if not view.confirmed or view.choice in (None, "done"):
+            try:
+                await msg.edit(view=None)
+            except discord.HTTPException:
+                pass
+            if view.choice == "done":
+                await channel.send("✅ Done. Your transfer setup is saved.")
+            else:
+                await channel.send(_TIMEOUT_MSG)
+            return "DONE"
+        if view.choice == "resetup":
+            return "RESETUP"
+        status = await _edit_section(channel, guild_id, user, cfg, cancel_event, view.choice)
+        if status == "CANCEL":
+            return "DONE"
+        if status == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return "DONE"
+        # OK / KEEP → loop and re-post the menu.
+
+
+async def _edit_gate(channel, owner_id, title, current_summary, cancel_event) -> str:
+    """Show the current value with Change / Keep current. Returns ``"change"``
+    / ``"KEEP"`` / ``"CANCEL"`` / ``"TIMEOUT"``."""
+    view = _ButtonChoiceView(
+        owner_id,
+        [
+            ("✏️ Change it", "change", discord.ButtonStyle.primary),
+            ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
+        ],
+    )
+    await channel.send(f"**{title}**\nCurrent: {current_summary}", view=view)
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if not view.confirmed:
+        return "TIMEOUT"
+    return "change" if view.value == "change" else "KEEP"
+
+
+async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> str:
+    """Dispatch one section editor. Returns ``"OK"`` / ``"KEEP"`` / ``"CANCEL"``
+    / ``"TIMEOUT"``."""
+    handlers = {
+        "mapping": _edit_mapping,
+        "channel": _edit_channel,
+        "style": _edit_style,
+        "filter": _edit_filter,
+        "intake": _edit_intake,
+        "templates": _edit_templates,
+        "removal": _edit_removal,
+    }
+    handler = handlers.get(section)
+    if handler is None:
+        return "OK"
+    return await handler(channel, guild_id, user, cfg, cancel_event)
+
+
+async def _edit_mapping(channel, guild_id, user, cfg, cancel_event) -> str:
+    saved_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+    g = await _edit_gate(
+        channel, user.id, "Column mapping", transfer.summarize_column_map(saved_map), cancel_event
+    )
+    if g != "change":
+        return g
+    mode = cfg.get("setup_mode") or ""
+    sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
+    tab = (cfg.get("alliance_sheet_tab") or "").strip()
+    try:
+        header, _rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+    except Exception as e:  # noqa: BLE001
+        await channel.send(f"⚠️ Couldn't read your sheet: {config.describe_sheet_error(e)}")
+        return "OK"
+    cm = await _map_step(
+        channel,
+        guild_id,
+        user.id,
+        header,
+        saved_map,
+        include_status=(mode != _MODE_WATCH),
+        cancel_event=cancel_event,
+    )
+    if cm in ("CANCEL", "TIMEOUT"):
+        return cm
+    # Re-snapshot silently so adding a status column doesn't fire a flood of
+    # "status changed" notices for everyone who already has a value in it.
+    await channel.send("⏳ Re-syncing your applicants with the new columns…")
+    try:
+        await _finalize_and_enable(guild_id, sheet_id, tab, cm)
+    except Exception as e:  # noqa: BLE001
+        await channel.send(
+            f"⚠️ Mapping saved, but the re-sync failed: {config.describe_sheet_error(e)}"
+        )
+        return "OK"
+    await channel.send("✅ Column mapping updated.")
+    return "OK"
+
+
+async def _edit_channel(channel, guild_id, user, cfg, cancel_event) -> str:
+    chan = cfg.get("notification_channel_id") or 0
+    g = await _edit_gate(
+        channel,
+        user.id,
+        "Notification channel",
+        f"<#{chan}>" if chan else "*none set*",
+        cancel_event,
+    )
+    if g != "change":
+        return g
+    st, chan_id = await _step_channel(channel, user.id, cancel_event)
+    if st in ("CANCEL", "TIMEOUT"):
+        return st
+    config.update_transfer_config_field(guild_id, "notification_channel_id", chan_id)
+    await channel.send(f"✅ Notices will post to <#{chan_id}>.")
+    return "OK"
+
+
+async def _edit_style(channel, guild_id, user, cfg, cancel_event) -> str:
+    cur = (
+        "a message per applicant"
+        if (cfg.get("notification_style") or "each") == "each"
+        else "a digest"
+    )
+    g = await _edit_gate(channel, user.id, "Notification style", cur, cancel_event)
+    if g != "change":
+        return g
+    st, style = await _step_style(channel, user.id, cancel_event)
+    if st in ("CANCEL", "TIMEOUT"):
+        return st
+    config.update_transfer_config_field(guild_id, "notification_style", style)
+    await channel.send("✅ Notification style updated.")
+    return "OK"
+
+
+async def _edit_filter(channel, guild_id, user, cfg, cancel_event) -> str:
+    mode = cfg.get("setup_mode") or ""
+    cur = transfer.describe_filter(transfer.parse_filter(cfg.get("notification_filter_json")))
+    g = await _edit_gate(channel, user.id, "Notification filter", cur, cancel_event)
+    if g != "change":
+        return g
+    sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
+    tab = (cfg.get("alliance_sheet_tab") or "").strip()
+    try:
+        header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+    except Exception as e:  # noqa: BLE001
+        await channel.send(f"⚠️ Couldn't read your sheet: {config.describe_sheet_error(e)}")
+        return "OK"
+    if mode == _MODE_WATCH:
+        filt = await _build_filter(
+            channel,
+            user.id,
+            header,
+            rows,
+            cancel_event,
+            intro=(
+                "**Which applicants should ping you?**\n"
+                "This is a shared sheet, so it may hold applicants for other alliances too. "
+                "Get pinged for every new row, or only the ones matching a filter?"
+            ),
+            none_label="✅ Every new applicant on the sheet",
+            build_label="🔎 Only ones matching a filter",
+        )
+    else:
+        filt = await _build_filter(channel, user.id, header, rows, cancel_event)
+    if filt in ("CANCEL", "TIMEOUT"):
+        return filt
+    config.update_transfer_config_field(
+        guild_id, "notification_filter_json", json.dumps(filt) if filt else ""
+    )
+    await channel.send(f"✅ Filter: {transfer.describe_filter(filt)}")
+    return "OK"
+
+
+async def _edit_intake(channel, guild_id, user, cfg, cancel_event) -> str:
+    mode = cfg.get("setup_mode") or ""
+    changed = False
+    if mode == _MODE_SOURCE_TO_OWN:
+        r = await _run_source_step(
+            channel,
+            guild_id,
+            user.id,
+            step_label="Your shared (intake) sheet",
+            intro_text=(
+                "The read-only sheet applicants come in on. The bot copies matching rows from it "
+                "into your sheet."
+            ),
+            prefix="server_wide",
+            current=cfg,
+            cancel_event=cancel_event,
+            required=True,
+        )
+        if r in ("CANCEL", "TIMEOUT"):
+            return r
+        changed = changed or r == "OK"
+        cfg = config.get_transfer_config(guild_id)
+    elif mode == _MODE_OWN:
+        r = await _run_source_step(
+            channel,
+            guild_id,
+            user.id,
+            step_label="Pull from a shared sheet (optional)",
+            intro_text=(
+                "Pull matching applicants in from a server-wide / shared sheet (read-only: the bot "
+                "copies from it, never edits it). Skip if you only track your own sheet."
+            ),
+            prefix="server_wide",
+            current=cfg,
+            cancel_event=cancel_event,
+        )
+        if r in ("CANCEL", "TIMEOUT"):
+            return r
+        changed = changed or r == "OK"
+        cfg = config.get_transfer_config(guild_id)
+
+    rf = await _run_source_step(
+        channel,
+        guild_id,
+        user.id,
+        step_label="Your own form (optional)",
+        intro_text=(
+            "If your alliance runs its own Google Form, the bot can copy each new response in. "
+            "Skip it if your form already writes straight into this sheet — the bot will see those "
+            "rows on its own."
+        ),
+        prefix="alliance_form",
+        current=cfg,
+        cancel_event=cancel_event,
+    )
+    if rf in ("CANCEL", "TIMEOUT"):
+        return rf
+    changed = changed or rf == "OK"
+
+    if changed:
+        cfg = config.get_transfer_config(guild_id)
+        sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
+        tab = (cfg.get("alliance_sheet_tab") or "").strip()
+        cm = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+        await channel.send("⏳ Pulling matching applicants in and re-syncing…")
+        try:
+            await _finalize_and_enable(guild_id, sheet_id, tab, cm)
+        except Exception as e:  # noqa: BLE001
+            await channel.send(
+                f"⚠️ Sources saved, but the re-sync failed: {config.describe_sheet_error(e)}"
+            )
+            return "OK"
+        await channel.send("✅ Intake sources updated.")
+    return "OK"
+
+
+async def _edit_templates(channel, guild_id, user, cfg, cancel_event) -> str:
+    # Each template prompt already offers Keep current / Define your own, so it
+    # carries its own per-template escape.
+    if await _step_templates(channel, guild_id, user.id, cfg, cancel_event) != "OK":
+        return "CANCEL"  # ask_keep_or_change posted its own cancel/timeout notice
+    await channel.send("✅ Templates updated.")
+    return "OK"
+
+
+async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
+    rmv = "on" if cfg.get("notify_on_delete") else "off"
+    wbk = "on" if cfg.get("writeback_enabled") else "off"
+    g = await _edit_gate(
+        channel,
+        user.id,
+        "Removal notices & write-back",
+        f"removal {rmv}, write-back {wbk}",
+        cancel_event,
+    )
+    if g != "change":
+        return g
+    rm = await _step_removal(channel, guild_id, user.id, cancel_event)
+    if rm in ("CANCEL", "TIMEOUT"):
+        return rm
+    status_cols = transfer.parse_column_map(cfg.get("alliance_column_map_json")).get("status", [])
+    if status_cols:
+        wb = await _step_writeback(channel, guild_id, user.id, cfg, cancel_event, status_cols)
+        if wb in ("CANCEL", "ABORT"):
+            return "CANCEL"
+        if wb == "TIMEOUT":
+            return "TIMEOUT"
+    else:
+        await channel.send(
+            "ℹ️ Write-back needs a Status column — add one in **Column mapping** first."
+        )
+    await channel.send("✅ Removal & write-back updated.")
+    return "OK"

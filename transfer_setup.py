@@ -762,24 +762,246 @@ def _map_embed(
     return embed
 
 
+class _AdaptiveColumnMapView(discord.ui.View):
+    """Wide-sheet column mapper. A hub (summary + one button per field) that
+    morphs *in place* into a single focused, paged picker for one field at a
+    time — so ◀ ▶ only ever moves the field you're editing, never all four at
+    once (the jarring shared-pager problem). Selection state is global column
+    indices, so it survives paging and switching fields. One message throughout,
+    edited via ``safe_edit_response``."""
+
+    _FIELDS = {
+        "name": ("Name", "the column that identifies each applicant (required)"),
+        "status": ("Status", "a change here posts a status-change notice"),
+        "display": ("Display", "the columns shown in each notice"),
+        "identity": ("Identity Fallback", "tells apart two people with the same name"),
+    }
+
+    def __init__(self, *, owner_id: int, headers: list, initial_map: dict, include_status=True):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.all_headers = headers
+        self.include_status = include_status
+        self.per_page = _PER_PAGE
+        self.pages = _page_count(headers, self.per_page)
+        self.message: discord.Message | None = None
+        self.saved = False
+        self.mode = "hub"  # "hub" | "name" | "status" | "display" | "identity"
+        self.page = 0
+        self._warn = ""
+
+        nm = _idx_for_headers(headers, [initial_map.get("name")] if initial_map.get("name") else [])
+        self.name_idx = nm[0] if nm else None
+        self.status_idx = set(_idx_for_headers(headers, initial_map.get("status") or []))
+        self.display_idx = set(_idx_for_headers(headers, initial_map.get("display") or []))
+        self.identity_idx = set(_idx_for_headers(headers, initial_map.get("identity_extra") or []))
+
+        self._render_hub()
+
+    # ── state ────────────────────────────────────────────────────────────────
+    def _field_order(self) -> list:
+        fields = ["name"]
+        if self.include_status:
+            fields.append("status")
+        fields += ["display", "identity"]
+        return fields
+
+    def _state_for(self, field) -> set:
+        if field == "name":
+            return {self.name_idx} if self.name_idx is not None else set()
+        return {
+            "status": self.status_idx,
+            "display": self.display_idx,
+            "identity": self.identity_idx,
+        }[field]
+
+    def _set_state(self, field, value):
+        if field == "status":
+            self.status_idx = value
+        elif field == "display":
+            self.display_idx = value
+        elif field == "identity":
+            self.identity_idx = value
+
+    def _headers_for(self, idx_set) -> list:
+        return [self.all_headers[i] for i in sorted(idx_set) if 0 <= i < len(self.all_headers)]
+
+    def column_map(self) -> dict:
+        name = (
+            self.all_headers[self.name_idx]
+            if (self.name_idx is not None and 0 <= self.name_idx < len(self.all_headers))
+            else None
+        )
+        out: dict = {"name": name}
+        if self.identity_idx:
+            out["identity_extra"] = self._headers_for(self.identity_idx)
+        if self.include_status and self.status_idx:
+            out["status"] = self._headers_for(self.status_idx)
+        if self.display_idx:
+            out["display"] = self._headers_for(self.display_idx)
+        return out
+
+    # ── rendering ────────────────────────────────────────────────────────────
+    def _render_hub(self):
+        self.mode = "hub"
+        self.clear_items()
+        for field in self._field_order():
+            mark = "✅" if self._state_for(field) else "▫️"
+            btn = discord.ui.Button(
+                label=f"{mark} {self._FIELDS[field][0]}", style=discord.ButtonStyle.secondary, row=0
+            )
+            btn.callback = self._make_edit(field)
+            self.add_item(btn)
+        save = discord.ui.Button(label="✅ Save mapping", style=discord.ButtonStyle.success, row=1)
+        save.callback = self._on_save
+        self.add_item(save)
+
+    def _render_field(self, field):
+        self.mode = field
+        self.clear_items()
+        is_name = field == "name"
+        opts = _page_options(self.all_headers, self.page, self._state_for(field))
+        sel = discord.ui.Select(
+            placeholder=f"Pick the {self._FIELDS[field][0]} column" + ("" if is_name else "(s)"),
+            min_values=0,
+            max_values=1 if is_name else max(1, len(opts)),
+            row=0,
+            options=opts,
+        )
+        sel.callback = self._on_field_select
+        self.add_item(sel)
+        if self.pages > 1:
+            prev = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1, disabled=self.page <= 0
+            )
+            prev.callback = self._on_prev
+            self.add_item(prev)
+            nxt = discord.ui.Button(
+                label="Next ▶",
+                style=discord.ButtonStyle.secondary,
+                row=1,
+                disabled=self.page >= self.pages - 1,
+            )
+            nxt.callback = self._on_next
+            self.add_item(nxt)
+        done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.primary, row=1)
+        done.callback = self._on_field_done
+        self.add_item(done)
+
+    def render_embed(self) -> discord.Embed:
+        lines = [f"This sheet has **{len(self.all_headers)}** columns, so set one field at a time."]
+        if self.mode == "hub":
+            lines.append("Tap a field below to choose its column(s), then **Save mapping**.")
+        else:
+            label, desc = self._FIELDS[self.mode]
+            lines.append(f"**Editing {label}:** {desc}.")
+            if self.pages > 1:
+                lines.append(
+                    f"Page **{self.page + 1} of {self.pages}** — ◀ ▶ shows more columns. "
+                    "**Done** goes back to the field list."
+                )
+        body = "\n".join(lines) + "\n\n" + transfer.summarize_column_map(self.column_map())
+        if self._warn:
+            body += f"\n\n{self._warn}"
+        return discord.Embed(
+            title="🔁 Map your columns", color=discord.Color.blurple(), description=body
+        )
+
+    # ── interactions ─────────────────────────────────────────────────────────
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _make_edit(self, field):
+        async def _cb(interaction: discord.Interaction):
+            self.page = 0
+            self._warn = ""
+            self._render_field(field)
+            await wizard_registry.safe_edit_response(
+                interaction, embed=self.render_embed(), view=self
+            )
+
+        return _cb
+
+    async def _on_field_select(self, interaction: discord.Interaction):
+        field = self.mode
+        if field == "name":
+            picked = _selected_indices(interaction.data["values"])
+            if picked:
+                self.name_idx = sorted(picked)[0]
+            elif self.name_idx in _page_index_set(self.all_headers, self.page, self.per_page):
+                self.name_idx = None
+        else:
+            on_page = _page_index_set(self.all_headers, self.page, self.per_page)
+            self._set_state(
+                field,
+                _merge_page_selection(self._state_for(field), on_page, interaction.data["values"]),
+            )
+        await interaction.response.defer()
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._render_field(self.mode)
+        await wizard_registry.safe_edit_response(interaction, embed=self.render_embed(), view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self.pages - 1, self.page + 1)
+        self._render_field(self.mode)
+        await wizard_registry.safe_edit_response(interaction, embed=self.render_embed(), view=self)
+
+    async def _on_field_done(self, interaction: discord.Interaction):
+        self.page = 0
+        self._render_hub()
+        await wizard_registry.safe_edit_response(interaction, embed=self.render_embed(), view=self)
+
+    async def _on_save(self, interaction: discord.Interaction):
+        if self.name_idx is None:
+            self._warn = (
+                "⚠️ Pick a **Name** column first (open ▫️ Name) — it's the one required field."
+            )
+            await wizard_registry.safe_edit_response(
+                interaction, embed=self.render_embed(), view=self
+            )
+            return
+        self.saved = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, embed=self.render_embed(), view=self)
+        self.stop()
+
+
 async def _map_step(
     channel, guild_id, owner_id, header, saved_map, *, include_status, cancel_event
 ):
     """Run the column-mapping step against ``header``, save it to
     ``alliance_column_map_json``, and return the column map (or a
-    ``"CANCEL"`` / ``"TIMEOUT"`` sentinel)."""
+    ``"CANCEL"`` / ``"TIMEOUT"`` sentinel). Narrow sheets (≤25 columns) use the
+    all-at-once view; wide sheets use the adaptive one-field-at-a-time view so
+    paging never disturbs a field you aren't editing."""
     initial_map = saved_map or transfer.suggest_column_map(header)
     if not include_status:
         initial_map = {k: v for k, v in initial_map.items() if k != "status"}
-    view = _ColumnMapView(
-        owner_id=owner_id, headers=header, initial_map=initial_map, include_status=include_status
-    )
-    view.message = await channel.send(
-        embed=_map_embed(
-            initial_map, len(header) > _PER_PAGE, include_status=include_status, total=len(header)
-        ),
-        view=view,
-    )
+    if _page_count(header) > 1:
+        view = _AdaptiveColumnMapView(
+            owner_id=owner_id,
+            headers=header,
+            initial_map=initial_map,
+            include_status=include_status,
+        )
+        view.message = await channel.send(embed=view.render_embed(), view=view)
+    else:
+        view = _ColumnMapView(
+            owner_id=owner_id,
+            headers=header,
+            initial_map=initial_map,
+            include_status=include_status,
+        )
+        view.message = await channel.send(
+            embed=_map_embed(initial_map, False, include_status=include_status, total=len(header)),
+            view=view,
+        )
     await wizard_registry.wait_view_or_cancel(view, cancel_event)
     if view.cancelled:
         return "CANCEL"

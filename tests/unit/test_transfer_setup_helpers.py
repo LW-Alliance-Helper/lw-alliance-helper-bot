@@ -155,6 +155,55 @@ class TestPaging:
         assert cm["display"] == ["C5"]
 
 
+class TestAdaptiveColumnMap:
+    """Wide sheets use the one-field-at-a-time adaptive mapper so paging never
+    disturbs a field you aren't editing."""
+
+    HEADERS = [f"C{i}" for i in range(60)]  # 3 pages
+
+    def _view(self, include_status=True):
+        return transfer_setup._AdaptiveColumnMapView(
+            owner_id=1,
+            headers=self.HEADERS,
+            initial_map={"name": "C40", "status": ["C50"], "display": ["C5"]},
+            include_status=include_status,
+        )
+
+    def test_seeds_and_resolves_across_pages(self):
+        v = self._view()
+        assert v.pages == 3
+        assert v.name_idx == 40
+        cm = v.column_map()
+        assert cm["name"] == "C40"
+        assert cm["status"] == ["C50"]
+        assert cm["display"] == ["C5"]
+
+    def test_hub_has_one_button_per_field_plus_save(self):
+        assert len(self._view().children) == 5  # name/status/display/identity + save
+        assert len(self._view(include_status=False).children) == 4  # status dropped
+
+    def test_field_view_is_one_select_plus_nav(self):
+        v = self._view()
+        v._render_field("status")
+        kinds = [type(c).__name__ for c in v.children]
+        assert kinds.count("Select") == 1
+        assert kinds.count("Button") == 3  # ◀ ▶ Done
+
+    def test_name_field_is_single_select(self):
+        v = self._view()
+        v._render_field("name")
+        sel = next(c for c in v.children if type(c).__name__ == "Select")
+        assert sel.max_values == 1
+
+    def test_paging_shows_only_that_pages_columns(self):
+        v = self._view()
+        v.page = 2
+        v._render_field("display")
+        sel = next(c for c in v.children if type(c).__name__ == "Select")
+        assert sel.options[0].value == "50"
+        assert sel.options[-1].value == "59"
+
+
 class TestEditMenuSections:
     """The re-entry menu shows sections appropriate to the setup mode."""
 

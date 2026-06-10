@@ -64,6 +64,22 @@ def _capture(e: Exception) -> None:
             pass
 
 
+def _display_status_value(value) -> str:
+    """User-facing text for a status cell: a checkbox/boolean cell (``TRUE`` /
+    ``FALSE``) shows as Yes / No, any other text passes through unchanged, and a
+    blank shows as ``(blank)``. Keeps TRUE/FALSE out of leadership-facing copy
+    while the bot still writes the literal booleans the checkbox needs."""
+    if value is None:
+        return "(blank)"
+    s = str(value).strip()
+    low = s.lower()
+    if low == "true":
+        return "Yes"
+    if low == "false":
+        return "No"
+    return s or "(blank)"
+
+
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
 
@@ -79,7 +95,8 @@ def _new_applicant_embed(name: str, display_pairs: list) -> discord.Embed:
 def _status_change_embed(name: str, changes: list) -> discord.Embed:
     embed = discord.Embed(title=f"🔔 {name}: status changed"[:256], color=discord.Color.blue())
     lines = [
-        f"**{field}:** {(old or '(blank)')} → {(new or '(blank)')}" for field, old, new in changes
+        f"**{field}** has changed from {_display_status_value(old)} to {_display_status_value(new)}"
+        for field, old, new in changes
     ]
     embed.description = "\n".join(lines)[:4000]
     return embed
@@ -87,7 +104,9 @@ def _status_change_embed(name: str, changes: list) -> discord.Embed:
 
 def _removal_embed(name: str, snapshot: dict) -> discord.Embed:
     embed = discord.Embed(title=f"🗑️ {name} removed from the sheet"[:256], color=discord.Color.red())
-    last = ", ".join(f"{k}: {v}" for k, v in (snapshot or {}).items() if str(v).strip())
+    last = ", ".join(
+        f"{k}: {_display_status_value(v)}" for k, v in (snapshot or {}).items() if str(v).strip()
+    )
     embed.description = f"They'd been marked: {last}." if last else "Removed from your sheet."
     return embed
 
@@ -113,21 +132,22 @@ def _full_details_embed(name: str, header: list, row: list) -> discord.Embed:
 
 
 class _WriteConfirmView(discord.ui.View):
-    """Ephemeral confirm → write a status cell back to the alliance sheet. The
-    row is re-found by identity at click time (it may have moved since the
-    notice posted), then the configured value is written to the status
-    column's cell."""
+    """Ephemeral Yes / No → tick or untick a status checkbox on the alliance
+    sheet. Yes writes ``TRUE``, No writes ``FALSE`` (so the checkbox toggles
+    either way); the user only ever sees Yes / No. The row is re-found by
+    identity at click time, since it may have moved since the notice posted."""
 
     def __init__(self, *, name: str, status_col: str, writeback: dict):
         super().__init__(timeout=120)
         self.name = name
         self.status_col = status_col
         self.wb = writeback
-        confirm = discord.ui.Button(
-            label=f"✅ Write {writeback['value']}"[:80], style=discord.ButtonStyle.success
-        )
-        confirm.callback = self._do
-        self.add_item(confirm)
+        yes = discord.ui.Button(label="✅ Yes", style=discord.ButtonStyle.success)
+        yes.callback = self._make("TRUE", "Yes")
+        self.add_item(yes)
+        no = discord.ui.Button(label="❌ No", style=discord.ButtonStyle.danger)
+        no.callback = self._make("FALSE", "No")
+        self.add_item(no)
         cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         cancel.callback = self._cancel
         self.add_item(cancel)
@@ -135,7 +155,13 @@ class _WriteConfirmView(discord.ui.View):
     async def _cancel(self, interaction: discord.Interaction):
         await interaction.response.edit_message(content="Cancelled. Nothing written.", view=None)
 
-    async def _do(self, interaction: discord.Interaction):
+    def _make(self, raw_value: str, label: str):
+        async def _cb(interaction: discord.Interaction):
+            await self._write(interaction, raw_value, label)
+
+        return _cb
+
+    async def _write(self, interaction: discord.Interaction, raw_value: str, label: str):
         await interaction.response.defer(ephemeral=True, thinking=True)
         wb = self.wb
         try:
@@ -163,7 +189,7 @@ class _WriteConfirmView(discord.ui.View):
             return
         try:
             await asyncio.to_thread(
-                transfer_sheets.write_cell, wb["sheet_id"], wb["tab"], idx + 2, col_idx, wb["value"]
+                transfer_sheets.write_cell, wb["sheet_id"], wb["tab"], idx + 2, col_idx, raw_value
             )
         except Exception as e:  # noqa: BLE001
             await interaction.followup.send(
@@ -174,7 +200,7 @@ class _WriteConfirmView(discord.ui.View):
             _capture(e)
             return
         await interaction.followup.send(
-            f"✅ Set **{self.status_col} = {wb['value']}** for **{self.name}**.", ephemeral=True
+            f"✅ Set **{self.status_col}** to **{label}** for **{self.name}**.", ephemeral=True
         )
 
 
@@ -191,21 +217,26 @@ class _NoticeView(discord.ui.View):
         self.writeback = writeback
         self.message: discord.Message | None = None
 
-        details = discord.ui.Button(label="📄 Full details", style=discord.ButtonStyle.secondary)
+        # Row 0: the bot's own actions (full details + draft-a-message).
+        details = discord.ui.Button(
+            label="📄 Full details", style=discord.ButtonStyle.secondary, row=0
+        )
         details.callback = self._full_details
         self.add_item(details)
         for kind in template_kinds:
             btn = discord.ui.Button(
-                label=_TEMPLATE_BTN.get(kind, "📩 Message"), style=discord.ButtonStyle.primary
+                label=_TEMPLATE_BTN.get(kind, "📩 Message"),
+                style=discord.ButtonStyle.primary,
+                row=0,
             )
             btn.callback = self._make_template_cb(kind)
             self.add_item(btn)
-        # Decision write-back: one button per status column (capped to keep the
-        # view within Discord's limits). Only when the alliance opted in.
+        # Row 1: decision write-back — one button per status column (capped to a
+        # row). Clicking it asks Yes/No (writes TRUE/FALSE to tick the checkbox).
         if writeback:
-            for status_col in (writeback.get("status_cols") or [])[:3]:
+            for status_col in (writeback.get("status_cols") or [])[:5]:
                 btn = discord.ui.Button(
-                    label=f"✅ Set {status_col}"[:80], style=discord.ButtonStyle.success
+                    label=f"✏️ Set {status_col}"[:80], style=discord.ButtonStyle.secondary, row=1
                 )
                 btn.callback = self._make_writeback_cb(status_col)
                 self.add_item(btn)
@@ -239,8 +270,7 @@ class _NoticeView(discord.ui.View):
                 name=self.name, status_col=status_col, writeback=self.writeback
             )
             await interaction.response.send_message(
-                f"Write **{self.writeback['value']}** to **{status_col}** for "
-                f"**{self.name}** in your sheet?",
+                f"Set **{status_col}** for **{self.name}** to Yes or No?",
                 view=view,
                 ephemeral=True,
             )
@@ -421,7 +451,6 @@ class TransferCog(commands.Cog):
         wb_base = None
         if cfg.get("writeback_enabled") and column_map.get("status"):
             wb_base = {
-                "value": cfg.get("writeback_value") or "TRUE",
                 "sheet_id": sheet_id,
                 "tab": tab,
                 "column_map": column_map,
@@ -521,7 +550,7 @@ class TransferCog(commands.Cog):
             lines = []
             for sc in diff.status_changes[:25]:
                 name = transfer.cell_for(sc.row, hidx, name_header) or "(unknown)"
-                chg = ", ".join(f"{f}: {n or '(blank)'}" for f, _o, n in sc.changes)
+                chg = ", ".join(f"{f}: {_display_status_value(n)}" for f, _o, n in sc.changes)
                 lines.append(f"• **{name}**: {chg}")
             embed.add_field(
                 name=f"Status changes ({len(diff.status_changes)})",

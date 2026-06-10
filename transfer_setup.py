@@ -1825,15 +1825,16 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
     return "OK"
 
 
-async def _step_writeback(channel, guild_id, owner_id, current, cancel_event, status_cols):
-    from setup_cog import YesNoView, ask_keep_or_change
+async def _step_writeback(channel, guild_id, owner_id, cancel_event, status_cols):
+    from setup_cog import YesNoView
 
     view = YesNoView()
     await channel.send(
         "**Decision write-back?**\n"
-        f"Add buttons to each notification so you can mark an applicant "
-        f"(**{', '.join(status_cols)}**) right from Discord, and the bot writes it back to your "
-        "sheet. Leave off to keep the bot read-only.",
+        f"Add **Yes / No** buttons to each notification so you can mark an applicant "
+        f"(**{', '.join(status_cols)}**) right from Discord. The bot ticks or unticks the matching "
+        "checkbox on your sheet, so make those columns checkboxes in Google Sheets "
+        "(Insert → Checkbox). Leave off to keep the bot read-only.",
         view=view,
     )
     await wizard_registry.wait_view_or_cancel(view, cancel_event)
@@ -1841,25 +1842,7 @@ async def _step_writeback(channel, guild_id, owner_id, current, cancel_event, st
         return "CANCEL"
     if view.selected is None:
         return "TIMEOUT"
-    if view.selected:
-        wb_value = await ask_keep_or_change(
-            channel,
-            "**Write-back value**\n"
-            "What should the bot write when you click a Set button? Google Sheets checkboxes use "
-            "**TRUE** (so the box ticks); use your own word if your sheet expects e.g. `Yes`.",
-            default="TRUE",
-            current=current.get("writeback_value", ""),
-            modal_title="Write-back value",
-            modal_label="Value to write",
-            cancel_event=cancel_event,
-        )
-        if wb_value is None:
-            return "ABORT"
-        config.update_transfer_config_fields(
-            guild_id, writeback_enabled=1, writeback_value=wb_value or "TRUE"
-        )
-    else:
-        config.update_transfer_config_field(guild_id, "writeback_enabled", 0)
+    config.update_transfer_config_field(guild_id, "writeback_enabled", 1 if view.selected else 0)
     return "OK"
 
 
@@ -2122,10 +2105,8 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 config.get_transfer_config(guild_id).get("alliance_column_map_json")
             ).get("status", [])
             if status_cols:
-                wb = await _step_writeback(
-                    channel, guild_id, user.id, current, cancel_event, status_cols
-                )
-                if wb in ("CANCEL", "ABORT"):
+                wb = await _step_writeback(channel, guild_id, user.id, cancel_event, status_cols)
+                if wb == "CANCEL":
                     return
                 if wb == "TIMEOUT":
                     await channel.send(_TIMEOUT_MSG)
@@ -2602,8 +2583,8 @@ async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
         return rm
     status_cols = transfer.parse_column_map(cfg.get("alliance_column_map_json")).get("status", [])
     if status_cols:
-        wb = await _step_writeback(channel, guild_id, user.id, cfg, cancel_event, status_cols)
-        if wb in ("CANCEL", "ABORT"):
+        wb = await _step_writeback(channel, guild_id, user.id, cancel_event, status_cols)
+        if wb == "CANCEL":
             return "CANCEL"
         if wb == "TIMEOUT":
             return "TIMEOUT"

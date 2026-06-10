@@ -95,6 +95,91 @@ def _headers_from_values(headers: list, values) -> list:
     return [headers[i] for i in sorted(picked) if 0 <= i < len(headers)]
 
 
+# ── Paged column pickers ──────────────────────────────────────────────────────
+#
+# A select tops out at 25 options, but a recruiting / server-wide sheet can have
+# far more columns. The pickers below page through the headers in 25-wide
+# windows with ◀ ▶ buttons. Options are valued by *global* column index so a
+# selection on one page stays addressable after a flip; multi-select state is
+# kept as a set of global indices and merged per page (see _merge_page_selection)
+# so picks on other pages survive.
+
+_PER_PAGE = 25
+
+# Inert one-option list a select is built with before _render() points it at the
+# current page (a select needs ≥1 option at construction; "-1" maps to nothing).
+_PLACEHOLDER_OPTS = [discord.SelectOption(label="…", value="-1")]
+
+
+def _page_count(headers: list, per_page: int = _PER_PAGE) -> int:
+    """How many 25-column pages it takes to show every header (at least 1)."""
+    return max(1, (len(headers) + per_page - 1) // per_page)
+
+
+def _page_index_set(headers: list, page: int, per_page: int = _PER_PAGE) -> set:
+    """Global indices of the non-blank columns shown on ``page``."""
+    start = page * per_page
+    return {start + o for o, h in enumerate(headers[start : start + per_page]) if str(h).strip()}
+
+
+def _page_options(headers: list, page: int, selected_idx, per_page: int = _PER_PAGE) -> list:
+    """SelectOptions for one page, valued by *global* column index. Blank
+    headers are skipped; ``selected_idx`` (global indices) drives ``default``.
+    A page with no named columns falls back to one inert option (``"-1"``) so
+    the select still has the ≥1 option Discord requires."""
+    start = page * per_page
+    opts = []
+    for o, h in enumerate(headers[start : start + per_page]):
+        text = str(h).strip()
+        if not text:
+            continue
+        gi = start + o
+        opts.append(
+            discord.SelectOption(label=text[:100], value=str(gi), default=(gi in selected_idx))
+        )
+    if not opts:
+        opts = [discord.SelectOption(label="(no named columns on this page)", value="-1")]
+    return opts
+
+
+def _selected_indices(values) -> set:
+    """Parse a select's submitted values into a set of real global indices
+    (dropping the ``-1`` inert-placeholder sentinel)."""
+    out = set()
+    for v in values:
+        try:
+            gi = int(v)
+        except (TypeError, ValueError):
+            continue
+        if gi >= 0:
+            out.add(gi)
+    return out
+
+
+def _merge_page_selection(old_idx, on_page: set, values) -> set:
+    """Merge a multi-select's current-page picks into cross-page state: drop
+    every index that lives on this page, then add the ones now selected — so
+    picks made on other pages survive the flip."""
+    return (set(old_idx) - on_page) | _selected_indices(values)
+
+
+def _idx_for_headers(headers: list, wanted) -> list:
+    """Global indices (first match) for a list of header texts, dropping any
+    that no longer resolve. Seeds index-based selection from a saved
+    header-name column map."""
+    norm_to_idx: dict = {}
+    for i, h in enumerate(headers):
+        key = transfer._norm_header(h)
+        if key and key not in norm_to_idx:
+            norm_to_idx[key] = i
+    out = []
+    for w in wanted or []:
+        i = norm_to_idx.get(transfer._norm_header(w))
+        if i is not None:
+            out.append(i)
+    return out
+
+
 # ── Entry point (premium gate) ────────────────────────────────────────────────
 
 
@@ -375,19 +460,24 @@ class _ModeStepView(discord.ui.View):
 
     async def _verify(self, interaction: discord.Interaction, mode: str, sheets: list):
         await interaction.response.defer(thinking=True, ephemeral=True)
+        # Sentence-fitting noun phrase per role; `short` is for the inline summary.
         labels = {
-            "intake": "shared (intake)",
-            "alliance": "watched" if mode == _MODE_WATCH else "your",
+            "intake": "the shared (intake) sheet",
+            "alliance": "the sheet you watch" if mode == _MODE_WATCH else "your sheet",
+        }
+        short = {
+            "intake": "Shared sheet",
+            "alliance": "Watched sheet" if mode == _MODE_WATCH else "Your sheet",
         }
         read: dict = {}
         for role, sid, tab in sheets:
+            label = labels.get(role, role)
             sid = transfer.extract_sheet_id(sid)
             try:
                 header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sid, tab)
             except Exception as e:  # noqa: BLE001
                 await interaction.followup.send(
-                    f"⚠️ Couldn't read the {labels.get(role, role)} sheet/tab: "
-                    f"{config.describe_sheet_error(e)}\n"
+                    f"⚠️ Couldn't read {label} (tab “{tab}”): {config.describe_sheet_error(e)}\n"
                     "Check the Sheet ID + tab and that the bot's service account has access, "
                     "then click the button again.",
                     ephemeral=True,
@@ -395,8 +485,8 @@ class _ModeStepView(discord.ui.View):
                 return
             if not header:
                 await interaction.followup.send(
-                    f"⚠️ The {labels.get(role, role)} tab has no header row. Put your column "
-                    "headers in row 1, then click the button again.",
+                    f"⚠️ {label[:1].upper() + label[1:]} has no header row (tab “{tab}”). "
+                    "Put your column headers in row 1, then click the button again.",
                     ephemeral=True,
                 )
                 return
@@ -409,7 +499,7 @@ class _ModeStepView(discord.ui.View):
             item.disabled = True
         if self.message:
             try:
-                summary = " · ".join(f"{labels.get(r, r)}: {len(read[r][2])} cols" for r in read)
+                summary = " · ".join(f"{short.get(r, r)}: {len(read[r][2])} cols" for r in read)
                 await self.message.edit(
                     content=f"✅ Connected ({summary}). Continuing below.", view=self
                 )
@@ -464,75 +554,101 @@ class _ColumnMapView(discord.ui.View):
     """Name (required) + optional Status / Display / Identity-Fallback
     multi-selects, all seeded from the auto-map guess. ``include_status=False``
     drops the Status picker (a read-only watched sheet has nothing to write or
-    track changes on). Only the first 25 headers are pickable (Discord's
-    select cap)."""
+    track changes on). Wide sheets page through their columns with ◀ ▶, and
+    selections persist across pages (state is kept as global column indices)."""
 
     def __init__(self, *, owner_id: int, headers: list, initial_map: dict, include_status=True):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
-        self.headers = headers[:25]
-        self.truncated = len(headers) > 25
+        self.all_headers = headers
         self.message: discord.Message | None = None
         self.saved = False
         self.include_status = include_status
-        self.sel_name = initial_map.get("name") or None
-        self.sel_status = list(initial_map.get("status") or [])
-        self.sel_display = list(initial_map.get("display") or [])
-        self.sel_identity = list(initial_map.get("identity_extra") or [])
+        self.per_page = _PER_PAGE
+        self.page = 0
+        self.pages = _page_count(headers, self.per_page)
 
-        # Dropdowns are numbered ①–④ and pre-filled with the guess so the
-        # selected values stay visible. Discord hides a select's placeholder
-        # once anything is selected, so the embed carries a numbered legend
-        # (top-to-bottom) saying what each dropdown is; an *empty* category
-        # falls back to showing its numbered placeholder.
-        name_sel = discord.ui.Select(
+        # Selection state as *global* column indices (survives page flips).
+        nm = _idx_for_headers(headers, [initial_map.get("name")] if initial_map.get("name") else [])
+        self.name_idx = nm[0] if nm else None
+        self.status_idx = set(_idx_for_headers(headers, initial_map.get("status") or []))
+        self.display_idx = set(_idx_for_headers(headers, initial_map.get("display") or []))
+        self.identity_idx = set(_idx_for_headers(headers, initial_map.get("identity_extra") or []))
+
+        # Name is min_values=0 (so a flip to a page without it doesn't force a
+        # wrong pick); it's validated as required on Save instead.
+        self._name_sel = discord.ui.Select(
             placeholder="① Name column (required)",
-            min_values=1,
+            min_values=0,
             max_values=1,
             row=0,
-            options=_header_options(self.headers, [self.sel_name] if self.sel_name else []),
+            options=_PLACEHOLDER_OPTS,
         )
-        name_sel.callback = self._on_name
-        self.add_item(name_sel)
+        self._name_sel.callback = self._on_name
+        self.add_item(self._name_sel)
 
         row = 1
+        self._status_sel = None
         if include_status:
-            self._add_multi(
-                "② Status columns to watch (optional)", row, self.sel_status, self._on_status
+            self._status_sel = self._make_multi(
+                "② Status columns to watch (optional)", row, self._on_status
             )
             row += 1
             disp_num, id_num = "③", "④"
         else:
             disp_num, id_num = "②", "③"
-        self._add_multi(
-            f"{disp_num} Columns to show in notices (optional)",
-            row,
-            self.sel_display,
-            self._on_display,
+        self._display_sel = self._make_multi(
+            f"{disp_num} Columns to show in notices (optional)", row, self._on_display
         )
         row += 1
-        self._add_multi(
-            f"{id_num} Identity Fallback, e.g. Server (optional)",
-            row,
-            self.sel_identity,
-            self._on_identity,
+        self._identity_sel = self._make_multi(
+            f"{id_num} Identity Fallback, e.g. Server (optional)", row, self._on_identity
         )
 
+        self._prev = self._next = None
+        if self.pages > 1:
+            self._prev = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary, row=4
+            )
+            self._prev.callback = self._on_prev
+            self.add_item(self._prev)
+            self._next = discord.ui.Button(
+                label="Next ▶", style=discord.ButtonStyle.secondary, row=4
+            )
+            self._next.callback = self._on_next
+            self.add_item(self._next)
         save = discord.ui.Button(label="✅ Save mapping", style=discord.ButtonStyle.success, row=4)
         save.callback = self._on_save
         self.add_item(save)
 
-    def _add_multi(self, placeholder: str, row: int, selected: list, callback):
-        opts = _header_options(self.headers, selected)
+        self._render()
+
+    def _make_multi(self, placeholder: str, row: int, callback):
         sel = discord.ui.Select(
-            placeholder=placeholder,
-            min_values=0,
-            max_values=max(1, len(opts)),
-            row=row,
-            options=opts,
+            placeholder=placeholder, min_values=0, max_values=1, row=row, options=_PLACEHOLDER_OPTS
         )
         sel.callback = callback
         self.add_item(sel)
+        return sel
+
+    def _render(self):
+        """Re-point every select at the current page's options + update nav."""
+        self._name_sel.options = _page_options(
+            self.all_headers, self.page, {self.name_idx} if self.name_idx is not None else set()
+        )
+        for sel, state in (
+            (self._status_sel, self.status_idx),
+            (self._display_sel, self.display_idx),
+            (self._identity_sel, self.identity_idx),
+        ):
+            if sel is None:
+                continue
+            opts = _page_options(self.all_headers, self.page, state)
+            sel.options = opts
+            sel.max_values = max(1, len(opts))
+        if self._prev is not None:
+            self._prev.disabled = self.page <= 0
+            self._next.disabled = self.page >= self.pages - 1
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -541,36 +657,67 @@ class _ColumnMapView(discord.ui.View):
         return True
 
     async def _on_name(self, interaction: discord.Interaction):
-        picked = _headers_from_values(self.headers, interaction.data["values"])
-        self.sel_name = picked[0] if picked else None
+        picked = _selected_indices(interaction.data["values"])
+        if picked:
+            self.name_idx = sorted(picked)[0]
+        elif self.name_idx in _page_index_set(self.all_headers, self.page, self.per_page):
+            self.name_idx = None  # deliberately cleared on its own page
         await interaction.response.defer()
 
     async def _on_status(self, interaction: discord.Interaction):
-        self.sel_status = _headers_from_values(self.headers, interaction.data["values"])
+        on_page = _page_index_set(self.all_headers, self.page, self.per_page)
+        self.status_idx = _merge_page_selection(
+            self.status_idx, on_page, interaction.data["values"]
+        )
         await interaction.response.defer()
 
     async def _on_display(self, interaction: discord.Interaction):
-        self.sel_display = _headers_from_values(self.headers, interaction.data["values"])
+        on_page = _page_index_set(self.all_headers, self.page, self.per_page)
+        self.display_idx = _merge_page_selection(
+            self.display_idx, on_page, interaction.data["values"]
+        )
         await interaction.response.defer()
 
     async def _on_identity(self, interaction: discord.Interaction):
-        self.sel_identity = _headers_from_values(self.headers, interaction.data["values"])
+        on_page = _page_index_set(self.all_headers, self.page, self.per_page)
+        self.identity_idx = _merge_page_selection(
+            self.identity_idx, on_page, interaction.data["values"]
+        )
         await interaction.response.defer()
 
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self.pages - 1, self.page + 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    def _headers_for(self, idx_set) -> list:
+        return [self.all_headers[i] for i in sorted(idx_set) if 0 <= i < len(self.all_headers)]
+
     def column_map(self) -> dict:
-        out: dict = {"name": self.sel_name}
-        if self.sel_identity:
-            out["identity_extra"] = self.sel_identity
-        if self.include_status and self.sel_status:
-            out["status"] = self.sel_status
-        if self.sel_display:
-            out["display"] = self.sel_display
+        name = (
+            self.all_headers[self.name_idx]
+            if (self.name_idx is not None and 0 <= self.name_idx < len(self.all_headers))
+            else None
+        )
+        out: dict = {"name": name}
+        if self.identity_idx:
+            out["identity_extra"] = self._headers_for(self.identity_idx)
+        if self.include_status and self.status_idx:
+            out["status"] = self._headers_for(self.status_idx)
+        if self.display_idx:
+            out["display"] = self._headers_for(self.display_idx)
         return out
 
     async def _on_save(self, interaction: discord.Interaction):
-        if not self.sel_name:
+        if self.name_idx is None:
+            extra = " Use ◀ ▶ to find it if it's on another page." if self.pages > 1 else ""
             await interaction.response.send_message(
-                "⚠️ Pick a **Name** column. It's the one required field.", ephemeral=True
+                f"⚠️ Pick a **Name** column. It's the one required field.{extra}", ephemeral=True
             )
             return
         self.saved = True
@@ -580,7 +727,9 @@ class _ColumnMapView(discord.ui.View):
         self.stop()
 
 
-def _map_embed(column_map: dict, truncated: bool, include_status: bool = True) -> discord.Embed:
+def _map_embed(
+    column_map: dict, multipage: bool, include_status: bool = True, total: int = 0
+) -> discord.Embed:
     if include_status:
         legend = (
             "① **Name** (required): identifies each applicant\n"
@@ -605,8 +754,11 @@ def _map_embed(column_map: dict, truncated: bool, include_status: bool = True) -
             f"**My guess:**\n{transfer.summarize_column_map(column_map)}"
         ),
     )
-    if truncated:
-        embed.set_footer(text="Only the first 25 columns are pickable here.")
+    if multipage:
+        embed.set_footer(
+            text=f"This sheet has {total} columns — use ◀ ▶ under the dropdowns to page "
+            "through all of them. Your picks are kept across pages."
+        )
     return embed
 
 
@@ -623,7 +775,10 @@ async def _map_step(
         owner_id=owner_id, headers=header, initial_map=initial_map, include_status=include_status
     )
     view.message = await channel.send(
-        embed=_map_embed(initial_map, len(header) > 25, include_status=include_status), view=view
+        embed=_map_embed(
+            initial_map, len(header) > _PER_PAGE, include_status=include_status, total=len(header)
+        ),
+        view=view,
     )
     await wizard_registry.wait_view_or_cancel(view, cancel_event)
     if view.cancelled:
@@ -766,22 +921,45 @@ class _ButtonChoiceView(discord.ui.View):
 
 
 class _FilterColumnView(discord.ui.View):
-    """Single-select of the sheet's columns to filter on."""
+    """Single-select of the sheet's columns to filter on, paged for wide
+    sheets (◀ ▶). Picking a column confirms and stops."""
 
     def __init__(self, owner_id: int, header: list):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
-        self._headers = header
+        self.all_headers = header
         self.column = None
         self.confirmed = False
+        self.per_page = _PER_PAGE
+        self.page = 0
+        self.pages = _page_count(header, self.per_page)
         self._sel = discord.ui.Select(
             placeholder="Pick a column to filter on",
-            min_values=1,
+            min_values=0,
             max_values=1,
-            options=_header_options(header),
+            options=_PLACEHOLDER_OPTS,
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
+        self._prev = self._next = None
+        if self.pages > 1:
+            self._prev = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1
+            )
+            self._prev.callback = self._on_prev
+            self.add_item(self._prev)
+            self._next = discord.ui.Button(
+                label="Next ▶", style=discord.ButtonStyle.secondary, row=1
+            )
+            self._next.callback = self._on_next
+            self.add_item(self._next)
+        self._render()
+
+    def _render(self):
+        self._sel.options = _page_options(self.all_headers, self.page, set())
+        if self._prev is not None:
+            self._prev.disabled = self.page <= 0
+            self._next.disabled = self.page >= self.pages - 1
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -790,13 +968,26 @@ class _FilterColumnView(discord.ui.View):
         return True
 
     async def _cb(self, interaction: discord.Interaction):
-        picked = _headers_from_values(self._headers, interaction.data["values"])
-        self.column = picked[0] if picked else None
+        picked = _selected_indices(interaction.data["values"])
+        if not picked:  # the inert placeholder on an all-blank page
+            await interaction.response.defer()
+            return
+        self.column = self.all_headers[sorted(picked)[0]]
         self.confirmed = True
         for item in self.children:
             item.disabled = True
         await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self.pages - 1, self.page + 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
 
 
 class _FilterMultiView(discord.ui.View):
@@ -1047,35 +1238,64 @@ class _SourceMapView(discord.ui.View):
     def __init__(self, *, owner_id: int, headers: list, initial_map: dict):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
-        self.headers = headers[:25]
+        self.all_headers = headers
         self.saved = False
-        self.sel_name = initial_map.get("name") or None
-        self.sel_identity = list(initial_map.get("identity_extra") or [])
+        self.per_page = _PER_PAGE
+        self.page = 0
+        self.pages = _page_count(headers, self.per_page)
 
-        name_sel = discord.ui.Select(
+        nm = _idx_for_headers(headers, [initial_map.get("name")] if initial_map.get("name") else [])
+        self.name_idx = nm[0] if nm else None
+        self.identity_idx = set(_idx_for_headers(headers, initial_map.get("identity_extra") or []))
+
+        self._name_sel = discord.ui.Select(
             placeholder="① Name column (required)",
-            min_values=1,
+            min_values=0,
             max_values=1,
             row=0,
-            options=_header_options(self.headers, [self.sel_name] if self.sel_name else []),
+            options=_PLACEHOLDER_OPTS,
         )
-        name_sel.callback = self._on_name
-        self.add_item(name_sel)
+        self._name_sel.callback = self._on_name
+        self.add_item(self._name_sel)
 
-        id_opts = _header_options(self.headers, self.sel_identity)
-        id_sel = discord.ui.Select(
+        self._id_sel = discord.ui.Select(
             placeholder="② Identity Fallback, e.g. Server (optional)",
             min_values=0,
-            max_values=max(1, len(id_opts)),
+            max_values=1,
             row=1,
-            options=id_opts,
+            options=_PLACEHOLDER_OPTS,
         )
-        id_sel.callback = self._on_identity
-        self.add_item(id_sel)
+        self._id_sel.callback = self._on_identity
+        self.add_item(self._id_sel)
 
+        self._prev = self._next = None
+        if self.pages > 1:
+            self._prev = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary, row=2
+            )
+            self._prev.callback = self._on_prev
+            self.add_item(self._prev)
+            self._next = discord.ui.Button(
+                label="Next ▶", style=discord.ButtonStyle.secondary, row=2
+            )
+            self._next.callback = self._on_next
+            self.add_item(self._next)
         save = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=2)
         save.callback = self._on_save
         self.add_item(save)
+
+        self._render()
+
+    def _render(self):
+        self._name_sel.options = _page_options(
+            self.all_headers, self.page, {self.name_idx} if self.name_idx is not None else set()
+        )
+        opts = _page_options(self.all_headers, self.page, self.identity_idx)
+        self._id_sel.options = opts
+        self._id_sel.max_values = max(1, len(opts))
+        if self._prev is not None:
+            self._prev.disabled = self.page <= 0
+            self._next.disabled = self.page >= self.pages - 1
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -1084,24 +1304,51 @@ class _SourceMapView(discord.ui.View):
         return True
 
     async def _on_name(self, interaction: discord.Interaction):
-        picked = _headers_from_values(self.headers, interaction.data["values"])
-        self.sel_name = picked[0] if picked else None
+        picked = _selected_indices(interaction.data["values"])
+        if picked:
+            self.name_idx = sorted(picked)[0]
+        elif self.name_idx in _page_index_set(self.all_headers, self.page, self.per_page):
+            self.name_idx = None
         await interaction.response.defer()
 
     async def _on_identity(self, interaction: discord.Interaction):
-        self.sel_identity = _headers_from_values(self.headers, interaction.data["values"])
+        on_page = _page_index_set(self.all_headers, self.page, self.per_page)
+        self.identity_idx = _merge_page_selection(
+            self.identity_idx, on_page, interaction.data["values"]
+        )
         await interaction.response.defer()
 
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self.pages - 1, self.page + 1)
+        self._render()
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
     def column_map(self) -> dict:
-        out: dict = {"name": self.sel_name}
-        if self.sel_identity:
-            out["identity_extra"] = self.sel_identity
+        name = (
+            self.all_headers[self.name_idx]
+            if (self.name_idx is not None and 0 <= self.name_idx < len(self.all_headers))
+            else None
+        )
+        out: dict = {"name": name}
+        if self.identity_idx:
+            out["identity_extra"] = [
+                self.all_headers[i]
+                for i in sorted(self.identity_idx)
+                if 0 <= i < len(self.all_headers)
+            ]
         return out
 
     async def _on_save(self, interaction: discord.Interaction):
-        if not self.sel_name:
+        if self.name_idx is None:
+            extra = " Use ◀ ▶ to find it if it's on another page." if self.pages > 1 else ""
             await interaction.response.send_message(
-                "⚠️ Pick a **Name** column — it's required to avoid copying the same person twice.",
+                "⚠️ Pick a **Name** column — it's required to avoid copying the same person "
+                f"twice.{extra}",
                 ephemeral=True,
             )
             return

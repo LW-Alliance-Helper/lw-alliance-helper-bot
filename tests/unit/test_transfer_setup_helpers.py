@@ -100,3 +100,56 @@ class TestModeLabels:
             transfer_setup._MODE_WATCH,
         ):
             assert transfer_setup._MODE_LABELS[mode]
+
+
+class TestPaging:
+    """Column pickers page through >25-column sheets; selections are tracked as
+    global indices so they survive page flips."""
+
+    HEADERS = [f"C{i}" for i in range(60)]  # 3 pages of 25/25/10
+
+    def test_page_count(self):
+        assert transfer_setup._page_count(self.HEADERS) == 3
+        assert transfer_setup._page_count([]) == 1
+        assert transfer_setup._page_count(["a"]) == 1
+
+    def test_page_options_use_global_indices_and_default(self):
+        opts = transfer_setup._page_options(self.HEADERS, 1, {30})  # page 1 = idx 25..49
+        assert opts[0].value == "25"
+        assert opts[-1].value == "49"
+        assert any(o.default and o.value == "30" for o in opts)
+
+    def test_page_options_skip_blank_and_fall_back(self):
+        opts = transfer_setup._page_options(["", "  ", ""], 0, set())
+        assert len(opts) == 1 and opts[0].value == "-1"
+
+    def test_page_index_set(self):
+        assert transfer_setup._page_index_set(self.HEADERS, 2) == set(range(50, 60))
+
+    def test_merge_preserves_offpage_selection(self):
+        # Existing picks {2 (page0), 40 (page1)}; on page 1 the user now picks 41.
+        on_page = transfer_setup._page_index_set(self.HEADERS, 1)  # {25..49}
+        merged = transfer_setup._merge_page_selection({2, 40}, on_page, ["41"])
+        assert merged == {2, 41}  # page-0's 2 survives; page-1's 40 replaced by 41
+
+    def test_merge_drops_placeholder_value(self):
+        assert transfer_setup._merge_page_selection(set(), {0, 1, 2}, ["-1"]) == set()
+
+    def test_idx_for_headers_first_match_and_drop_missing(self):
+        assert transfer_setup._idx_for_headers(["A", "B", "C"], ["c", "A"]) == [2, 0]
+        assert transfer_setup._idx_for_headers(["A", "B"], ["zzz"]) == []
+
+    def test_wide_column_map_view_seeds_and_resolves_beyond_page0(self):
+        v = transfer_setup._ColumnMapView(
+            owner_id=1,
+            headers=self.HEADERS,
+            initial_map={"name": "C40", "status": ["C50"], "display": ["C5"]},
+            include_status=True,
+        )
+        assert v.pages == 3
+        assert v.name_idx == 40
+        assert v.status_idx == {50}
+        cm = v.column_map()
+        assert cm["name"] == "C40"
+        assert cm["status"] == ["C50"]
+        assert cm["display"] == ["C5"]

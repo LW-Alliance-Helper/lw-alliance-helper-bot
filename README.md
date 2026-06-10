@@ -14,6 +14,7 @@ A Discord bot built for **Last War alliance leadership** — event announcements
 - **⚔️ Desert Storm / 🏜️ Canyon Storm** — Generate ready-to-copy team mail drafts per team. Configurable participation tracking with custom questions; sit-outs and no-shows logged to your sheet.
 - **📋 Surveys** — Members submit stats through a private Discord thread; responses save directly to your sheet, with a leadership notification per submission.
 - **📈 Growth tracking** — Snapshot any metric in your sheet (squad powers, THP, kills, anything) on a configurable schedule. You define the metrics, source, and cadence.
+- **🔁 Transfer management 💎** — Premium. The bot watches your recruiting sheet and pings you when new applicants land or their status changes, drafts your in-game outreach messages, optionally pulls matching players from a server-wide sheet, and (opt-in) writes your accept/decline decisions back to the sheet from Discord. Only a Name column is required; everything else maps to whatever your sheet already uses.
 - **💎 Premium add-ons** — DM-based reminders, multi-survey, member roster sync, customizable DM bodies, unlimited templates and survey questions, threads as channel destinations.
 
 → Full command reference: [commands page](https://lw-alliance-helper.github.io/commands.html)

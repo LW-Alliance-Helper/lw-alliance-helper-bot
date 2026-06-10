@@ -328,6 +328,75 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_transfer_config — Transfer Management (#16, Premium-only).
+        # A passive sheet-watching layer over an alliance's existing
+        # transfer-tracking spreadsheet: the bot polls the sheet, detects
+        # new rows + status-column changes, and posts notifications. It
+        # never writes tracking columns back to the alliance sheet (pure
+        # read access — see transfer.py change-detection note), though the
+        # optional server-wide / form sources *do* copy matching rows into
+        # the alliance sheet.
+        #
+        # The `*_column_map_json` fields hold the flexible column mapping
+        # (only Member name is required) as JSON. Columns are addressed by
+        # *header name* (resolved to a live index on each poll — see
+        # transfer.resolve_columns), so inserting/moving a column doesn't
+        # break the mapping:
+        #   {"member": "Name", "power": "Total Power", "tier": "Tier",
+        #    "want": "Want?", "confirmed": "Confirmed", "declined": "Declined",
+        #    "notes": "Notes", "server": "Server",
+        #    "extras": [{"label": "Bear vs Lion", "header": "BvL"}, ...]}
+        # The `*_filter_json` fields hold the AND-only filter DSL
+        # (see transfer.evaluate_filter). `last_seen_state_json` is the
+        # watch state (identity-hash → status snapshot); `copied_state_json`
+        # is the separate dedup set for rows already copied in from the
+        # optional server-wide / form sources. `notify_on_delete` is the
+        # opt-in for "applicant removed from your sheet" notices (only fired
+        # when a status had been set). Empty-string template fields mean
+        # "use the defaults.py default".
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_transfer_config (
+                guild_id                       INTEGER PRIMARY KEY,
+                enabled                        INTEGER DEFAULT 0,
+
+                alliance_sheet_id              TEXT    DEFAULT '',
+                alliance_sheet_tab             TEXT    DEFAULT '',
+                alliance_column_map_json       TEXT    DEFAULT '{}',
+
+                poll_frequency_minutes         INTEGER DEFAULT 60,
+                notification_channel_id        INTEGER DEFAULT 0,
+                notification_filter_json       TEXT    DEFAULT '',
+                notify_on_delete               INTEGER DEFAULT 0,
+                notification_style             TEXT    DEFAULT 'each',
+
+                server_wide_enabled            INTEGER DEFAULT 0,
+                server_wide_sheet_id           TEXT    DEFAULT '',
+                server_wide_sheet_tab          TEXT    DEFAULT '',
+                server_wide_column_map_json    TEXT    DEFAULT '{}',
+                server_wide_filter_json        TEXT    DEFAULT '',
+
+                alliance_form_enabled          INTEGER DEFAULT 0,
+                alliance_form_sheet_id         TEXT    DEFAULT '',
+                alliance_form_sheet_tab        TEXT    DEFAULT '',
+                alliance_form_column_map_json  TEXT    DEFAULT '{}',
+                alliance_form_filter_json      TEXT    DEFAULT '',
+
+                package_column                 TEXT    DEFAULT '',
+
+                writeback_enabled              INTEGER DEFAULT 0,
+                writeback_value                TEXT    DEFAULT 'TRUE',
+
+                template_apply_invitation      TEXT    DEFAULT '',
+                template_confirm_request       TEXT    DEFAULT '',
+                template_decline               TEXT    DEFAULT '',
+
+                last_seen_state_json           TEXT    DEFAULT '{}',
+                copied_state_json              TEXT    DEFAULT '{}',
+                last_polled_at                 TEXT    DEFAULT ''
+            )
+        """)
+        conn.commit()
+
         # guild_storm_config — per-guild DS/CS mail templates and time options.
         # `templates_json` and `default_template` support multiple named
         # templates per (guild, event_type) for premium subscribers.
@@ -1039,6 +1108,44 @@ def init_db():
         except Exception:
             pass
 
+        # ── guild_transfer_config migrations (#16 Transfer Management) ─────────
+        for col, definition in [
+            ("enabled", "INTEGER DEFAULT 0"),
+            ("alliance_sheet_id", "TEXT    DEFAULT ''"),
+            ("alliance_sheet_tab", "TEXT    DEFAULT ''"),
+            ("alliance_column_map_json", "TEXT    DEFAULT '{}'"),
+            ("poll_frequency_minutes", "INTEGER DEFAULT 60"),
+            ("notification_channel_id", "INTEGER DEFAULT 0"),
+            ("notification_filter_json", "TEXT    DEFAULT ''"),
+            ("notify_on_delete", "INTEGER DEFAULT 0"),
+            ("notification_style", "TEXT    DEFAULT 'each'"),
+            ("server_wide_enabled", "INTEGER DEFAULT 0"),
+            ("server_wide_sheet_id", "TEXT    DEFAULT ''"),
+            ("server_wide_sheet_tab", "TEXT    DEFAULT ''"),
+            ("server_wide_column_map_json", "TEXT    DEFAULT '{}'"),
+            ("server_wide_filter_json", "TEXT    DEFAULT ''"),
+            ("alliance_form_enabled", "INTEGER DEFAULT 0"),
+            ("alliance_form_sheet_id", "TEXT    DEFAULT ''"),
+            ("alliance_form_sheet_tab", "TEXT    DEFAULT ''"),
+            ("alliance_form_column_map_json", "TEXT    DEFAULT '{}'"),
+            ("alliance_form_filter_json", "TEXT    DEFAULT ''"),
+            ("package_column", "TEXT    DEFAULT ''"),
+            ("writeback_enabled", "INTEGER DEFAULT 0"),
+            ("writeback_value", "TEXT    DEFAULT 'TRUE'"),
+            ("template_apply_invitation", "TEXT    DEFAULT ''"),
+            ("template_confirm_request", "TEXT    DEFAULT ''"),
+            ("template_decline", "TEXT    DEFAULT ''"),
+            ("last_seen_state_json", "TEXT    DEFAULT '{}'"),
+            ("copied_state_json", "TEXT    DEFAULT '{}'"),
+            ("last_polled_at", "TEXT    DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_transfer_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_transfer_config")
+            except Exception:
+                pass
+
         # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
         for col, definition in [
             ("tab_breakdown", "TEXT    DEFAULT 'Growth Breakdown'"),
@@ -1370,6 +1477,31 @@ def get_spreadsheet(guild_id: int = None):
 
     gc = gspread.authorize(creds)
     sheet_id = get_spreadsheet_id(guild_id)
+    return gc.open_by_key(sheet_id)
+
+
+def get_spreadsheet_by_id(sheet_id: str):
+    """Return an authenticated gspread Spreadsheet for an arbitrary sheet ID.
+
+    Like :func:`get_spreadsheet` but opens a sheet the guild doesn't own —
+    Transfer Management (#16) watches a separate transfer sheet (and optional
+    server-wide / form sheets) whose IDs aren't the guild's configured
+    spreadsheet. Same credential bootstrap. Raises on a bad ID / no access so
+    the caller can surface a friendly "couldn't reach that sheet" message.
+    """
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc = gspread.authorize(creds)
     return gc.open_by_key(sheet_id)
 
 
@@ -4635,6 +4767,130 @@ def get_buddy_enabled_guilds() -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM guild_buddy_config WHERE enabled = 1 AND persistent_message_id != 0"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Transfer Management (#16, Premium-only sheet-watcher) ────────────────────
+
+_TRANSFER_DEFAULTS = {
+    "enabled": 0,
+    "alliance_sheet_id": "",
+    "alliance_sheet_tab": "",
+    "alliance_column_map_json": "{}",
+    "poll_frequency_minutes": 60,
+    "notification_channel_id": 0,
+    "notification_filter_json": "",
+    "notify_on_delete": 0,
+    "notification_style": "each",
+    "server_wide_enabled": 0,
+    "server_wide_sheet_id": "",
+    "server_wide_sheet_tab": "",
+    "server_wide_column_map_json": "{}",
+    "server_wide_filter_json": "",
+    "alliance_form_enabled": 0,
+    "alliance_form_sheet_id": "",
+    "alliance_form_sheet_tab": "",
+    "alliance_form_column_map_json": "{}",
+    "alliance_form_filter_json": "",
+    "package_column": "",
+    "writeback_enabled": 0,
+    "writeback_value": "TRUE",
+    "template_apply_invitation": "",
+    "template_confirm_request": "",
+    "template_decline": "",
+    "last_seen_state_json": "{}",
+    "copied_state_json": "{}",
+    "last_polled_at": "",
+}
+
+_TRANSFER_FIELDS = set(_TRANSFER_DEFAULTS)
+
+
+def has_transfer_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_transfer_config` — i.e. they
+    have run `/setup_transfers` at least once. `get_transfer_config` returns
+    a fallback dict on miss, so it can't distinguish "saved with all
+    defaults" from "never configured"; this helper backs the setup-wizard
+    summary embed and the disable-with-clear gate."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_transfer_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def get_transfer_config(guild_id: int) -> dict:
+    """Return the Transfer Management config for a guild, falling back to
+    defaults when the guild has never run `/setup_transfers`."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_transfer_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {"guild_id": guild_id, **_TRANSFER_DEFAULTS}
+
+
+def update_transfer_config_field(guild_id: int, field: str, value):
+    """Update a single Transfer Management column without disturbing the
+    others. `field` is validated against an allowlist so the column name
+    can't be injected. The wizard saves step-by-step, so per-field updates
+    keep earlier steps intact if a later step is cancelled."""
+    if field not in _TRANSFER_FIELDS:
+        raise ValueError(f"unknown transfer config field: {field!r}")
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO guild_transfer_config (guild_id) VALUES (?)", (guild_id,)
+        )
+        conn.execute(
+            f"UPDATE guild_transfer_config SET {field} = ? WHERE guild_id = ?",
+            (value, guild_id),
+        )
+        conn.commit()
+
+
+def update_transfer_config_fields(guild_id: int, **fields):
+    """Update several Transfer Management columns in one transaction. Every
+    key is allowlist-checked (same guard as the single-field helper). Used
+    by the poller to write `last_seen_state_json` + `last_polled_at`
+    atomically after each poll, and by wizard steps that save a cluster of
+    related fields together."""
+    unknown = set(fields) - _TRANSFER_FIELDS
+    if unknown:
+        raise ValueError(f"unknown transfer config field(s): {sorted(unknown)!r}")
+    if not fields:
+        return
+    assignments = ", ".join(f"{f} = ?" for f in fields)
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO guild_transfer_config (guild_id) VALUES (?)", (guild_id,)
+        )
+        conn.execute(
+            f"UPDATE guild_transfer_config SET {assignments} WHERE guild_id = ?",
+            (*fields.values(), guild_id),
+        )
+        conn.commit()
+
+
+def clear_transfer_config(guild_id: int) -> None:
+    """Delete the guild's transfer config row entirely (disable-with-clear).
+    `get_transfer_config` returns a default dict when the row is absent, so
+    deletion is the cleanest reset."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM guild_transfer_config WHERE guild_id = ?", (guild_id,))
+        conn.commit()
+
+
+def get_transfer_enabled_guilds() -> list[dict]:
+    """Rows for every guild with Transfer Management enabled and an alliance
+    sheet configured — the work-list for the poll loop. Premium is
+    re-checked at poll time (not stored), so a lapsed subscriber's row is
+    skipped by the loop, never deleted."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM guild_transfer_config WHERE enabled = 1 AND alliance_sheet_id != ''"
         ).fetchall()
     return [dict(r) for r in rows]
 

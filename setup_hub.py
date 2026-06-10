@@ -51,6 +51,7 @@ HUB_BTN_MEMBERS = "👥 Member Sync"
 HUB_BTN_SURVEY = "📋 Survey"
 HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
 HUB_BTN_BUDDY = "🤝 Buddy System"
+HUB_BTN_TRANSFERS = "🔁 Transfers"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",
@@ -158,6 +159,10 @@ def _build_setup_hub_embed(
         buddy_on = bool((config.get_buddy_config(guild.id) or {}).get("enabled"))
     except Exception:
         buddy_on = False
+    try:
+        transfers_on = bool((config.get_transfer_config(guild.id) or {}).get("enabled"))
+    except Exception:
+        transfers_on = False
 
     # Premium-gated features show 💎 on free tier instead of ⚪.
     def _free(state: bool) -> str:
@@ -184,6 +189,7 @@ def _build_setup_hub_embed(
         f"{_premium(survey_on)} Survey",
         f"{_premium(members_on)} Member Sync",
         f"{_free(buddy_on)} Profession Buddy System",
+        f"{_premium(transfers_on)} Transfer Management",
     ]
     if not setup_done:
         description_lines.insert(
@@ -245,7 +251,12 @@ class _SetupHubView(discord.ui.View):
         labels with 💎. Mirrors the same idiom as storm_event_hub."""
         if self.is_premium:
             return
-        for button in (self.btn_members, self.btn_survey, self.btn_growth_breakdown):
+        for button in (
+            self.btn_members,
+            self.btn_survey,
+            self.btn_growth_breakdown,
+            self.btn_transfers,
+        ):
             button.disabled = True
             if not button.label.startswith("💎"):
                 button.label = f"💎 {button.label}"
@@ -414,6 +425,12 @@ class _SetupHubView(discord.ui.View):
         from setup_cog import _launch_growth_breakdown_setup
 
         await _launch_growth_breakdown_setup(inter, self.bot)
+
+    @discord.ui.button(label=HUB_BTN_TRANSFERS, style=discord.ButtonStyle.secondary, row=3)
+    async def btn_transfers(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from transfer_setup import _launch_transfer_setup
+
+        await _launch_transfer_setup(inter, self.bot)
 
 
 # ── Slash-command entry point ────────────────────────────────────────────────

@@ -249,6 +249,48 @@ DEFAULT_BUDDY_DM = (
 )
 
 
+# ── Transfer Management in-game message templates (#16, Premium) ─────────────
+#
+# Three editable templates the recruiter renders on demand via
+# `/transfer_template <kind> <candidate>` (and the buttons on the transfer
+# status-change notification). The rendered text is meant to be copied into
+# in-game chat, so it carries no Discord markup. Customised per guild via
+# `/setup_transfers` Step 9; an empty saved value means "use the default
+# here." Placeholders are SafeDict-substituted at render time
+# (transfer.render_transfer_template) so a typo like `{nme}` renders
+# literally instead of crashing.
+#
+# Available placeholders (any subset is fine — unmapped ones render blank):
+#   {name}           — candidate's in-game name
+#   {alliance_name}  — the alliance's name (the guild's configured name)
+#   {tier}           — proposed tier, when a Tier column is mapped
+#   {power}          — total power, when a Power column is mapped
+
+DEFAULT_TRANSFER_APPLY = (
+    "Hey {name}, we're recruiting for {alliance_name} and think you'd be a great fit. "
+    "Want to hear what we're about?"
+)
+
+DEFAULT_TRANSFER_CONFIRM = (
+    "Hi {name}, we'd love to have you on {alliance_name}. Can you confirm you're "
+    "transferring so we can hold your spot?"
+)
+
+DEFAULT_TRANSFER_DECLINE = (
+    "Hey {name}, thanks for considering {alliance_name}. We're going a different "
+    "direction this season, but best of luck out there!"
+)
+
+# Maps the template "kind" (used in config field names, the wizard, and the
+# `/transfer_template` command) to its hardcoded default body. The config
+# column for each kind is `template_<kind>` on guild_transfer_config.
+DEFAULT_TRANSFER_TEMPLATES = {
+    "apply_invitation": DEFAULT_TRANSFER_APPLY,
+    "confirm_request": DEFAULT_TRANSFER_CONFIRM,
+    "decline": DEFAULT_TRANSFER_DECLINE,
+}
+
+
 # ── Shiny Tasks daily announcement (free tier) ──────────────────────────────
 #
 # `{servers}` renders as a comma-separated list with an "and" before the

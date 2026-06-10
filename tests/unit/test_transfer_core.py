@@ -70,6 +70,29 @@ class TestParseColumnMap:
         assert transfer.parse_column_map(bad) == {}
 
 
+class TestExtractSheetId:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (
+                "https://docs.google.com/spreadsheets/d/1AbC_dEF-123/edit#gid=0",
+                "1AbC_dEF-123",
+            ),
+            (
+                "https://docs.google.com/spreadsheets/d/1AbC_dEF-123/edit?usp=sharing",
+                "1AbC_dEF-123",
+            ),
+            ("https://docs.google.com/spreadsheets/d/1AbC_dEF-123", "1AbC_dEF-123"),
+            ("  1AbC_dEF-123  ", "1AbC_dEF-123"),  # bare ID, trimmed
+            ("1AbC_dEF-123", "1AbC_dEF-123"),
+            ("", ""),
+            (None, ""),
+        ],
+    )
+    def test_extract(self, value, expected):
+        assert transfer.extract_sheet_id(value) == expected
+
+
 class TestHeaderIndex:
     def test_basic(self):
         assert transfer.header_index(["A", "B", "C"]) == {"a": 0, "b": 1, "c": 2}

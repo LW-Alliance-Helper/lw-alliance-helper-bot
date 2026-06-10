@@ -36,6 +36,42 @@ _DENY_NOT_OWNER = "⛔ Only the person who started setup can use these controls.
 _TIMEOUT_MSG = "⏰ Timed out. Run `/transfers` → **⚙️ Setup Transfers** to start again."
 
 
+# ── Select-option helpers ─────────────────────────────────────────────────────
+#
+# Discord caps a SelectOption *value* at 1–100 chars, but a sheet header can be
+# long (a whole survey question) or blank. So we key options by the column
+# *index* (a short, unique, never-empty value) and map back to the header text.
+
+
+def _header_options(headers: list, selected=()) -> list:
+    """SelectOptions for picking columns, valued by column index. Skips
+    blank-header columns (you can't address one), truncates the label to 100,
+    and caps at Discord's 25 options. ``selected`` is the list of header texts
+    to pre-check."""
+    sel = set(selected)
+    opts = []
+    for i, header in enumerate(headers):
+        text = str(header).strip()
+        if not text:
+            continue
+        opts.append(discord.SelectOption(label=text[:100], value=str(i), default=(header in sel)))
+        if len(opts) >= 25:
+            break
+    return opts
+
+
+def _headers_from_values(headers: list, values) -> list:
+    """Map selected option values (column-index strings) back to header text,
+    in sheet order."""
+    picked = set()
+    for v in values:
+        try:
+            picked.add(int(v))
+        except (TypeError, ValueError):
+            continue
+    return [headers[i] for i in sorted(picked) if 0 <= i < len(headers)]
+
+
 # ── Entry point (premium gate) ────────────────────────────────────────────────
 
 
@@ -89,11 +125,11 @@ class _SheetModal(discord.ui.Modal, title="Transfer sheet"):
         super().__init__()
         self._on_submit = on_submit
         self.sheet_id = discord.ui.TextInput(
-            label="Google Sheet ID (from the sheet's URL)",
+            label="Google Sheet ID or link",
             default=default_id or None,
-            placeholder="1AbC...long-id...xyz",
+            placeholder="Paste the sheet's URL or just its ID",
             required=True,
-            max_length=120,
+            max_length=300,
         )
         self.tab = discord.ui.TextInput(
             label="Tab name",
@@ -150,6 +186,8 @@ class _SheetStepView(discord.ui.View):
 
     async def _verify(self, interaction: discord.Interaction, sheet_id: str, tab: str):
         await interaction.response.defer(thinking=True, ephemeral=True)
+        # Accept a pasted full Sheets URL, not just the bare ID.
+        sheet_id = transfer.extract_sheet_id(sheet_id)
         try:
             header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
         except Exception as e:  # noqa: BLE001 — surface any gspread failure as friendly text
@@ -212,10 +250,7 @@ class _ColumnMapView(discord.ui.View):
             min_values=1,
             max_values=1,
             row=0,
-            options=[
-                discord.SelectOption(label=h[:100], value=h, default=(h == self.sel_name))
-                for h in self.headers
-            ],
+            options=_header_options(self.headers, [self.sel_name] if self.sel_name else []),
         )
         name_sel.callback = self._on_name
         self.add_item(name_sel)
@@ -233,15 +268,13 @@ class _ColumnMapView(discord.ui.View):
         self.add_item(save)
 
     def _add_multi(self, placeholder: str, row: int, selected: list, callback):
+        opts = _header_options(self.headers, selected)
         sel = discord.ui.Select(
             placeholder=placeholder,
             min_values=0,
-            max_values=len(self.headers),
+            max_values=max(1, len(opts)),
             row=row,
-            options=[
-                discord.SelectOption(label=h[:100], value=h, default=(h in selected))
-                for h in self.headers
-            ],
+            options=opts,
         )
         sel.callback = callback
         self.add_item(sel)
@@ -252,25 +285,21 @@ class _ColumnMapView(discord.ui.View):
             return False
         return True
 
-    def _ordered(self, chosen) -> list:
-        """Keep multi-select results in sheet order (predictable, stable)."""
-        picked = set(chosen)
-        return [h for h in self.headers if h in picked]
-
     async def _on_name(self, interaction: discord.Interaction):
-        self.sel_name = interaction.data["values"][0]
+        picked = _headers_from_values(self.headers, interaction.data["values"])
+        self.sel_name = picked[0] if picked else None
         await interaction.response.defer()
 
     async def _on_status(self, interaction: discord.Interaction):
-        self.sel_status = self._ordered(interaction.data["values"])
+        self.sel_status = _headers_from_values(self.headers, interaction.data["values"])
         await interaction.response.defer()
 
     async def _on_display(self, interaction: discord.Interaction):
-        self.sel_display = self._ordered(interaction.data["values"])
+        self.sel_display = _headers_from_values(self.headers, interaction.data["values"])
         await interaction.response.defer()
 
     async def _on_identity(self, interaction: discord.Interaction):
-        self.sel_identity = self._ordered(interaction.data["values"])
+        self.sel_identity = _headers_from_values(self.headers, interaction.data["values"])
         await interaction.response.defer()
 
     def column_map(self) -> dict:
@@ -444,11 +473,14 @@ class _FilterColumnView(discord.ui.View):
     def __init__(self, owner_id: int, header: list):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
+        self._headers = header
         self.column = None
         self.confirmed = False
-        opts = [discord.SelectOption(label=h[:100], value=h) for h in header[:25] if str(h).strip()]
         self._sel = discord.ui.Select(
-            placeholder="Pick a column to filter on", min_values=1, max_values=1, options=opts
+            placeholder="Pick a column to filter on",
+            min_values=1,
+            max_values=1,
+            options=_header_options(header),
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
@@ -460,7 +492,8 @@ class _FilterColumnView(discord.ui.View):
         return True
 
     async def _cb(self, interaction: discord.Interaction):
-        self.column = self._sel.values[0]
+        picked = _headers_from_values(self._headers, interaction.data["values"])
+        self.column = picked[0] if picked else None
         self.confirmed = True
         for item in self.children:
             item.disabled = True
@@ -474,9 +507,15 @@ class _FilterMultiView(discord.ui.View):
     def __init__(self, owner_id: int, distinct: list):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
+        self._distinct = distinct[:25]
         self.values = None
         self.confirmed = False
-        opts = [discord.SelectOption(label=v[:100], value=v) for v in distinct[:25]]
+        # Index-valued options: a distinct cell value can exceed Discord's
+        # 100-char option-value cap, so map back by position.
+        opts = [
+            discord.SelectOption(label=(str(v)[:100] or " "), value=str(i))
+            for i, v in enumerate(self._distinct)
+        ]
         self._sel = discord.ui.Select(
             placeholder="Pick the value(s) to match",
             min_values=1,
@@ -493,7 +532,13 @@ class _FilterMultiView(discord.ui.View):
         return True
 
     async def _cb(self, interaction: discord.Interaction):
-        self.values = list(self._sel.values)
+        picked = []
+        for v in interaction.data["values"]:
+            try:
+                picked.append(self._distinct[int(v)])
+            except (TypeError, ValueError, IndexError):
+                continue
+        self.values = picked
         self.confirmed = True
         for item in self.children:
             item.disabled = True
@@ -695,23 +740,18 @@ class _SourceMapView(discord.ui.View):
             min_values=1,
             max_values=1,
             row=0,
-            options=[
-                discord.SelectOption(label=h[:100], value=h, default=(h == self.sel_name))
-                for h in self.headers
-            ],
+            options=_header_options(self.headers, [self.sel_name] if self.sel_name else []),
         )
         name_sel.callback = self._on_name
         self.add_item(name_sel)
 
+        id_opts = _header_options(self.headers, self.sel_identity)
         id_sel = discord.ui.Select(
             placeholder="Also-identity columns, e.g. Server (optional)",
             min_values=0,
-            max_values=len(self.headers),
+            max_values=max(1, len(id_opts)),
             row=1,
-            options=[
-                discord.SelectOption(label=h[:100], value=h, default=(h in self.sel_identity))
-                for h in self.headers
-            ],
+            options=id_opts,
         )
         id_sel.callback = self._on_identity
         self.add_item(id_sel)
@@ -727,12 +767,12 @@ class _SourceMapView(discord.ui.View):
         return True
 
     async def _on_name(self, interaction: discord.Interaction):
-        self.sel_name = interaction.data["values"][0]
+        picked = _headers_from_values(self.headers, interaction.data["values"])
+        self.sel_name = picked[0] if picked else None
         await interaction.response.defer()
 
     async def _on_identity(self, interaction: discord.Interaction):
-        picked = set(interaction.data["values"])
-        self.sel_identity = [h for h in self.headers if h in picked]
+        self.sel_identity = _headers_from_values(self.headers, interaction.data["values"])
         await interaction.response.defer()
 
     def column_map(self) -> dict:

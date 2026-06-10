@@ -91,6 +91,20 @@ def _norm_header(value) -> str:
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
 
 
+def extract_sheet_id(value) -> str:
+    """Accept either a raw Google Sheet ID or a full sheet URL and return the
+    bare ID. Recruiters routinely paste the whole
+    ``https://docs.google.com/spreadsheets/d/<ID>/edit#gid=0`` link; pull the
+    ID out of the ``/d/<ID>`` segment (it stops at the next ``/``, ``?`` or
+    ``#``). A value that isn't a URL is returned trimmed as-is, so a bare ID
+    passes through unchanged."""
+    if not value:
+        return ""
+    s = str(value).strip()
+    m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", s) or re.search(r"/d/([A-Za-z0-9_-]+)", s)
+    return m.group(1) if m else s
+
+
 def parse_column_map(raw) -> dict:
     """Decode a stored ``*_column_map_json`` value into a dict. Tolerates
     ``None`` / empty / malformed JSON by returning ``{}`` so a corrupt saved

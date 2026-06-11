@@ -426,8 +426,13 @@ class TrainCog(commands.Cog):
                 )
                 continue
 
-            # Check if someone is scheduled today
-            today_str = today.isoformat()
+            # Announce against the Last War in-game (server, UTC-2) date: this
+            # reminder fires at the in-game reset, which is already the next
+            # in-game day, so the local calendar date would name yesterday's
+            # train. See config.server_date_for.
+            from config import server_date_for
+
+            today_str = server_date_for(guild_now).isoformat()
             schedule = load_schedule(guild.id)
             if today_str not in schedule:
                 self.reminders_fired.add(guild.id)
@@ -603,7 +608,14 @@ class TrainCog(commands.Cog):
             return
         self.rotation_confirm_fired.add(guild.id)  # mark first — one attempt/day
 
-        today_iso = guild_now.date().isoformat()
+        # Resolve against the Last War in-game (server, UTC-2) date, not the
+        # guild's local calendar date. The reminder fires at the in-game reset
+        # (~2h before local midnight), which is already the next in-game day, so
+        # the local date would name the conductor for the day that just ended —
+        # the "train a day behind" bug. See config.server_date_for.
+        from config import server_date_for
+
+        today_iso = server_date_for(guild_now).isoformat()
         history = await asyncio.get_event_loop().run_in_executor(
             None, tr.load_history, guild.id, tcfg.get("history_tab") or ""
         )

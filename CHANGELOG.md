@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.7] — 2026-06-11
+
+### Fixed
+- Train conductor announcements now name the in-game day that's starting, not the one that just ended, so they no longer land a day behind the server reset ([#318](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/318)).
+
 ## [1.5.6] — 2026-06-08
 
 ### Changed

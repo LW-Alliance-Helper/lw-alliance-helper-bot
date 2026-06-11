@@ -44,10 +44,13 @@ LEADERSHIP_CHAN_ID = 1111
 REMINDER_CHAN_ID = 5555
 ET = ZoneInfo("America/New_York")
 
-# Tests pin `datetime.now(tz=ET)` to 2026-05-15 22:00 ET inside the
-# loop, so the loop derives `today` as 2026-05-15. Schedule keys must
-# match that date — not real today — for the reminder lookup to hit.
-PATCHED_TODAY_ISO = "2026-05-15"
+# Tests pin `datetime.now(tz=ET)` to 2026-05-15 22:00 ET inside the loop.
+# The train reminder fires at the in-game server reset and resolves "today"
+# against the Last War server date (UTC-2) via `config.server_date_for`, so a
+# 10pm EDT fire is already the next in-game day — 2026-05-16. Schedule keys
+# must match that server date, not the local calendar date, for the lookup to
+# hit. (The birthday auto-population path still keys off the local date.)
+PATCHED_TODAY_ISO = "2026-05-16"
 
 
 # ── Fixtures and helpers ─────────────────────────────────────────────────────

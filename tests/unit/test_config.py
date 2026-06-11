@@ -2177,3 +2177,37 @@ class TestStormRegistrationPostIndices:
         assert post is not None
         assert post["message_id"] == 9999
         assert post["channel_id"] == 222
+
+
+class TestServerDateFor:
+    """`server_date_for` maps an instant to the Last War in-game (server, UTC-2)
+    date — the in-game day rolls over at 00:00 server time, ~2h before UTC
+    midnight, so a local evening clock time is already the next in-game day."""
+
+    def test_evening_local_is_next_in_game_day(self):
+        import config
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        # 10pm ET on a summer (EDT) Tuesday == 00:00 server time the next day.
+        dt = datetime(2026, 6, 2, 22, 0, tzinfo=ZoneInfo("America/New_York"))
+        assert config.server_date_for(dt).isoformat() == "2026-06-03"
+
+    def test_daytime_local_is_same_in_game_day(self):
+        import config
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        # A mid-day local time is well before the reset → same calendar date.
+        dt = datetime(2026, 6, 2, 9, 0, tzinfo=ZoneInfo("America/New_York"))
+        assert config.server_date_for(dt).isoformat() == "2026-06-02"
+
+    def test_just_before_reset_stays_today(self):
+        import config
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        # The reset lands at 10pm EDT (00:00 server time). 9:59pm EDT is one
+        # minute before it == 23:59 server time → still the same in-game date.
+        dt = datetime(2026, 6, 2, 21, 59, tzinfo=ZoneInfo("America/New_York"))
+        assert config.server_date_for(dt).isoformat() == "2026-06-02"

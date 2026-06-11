@@ -1266,10 +1266,12 @@ class _FilterMultiView(discord.ui.View):
 
 
 class _FilterValueModal(discord.ui.Modal):
-    def __init__(self, *, title: str, label: str, on_submit):
+    def __init__(self, *, title: str, label: str, on_submit, default: str | None = None):
         super().__init__(title=title[:45])
         self._on_submit = on_submit
-        self.value_input = discord.ui.TextInput(label=label[:45], required=True, max_length=100)
+        self.value_input = discord.ui.TextInput(
+            label=label[:45], required=True, max_length=300, default=(default or None)
+        )
         self.add_item(self.value_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -1277,9 +1279,10 @@ class _FilterValueModal(discord.ui.Modal):
 
 
 class _FilterValueView(discord.ui.View):
-    """Button → modal for a free-text / numeric-threshold filter value."""
+    """Button → modal for a free-text value (filter threshold, decision
+    options, …). ``default`` pre-fills the modal for an edit."""
 
-    def __init__(self, owner_id: int, *, prompt_title: str, prompt_label: str):
+    def __init__(self, owner_id: int, *, prompt_title: str, prompt_label: str, default: str = ""):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
         self.value = None
@@ -1287,6 +1290,7 @@ class _FilterValueView(discord.ui.View):
         self.message: discord.Message | None = None
         self._title = prompt_title
         self._label = prompt_label
+        self._default = default
         btn = discord.ui.Button(label="✏️ Enter value", style=discord.ButtonStyle.primary)
         btn.callback = self._enter
         self.add_item(btn)
@@ -1299,7 +1303,9 @@ class _FilterValueView(discord.ui.View):
 
     async def _enter(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
-            _FilterValueModal(title=self._title, label=self._label, on_submit=self._save)
+            _FilterValueModal(
+                title=self._title, label=self._label, on_submit=self._save, default=self._default
+            )
         )
 
     async def _save(self, interaction: discord.Interaction, value: str):
@@ -1885,10 +1891,51 @@ async def _create_decision_column(channel, sheet_id, tab, dname, kind, options) 
     return True
 
 
+async def _ask_shape_and_options(channel, user_id, dname, cancel_event, *, current=None):
+    """Ask a decision's shape (yes/no | pick-one) and, for pick-one, its options
+    (pre-filled from ``current`` when editing). Returns ``(kind, options)``,
+    ``None`` (skipped), or a ``"CANCEL"`` / ``"TIMEOUT"`` sentinel."""
+    shapev = _ButtonChoiceView(
+        user_id,
+        [
+            ("☑️ Yes / No", "yesno", discord.ButtonStyle.primary),
+            ("🔽 Pick one from a list", "pickone", discord.ButtonStyle.secondary),
+        ],
+    )
+    await channel.send(f"How should **{dname}** work?", view=shapev)
+    await wizard_registry.wait_view_or_cancel(shapev, cancel_event)
+    if shapev.cancelled:
+        return "CANCEL"
+    if not shapev.confirmed:
+        return "TIMEOUT"
+    if shapev.value != "pickone":
+        return ("yesno", [])
+
+    default = ", ".join(current["options"]) if current and current.get("kind") == "pickone" else ""
+    optv = _FilterValueView(
+        user_id,
+        prompt_title=f"{dname} options"[:45],
+        prompt_label="Comma-separated, e.g. Pending, Confirmed, Declined",
+        default=default,
+    )
+    optv.message = await channel.send(
+        f"List the options for **{dname}** (comma-separated):", view=optv
+    )
+    await wizard_registry.wait_view_or_cancel(optv, cancel_event)
+    if optv.cancelled:
+        return "CANCEL"
+    if not optv.confirmed:
+        return "TIMEOUT"
+    options = [o.strip() for o in (optv.value or "").split(",") if o.strip()]
+    if not options:
+        await channel.send("⚠️ No options entered; skipping that one.")
+        return None
+    return ("pickone", options)
+
+
 async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
-    """Walk one decision: name → shape → (options) → create the column. Returns
-    the decision dict, ``None`` (skipped), or a ``"CANCEL"`` / ``"TIMEOUT"``
-    sentinel."""
+    """Walk a brand-new decision: name → shape → (options) → create the column.
+    Returns the decision dict, ``None`` (skipped), or a sentinel."""
     namev = _FilterValueView(
         user_id, prompt_title="Decision name", prompt_label="Column name, e.g. Confirmed"
     )
@@ -1906,128 +1953,180 @@ async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
     if not dname:
         await channel.send("⚠️ No name entered; skipping that one.")
         return None
-
-    shapev = _ButtonChoiceView(
-        user_id,
-        [
-            ("☑️ Yes / No", "yesno", discord.ButtonStyle.primary),
-            ("🔽 Pick one from a list", "pickone", discord.ButtonStyle.secondary),
-        ],
-    )
-    await channel.send(f"How should **{dname}** work?", view=shapev)
-    await wizard_registry.wait_view_or_cancel(shapev, cancel_event)
-    if shapev.cancelled:
-        return "CANCEL"
-    if not shapev.confirmed:
-        return "TIMEOUT"
-    kind = shapev.value
-
-    options: list = []
-    if kind == "pickone":
-        optv = _FilterValueView(
-            user_id,
-            prompt_title=f"{dname} options"[:45],
-            prompt_label="Comma-separated, e.g. Pending, Confirmed, Declined",
-        )
-        optv.message = await channel.send(
-            f"List the options for **{dname}** (comma-separated):", view=optv
-        )
-        await wizard_registry.wait_view_or_cancel(optv, cancel_event)
-        if optv.cancelled:
-            return "CANCEL"
-        if not optv.confirmed:
-            return "TIMEOUT"
-        options = [o.strip() for o in (optv.value or "").split(",") if o.strip()]
-        if not options:
-            await channel.send("⚠️ No options entered; skipping that one.")
-            return None
-
+    res = await _ask_shape_and_options(channel, user_id, dname, cancel_event)
+    if res in ("CANCEL", "TIMEOUT"):
+        return res
+    if res is None:
+        return None
+    kind, options = res
     if not await _create_decision_column(channel, sheet_id, tab, dname, kind, options):
         return None
-    return {"column": dname, "kind": kind, "options": options if kind == "pickone" else []}
+    return {"column": dname, "kind": kind, "options": options}
+
+
+async def _edit_one_decision(channel, user_id, sheet_id, tab, decision, cancel_event):
+    """Re-do an existing decision's shape/options (same column name), re-applying
+    the validation. Returns the updated dict, ``None`` (skipped), or a sentinel."""
+    res = await _ask_shape_and_options(
+        channel, user_id, decision["column"], cancel_event, current=decision
+    )
+    if res in ("CANCEL", "TIMEOUT"):
+        return res
+    if res is None:
+        return None
+    kind, options = res
+    if not await _create_decision_column(channel, sheet_id, tab, decision["column"], kind, options):
+        return None
+    return {"column": decision["column"], "kind": kind, "options": options}
+
+
+def _decisions_embed(decisions: list) -> discord.Embed:
+    embed = discord.Embed(title="🧭 Decisions", color=discord.Color.blurple())
+    if not decisions:
+        embed.description = (
+            "No decisions yet.\n\n"
+            "A **decision** lets leadership Confirm, Decline, or set a status on an applicant "
+            "right from the notification. The bot adds the column to your sheet (a Yes/No "
+            "checkbox or a pick-one dropdown) and writes your choice back.\n\n"
+            "**➕ Add a decision** to set one up, or **✅ Done** to skip."
+        )
+        return embed
+    lines = []
+    for i, d in enumerate(decisions, 1):
+        if d["kind"] == "pickone":
+            lines.append(f"**{i}. {d['column']}** — pick one: {', '.join(d['options'])}")
+        else:
+            lines.append(f"**{i}. {d['column']}** — Yes / No checkbox")
+    embed.description = (
+        "\n".join(lines) + "\n\nThese are the columns already in your sheet. Add a new one, "
+        "edit one, or delete one — what's listed is what exists, so you won't make duplicates."
+    )
+    return embed
+
+
+class _DecisionPickView(discord.ui.View):
+    """Single-select of the configured decisions, to choose one to edit/delete."""
+
+    def __init__(self, owner_id: int, decisions: list, verb: str):
+        super().__init__(timeout=_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.index = None
+        self.confirmed = False
+        options = []
+        for i, d in enumerate(decisions[:25]):
+            desc = f"pick one: {', '.join(d['options'])}" if d["kind"] == "pickone" else "Yes / No"
+            options.append(
+                discord.SelectOption(
+                    label=str(d["column"])[:100], description=desc[:100], value=str(i)
+                )
+            )
+        self._sel = discord.ui.Select(
+            placeholder=f"Pick a decision to {verb}", min_values=1, max_values=1, options=options
+        )
+        self._sel.callback = self._cb
+        self.add_item(self._sel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _cb(self, interaction: discord.Interaction):
+        try:
+            self.index = int(interaction.data["values"][0])
+        except (TypeError, ValueError, IndexError):
+            self.index = None
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
+
+
+async def _pick_decision(channel, user_id, decisions, verb, cancel_event):
+    view = _DecisionPickView(user_id, decisions, verb)
+    await channel.send(f"Which decision do you want to {verb}?", view=view)
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if not view.confirmed or view.index is None:
+        return "TIMEOUT"
+    return view.index
 
 
 async def _run_decisions_step(channel, guild_id, user_id, sheet_id, tab, cancel_event):
-    """Set up the decisions the bot can make on an applicant from Discord. Each
-    is a column the bot adds to the tracked sheet (yes/no checkbox or pick-one
-    dropdown) and writes back to. Saves ``status`` + ``decisions`` + the
-    ``writeback_enabled`` flag. Returns ``"OK"`` / ``"KEEP"`` / ``"CANCEL"`` /
-    ``"TIMEOUT"``."""
-    existing = transfer.decisions_for(
-        transfer.parse_column_map(
-            config.get_transfer_config(guild_id).get("alliance_column_map_json")
-        )
-    )
-    if existing:
-        summary = ", ".join(transfer.describe_decision(d) for d in existing)
-        gate = _ButtonChoiceView(
-            user_id,
-            [
-                ("➕ Add or change", "edit", discord.ButtonStyle.primary),
-                ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
-                ("🗑️ Remove all", "remove", discord.ButtonStyle.danger),
-            ],
-        )
-        await channel.send(
-            f"**Decisions**\nCurrent: {summary}\nAdd to / change them, keep as-is, or remove "
-            "them all?",
-            view=gate,
-        )
-    else:
-        gate = _ButtonChoiceView(
-            user_id,
-            [
-                ("✅ Set up decisions", "edit", discord.ButtonStyle.primary),
-                ("⏭️ No decisions", "remove", discord.ButtonStyle.secondary),
-            ],
-        )
-        await channel.send(
-            "**Decisions: act on applicants from Discord?**\n"
-            "Want to Confirm, Decline, or set a status on an applicant right from the "
-            "notification? The bot adds the column to your sheet (a checkbox or a dropdown) and "
-            "writes your choice back. Skip if you only want to be notified.",
-            view=gate,
-        )
-    await wizard_registry.wait_view_or_cancel(gate, cancel_event)
-    if gate.cancelled:
-        return "CANCEL"
-    if not gate.confirmed:
-        return "TIMEOUT"
-    if gate.value == "keep":
-        await channel.send("↩️ Decisions kept as-is.")
-        return "KEEP"
-    if gate.value == "remove":
-        _save_decisions(guild_id, [])
-        await channel.send("🗑️ No decisions. The bot will just notify you.")
-        return "OK"
-
-    # Seed with existing so "add" appends; re-adding a name replaces it.
-    decisions = [dict(d) for d in existing]
+    """The decisions manager: list every decision with its values, then add /
+    edit / delete one. Re-posts the list after each change so it's always
+    visible (you can see what exists and won't make duplicates). Each change
+    saves ``status`` + ``decisions`` + ``writeback_enabled``. Returns ``"OK"`` /
+    ``"CANCEL"`` / ``"TIMEOUT"``."""
+    msg = None
     while True:
-        one = await _add_one_decision(channel, user_id, sheet_id, tab, cancel_event)
-        if one in ("CANCEL", "TIMEOUT"):
-            return one
-        if isinstance(one, dict):
-            decisions = [d for d in decisions if d["column"].casefold() != one["column"].casefold()]
-            decisions.append(one)
-
-        more = _ButtonChoiceView(
-            user_id,
-            [
-                ("➕ Add another", "more", discord.ButtonStyle.primary),
-                ("✅ Done", "done", discord.ButtonStyle.success),
-            ],
+        decisions = transfer.decisions_for(
+            transfer.parse_column_map(
+                config.get_transfer_config(guild_id).get("alliance_column_map_json")
+            )
         )
-        summary = ", ".join(transfer.describe_decision(d) for d in decisions) or "none yet"
-        await channel.send(f"**Decisions so far:** {summary}", view=more)
-        await wizard_registry.wait_view_or_cancel(more, cancel_event)
-        if more.cancelled:
+        opts = [("➕ Add a decision", "add", discord.ButtonStyle.primary)]
+        if decisions:
+            opts += [
+                ("✏️ Edit", "edit", discord.ButtonStyle.secondary),
+                ("🗑️ Delete", "delete", discord.ButtonStyle.danger),
+            ]
+        opts.append(("✅ Done", "done", discord.ButtonStyle.success))
+        view = _ButtonChoiceView(user_id, opts)
+        # Re-post at the bottom so the list stays the most-recent message.
+        if msg is not None:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+        msg = await channel.send(embed=_decisions_embed(decisions), view=view)
+        view.message = msg
+        await wizard_registry.wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
             return "CANCEL"
-        if not more.confirmed or more.value == "done":
-            break
+        if not view.confirmed or view.value == "done":
+            try:
+                await msg.edit(view=None)
+            except discord.HTTPException:
+                pass
+            return "OK"
 
-    _save_decisions(guild_id, decisions)
-    return "OK"
+        if view.value == "add":
+            one = await _add_one_decision(channel, user_id, sheet_id, tab, cancel_event)
+            if one in ("CANCEL", "TIMEOUT"):
+                return one
+            if isinstance(one, dict):
+                decisions = [
+                    d for d in decisions if d["column"].casefold() != one["column"].casefold()
+                ]
+                decisions.append(one)
+                _save_decisions(guild_id, decisions)
+        elif view.value in ("edit", "delete"):
+            idx = await _pick_decision(channel, user_id, decisions, view.value, cancel_event)
+            if idx in ("CANCEL", "TIMEOUT"):
+                return idx
+            if not isinstance(idx, int) or not 0 <= idx < len(decisions):
+                continue
+            target = decisions[idx]
+            if view.value == "delete":
+                decisions = [d for j, d in enumerate(decisions) if j != idx]
+                _save_decisions(guild_id, decisions)
+                await channel.send(
+                    f"🗑️ Removed **{target['column']}** from your decisions. The column stays in "
+                    "your sheet — delete it there if you want it gone."
+                )
+            else:
+                updated = await _edit_one_decision(
+                    channel, user_id, sheet_id, tab, target, cancel_event
+                )
+                if updated in ("CANCEL", "TIMEOUT"):
+                    return updated
+                if isinstance(updated, dict):
+                    decisions[idx] = updated
+                    _save_decisions(guild_id, decisions)
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -2398,6 +2497,7 @@ class _EditMenuView(discord.ui.View):
         specs.append(("✉️ Templates", "templates", 1))
         if mode != _MODE_WATCH:
             specs.append(("🧭 Decisions", "decisions", 2))
+            specs.append(("🔔 Removal", "removal", 2))
         specs.append(("📑 Change sheets / setup type", "resetup", 2))
         for label, value, row in specs:
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
@@ -2550,6 +2650,7 @@ async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> 
         "intake": _edit_intake,
         "templates": _edit_templates,
         "decisions": _edit_decisions,
+        "removal": _edit_removal,
     }
     handler = handlers.get(section)
     if handler is None:
@@ -2757,23 +2858,21 @@ async def _edit_templates(channel, guild_id, user, cfg, cancel_event) -> str:
 
 
 async def _edit_decisions(channel, guild_id, user, cfg, cancel_event) -> str:
-    # The decisions step carries its own gate (Add/change · Keep current ·
-    # Remove all), so it's non-destructive to click in. Removal follows only
-    # when decisions exist.
+    # The decisions manager lists everything and is non-destructive (Done makes
+    # no change), so it doubles as the "just look" view. Removal is its own
+    # menu section.
     sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
     tab = (cfg.get("alliance_sheet_tab") or "").strip()
-    dec = await _run_decisions_step(channel, guild_id, user.id, sheet_id, tab, cancel_event)
-    if dec in ("CANCEL", "TIMEOUT"):
-        return dec
-    if dec == "KEEP":
-        return "KEEP"
-    if transfer.decisions_for(
-        transfer.parse_column_map(
-            config.get_transfer_config(guild_id).get("alliance_column_map_json")
-        )
-    ):
-        rm = await _step_removal(channel, guild_id, user.id, cancel_event)
-        if rm in ("CANCEL", "TIMEOUT"):
-            return rm
-    await channel.send("✅ Decisions updated.")
+    return await _run_decisions_step(channel, guild_id, user.id, sheet_id, tab, cancel_event)
+
+
+async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
+    rmv = "on" if cfg.get("notify_on_delete") else "off"
+    g = await _edit_gate(channel, user.id, "Removal notices", f"currently {rmv}", cancel_event)
+    if g != "change":
+        return g
+    rm = await _step_removal(channel, guild_id, user.id, cancel_event)
+    if rm in ("CANCEL", "TIMEOUT"):
+        return rm
+    await channel.send("✅ Removal notices updated.")
     return "OK"

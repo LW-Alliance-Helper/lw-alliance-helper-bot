@@ -221,6 +221,7 @@ class TestEditMenuSections:
             "Intake",
             "Templates",
             "Decisions",
+            "Removal",
             "Change sheets",
             "Done",
         ):
@@ -230,6 +231,7 @@ class TestEditMenuSections:
         labels = self._labels(transfer_setup._MODE_WATCH)
         assert not any("Intake" in label for label in labels)
         assert not any("Decisions" in label for label in labels)
+        assert not any("Removal" in label for label in labels)
         assert any("Filter" in label for label in labels)
 
     def test_source_to_own_hides_standalone_filter_keeps_intake(self):
@@ -237,6 +239,30 @@ class TestEditMenuSections:
         assert not any("Filter" in label for label in labels)
         assert any("Intake" in label for label in labels)
         assert any("Decisions" in label for label in labels)
+
+
+class TestDecisionsManager:
+    """The decisions manager lists every decision with its values so users can
+    see what exists (and not make duplicates), and pick one to edit/delete."""
+
+    DS = [
+        {"column": "Confirmed", "kind": "yesno", "options": []},
+        {"column": "Status", "kind": "pickone", "options": ["Pending", "Confirmed", "Declined"]},
+    ]
+
+    def test_empty_embed_prompts_to_add(self):
+        assert "Add a decision" in transfer_setup._decisions_embed([]).description
+
+    def test_list_embed_shows_each_with_its_values(self):
+        d = transfer_setup._decisions_embed(self.DS).description
+        assert "1. Confirmed" in d and "Yes / No" in d
+        assert "2. Status" in d and "Pending, Confirmed, Declined" in d
+
+    def test_pick_view_one_option_per_decision(self):
+        v = transfer_setup._DecisionPickView(owner_id=1, decisions=self.DS, verb="delete")
+        sel = next(c for c in v.children if type(c).__name__ == "Select")
+        assert [o.value for o in sel.options] == ["0", "1"]
+        assert sel.options[0].label == "Confirmed"
 
 
 class TestSaveDecisions:

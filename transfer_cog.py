@@ -132,22 +132,30 @@ def _full_details_embed(name: str, header: list, row: list) -> discord.Embed:
 
 
 class _WriteConfirmView(discord.ui.View):
-    """Ephemeral Yes / No → tick or untick a status checkbox on the alliance
-    sheet. Yes writes ``TRUE``, No writes ``FALSE`` (so the checkbox toggles
-    either way); the user only ever sees Yes / No. The row is re-found by
-    identity at click time, since it may have moved since the notice posted."""
+    """Ephemeral decision prompt → write a value to the decision's column on the
+    alliance sheet. Buttons follow the decision's shape: a **yesno** decision
+    shows Yes / No (writing ``TRUE`` / ``FALSE`` so a checkbox toggles), a
+    **pickone** decision shows one button per option (writing that option). The
+    user never sees TRUE/FALSE. The row is re-found by identity at click time,
+    since it may have moved since the notice posted."""
 
-    def __init__(self, *, name: str, status_col: str, writeback: dict):
+    def __init__(self, *, name: str, decision: dict, writeback: dict):
         super().__init__(timeout=120)
         self.name = name
-        self.status_col = status_col
+        self.status_col = decision["column"]
         self.wb = writeback
-        yes = discord.ui.Button(label="✅ Yes", style=discord.ButtonStyle.success)
-        yes.callback = self._make("TRUE", "Yes")
-        self.add_item(yes)
-        no = discord.ui.Button(label="❌ No", style=discord.ButtonStyle.danger)
-        no.callback = self._make("FALSE", "No")
-        self.add_item(no)
+        if decision.get("kind") == "pickone" and decision.get("options"):
+            for opt in decision["options"][:20]:
+                btn = discord.ui.Button(label=str(opt)[:80], style=discord.ButtonStyle.primary)
+                btn.callback = self._make(str(opt), str(opt))
+                self.add_item(btn)
+        else:
+            yes = discord.ui.Button(label="✅ Yes", style=discord.ButtonStyle.success)
+            yes.callback = self._make("TRUE", "Yes")
+            self.add_item(yes)
+            no = discord.ui.Button(label="❌ No", style=discord.ButtonStyle.danger)
+            no.callback = self._make("FALSE", "No")
+            self.add_item(no)
         cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         cancel.callback = self._cancel
         self.add_item(cancel)
@@ -231,14 +239,16 @@ class _NoticeView(discord.ui.View):
             )
             btn.callback = self._make_template_cb(kind)
             self.add_item(btn)
-        # Row 1: decision write-back — one button per status column (capped to a
-        # row). Clicking it asks Yes/No (writes TRUE/FALSE to tick the checkbox).
+        # Row 1: decision write-back — one button per decision (capped to a row).
+        # Clicking it prompts for the decision's values (Yes/No or pick-one).
         if writeback:
-            for status_col in (writeback.get("status_cols") or [])[:5]:
+            for decision in (writeback.get("decisions") or [])[:5]:
                 btn = discord.ui.Button(
-                    label=f"✏️ Set {status_col}"[:80], style=discord.ButtonStyle.secondary, row=1
+                    label=f"✏️ Set {decision['column']}"[:80],
+                    style=discord.ButtonStyle.secondary,
+                    row=1,
                 )
-                btn.callback = self._make_writeback_cb(status_col)
+                btn.callback = self._make_writeback_cb(decision)
                 self.add_item(btn)
 
     async def on_timeout(self) -> None:
@@ -264,16 +274,14 @@ class _NoticeView(discord.ui.View):
 
         return _cb
 
-    def _make_writeback_cb(self, status_col: str):
+    def _make_writeback_cb(self, decision: dict):
         async def _cb(interaction: discord.Interaction):
-            view = _WriteConfirmView(
-                name=self.name, status_col=status_col, writeback=self.writeback
-            )
-            await interaction.response.send_message(
-                f"Set **{status_col}** for **{self.name}** to Yes or No?",
-                view=view,
-                ephemeral=True,
-            )
+            view = _WriteConfirmView(name=self.name, decision=decision, writeback=self.writeback)
+            if decision.get("kind") == "pickone":
+                prompt = f"Set **{decision['column']}** for **{self.name}** to which value?"
+            else:
+                prompt = f"Set **{decision['column']}** for **{self.name}** to Yes or No?"
+            await interaction.response.send_message(prompt, view=view, ephemeral=True)
 
         return _cb
 
@@ -449,12 +457,13 @@ class TransferCog(commands.Cog):
             return
 
         wb_base = None
-        if cfg.get("writeback_enabled") and column_map.get("status"):
+        decisions = transfer.decisions_for(column_map)
+        if cfg.get("writeback_enabled") and decisions:
             wb_base = {
                 "sheet_id": sheet_id,
                 "tab": tab,
                 "column_map": column_map,
-                "status_cols": column_map.get("status", []),
+                "decisions": decisions,
             }
 
         await self._post(

@@ -213,18 +213,59 @@ def _synonym_score(synonym: str, header_norm: str) -> int:
     return 0
 
 
+def decisions_for(column_map: dict) -> list:
+    """The write-back **decisions** for a column map: a list of
+    ``{"column", "kind", "options"}``. ``kind`` is ``"yesno"`` (a checkbox the
+    bot ticks/unticks) or ``"pickone"`` (a dropdown the bot sets to one of
+    ``options``).
+
+    Prefers an explicit ``decisions`` list; falls back to treating each watched
+    ``status`` column as a yes/no decision, so a config saved before the
+    decision model still drives a sensible (checkbox) write-back. The watched-
+    column list (``status``) stays the change-detection source of truth; this
+    only adds *how to write* each one."""
+    raw = column_map.get("decisions")
+    out: list = []
+    if isinstance(raw, list) and raw:
+        for d in raw:
+            if not isinstance(d, dict):
+                continue
+            col = d.get("column")
+            if not col:
+                continue
+            kind = d.get("kind") if d.get("kind") in ("yesno", "pickone") else "yesno"
+            options = [str(o) for o in (d.get("options") or [])]
+            out.append({"column": col, "kind": kind, "options": options})
+        return out
+    return [
+        {"column": col, "kind": "yesno", "options": []} for col in (column_map.get("status") or [])
+    ]
+
+
+def describe_decision(decision: dict) -> str:
+    """One-line label for a decision: ``"Confirmed (Yes/No)"`` or
+    ``"Status (Pending/Confirmed/Declined)"``."""
+    col = decision.get("column", "?")
+    if decision.get("kind") == "pickone" and decision.get("options"):
+        return f"{col} ({'/'.join(decision['options'])})"
+    return f"{col} (Yes/No)"
+
+
 def summarize_column_map(column_map: dict) -> str:
     """Human-readable one-block summary of a column map for the wizard's
-    review embed and the hub. Lists the Name column, any also-identity
-    columns, the watched status columns, and the columns shown in notices."""
+    review embed and the hub. Lists the Name column, any identity-fallback
+    columns, the decisions the bot can make, and the columns shown in notices."""
     name = column_map.get("name") or "*not set*"
     identity = column_map.get("identity_extra") or []
-    status = column_map.get("status") or []
     display = column_map.get("display") or []
     lines = [f"**Name:** {name}"]
     if identity:
         lines.append(f"**Identity Fallback:** {', '.join(identity)}")
-    lines.append(f"**Status watched:** {', '.join(status) if status else '*none*'}")
+    decisions = decisions_for(column_map)
+    if decisions:
+        lines.append(f"**Decisions:** {', '.join(describe_decision(d) for d in decisions)}")
+    else:
+        lines.append("**Decisions:** *none*")
     lines.append(f"**Shown in notices:** {', '.join(display) if display else '*none*'}")
     return "\n".join(lines)
 

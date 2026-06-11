@@ -291,10 +291,11 @@ HELP_CATEGORIES: dict[str, dict] = {
         "commands": [
             (
                 f"/setup → {HUB_BTN_TRANSFERS}",
-                "💎 Run the setup wizard: point the bot at your transfer sheet, "
-                "auto-map the columns, pick a notification channel + style, "
-                "build a new-applicant filter, connect optional server-wide / "
-                "intake-form sources, and turn on decision write-back.",
+                "💎 Run the setup wizard: tell the bot how your sheets are set "
+                "up, auto-map the columns, pick a notification channel + style, "
+                "build a new-applicant filter, connect optional shared-sheet / "
+                "form sources, and set up decisions (Confirm / Decline / a "
+                "status) the bot adds to your sheet and writes back from Discord.",
             ),
             (
                 "/transfers",
@@ -302,7 +303,8 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "filter, sources) plus 📋 View applicants and ⚙️ Setup "
                 "Transfers. New-applicant / status-change notices post to your "
                 "chosen channel with 📄 Full details, draft-a-message buttons, "
-                "and (if enabled) ✅ Set-status write-back.",
+                "and (if you set up decisions) buttons to mark applicants right "
+                "from Discord.",
             ),
         ],
     },

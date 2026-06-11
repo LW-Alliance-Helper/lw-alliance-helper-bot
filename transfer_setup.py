@@ -1008,6 +1008,14 @@ async def _map_step(
     if not view.saved:
         return "TIMEOUT"
     column_map = view.column_map()
+    # Mapping only covers Name / Display / Identity; preserve the separately-
+    # configured decisions (status + decisions) so a re-map doesn't wipe them.
+    existing = transfer.parse_column_map(
+        config.get_transfer_config(guild_id).get("alliance_column_map_json")
+    )
+    for key in ("status", "decisions"):
+        if existing.get(key):
+            column_map[key] = existing[key]
     config.update_transfer_config_field(
         guild_id, "alliance_column_map_json", json.dumps(column_map)
     )
@@ -1825,24 +1833,200 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
     return "OK"
 
 
-async def _step_writeback(channel, guild_id, owner_id, cancel_event, status_cols):
-    from setup_cog import YesNoView
+# ── Decisions (write-back) ────────────────────────────────────────────────────
 
-    view = YesNoView()
-    await channel.send(
-        "**Decision write-back?**\n"
-        f"Add **Yes / No** buttons to each notification so you can mark an applicant "
-        f"(**{', '.join(status_cols)}**) right from Discord. The bot ticks or unticks the matching "
-        "checkbox on your sheet, so make those columns checkboxes in Google Sheets "
-        "(Insert → Checkbox). Leave off to keep the bot read-only.",
-        view=view,
+
+def _save_decisions(guild_id: int, decisions: list) -> None:
+    """Persist the decision list into the alliance column map (``status`` =
+    watched headers for change detection, ``decisions`` = shape/options) and
+    flip ``writeback_enabled``. Preserves the rest of the map."""
+    cm = transfer.parse_column_map(
+        config.get_transfer_config(guild_id).get("alliance_column_map_json")
     )
-    await wizard_registry.wait_view_or_cancel(view, cancel_event)
-    if view.cancelled:
+    if decisions:
+        cm["status"] = [d["column"] for d in decisions]
+        cm["decisions"] = decisions
+    else:
+        cm.pop("status", None)
+        cm.pop("decisions", None)
+    config.update_transfer_config_fields(
+        guild_id,
+        alliance_column_map_json=json.dumps(cm),
+        writeback_enabled=1 if decisions else 0,
+    )
+
+
+async def _create_decision_column(channel, sheet_id, tab, dname, kind, options) -> bool:
+    """Make sure the decision column exists on the tracked sheet and apply the
+    matching validation (checkbox for yes/no, dropdown for pick-one). Returns
+    True on success, posting a friendly error and False if the sheet can't be
+    edited."""
+    await channel.send(f"⏳ Adding **{dname}** to your sheet…")
+    try:
+        new_header = await asyncio.to_thread(transfer_sheets.ensure_columns, sheet_id, tab, [dname])
+        col_idx = transfer.header_index(new_header).get(transfer._norm_header(dname))
+        if col_idx is None:
+            raise RuntimeError("column missing after creation")
+        if kind == "pickone":
+            await asyncio.to_thread(
+                transfer_sheets.set_dropdown_validation, sheet_id, tab, col_idx, options
+            )
+            shape = f"a dropdown ({', '.join(options)})"
+        else:
+            await asyncio.to_thread(transfer_sheets.set_checkbox_validation, sheet_id, tab, col_idx)
+            shape = "a Yes/No checkbox"
+    except Exception as e:  # noqa: BLE001
+        await channel.send(
+            f"⚠️ Couldn't set up **{dname}** on your sheet: {config.describe_sheet_error(e)} "
+            "(the bot's service account needs edit access). Skipping it."
+        )
+        return False
+    await channel.send(f"✅ Added **{dname}** as {shape}.")
+    return True
+
+
+async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
+    """Walk one decision: name → shape → (options) → create the column. Returns
+    the decision dict, ``None`` (skipped), or a ``"CANCEL"`` / ``"TIMEOUT"``
+    sentinel."""
+    namev = _FilterValueView(
+        user_id, prompt_title="Decision name", prompt_label="Column name, e.g. Confirmed"
+    )
+    namev.message = await channel.send(
+        "**Name this decision** — it becomes a column in your sheet (e.g. Confirmed, Declined, "
+        "or Status):",
+        view=namev,
+    )
+    await wizard_registry.wait_view_or_cancel(namev, cancel_event)
+    if namev.cancelled:
         return "CANCEL"
-    if view.selected is None:
+    if not namev.confirmed:
         return "TIMEOUT"
-    config.update_transfer_config_field(guild_id, "writeback_enabled", 1 if view.selected else 0)
+    dname = (namev.value or "").strip()
+    if not dname:
+        await channel.send("⚠️ No name entered; skipping that one.")
+        return None
+
+    shapev = _ButtonChoiceView(
+        user_id,
+        [
+            ("☑️ Yes / No", "yesno", discord.ButtonStyle.primary),
+            ("🔽 Pick one from a list", "pickone", discord.ButtonStyle.secondary),
+        ],
+    )
+    await channel.send(f"How should **{dname}** work?", view=shapev)
+    await wizard_registry.wait_view_or_cancel(shapev, cancel_event)
+    if shapev.cancelled:
+        return "CANCEL"
+    if not shapev.confirmed:
+        return "TIMEOUT"
+    kind = shapev.value
+
+    options: list = []
+    if kind == "pickone":
+        optv = _FilterValueView(
+            user_id,
+            prompt_title=f"{dname} options"[:45],
+            prompt_label="Comma-separated, e.g. Pending, Confirmed, Declined",
+        )
+        optv.message = await channel.send(
+            f"List the options for **{dname}** (comma-separated):", view=optv
+        )
+        await wizard_registry.wait_view_or_cancel(optv, cancel_event)
+        if optv.cancelled:
+            return "CANCEL"
+        if not optv.confirmed:
+            return "TIMEOUT"
+        options = [o.strip() for o in (optv.value or "").split(",") if o.strip()]
+        if not options:
+            await channel.send("⚠️ No options entered; skipping that one.")
+            return None
+
+    if not await _create_decision_column(channel, sheet_id, tab, dname, kind, options):
+        return None
+    return {"column": dname, "kind": kind, "options": options if kind == "pickone" else []}
+
+
+async def _run_decisions_step(channel, guild_id, user_id, sheet_id, tab, cancel_event):
+    """Set up the decisions the bot can make on an applicant from Discord. Each
+    is a column the bot adds to the tracked sheet (yes/no checkbox or pick-one
+    dropdown) and writes back to. Saves ``status`` + ``decisions`` + the
+    ``writeback_enabled`` flag. Returns ``"OK"`` / ``"KEEP"`` / ``"CANCEL"`` /
+    ``"TIMEOUT"``."""
+    existing = transfer.decisions_for(
+        transfer.parse_column_map(
+            config.get_transfer_config(guild_id).get("alliance_column_map_json")
+        )
+    )
+    if existing:
+        summary = ", ".join(transfer.describe_decision(d) for d in existing)
+        gate = _ButtonChoiceView(
+            user_id,
+            [
+                ("➕ Add or change", "edit", discord.ButtonStyle.primary),
+                ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
+                ("🗑️ Remove all", "remove", discord.ButtonStyle.danger),
+            ],
+        )
+        await channel.send(
+            f"**Decisions**\nCurrent: {summary}\nAdd to / change them, keep as-is, or remove "
+            "them all?",
+            view=gate,
+        )
+    else:
+        gate = _ButtonChoiceView(
+            user_id,
+            [
+                ("✅ Set up decisions", "edit", discord.ButtonStyle.primary),
+                ("⏭️ No decisions", "remove", discord.ButtonStyle.secondary),
+            ],
+        )
+        await channel.send(
+            "**Decisions: act on applicants from Discord?**\n"
+            "Want to Confirm, Decline, or set a status on an applicant right from the "
+            "notification? The bot adds the column to your sheet (a checkbox or a dropdown) and "
+            "writes your choice back. Skip if you only want to be notified.",
+            view=gate,
+        )
+    await wizard_registry.wait_view_or_cancel(gate, cancel_event)
+    if gate.cancelled:
+        return "CANCEL"
+    if not gate.confirmed:
+        return "TIMEOUT"
+    if gate.value == "keep":
+        await channel.send("↩️ Decisions kept as-is.")
+        return "KEEP"
+    if gate.value == "remove":
+        _save_decisions(guild_id, [])
+        await channel.send("🗑️ No decisions. The bot will just notify you.")
+        return "OK"
+
+    # Seed with existing so "add" appends; re-adding a name replaces it.
+    decisions = [dict(d) for d in existing]
+    while True:
+        one = await _add_one_decision(channel, user_id, sheet_id, tab, cancel_event)
+        if one in ("CANCEL", "TIMEOUT"):
+            return one
+        if isinstance(one, dict):
+            decisions = [d for d in decisions if d["column"].casefold() != one["column"].casefold()]
+            decisions.append(one)
+
+        more = _ButtonChoiceView(
+            user_id,
+            [
+                ("➕ Add another", "more", discord.ButtonStyle.primary),
+                ("✅ Done", "done", discord.ButtonStyle.success),
+            ],
+        )
+        summary = ", ".join(transfer.describe_decision(d) for d in decisions) or "none yet"
+        await channel.send(f"**Decisions so far:** {summary}", view=more)
+        await wizard_registry.wait_view_or_cancel(more, cancel_event)
+        if more.cancelled:
+            return "CANCEL"
+        if not more.confirmed or more.value == "done":
+            break
+
+    _save_decisions(guild_id, decisions)
     return "OK"
 
 
@@ -1931,7 +2115,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 user.id,
                 header,
                 saved_map,
-                include_status=True,
+                include_status=False,
                 cancel_event=cancel_event,
             )
 
@@ -1949,7 +2133,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 user.id,
                 header,
                 saved_map,
-                include_status=True,
+                include_status=False,
                 cancel_event=cancel_event,
             )
 
@@ -2092,23 +2276,25 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         if await _step_templates(channel, guild_id, user.id, current, cancel_event) != "OK":
             return  # cancel/timeout already messaged
 
-        # ── Removal + write-back (writable modes only) ────────────────────────
+        # ── Decisions + removal (writable modes only) ─────────────────────────
         if mode != _MODE_WATCH:
-            rm = await _step_removal(channel, guild_id, user.id, cancel_event)
-            if rm == "CANCEL":
+            dec = await _run_decisions_step(channel, guild_id, user.id, sheet_id, tab, cancel_event)
+            if dec == "CANCEL":
                 return
-            if rm == "TIMEOUT":
+            if dec == "TIMEOUT":
                 await channel.send(_TIMEOUT_MSG)
                 return
 
-            status_cols = transfer.parse_column_map(
-                config.get_transfer_config(guild_id).get("alliance_column_map_json")
-            ).get("status", [])
-            if status_cols:
-                wb = await _step_writeback(channel, guild_id, user.id, cancel_event, status_cols)
-                if wb == "CANCEL":
+            # Removal notices only make sense once there's a decision to "mark".
+            if transfer.decisions_for(
+                transfer.parse_column_map(
+                    config.get_transfer_config(guild_id).get("alliance_column_map_json")
+                )
+            ):
+                rm = await _step_removal(channel, guild_id, user.id, cancel_event)
+                if rm == "CANCEL":
                     return
-                if wb == "TIMEOUT":
+                if rm == "TIMEOUT":
                     await channel.send(_TIMEOUT_MSG)
                     return
 
@@ -2151,6 +2337,10 @@ async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_ma
     from datetime import datetime, timezone
 
     cfg = config.get_transfer_config(guild_id)
+    # Re-read the map from config: the decisions step may have added status /
+    # decision columns since the caller captured `column_map`, and the baseline
+    # must snapshot them so the first poll doesn't fire a change for everyone.
+    column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
     header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
     try:
         from transfer_cog import copy_sources
@@ -2207,7 +2397,7 @@ class _EditMenuView(discord.ui.View):
             specs.append(("📥 Intake sources", "intake", 1))
         specs.append(("✉️ Templates", "templates", 1))
         if mode != _MODE_WATCH:
-            specs.append(("🗑️ Removal & write-back", "removal", 2))
+            specs.append(("🧭 Decisions", "decisions", 2))
         specs.append(("📑 Change sheets / setup type", "resetup", 2))
         for label, value, row in specs:
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
@@ -2277,8 +2467,9 @@ def _menu_embed(cfg: dict, mode: str) -> discord.Embed:
     if cfg.get("alliance_form_enabled"):
         extras.append("form pull ✅")
     if mode != _MODE_WATCH:
+        decisions = transfer.decisions_for(column_map)
+        extras.append(f"{len(decisions)} decision(s)" if decisions else "no decisions")
         extras.append(f"removal {'on' if cfg.get('notify_on_delete') else 'off'}")
-        extras.append(f"write-back {'on' if cfg.get('writeback_enabled') else 'off'}")
     if extras:
         embed.add_field(name="Extras", value=" · ".join(extras), inline=False)
     embed.add_field(
@@ -2358,7 +2549,7 @@ async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> 
         "filter": _edit_filter,
         "intake": _edit_intake,
         "templates": _edit_templates,
-        "removal": _edit_removal,
+        "decisions": _edit_decisions,
     }
     handler = handlers.get(section)
     if handler is None:
@@ -2373,7 +2564,6 @@ async def _edit_mapping(channel, guild_id, user, cfg, cancel_event) -> str:
     )
     if g != "change":
         return g
-    mode = cfg.get("setup_mode") or ""
     sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
     tab = (cfg.get("alliance_sheet_tab") or "").strip()
     try:
@@ -2387,7 +2577,7 @@ async def _edit_mapping(channel, guild_id, user, cfg, cancel_event) -> str:
         user.id,
         header,
         saved_map,
-        include_status=(mode != _MODE_WATCH),
+        include_status=False,
         cancel_event=cancel_event,
     )
     if cm in ("CANCEL", "TIMEOUT"):
@@ -2566,31 +2756,24 @@ async def _edit_templates(channel, guild_id, user, cfg, cancel_event) -> str:
     return "OK"
 
 
-async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
-    rmv = "on" if cfg.get("notify_on_delete") else "off"
-    wbk = "on" if cfg.get("writeback_enabled") else "off"
-    g = await _edit_gate(
-        channel,
-        user.id,
-        "Removal notices & write-back",
-        f"removal {rmv}, write-back {wbk}",
-        cancel_event,
-    )
-    if g != "change":
-        return g
-    rm = await _step_removal(channel, guild_id, user.id, cancel_event)
-    if rm in ("CANCEL", "TIMEOUT"):
-        return rm
-    status_cols = transfer.parse_column_map(cfg.get("alliance_column_map_json")).get("status", [])
-    if status_cols:
-        wb = await _step_writeback(channel, guild_id, user.id, cancel_event, status_cols)
-        if wb == "CANCEL":
-            return "CANCEL"
-        if wb == "TIMEOUT":
-            return "TIMEOUT"
-    else:
-        await channel.send(
-            "ℹ️ Write-back needs a Status column — add one in **Column mapping** first."
+async def _edit_decisions(channel, guild_id, user, cfg, cancel_event) -> str:
+    # The decisions step carries its own gate (Add/change · Keep current ·
+    # Remove all), so it's non-destructive to click in. Removal follows only
+    # when decisions exist.
+    sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
+    tab = (cfg.get("alliance_sheet_tab") or "").strip()
+    dec = await _run_decisions_step(channel, guild_id, user.id, sheet_id, tab, cancel_event)
+    if dec in ("CANCEL", "TIMEOUT"):
+        return dec
+    if dec == "KEEP":
+        return "KEEP"
+    if transfer.decisions_for(
+        transfer.parse_column_map(
+            config.get_transfer_config(guild_id).get("alliance_column_map_json")
         )
-    await channel.send("✅ Removal & write-back updated.")
+    ):
+        rm = await _step_removal(channel, guild_id, user.id, cancel_event)
+        if rm in ("CANCEL", "TIMEOUT"):
+            return rm
+    await channel.send("✅ Decisions updated.")
     return "OK"

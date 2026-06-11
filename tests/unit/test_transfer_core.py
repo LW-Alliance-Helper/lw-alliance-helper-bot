@@ -108,7 +108,7 @@ class TestHeaderIndex:
 
 
 class TestSummarizeColumnMap:
-    def test_full_map(self):
+    def test_full_map_legacy_status_reads_as_yesno_decisions(self):
         m = {
             "name": "In Game Username",
             "identity_extra": ["Current Server"],
@@ -118,18 +118,58 @@ class TestSummarizeColumnMap:
         out = transfer.summarize_column_map(m)
         assert "**Name:** In Game Username" in out
         assert "Identity Fallback:** Current Server" in out
-        assert "Want?, Confirmed" in out
+        # A pre-decision-model status column reads as a yes/no decision.
+        assert "Decisions:** Want? (Yes/No), Confirmed (Yes/No)" in out
         assert "Total Hero Power, Anticipated Seat Color" in out
+
+    def test_explicit_decisions_render_with_shape(self):
+        m = {
+            "name": "IGN",
+            "status": ["Confirmed", "Status"],
+            "decisions": [
+                {"column": "Confirmed", "kind": "yesno"},
+                {"column": "Status", "kind": "pickone", "options": ["Pending", "Confirmed"]},
+            ],
+        }
+        out = transfer.summarize_column_map(m)
+        assert "Confirmed (Yes/No)" in out
+        assert "Status (Pending/Confirmed)" in out
 
     def test_minimal_map(self):
         out = transfer.summarize_column_map({"name": "Name"})
         assert "**Name:** Name" in out
-        assert "Status watched:** *none*" in out
+        assert "Decisions:** *none*" in out
         assert "Shown in notices:** *none*" in out
         assert "Identity Fallback" not in out  # omitted when empty
 
     def test_empty_map(self):
         assert "*not set*" in transfer.summarize_column_map({})
+
+
+class TestDecisionsFor:
+    def test_explicit_decisions_passthrough_and_sanitize(self):
+        m = {
+            "decisions": [
+                {"column": "Confirmed", "kind": "yesno"},
+                {"column": "Status", "kind": "pickone", "options": ["A", "B"]},
+                {"column": "Bad", "kind": "weird"},  # unknown kind -> yesno
+                {"kind": "yesno"},  # no column -> dropped
+            ]
+        }
+        out = transfer.decisions_for(m)
+        assert [d["column"] for d in out] == ["Confirmed", "Status", "Bad"]
+        assert out[1]["options"] == ["A", "B"]
+        assert out[2]["kind"] == "yesno"
+
+    def test_legacy_status_becomes_yesno(self):
+        out = transfer.decisions_for({"status": ["Want?", "Confirmed"]})
+        assert out == [
+            {"column": "Want?", "kind": "yesno", "options": []},
+            {"column": "Confirmed", "kind": "yesno", "options": []},
+        ]
+
+    def test_none(self):
+        assert transfer.decisions_for({}) == []
 
 
 class TestCellFor:

@@ -220,20 +220,66 @@ class TestEditMenuSections:
             "Filter",
             "Intake",
             "Templates",
-            "Removal",
+            "Decisions",
             "Change sheets",
             "Done",
         ):
             assert any(needle in label for label in labels), needle
 
-    def test_watch_hides_intake_and_removal_keeps_filter(self):
+    def test_watch_hides_intake_and_decisions_keeps_filter(self):
         labels = self._labels(transfer_setup._MODE_WATCH)
         assert not any("Intake" in label for label in labels)
-        assert not any("Removal" in label for label in labels)
+        assert not any("Decisions" in label for label in labels)
         assert any("Filter" in label for label in labels)
 
     def test_source_to_own_hides_standalone_filter_keeps_intake(self):
         labels = self._labels(transfer_setup._MODE_SOURCE_TO_OWN)
         assert not any("Filter" in label for label in labels)
         assert any("Intake" in label for label in labels)
-        assert any("Removal" in label for label in labels)
+        assert any("Decisions" in label for label in labels)
+
+
+class TestSaveDecisions:
+    """_save_decisions persists status (watched) + decisions (shape) into the
+    column map and flips writeback_enabled, preserving the rest of the map."""
+
+    GUILD = 770000000000000001
+
+    def test_round_trip_and_writeback_on(self, temp_db):
+        import config
+        import transfer
+
+        config.update_transfer_config_field(
+            self.GUILD, "alliance_column_map_json", '{"name": "IGN", "display": ["Power"]}'
+        )
+        decisions = [
+            {"column": "Confirmed", "kind": "yesno", "options": []},
+            {"column": "Status", "kind": "pickone", "options": ["Pending", "Confirmed"]},
+        ]
+        transfer_setup._save_decisions(self.GUILD, decisions)
+        cfg = config.get_transfer_config(self.GUILD)
+        cm = transfer.parse_column_map(cfg["alliance_column_map_json"])
+        assert cm["name"] == "IGN"  # untouched
+        assert cm["display"] == ["Power"]  # untouched
+        assert cm["status"] == ["Confirmed", "Status"]
+        assert cm["decisions"] == decisions
+        assert cfg["writeback_enabled"] == 1
+
+    def test_clearing_turns_writeback_off(self, temp_db):
+        import config
+        import transfer
+
+        config.update_transfer_config_fields(
+            self.GUILD,
+            alliance_column_map_json=(
+                '{"name": "IGN", "status": ["X"], "decisions": '
+                '[{"column": "X", "kind": "yesno", "options": []}]}'
+            ),
+            writeback_enabled=1,
+        )
+        transfer_setup._save_decisions(self.GUILD, [])
+        cfg = config.get_transfer_config(self.GUILD)
+        cm = transfer.parse_column_map(cfg["alliance_column_map_json"])
+        assert "status" not in cm and "decisions" not in cm
+        assert cm["name"] == "IGN"  # preserved
+        assert cfg["writeback_enabled"] == 0

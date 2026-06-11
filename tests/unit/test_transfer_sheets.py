@@ -26,3 +26,51 @@ def test_data_validation_request_targets_the_column_data_range():
     assert rng["startColumnIndex"] == 4
     assert rng["endColumnIndex"] == 5
     assert req["setDataValidation"]["rule"] == {"condition": {"type": "BOOLEAN"}}
+
+
+class _RenameWS:
+    def __init__(self, header):
+        self._header = header
+        self.updated = None
+
+    def row_values(self, _row):
+        return self._header
+
+    def update_cell(self, row, col, value):
+        self.updated = (row, col, value)
+
+
+class _RenameSH:
+    def __init__(self, ws):
+        self._ws = ws
+
+    def worksheet(self, _tab):
+        return self._ws
+
+
+def _patch_sheet(monkeypatch, ws):
+    import config
+
+    monkeypatch.setattr(config, "get_spreadsheet_by_id", lambda _sid: _RenameSH(ws))
+
+
+def test_rename_column_in_place(monkeypatch):
+    ws = _RenameWS(["Name", "Confirmed", "Status"])
+    _patch_sheet(monkeypatch, ws)
+    assert transfer_sheets.rename_column("s", "t", "confirmed", "Approved") == "renamed"
+    assert ws.updated == (1, 2, "Approved")  # header cell of the 2nd column (1-based)
+
+
+def test_rename_column_not_found_leaves_sheet_untouched(monkeypatch):
+    ws = _RenameWS(["Name", "Status"])
+    _patch_sheet(monkeypatch, ws)
+    assert transfer_sheets.rename_column("s", "t", "Confirmed", "Approved") == "not_found"
+    assert ws.updated is None
+
+
+def test_rename_column_collision_refused(monkeypatch):
+    ws = _RenameWS(["Name", "Confirmed", "Approved"])
+    _patch_sheet(monkeypatch, ws)
+    # renaming Confirmed -> Approved would duplicate an existing header
+    assert transfer_sheets.rename_column("s", "t", "Confirmed", "Approved") == "collision"
+    assert ws.updated is None

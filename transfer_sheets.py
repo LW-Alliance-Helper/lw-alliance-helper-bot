@@ -87,6 +87,24 @@ def ensure_columns(sheet_id: str, tab: str, headers_to_ensure: list) -> list:
     return header + to_add
 
 
+def rename_column(sheet_id: str, tab: str, old_header: str, new_header: str) -> str:
+    """Rename a column's header in place (row 1), keeping the column's data and
+    validation. Returns ``"renamed"``, ``"not_found"`` (the old header isn't on
+    the sheet), or ``"collision"`` (a *different* column already uses the new
+    name — refused so we don't create a duplicate header)."""
+    sh = config.get_spreadsheet_by_id(sheet_id)
+    ws = sh.worksheet(tab)
+    header = ws.row_values(1)
+    norm_old, norm_new = _norm(old_header), _norm(new_header)
+    target = next((i for i, h in enumerate(header) if _norm(h) == norm_old), None)
+    if target is None:
+        return "not_found"
+    if any(i != target and _norm(h) == norm_new for i, h in enumerate(header)):
+        return "collision"
+    ws.update_cell(1, target + 1, new_header)
+    return "renamed"
+
+
 def _data_validation_request(ws, col_0based: int, rule: dict) -> dict:
     """A ``setDataValidation`` request covering a column's data rows (row 2 to
     the grid's last row), for the worksheet's grid id."""

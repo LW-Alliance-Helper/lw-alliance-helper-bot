@@ -1965,19 +1965,52 @@ async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
 
 
 async def _edit_one_decision(channel, user_id, sheet_id, tab, decision, cancel_event):
-    """Re-do an existing decision's shape/options (same column name), re-applying
-    the validation. Returns the updated dict, ``None`` (skipped), or a sentinel."""
-    res = await _ask_shape_and_options(
-        channel, user_id, decision["column"], cancel_event, current=decision
+    """Edit an existing decision: optionally **rename it in place** (keeping the
+    column's data + validation) and re-do its shape/options. All input is
+    gathered first, then applied, so a cancel leaves the sheet untouched.
+    Returns the updated dict, ``None`` (skipped), or a CANCEL/TIMEOUT sentinel."""
+    old_name = decision["column"]
+    namev = _FilterValueView(
+        user_id, prompt_title="Decision name", prompt_label="Column name", default=old_name
     )
+    namev.message = await channel.send(
+        f"**{old_name}** — keep the name or rename it (renaming keeps all its data):", view=namev
+    )
+    await wizard_registry.wait_view_or_cancel(namev, cancel_event)
+    if namev.cancelled:
+        return "CANCEL"
+    if not namev.confirmed:
+        return "TIMEOUT"
+    new_name = (namev.value or "").strip() or old_name
+
+    res = await _ask_shape_and_options(channel, user_id, new_name, cancel_event, current=decision)
     if res in ("CANCEL", "TIMEOUT"):
         return res
     if res is None:
         return None
     kind, options = res
-    if not await _create_decision_column(channel, sheet_id, tab, decision["column"], kind, options):
+
+    if new_name.casefold() != old_name.casefold():
+        await channel.send(f"⏳ Renaming **{old_name}** to **{new_name}**…")
+        try:
+            status = await asyncio.to_thread(
+                transfer_sheets.rename_column, sheet_id, tab, old_name, new_name
+            )
+        except Exception as e:  # noqa: BLE001
+            await channel.send(
+                f"⚠️ Couldn't rename on your sheet: {config.describe_sheet_error(e)}. Skipped."
+            )
+            return None
+        if status == "collision":
+            await channel.send(
+                f"⚠️ A column named **{new_name}** already exists — pick a different name. Skipped."
+            )
+            return None
+        # "not_found" falls through: _create_decision_column makes the column fresh.
+
+    if not await _create_decision_column(channel, sheet_id, tab, new_name, kind, options):
         return None
-    return {"column": decision["column"], "kind": kind, "options": options}
+    return {"column": new_name, "kind": kind, "options": options}
 
 
 def _decisions_embed(decisions: list) -> discord.Embed:
@@ -2060,8 +2093,16 @@ async def _run_decisions_step(channel, guild_id, user_id, sheet_id, tab, cancel_
     edit / delete one. Re-posts the list after each change so it's always
     visible (you can see what exists and won't make duplicates). Each change
     saves ``status`` + ``decisions`` + ``writeback_enabled``. Returns ``"OK"`` /
-    ``"CANCEL"`` / ``"TIMEOUT"``."""
+    ``"CANCEL"`` / ``"TIMEOUT"``.
+
+    On exit, if anything changed, it silently re-snapshots the sheet so the next
+    poll doesn't fire a spurious "X changed from Yes to blank" for every
+    applicant when a decision column is deleted or renamed (the snapshot key
+    moves). Re-snapshot does NOT enable the watcher — go-live owns that — so a
+    mid-setup cancel still leaves it off."""
     msg = None
+    changed = False
+    result = "OK"
     while True:
         decisions = transfer.decisions_for(
             transfer.parse_column_map(
@@ -2086,34 +2127,40 @@ async def _run_decisions_step(channel, guild_id, user_id, sheet_id, tab, cancel_
         view.message = msg
         await wizard_registry.wait_view_or_cancel(view, cancel_event)
         if view.cancelled:
-            return "CANCEL"
+            result = "CANCEL"
+            break
         if not view.confirmed or view.value == "done":
             try:
                 await msg.edit(view=None)
             except discord.HTTPException:
                 pass
-            return "OK"
+            result = "OK"
+            break
 
         if view.value == "add":
             one = await _add_one_decision(channel, user_id, sheet_id, tab, cancel_event)
             if one in ("CANCEL", "TIMEOUT"):
-                return one
+                result = one
+                break
             if isinstance(one, dict):
                 decisions = [
                     d for d in decisions if d["column"].casefold() != one["column"].casefold()
                 ]
                 decisions.append(one)
                 _save_decisions(guild_id, decisions)
+                changed = True
         elif view.value in ("edit", "delete"):
             idx = await _pick_decision(channel, user_id, decisions, view.value, cancel_event)
             if idx in ("CANCEL", "TIMEOUT"):
-                return idx
+                result = idx
+                break
             if not isinstance(idx, int) or not 0 <= idx < len(decisions):
                 continue
             target = decisions[idx]
             if view.value == "delete":
                 decisions = [d for j, d in enumerate(decisions) if j != idx]
                 _save_decisions(guild_id, decisions)
+                changed = True
                 await channel.send(
                     f"🗑️ Removed **{target['column']}** from your decisions. The column stays in "
                     "your sheet — delete it there if you want it gone."
@@ -2123,10 +2170,19 @@ async def _run_decisions_step(channel, guild_id, user_id, sheet_id, tab, cancel_
                     channel, user_id, sheet_id, tab, target, cancel_event
                 )
                 if updated in ("CANCEL", "TIMEOUT"):
-                    return updated
+                    result = updated
+                    break
                 if isinstance(updated, dict):
                     decisions[idx] = updated
                     _save_decisions(guild_id, decisions)
+                    changed = True
+
+    if changed:
+        try:
+            await _resnapshot(guild_id, sheet_id, tab)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] guild %s: decisions re-sync failed: %s", guild_id, e)
+    return result
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -2423,22 +2479,21 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
 
 
-async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_map: dict) -> int:
+async def _resnapshot(guild_id: int, sheet_id: str, tab: str) -> int:
     """Pull any current source backlog into the tracked sheet *silently*, then
-    bookmark every current row as the baseline (so existing applicants don't
-    flood the channel), persist that state, and flip the watcher on. Returns
-    the baseline applicant count.
+    re-bookmark every current row as the baseline, WITHOUT touching the enabled
+    flag. Returns the baseline applicant count.
 
-    The source seed means a two-sheet (or form-fed) setup doesn't dump its
-    whole matching backlog as new-applicant pings on the first poll — the rows
-    land in the sheet here and the baseline read below bookmarks them. A no-op
-    when no sources are enabled (own / watch modes)."""
+    The map is re-read from config (the decisions step may have added / removed /
+    renamed columns since the caller captured it), so the baseline snapshots the
+    *current* decision columns and the next poll doesn't fire a spurious change
+    for everyone. The source seed means a two-sheet (or form-fed) setup doesn't
+    dump its whole matching backlog as new-applicant pings on the first poll —
+    the rows land in the sheet here and the baseline bookmarks them. A no-op for
+    sources when none are enabled (own / watch modes)."""
     from datetime import datetime, timezone
 
     cfg = config.get_transfer_config(guild_id)
-    # Re-read the map from config: the decisions step may have added status /
-    # decision columns since the caller captured `column_map`, and the baseline
-    # must snapshot them so the first poll doesn't fire a change for everyone.
     column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
     header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
     try:
@@ -2446,7 +2501,7 @@ async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_ma
 
         copied = await copy_sources(cfg, header)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[TRANSFER] guild %s: go-live source seed failed: %s", guild_id, e)
+        logger.warning("[TRANSFER] guild %s: source seed failed: %s", guild_id, e)
         copied = 0
     if copied:
         header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
@@ -2455,11 +2510,18 @@ async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_ma
     diff = transfer.compute_poll_diff(rows, hidx, column_map, prior_state={}, baseline=True)
     config.update_transfer_config_fields(
         guild_id,
-        enabled=1,
         last_seen_state_json=json.dumps(diff.next_state),
         last_polled_at=datetime.now(timezone.utc).isoformat(),
     )
     return len(diff.next_state)
+
+
+async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_map: dict) -> int:
+    """Go-live: re-snapshot the sheet (seeding any source backlog silently) and
+    flip the watcher on. Returns the baseline applicant count."""
+    count = await _resnapshot(guild_id, sheet_id, tab)
+    config.update_transfer_config_field(guild_id, "enabled", 1)
+    return count
 
 
 # ── Re-entry edit menu ────────────────────────────────────────────────────────

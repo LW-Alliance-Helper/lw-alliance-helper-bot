@@ -50,7 +50,7 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
     column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
     enabled = bool(cfg.get("enabled"))
     chan = cfg.get("notification_channel_id") or 0
-    freq = cfg.get("poll_frequency_minutes") or 60
+    freq = cfg.get("poll_frequency_minutes") or 30
     style = (
         "a message per applicant"
         if (cfg.get("notification_style") or "each") == "each"

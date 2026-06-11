@@ -371,7 +371,7 @@ def init_db():
 
                 setup_mode                     TEXT    DEFAULT '',
 
-                poll_frequency_minutes         INTEGER DEFAULT 60,
+                poll_frequency_minutes         INTEGER DEFAULT 30,
                 notification_channel_id        INTEGER DEFAULT 0,
                 notification_filter_json       TEXT    DEFAULT '',
                 notify_on_delete               INTEGER DEFAULT 0,
@@ -1123,7 +1123,7 @@ def init_db():
             ("alliance_sheet_tab", "TEXT    DEFAULT ''"),
             ("alliance_column_map_json", "TEXT    DEFAULT '{}'"),
             ("setup_mode", "TEXT    DEFAULT ''"),
-            ("poll_frequency_minutes", "INTEGER DEFAULT 60"),
+            ("poll_frequency_minutes", "INTEGER DEFAULT 30"),
             ("notification_channel_id", "INTEGER DEFAULT 0"),
             ("notification_filter_json", "TEXT    DEFAULT ''"),
             ("notify_on_delete", "INTEGER DEFAULT 0"),
@@ -4788,7 +4788,7 @@ _TRANSFER_DEFAULTS = {
     "alliance_sheet_tab": "",
     "alliance_column_map_json": "{}",
     "setup_mode": "",
-    "poll_frequency_minutes": 60,
+    "poll_frequency_minutes": 30,
     "notification_channel_id": 0,
     "notification_filter_json": "",
     "notify_on_delete": 0,

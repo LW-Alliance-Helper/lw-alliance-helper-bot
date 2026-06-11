@@ -1790,6 +1790,34 @@ async def _step_style(channel, owner_id, cancel_event):
     return ("OK", view.style)
 
 
+# How often the bot polls a guild's sheet. 30 min is the recommended balance:
+# faster is snappier but the whole bot shares one Google service account's read
+# quota, so 1-minute polling across many alliances would risk rate-limit errors.
+_FREQ_OPTIONS = (5, 15, 30, 60)
+_FREQ_DEFAULT = 30
+
+
+async def _step_frequency(channel, owner_id, current_freq, cancel_event):
+    opts = []
+    for m in _FREQ_OPTIONS:
+        label = f"{m} min" + (" ✓" if m == current_freq else "")
+        style = discord.ButtonStyle.primary if m == _FREQ_DEFAULT else discord.ButtonStyle.secondary
+        opts.append((label, m, style))
+    view = _ButtonChoiceView(owner_id, opts)
+    await channel.send(
+        "**How often should the bot check your sheet?**\n"
+        "It scans for new applicants and changes on this schedule. **30 minutes** is the "
+        "recommended balance — shorter is snappier, but heavier on Google's shared read limits.",
+        view=view,
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return ("CANCEL", None)
+    if not view.confirmed or view.value is None:
+        return ("TIMEOUT", None)
+    return ("OK", view.value)
+
+
 async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
     """Walk the three in-game message templates. Returns ``"OK"`` or
     ``"ABORT"`` (``ask_keep_or_change`` posts its own cancel/timeout notice)."""
@@ -2344,6 +2372,16 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             return
         config.update_transfer_config_field(guild_id, "notification_style", style)
 
+        st, freq = await _step_frequency(
+            channel, user.id, current.get("poll_frequency_minutes") or _FREQ_DEFAULT, cancel_event
+        )
+        if st == "CANCEL":
+            return
+        if st == "TIMEOUT":
+            await channel.send(_TIMEOUT_MSG)
+            return
+        config.update_transfer_config_field(guild_id, "poll_frequency_minutes", freq)
+
         # ── Filter ────────────────────────────────────────────────────────────
         # Mode 1 has no notification filter: the source pull filter is the gate.
         if mode == _MODE_OWN:
@@ -2551,6 +2589,7 @@ class _EditMenuView(discord.ui.View):
             ("🗂️ Column mapping", "mapping", 0),
             ("📢 Channel", "channel", 0),
             ("🎚️ Style", "style", 0),
+            ("⏱️ Frequency", "frequency", 0),
         ]
         if mode in (_MODE_OWN, _MODE_WATCH):
             specs.append(("🔎 Filter", "filter", 1))
@@ -2634,9 +2673,10 @@ def _menu_embed(cfg: dict, mode: str) -> discord.Embed:
         extras.append(f"removal {'on' if cfg.get('notify_on_delete') else 'off'}")
     if extras:
         embed.add_field(name="Extras", value=" · ".join(extras), inline=False)
+    freq = cfg.get("poll_frequency_minutes") or _FREQ_DEFAULT
     embed.add_field(
         name="Notifications",
-        value=f"{f'<#{chan}>' if chan else '*no channel set*'} · {style}",
+        value=f"{f'<#{chan}>' if chan else '*no channel set*'} · {style} · every {freq} min",
         inline=False,
     )
     return embed
@@ -2708,6 +2748,7 @@ async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> 
         "mapping": _edit_mapping,
         "channel": _edit_channel,
         "style": _edit_style,
+        "frequency": _edit_frequency,
         "filter": _edit_filter,
         "intake": _edit_intake,
         "templates": _edit_templates,
@@ -2792,6 +2833,19 @@ async def _edit_style(channel, guild_id, user, cfg, cancel_event) -> str:
         return st
     config.update_transfer_config_field(guild_id, "notification_style", style)
     await channel.send("✅ Notification style updated.")
+    return "OK"
+
+
+async def _edit_frequency(channel, guild_id, user, cfg, cancel_event) -> str:
+    cur = cfg.get("poll_frequency_minutes") or _FREQ_DEFAULT
+    g = await _edit_gate(channel, user.id, "Check frequency", f"every {cur} min", cancel_event)
+    if g != "change":
+        return g
+    st, freq = await _step_frequency(channel, user.id, cur, cancel_event)
+    if st in ("CANCEL", "TIMEOUT"):
+        return st
+    config.update_transfer_config_field(guild_id, "poll_frequency_minutes", freq)
+    await channel.send(f"✅ Now checking every **{freq} min**.")
     return "OK"
 
 

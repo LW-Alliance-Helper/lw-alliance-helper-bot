@@ -22,7 +22,7 @@ def test_default_config_when_unconfigured(temp_db):
     cfg = config.get_transfer_config(GUILD)
     assert cfg["guild_id"] == GUILD
     assert cfg["enabled"] == 0
-    assert cfg["poll_frequency_minutes"] == 60
+    assert cfg["poll_frequency_minutes"] == 30
     assert cfg["alliance_column_map_json"] == "{}"
     assert cfg["notification_filter_json"] == ""
     assert cfg["last_seen_state_json"] == "{}"

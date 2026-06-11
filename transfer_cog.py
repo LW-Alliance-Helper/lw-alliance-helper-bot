@@ -392,7 +392,7 @@ class TransferCog(commands.Cog):
     async def _poll_guild(self, cfg: dict, now: datetime) -> None:
         gid = cfg["guild_id"]
         if not transfer.poll_is_due(
-            cfg.get("last_polled_at"), cfg.get("poll_frequency_minutes") or 60, now
+            cfg.get("last_polled_at"), cfg.get("poll_frequency_minutes") or 30, now
         ):
             return
         if not await premium.is_premium(gid, bot=self.bot):

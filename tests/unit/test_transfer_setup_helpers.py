@@ -217,6 +217,7 @@ class TestEditMenuSections:
             "Column mapping",
             "Channel",
             "Style",
+            "Frequency",
             "Filter",
             "Intake",
             "Templates",

@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.5.7"
+__version__ = "1.5.8"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -706,6 +706,7 @@ async def shiny_tasks_post_task():
         get_shiny_task_servers_in_range,
         list_shiny_enabled_guild_ids,
         mark_shiny_tasks_posted,
+        server_date_for,
         stamp_loop_heartbeat,
     )
     from shiny_tasks import build_announcement_for_guild
@@ -752,6 +753,14 @@ async def shiny_tasks_post_task():
                 )
                 continue
 
+            # Resolve the shiny cycle against the Last War in-game (server,
+            # UTC-2) date, not the guild's local calendar date. The post can
+            # fire after the in-game reset (00:00 server time, ~2h before local
+            # midnight) — e.g. a 10:30pm local post — at which point the local
+            # date still names the in-game day that just ended, so the cycle
+            # would list yesterday's shiny servers (#330). Same class of bug as
+            # the train "day behind" fix (#318). See config.server_date_for.
+            shiny_today = server_date_for(guild_now)
             rows = get_shiny_task_servers_in_range(
                 int(scfg.get("server_min") or 0),
                 int(scfg.get("server_max") or 0),
@@ -760,7 +769,7 @@ async def shiny_tasks_post_task():
                 server_rows=rows,
                 server_min=int(scfg.get("server_min") or 0),
                 server_max=int(scfg.get("server_max") or 0),
-                today=guild_now.date(),
+                today=shiny_today,
                 template=scfg.get("message_template") or "",
             )
             if body is None:

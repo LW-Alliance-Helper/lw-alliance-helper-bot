@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.8] — 2026-06-15
+
+### Fixed
+- Daily Shiny Tasks posts now follow the in-game server day, so a post timed just after the reset no longer lists the prior day's servers ([#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330)).
+
 ## [1.5.7] — 2026-06-11
 
 ### Fixed

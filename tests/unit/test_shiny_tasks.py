@@ -630,6 +630,39 @@ class TestShinyTasksPostTask:
 
         assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == ""
 
+    @pytest.mark.asyncio
+    async def test_post_after_reset_uses_in_game_server_day(self, temp_db):
+        """Regression for the 'shiny a day behind' bug (#330): a 10:30pm-local
+        post fires after the in-game reset (00:00 server time, UTC-2, ~2h before
+        local midnight), which is already the next in-game day. The server list
+        must come from that day's cycle, not the local-today cycle that just
+        ended.
+
+        22:30 EDT on 2026-06-02 == 00:30 server time (UTC-2) on 2026-06-03.
+          * #2280 (created 2026-05-31): shiny on 06-03 (Δ3), not 06-02 (Δ2).
+          * #2290 (created 2026-05-30): shiny on 06-02 (Δ3), not 06-03 (Δ4).
+        Using the server date posts #2280; the local-date bug would post #2290.
+        """
+        _seed_complete(TEST_GUILD_ID)
+        _seed_servers(
+            [
+                (2280, "2026-05-31", "global"),  # in-game today (06-03)
+                (2290, "2026-05-30", "global"),  # local today (06-02)
+            ]
+        )
+        _enable_shiny(
+            TEST_GUILD_ID,
+            post_time="22:30",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
+        )
+
+        sent = await _run_loop_at(datetime(2026, 6, 2, 22, 30, tzinfo=ET))
+        assert len(sent) == 1
+        assert "2280" in sent[0]
+        assert "2290" not in sent[0]
+
 
 class TestShinyTasksRefreshTask:
     """`tasks.loop` fires the body immediately on `.start()` and the

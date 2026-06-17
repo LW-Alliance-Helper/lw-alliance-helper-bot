@@ -1387,6 +1387,96 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
     )
 
 
+@admin_group.command(
+    name="shiny_servers",
+    description="(Bot owner only) Dump stored shiny_task_servers rows for a server-number range.",
+)
+@app_commands.describe(
+    min_server="Lowest server number to include (inclusive)",
+    max_server="Highest server number to include (inclusive)",
+)
+async def admin_shiny_servers_slash(
+    interaction: discord.Interaction, min_server: int, max_server: int
+):
+    """Spot-check the frozen shiny_task_servers snapshot against the source.
+    Owner-only debug tool: lists each stored server's creation_date, whether
+    it's shiny on the current in-game day, and flags rows missing from the
+    range — so a drift between the snapshot and reality is visible at a glance.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    if min_server > max_server:
+        min_server, max_server = max_server, min_server
+
+    from config import _get_conn, server_date_for  # noqa: PLC0415
+    from shiny_tasks import is_shiny_today  # noqa: PLC0415
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT server_number, creation_date, last_seen_at "
+            "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
+            "ORDER BY server_number",
+            (min_server, max_server),
+        ).fetchall()
+
+    if not rows:
+        await interaction.response.send_message(
+            f"ℹ️ No `shiny_task_servers` rows stored between **{min_server}** and **{max_server}**.",
+            ephemeral=True,
+        )
+        return
+
+    # "Today" = the Last War in-game (server, UTC-2) date — the same date the
+    # live post loop uses (see config.server_date_for) — so the Shiny? column
+    # matches what the bot would announce right now and is directly checkable
+    # against the source's "Shiny Tasks" column.
+    server_today = server_date_for(datetime.now(timezone.utc))
+
+    header = f"{'Server':>6}  {'Created':<10}  {'Shiny?':<6}  {'Last seen':<10}"
+    table = [header, "-" * len(header)]
+    shiny_nums: list[int] = []
+    for r in rows:
+        cd = (r["creation_date"] or "")[:10]
+        try:
+            is_shiny = is_shiny_today(date.fromisoformat(cd), server_today)
+        except ValueError:
+            is_shiny = False
+        if is_shiny:
+            shiny_nums.append(r["server_number"])
+        table.append(
+            f"{r['server_number']:>6}  {cd:<10}  {'yes' if is_shiny else 'no':<6}  "
+            f"{(r['last_seen_at'] or '')[:10]:<10}"
+        )
+
+    present = {r["server_number"] for r in rows}
+    missing = [n for n in range(min_server, max_server + 1) if n not in present]
+
+    summary = (
+        f"**Shiny snapshot {min_server}–{max_server}** · in-game date "
+        f"`{server_today.isoformat()}`\n"
+        f"{len(rows)} stored, {len(missing)} missing in range · "
+        f"{len(shiny_nums)} shiny today"
+    )
+    detail = (
+        f"Shiny today: {', '.join(map(str, shiny_nums)) or '(none)'}\n"
+        f"Missing rows: {', '.join(map(str, missing)) or '(none)'}\n\n" + "\n".join(table)
+    )
+
+    full = f"{summary}\n```\n{detail}\n```"
+    if len(full) <= 1900:
+        await interaction.response.send_message(full, ephemeral=True)
+    else:
+        import io  # noqa: PLC0415
+
+        fp = io.BytesIO(detail.encode("utf-8"))
+        await interaction.response.send_message(
+            content=f"{summary}\n*(full table attached)*",
+            file=discord.File(fp, filename=f"shiny_servers_{min_server}_{max_server}.txt"),
+            ephemeral=True,
+        )
+
+
 # Register the /growth Group on the tree once every subcommand has
 # been attached above. Global registration.
 bot.tree.add_command(growth_group)

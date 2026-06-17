@@ -1477,6 +1477,102 @@ async def admin_shiny_servers_slash(
         )
 
 
+@admin_group.command(
+    name="shiny_import",
+    description="(Bot owner only) Bulk-replace the shiny server snapshot from an attached JSON export.",
+)
+@app_commands.describe(
+    file="JSON array of server records (id + timestamp + region) captured from the source.",
+)
+async def admin_shiny_import_slash(interaction: discord.Interaction, file: discord.Attachment):
+    """One-shot correction of the frozen shiny_task_servers snapshot (#331).
+    Parses the attached JSON, derives every creation date in server time
+    (UTC-2) so they match the source, and upserts the whole set — fixing
+    drifted dates and adding new servers in a single push. Servers absent from
+    the file keep their rows but age out of posts via the 30-day soft-delete
+    filter (same as the old refresh).
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    from config import upsert_shiny_task_servers  # noqa: PLC0415
+    from shiny_tasks import parse_server_records_json  # noqa: PLC0415
+
+    try:
+        raw = await file.read()
+        rows = parse_server_records_json(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        await interaction.followup.send(
+            f"⚠️ `{file.filename}` isn't UTF-8 text — attach the raw JSON export.",
+            ephemeral=True,
+        )
+        return
+    except ValueError as e:  # includes json.JSONDecodeError
+        await interaction.followup.send(
+            f"⚠️ Couldn't parse `{file.filename}` as JSON: {e}", ephemeral=True
+        )
+        return
+
+    if not rows:
+        await interaction.followup.send(
+            "⚠️ Parsed 0 usable server records — the file should be a JSON array "
+            "of objects each with an `id` and a `timestamp`.",
+            ephemeral=True,
+        )
+        return
+
+    n = upsert_shiny_task_servers(rows, seen_at=datetime.now(timezone.utc).isoformat())
+    lo, hi = min(r[0] for r in rows), max(r[0] for r in rows)
+    await interaction.followup.send(
+        f"✅ Imported **{n}** server rows (ids {lo}–{hi}). Creation dates derived "
+        f"in server time (UTC-2). Spot-check with `/admin shiny_servers`.",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="shiny_set",
+    description="(Bot owner only) Add or correct one server's creation date in the shiny snapshot.",
+)
+@app_commands.describe(
+    server="Server number (e.g. 2286)",
+    creation_date="Creation date in YYYY-MM-DD (server time) — match the date the source shows",
+    region="Region label (optional; defaults to global)",
+)
+async def admin_shiny_set_slash(
+    interaction: discord.Interaction,
+    server: int,
+    creation_date: str,
+    region: str = "global",
+):
+    """Add a newly-launched server, or correct one row, in the shiny snapshot.
+    Single-row upsert — leaves every other server untouched."""
+    if not await _require_bot_owner(interaction):
+        return
+    try:
+        d = date.fromisoformat(creation_date.strip())
+    except ValueError:
+        await interaction.response.send_message(
+            f"⚠️ `{creation_date}` isn't a valid date — use `YYYY-MM-DD` "
+            "(the creation date the source shows for that server).",
+            ephemeral=True,
+        )
+        return
+
+    from config import upsert_shiny_task_servers  # noqa: PLC0415
+
+    reg = region.strip() or "global"
+    upsert_shiny_task_servers(
+        [(server, d.isoformat(), reg)],
+        seen_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await interaction.response.send_message(
+        f"✅ Set server **{server}** → creation date `{d.isoformat()}` (region {reg}).",
+        ephemeral=True,
+    )
+
+
 # Register the /growth Group on the tree once every subcommand has
 # been attached above. Global registration.
 bot.tree.add_command(growth_group)

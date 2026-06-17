@@ -274,6 +274,42 @@ class TestParseRecords:
         assert _parse_records("nothing of interest in here") == []
 
 
+class TestParseServerRecordsJson:
+    """`parse_server_records_json` ingests the JSON array the source's servers
+    page loads (the `/admin shiny_import` payload) and derives creation dates in
+    server time (UTC-2), so the snapshot matches the source's displayed dates."""
+
+    def test_creation_date_uses_server_time_not_utc(self):
+        import json as _json
+
+        from shiny_tasks import parse_server_records_json
+
+        # 00:30 UTC on 2026-03-10 is still 2026-03-09 in server time (UTC-2),
+        # so the creation date must be the 9th — the #331 fix. Plain UTC would
+        # store the 10th and push the server a day late in the 3-day cycle.
+        ts_ms = int(datetime(2026, 3, 10, 0, 30, tzinfo=timezone.utc).timestamp() * 1000)
+        text = _json.dumps([{"id": "2500", "timestamp": str(ts_ms), "region": ["global"]}])
+        assert parse_server_records_json(text) == [(2500, "2026-03-09", "global")]
+
+    def test_skips_unusable_records_and_reads_region(self):
+        import json as _json
+
+        from shiny_tasks import parse_server_records_json
+
+        text = _json.dumps(
+            [
+                {"id": "1", "timestamp": "1700000000000", "region": ["europe"]},
+                {"id": "2"},  # no timestamp → skipped
+                {"timestamp": "1700000000000"},  # no id → skipped
+                {"id": "3", "timestamp": "1700000000000", "region": []},  # empty region → ""
+            ]
+        )
+        rows = parse_server_records_json(text)
+        assert [r[0] for r in rows] == [1, 3]
+        assert rows[0] == (1, "2023-11-14", "europe")
+        assert rows[1][2] == ""
+
+
 # ── DB helpers (use the temp_db fixture from conftest) ───────────────────────
 
 

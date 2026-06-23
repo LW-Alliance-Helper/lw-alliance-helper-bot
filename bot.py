@@ -362,6 +362,24 @@ async def on_ready():
             print(f"[STORM SCHEDULER] Failed to start: {e}")
             sentry_sdk.capture_exception(e)
 
+        # Start the internal HTTP API server for the Map Manager integration
+        # (#316) — only when MAPMANAGER_API_KEY is configured, mirroring the
+        # Sentry-DSN opt-in so dev / CI don't bind a port. Runs in-process
+        # alongside the gateway client on 0.0.0.0:${PORT}; Railway routes
+        # inbound HTTP to it. The runner handle is stashed on the bot so it
+        # outlives this scope (and so a future shutdown hook can close it).
+        try:
+            from api_server import api_server_enabled, start_api_server
+
+            if api_server_enabled():
+                bot._api_runner = await start_api_server(bot)
+                print(f"[API] Internal HTTP API server started on :{os.getenv('PORT', '8080')}")
+            else:
+                print("[API] MAPMANAGER_API_KEY not set — internal HTTP API server disabled")
+        except Exception as e:
+            print(f"[API] Failed to start internal HTTP API server: {e}")
+            sentry_sdk.capture_exception(e)
+
         # After a short settle delay (guild cache + channels ready), scan the
         # captured heartbeats for an outage and post catch-up digests (#227).
         async def _delayed_outage_catchup():

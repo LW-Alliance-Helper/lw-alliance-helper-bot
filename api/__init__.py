@@ -14,3 +14,13 @@ The application itself is assembled in the top-level ``api_server`` module and
 started once from ``bot.on_ready``. See ``docs/BOT_INTEGRATION_HANDOFF.md`` in
 the Map Manager repo for the cross-service contract.
 """
+
+from aiohttp import web
+
+# Typed application key for the gateway client stashed on the app. Route handlers
+# reach the discord.py bot (member lookups, sheet config) via
+# ``request.app[BOT_KEY]`` rather than a module global. Defined here (not in
+# ``api_server``) so route modules can import it without an import cycle back
+# through the app assembler. Using a ``web.AppKey`` is aiohttp 3.9+'s
+# recommended, warning-free form.
+BOT_KEY: web.AppKey = web.AppKey("bot", object)

@@ -30,15 +30,17 @@ import os
 
 from aiohttp import web
 
+from api import BOT_KEY
+from api.routes.guilds import get_guild_link, get_guild_member
 from api.routes.healthz import healthz
+from api.routes.sheets import (
+    sheet_growth,
+    sheet_roster,
+    sheet_storm_history_append,
+    sheet_storm_history_get,
+)
 
 DEFAULT_PORT = 8080
-
-# Typed application key for the gateway client stashed on the app. Route
-# handlers reach the discord.py bot (member lookups, sheet config) via
-# ``request.app[BOT_KEY]`` rather than a module global. Using a ``web.AppKey``
-# (instead of a bare string) is aiohttp 3.9+'s recommended, warning-free form.
-BOT_KEY: web.AppKey = web.AppKey("bot", object)
 
 
 def api_server_enabled() -> bool:
@@ -62,14 +64,27 @@ def _port() -> int:
 def build_app(bot=None) -> web.Application:
     """Construct the aiohttp application and register routes.
 
-    ``bot`` is stashed on the app (``app["bot"]``) so route handlers can reach
-    the gateway cache (member lookups, sheet config, etc.) without a module
-    global. Passing None is supported for route-shape tests that don't need the
-    gateway.
+    ``bot`` is stashed on the app under ``BOT_KEY`` so route handlers can reach
+    the gateway cache (member lookups, sheet config, etc.) via
+    ``request.app[BOT_KEY]`` without a module global. Passing None is supported
+    for route-shape tests that don't need the gateway.
     """
     app = web.Application()
     app[BOT_KEY] = bot
     app.router.add_get("/healthz", healthz)
+
+    # Guild lookups MM calls (6D). `link` resolves a guild to its alliance +
+    # sheet + premium state; `members` is the gateway-cache lookup MM uses to
+    # derive a signed-in user's bot-linked tier.
+    app.router.add_get("/api/guilds/{guild_id}/link", get_guild_link)
+    app.router.add_get("/api/guilds/{guild_id}/members/{discord_user_id}", get_guild_member)
+
+    # Sheet-backed reads (roster / storm history / growth) + the OCR append.
+    # Currently 501 stubs — see api/routes/sheets.py for why.
+    app.router.add_get("/api/guilds/{guild_id}/sheet/roster", sheet_roster)
+    app.router.add_get("/api/guilds/{guild_id}/sheet/storm-history", sheet_storm_history_get)
+    app.router.add_post("/api/guilds/{guild_id}/sheet/storm-history", sheet_storm_history_append)
+    app.router.add_get("/api/guilds/{guild_id}/sheet/growth", sheet_growth)
     return app
 
 

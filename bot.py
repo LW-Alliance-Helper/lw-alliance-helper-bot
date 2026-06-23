@@ -233,6 +233,9 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    if "mapmanager_cog" not in bot.extensions:
+        await bot.load_extension("mapmanager_cog")
+        print("[INFO] Map Manager cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

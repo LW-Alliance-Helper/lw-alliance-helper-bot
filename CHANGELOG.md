@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.9] — 2026-06-22
+
+### Fixed
+- The birthday scheduling-conflict alert stops re-posting nightly once resolved, and a member placed anywhere within a week of their birthday now silences it ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
+### Added
+- The birthday scheduling-conflict alert is now interactive: place the member on an open day, show the surrounding week, or dismiss it for good ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
 ## [1.5.8] — 2026-06-15
 
 ### Fixed

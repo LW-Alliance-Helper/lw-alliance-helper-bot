@@ -10253,17 +10253,19 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if not enabled_view.selected:
         from config import save_birthday_config
 
-        # `last_train_population_date` is operational state owned by the
-        # train-auto-pop scheduler (see #89) — not a `save_birthday_config`
-        # parameter. Strip it from the splat so the disable path still
-        # works when the column exists on the loaded row.
+        # `last_train_population_date` and `ignored_conflicts` are operational
+        # state owned by the train-auto-pop scheduler and the conflict alert
+        # (see #89, #334) — not `save_birthday_config` parameters. Strip them
+        # from the splat so the disable path still works when those columns
+        # exist on the loaded row.
         save_birthday_config(
             guild_id,
             enabled=0,
             **{
                 k: v
                 for k, v in current.items()
-                if k not in ("guild_id", "enabled", "last_train_population_date")
+                if k
+                not in ("guild_id", "enabled", "last_train_population_date", "ignored_conflicts")
             },
         )
         await ask_disable_with_clear(

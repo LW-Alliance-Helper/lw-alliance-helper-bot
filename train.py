@@ -36,6 +36,8 @@ from train_birthdays import (
     get_member_tab_name,
     parse_birthday,
     check_and_add_birthdays,
+    conflict_key,
+    render_conflict_message,
 )
 from train_birthdays import _get_member_sheet_inner as _get_member_sheet  # noqa: F401
 

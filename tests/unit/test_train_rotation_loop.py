@@ -178,3 +178,32 @@ async def test_daily_confirm_dedup_prevents_double_post():
     history = [tr.HistoryRow("2026-06-01", "Alice", "auto", tr.STATUS_SCHEDULED)]
     chan = await _run(cog, now=MONDAY_6PM, history=history)
     assert chan.send.await_count == 0
+
+
+async def test_daily_confirm_targets_in_game_day_at_evening_reset():
+    """Regression for the 'train a day behind' bug (#318): a 10pm-local reminder
+    fires at the in-game server reset (~2h before local midnight), which is
+    already the next in-game day. The confirmation must announce that day's
+    conductor — tomorrow's calendar row — not the local-today row that just
+    ended."""
+    import train_rotation_ui as ui
+
+    cog = _make_cog()
+    # 10pm ET Tue 2026-06-02 == 00:00 server time (UTC-2) Wed 2026-06-03.
+    tue_10pm = datetime(2026, 6, 2, 22, 0, tzinfo=ET)
+    history = [
+        tr.HistoryRow("2026-06-02", "Alice", "auto", tr.STATUS_SCHEDULED),  # local today
+        tr.HistoryRow("2026-06-03", "Bob", "auto", tr.STATUS_SCHEDULED),  # in-game today
+    ]
+    captured = {}
+
+    def _capture_embed(dd):
+        captured["dd"] = dd
+        return MagicMock()
+
+    with patch.object(ui, "build_daily_confirm_embed", side_effect=_capture_embed):
+        chan = await _run(cog, now=tue_10pm, tcfg=_tcfg(reminder_time="22:00"), history=history)
+
+    assert chan.send.await_count >= 1
+    assert captured["dd"].date == "2026-06-03"
+    assert captured["dd"].member == "Bob"

@@ -274,6 +274,42 @@ class TestParseRecords:
         assert _parse_records("nothing of interest in here") == []
 
 
+class TestParseServerRecordsJson:
+    """`parse_server_records_json` ingests the JSON array the source's servers
+    page loads (the `/admin shiny_import` payload) and derives creation dates in
+    server time (UTC-2), so the snapshot matches the source's displayed dates."""
+
+    def test_creation_date_uses_server_time_not_utc(self):
+        import json as _json
+
+        from shiny_tasks import parse_server_records_json
+
+        # 00:30 UTC on 2026-03-10 is still 2026-03-09 in server time (UTC-2),
+        # so the creation date must be the 9th — the #331 fix. Plain UTC would
+        # store the 10th and push the server a day late in the 3-day cycle.
+        ts_ms = int(datetime(2026, 3, 10, 0, 30, tzinfo=timezone.utc).timestamp() * 1000)
+        text = _json.dumps([{"id": "2500", "timestamp": str(ts_ms), "region": ["global"]}])
+        assert parse_server_records_json(text) == [(2500, "2026-03-09", "global")]
+
+    def test_skips_unusable_records_and_reads_region(self):
+        import json as _json
+
+        from shiny_tasks import parse_server_records_json
+
+        text = _json.dumps(
+            [
+                {"id": "1", "timestamp": "1700000000000", "region": ["europe"]},
+                {"id": "2"},  # no timestamp → skipped
+                {"timestamp": "1700000000000"},  # no id → skipped
+                {"id": "3", "timestamp": "1700000000000", "region": []},  # empty region → ""
+            ]
+        )
+        rows = parse_server_records_json(text)
+        assert [r[0] for r in rows] == [1, 3]
+        assert rows[0] == (1, "2023-11-14", "europe")
+        assert rows[1][2] == ""
+
+
 # ── DB helpers (use the temp_db fixture from conftest) ───────────────────────
 
 
@@ -629,6 +665,39 @@ class TestShinyTasksPostTask:
         from config import get_shiny_tasks_config
 
         assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == ""
+
+    @pytest.mark.asyncio
+    async def test_post_after_reset_uses_in_game_server_day(self, temp_db):
+        """Regression for the 'shiny a day behind' bug (#330): a 10:30pm-local
+        post fires after the in-game reset (00:00 server time, UTC-2, ~2h before
+        local midnight), which is already the next in-game day. The server list
+        must come from that day's cycle, not the local-today cycle that just
+        ended.
+
+        22:30 EDT on 2026-06-02 == 00:30 server time (UTC-2) on 2026-06-03.
+          * #2280 (created 2026-05-31): shiny on 06-03 (Δ3), not 06-02 (Δ2).
+          * #2290 (created 2026-05-30): shiny on 06-02 (Δ3), not 06-03 (Δ4).
+        Using the server date posts #2280; the local-date bug would post #2290.
+        """
+        _seed_complete(TEST_GUILD_ID)
+        _seed_servers(
+            [
+                (2280, "2026-05-31", "global"),  # in-game today (06-03)
+                (2290, "2026-05-30", "global"),  # local today (06-02)
+            ]
+        )
+        _enable_shiny(
+            TEST_GUILD_ID,
+            post_time="22:30",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
+        )
+
+        sent = await _run_loop_at(datetime(2026, 6, 2, 22, 30, tzinfo=ET))
+        assert len(sent) == 1
+        assert "2280" in sent[0]
+        assert "2290" not in sent[0]
 
 
 class TestShinyTasksRefreshTask:

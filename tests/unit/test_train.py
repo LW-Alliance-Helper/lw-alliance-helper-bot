@@ -305,6 +305,7 @@ class TestCheckAndAddBirthdays:
 
     def test_alert_generated_when_no_slot_available(self, seeded_db):
         from train import check_and_add_birthdays
+
         from config import save_birthday_config
 
         today = date.today()
@@ -321,17 +322,25 @@ class TestCheckAndAddBirthdays:
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
         with patch("train_birthdays.load_birthdays", return_value=members):
-            schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+            schedule, conflicts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
-        assert len(alerts) == 1
-        assert "Alice" in alerts[0]
+        # Structured conflict, not a pre-rendered string.
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["name"] == "Alice"
+        assert c["bday_iso"] == target.isoformat()
+        assert c["key"]  # dedup identity present
+        # The +2 day (and other open days through +7) are offered for placement.
+        assert (target + timedelta(days=2)).isoformat() in c["open_dates"]
+        # Taken adjacent days are not offered.
+        assert target.isoformat() not in c["open_dates"]
 
     def test_multiple_conflicts_collapse_into_one_alert(self, seeded_db):
         """#89: two members hitting the same conflict signature should
-        produce ONE Discord message, not one per member. The combined
+        render into ONE Discord message, not one per member. The combined
         message lists every affected member and ends in a sentence that
         addresses leadership as the recipient."""
-        from train import check_and_add_birthdays
+        from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
         today = date.today()
@@ -351,10 +360,10 @@ class TestCheckAndAddBirthdays:
         ]
 
         with patch("train_birthdays.load_birthdays", return_value=members):
-            _, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+            _, conflicts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
-        assert len(alerts) == 1, f"Expected one combined alert, got {len(alerts)}: {alerts}"
-        msg = alerts[0]
+        assert len(conflicts) == 2
+        msg = render_conflict_message(conflicts)
         assert "ShadowHunter" in msg
         assert "Phoenix99" in msg
         # Header only renders once at the top, not per member.
@@ -365,7 +374,7 @@ class TestCheckAndAddBirthdays:
     def test_single_conflict_uses_singular_copy(self, seeded_db):
         """When only one member conflicts, the trailing instruction
         reads 'this member', not 'these members'."""
-        from train import check_and_add_birthdays
+        from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
         today = date.today()
@@ -381,11 +390,83 @@ class TestCheckAndAddBirthdays:
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
         with patch("train_birthdays.load_birthdays", return_value=members):
-            _, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+            _, conflicts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
-        assert len(alerts) == 1
-        assert "this member" in alerts[0]
-        assert "these members" not in alerts[0]
+        assert len(conflicts) == 1
+        msg = render_conflict_message(conflicts)
+        assert "this member" in msg
+        assert "these members" not in msg
+
+    def test_manual_placement_off_birthday_silences_alert(self, seeded_db):
+        """The reported bug: leadership resolves a conflict by hand-placing
+        the member a couple days off the birthday (e.g. birthday+2). The
+        ±1-day "already scheduled" check used to miss that and re-alert
+        daily. The widened ±window must see it and stay quiet."""
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
+
+        # The three days around the birthday are taken by other people, and
+        # leadership has manually parked Swaggy on birthday+2.
+        existing = {
+            (target - timedelta(days=1)).isoformat(): {"name": "Sylvia"},
+            target.isoformat(): {"name": "Walrus"},
+            (target + timedelta(days=1)).isoformat(): {"name": "DSP"},
+            (target + timedelta(days=2)).isoformat(): {"name": "Swaggy"},
+        }
+        members = [{"name": "Swaggy", "month": target.month, "day": target.day}]
+
+        with patch("train_birthdays.load_birthdays", return_value=members):
+            _, conflicts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        assert conflicts == [], "Manual placement near the birthday should silence the alert"
+
+    def test_dismissed_conflict_is_not_re_alerted(self, seeded_db):
+        """Clicking Ignore persists a dismissal keyed by member+birthday, so
+        the next daily run produces no conflict for that occurrence."""
+        from train import check_and_add_birthdays
+        from config import save_birthday_config, mark_conflict_ignored
+
+        today = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
+
+        existing = {
+            (target - timedelta(days=1)).isoformat(): {"name": "X"},
+            target.isoformat(): {"name": "Y"},
+            (target + timedelta(days=1)).isoformat(): {"name": "Z"},
+        }
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train_birthdays.load_birthdays", return_value=members):
+            _, conflicts = check_and_add_birthdays(dict(existing), guild_id=TEST_GUILD_ID)
+            assert len(conflicts) == 1
+
+            # Leadership dismisses it.
+            mark_conflict_ignored(TEST_GUILD_ID, conflicts[0]["key"])
+
+            _, conflicts2 = check_and_add_birthdays(dict(existing), guild_id=TEST_GUILD_ID)
+
+        assert conflicts2 == [], "A dismissed conflict must not re-alert"
+
+    def test_conflict_key_discord_id_first(self):
+        """conflict_key prefers the Discord ID, falls back to lowercased
+        name, and embeds the year so next year's birthday is a fresh key."""
+        from train import conflict_key
+
+        assert conflict_key({"name": "Bob", "discord_id": "123"}, "2026-07-03") == (
+            "id:123|2026-07-03"
+        )
+        assert conflict_key({"name": "Bob"}, "2026-07-03") == "name:bob|2026-07-03"
+        # Same person, different year → different key.
+        assert conflict_key({"name": "Bob"}, "2027-07-03") != conflict_key(
+            {"name": "Bob"}, "2026-07-03"
+        )
 
     def test_birthday_outside_lookahead_not_added(self, seeded_db):
         from train import check_and_add_birthdays

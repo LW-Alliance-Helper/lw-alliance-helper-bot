@@ -29,6 +29,7 @@ from train import (
     save_schedule,
     load_birthdays,
     check_and_add_birthdays,
+    render_conflict_message,
     get_member_tab_name,
 )
 
@@ -63,6 +64,225 @@ def _render_dm_body(template: str, *, name: str = "") -> str:
 
 # Alias used inside slash commands so the `date` parameter name doesn't shadow it
 date_cls = date
+
+
+def _pretty_day(iso: str) -> str:
+    """ISO date → 'Thu, Jul 3' for button labels and confirmations."""
+    d = date.fromisoformat(iso)
+    return f"{d:%a, %b} {d.day}"
+
+
+# ── Birthday conflict alert (interactive) ────────────────────────────────────────
+
+
+class BirthdayConflictView(discord.ui.View):
+    """Interactive resolution for a birthday→train scheduling conflict.
+
+    Replaces the old fire-and-forget text alert. Posted to the leadership
+    channel when one or more members can't be auto-placed near their
+    birthday, it offers three actions:
+
+      • 📅 a dropdown of open days (each member's birthday→+7 window) that
+        places the member with one click and writes it to the schedule,
+      • 📋 Show next 7 days — an ephemeral read-only view of the surrounding
+        schedule so leadership can see what's free,
+      • 🙈 Ignore — persists a dismissal so the *daily* re-post stops
+        nagging about a conflict that's been handled off-schedule.
+
+    Placing a member silences future alerts on its own: the next daily run's
+    ±window "already handled" check sees the new entry. The view is NOT
+    persistent — its buttons stop working after the timeout or a bot
+    restart — but the loop re-posts a fresh, working alert each day the
+    conflict is still open, so nothing is permanently lost.
+    """
+
+    def __init__(self, cog, guild_id: int, conflicts: list[dict]):
+        # 12h window so leadership has the evening + overnight to act; if it
+        # lapses, the 22:00 ET loop re-posts a fresh alert next day.
+        super().__init__(timeout=43200)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.conflicts = conflicts
+        # Set by the loop right after channel.send so on_timeout / the
+        # resolution callbacks can edit the original alert message.
+        self.message = None
+
+        # Date dropdown: "<member> → <open day>" across every conflict, so
+        # one control resolves the common single-member case and the rarer
+        # multi-member case alike. Discord caps a select at 25 options.
+        options: list[discord.SelectOption] = []
+        truncated = False
+        for i, c in enumerate(conflicts):
+            for iso in c.get("open_dates", []):
+                if len(options) >= 25:
+                    truncated = True
+                    break
+                label = f"{c['name']} → {_pretty_day(iso)}"
+                options.append(discord.SelectOption(label=label[:100], value=f"{i}|{iso}"))
+            if truncated:
+                break
+        if truncated:
+            print(
+                f"[BIRTHDAY] Conflict alert for guild {guild_id} truncated the "
+                f"day dropdown to 25 options — 📋 Show next 7 days lists the rest."
+            )
+        if options:
+            self._select = discord.ui.Select(
+                placeholder="📅 Place a member on an open day…",
+                min_values=1,
+                max_values=1,
+                options=options,
+            )
+            self._select.callback = self._on_place
+            self.add_item(self._select)
+        else:
+            self._select = None
+
+        show_btn = discord.ui.Button(
+            label="📋 Show next 7 days", style=discord.ButtonStyle.secondary
+        )
+        show_btn.callback = self._on_show
+        self.add_item(show_btn)
+
+        ignore_btn = discord.ui.Button(label="🙈 Ignore", style=discord.ButtonStyle.danger)
+        ignore_btn.callback = self._on_ignore
+        self.add_item(ignore_btn)
+
+    async def on_timeout(self):
+        """Strip the controls and point leadership at the manual escape
+        hatch. Without this the buttons look live after the view stops
+        listening and clicks fail with 'Interaction failed'."""
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(
+            self.message,
+            command_hint="`/train` → 🎂 Run birthday check (it also re-posts tonight)",
+        )
+
+    async def _ensure_leadership(self, interaction: discord.Interaction) -> bool:
+        cfg = get_config(self.guild_id)
+        if not cfg:
+            await interaction.response.send_message(
+                "⚙️ Bot not configured. Run `/setup`.", ephemeral=True
+            )
+            return False
+        role_names = [r.name for r in getattr(interaction.user, "roles", [])]
+        if cfg.leadership_role_name not in role_names:
+            await interaction.response.send_message(
+                f"⛔ You need the **{cfg.leadership_role_name}** role to do that.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_place(self, interaction: discord.Interaction):
+        if not await self._ensure_leadership(interaction):
+            return
+        # Defer first: load + save hit Google Sheets and can blow the 3s
+        # interaction-token window (cf. #76).
+        await interaction.response.defer(ephemeral=True)
+
+        idx_str, date_iso = self._select.values[0].split("|", 1)
+        conflict = self.conflicts[int(idx_str)]
+
+        loop = asyncio.get_running_loop()
+        schedule = await loop.run_in_executor(None, load_schedule, self.guild_id)
+        # The slot may have been taken since the alert posted.
+        if date_iso in schedule:
+            await interaction.followup.send(
+                f"⚠️ **{_pretty_day(date_iso)}** was just taken by "
+                f"**{schedule[date_iso].get('name', 'someone')}**. Pick another day.",
+                ephemeral=True,
+            )
+            return
+        schedule[date_iso] = {
+            "name": conflict["name"],
+            "theme": "Birthday",
+            "tone": "",
+            "notes": "Manually placed from birthday conflict alert",
+            "prompt_retrieved": False,
+        }
+        await loop.run_in_executor(None, save_schedule, schedule, self.guild_id)
+
+        # Resolved: the new entry is now visible to the daily ±window check,
+        # so no re-alert. Drop it from the live alert.
+        self.conflicts.pop(int(idx_str))
+        await interaction.followup.send(
+            f"✅ Placed **{conflict['name']}** on **{_pretty_day(date_iso)}**.",
+            ephemeral=True,
+        )
+        await self._rerender()
+
+    async def _on_show(self, interaction: discord.Interaction):
+        # Read-only — anyone who can see the leadership channel may peek.
+        await interaction.response.defer(ephemeral=True)
+        loop = asyncio.get_running_loop()
+        schedule = await loop.run_in_executor(None, load_schedule, self.guild_id)
+
+        embed = discord.Embed(
+            title="📋 Schedule around the conflict", color=discord.Color.blurple()
+        )
+        for c in self.conflicts:
+            bday = date.fromisoformat(c["bday_iso"])
+            lines = []
+            for i in range(0, 8):
+                d = bday + timedelta(days=i)
+                occupant = schedule.get(d.isoformat(), {}).get("name", "").strip()
+                marker = "🎂 " if i == 0 else ""
+                tail = f"— {occupant}" if occupant else "— *(open)*"
+                lines.append(f"{marker}**{d:%a, %b} {d.day}** {tail}")
+            embed.add_field(
+                name=f"{c['name']} · birthday {c['bday_fmt']}",
+                value="\n".join(lines),
+                inline=False,
+            )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _on_ignore(self, interaction: discord.Interaction):
+        if not await self._ensure_leadership(interaction):
+            return
+        from config import mark_conflict_ignored
+
+        names = ", ".join(c["name"] for c in self.conflicts)
+        for c in self.conflicts:
+            mark_conflict_ignored(self.guild_id, c["key"])
+        await interaction.response.send_message(
+            "🙈 Dismissed — you won't get this alert again for these birthdays.",
+            ephemeral=True,
+        )
+        try:
+            await self.message.edit(
+                content=f"🙈 **Birthday conflict dismissed.** Won't alert again about: {names}.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+    async def _rerender(self):
+        """After a placement, refresh the original alert: rebuild it with the
+        remaining conflicts, or mark it fully resolved and drop the controls."""
+        if self.conflicts:
+            new_view = BirthdayConflictView(self.cog, self.guild_id, self.conflicts)
+            new_view.message = self.message
+            try:
+                await self.message.edit(
+                    content=render_conflict_message(self.conflicts), view=new_view
+                )
+            except discord.HTTPException:
+                pass
+        else:
+            try:
+                await self.message.edit(
+                    content=(
+                        "✅ **Birthday scheduling conflict resolved.** "
+                        "Every affected member is now on the schedule."
+                    ),
+                    view=None,
+                )
+            except discord.HTTPException:
+                pass
+        self.stop()
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
@@ -286,17 +506,19 @@ class TrainCog(commands.Cog):
                             # same object, so comparing the return value to the
                             # input would always be equal (the original 1.0.x bug).
                             before = dict(current_schedule)
-                            updated_schedule, alerts = check_and_add_birthdays(
+                            updated_schedule, conflicts = check_and_add_birthdays(
                                 current_schedule,
                                 guild_id=guild.id,
                             )
-                            if updated_schedule != before or alerts:
+                            if updated_schedule != before or conflicts:
                                 save_schedule(updated_schedule, guild.id)
-                            if alerts:
+                            if conflicts:
                                 alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
                                 if alert_channel:
-                                    for alert in alerts:
-                                        await alert_channel.send(alert)
+                                    view = BirthdayConflictView(self, guild.id, conflicts)
+                                    view.message = await alert_channel.send(
+                                        render_conflict_message(conflicts), view=view
+                                    )
                             # Stamp *after* a successful run so a mid-fire
                             # crash leaves the day un-stamped and a manual
                             # /train → 🎂 Run birthday check (or the next
@@ -426,8 +648,13 @@ class TrainCog(commands.Cog):
                 )
                 continue
 
-            # Check if someone is scheduled today
-            today_str = today.isoformat()
+            # Announce against the Last War in-game (server, UTC-2) date: this
+            # reminder fires at the in-game reset, which is already the next
+            # in-game day, so the local calendar date would name yesterday's
+            # train. See config.server_date_for.
+            from config import server_date_for
+
+            today_str = server_date_for(guild_now).isoformat()
             schedule = load_schedule(guild.id)
             if today_str not in schedule:
                 self.reminders_fired.add(guild.id)
@@ -603,7 +830,14 @@ class TrainCog(commands.Cog):
             return
         self.rotation_confirm_fired.add(guild.id)  # mark first — one attempt/day
 
-        today_iso = guild_now.date().isoformat()
+        # Resolve against the Last War in-game (server, UTC-2) date, not the
+        # guild's local calendar date. The reminder fires at the in-game reset
+        # (~2h before local midnight), which is already the next in-game day, so
+        # the local date would name the conductor for the day that just ended —
+        # the "train a day behind" bug. See config.server_date_for.
+        from config import server_date_for
+
+        today_iso = server_date_for(guild_now).isoformat()
         history = await asyncio.get_event_loop().run_in_executor(
             None, tr.load_history, guild.id, tcfg.get("history_tab") or ""
         )

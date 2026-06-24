@@ -3,17 +3,39 @@
 Reference for `shiny_tasks.fetch_server_table` and the weekly refresh
 loop. Documents *how* we get the server list and *what* it looks like.
 
-> **Status (2026-06, #293): refresh DISABLED.** The site moved its server
-> data behind an API key (the `/servers` page no longer inlines records in
-> the page chunk, and `/api/servers` now returns `401 "Invalid or missing
-> API key"`). An access request to the maintainer went unanswered, and the
-> site itself notes that newer servers' day values are crowd-corrected
-> estimates. So `shiny_tasks.SERVER_REFRESH_ENABLED` is `False`: the weekly
-> refresh and startup seed are no-ops, and the feature serves the frozen
-> `shiny_task_servers` snapshot already in the DB. The endpoint-discovery
-> and parsing notes below describe the **old** working scrape, kept for
-> reference. To re-enable, repoint `fetch_server_table` at an authenticated
-> endpoint and flip the flag.
+> **Status (2026-06): refresh stays DISABLED — the snapshot is maintained
+> manually.** The upstream `/api/servers` endpoint moved behind an API key we
+> don't have (`401 "Invalid or missing API key"`) and an access request to the
+> maintainer went unanswered (#293), so `shiny_tasks.SERVER_REFRESH_ENABLED`
+> is `False` and the automated weekly refresh / startup seed are no-ops.
+> **We're not pursuing automated refresh** — the auth wall makes it
+> unreliable and the data is slow-moving. Instead the `shiny_task_servers`
+> snapshot is kept current by **periodic manual check-ins**: the full server
+> list is still downloadable from the page's Next.js JS chunk in a signed-in
+> browser, so capture it and load it with the owner-only `/admin shiny_import`
+> command (add/correct one server with `/admin shiny_set`). See **Manual
+> maintenance** below. The endpoint-discovery / regex notes that follow
+> describe the **old** automated scrape, kept for reference.
+
+## Manual maintenance (current process)
+
+No automated refresh. To refresh the snapshot (after an alliance reports a
+wrong day, or just periodically — the source's estimates get crowd-corrected
+over time, which is what caused the #330/#331 drift):
+
+1. Open the source's servers page in a browser, signed in as normal.
+2. DevTools (`F12`) → **Network** → reload → find the JS chunk carrying the
+   full server array. It's a numbered `/_next/static/chunks/<n>-<hash>.js`
+   file (the hash and `?dpl=` token rotate every deploy, so locate it fresh
+   each time) — the records have the `{"id","server":"State#N","timestamp",…}`
+   shape. The exact URL for the most recent capture is kept in local `notes/`
+   (gitignored), since it rotates and isn't worth tracking here.
+3. Save the JSON array of records to a file.
+4. Run **`/admin shiny_import <file>`** (owner-only, `BOT_ADMIN_GUILD_IDS`).
+   It upserts every server, deriving creation dates in **server time (UTC-2)**
+   so they match the source and the 3-day cycle lines up.
+5. Spot-check with **`/admin shiny_servers <min> <max>`**; fix one-offs with
+   **`/admin shiny_set <server> <YYYY-MM-DD>`**.
 
 ## Endpoint discovery
 
@@ -40,9 +62,13 @@ without one):
  "updatedAt":<ms>,"region":["<region>"]}
 ```
 
-The fields we keep: `id` → `server_number`, `timestamp` → `creation_date`
-(`datetime.fromtimestamp(int(ms)/1000, tz=UTC).date()`), `region[0]` →
-`region`.
+The fields we keep: `id` → `server_number`, `timestamp` → `creation_date`,
+`region[0]` → `region`. The creation date is derived in **server time
+(UTC-2)** via `shiny_tasks._creation_date_from_ms` — the in-game day rolls at
+00:00 server time, so a plain UTC date lands servers launched in the
+00:00–01:59 UTC window a day late in the cycle (#331). The current
+`/admin shiny_import` path uses `shiny_tasks.parse_server_records_json`
+(clean JSON array); the regex parser above is the legacy chunk scrape.
 
 As of 2026-05-11 the bundle contains 2266 servers (highest #2270, with
 gaps).

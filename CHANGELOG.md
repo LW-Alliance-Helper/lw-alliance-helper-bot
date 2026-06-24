@@ -17,6 +17,24 @@ and PR description.
 - Optional server-wide and intake-form pulls auto-copy filter-matching applicants into your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 - Optional write-back marks an applicant Want / Confirmed / Declined from Discord and updates your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
+## [1.5.9] — 2026-06-22
+
+### Fixed
+- The birthday scheduling-conflict alert stops re-posting nightly once resolved, and a member placed anywhere within a week of their birthday now silences it ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
+### Added
+- The birthday scheduling-conflict alert is now interactive: place the member on an open day, show the surrounding week, or dismiss it for good ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
+## [1.5.8] — 2026-06-15
+
+### Fixed
+- Daily Shiny Tasks posts now follow the in-game server day, so a post timed just after the reset no longer lists the prior day's servers ([#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330)).
+
+## [1.5.7] — 2026-06-11
+
+### Fixed
+- Train conductor announcements now name the in-game day that's starting, not the one that just ended, so they no longer land a day behind the server reset ([#318](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/318)).
+
 ## [1.5.6] — 2026-06-08
 
 ### Changed

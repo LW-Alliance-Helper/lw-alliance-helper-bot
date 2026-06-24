@@ -247,10 +247,58 @@ def birthday_lookup_for_dates(dates, guild_id: int = None) -> dict[str, list[str
     return out
 
 
-def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[str]]:
+# How far on either side of a birthday a member's existing schedule entry
+# counts as "already handled", suppressing the conflict alert. Wider than
+# the ±1-day placement window on purpose: leadership often resolves a
+# conflict by hand-placing the member a few days off (e.g. birthday+2), and
+# the alert must see that and go quiet. See #89 follow-up.
+CONFLICT_HANDLED_WINDOW = 7
+
+
+def conflict_key(member: dict, bday_iso: str) -> str:
+    """Stable identity for one member's birthday conflict on a specific
+    year's date. Discord-ID-first (survives a sheet rename), name-fallback
+    (lowercased). Used as the dedup key for the dismissed-conflict set so an
+    "Ignore" click silences exactly this birthday occurrence — next year's
+    same-day birthday gets a fresh key via the year embedded in `bday_iso`."""
+    did = str(member.get("discord_id") or "").strip()
+    if did:
+        return f"id:{did}|{bday_iso}"
+    return f"name:{member.get('name', '').strip().lower()}|{bday_iso}"
+
+
+def render_conflict_message(conflicts: list[dict]) -> str:
+    """Render the combined human-readable body of the interactive birthday
+    conflict alert: one header, one section per affected member, and
+    singular/plural closing copy. A standalone helper so the cog (which
+    attaches the resolution buttons) and the tests share one source of truth
+    for the wording — multiple conflicts still collapse into one message
+    (#89)."""
+    sections = [
+        f"**{c['name']}'s** birthday is **{c['bday_fmt']}** but all three "
+        f"surrounding dates are taken:\n" + "\n".join(f"• {t}" for t in c["taken"])
+        for c in conflicts
+    ]
+    return (
+        "🚨 **Birthday scheduling conflict — manual action needed!**\n\n"
+        + "\n\n".join(sections)
+        + "\n\nUse the buttons below to place "
+        + ("this member" if len(conflicts) == 1 else "these members")
+        + " on an open day, show the surrounding schedule, or dismiss this alert."
+    )
+
+
+def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[dict]]:
     """
     Look ahead lookahead_days from today (from guild birthday config).
     Uses configured tab, name column, and birthday column.
+
+    Returns `(schedule, conflicts)` where `conflicts` is a list of
+    structured dicts (one per member who couldn't be placed), each with
+    `name`, `discord_id`, `bday_iso`, `bday_fmt`, `taken`, `open_dates`,
+    and a dedup `key`. An empty list means nothing needs leadership's
+    attention. The cog turns the list into a single interactive alert via
+    `render_conflict_message` + the resolution buttons.
     """
     from config import get_birthday_config
 
@@ -269,9 +317,9 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
     today = date.today()
     check_year = today.year
     added_count = 0
-    # Per-member conflict records collected during the loop; folded into
-    # a single combined Discord message at the end so leadership gets
-    # one post listing every affected member, not one post per member.
+    # Per-member structured conflict records collected during the loop and
+    # returned for the cog to render into one combined interactive alert,
+    # so leadership gets a single post listing every affected member.
     conflicts: list[dict] = []
 
     for member in members:
@@ -297,10 +345,14 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
         if days_until > lookahead:
             continue
 
-        # Person-specific conflict check: is this member's name already
-        # in the schedule on bday-1, bday, or bday+1? If so, skip entirely.
+        # Person-specific conflict check: is this member already in the
+        # schedule anywhere within ±CONFLICT_HANDLED_WINDOW days of their
+        # birthday? If so, treat the conflict as handled and skip entirely.
+        # The window is wider than the ±1-day placement attempt so a manual
+        # fix a few days off the birthday (the common leadership workaround)
+        # silences the alert instead of letting it re-fire daily.
         already_scheduled = False
-        for delta in (-1, 0, 1):
+        for delta in range(-CONFLICT_HANDLED_WINDOW, CONFLICT_HANDLED_WINDOW + 1):
             check_date = (bday + timedelta(days=delta)).isoformat()
             if check_date in schedule:
                 existing_name = schedule[check_date].get("name", "").strip().lower()
@@ -311,6 +363,16 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
         if already_scheduled:
             print(f"[BIRTHDAY] Skipping {name} — already in schedule near {bday.isoformat()}")
             continue
+
+        # Leadership explicitly dismissed this conflict from a prior alert.
+        # Don't auto-place and don't re-alert — they've handled it their way.
+        key = conflict_key(member, bday.isoformat())
+        if guild_id:
+            from config import get_ignored_conflict_keys
+
+            if key in get_ignored_conflict_keys(guild_id):
+                print(f"[BIRTHDAY] Skipping {name} — conflict dismissed by leadership")
+                continue
 
         # Try to place: bday first, then bday-1, then bday+1
         placed_date = None
@@ -328,11 +390,22 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
             for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
                 occupant = schedule[candidate.isoformat()].get("name", "someone")
                 taken.append(f"{candidate:%b} {candidate.day} ({occupant})")
+            # Open slots in the birthday→+7 window that leadership can place
+            # the member into straight from the alert's dropdown.
+            open_dates = [
+                (bday + timedelta(days=i)).isoformat()
+                for i in range(0, 8)
+                if (bday + timedelta(days=i)).isoformat() not in schedule
+            ]
             conflicts.append(
                 {
                     "name": name,
+                    "discord_id": member.get("discord_id"),
+                    "bday_iso": bday.isoformat(),
                     "bday_fmt": f"{bday:%A, %B} {bday.day}",
                     "taken": taken,
+                    "open_dates": open_dates,
+                    "key": key,
                 }
             )
             print(f"[BIRTHDAY] CONFLICT — could not place {name} around {bday.isoformat()}")
@@ -363,22 +436,8 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
             f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule"
         )
 
-    # Fold every conflict into a single combined alert message. The list
-    # is always 0 or 1 entries — callers that iterate `alerts` end up
-    # sending at most one Discord message per check_and_add_birthdays
-    # invocation, no matter how many members hit the conflict path.
-    if not conflicts:
-        return schedule, []
-    sections = [
-        f"**{c['name']}'s** birthday is **{c['bday_fmt']}** but all three "
-        f"surrounding dates are taken:\n" + "\n".join(f"• {t}" for t in c["taken"])
-        for c in conflicts
-    ]
-    combined = (
-        "🚨 **Birthday scheduling conflict — manual action needed!**\n\n"
-        + "\n\n".join(sections)
-        + "\n\nPlease manually add "
-        + ("this member" if len(conflicts) == 1 else "these members")
-        + " to the schedule."
-    )
-    return schedule, [combined]
+    # Return the structured conflicts. The cog renders them into a single
+    # combined message (render_conflict_message) with interactive
+    # resolution buttons attached — one Discord post no matter how many
+    # members hit the conflict path (#89). An empty list means no alert.
+    return schedule, conflicts

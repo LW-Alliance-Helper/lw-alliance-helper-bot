@@ -90,11 +90,20 @@ async def test_healthz_returns_ok():
 # ── api_server helpers ────────────────────────────────────────────────────────
 
 
-def test_api_server_enabled_reflects_key(monkeypatch):
+def test_api_server_enabled_reflects_key_or_port(monkeypatch):
     monkeypatch.delenv("MAPMANAGER_API_KEY", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
     assert api_server_enabled() is False
+    # The integration key enables it.
     monkeypatch.setenv("MAPMANAGER_API_KEY", "k")
     assert api_server_enabled() is True
+    # A web deploy (Railway sets PORT) binds even before the key is set, so the
+    # port is up for routing + the health check.
+    monkeypatch.delenv("MAPMANAGER_API_KEY", raising=False)
+    monkeypatch.setenv("PORT", "8080")
+    assert api_server_enabled() is True
+    # Neither set (local dev) binds nothing.
+    monkeypatch.delenv("PORT", raising=False)
     monkeypatch.setenv("MAPMANAGER_API_KEY", "  ")
     assert api_server_enabled() is False
 

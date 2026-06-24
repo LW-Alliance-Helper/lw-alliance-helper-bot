@@ -366,11 +366,14 @@ async def on_ready():
             sentry_sdk.capture_exception(e)
 
         # Start the internal HTTP API server for the Map Manager integration
-        # (#316) — only when MAPMANAGER_API_KEY is configured, mirroring the
-        # Sentry-DSN opt-in so dev / CI don't bind a port. Runs in-process
-        # alongside the gateway client on 0.0.0.0:${PORT}; Railway routes
-        # inbound HTTP to it. The runner handle is stashed on the bot so it
-        # outlives this scope (and so a future shutdown hook can close it).
+        # (#316). Starts when running as a Railway web service (PORT set) or
+        # when MAPMANAGER_API_KEY is configured, so the port is bound for
+        # Railway's routing + health check. Runs in-process alongside the
+        # gateway client on 0.0.0.0:${PORT} — the /members lookup needs the
+        # gateway member cache, so the API must NOT be split into a separate
+        # service. Railway routes inbound HTTP to it via the `web` Procfile
+        # process type. The runner handle is stashed on the bot so it outlives
+        # this scope (and so a future shutdown hook can close it).
         try:
             from api_server import api_server_enabled, start_api_server
 
@@ -378,7 +381,10 @@ async def on_ready():
                 bot._api_runner = await start_api_server(bot)
                 print(f"[API] Internal HTTP API server started on :{os.getenv('PORT', '8080')}")
             else:
-                print("[API] MAPMANAGER_API_KEY not set — internal HTTP API server disabled")
+                print(
+                    "[API] No PORT (not a web deploy) and no MAPMANAGER_API_KEY — "
+                    "internal HTTP API server disabled (local dev)"
+                )
         except Exception as e:
             print(f"[API] Failed to start internal HTTP API server: {e}")
             sentry_sdk.capture_exception(e)

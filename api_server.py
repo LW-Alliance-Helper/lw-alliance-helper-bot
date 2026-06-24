@@ -47,10 +47,15 @@ DEFAULT_PORT = 8080
 def api_server_enabled() -> bool:
     """True when the inbound API server should start.
 
-    Gated on the service key so an environment that hasn't configured the
-    integration never binds a port (matches the Sentry-DSN opt-in pattern).
+    Starts when the integration is configured (``MAPMANAGER_API_KEY``) OR when
+    running as a Railway web service (Railway sets ``PORT``) — so the process
+    binds the port for Railway's routing + health check even before the key is
+    set. The uncredentialed ``/healthz`` answers the health check; credentialed
+    routes return 503 until the key is configured. Local dev (neither var set)
+    binds nothing. Pairs with the ``web`` Procfile process type; a Railway
+    ``worker`` gets no inbound HTTP routing, so the server would be unreachable.
     """
-    return bool(os.getenv("MAPMANAGER_API_KEY", "").strip())
+    return bool(os.getenv("MAPMANAGER_API_KEY", "").strip() or os.getenv("PORT", "").strip())
 
 
 def _port() -> int:

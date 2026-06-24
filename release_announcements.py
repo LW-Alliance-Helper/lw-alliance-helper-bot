@@ -69,6 +69,22 @@ RELEASE_ANNOUNCEMENTS: dict[str, ReleaseAnnouncement] = {
         support_post_url="https://discord.com/channels/1497432945827516639/1502745629217263746",
         github_release_url="https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/releases/tag/v1.4.0",
     ),
+    "1.6.0": ReleaseAnnouncement(
+        description=(
+            "Version 1.6.0 brings Transfer Management, a new way to stay on "
+            "top of recruiting without leaving Discord. Here's what your "
+            "alliance can do starting now:"
+        ),
+        bullets=[
+            "New applicants ping you the moment they appear in your sheet (💎 Premium)",
+            "Status changes (Confirmed, Declined, and more) ping you too (💎 Premium)",
+            "Send apply / confirm / decline messages in one click (💎 Premium)",
+            "Auto-pull matching applicants from a server-wide sheet or form (💎 Premium)",
+            "Mark and write decisions back to your sheet from Discord (💎 Premium)",
+        ],
+        support_post_url="https://discord.com/channels/1497432945827516639/1502745629217263746",
+        github_release_url="https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/releases/tag/v1.6.0",
+    ),
 }
 
 

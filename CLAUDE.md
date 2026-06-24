@@ -402,7 +402,7 @@ These have been thought through. Reopening them needs a real reason:
   and 1.4.0 (Premium Storm Overhaul [#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)
   + Participation Tracking 2.0 [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)).
   See `CHANGELOG.md` for per-version detail.
-- ~2334 tests collected; full default (non-sheets) lane green.
+- ~2615 tests pass on the default (non-sheets) lane (18 sheets tests deselected).
 - Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
   large-files), ruff lint + format (line-length 100), codespell, a

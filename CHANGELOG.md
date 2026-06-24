@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.0] — 2026-06-24
+
+### Added
+- **Transfer Management** (💎 Premium): watches your recruiting sheet and pings you on new applicants and status changes ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer notices carry one-click in-game message drafts (apply / confirm / decline) and a full applicant record ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Optional server-wide and intake-form pulls auto-copy filter-matching applicants into your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Optional write-back marks an applicant Want / Confirmed / Declined from Discord and updates your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
 ## [1.5.6] — 2026-06-08
 
 ### Changed

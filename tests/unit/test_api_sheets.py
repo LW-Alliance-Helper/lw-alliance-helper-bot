@@ -16,7 +16,6 @@ from tests.conftest import TEST_GUILD_ID
 AUTH = {"Authorization": "Bearer testkey"}
 
 STUB_ROUTES = [
-    ("GET", f"/api/guilds/{TEST_GUILD_ID}/sheet/roster"),
     ("GET", f"/api/guilds/{TEST_GUILD_ID}/sheet/storm-history"),
     ("POST", f"/api/guilds/{TEST_GUILD_ID}/sheet/storm-history"),
 ]

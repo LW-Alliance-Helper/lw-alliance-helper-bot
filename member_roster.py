@@ -183,6 +183,71 @@ def detect_column_layout(headers: list[str]) -> dict:
     return {"layout": layout, "pending_appends": pending}
 
 
+# ── Roster read for the Map Manager API (#316) ──────────────────────────────
+#
+# `GET /sheet/roster` serves the alliance roster to Map Manager. The bot's
+# *structured* roster columns are identity only (Discord ID / Name / Display
+# Name / Joined / Roles — see `_bot_managed_cols`). Power lives in an
+# alliance-owned custom column the bot doesn't read structurally, and
+# attendance lives in the storm participation log — so those stat fields are
+# left null here (the null-tolerant RosterMember shape) and the route adds tier
+# roles from the gateway. Pure parsing lives here; gateway/role enrichment and
+# the ETag live in the route.
+
+
+def _roster_cell(row: list[str], idx: int) -> str:
+    return row[idx].strip() if 0 <= idx < len(row) else ""
+
+
+def parse_roster_rows(rcfg: dict, values: list[list[str]]) -> list[dict]:
+    """Parse the roster tab's `get_all_values()` into identity dicts.
+
+    Returns `[{ discord_id, name, display_name, joined_at }]` (sheet-derived
+    only; the route adds tier roles + the null stat fields). Skips the header
+    row and any row with neither a name nor a display name. A non-numeric
+    Discord-ID cell (a hand-typed non-Discord member) yields `discord_id=None`.
+    """
+    if not values or len(values) < 2:
+        return []
+    did_col = int(rcfg.get("discord_id_col", 0))
+    name_col = int(rcfg.get("name_col", 1))
+    disp_col = int(rcfg.get("display_col", 2))
+    joined_col = int(rcfg.get("joined_col", 3))
+    out: list[dict] = []
+    for row in values[1:]:
+        name = _roster_cell(row, name_col)
+        display = _roster_cell(row, disp_col)
+        if not name and not display:
+            continue
+        raw_id = _roster_cell(row, did_col)
+        out.append(
+            {
+                "discord_id": raw_id if raw_id.isdigit() else None,
+                "name": name or display,
+                "display_name": display or None,
+                "joined_at": _roster_cell(row, joined_col) or None,
+            }
+        )
+    return out
+
+
+def read_roster_members(guild_id: int) -> list[dict]:
+    """Read the guild's roster tab into identity dicts (see `parse_roster_rows`).
+
+    Degrades to an empty list (never raises) when the roster isn't configured or
+    the sheet can't be read, so the API returns an empty roster rather than a
+    500. The underlying read is cached (`read_member_roster_values`)."""
+    import config
+
+    try:
+        rcfg = config.get_member_roster_config(guild_id)
+        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
+    except Exception as e:
+        print(f"[ROSTER] Could not read roster for guild {guild_id}: {e}")
+        return []
+    return parse_roster_rows(rcfg, values)
+
+
 def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     """
     Build the rows that will be written to the sheet, including a header row.

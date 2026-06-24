@@ -38,6 +38,7 @@ from api.routes.sheets import (
     sheet_roster,
     sheet_storm_history_append,
     sheet_storm_history_get,
+    sheet_storm_roster,
 )
 
 DEFAULT_PORT = 8080
@@ -79,12 +80,15 @@ def build_app(bot=None) -> web.Application:
     app.router.add_get("/api/guilds/{guild_id}/link", get_guild_link)
     app.router.add_get("/api/guilds/{guild_id}/members/{discord_user_id}", get_guild_member)
 
-    # Sheet-backed reads (roster / storm history / growth) + the OCR append.
-    # Currently 501 stubs — see api/routes/sheets.py for why.
+    # Sheet-backed reads. roster + growth are implemented; storm-history is a
+    # 501 stub (needs OCR-supplied match outcomes) — see api/routes/sheets.py.
     app.router.add_get("/api/guilds/{guild_id}/sheet/roster", sheet_roster)
     app.router.add_get("/api/guilds/{guild_id}/sheet/storm-history", sheet_storm_history_get)
     app.router.add_post("/api/guilds/{guild_id}/sheet/storm-history", sheet_storm_history_append)
     app.router.add_get("/api/guilds/{guild_id}/sheet/growth", sheet_growth)
+    # Storm-roster write-back (handoff §6.1): MM's rebuilt planner posts a
+    # finished event roster; the bot writes it to rosters_tab if the date is empty.
+    app.router.add_post("/api/guilds/{guild_id}/sheet/storm-roster", sheet_storm_roster)
     return app
 
 

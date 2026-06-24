@@ -26,11 +26,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 
 from aiohttp import web
 
 from api import BOT_KEY
 from api.auth import requires_api_key
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _NOT_IMPLEMENTED_DETAIL = (
     "Sheet-backed endpoint not implemented yet. See api/routes/sheets.py for why."
@@ -168,3 +171,45 @@ async def sheet_storm_history_append(request: web.Request) -> web.Response:
     # OCR write-back (append a parsed storm row to the storm-log sheet) is
     # Phase 8; stubbed per the handoff.
     return _not_implemented("storm-history append", "{ appended: true }")
+
+
+@requires_api_key
+async def sheet_storm_roster(request: web.Request) -> web.Response:
+    """Write an MM-built storm plan to the bot's `rosters_tab` (handoff §6.1).
+
+    Body `{ event_type: "ds"|"cs", event_date: "YYYY-MM-DD", assignments: [...],
+    overwrite?: bool }`. Writes one row per assignment only when that
+    (event_type, date) has no rows yet (or `overwrite`), filling Power from the
+    roster. Returns `{ written, rows, skipped_reason? }`.
+    """
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON
+        return web.json_response({"error": "bad_json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "bad_body"}, status=400)
+
+    event_type = str(body.get("event_type", "")).lower()
+    event_date = str(body.get("event_date", ""))
+    assignments = body.get("assignments")
+    if event_type not in ("ds", "cs"):
+        return web.json_response({"error": "bad_event_type"}, status=400)
+    if not _DATE_RE.match(event_date):
+        return web.json_response({"error": "bad_event_date"}, status=400)
+    if not isinstance(assignments, list):
+        return web.json_response({"error": "bad_assignments"}, status=400)
+
+    import storm_roster_writeback
+
+    result = await asyncio.to_thread(
+        storm_roster_writeback.write_mm_storm_roster,
+        guild_id,
+        event_type,
+        event_date,
+        assignments,
+        overwrite=bool(body.get("overwrite", False)),
+    )
+    return web.json_response(result)

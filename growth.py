@@ -275,9 +275,12 @@ def build_member_power_map(metric_labels: list[str], rows: list[list[str]]) -> d
     for row in rows[1:]:
         if not row or not row[0].strip():
             continue
+        # Emit in configured metric order (NOT sheet-header order): MM derives
+        # the roster's power column order from object-key insertion order.
         values = {}
-        for label, idx in latest_cols.items():
-            if idx < len(row):
+        for label in metric_labels:
+            idx = latest_cols.get(label)
+            if idx is not None and idx < len(row):
                 parsed = _parse_growth_cell(row[idx])
                 if parsed is not None:
                     values[label] = _as_number(parsed)

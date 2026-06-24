@@ -97,3 +97,12 @@ def test_build_member_power_map_latest_period_only():
 def test_build_member_power_map_empty_inputs():
     assert growth.build_member_power_map(["Power"], []) == {}
     assert growth.build_member_power_map([], [["Name", "Power (Jan 2026)"], ["Ada", "1"]]) == {}
+
+
+def test_build_member_power_map_emits_configured_key_order():
+    # Sheet header lists Kills before Power, but configured order is Power, Kills.
+    # MM keys the roster's power columns off insertion order, so the emitted map
+    # must follow the configured order, not the sheet layout.
+    rows = [["Name", "Kills (Jan 2026)", "Power (Jan 2026)"], ["Ada", "60", "1200000"]]
+    out = growth.build_member_power_map(["Power", "Kills"], rows)
+    assert list(out["ada"].keys()) == ["Power", "Kills"]

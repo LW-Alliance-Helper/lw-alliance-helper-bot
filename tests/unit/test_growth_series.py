@@ -78,3 +78,22 @@ def test_parse_cell_blank_is_none_zero_is_active():
 def test_read_growth_series_empty_when_unconfigured(monkeypatch):
     monkeypatch.setattr("config.get_growth_config", lambda gid: {"metrics": [], "tab_growth": ""})
     assert growth.read_growth_series(123) == {"metrics": [], "snapshots": []}
+
+
+# ── build_member_power_map (roster `power` source) ────────────────────────────
+
+
+def test_build_member_power_map_latest_period_only():
+    rows = [
+        ["Name", "Power (Jan 2026)", "Kills (Jan 2026)", "Power (Feb 2026)", "Kills (Feb 2026)"],
+        ["Ada", "1000000", "50", "1200000", "60"],
+        ["Bo", "2000000", "70", "", ""],  # blank in latest period (Feb) → omitted
+    ]
+    out = growth.build_member_power_map(["Power", "Kills"], rows)
+    assert out["ada"] == {"Power": 1200000, "Kills": 60}
+    assert "bo" not in out
+
+
+def test_build_member_power_map_empty_inputs():
+    assert growth.build_member_power_map(["Power"], []) == {}
+    assert growth.build_member_power_map([], [["Name", "Power (Jan 2026)"], ["Ada", "1"]]) == {}

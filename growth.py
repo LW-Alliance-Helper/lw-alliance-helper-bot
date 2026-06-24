@@ -249,6 +249,63 @@ def read_growth_series(guild_id: int) -> dict:
     return build_growth_series(metric_labels, rows)
 
 
+def build_member_power_map(metric_labels: list[str], rows: list[list[str]]) -> dict:
+    """Per-member *current* value for each configured metric, from the latest
+    snapshot column. Keyed by lowercased member name (column A).
+
+    This is the `power` map for `GET /sheet/roster`: the alliance's growth
+    metrics double as their roster power columns (Total Hero / 1st Squad / Arena
+    etc.). Returns `{ name_lower: { label: number } }`; members with no values
+    are omitted.
+    """
+    if not rows or not rows[0] or not metric_labels:
+        return {}
+    header = rows[0]
+    periods = _extract_period_labels(header, metric_labels)
+    if not periods:
+        return {}
+    latest = periods[-1]
+    latest_cols: dict[str, int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            if h == f"{label} ({latest})":
+                latest_cols[label] = i
+                break
+    out: dict[str, dict] = {}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        values = {}
+        for label, idx in latest_cols.items():
+            if idx < len(row):
+                parsed = _parse_growth_cell(row[idx])
+                if parsed is not None:
+                    values[label] = _as_number(parsed)
+        if values:
+            out[row[0].strip().lower()] = values
+    return out
+
+
+def read_member_power_map(guild_id: int) -> dict:
+    """Read the latest growth snapshot into a per-member power map for the
+    roster API (see `build_member_power_map`). Degrades to `{}` (never raises)
+    when growth isn't configured or the sheet can't be read."""
+    from config import get_growth_config
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth:
+        return {}
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] Could not read growth tab for power map, guild {guild_id}: {e}")
+        return {}
+    return build_member_power_map(metric_labels, rows)
+
+
 def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
     """Compute the next scheduled snapshot datetime, in America/New_York.
 

@@ -1,8 +1,8 @@
 """Tests for GET /sheet/roster and its parser (6D, #316).
 
 `parse_roster_rows` is the pure sheet→identity mapping; the endpoint adds tier
-roles from the (faked) gateway, nulls the stat fields, and serves an ETag with
-If-None-Match support.
+roles (gateway), the power map (growth metrics), and storm attendance, then
+serves an ETag with If-None-Match support.
 """
 
 from __future__ import annotations
@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+import growth
 import member_roster
+import member_stats
 from api_server import build_app
 from tests.conftest import TEST_GUILD_ID
 
@@ -23,6 +25,15 @@ RCFG = {"discord_id_col": 0, "name_col": 1, "display_col": 2, "joined_col": 3}
 @pytest.fixture(autouse=True)
 def _api_key(monkeypatch):
     monkeypatch.setenv("MAPMANAGER_API_KEY", "testkey")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sheets(monkeypatch):
+    """Default the three enrichment readers to empty so endpoint tests never hit
+    a real sheet; individual tests override as needed."""
+    monkeypatch.setattr(member_roster, "read_roster_members", lambda gid: [])
+    monkeypatch.setattr(growth, "read_member_power_map", lambda gid: {})
+    monkeypatch.setattr(member_stats, "read_storm_attendance_map", lambda gid: {})
 
 
 def _member(role_names):
@@ -70,7 +81,7 @@ def test_parse_skips_rows_without_name_or_display():
 # ── endpoint ──────────────────────────────────────────────────────────────────
 
 
-async def test_roster_returns_members_with_tiers(seeded_db, monkeypatch):
+async def test_roster_returns_members_with_enrichment(seeded_db, monkeypatch):
     monkeypatch.setattr(
         member_roster,
         "read_roster_members",
@@ -79,6 +90,13 @@ async def test_roster_returns_members_with_tiers(seeded_db, monkeypatch):
             {"discord_id": None, "name": "manual", "display_name": None, "joined_at": None},
         ],
     )
+    monkeypatch.setattr(
+        growth,
+        "read_member_power_map",
+        lambda gid: {"ada": {"Total Hero": 1000000, "1st Squad": 500000}},
+    )
+    monkeypatch.setattr(member_stats, "read_storm_attendance_map", lambda gid: {"ada": 92})
+
     member = _member(["Leadership", "Member"])
     guild = SimpleNamespace(get_member=lambda uid: member if uid == 123 else None)
     bot = SimpleNamespace(get_guild=lambda gid: guild)
@@ -89,27 +107,30 @@ async def test_roster_returns_members_with_tiers(seeded_db, monkeypatch):
         assert r.headers.get("ETag")
         body = await r.json()
 
-    assert body[0]["name"] == "ada"
-    assert body[0]["joined_at"] == "2026-01-15"
-    assert set(body[0]["roles"]) == {"leadership", "member"}
-    # stat fields are null pending enrichment
-    for field in ("power", "attendance", "hero_level", "last_seen"):
-        assert body[0][field] is None
-    # non-Discord member: no tier roles
-    assert body[1]["discord_id"] is None
-    assert body[1]["roles"] == []
+    ada = body[0]
+    assert ada["name"] == "ada"
+    assert ada["joined_at"] == "2026-01-15"
+    assert set(ada["roles"]) == {"leadership", "member"}
+    assert ada["power"] == {"Total Hero": 1000000, "1st Squad": 500000}
+    assert ada["attendance"] == 92
+    # hero_level / last_seen were dropped from the schema
+    assert "hero_level" not in ada and "last_seen" not in ada
+
+    manual = body[1]
+    assert manual["discord_id"] is None
+    assert manual["roles"] == []
+    assert manual["power"] == {}  # no growth data → empty map
+    assert manual["attendance"] is None
 
 
-async def test_roster_empty_when_unconfigured(seeded_db, monkeypatch):
-    monkeypatch.setattr(member_roster, "read_roster_members", lambda gid: [])
+async def test_roster_empty_when_unconfigured(seeded_db):
     async with TestClient(TestServer(build_app(bot=None))) as client:
         r = await client.get(f"/api/guilds/{TEST_GUILD_ID}/sheet/roster", headers=AUTH)
         assert r.status == 200
         assert (await r.json()) == []
 
 
-async def test_roster_conditional_get_304(seeded_db, monkeypatch):
-    monkeypatch.setattr(member_roster, "read_roster_members", lambda gid: [])
+async def test_roster_conditional_get_304(seeded_db):
     async with TestClient(TestServer(build_app(bot=None))) as client:
         first = await client.get(f"/api/guilds/{TEST_GUILD_ID}/sheet/roster", headers=AUTH)
         etag = first.headers["ETag"]

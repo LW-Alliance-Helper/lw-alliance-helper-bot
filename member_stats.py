@@ -423,6 +423,45 @@ def _storm_attendance_for_member(guild_id: int, event_type: str, name_lower: str
     return attended, len(rows), last_attended
 
 
+def read_storm_attendance_map(guild_id: int) -> dict[str, int]:
+    """Storm attendance % per member for the roster API (#316), keyed by
+    lowercased member name.
+
+    Mirrors what `/member_stats` computes per member (attended / tracked from the
+    Per-Member participation Log via `_storm_attendance_for_member`), but in bulk
+    — one log read per event type — and summed across both storm types into one
+    figure. Members with no tracked events are omitted, so the roster renders a
+    null. Degrades per-event-type on read failure rather than raising.
+    """
+    from storm_log import ATTENDANCE_QUESTION_KEY, read_member_log_window
+
+    totals: dict[str, list[int]] = {}  # name_lower -> [attended, tracked]
+    for event_type in ("DS", "CS"):
+        try:
+            dates, by_member = read_member_log_window(
+                guild_id, event_type, 50, ATTENDANCE_QUESTION_KEY
+            )
+        except Exception as e:
+            logger.warning(
+                "[MEMBERSTATS] attendance map read failed guild=%s type=%s: %s",
+                guild_id,
+                event_type,
+                e,
+            )
+            continue
+        if not dates:
+            continue
+        for name, rows in by_member.items():
+            nl = name.strip().lower()
+            if not nl:
+                continue
+            attended = sum(1 for v in rows.values() if _storm_truthy(v))
+            acc = totals.setdefault(nl, [0, 0])
+            acc[0] += attended
+            acc[1] += len(rows)
+    return {nl: _pct(a, t) for nl, (a, t) in totals.items() if t}
+
+
 def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
     """(primary, sub, sat_out, last_sat_out_date) placement across recent events,
     or None. Primary/sub from the saved team plans (by Discord ID). "Sat out"

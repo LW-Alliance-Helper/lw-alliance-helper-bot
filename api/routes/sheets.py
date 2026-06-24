@@ -6,12 +6,11 @@ surfaces, plus the OCR write-back append.
 Status:
   - **`GET /sheet/growth` — implemented.** Generic pass-through of the alliance's
     configured growth metrics (``growth.read_growth_series``).
-  - **`GET /sheet/roster` — implemented (identity + tier roles).** The bot's
-    structured roster columns are identity only, so this returns
-    name/discord_id/display_name/joined_at + tier roles (from the gateway), with
-    the stat fields (power/attendance/hero_level/last_seen) null — those need a
-    cross-tab enrichment pass + a source decision (power especially). Carries an
-    ``ETag`` and honors ``If-None-Match`` (304).
+  - **`GET /sheet/roster` — implemented.** Identity + tier roles, plus ``power``
+    (the alliance's configured growth metrics at their latest snapshot, as a
+    label→number map) and ``attendance`` (combined storm attendance %, matching
+    ``/member_stats``). hero_level / last_seen are dropped. Carries an ``ETag``
+    and honors ``If-None-Match`` (304); power/attendance join by member name.
   - **`GET /sheet/storm-history` — 501 stub.** Needs match-outcome data the bot
     doesn't store yet (it tracks participation/attendance, not results — those
     arrive via the OCR write-back).
@@ -88,32 +87,55 @@ async def sheet_growth(request: web.Request) -> web.Response:
 async def sheet_roster(request: web.Request) -> web.Response:
     """The alliance roster as MM's ``RosterMember[]`` (+ ETag).
 
-    Identity (name / discord_id / display_name / joined_at) comes from the
-    roster tab; `roles` (leadership/member tiers) is resolved live from the
-    gateway. `power`/`attendance`/`hero_level`/`last_seen` are null pending the
-    enrichment pass. Empty list when no roster is configured.
+    Identity (name / discord_id / display_name / joined_at) comes from the Member
+    Roster tab; ``roles`` (leadership/member tiers) resolves live from the
+    gateway; ``power`` is the alliance's configured growth metrics at their
+    latest snapshot (Total Hero / 1st Squad / ... as a label→number map); and
+    ``attendance`` is the combined storm attendance % (matching ``/member_stats``).
+    Empty list when no roster is configured; power/attendance are best-effort by
+    member name.
     """
     guild_id = _parse_guild_id(request)
     if guild_id is None:
         return web.json_response({"error": "bad_guild_id"}, status=400)
 
     import config
+    import growth
     import member_roster
+    import member_stats
     from api.routes.guilds import _tier_roles
 
-    rows = await asyncio.to_thread(member_roster.read_roster_members, guild_id)
+    # Three blocking gspread reads — run them concurrently off the event loop.
+    rows, power_map, attendance_map = await asyncio.gather(
+        asyncio.to_thread(member_roster.read_roster_members, guild_id),
+        asyncio.to_thread(growth.read_member_power_map, guild_id),
+        asyncio.to_thread(member_stats.read_storm_attendance_map, guild_id),
+    )
+
     cfg = config.get_config(guild_id)
     bot = request.app[BOT_KEY]
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     members = []
     for r in rows:
-        roles: list[str] = []
         discord_id = r.get("discord_id")
+        roles: list[str] = []
         if discord_id and guild is not None:
             member = guild.get_member(int(discord_id))
             if member is not None:
                 roles = _tier_roles(member, cfg)
+
+        # Power / attendance join by name, preferring the display name (the key
+        # the growth + participation sheets use), falling back to the username.
+        name_keys = [k.strip().lower() for k in (r.get("display_name"), r.get("name")) if k]
+        power: dict = {}
+        attendance = None
+        for k in name_keys:
+            if not power:
+                power = power_map.get(k, {})
+            if attendance is None:
+                attendance = attendance_map.get(k)
+
         members.append(
             {
                 "discord_id": discord_id,
@@ -121,10 +143,8 @@ async def sheet_roster(request: web.Request) -> web.Response:
                 "display_name": r.get("display_name"),
                 "joined_at": r.get("joined_at"),
                 "roles": roles,
-                "power": None,
-                "attendance": None,
-                "hero_level": None,
-                "last_seen": None,
+                "power": power,
+                "attendance": attendance,
             }
         )
 

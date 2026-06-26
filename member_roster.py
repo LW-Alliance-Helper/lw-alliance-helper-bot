@@ -248,6 +248,93 @@ def read_roster_members(guild_id: int) -> list[dict]:
     return parse_roster_rows(rcfg, values)
 
 
+def add_ocr_members(guild_id: int, members: list[dict]) -> dict:
+    """Merge-add OCR'd member names to the Member Roster tab (handoff §6.3).
+
+    ``members`` is ``[{ "name": str, "discord_id": str | None }]`` parsed by Map
+    Manager from a roster screenshot. Each name not already on the roster (by
+    Discord id when present, else case-insensitive name) is appended as a new
+    row — the name in both the Name and Display Name columns, with the presence
+    column set to "No". Identity stays Discord-sync-owned: a name that turns out
+    to be a live Discord member is reconciled (and the flag flipped) on the next
+    member sync. Existing rows and hand-typed non-Discord rows are never touched.
+
+    Returns ``{ "written": bool, "rows": int }`` (``rows`` = members appended).
+    Degrades to not-written (never raises) when the roster isn't configured or
+    the sheet can't be read.
+    """
+    import config
+
+    if not members:
+        return {"written": False, "rows": 0}
+    cfg = config.get_member_roster_config(guild_id)
+    if not cfg.get("enabled"):
+        return {"written": False, "rows": 0}
+    tab_name = cfg.get("tab_name") or "Member Roster"
+    try:
+        ws = config.get_member_roster_sheet(guild_id, tab_name)
+        existing = ws.get_all_values()
+    except Exception as e:
+        print(f"[ROSTER] OCR member-add read failed for guild {guild_id}: {e}")
+        return {"written": False, "rows": 0}
+
+    did_col = int(cfg.get("discord_id_col", 0))
+    name_col = int(cfg.get("name_col", 1))
+    disp_col = int(cfg.get("display_col", 2))
+    header = existing[0] if existing else []
+    presence_idx = next(
+        (i for i, h in enumerate(header) if h.strip() == DISCORD_FLAG_COLUMN_HEADER), -1
+    )
+
+    # Index existing identity so the merge-add never duplicates a member.
+    seen_names: set[str] = set()
+    seen_ids: set[str] = set()
+    for row in existing[1:]:
+        for c in (name_col, disp_col):
+            v = row[c].strip().lower() if c < len(row) else ""
+            if v:
+                seen_names.add(v)
+        rid = row[did_col].strip() if did_col < len(row) else ""
+        if rid:
+            seen_ids.add(rid)
+
+    needed = [len(header), did_col + 1, name_col + 1, disp_col + 1]
+    if presence_idx >= 0:
+        needed.append(presence_idx + 1)
+    width = max(needed)
+
+    new_rows: list[list[str]] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        if not name:
+            continue
+        raw_id = m.get("discord_id")
+        did = str(raw_id).strip() if raw_id not in (None, "") else ""
+        if did and did in seen_ids:
+            continue
+        if name.lower() in seen_names:
+            continue
+        row = [""] * width
+        row[name_col] = name
+        row[disp_col] = name
+        if did:
+            row[did_col] = did
+        if presence_idx >= 0:
+            row[presence_idx] = "No"
+        new_rows.append(row)
+        seen_names.add(name.lower())
+        if did:
+            seen_ids.add(did)
+
+    if not new_rows:
+        return {"written": False, "rows": 0}
+    ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+    config.clear_roster_read_cache()
+    return {"written": True, "rows": len(new_rows)}
+
+
 def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     """
     Build the rows that will be written to the sheet, including a header row.

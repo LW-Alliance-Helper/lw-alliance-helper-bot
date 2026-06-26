@@ -40,10 +40,15 @@ from api.routes.guilds import (
 )
 from api.routes.healthz import healthz
 from api.routes.sheets import (
+    get_growth_breakdown,
     get_member_history,
+    get_member_profile,
+    get_storm_trends,
     get_zone_rules,
     sheet_growth,
+    sheet_power_upsert,
     sheet_roster,
+    sheet_roster_add,
     sheet_storm_history_append,
     sheet_storm_history_get,
     sheet_storm_roster,
@@ -116,6 +121,17 @@ def build_app(bot=None) -> web.Application:
         "/api/guilds/{guild_id}/members/{discord_user_id}/history", get_member_history
     )
     app.router.add_get("/api/guilds/{guild_id}/storm/zone-rules", get_zone_rules)
+
+    # OCR write-backs (handoff §6.2 / §6.3): MM posts parsed screenshot data; the
+    # bot merges into the Sheet without clobbering.
+    app.router.add_post("/api/guilds/{guild_id}/sheet/roster", sheet_roster_add)
+    app.router.add_post("/api/guilds/{guild_id}/sheet/power", sheet_power_upsert)
+
+    # Enrichment reads (surface bot features on MM's alliance pages): growth
+    # breakdown buckets, the full member profile, and storm participation trends.
+    app.router.add_get("/api/guilds/{guild_id}/growth/breakdown", get_growth_breakdown)
+    app.router.add_get("/api/guilds/{guild_id}/members/{discord_user_id}/stats", get_member_profile)
+    app.router.add_get("/api/guilds/{guild_id}/storm/trends", get_storm_trends)
     return app
 
 

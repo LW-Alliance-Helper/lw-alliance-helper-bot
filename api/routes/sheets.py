@@ -12,9 +12,15 @@ Status:
     ``/member_stats``). hero_level / last_seen are dropped. Carries an ``ETag``
     and honors ``If-None-Match`` (304); power/attendance join by member name.
   - **`GET /sheet/storm-history` — 501 stub.** Needs match-outcome data the bot
-    doesn't store yet (it tracks participation/attendance, not results — those
-    arrive via the OCR write-back).
-  - **`POST /sheet/storm-history` — 501 stub** (OCR append is Phase 8).
+    doesn't store (it tracks participation/attendance, not results). By design,
+    storm results live only in MM (OCR), not the Sheet — so this stays a stub.
+  - **`POST /sheet/storm-history` — 501 stub** (storm results are MM-only).
+  - **`POST /sheet/roster` — implemented.** OCR member-add (§6.3): merge-adds
+    parsed names, preserving existing + non-Discord rows.
+  - **`POST /sheet/power` — implemented.** OCR power upsert (§6.2): per-metric
+    upsert into the current period's growth columns; never clobbers.
+  - **`GET /growth/breakdown`, `GET /members/{id}/stats`, `GET /storm/trends` —
+    implemented.** Enrichment reads surfacing bot features on MM's pages.
 
 The gspread reads are blocking and the API server shares the gateway's event
 loop, so reads run via ``asyncio.to_thread``. Target shapes live in the Map
@@ -266,3 +272,126 @@ async def get_zone_rules(request: web.Request) -> web.Response:
 
     rules = await asyncio.to_thread(storm_strategy.zone_rules_for, guild_id, event_type.upper())
     return web.json_response({"rules": rules})
+
+
+# ── OCR write-backs (handoff §6.2 / §6.3) ─────────────────────────────────────
+# MM parses a screenshot, the officer confirms, and MM posts only what it's
+# adding/changing. The bot merges into the Sheet (the source of truth) and never
+# clobbers existing data. Both return `{ written, rows }`.
+
+
+@requires_api_key
+async def sheet_roster_add(request: web.Request) -> web.Response:
+    """OCR member-add (§6.3). Body `{ members: [{ name, discord_id }] }`
+    (`discord_id` is null for OCR'd names). Merge-adds names not already on the
+    roster, preserving existing + hand-typed non-Discord rows; identity stays
+    Discord-sync-owned. Returns `{ written, rows }`."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON
+        return web.json_response({"error": "bad_json"}, status=400)
+    if not isinstance(body, dict) or not isinstance(body.get("members"), list):
+        return web.json_response({"error": "bad_members"}, status=400)
+
+    import member_roster
+
+    result = await asyncio.to_thread(member_roster.add_ocr_members, guild_id, body["members"])
+    return web.json_response(result)
+
+
+@requires_api_key
+async def sheet_power_upsert(request: web.Request) -> web.Response:
+    """OCR power upsert (§6.2). Body `{ members: [{ name, discord_id, values: {
+    label: number } }] }`. Upserts each sent metric (labels = configured growth
+    metrics) into the current period's column; never clobbers metrics/columns MM
+    didn't send. Returns `{ written, rows }`."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON
+        return web.json_response({"error": "bad_json"}, status=400)
+    if not isinstance(body, dict) or not isinstance(body.get("members"), list):
+        return web.json_response({"error": "bad_members"}, status=400)
+
+    import growth
+
+    result = await asyncio.to_thread(growth.upsert_member_power, guild_id, body["members"])
+    return web.json_response(result)
+
+
+# ── Enrichment reads (surface bot features on MM's alliance pages, #316) ──────
+
+
+@requires_api_key
+async def get_growth_breakdown(request: web.Request) -> web.Response:
+    """Per-member growth buckets for MM's Growth page. Returns
+    `read_latest_breakdown`'s shape `{ has_data, prev_period_label,
+    curr_period_label, metric_labels, summary: { metric: { bucket: [names] } } }`
+    — present-but-empty before the first period-over-period transition."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+
+    import growth
+
+    data = await asyncio.to_thread(growth.read_latest_breakdown, guild_id)
+    return web.json_response(data)
+
+
+@requires_api_key
+async def get_member_profile(request: web.Request) -> web.Response:
+    """Consolidated member profile (the JSON behind `/member_stats`): identity,
+    power, storm participation, train, surveys. 404 when the member is unknown to
+    both the roster and the gateway."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    discord_id = request.match_info.get("discord_user_id", "")
+    if not discord_id.isdigit():
+        return web.json_response({"error": "bad_member_id"}, status=400)
+
+    import member_stats
+
+    # Gateway lookup must happen on the event loop; the resolved member object is
+    # then read off-thread (cached attrs only).
+    bot = request.app[BOT_KEY]
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    member = guild.get_member(int(discord_id)) if guild is not None else None
+
+    target = await asyncio.to_thread(
+        member_stats.resolve_profile_target, guild_id, int(discord_id), member=member
+    )
+    if target is None:
+        return web.json_response({"error": "member_not_found"}, status=404)
+    profile = await asyncio.to_thread(member_stats.build_member_profile, guild_id, target)
+    return web.json_response(profile)
+
+
+@requires_api_key
+async def get_storm_trends(request: web.Request) -> web.Response:
+    """Per-member storm attendance trends for MM's Storms page.
+    `?event_type=ds|cs&lookback=N` (N clamped 1..50, default 12). Returns
+    `{ event_type, lookback_events, total_events, members: [...] }`."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    event_type = (request.query.get("event_type") or "").lower()
+    if event_type not in ("ds", "cs"):
+        return web.json_response({"error": "bad_event_type"}, status=400)
+    try:
+        lookback = int(request.query.get("lookback", 12))
+    except (TypeError, ValueError):
+        lookback = 12
+    lookback = max(1, min(lookback, 50))
+
+    import storm_trends
+
+    data = await asyncio.to_thread(
+        storm_trends.member_attendance_summary, guild_id, event_type.upper(), lookback
+    )
+    return web.json_response(data)

@@ -370,6 +370,111 @@ def read_member_history(guild_id: int, name_keys: set[str]) -> dict:
     return build_member_history(metric_labels, rows, name_keys)
 
 
+def upsert_member_power(
+    guild_id: int, members: list[dict], *, period_label: str | None = None
+) -> dict:
+    """Upsert OCR'd power into the Growth Tracking tab (handoff §6.2).
+
+    ``members`` is ``[{ "name": str, "discord_id": str | None, "values": { label:
+    number } }]`` parsed by Map Manager from a power screenshot. For each member,
+    only the metric labels MM sends that match the alliance's configured metrics
+    are written, into the current period's ``{label} ({%b %Y})`` column — other
+    columns (and metrics MM didn't send) are never touched. A member missing from
+    the tab is appended. ``period_label`` overrides the target period (tests pass
+    it explicitly); production uses the current month, matching the scheduled
+    snapshot so an OCR reading and a snapshot share the period column.
+
+    Returns ``{ "written": bool, "rows": int }`` (``rows`` = members upserted).
+    Degrades to not-written (never raises) when growth isn't configured.
+    """
+    from config import get_growth_config
+
+    if not members:
+        return {"written": False, "rows": 0}
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth:
+        return {"written": False, "rows": 0}
+
+    period = period_label or datetime.now(tz=ET).strftime("%b %Y")
+
+    import gspread
+
+    try:
+        sh = _get_spreadsheet(guild_id)
+        try:
+            ws = sh.worksheet(tab_growth)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=tab_growth, rows=500, cols=50)
+        all_values = ws.get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] OCR power upsert read failed for guild {guild_id}: {e}")
+        return {"written": False, "rows": 0}
+
+    if not all_values or not all_values[0]:
+        all_values = [["Name"]]
+    header_row = all_values[0]
+
+    # Which configured metrics did MM actually send (across all members)?
+    sent_labels: list[str] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        for label in m.get("values") or {}:
+            if label in metric_labels and label not in sent_labels:
+                sent_labels.append(label)
+    if not sent_labels:
+        return {"written": False, "rows": 0}
+
+    # Ensure the current-period column exists for each sent metric.
+    header_changed = False
+    for label in sent_labels:
+        col_name = f"{label} ({period})"
+        if col_name not in header_row:
+            header_row.append(col_name)
+            header_changed = True
+    if header_changed:
+        ws.update("A1", [header_row], value_input_option="USER_ENTERED")
+
+    name_to_row: dict[str, int] = {}
+    for i, row in enumerate(all_values[1:], start=2):
+        if row and row[0].strip():
+            name_to_row[row[0].strip().lower()] = i
+
+    updates: list[dict] = []
+    new_member_rows: list[list[str]] = []
+    upserted = 0
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        values = m.get("values") or {}
+        member_labels = [label for label in values if label in metric_labels]
+        if not name or not member_labels:
+            continue
+        row_idx = name_to_row.get(name.lower())
+        if row_idx is None:
+            # Reserve a row; the append is batched after the loop (#40 quota).
+            new_row = [name] + [""] * (len(header_row) - 1)
+            row_idx = len(all_values) + 1
+            new_member_rows.append(new_row)
+            all_values.append(new_row)
+            name_to_row[name.lower()] = row_idx
+        for label in member_labels:
+            col_idx = header_row.index(f"{label} ({period})")
+            updates.append(
+                {"range": f"{_col_letter(col_idx)}{row_idx}", "values": [[values[label]]]}
+            )
+        upserted += 1
+
+    if new_member_rows:
+        ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    return {"written": upserted > 0, "rows": upserted}
+
+
 def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
     """Compute the next scheduled snapshot datetime, in America/New_York.
 

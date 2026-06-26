@@ -139,14 +139,11 @@ def test_zone_rules_for_extracts_configured_floors(monkeypatch):
     monkeypatch.setattr(
         storm_strategy, "load_preset", lambda gid, et, name: SimpleNamespace(zones=zones)
     )
+    # PHASE8 §4 pinned shape: { zone, min_power } only (min_power = max of the
+    # per-team floors); Arsenal has no floor so it's omitted.
     assert storm_strategy.zone_rules_for(123, "DS") == [
-        {
-            "zone": "Nuclear Silo",
-            "min_power": 1500000,
-            "min_power_a": 1500000,
-            "min_power_b": 1200000,
-        },
-        {"zone": "Science Hub", "min_power": 800000, "min_power_a": 0, "min_power_b": 800000},
+        {"zone": "Nuclear Silo", "min_power": 1500000},
+        {"zone": "Science Hub", "min_power": 800000},
     ]
 
 
@@ -160,9 +157,7 @@ def test_zone_rules_for_empty_when_no_presets(monkeypatch):
 async def test_zone_rules_endpoint_returns_rules(monkeypatch):
     import storm_strategy
 
-    rules = [
-        {"zone": "Nuclear Silo", "min_power": 1500000, "min_power_a": 1500000, "min_power_b": 0}
-    ]
+    rules = [{"zone": "Nuclear Silo", "min_power": 1500000}]
     monkeypatch.setattr(storm_strategy, "zone_rules_for", lambda gid, et: rules)
     async with TestClient(TestServer(build_app(bot=None))) as client:
         r = await client.get(

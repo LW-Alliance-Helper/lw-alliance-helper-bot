@@ -755,8 +755,9 @@ def zone_rules_for(guild_id: int, event_type: str) -> list[dict]:
 
     Sources the per-zone power floors from the alliance's first saved strategy
     preset for this event type. The bot does NOT gate on these; MM shows them as
-    a guideline next to each zone. Returns
-    `[{ zone, min_power, min_power_a, min_power_b }]` for zones that have a
+    an amber badge next to each zone (it owns the leadership-only + export-
+    exclusion behaviour — the bot just serves the rules). Returns
+    `[{ zone, min_power }]` (the pinned PHASE8 §4 shape) for zones with a
     configured floor, or `[]` when there is no preset / no floors. `min_power` is
     the higher of the per-team floors (single-team alliances leave the unused
     team at 0). Never raises.
@@ -774,9 +775,7 @@ def zone_rules_for(guild_id: int, event_type: str) -> list[dict]:
             b = int(getattr(z, "min_power_b", 0) or 0)
             if a <= 0 and b <= 0:
                 continue
-            rules.append(
-                {"zone": z.zone, "min_power": max(a, b), "min_power_a": a, "min_power_b": b}
-            )
+            rules.append({"zone": z.zone, "min_power": max(a, b)})
         return rules
     except Exception as e:  # noqa: BLE001 — never break the API on a strategy read
         logger.warning(

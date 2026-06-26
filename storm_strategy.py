@@ -750,6 +750,44 @@ def list_presets(guild_id: int, event_type: str) -> list[str]:
     return list(seen)
 
 
+def zone_rules_for(guild_id: int, event_type: str) -> list[dict]:
+    """Per-zone preferred power for MM's planner (display only, #316).
+
+    Sources the per-zone power floors from the alliance's first saved strategy
+    preset for this event type. The bot does NOT gate on these; MM shows them as
+    a guideline next to each zone. Returns
+    `[{ zone, min_power, min_power_a, min_power_b }]` for zones that have a
+    configured floor, or `[]` when there is no preset / no floors. `min_power` is
+    the higher of the per-team floors (single-team alliances leave the unused
+    team at 0). Never raises.
+    """
+    try:
+        names = list_presets(guild_id, event_type)
+        if not names:
+            return []
+        preset = load_preset(guild_id, event_type, names[0])
+        if preset is None:
+            return []
+        rules: list[dict] = []
+        for z in preset.zones:
+            a = int(getattr(z, "min_power_a", 0) or 0)
+            b = int(getattr(z, "min_power_b", 0) or 0)
+            if a <= 0 and b <= 0:
+                continue
+            rules.append(
+                {"zone": z.zone, "min_power": max(a, b), "min_power_a": a, "min_power_b": b}
+            )
+        return rules
+    except Exception as e:  # noqa: BLE001 — never break the API on a strategy read
+        logger.warning(
+            "[STORM STRATEGY] zone_rules_for failed guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
+        return []
+
+
 def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     """Persist a preset to the Sheet. Replaces all rows for this preset
     name with the buffer's current zones. Returns True on success."""

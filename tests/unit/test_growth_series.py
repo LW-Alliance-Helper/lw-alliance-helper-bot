@@ -106,3 +106,39 @@ def test_build_member_power_map_emits_configured_key_order():
     rows = [["Name", "Kills (Jan 2026)", "Power (Jan 2026)"], ["Ada", "60", "1200000"]]
     out = growth.build_member_power_map(["Power", "Kills"], rows)
     assert list(out["ada"].keys()) == ["Power", "Kills"]
+
+
+# ── build_member_history (per-member growth panels) ───────────────────────────
+
+
+def test_build_member_history_extracts_one_member_over_time():
+    rows = [
+        ["Name", "Power (Jan 2026)", "Kills (Jan 2026)", "Power (Feb 2026)", "Kills (Feb 2026)"],
+        ["Ada", "1000000", "50", "1200000", "60"],
+        ["Bo", "2000000", "70", "", ""],
+    ]
+    out = growth.build_member_history(["Power", "Kills"], rows, {"ada"})
+    assert out["metrics"]["Power"] == [
+        {"at": "2026-01-01", "value": 1000000},
+        {"at": "2026-02-01", "value": 1200000},
+    ]
+    assert out["metrics"]["Kills"] == [
+        {"at": "2026-01-01", "value": 50},
+        {"at": "2026-02-01", "value": 60},
+    ]
+
+
+def test_build_member_history_omits_blank_cells():
+    rows = [["Name", "Power (Jan 2026)", "Power (Feb 2026)"], ["Bo", "2000000", ""]]
+    out = growth.build_member_history(["Power"], rows, {"bo"})
+    assert out["metrics"]["Power"] == [{"at": "2026-01-01", "value": 2000000}]
+
+
+def test_build_member_history_member_not_found_is_empty_series():
+    rows = [["Name", "Power (Jan 2026)"], ["Ada", "1"]]
+    assert growth.build_member_history(["Power"], rows, {"nobody"}) == {"metrics": {"Power": []}}
+
+
+def test_build_member_history_no_name_keys():
+    rows = [["Name", "Power (Jan 2026)"], ["Ada", "1"]]
+    assert growth.build_member_history(["Power"], rows, set()) == {"metrics": {}}

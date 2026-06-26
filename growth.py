@@ -309,6 +309,67 @@ def read_member_power_map(guild_id: int) -> dict:
     return build_member_power_map(metric_labels, rows)
 
 
+def build_member_history(
+    metric_labels: list[str], rows: list[list[str]], name_keys: set[str]
+) -> dict:
+    """One member's growth history for the roster/dashboard panels (#316).
+
+    `name_keys` are lowercased candidate names (display name, username); the
+    first matching column-A row wins. Returns
+    `{ "metrics": { label: [{ "at": iso, "value": number }] } }` in chronological
+    period order, omitting blank cells. Labels match the configured growth
+    metrics (same as /sheet/growth + /sheet/roster).
+    """
+    if not rows or not rows[0] or not metric_labels or not name_keys:
+        return {"metrics": {}}
+    header = rows[0]
+    periods = _extract_period_labels(header, metric_labels)
+    member_row = next((r for r in rows[1:] if r and r[0].strip().lower() in name_keys), None)
+    if member_row is None or not periods:
+        return {"metrics": {label: [] for label in metric_labels}}
+
+    col_index: dict[tuple[str, str], int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            prefix = f"{label} ("
+            if h.startswith(prefix) and h.endswith(")"):
+                col_index[(label, h[len(prefix) : -1])] = i
+                break
+
+    metrics: dict[str, list] = {}
+    for label in metric_labels:
+        series = []
+        for period in periods:
+            idx = col_index.get((label, period))
+            if idx is None or idx >= len(member_row):
+                continue
+            val = _parse_growth_cell(member_row[idx])
+            if val is None:
+                continue
+            series.append({"at": _period_to_iso(period), "value": _as_number(val)})
+        metrics[label] = series
+    return {"metrics": metrics}
+
+
+def read_member_history(guild_id: int, name_keys: set[str]) -> dict:
+    """Read the growth tab and extract one member's per-metric history (see
+    `build_member_history`). Degrades to `{"metrics": {}}` (never raises)."""
+    from config import get_growth_config
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth or not name_keys:
+        return {"metrics": {}}
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] member history read failed (guild {guild_id}): {e}")
+        return {"metrics": {}}
+    return build_member_history(metric_labels, rows, name_keys)
+
+
 def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
     """Compute the next scheduled snapshot datetime, in America/New_York.
 

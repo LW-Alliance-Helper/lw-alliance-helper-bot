@@ -31,9 +31,12 @@ import os
 from aiohttp import web
 
 from api import BOT_KEY
+from api.routes.discord_actions import get_guild_channels, post_image
 from api.routes.guilds import get_guild_link, get_guild_member
 from api.routes.healthz import healthz
 from api.routes.sheets import (
+    get_member_history,
+    get_zone_rules,
     sheet_growth,
     sheet_roster,
     sheet_storm_history_append,
@@ -75,7 +78,10 @@ def build_app(bot=None) -> web.Application:
     ``request.app[BOT_KEY]`` without a module global. Passing None is supported
     for route-shape tests that don't need the gateway.
     """
-    app = web.Application()
+    # Body-size limit raised from aiohttp's 1 MB default for the post-image
+    # endpoint (a base64 PNG can be several MB); 16 MB covers Discord's 8 MB
+    # attachment ceiling plus base64 overhead.
+    app = web.Application(client_max_size=16 * 1024 * 1024)
     app[BOT_KEY] = bot
     app.router.add_get("/healthz", healthz)
 
@@ -94,6 +100,14 @@ def build_app(bot=None) -> web.Application:
     # Storm-roster write-back (handoff §6.1): MM's rebuilt planner posts a
     # finished event roster; the bot writes it to rosters_tab if the date is empty.
     app.router.add_post("/api/guilds/{guild_id}/sheet/storm-roster", sheet_storm_roster)
+
+    # Phase 8 "Post to Discord" + per-member history (PHASE8_DISCORD_HANDOFF.md).
+    app.router.add_get("/api/guilds/{guild_id}/channels", get_guild_channels)
+    app.router.add_post("/api/guilds/{guild_id}/post-image", post_image)
+    app.router.add_get(
+        "/api/guilds/{guild_id}/members/{discord_user_id}/history", get_member_history
+    )
+    app.router.add_get("/api/guilds/{guild_id}/storm/zone-rules", get_zone_rules)
     return app
 
 

@@ -213,3 +213,56 @@ async def sheet_storm_roster(request: web.Request) -> web.Response:
         overwrite=bool(body.get("overwrite", False)),
     )
     return web.json_response(result)
+
+
+@requires_api_key
+async def get_member_history(request: web.Request) -> web.Response:
+    """Per-member growth history (Phase 8). Resolves the Discord id to the
+    member's roster + gateway names, then reads their per-metric growth series.
+    Returns the metric-keyed shape `{ "metrics": { label: [{ at, value }] } }`.
+    """
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    discord_id = request.match_info.get("discord_user_id", "")
+
+    import growth
+    import member_roster
+
+    name_keys: set[str] = set()
+    # Roster names — the keys the growth sheet is most likely keyed by.
+    roster = await asyncio.to_thread(member_roster.read_roster_members, guild_id)
+    for r in roster:
+        if r.get("discord_id") == discord_id:
+            for k in (r.get("display_name"), r.get("name")):
+                if k:
+                    name_keys.add(k.strip().lower())
+            break
+    # Gateway names too (covers a member missing from the roster sheet).
+    bot = request.app[BOT_KEY]
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    member = guild.get_member(int(discord_id)) if guild and discord_id.isdigit() else None
+    if member is not None:
+        name_keys.add(member.display_name.strip().lower())
+        name_keys.add(member.name.strip().lower())
+
+    history = await asyncio.to_thread(growth.read_member_history, guild_id, name_keys)
+    return web.json_response(history)
+
+
+@requires_api_key
+async def get_zone_rules(request: web.Request) -> web.Response:
+    """Per-zone preferred power from the alliance's strategy (Phase 8, display
+    only). ``?event_type=ds|cs``. Returns ``{ rules: [{ zone, min_power,
+    min_power_a, min_power_b }] }``; empty when nothing is configured."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    event_type = (request.query.get("event_type") or "").lower()
+    if event_type not in ("ds", "cs"):
+        return web.json_response({"error": "bad_event_type"}, status=400)
+
+    import storm_strategy
+
+    rules = await asyncio.to_thread(storm_strategy.zone_rules_for, guild_id, event_type.upper())
+    return web.json_response({"rules": rules})

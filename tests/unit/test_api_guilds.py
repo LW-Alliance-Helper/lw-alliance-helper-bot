@@ -130,3 +130,79 @@ async def test_member_bad_user_id(seeded_db):
     async with TestClient(TestServer(build_app(bot=bot))) as client:
         r = await client.get(f"/api/guilds/{TEST_GUILD_ID}/members/not-a-number", headers=AUTH)
         assert r.status == 400
+
+
+# ── /config (Settings: verify bot setup) ──────────────────────────────────────
+
+
+async def test_config_returns_roles_and_tabs(seeded_db):
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(f"/api/guilds/{TEST_GUILD_ID}/config", headers=AUTH)
+        assert r.status == 200
+        body = await r.json()
+    assert body["roles"] == [
+        {"tier": "leadership", "discordRoles": ["Leadership"]},
+        {"tier": "member", "discordRoles": ["Member"]},
+    ]
+    features = {t["feature"] for t in body["tabs"]}
+    assert {"Member Roster", "Growth", "Desert Storm roster", "Canyon Storm roster"} <= features
+
+
+async def test_config_requires_auth():
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(f"/api/guilds/{TEST_GUILD_ID}/config")
+        assert r.status == 401
+
+
+# ── /storm/votes (planner candidate roster) ───────────────────────────────────
+
+
+async def test_storm_votes_maps_rows_and_resolves_names(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "get_storm_signups",
+        lambda gid, et, date: [
+            {"target_member_id": "123", "vote": "a"},
+            {"target_member_id": "456", "vote": "cannot"},  # not in gateway cache
+            {"target_member_id": "", "vote": "either"},  # no id
+        ],
+    )
+    guild = SimpleNamespace(
+        get_member=lambda uid: SimpleNamespace(display_name="Ada") if uid == 123 else None
+    )
+    bot = SimpleNamespace(get_guild=lambda gid: guild)
+    async with TestClient(TestServer(build_app(bot=bot))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/storm/votes?event_type=ds&date=2026-06-27", headers=AUTH
+        )
+        assert r.status == 200
+        body = await r.json()
+    assert body == [
+        {"member_name": "Ada", "discord_id": "123", "vote": "a"},
+        {"member_name": "", "discord_id": "456", "vote": "cannot"},
+        {"member_name": "", "discord_id": None, "vote": "either"},
+    ]
+
+
+async def test_storm_votes_bad_event_type():
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/storm/votes?event_type=xx&date=2026-06-27", headers=AUTH
+        )
+        assert r.status == 400
+
+
+async def test_storm_votes_bad_date():
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/storm/votes?event_type=ds&date=nope", headers=AUTH
+        )
+        assert r.status == 400
+
+
+async def test_storm_votes_requires_auth():
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/storm/votes?event_type=ds&date=2026-06-27"
+        )
+        assert r.status == 401

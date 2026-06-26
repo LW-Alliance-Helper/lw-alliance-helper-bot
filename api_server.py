@@ -32,7 +32,12 @@ from aiohttp import web
 
 from api import BOT_KEY
 from api.routes.discord_actions import get_guild_channels, post_image
-from api.routes.guilds import get_guild_link, get_guild_member
+from api.routes.guilds import (
+    get_guild_config,
+    get_guild_link,
+    get_guild_member,
+    get_storm_votes,
+)
 from api.routes.healthz import healthz
 from api.routes.sheets import (
     get_member_history,
@@ -90,6 +95,9 @@ def build_app(bot=None) -> web.Application:
     # derive a signed-in user's bot-linked tier.
     app.router.add_get("/api/guilds/{guild_id}/link", get_guild_link)
     app.router.add_get("/api/guilds/{guild_id}/members/{discord_user_id}", get_guild_member)
+    # Settings "verify your bot setup" (read-only config) + planner sign-up votes.
+    app.router.add_get("/api/guilds/{guild_id}/config", get_guild_config)
+    app.router.add_get("/api/guilds/{guild_id}/storm/votes", get_storm_votes)
 
     # Sheet-backed reads. roster + growth are implemented; storm-history is a
     # 501 stub (needs OCR-supplied match outcomes) — see api/routes/sheets.py.

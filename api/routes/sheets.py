@@ -257,10 +257,10 @@ async def get_member_history(request: web.Request) -> web.Response:
 
 
 @requires_api_key
-async def get_zone_rules(request: web.Request) -> web.Response:
-    """Per-zone preferred power from the alliance's strategy (Phase 8, display
-    only). ``?event_type=ds|cs``. Returns ``{ rules: [{ zone, min_power,
-    min_power_a, min_power_b }] }``; empty when nothing is configured."""
+async def get_storm_strategies(request: web.Request) -> web.Response:
+    """Named strategies for MM's planner dropdown (PHASE8 §4). ``?event_type=ds|cs``.
+    Returns ``{ strategies: [{ id, name }] }`` (the bot keys presets by name, so
+    id == name); empty list when none are configured."""
     guild_id = _parse_guild_id(request)
     if guild_id is None:
         return web.json_response({"error": "bad_guild_id"}, status=400)
@@ -270,7 +270,32 @@ async def get_zone_rules(request: web.Request) -> web.Response:
 
     import storm_strategy
 
-    rules = await asyncio.to_thread(storm_strategy.zone_rules_for, guild_id, event_type.upper())
+    strategies = await asyncio.to_thread(
+        storm_strategy.list_strategies, guild_id, event_type.upper()
+    )
+    return web.json_response({"strategies": strategies})
+
+
+@requires_api_key
+async def get_zone_rules(request: web.Request) -> web.Response:
+    """Per-zone rules for the strategy MM picked (PHASE8 §4, display only).
+    ``?event_type=ds|cs&strategy_id=<id>`` (``strategy_id`` optional — omitted
+    falls back to the first strategy). Returns ``{ rules: [{ zone, min_a, min_b,
+    min_players, max_players, priority }] }``; empty when nothing is configured.
+    ``min_players`` is always 0 (the bot has no per-zone minimum player count)."""
+    guild_id = _parse_guild_id(request)
+    if guild_id is None:
+        return web.json_response({"error": "bad_guild_id"}, status=400)
+    event_type = (request.query.get("event_type") or "").lower()
+    if event_type not in ("ds", "cs"):
+        return web.json_response({"error": "bad_event_type"}, status=400)
+    strategy_id = request.query.get("strategy_id") or None
+
+    import storm_strategy
+
+    rules = await asyncio.to_thread(
+        storm_strategy.zone_rules_for, guild_id, event_type.upper(), strategy_id
+    )
     return web.json_response({"rules": rules})
 
 

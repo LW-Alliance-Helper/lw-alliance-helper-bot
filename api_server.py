@@ -43,6 +43,7 @@ from api.routes.sheets import (
     get_growth_breakdown,
     get_member_history,
     get_member_profile,
+    get_storm_strategies,
     get_storm_trends,
     get_zone_rules,
     sheet_growth,
@@ -120,6 +121,7 @@ def build_app(bot=None) -> web.Application:
     app.router.add_get(
         "/api/guilds/{guild_id}/members/{discord_user_id}/history", get_member_history
     )
+    app.router.add_get("/api/guilds/{guild_id}/storm/strategies", get_storm_strategies)
     app.router.add_get("/api/guilds/{guild_id}/storm/zone-rules", get_zone_rules)
 
     # OCR write-backs (handoff §6.2 / §6.3): MM posts parsed screenshot data; the

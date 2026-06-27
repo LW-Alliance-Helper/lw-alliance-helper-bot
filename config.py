@@ -534,7 +534,7 @@ def init_db():
         conn.commit()
 
         # guild_alliance_mappings — the bot's record of a guild's Map Manager
-        # link (#316). Established by `/map_manager setup`, which calls MM's
+        # link (#316). Established by the `/map_manager` hub's Link action, which calls MM's
         # POST /api/internal/guild-links and stores the resolved ids here so
         # the bot's own HTTP endpoints (6D) can answer "which alliance is this
         # guild?" without a round-trip back to MM. guild_id is the PK: a guild
@@ -1858,7 +1858,7 @@ def save_guild_alliance_mapping(
 ) -> None:
     """Upsert the active Map Manager link for a guild.
 
-    `guild_id` is the PK, so re-running `/map_manager setup` overwrites the
+    `guild_id` is the PK, so re-linking via `/map_manager` overwrites the
     prior mapping in place and clears `revoked_at` (matching MM, which replaces
     the guild's active link on a re-run). `linked_at` is stamped to now.
     """

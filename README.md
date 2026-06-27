@@ -15,6 +15,7 @@ A Discord bot built for **Last War alliance leadership** — event announcements
 - **📋 Surveys** — Members submit stats through a private Discord thread; responses save directly to your sheet, with a leadership notification per submission.
 - **📈 Growth tracking** — Snapshot any metric in your sheet (squad powers, THP, kills, anything) on a configurable schedule. You define the metrics, source, and cadence.
 - **🔁 Transfer management 💎** — Premium. The bot watches your recruiting sheet and pings you when new applicants land or their status changes, drafts your in-game outreach messages, optionally pulls matching players from a server-wide sheet, and (opt-in) writes your accept/decline decisions back to the sheet from Discord. Only a Name column is required; everything else maps to whatever your sheet already uses.
+- **🗺️ Map Manager 💎** — Premium. Connect your alliance to the Map Manager web app, a visual dashboard that displays your roster, growth, and storm-participation data on the web. Link it from Discord with `/map_manager`; your data stays in your Google Sheet, and Map Manager reads it through the bot to render it.
 - **💎 Premium add-ons** — DM-based reminders, multi-survey, member roster sync, customizable DM bodies, unlimited templates and survey questions, threads as channel destinations.
 
 → Full command reference: [commands page](https://lw-alliance-helper.github.io/commands.html)
@@ -30,6 +31,8 @@ Alliance Helper is built around a simple principle: **your alliance's data lives
 - **Premium adds features, not data captivity.** Subscribing unlocks DMs, scheduled reminders, and roster sync — nothing about where your data lives changes.
 
 The bot's own SQLite database stores only what it needs to do its job — wizard answers, channel/role IDs, schedule state, premium status. Alliance data itself stays in your sheet.
+
+**Map Manager integration (Premium, opt-in).** If you link your alliance to the Map Manager web app with `/map_manager`, the bot exposes a small authenticated API that Map Manager calls to read your alliance data (roster, growth snapshots, storm participation) and render it on the web. Access is gated by a per-environment service key, scoped to your linked guild, and only happens for alliances that have linked. The data is read from your Google Sheet on demand; the integration keeps no separate copy. Disconnect anytime with `/map_manager` → Unlink.
 
 Alongside the config, the bot keeps a small **install-metadata record** for each server it's in: guild ID, guild name, the owner's Discord ID, the Discord ID of the user who invited the bot (when readable from the audit log), and the timestamps for first install and most recent reconnect. This exists so that when an error appears in the logs against a particular guild ID, leadership can be contacted to fix it. The record is **deleted automatically** when the bot is removed from a server, and can be deleted on request at any time — open a [Data removal request](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/new/choose) with your guild ID.
 
@@ -49,7 +52,7 @@ Every feature works on the **free tier** with sensible caps for a typical allian
 | Tracked growth metrics | 5 | Unlimited |
 | Channel destinations | Text channels | Text channels and threads |
 | Storm participation lookback | 4 entries | Unlimited |
-| Premium-only features | — | Member Roster Sync · birthday DMs · train assignment DMs · DM-based storm reminders · DM-based survey reminders · auto-mentions · customisable DM bodies |
+| Premium-only features | — | Member Roster Sync · birthday DMs · train assignment DMs · DM-based storm reminders · DM-based survey reminders · auto-mentions · customisable DM bodies · Transfer Management · Map Manager integration |
 
 Full comparison + complete premium-only feature list: [pricing page](https://lw-alliance-helper.github.io/pricing.html).
 

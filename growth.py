@@ -129,6 +129,352 @@ def _extract_period_labels(header_row: list[str], metric_labels: list[str]) -> l
     return seen
 
 
+# ── Growth series read (for the Map Manager integration, #316) ───────────────
+#
+# `GET /sheet/growth` passes the alliance's *configured* metrics through to Map
+# Manager, which renders them generically (no hardcoded metric). The Growth
+# Tracking tab is a wide matrix: column A = member name, other columns are
+# `{metric} ({period})` (period = the snapshot's "%b %Y" label). We sum each
+# metric across members per period into alliance totals and shape it as
+# `{ metrics: [...], snapshots: [{ date, members, values }] }`. See
+# `docs/BOT_INTEGRATION_HANDOFF.md` in the Map Manager repo for the contract.
+
+
+def _parse_growth_cell(cell) -> float | None:
+    """Parse a growth-tab cell to a number, or None when blank/unparseable.
+
+    None (not 0.0) for blanks so a member with no value that period isn't
+    counted as active. Strips thousands separators and tolerates the scientific
+    notation Sheets can render for large numbers.
+    """
+    s = str(cell).strip().replace(",", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _as_number(value: float):
+    """Collapse a float total to an int when it's whole (the common case for
+    power / kills), else round to 2dp, so MM receives clean `number`s."""
+    rounded = round(value, 2)
+    return int(rounded) if rounded == int(rounded) else rounded
+
+
+def _period_to_iso(period: str) -> str:
+    """Convert a `%b %Y` period label (e.g. "Jun 2026") to an ISO date (first of
+    that month). Falls back to the raw label if it doesn't parse."""
+    try:
+        return datetime.strptime(period, "%b %Y").date().isoformat()
+    except ValueError:
+        return period
+
+
+def build_growth_series(metric_labels: list[str], rows: list[list[str]]) -> dict:
+    """Aggregate the Growth Tracking tab's wide matrix into MM's growth shape.
+
+    `metric_labels` are the alliance's configured metrics in display order;
+    `rows` is the tab's `get_all_values()` (header + one row per member).
+    Returns `{ "metrics": [...], "snapshots": [{ date, members, values }] }` with
+    periods in chronological (header) order and `values` summed across members.
+    A metric absent from an early period (added later) is simply omitted from
+    that period's `values`.
+    """
+    if not rows or not rows[0]:
+        return {"metrics": metric_labels, "snapshots": []}
+
+    header = rows[0]
+    data_rows = rows[1:]
+    periods = _extract_period_labels(header, metric_labels)
+
+    # (metric, period) -> column index, parsed from the `{label} ({period})`
+    # headers (longest-prefix-free since labels don't contain " (").
+    col_index: dict[tuple[str, str], int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            prefix = f"{label} ("
+            if h.startswith(prefix) and h.endswith(")"):
+                col_index[(label, h[len(prefix) : -1])] = i
+                break
+
+    snapshots = []
+    for period in periods:
+        values: dict[str, float] = {}
+        active: set[int] = set()
+        for label in metric_labels:
+            idx = col_index.get((label, period))
+            if idx is None:
+                continue  # metric wasn't tracked this period
+            total = 0.0
+            for ri, row in enumerate(data_rows):
+                if idx >= len(row):
+                    continue
+                parsed = _parse_growth_cell(row[idx])
+                if parsed is None:
+                    continue
+                total += parsed
+                active.add(ri)
+            values[label] = _as_number(total)
+        snapshots.append({"date": _period_to_iso(period), "members": len(active), "values": values})
+    return {"metrics": metric_labels, "snapshots": snapshots}
+
+
+def read_growth_series(guild_id: int) -> dict:
+    """Read the guild's Growth Tracking tab and shape it for MM (#316).
+
+    Returns `{ "metrics": [...], "snapshots": [...] }`. Degrades to empty
+    snapshots (never raises) when growth isn't configured or the sheet can't be
+    read, so MM renders its empty state rather than erroring. `metrics` is the
+    configured label list even before the first snapshot, so MM can show the
+    columns up front.
+    """
+    from config import get_growth_config
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth:
+        return {"metrics": metric_labels, "snapshots": []}
+
+    try:
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(tab_growth)
+        rows = ws.get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] Could not read growth tab for guild {guild_id}: {e}")
+        return {"metrics": metric_labels, "snapshots": []}
+
+    return build_growth_series(metric_labels, rows)
+
+
+def build_member_power_map(metric_labels: list[str], rows: list[list[str]]) -> dict:
+    """Per-member *current* value for each configured metric, from the latest
+    snapshot column. Keyed by lowercased member name (column A).
+
+    This is the `power` map for `GET /sheet/roster`: the alliance's growth
+    metrics double as their roster power columns (Total Hero / 1st Squad / Arena
+    etc.). Returns `{ name_lower: { label: number } }`; members with no values
+    are omitted.
+    """
+    if not rows or not rows[0] or not metric_labels:
+        return {}
+    header = rows[0]
+    periods = _extract_period_labels(header, metric_labels)
+    if not periods:
+        return {}
+    latest = periods[-1]
+    latest_cols: dict[str, int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            if h == f"{label} ({latest})":
+                latest_cols[label] = i
+                break
+    out: dict[str, dict] = {}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        # Emit in configured metric order (NOT sheet-header order): MM derives
+        # the roster's power column order from object-key insertion order.
+        values = {}
+        for label in metric_labels:
+            idx = latest_cols.get(label)
+            if idx is not None and idx < len(row):
+                parsed = _parse_growth_cell(row[idx])
+                if parsed is not None:
+                    values[label] = _as_number(parsed)
+        if values:
+            out[row[0].strip().lower()] = values
+    return out
+
+
+def read_member_power_map(guild_id: int) -> dict:
+    """Read the latest growth snapshot into a per-member power map for the
+    roster API (see `build_member_power_map`). Degrades to `{}` (never raises)
+    when growth isn't configured or the sheet can't be read."""
+    from config import get_growth_config
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth:
+        return {}
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] Could not read growth tab for power map, guild {guild_id}: {e}")
+        return {}
+    return build_member_power_map(metric_labels, rows)
+
+
+def build_member_history(
+    metric_labels: list[str], rows: list[list[str]], name_keys: set[str]
+) -> dict:
+    """One member's growth history for the roster/dashboard panels (#316).
+
+    `name_keys` are lowercased candidate names (display name, username); the
+    first matching column-A row wins. Returns
+    `{ "metrics": { label: [{ "at": iso, "value": number }] } }` in chronological
+    period order, omitting blank cells. Labels match the configured growth
+    metrics (same as /sheet/growth + /sheet/roster).
+    """
+    if not rows or not rows[0] or not metric_labels or not name_keys:
+        return {"metrics": {}}
+    header = rows[0]
+    periods = _extract_period_labels(header, metric_labels)
+    member_row = next((r for r in rows[1:] if r and r[0].strip().lower() in name_keys), None)
+    if member_row is None or not periods:
+        return {"metrics": {label: [] for label in metric_labels}}
+
+    col_index: dict[tuple[str, str], int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            prefix = f"{label} ("
+            if h.startswith(prefix) and h.endswith(")"):
+                col_index[(label, h[len(prefix) : -1])] = i
+                break
+
+    metrics: dict[str, list] = {}
+    for label in metric_labels:
+        series = []
+        for period in periods:
+            idx = col_index.get((label, period))
+            if idx is None or idx >= len(member_row):
+                continue
+            val = _parse_growth_cell(member_row[idx])
+            if val is None:
+                continue
+            series.append({"at": _period_to_iso(period), "value": _as_number(val)})
+        metrics[label] = series
+    return {"metrics": metrics}
+
+
+def read_member_history(guild_id: int, name_keys: set[str]) -> dict:
+    """Read the growth tab and extract one member's per-metric history (see
+    `build_member_history`). Degrades to `{"metrics": {}}` (never raises)."""
+    from config import get_growth_config
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth or not name_keys:
+        return {"metrics": {}}
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] member history read failed (guild {guild_id}): {e}")
+        return {"metrics": {}}
+    return build_member_history(metric_labels, rows, name_keys)
+
+
+def upsert_member_power(
+    guild_id: int, members: list[dict], *, period_label: str | None = None
+) -> dict:
+    """Upsert OCR'd power into the Growth Tracking tab (handoff §6.2).
+
+    ``members`` is ``[{ "name": str, "discord_id": str | None, "values": { label:
+    number } }]`` parsed by Map Manager from a power screenshot. For each member,
+    only the metric labels MM sends that match the alliance's configured metrics
+    are written, into the current period's ``{label} ({%b %Y})`` column — other
+    columns (and metrics MM didn't send) are never touched. A member missing from
+    the tab is appended. ``period_label`` overrides the target period (tests pass
+    it explicitly); production uses the current month, matching the scheduled
+    snapshot so an OCR reading and a snapshot share the period column.
+
+    Returns ``{ "written": bool, "rows": int }`` (``rows`` = members upserted).
+    Degrades to not-written (never raises) when growth isn't configured.
+    """
+    from config import get_growth_config
+
+    if not members:
+        return {"written": False, "rows": 0}
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    if not metric_labels or not tab_growth:
+        return {"written": False, "rows": 0}
+
+    period = period_label or datetime.now(tz=ET).strftime("%b %Y")
+
+    import gspread
+
+    try:
+        sh = _get_spreadsheet(guild_id)
+        try:
+            ws = sh.worksheet(tab_growth)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=tab_growth, rows=500, cols=50)
+        all_values = ws.get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] OCR power upsert read failed for guild {guild_id}: {e}")
+        return {"written": False, "rows": 0}
+
+    if not all_values or not all_values[0]:
+        all_values = [["Name"]]
+    header_row = all_values[0]
+
+    # Which configured metrics did MM actually send (across all members)?
+    sent_labels: list[str] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        for label in m.get("values") or {}:
+            if label in metric_labels and label not in sent_labels:
+                sent_labels.append(label)
+    if not sent_labels:
+        return {"written": False, "rows": 0}
+
+    # Ensure the current-period column exists for each sent metric.
+    header_changed = False
+    for label in sent_labels:
+        col_name = f"{label} ({period})"
+        if col_name not in header_row:
+            header_row.append(col_name)
+            header_changed = True
+    if header_changed:
+        ws.update("A1", [header_row], value_input_option="USER_ENTERED")
+
+    name_to_row: dict[str, int] = {}
+    for i, row in enumerate(all_values[1:], start=2):
+        if row and row[0].strip():
+            name_to_row[row[0].strip().lower()] = i
+
+    updates: list[dict] = []
+    new_member_rows: list[list[str]] = []
+    upserted = 0
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        values = m.get("values") or {}
+        member_labels = [label for label in values if label in metric_labels]
+        if not name or not member_labels:
+            continue
+        row_idx = name_to_row.get(name.lower())
+        if row_idx is None:
+            # Reserve a row; the append is batched after the loop (#40 quota).
+            new_row = [name] + [""] * (len(header_row) - 1)
+            row_idx = len(all_values) + 1
+            new_member_rows.append(new_row)
+            all_values.append(new_row)
+            name_to_row[name.lower()] = row_idx
+        for label in member_labels:
+            col_idx = header_row.index(f"{label} ({period})")
+            updates.append(
+                {"range": f"{_col_letter(col_idx)}{row_idx}", "values": [[values[label]]]}
+            )
+        upserted += 1
+
+    if new_member_rows:
+        ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    return {"written": upserted > 0, "rows": upserted}
+
+
 def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
     """Compute the next scheduled snapshot datetime, in America/New_York.
 
@@ -822,6 +1168,80 @@ def read_latest_breakdown(guild_id: int) -> dict:
         "prev_period_label": prev_period_label,
         "curr_period_label": curr_period_label,
         "metric_labels": metric_labels,
+        "summary": summary,
+    }
+
+
+def breakdown_for_range(guild_id: int, from_period: str, to_period: str) -> dict:
+    """Per-member growth buckets between two arbitrary snapshot periods (#316).
+
+    Same shape as `read_latest_breakdown`, but classifies `{from_period}` ->
+    `{to_period}` on the fly from the Growth Tracking tab so MM's Compare picker
+    can pick any two snapshot months (not just the latest consecutive pair).
+    `from_period` / `to_period` are `{%b %Y}` labels exactly as the bot emits
+    them, echoed back in `prev_period_label` / `curr_period_label`. Returns the
+    empty (`has_data: False`) dict when either period is absent from the tab, so
+    the caller can fall back to the latest transition. Never raises.
+    """
+    from config import get_growth_config
+
+    empty = {
+        "has_data": False,
+        "prev_period_label": "",
+        "curr_period_label": "",
+        "metric_labels": [],
+        "summary": {},
+    }
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    thresholds = gcfg.get("breakdown_thresholds") or {}
+    if not metric_labels or not tab_growth or not from_period or not to_period:
+        return empty
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] breakdown range read failed (guild {guild_id}): {e}")
+        return empty
+    if not rows or not rows[0]:
+        return empty
+    header = rows[0]
+
+    from_cols: dict[str, int] = {}
+    to_cols: dict[str, int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            if h == f"{label} ({from_period})":
+                from_cols[label] = i
+            elif h == f"{label} ({to_period})":
+                to_cols[label] = i
+    # Only metrics present in BOTH periods can be compared.
+    metrics_present = [label for label in metric_labels if label in from_cols and label in to_cols]
+    if not metrics_present:
+        return empty
+
+    summary: dict = {m: {b: [] for b in BUCKET_ORDER} for m in metrics_present}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        name = row[0].strip()
+        for label in metrics_present:
+            fi, ti = from_cols[label], to_cols[label]
+            prev = _parse_growth_cell(row[fi]) if fi < len(row) else None
+            curr = _parse_growth_cell(row[ti]) if ti < len(row) else None
+            if prev is None or curr is None:
+                continue
+            bucket = classify_bucket(prev, curr, thresholds=thresholds)
+            if bucket:
+                summary[label][bucket].append(name)
+
+    return {
+        "has_data": True,
+        "prev_period_label": from_period,
+        "curr_period_label": to_period,
+        "metric_labels": metrics_present,
         "summary": summary,
     }
 

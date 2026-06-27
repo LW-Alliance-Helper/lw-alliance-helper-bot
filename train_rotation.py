@@ -473,6 +473,7 @@ def select_conductor(
     counted_reasons: set[str],
     already_scheduled: set[str],
     before: date | None = None,
+    role_rules_enabled: bool = True,
 ) -> tuple[str | None, str, bool]:
     """Resolve a single day's conductor.
 
@@ -501,8 +502,18 @@ def select_conductor(
             return pinned, RULE_TO_REASON[RULE_SPECIFIC], False
         return None, RULE_TO_REASON[RULE_SPECIFIC], True
 
-    reason = RULE_TO_REASON.get(day_rule.rule_type, "auto")
     rt = day_rule.rule_type
+
+    # Role-scoped day rules (leadership / vs / contest / event) are a Premium
+    # capability (#337): they pick from a Discord-role pool, which needs the
+    # synced roster's Discord IDs. On free tier (role_rules_enabled False) they
+    # fall back to a full-roster auto pick, so the day still fills fairly
+    # instead of dropping to "needs picking" — a lapsed subscription degrades to
+    # a working rotation rather than a broken schedule.
+    if not role_rules_enabled and (rt == RULE_LEADERSHIP or rt in ROLE_REQUIRED_RULES):
+        rt = RULE_AUTO
+
+    reason = RULE_TO_REASON.get(rt, "auto")
 
     if rt == RULE_MANUAL:
         # Always manual — leadership assigns the day themselves (prompted).
@@ -613,6 +624,7 @@ def generate_week_draft(
     counted_reasons: set[str],
     birthday_mode: str = BIRTHDAY_DISABLED,
     birthdays_on_date: dict[str, list[str]] | None = None,
+    role_rules_enabled: bool = True,
 ) -> list[DraftDay]:
     """Generate a 7-day draft (Mon→Sun) from a preset and current state.
 
@@ -674,6 +686,7 @@ def generate_week_draft(
             counted_reasons=counted,
             already_scheduled=already,
             before=week_start,
+            role_rules_enabled=role_rules_enabled,
         )
         if member:
             already.add(_norm(member))
@@ -700,6 +713,7 @@ def reroll_day(
     counted_reasons: set[str],
     other_scheduled: set[str],
     target_date: date,
+    role_rules_enabled: bool = True,
 ) -> tuple[str | None, str, bool]:
     """Suggest the next fair conductor for a single day (the draft's [⏭️ Next]
     button). Picks from the rule's role if one is scoped (leadership / vs /
@@ -708,6 +722,10 @@ def reroll_day(
     `other_scheduled` is the rest of the week's placements minus this day."""
     role_pools = role_pools or {}
     rt = draft_day.rule_type
+    # Role-scoped days are Premium (#337); on free tier reroll picks from the
+    # full roster and records the `auto` reason to match the weekly draft.
+    if not role_rules_enabled and (rt == RULE_LEADERSHIP or rt in ROLE_REQUIRED_RULES):
+        rt = RULE_AUTO
     if rt == RULE_LEADERSHIP and role_pools.get(RULE_LEADERSHIP):
         pool = list(role_pools[RULE_LEADERSHIP])
     elif rt in ROLE_REQUIRED_RULES and role_pools.get(rt):
@@ -882,10 +900,22 @@ def _cell(row: list[str], idx: int) -> str:
 
 
 def load_roster_members(guild_id: int) -> list[dict]:
-    """Read the Member Roster tab → [{"name": str, "discord_id": str}, ...].
+    """Read the alliance roster tab → [{"name": str, "discord_id": str}, ...].
 
-    Returns [] when member-roster config is missing or the Sheet read fails.
-    Name resolution prefers Display Name, falls back to Name when blank."""
+    Two sources, distinguished by the member-roster config's `enabled` flag
+    (which is on only when the Premium Member Sync is configured, #337):
+
+      - Sync ON (Premium): the tab carries the synced layout, so we also read
+        the Discord ID and Display Name columns. Name resolution prefers
+        Display Name, falls back to Name. The IDs power role-scoped day pools
+        and rename-proof history.
+      - Sync OFF (free / no sync): a hand-maintained roster the alliance
+        pointed us at. We read ONLY the name column — no IDs, no display
+        column — because free tier never needs them (full-roster rotation
+        works on names alone).
+
+    Returns [] when the config read or the Sheet read fails — callers degrade
+    to an empty pool gracefully."""
     import config
 
     try:
@@ -896,8 +926,7 @@ def load_roster_members(guild_id: int) -> list[dict]:
 
     tab_name = rcfg.get("tab_name") or "Member Roster"
     name_col = int(rcfg.get("name_col", 1))
-    display_col = int(rcfg.get("display_col", 2))
-    id_col = int(rcfg.get("discord_id_col", 0))
+    synced = bool(rcfg.get("enabled"))
 
     try:
         ws = config.get_member_roster_sheet(guild_id, tab_name)
@@ -907,12 +936,22 @@ def load_roster_members(guild_id: int) -> list[dict]:
         return []
 
     out: list[dict] = []
-    for row in values[1:]:  # row 1 is the header
-        display = _cell(row, display_col)
-        name = display or _cell(row, name_col)
-        if not name:
-            continue
-        out.append({"name": name, "discord_id": _cell(row, id_col)})
+    if synced:
+        display_col = int(rcfg.get("display_col", 2))
+        id_col = int(rcfg.get("discord_id_col", 0))
+        for row in values[1:]:  # row 1 is the header
+            display = _cell(row, display_col)
+            name = display or _cell(row, name_col)
+            if not name:
+                continue
+            out.append({"name": name, "discord_id": _cell(row, id_col)})
+    else:
+        # Free name-only pointer: read just the name column, no Discord IDs.
+        for row in values[1:]:  # row 1 is the header
+            name = _cell(row, name_col)
+            if not name:
+                continue
+            out.append({"name": name, "discord_id": ""})
     return out
 
 

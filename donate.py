@@ -151,6 +151,7 @@ def _build_upgrade_pitch_embed() -> discord.Embed:
             "**What you get:**\n"
             "• 📣 Unlimited events (vs 5 free)\n"
             "• 🚂 Up to 10 saved train prompt templates (vs 1 free)\n"
+            "• 🚂 Role-scoped Conductor Rotation days (Leadership, VS, Contest, Event)\n"
             "• ⚔️ Up to 10 saved storm mail templates per team (vs 1 free)\n"
             "• 📋 Multiple surveys + extra question types (multi-select, date) plus min/max bounds on numeric\n"
             "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"

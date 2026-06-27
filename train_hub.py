@@ -204,7 +204,7 @@ async def _open_week_draft(bot, interaction: discord.Interaction):
     # Default to the week leadership is most likely planning: the current week,
     # but the upcoming week once it's the configured draft day (#304).
     week_start = ui.default_draft_week(today, int(tcfg.get("weekly_draft_day", 6)))
-    draft = await asyncio.to_thread(ui.load_week_draft, bot, guild_id, week_start)
+    draft = await ui.load_week_draft_async(bot, guild_id, week_start)
 
     preset_name = tcfg.get("active_schedule_preset") or "Standard Week"
     view = ui.WeeklyDraftView(bot, guild_id, draft, week_start, preset_name)
@@ -218,7 +218,7 @@ async def _render_logs(bot, interaction: discord.Interaction):
     guild_id = interaction.guild_id
     # Full state gives the roster, so "fewest trains" can surface members who've
     # driven zero times and therefore have no history rows at all.
-    state = await asyncio.to_thread(ui.load_rotation_state, bot, guild_id)
+    state = await ui.load_rotation_state_async(bot, guild_id)
     today = ui._guild_today(bot, guild_id)
     tally = tr.member_tally(
         state.eligible_pool, state.history, state.counted_reasons, state.member_rules, today

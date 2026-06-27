@@ -91,7 +91,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 f"/setup → {HUB_BTN_TRAIN}",
                 "Configure the train tab, blurb generation, reminders, and "
-                "(optionally) turn on Conductor Rotation.",
+                "(optionally) turn on Conductor Rotation. Point it at your roster "
+                "tab and name column; role-scoped days (Leadership, VS, Contest, "
+                "Event) are 💎 Premium.",
             ),
             (
                 "/train",

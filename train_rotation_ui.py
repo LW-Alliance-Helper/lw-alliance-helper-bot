@@ -54,6 +54,7 @@ class RotationState:
         member_rules: list,
         history: list,
         counted_reasons: set,
+        role_rules_enabled: bool = True,
     ):
         self.cfg = cfg
         self.roster = roster
@@ -62,6 +63,9 @@ class RotationState:
         self.member_rules = member_rules
         self.history = history
         self.counted_reasons = counted_reasons
+        # Role-scoped day rules are Premium (#337). When False, role pools are
+        # empty and the draft/reroll fall back to the full roster.
+        self.role_rules_enabled = role_rules_enabled
 
 
 def _resolve_leadership_role(bot, guild_id: int, cfg: dict):
@@ -78,12 +82,16 @@ def _resolve_leadership_role(bot, guild_id: int, cfg: dict):
     return None
 
 
-def load_rotation_state(bot, guild_id: int) -> RotationState:
+def load_rotation_state(bot, guild_id: int, *, is_premium: bool = True) -> RotationState:
     """Load config + roster + rules + history into a RotationState.
 
     Does the (blocking) Sheet reads; callers in async contexts should wrap this
-    in `asyncio.to_thread`. Per-rule-type role pools are resolved against the
-    roster by Discord ID so their names match Train History."""
+    in `asyncio.to_thread` and pass `is_premium` (resolved via
+    `premium.is_premium` in the async context — this function is sync). Role
+    pools are a Premium capability (#337): when `is_premium` is False they're
+    left empty and the draft/reroll fall back to a full-roster auto pick.
+    Per-rule-type role pools are resolved against the roster by Discord ID so
+    their names match Train History."""
     from config import get_train_config
 
     cfg = get_train_config(guild_id)
@@ -92,22 +100,26 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
 
     guild = bot.get_guild(guild_id)
     role_pools: dict[str, list[str]] = {}
-    # Explicit per-rule-type role assignments (#55). cfg["rule_type_roles"] is a
-    # {rule_type: role_id} dict (parsed in config.get_train_config).
-    rule_type_roles = cfg.get("rule_type_roles") or {}
-    for rt, role_id in rule_type_roles.items():
-        role = guild.get_role(int(role_id)) if (guild and role_id) else None
-        if role:
-            role_pools[rt] = tr.role_pool_from_roster(roster, {str(m.id) for m in role.members})
+    # Role-scoped day rules (leadership / vs / contest / event) are Premium-only
+    # (#337). On free tier we skip building role pools entirely — select_conductor
+    # falls back to the full roster for those days.
+    if is_premium:
+        # Explicit per-rule-type role assignments (#55). cfg["rule_type_roles"] is
+        # a {rule_type: role_id} dict (parsed in config.get_train_config).
+        rule_type_roles = cfg.get("rule_type_roles") or {}
+        for rt, role_id in rule_type_roles.items():
+            role = guild.get_role(int(role_id)) if (guild and role_id) else None
+            if role:
+                role_pools[rt] = tr.role_pool_from_roster(roster, {str(m.id) for m in role.members})
 
-    # Leadership defaults to the alliance's main leadership role when no
-    # explicit leadership-rule role was assigned.
-    if tr.RULE_LEADERSHIP not in role_pools:
-        lead_role = _resolve_leadership_role(bot, guild_id, cfg)
-        if lead_role:
-            role_pools[tr.RULE_LEADERSHIP] = tr.role_pool_from_roster(
-                roster, {str(m.id) for m in lead_role.members}
-            )
+        # Leadership defaults to the alliance's main leadership role when no
+        # explicit leadership-rule role was assigned.
+        if tr.RULE_LEADERSHIP not in role_pools:
+            lead_role = _resolve_leadership_role(bot, guild_id, cfg)
+            if lead_role:
+                role_pools[tr.RULE_LEADERSHIP] = tr.role_pool_from_roster(
+                    roster, {str(m.id) for m in lead_role.members}
+                )
 
     member_rules = tr.load_member_rules(guild_id, cfg.get("member_rules_tab") or "")
     # Canonicalize ID-tagged history rows to the roster's current names so a
@@ -125,6 +137,42 @@ def load_rotation_state(bot, guild_id: int) -> RotationState:
         member_rules=member_rules,
         history=history,
         counted_reasons=counted,
+        role_rules_enabled=is_premium,
+    )
+
+
+# ── Async wrappers ────────────────────────────────────────────────────────────
+# Role-scoped day rules are Premium (#337). The Sheet-reading builders below run
+# off-thread (sync); these wrappers resolve Premium in the async context and
+# thread it through, so role pools are built — and role days honored — only for
+# Premium guilds. Free guilds get the full-roster fallback.
+
+
+async def _resolve_premium(bot, guild_id: int) -> bool:
+    import premium
+
+    return await premium.is_premium(guild_id, bot=bot)
+
+
+async def load_rotation_state_async(bot, guild_id: int) -> RotationState:
+    """Resolve Premium, then load the rotation state off-thread."""
+    is_premium = await _resolve_premium(bot, guild_id)
+    return await asyncio.to_thread(load_rotation_state, bot, guild_id, is_premium=is_premium)
+
+
+async def load_week_draft_async(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
+    """Resolve Premium, then load the week draft off-thread."""
+    is_premium = await _resolve_premium(bot, guild_id)
+    return await asyncio.to_thread(
+        load_week_draft, bot, guild_id, week_start, is_premium=is_premium
+    )
+
+
+async def regenerate_week_async(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
+    """Resolve Premium, then regenerate + persist the week draft off-thread."""
+    is_premium = await _resolve_premium(bot, guild_id)
+    return await asyncio.to_thread(
+        regenerate_week, bot, guild_id, week_start, is_premium=is_premium
     )
 
 
@@ -1352,9 +1400,7 @@ class WeeklyDraftView(discord.ui.View):
         await interaction.response.defer()
         self.week_start = self.week_start + timedelta(days=days)
         self.selected_iso = None
-        self.draft = await asyncio.to_thread(
-            load_week_draft, self.bot, self.guild_id, self.week_start
-        )
+        self.draft = await load_week_draft_async(self.bot, self.guild_id, self.week_start)
         await self._refresh(interaction)
 
     async def _guard_day(self, interaction: discord.Interaction) -> tr.DraftDay | None:
@@ -1406,7 +1452,7 @@ class WeeklyDraftView(discord.ui.View):
         if dd is None:
             return
         await interaction.response.defer()
-        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        state = await load_rotation_state_async(self.bot, self.guild_id)
         other = {tr._norm(d.member) for d in self.draft if d.member and d.date != dd.date}
         member, reason, needs = tr.reroll_day(
             dd,
@@ -1417,6 +1463,7 @@ class WeeklyDraftView(discord.ui.View):
             counted_reasons=state.counted_reasons,
             other_scheduled=other,
             target_date=date.fromisoformat(dd.date),
+            role_rules_enabled=state.role_rules_enabled,
         )
         dd.member, dd.reason, dd.needs_picking = member, reason, needs
         dd.note = "" if member else "needs picking"
@@ -1430,7 +1477,7 @@ class WeeklyDraftView(discord.ui.View):
             return
         # thinking=True so the button shows it's working during the roster read.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        state = await load_rotation_state_async(self.bot, self.guild_id)
         names, scope = _assign_pool_for_day(state, dd.rule_type)
         full_names = tr.roster_names(state.roster)
         day_label = f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}"
@@ -1510,9 +1557,7 @@ class WeeklyDraftView(discord.ui.View):
                 c.disabled = True
             await ci.response.edit_message(content="🔄 Re-drafting the whole week…", view=confirm)
             try:
-                self.draft = await asyncio.to_thread(
-                    regenerate_week, self.bot, self.guild_id, self.week_start
-                )
+                self.draft = await regenerate_week_async(self.bot, self.guild_id, self.week_start)
             except Exception as e:
                 print(f"[TRAIN ROTATION] re-draft failed for guild {self.guild_id}: {e}")
                 redrafting["on"] = False
@@ -1590,12 +1635,16 @@ def resolve_birthday_mode(guild_id: int) -> str:
     return tr.BIRTHDAY_DISABLED
 
 
-def regenerate_week(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
+def regenerate_week(
+    bot, guild_id: int, week_start: date, is_premium: bool = True
+) -> list[tr.DraftDay]:
     """Generate a fresh draft for the week and persist it as scheduled rows.
-    Blocking — call via asyncio.to_thread."""
+    Blocking — call via asyncio.to_thread (or `regenerate_week_async`, which
+    resolves `is_premium` for you). `is_premium` gates role-scoped day rules
+    (#337)."""
     from config import get_train_config
 
-    state = load_rotation_state(bot, guild_id)
+    state = load_rotation_state(bot, guild_id, is_premium=is_premium)
     cfg = get_train_config(guild_id)
     preset = tr.load_preset(
         guild_id,
@@ -1621,6 +1670,7 @@ def regenerate_week(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
         counted_reasons=state.counted_reasons,
         birthday_mode=birthday_mode,
         birthdays_on_date=birthdays,
+        role_rules_enabled=state.role_rules_enabled,
     )
     # Stamp each conductor's Discord ID from the roster so the draft embed can
     # render them as @mentions.
@@ -1634,11 +1684,15 @@ def regenerate_week(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
     return draft
 
 
-def load_week_draft(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
+def load_week_draft(
+    bot, guild_id: int, week_start: date, is_premium: bool = True
+) -> list[tr.DraftDay]:
     """Reconstruct the current week's draft from the scheduled history rows, so
     `/train draft_week` can reopen an editable view without re-rolling. Falls
     back to generating a fresh draft when no scheduled rows exist for the week.
-    Blocking — call via asyncio.to_thread."""
+    Blocking — call via asyncio.to_thread (or `load_week_draft_async`, which
+    resolves `is_premium` for you). `is_premium` only matters on the
+    regenerate fallback, where it gates role-scoped day rules (#337)."""
     from config import get_train_config
 
     cfg = get_train_config(guild_id)
@@ -1649,7 +1703,7 @@ def load_week_draft(bot, guild_id: int, week_start: date) -> list[tr.DraftDay]:
     relevant = (tr.STATUS_SCHEDULED, tr.STATUS_POSTED)
     rows = {h.date: h for h in history if h.date in week_isos and h.status in relevant}
     if not rows:
-        return regenerate_week(bot, guild_id, week_start)
+        return regenerate_week(bot, guild_id, week_start, is_premium=is_premium)
     draft = []
     for i in range(7):
         d = week_start + timedelta(days=i)
@@ -1762,7 +1816,7 @@ class DailyConfirmView(discord.ui.View):
             await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
             return
         await interaction.response.defer()
-        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        state = await load_rotation_state_async(self.bot, self.guild_id)
         member, reason, needs = tr.reroll_day(
             self.dd,
             eligible_pool=state.eligible_pool,
@@ -1772,6 +1826,7 @@ class DailyConfirmView(discord.ui.View):
             counted_reasons=state.counted_reasons,
             other_scheduled=set(),
             target_date=date.fromisoformat(self.dd.date),
+            role_rules_enabled=state.role_rules_enabled,
         )
         self.dd.member, self.dd.reason, self.dd.needs_picking = member, reason, needs
         await asyncio.to_thread(self._persist_scheduled)
@@ -1783,7 +1838,7 @@ class DailyConfirmView(discord.ui.View):
             await interaction.response.send_message(DENY_NOT_LEADER, ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        state = await asyncio.to_thread(load_rotation_state, self.bot, self.guild_id)
+        state = await load_rotation_state_async(self.bot, self.guild_id)
         names, scope = _assign_pool_for_day(state, self.dd.rule_type)
         full_names = tr.roster_names(state.roster)
 

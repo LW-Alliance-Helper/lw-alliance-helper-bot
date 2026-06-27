@@ -141,6 +141,11 @@ PREMIUM_FEATURES: set[str] = {
     "buddy_self_service",
     "buddy_auto_repair",
     "buddy_dm",
+    # Train Conductor Rotation (#337). The rotation itself is free (full-roster
+    # fair pick from a name-only roster the alliance points us at). Role-scoped
+    # day rules — leadership / vs / contest / event days that pick from a Discord
+    # role — are Premium, since they need the synced roster's Discord IDs.
+    "train_role_days",
 }
 
 

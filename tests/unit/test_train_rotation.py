@@ -421,11 +421,155 @@ def test_manual_rule_always_needs_picking():
     assert reason == "manual"
 
 
+# ── select_conductor: free tier (role rules disabled, #337) ──────────────────
+
+
+def test_free_tier_leadership_falls_back_to_full_roster():
+    # On free tier (role_rules_enabled False) a leadership day rotates the full
+    # roster instead of "needs picking", recorded as an auto pick.
+    member, reason, needs = tr.select_conductor(
+        DayRule(0, tr.RULE_LEADERSHIP),
+        target_date=MONDAY,
+        eligible_pool=["Alice", "Bob"],
+        role_pools={},  # no role pools built on free tier
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        already_scheduled=set(),
+        role_rules_enabled=False,
+    )
+    assert member in ("Alice", "Bob")
+    assert needs is False
+    assert reason == "auto"
+
+
+def test_free_tier_vs_falls_back_to_full_roster():
+    member, reason, needs = tr.select_conductor(
+        DayRule(0, tr.RULE_VS),
+        target_date=MONDAY,
+        eligible_pool=["Alice", "Bob"],
+        role_pools={},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        already_scheduled=set(),
+        role_rules_enabled=False,
+    )
+    assert member in ("Alice", "Bob")
+    assert needs is False
+    assert reason == "auto"
+
+
+def test_free_tier_ignores_role_pool_even_if_present():
+    # Defensive: even if a role pool somehow exists, free tier rotates the full
+    # roster and never honors the role scope.
+    member, reason, _ = tr.select_conductor(
+        DayRule(0, tr.RULE_LEADERSHIP),
+        target_date=MONDAY,
+        eligible_pool=["Alice", "Bob"],
+        role_pools={tr.RULE_LEADERSHIP: ["Officer"]},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        already_scheduled=set(),
+        role_rules_enabled=False,
+    )
+    assert member in ("Alice", "Bob")
+    assert member != "Officer"
+    assert reason == "auto"
+
+
+def test_premium_default_still_scopes_roles():
+    # Default (role_rules_enabled True) preserves Premium behavior: a leadership
+    # day with no resolvable role still needs picking, not a full-roster pick.
+    member, _, needs = tr.select_conductor(
+        DayRule(0, tr.RULE_LEADERSHIP),
+        target_date=MONDAY,
+        eligible_pool=["Alice", "Bob"],
+        role_pools={},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        already_scheduled=set(),
+    )
+    assert member is None
+    assert needs is True
+
+
+def test_free_tier_reroll_role_day_uses_full_roster_as_auto():
+    # reroll on a leadership day, free tier → picks from the full roster and
+    # records the auto reason (matching the weekly draft).
+    member, reason, needs = tr.reroll_day(
+        tr.DraftDay(
+            date="2026-06-01",
+            weekday=0,
+            rule_type=tr.RULE_LEADERSHIP,
+            member="Officer",
+            reason="leadership",
+        ),
+        eligible_pool=["Alice", "Bob"],
+        role_pools={tr.RULE_LEADERSHIP: ["Officer"]},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        other_scheduled=set(),
+        target_date=MONDAY,
+        role_rules_enabled=False,
+    )
+    assert member in ("Alice", "Bob")
+    assert member != "Officer"
+    assert needs is False
+    assert reason == "auto"
+
+
 # ── generate_week_draft ──────────────────────────────────────────────────────
 
 
 def _standard_preset():
     return SchedulePreset.default("Standard Week")
+
+
+def _leadership_monday_preset():
+    """Monday = leadership, every other day = auto."""
+    days = {wd: DayRule(weekday=wd) for wd in range(7)}
+    days[0] = DayRule(weekday=0, rule_type=tr.RULE_LEADERSHIP)
+    return SchedulePreset(name="Lead Monday", days=days)
+
+
+def test_free_tier_draft_fills_role_day_from_full_roster():
+    # A leadership Monday on free tier (role_rules_enabled False) fills from the
+    # full roster instead of needs-picking.
+    draft = tr.generate_week_draft(
+        _leadership_monday_preset(),
+        MONDAY,
+        eligible_pool=["Alice", "Bob", "Cara"],
+        role_pools={},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+        role_rules_enabled=False,
+    )
+    mon = next(d for d in draft if d.date == "2026-06-01")
+    assert mon.member in ("Alice", "Bob", "Cara")
+    assert mon.needs_picking is False
+    assert mon.reason == "auto"
+
+
+def test_premium_draft_role_day_needs_picking_without_role():
+    # Same preset, Premium default, no role pool → the leadership day needs
+    # picking (unchanged Premium behavior).
+    draft = tr.generate_week_draft(
+        _leadership_monday_preset(),
+        MONDAY,
+        eligible_pool=["Alice", "Bob", "Cara"],
+        role_pools={},
+        member_rules=[],
+        history=[],
+        counted_reasons=COUNTED,
+    )
+    mon = next(d for d in draft if d.date == "2026-06-01")
+    assert mon.member is None
+    assert mon.needs_picking is True
 
 
 def test_draft_produces_seven_days_mon_to_sun():

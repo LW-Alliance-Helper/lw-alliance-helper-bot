@@ -81,6 +81,11 @@ Per-member growth classification for the latest period-over-period transition.
   labels keyed off these.
 - Suggested UI: a bucket chip per member on the Growth page, or a
   "needs attention" group (`none` + `decline`).
+- **`?from={Mon YYYY}&to={Mon YYYY}` (Compare picker):** when both are present,
+  the buckets are computed for that exact period pair (any two snapshot months,
+  not just the latest consecutive one), and the labels are echoed back in
+  `prev_period_label` / `curr_period_label`. Omit them for the latest transition.
+  An unknown period falls back to the latest transition (never 500).
 
 ### `GET /api/guilds/{guildId}/members/{discordId}/stats` → member detail
 
@@ -105,6 +110,10 @@ is officer-facing). Sections are omitted when the member has no data for them.
   and the gateway; `400` on a non-numeric id.
 - Empty sections: `power` is `{}`, `storm` is `{}`, `surveys` is `[]`, `train` is
   absent.
+- **`?lookback=N` (clamped 1..50):** scopes the `storm` counts (signup /
+  attendance / placement) to the last N events; `power` / `train` / `surveys` are
+  unaffected. Omit it for the bot's default window (180 days of sign-ups, 50
+  logged attendance events).
 - This overlaps the existing `/members/{id}/history` (growth over time): use
   history for the chart, this for the at-a-glance profile.
 

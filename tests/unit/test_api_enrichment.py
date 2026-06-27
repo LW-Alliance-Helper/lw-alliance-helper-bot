@@ -54,6 +54,90 @@ async def test_breakdown_requires_auth():
         assert r.status == 401
 
 
+def _patch_growth_tab(monkeypatch, rows):
+    from types import SimpleNamespace
+
+    import config
+
+    gcfg = {
+        "metrics": [{"col": "B", "label": "Power"}],
+        "tab_growth": "Growth Tracking",
+        "breakdown_thresholds": {},
+    }
+    monkeypatch.setattr(config, "get_growth_config", lambda gid: gcfg)
+    ws = SimpleNamespace(get_all_values=lambda: [list(r) for r in rows])
+    monkeypatch.setattr(
+        growth, "_get_spreadsheet", lambda gid: SimpleNamespace(worksheet=lambda t: ws)
+    )
+
+
+def test_breakdown_for_range_classifies(monkeypatch):
+    rows = [
+        ["Name", "Power (Apr 2026)", "Power (May 2026)", "Power (Jun 2026)"],
+        ["Ada", "1000000", "1100000", "1300000"],  # +30% Apr->Jun -> increased
+        ["Bo", "1000000", "1000000", "950000"],  # -5% -> decline
+        ["Cy", "1000000", "1050000", "1080000"],  # +8% -> low
+    ]
+    _patch_growth_tab(monkeypatch, rows)
+    out = growth.breakdown_for_range(TEST_GUILD_ID, "Apr 2026", "Jun 2026")
+    assert out["has_data"] is True
+    assert out["prev_period_label"] == "Apr 2026"
+    assert out["curr_period_label"] == "Jun 2026"
+    assert out["metric_labels"] == ["Power"]
+    assert out["summary"] == {
+        "Power": {"increased": ["Ada"], "steady": [], "low": ["Cy"], "none": [], "decline": ["Bo"]}
+    }
+
+
+def test_breakdown_for_range_unknown_period_returns_empty(monkeypatch):
+    rows = [["Name", "Power (Apr 2026)", "Power (Jun 2026)"], ["Ada", "1000000", "1300000"]]
+    _patch_growth_tab(monkeypatch, rows)
+    out = growth.breakdown_for_range(TEST_GUILD_ID, "Jan 2025", "Feb 2025")
+    assert out["has_data"] is False
+    assert out["summary"] == {}
+
+
+async def test_breakdown_route_uses_range_when_from_to(monkeypatch):
+    captured = {}
+    ranged = {
+        "has_data": True,
+        "prev_period_label": "Apr 2026",
+        "curr_period_label": "Jun 2026",
+        "metric_labels": ["Power"],
+        "summary": {},
+    }
+    monkeypatch.setattr(
+        growth, "breakdown_for_range", lambda gid, f, t: captured.update(f=f, t=t) or ranged
+    )
+    monkeypatch.setattr(growth, "read_latest_breakdown", lambda gid: {"unexpected": True})
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/growth/breakdown?from=Apr%202026&to=Jun%202026",
+            headers=AUTH,
+        )
+        assert r.status == 200
+        assert (await r.json()) == ranged
+    assert captured == {"f": "Apr 2026", "t": "Jun 2026"}
+
+
+async def test_breakdown_route_falls_back_on_unknown_period(monkeypatch):
+    latest = {
+        "has_data": True,
+        "prev_period_label": "May 2026",
+        "curr_period_label": "Jun 2026",
+        "metric_labels": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(growth, "breakdown_for_range", lambda gid, f, t: {"has_data": False})
+    monkeypatch.setattr(growth, "read_latest_breakdown", lambda gid: latest)
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        r = await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/growth/breakdown?from=Bad&to=Range", headers=AUTH
+        )
+        assert r.status == 200
+        assert (await r.json()) == latest
+
+
 # ── member profile ────────────────────────────────────────────────────────────
 
 
@@ -63,7 +147,7 @@ def test_build_member_profile_assembles_sections(monkeypatch):
     monkeypatch.setattr(
         member_stats,
         "_storm_profile",
-        lambda gid, t, *, leadership_view: {"ds": {"attendance": {"pct": 80}}},
+        lambda gid, t, *, leadership_view, lookback=None: {"ds": {"attendance": {"pct": 80}}},
     )
     monkeypatch.setattr(member_stats, "_survey_profile", lambda gid, t: [{"survey_name": "S"}])
     monkeypatch.setattr(member_stats, "_train_profile", lambda gid, t: {"conductor_count": 3})
@@ -84,7 +168,9 @@ def test_build_member_profile_assembles_sections(monkeypatch):
 def test_build_member_profile_hides_train_for_member_view(monkeypatch):
     target = Target(name="Ada", discord_id=111, joined="")
     monkeypatch.setattr(member_stats, "_power_values", lambda gid, t: {})
-    monkeypatch.setattr(member_stats, "_storm_profile", lambda gid, t, *, leadership_view: {})
+    monkeypatch.setattr(
+        member_stats, "_storm_profile", lambda gid, t, *, leadership_view, lookback=None: {}
+    )
     monkeypatch.setattr(member_stats, "_survey_profile", lambda gid, t: [])
     monkeypatch.setattr(member_stats, "_train_profile", lambda gid, t: {"conductor_count": 3})
 
@@ -99,11 +185,60 @@ async def test_member_profile_route_passes_through(monkeypatch):
     monkeypatch.setattr(
         member_stats, "resolve_profile_target", lambda gid, did, member=None: target
     )
-    monkeypatch.setattr(member_stats, "build_member_profile", lambda gid, t: profile)
+    monkeypatch.setattr(member_stats, "build_member_profile", lambda gid, t, lookback=None: profile)
     async with TestClient(TestServer(build_app(bot=None))) as client:
         r = await client.get(f"/api/guilds/{TEST_GUILD_ID}/members/111/stats", headers=AUTH)
         assert r.status == 200
         assert (await r.json()) == profile
+
+
+async def test_member_profile_lookback_clamped_and_passed(monkeypatch):
+    target = Target(name="Ada", discord_id=111, joined="")
+    captured = {}
+    monkeypatch.setattr(
+        member_stats, "resolve_profile_target", lambda gid, did, member=None: target
+    )
+    monkeypatch.setattr(
+        member_stats,
+        "build_member_profile",
+        lambda gid, t, lookback=None: captured.update(lookback=lookback) or {"member": {}},
+    )
+    async with TestClient(TestServer(build_app(bot=None))) as client:
+        # In range -> passed through.
+        await client.get(f"/api/guilds/{TEST_GUILD_ID}/members/111/stats?lookback=8", headers=AUTH)
+        assert captured["lookback"] == 8
+        # Over the cap -> clamped to 50.
+        await client.get(
+            f"/api/guilds/{TEST_GUILD_ID}/members/111/stats?lookback=999", headers=AUTH
+        )
+        assert captured["lookback"] == 50
+        # Omitted -> None (the bot's default window).
+        await client.get(f"/api/guilds/{TEST_GUILD_ID}/members/111/stats", headers=AUTH)
+        assert captured["lookback"] is None
+
+
+def test_storm_profile_threads_lookback_to_readers(monkeypatch):
+    target = Target(name="Ada", discord_id=111, joined="")
+    seen = {}
+    # update() returns None, so each reader reports "no data" and _storm_profile
+    # skips unpacking — we only care that the lookback reached every reader.
+    monkeypatch.setattr(
+        member_stats,
+        "_storm_signups_for_member",
+        lambda gid, et, did, lb=None: seen.update(signup=lb),
+    )
+    monkeypatch.setattr(
+        member_stats,
+        "_storm_attendance_for_member",
+        lambda gid, et, name, lb=None: seen.update(attendance=lb),
+    )
+    monkeypatch.setattr(
+        member_stats,
+        "_storm_placement_for_member",
+        lambda gid, et, did, lb=None: seen.update(placement=lb),
+    )
+    member_stats._storm_profile(TEST_GUILD_ID, target, leadership_view=True, lookback=10)
+    assert seen == {"signup": 10, "attendance": 10, "placement": 10}
 
 
 async def test_member_profile_404_when_unknown(monkeypatch):

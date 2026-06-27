@@ -1172,6 +1172,80 @@ def read_latest_breakdown(guild_id: int) -> dict:
     }
 
 
+def breakdown_for_range(guild_id: int, from_period: str, to_period: str) -> dict:
+    """Per-member growth buckets between two arbitrary snapshot periods (#316).
+
+    Same shape as `read_latest_breakdown`, but classifies `{from_period}` ->
+    `{to_period}` on the fly from the Growth Tracking tab so MM's Compare picker
+    can pick any two snapshot months (not just the latest consecutive pair).
+    `from_period` / `to_period` are `{%b %Y}` labels exactly as the bot emits
+    them, echoed back in `prev_period_label` / `curr_period_label`. Returns the
+    empty (`has_data: False`) dict when either period is absent from the tab, so
+    the caller can fall back to the latest transition. Never raises.
+    """
+    from config import get_growth_config
+
+    empty = {
+        "has_data": False,
+        "prev_period_label": "",
+        "curr_period_label": "",
+        "metric_labels": [],
+        "summary": {},
+    }
+
+    gcfg = get_growth_config(guild_id)
+    metric_labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+    tab_growth = gcfg.get("tab_growth")
+    thresholds = gcfg.get("breakdown_thresholds") or {}
+    if not metric_labels or not tab_growth or not from_period or not to_period:
+        return empty
+    try:
+        sh = _get_spreadsheet(guild_id)
+        rows = sh.worksheet(tab_growth).get_all_values()
+    except Exception as e:
+        print(f"[GROWTH] breakdown range read failed (guild {guild_id}): {e}")
+        return empty
+    if not rows or not rows[0]:
+        return empty
+    header = rows[0]
+
+    from_cols: dict[str, int] = {}
+    to_cols: dict[str, int] = {}
+    for i, h in enumerate(header):
+        for label in metric_labels:
+            if h == f"{label} ({from_period})":
+                from_cols[label] = i
+            elif h == f"{label} ({to_period})":
+                to_cols[label] = i
+    # Only metrics present in BOTH periods can be compared.
+    metrics_present = [label for label in metric_labels if label in from_cols and label in to_cols]
+    if not metrics_present:
+        return empty
+
+    summary: dict = {m: {b: [] for b in BUCKET_ORDER} for m in metrics_present}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        name = row[0].strip()
+        for label in metrics_present:
+            fi, ti = from_cols[label], to_cols[label]
+            prev = _parse_growth_cell(row[fi]) if fi < len(row) else None
+            curr = _parse_growth_cell(row[ti]) if ti < len(row) else None
+            if prev is None or curr is None:
+                continue
+            bucket = classify_bucket(prev, curr, thresholds=thresholds)
+            if bucket:
+                summary[label][bucket].append(name)
+
+    return {
+        "has_data": True,
+        "prev_period_label": from_period,
+        "curr_period_label": to_period,
+        "metric_labels": metrics_present,
+        "summary": summary,
+    }
+
+
 def format_breakdown_embed(
     *,
     metric_labels: list[str],

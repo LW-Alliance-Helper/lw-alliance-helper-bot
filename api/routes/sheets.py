@@ -354,31 +354,50 @@ async def sheet_power_upsert(request: web.Request) -> web.Response:
 
 @requires_api_key
 async def get_growth_breakdown(request: web.Request) -> web.Response:
-    """Per-member growth buckets for MM's Growth page. Returns
-    `read_latest_breakdown`'s shape `{ has_data, prev_period_label,
-    curr_period_label, metric_labels, summary: { metric: { bucket: [names] } } }`
-    — present-but-empty before the first period-over-period transition."""
+    """Per-member growth buckets for MM's Growth page. Returns `{ has_data,
+    prev_period_label, curr_period_label, metric_labels, summary: { metric: {
+    bucket: [names] } } }` — present-but-empty before the first transition. With
+    `?from={Mon YYYY}&to={Mon YYYY}` (MM's Compare picker) it classifies that
+    specific range; an unknown period falls back to the latest transition rather
+    than erroring."""
     guild_id = _parse_guild_id(request)
     if guild_id is None:
         return web.json_response({"error": "bad_guild_id"}, status=400)
+    from_period = request.query.get("from")
+    to_period = request.query.get("to")
 
     import growth
 
-    data = await asyncio.to_thread(growth.read_latest_breakdown, guild_id)
+    if from_period and to_period:
+        data = await asyncio.to_thread(growth.breakdown_for_range, guild_id, from_period, to_period)
+        if not data.get("has_data"):
+            # Unknown period(s): fall back to the latest transition, not a 500.
+            data = await asyncio.to_thread(growth.read_latest_breakdown, guild_id)
+    else:
+        data = await asyncio.to_thread(growth.read_latest_breakdown, guild_id)
     return web.json_response(data)
 
 
 @requires_api_key
 async def get_member_profile(request: web.Request) -> web.Response:
     """Consolidated member profile (the JSON behind `/member_stats`): identity,
-    power, storm participation, train, surveys. 404 when the member is unknown to
-    both the roster and the gateway."""
+    power, storm participation, train, surveys. `?lookback=N` (clamped 1..50)
+    scopes the storm counts to the last N events; omitted = the bot's default
+    window. 404 when the member is unknown to both the roster and the gateway."""
     guild_id = _parse_guild_id(request)
     if guild_id is None:
         return web.json_response({"error": "bad_guild_id"}, status=400)
     discord_id = request.match_info.get("discord_user_id", "")
     if not discord_id.isdigit():
         return web.json_response({"error": "bad_member_id"}, status=400)
+
+    lookback = None
+    raw_lookback = request.query.get("lookback")
+    if raw_lookback is not None:
+        try:
+            lookback = max(1, min(int(raw_lookback), 50))
+        except (TypeError, ValueError):
+            lookback = None
 
     import member_stats
 
@@ -393,7 +412,9 @@ async def get_member_profile(request: web.Request) -> web.Response:
     )
     if target is None:
         return web.json_response({"error": "member_not_found"}, status=404)
-    profile = await asyncio.to_thread(member_stats.build_member_profile, guild_id, target)
+    profile = await asyncio.to_thread(
+        member_stats.build_member_profile, guild_id, target, lookback=lookback
+    )
     return web.json_response(profile)
 
 

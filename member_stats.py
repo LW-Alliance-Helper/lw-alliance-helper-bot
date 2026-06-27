@@ -372,10 +372,13 @@ def _storm_event_dates(guild_id: int, event_type: str) -> list[str]:
     )
 
 
-def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
+def _storm_signups_for_member(
+    guild_id: int, event_type: str, discord_id, lookback: int | None = None
+):
     """(available_count, total_events, last_vote_date) from the sign-up poll
     votes, or None. Keyed by Discord ID, so manual members are skipped.
-    `last_vote_date` is the most recent event they cast any vote on."""
+    `last_vote_date` is the most recent event they cast any vote on. `lookback`
+    scopes to the most recent N events (the API's ?lookback); None = full window."""
     if not discord_id:
         return None
     import config
@@ -387,6 +390,8 @@ def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
         return None
     if not dates:
         return None
+    if lookback:
+        dates = dates[-lookback:]
     available = 0
     last_vote = ""
     for d in dates:  # ascending, so the last hit is the most recent
@@ -398,13 +403,18 @@ def _storm_signups_for_member(guild_id: int, event_type: str, discord_id):
     return available, len(dates), last_vote
 
 
-def _storm_attendance_for_member(guild_id: int, event_type: str, name_lower: str):
+def _storm_attendance_for_member(
+    guild_id: int, event_type: str, name_lower: str, lookback: int | None = None
+):
     """(attended_count, tracked_events, last_attended_date) from the Per-Member
-    participation Log, or None. Keyed by member name."""
+    participation Log, or None. Keyed by member name. `lookback` scopes to the
+    most recent N events (the API's ?lookback); None = the default 50-event window."""
     from storm_log import ATTENDANCE_QUESTION_KEY, read_member_log_window
 
     try:
-        dates, by_member = read_member_log_window(guild_id, event_type, 50, ATTENDANCE_QUESTION_KEY)
+        dates, by_member = read_member_log_window(
+            guild_id, event_type, lookback or 50, ATTENDANCE_QUESTION_KEY
+        )
     except Exception as e:
         logger.warning("[MEMBERSTATS] storm log read failed guild=%s: %s", guild_id, e)
         return None
@@ -462,11 +472,14 @@ def read_storm_attendance_map(guild_id: int) -> dict[str, int]:
     return {nl: _pct(a, t) for nl, (a, t) in totals.items() if t}
 
 
-def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
+def _storm_placement_for_member(
+    guild_id: int, event_type: str, discord_id, lookback: int | None = None
+):
     """(primary, sub, sat_out, last_sat_out_date) placement across recent events,
     or None. Primary/sub from the saved team plans (by Discord ID). "Sat out"
     is derived as available-but-not-placed (leadership's explicit sit-out sheet
-    has no per-member reader). Leadership-only."""
+    has no per-member reader). Leadership-only. `lookback` scopes to the most
+    recent N events (the API's ?lookback); None = full window."""
     if not discord_id:
         return None
     import config
@@ -478,6 +491,8 @@ def _storm_placement_for_member(guild_id: int, event_type: str, discord_id):
         return None
     if not dates:
         return None
+    if lookback:
+        dates = dates[-lookback:]
     did = str(discord_id)
     primary = sub = sat_out = 0
     last_sat_out = ""
@@ -756,14 +771,18 @@ def _power_values(guild_id: int, target: Target) -> dict:
     return growth.build_member_power_map(metric_labels, rows).get(target.name.strip().lower(), {})
 
 
-def _storm_profile(guild_id: int, target: Target, *, leadership_view: bool) -> dict:
+def _storm_profile(
+    guild_id: int, target: Target, *, leadership_view: bool, lookback: int | None = None
+) -> dict:
     """Per-event-type storm participation: sign-up rate, attendance, and (in the
-    leadership view) placement counts. Omits an event type with no data."""
+    leadership view) placement counts. Omits an event type with no data.
+    `lookback` scopes every count to the most recent N events (the API's
+    ?lookback); None = each reader's default window."""
     out: dict = {}
     n = target.name.strip().lower()
     for event_type, key in (("DS", "ds"), ("CS", "cs")):
         block: dict = {}
-        signups = _storm_signups_for_member(guild_id, event_type, target.discord_id)
+        signups = _storm_signups_for_member(guild_id, event_type, target.discord_id, lookback)
         if signups:
             avail, total, last_vote = signups
             block["signup"] = {
@@ -772,7 +791,7 @@ def _storm_profile(guild_id: int, target: Target, *, leadership_view: bool) -> d
                 "pct": _pct(avail, total),
                 "last_vote": last_vote or None,
             }
-        attendance = _storm_attendance_for_member(guild_id, event_type, n)
+        attendance = _storm_attendance_for_member(guild_id, event_type, n, lookback)
         if attendance:
             attended, tracked, last_attended = attendance
             block["attendance"] = {
@@ -782,7 +801,9 @@ def _storm_profile(guild_id: int, target: Target, *, leadership_view: bool) -> d
                 "last_attended": last_attended or None,
             }
         if leadership_view:
-            placement = _storm_placement_for_member(guild_id, event_type, target.discord_id)
+            placement = _storm_placement_for_member(
+                guild_id, event_type, target.discord_id, lookback
+            )
             if placement:
                 primary, sub, sat_out, last_sat_out = placement
                 block["placement"] = {
@@ -849,11 +870,15 @@ def _survey_profile(guild_id: int, target: Target) -> list[dict]:
     return out
 
 
-def build_member_profile(guild_id: int, target: Target, *, leadership_view: bool = True) -> dict:
+def build_member_profile(
+    guild_id: int, target: Target, *, leadership_view: bool = True, lookback: int | None = None
+) -> dict:
     """Consolidated member profile for the Map Manager dashboard (#316) — the
     JSON behind `/member_stats`. Sections the member has no data for are omitted
     (power is `{}`, storm is `{}`, surveys is `[]`, train absent). The numbers
-    match the embed exactly because the same section readers back both."""
+    match the embed exactly because the same section readers back both.
+    `lookback` scopes only the `storm` counts to the most recent N events (the
+    API's ?lookback); power / train / surveys are unaffected."""
     profile: dict = {
         "member": {
             "name": target.name,
@@ -862,7 +887,9 @@ def build_member_profile(guild_id: int, target: Target, *, leadership_view: bool
             "is_manual": target.is_manual,
         },
         "power": _power_values(guild_id, target),
-        "storm": _storm_profile(guild_id, target, leadership_view=leadership_view),
+        "storm": _storm_profile(
+            guild_id, target, leadership_view=leadership_view, lookback=lookback
+        ),
         "surveys": _survey_profile(guild_id, target),
     }
     if leadership_view:

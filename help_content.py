@@ -328,7 +328,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "/map_manager",
                 "**Map Manager hub** (server admins). Shows the current link plus "
                 "buttons.\n"
-                "**Not linked:** 🔗 Link this server (💎) — enter your game server "
+                "**Not linked:** 🔗 Link this server (💎): enter your game server "
                 "number and alliance tag.\n"
                 "**Linked:** ✏️ Change link, 🔌 Unlink, and 🌐 Open Map Manager.",
             ),

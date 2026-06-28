@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.5.10"
+__version__ = "1.6.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -230,6 +230,9 @@ async def on_ready():
     if "member_stats" not in bot.extensions:
         await bot.load_extension("member_stats")
         print("[INFO] Member stats cog loaded")
+    if "transfer_cog" not in bot.extensions:
+        await bot.load_extension("transfer_cog")
+        print("[INFO] Transfer cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

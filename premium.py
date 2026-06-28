@@ -141,6 +141,8 @@ PREMIUM_FEATURES: set[str] = {
     "buddy_self_service",
     "buddy_auto_repair",
     "buddy_dm",
+    # Transfer Management (#16) — entirely Premium (no free slice).
+    "transfers",
     # Train Conductor Rotation (#337). The rotation itself is free (full-roster
     # fair pick from a name-only roster the alliance points us at). Role-scoped
     # day rules — leadership / vs / contest / event days that pick from a Discord

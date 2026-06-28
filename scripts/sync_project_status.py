@@ -74,8 +74,16 @@ CLOSE_KEYWORDS_RE = re.compile(
 )
 
 
+class AuthError(RuntimeError):
+    """The PROJECT_TOKEN PAT is missing, expired, or lacks scope (401/403).
+    Raised so the entry point can treat it as a soft skip — a token lapse
+    should warn, not red-X every push, since project sync is a convenience."""
+
+
 def gql(query, variables=None):
-    token = os.environ["GH_TOKEN"]
+    token = (os.environ.get("GH_TOKEN") or "").strip()
+    if not token:
+        raise AuthError("GH_TOKEN (PROJECT_TOKEN) is empty")
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     req = urllib.request.Request(
         GITHUB_API,
@@ -91,6 +99,10 @@ def gql(query, variables=None):
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
+        # 401 (bad/expired token) / 403 (insufficient scope) are token problems,
+        # not code problems — surface them as a soft skip rather than a CI failure.
+        if e.code in (401, 403):
+            raise AuthError(f"HTTP {e.code} from GitHub: {body}") from e
         raise RuntimeError(f"HTTP {e.code} from GitHub: {body}") from e
     if "errors" in data:
         raise RuntimeError(f"GraphQL errors: {data['errors']}")
@@ -290,4 +302,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AuthError as e:
+        # Token lapse: warn (visible in the Actions log) and exit clean so the
+        # workflow stays green. The board just won't advance until the secret
+        # is refreshed.
+        print(
+            f"::warning::Project status sync skipped: PROJECT_TOKEN auth failed ({e}). "
+            "Regenerate the fine-grained PAT (org Projects: Read and write) and update the "
+            "PROJECT_TOKEN repo secret."
+        )
+        sys.exit(0)

@@ -151,6 +151,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
 | `train_rotation.py` / `train_rotation_ui.py` / `train_hub.py` | Train Conductor Rotation (#55, free, opt-in): fairness selection (fewest drives → oldest last-driven → **stable random** tie-break seeded by the day, replacing the old alphabetical fallback) + `Train History`/`Member Rules`/`Day Rules` Sheet I/O. Fairness counts the **whole** history sheet as fact — any membered row counts (no posted/reason needed, blank reason counts), only the drafted week + future excluded via the `before` boundary; identity is **Discord-ID-first, name-fallback** (`canonicalize_history` + the appended `Discord ID` history column, stamped on write via `roster_id_map`). UI = buffered preset editor, weekly draft view (with ◀/▶ week nav), daily confirmation view. `train_hub.py` is the single `/train` hub (embed + button grid, Events-hub pattern) that fronts both rotation and the legacy blurb surface. The `check_rotation` loop (weekly draft + daily confirm) lives in `train_cog.py`; rotation gates on the `rotation_enabled` train-config flag. No strategy axis — auto/manual is derived from rule type + role; per-rule-type roles scope candidate pools; birthday mode is derived from the Birthday setup. | ~2.8K total |
 | `storm.py` / `storm_log.py` | Desert/Canyon Storm: drafts, participation, reminders. | ~2.5K total |
+| `transfer.py` / `transfer_cog.py` / `transfer_setup.py` / `transfer_sheets.py` / `transfers_hub.py` | Transfer Management ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16), Premium, 1.6.0): passive sheet-watcher over an alliance's recruiting sheet. `transfer.py` is the Discord-free core (header-name column addressing, AND-filter DSL, `compute_poll_diff` against `last_seen_state_json`, template render). `transfer_cog.py` is the per-minute poll loop posting new-applicant / status-change / removal notices (each or digest) with message drafts, full-record view, and opt-in decision write-back to the alliance's **own** sheet. `transfer_setup.py` is the wizard (largest piece); `transfers_hub.py` the `/transfers` front door. Optional server-wide / intake-form source pulls auto-copy filter-matching rows. Only Name is privileged; everything else is free-choice display/filter. State-diff poll self-heals after outages → no `outage_catchup` adapter (by design). | ~4.8K total |
 | `survey.py` | Squad-power surveys + scheduled reminders. | ~1.6K |
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
@@ -347,9 +348,11 @@ Current contents (worth being aware of when picking up new work):
   **fully shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema
   drops ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit
   was structured but should not generate new work.
-- **`notes/DESIGN_transfer_management.md`** — fully-iterated spec for
-  a Premium transfer-tracking feature (sheet-watcher + filter wizard +
-  in-game message templates). Post-launch v1.x.
+- **`notes/DESIGN_transfer_management.md`** — spec + build log for the
+  Premium transfer-tracking feature ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)),
+  now **built and shipping in 1.6.0**. Kept for the reconciliation
+  decisions (header-name addressing, only-Name-is-special, the
+  intentional no-outage-adapter call).
 - **`notes/PLANNING.md`** — cross-session work tracker.
 - **`notes/DEV_TEST_PLAN_*.md`** — ad-hoc test plans for a specific
   release-batch dev validation session. Delete after the batch ships
@@ -382,22 +385,24 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. `release/1.5.2` is cut from `dev` and
-  PR'd into `main` (production currently `1.5.1`; merging the PR ships
-  `1.5.2`). It rolls up the outage catch-up digest ([#227](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/227)),
-  `/my_stats` + `/member_stats` member lookup ([#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56),
-  [#299](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/299)),
-  buddy engineer reliability ranking ([#303](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/303)),
-  the Train Conductor Rotation setup rework ([#302](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/302)),
-  and a stale-ref sweep ([#298](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/298)).
-  The two big preceding releases: 1.5.0 (Train Conductor Rotation
+- 1.0.0 launched 2026-04-28. Production is `1.5.6`. `release/1.6.0`
+  is cut from `dev` for **Transfer Management** ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)) —
+  the Premium recruiting sheet-watcher — shipping as its own release
+  (CHANGELOG written, PR to `main` is the remaining step). **Map Manager
+  integration ([#316](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/316))
+  was decoupled to `1.7.0`** and continues on the
+  `map-manager-integration-316` branch. The 1.5.x line: 1.5.2 (outage
+  catch-up [#227](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/227)
+  + member stats [#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56)
+  + buddy reliability ranking [#303](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/303)),
+  then 1.5.3–1.5.6 train-rotation UX fixes. The two big preceding
+  releases: 1.5.0 (Train Conductor Rotation
   [#55](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/55)
   + Profession Buddy System [#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289))
   and 1.4.0 (Premium Storm Overhaul [#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)
   + Participation Tracking 2.0 [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)).
-  See `CHANGELOG.md` and the Recent shipped highlights table for
-  per-version detail.
-- ~2085 tests pass on the default (non-sheets) lane.
+  See `CHANGELOG.md` for per-version detail.
+- ~2615 tests pass on the default (non-sheets) lane (18 sheets tests deselected).
 - Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
   large-files), ruff lint + format (line-length 100), codespell, a
@@ -409,9 +414,12 @@ These have been thought through. Reopening them needs a real reason:
   once 1.4.6 lands on main.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
-- Transfer management feature designed, not built (see
-  `notes/DESIGN_transfer_management.md` and issue
-  [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer Management ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16))
+  built, merged to `dev` (PR #317), staging-tested, and now on
+  `release/1.6.0`. The state-diff poll self-heals after outages, so it has
+  **no `outage_catchup` adapter by design** (see the design doc's
+  reconciliation note). See `transfer*.py` and
+  `notes/DESIGN_transfer_management.md`.
 
 For per-version detail, see `CHANGELOG.md`. New in-flight work goes
 on a descriptive feature branch (which may bundle several related

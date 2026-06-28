@@ -267,15 +267,16 @@ class _SheetStepView(discord.ui.View):
         self.result = None
         self.confirmed = False
 
-        enter = discord.ui.Button(label="📝 Enter sheet", style=discord.ButtonStyle.primary)
-        enter.callback = self._enter
-        self.add_item(enter)
+        # Keep current goes first + green (the repo-wide keep/change convention).
         if default_id and default_tab:
             keep = discord.ui.Button(
-                label="✅ Keep current sheet", style=discord.ButtonStyle.secondary
+                label="✅ Keep current sheet", style=discord.ButtonStyle.success
             )
             keep.callback = self._keep
             self.add_item(keep)
+        enter = discord.ui.Button(label="📝 Enter sheet", style=discord.ButtonStyle.primary)
+        enter.callback = self._enter
+        self.add_item(enter)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -400,18 +401,30 @@ class _ModeStepView(discord.ui.View):
         self.result: dict | None = None
         self.confirmed = False
 
+        # On re-entry, offer Keep current first (green, leftmost) so leadership
+        # can keep the saved shape + sheets without re-typing sheet IDs.
+        r = 0
+        if current.get("setup_mode") and current.get("alliance_sheet_id"):
+            keep = discord.ui.Button(
+                label="✅ Keep current sheets & setup", style=discord.ButtonStyle.success, row=0
+            )
+            keep.callback = self._keep_current
+            self.add_item(keep)
+            r = 1
         b1 = discord.ui.Button(
             label="🔀 A shared sheet that populates my own sheet",
             style=discord.ButtonStyle.primary,
-            row=0,
+            row=r,
         )
         b1.callback = self._pick_source_to_own
         self.add_item(b1)
-        b2 = discord.ui.Button(label="🏠 My own sheet", style=discord.ButtonStyle.primary, row=1)
+        b2 = discord.ui.Button(
+            label="🏠 My own sheet", style=discord.ButtonStyle.primary, row=r + 1
+        )
         b2.callback = self._pick_own
         self.add_item(b2)
         b3 = discord.ui.Button(
-            label="👀 A shared sheet that I watch", style=discord.ButtonStyle.primary, row=2
+            label="👀 A shared sheet that I watch", style=discord.ButtonStyle.primary, row=r + 2
         )
         b3.callback = self._pick_watch
         self.add_item(b3)
@@ -444,6 +457,33 @@ class _ModeStepView(discord.ui.View):
                 on_submit=self._on_single(_MODE_WATCH),
             )
         )
+
+    async def _keep_current(self, interaction: discord.Interaction):
+        """Re-use the saved shape + sheets: read them again for fresh headers,
+        then proceed exactly as if the user had re-entered the same values."""
+        mode = self.current.get("setup_mode") or _MODE_OWN
+        if mode == _MODE_SOURCE_TO_OWN:
+            sheets = [
+                (
+                    "intake",
+                    self.current.get("server_wide_sheet_id") or "",
+                    self.current.get("server_wide_sheet_tab") or "",
+                ),
+                (
+                    "alliance",
+                    self.current.get("alliance_sheet_id") or "",
+                    self.current.get("alliance_sheet_tab") or "",
+                ),
+            ]
+        else:
+            sheets = [
+                (
+                    "alliance",
+                    self.current.get("alliance_sheet_id") or "",
+                    self.current.get("alliance_sheet_tab") or "",
+                )
+            ]
+        await self._verify(interaction, mode, sheets)
 
     def _on_single(self, mode: str):
         async def _cb(interaction: discord.Interaction, sheet_id: str, tab: str):
@@ -598,7 +638,7 @@ class _ColumnMapView(discord.ui.View):
         else:
             disp_num, id_num = "②", "③"
         self._display_sel = self._make_multi(
-            f"{disp_num} Columns to show in notices (optional)", row, self._on_display
+            f"{disp_num} Shown in notices (optional)", row, self._on_display
         )
         row += 1
         self._identity_sel = self._make_multi(
@@ -773,7 +813,7 @@ class _AdaptiveColumnMapView(discord.ui.View):
     _FIELDS = {
         "name": ("Name", "the column that identifies each applicant (required)"),
         "status": ("Status", "a change here posts a status-change notice"),
-        "display": ("Display", "the columns shown in each notice"),
+        "display": ("Shown in notices", "the columns shown in each notice"),
         "identity": ("Identity Fallback", "tells apart two people with the same name"),
     }
 
@@ -1036,8 +1076,12 @@ class _ChannelStepView(discord.ui.View):
         self.confirmed = False
         self.message: discord.Message | None = None
         self._sel = discord.ui.ChannelSelect(
-            channel_types=[discord.ChannelType.text],
-            placeholder="Pick the notifications channel",
+            channel_types=[
+                discord.ChannelType.text,
+                discord.ChannelType.public_thread,
+                discord.ChannelType.private_thread,
+            ],
+            placeholder="Pick the notifications channel or thread",
             min_values=1,
             max_values=1,
         )
@@ -1160,6 +1204,7 @@ class _FilterColumnView(discord.ui.View):
         self.all_headers = header
         self.column = None
         self.confirmed = False
+        self.back = False
         self.per_page = _PER_PAGE
         self.page = 0
         self.pages = _page_count(header, self.per_page)
@@ -1183,6 +1228,11 @@ class _FilterColumnView(discord.ui.View):
             )
             self._next.callback = self._on_next
             self.add_item(self._next)
+        back = discord.ui.Button(
+            label="↩️ Back (no filter)", style=discord.ButtonStyle.secondary, row=1
+        )
+        back.callback = self._on_back
+        self.add_item(back)
         self._render()
 
     def _render(self):
@@ -1218,6 +1268,13 @@ class _FilterColumnView(discord.ui.View):
         self.page = min(self.pages - 1, self.page + 1)
         self._render()
         await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        self.back = True
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+        self.stop()
 
 
 class _FilterMultiView(discord.ui.View):
@@ -1327,7 +1384,9 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
     Returns a clause dict, or the ``"CANCEL"`` / ``"TIMEOUT"`` sentinel."""
     if kind == "numeric":
         opv = _ButtonChoiceView(
-            owner_id, [(lbl, op, discord.ButtonStyle.secondary) for lbl, op in _FILTER_OPS]
+            owner_id,
+            [(lbl, op, discord.ButtonStyle.secondary) for lbl, op in _FILTER_OPS]
+            + [("↩️ Back", "BACK", discord.ButtonStyle.secondary)],
         )
         await channel.send(f"How should **{col}** compare?", view=opv)
         await wizard_registry.wait_view_or_cancel(opv, cancel_event)
@@ -1335,6 +1394,8 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             return "CANCEL"
         if not opv.confirmed:
             return "TIMEOUT"
+        if opv.value == "BACK":
+            return "BACK"
         valv = _FilterValueView(owner_id, prompt_title=col, prompt_label="Threshold (e.g. 250M)")
         valv.message = await channel.send(
             f"Enter the threshold for **{col}** (e.g. `250M`):", view=valv
@@ -1356,6 +1417,7 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             [
                 ("🔤 Contains text", "contains", discord.ButtonStyle.primary),
                 ("🎯 Is one of specific values", "in", discord.ButtonStyle.secondary),
+                ("↩️ Back", "BACK", discord.ButtonStyle.secondary),
             ],
         )
         await channel.send(f"How should **{col}** match?", view=how)
@@ -1364,6 +1426,8 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             return "CANCEL"
         if not how.confirmed:
             return "TIMEOUT"
+        if how.value == "BACK":
+            return "BACK"
         match = how.value
 
     if match == "in":
@@ -1433,6 +1497,10 @@ async def _build_filter(
         await wizard_registry.wait_view_or_cancel(colv, cancel_event)
         if colv.cancelled:
             return "CANCEL"
+        if colv.back:
+            # Backed out of the column picker: keep any clauses built so far,
+            # or end with no filter if they bailed before building any.
+            break
         if not colv.confirmed:
             return "TIMEOUT"
         col = colv.column
@@ -1442,6 +1510,9 @@ async def _build_filter(
         clause = await _build_clause(channel, owner_id, col, kind, distinct, cancel_event)
         if clause in ("CANCEL", "TIMEOUT"):
             return clause
+        if clause == "BACK":
+            # Abandoned this clause mid-build; back to the column picker.
+            continue
         if isinstance(clause, dict):
             clauses.append(clause)
         more = _ButtonChoiceView(
@@ -1695,7 +1766,7 @@ async def _run_source_step(
     already = bool(current.get(f"{prefix}_enabled"))
     if already:
         opts = [
-            ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
+            ("↩️ Keep current", "keep", discord.ButtonStyle.success),
             ("✏️ Replace", "connect", discord.ButtonStyle.primary),
         ]
         if not required:
@@ -1761,7 +1832,7 @@ async def _step_channel(channel, owner_id, cancel_event):
     view.message = await channel.send(
         "**Notification channel**\n"
         "Where should new-applicant and status-change notices post? A dedicated recruiting "
-        "channel works well.",
+        "channel (or a thread) works well.",
         view=view,
     )
     await wizard_registry.wait_view_or_cancel(view, cancel_event)
@@ -1775,7 +1846,8 @@ async def _step_channel(channel, owner_id, cancel_event):
 async def _step_style(channel, owner_id, cancel_event):
     view = _StyleStepView(owner_id=owner_id)
     await channel.send(
-        "**How should notifications arrive?**\n"
+        "**Notification Style**\n"
+        "How should notifications arrive?\n"
         "• **A message per applicant**: richest; great for a dedicated channel where you watch "
         "people arrive.\n"
         "• **One digest**: a single batched message when several land in the same check (tidier "
@@ -2588,7 +2660,7 @@ class _EditMenuView(discord.ui.View):
         specs = [
             ("🗂️ Column mapping", "mapping", 0),
             ("📢 Channel", "channel", 0),
-            ("🎚️ Style", "style", 0),
+            ("🎚️ Notification style", "style", 0),
             ("⏱️ Frequency", "frequency", 0),
         ]
         if mode in (_MODE_OWN, _MODE_WATCH):
@@ -2728,8 +2800,8 @@ async def _edit_gate(channel, owner_id, title, current_summary, cancel_event) ->
     view = _ButtonChoiceView(
         owner_id,
         [
+            ("↩️ Keep current", "keep", discord.ButtonStyle.success),
             ("✏️ Change it", "change", discord.ButtonStyle.primary),
-            ("↩️ Keep current", "keep", discord.ButtonStyle.secondary),
         ],
     )
     await channel.send(f"**{title}**\nCurrent: {current_summary}", view=view)

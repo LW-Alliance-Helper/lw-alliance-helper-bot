@@ -216,7 +216,7 @@ class TestEditMenuSections:
         for needle in (
             "Column mapping",
             "Channel",
-            "Style",
+            "Notification style",
             "Frequency",
             "Filter",
             "Intake",

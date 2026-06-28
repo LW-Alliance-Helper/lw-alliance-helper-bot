@@ -799,9 +799,7 @@ class TrainCog(commands.Cog):
         )
         preset_name = tcfg.get("active_schedule_preset") or "Standard Week"
 
-        draft = await asyncio.get_event_loop().run_in_executor(
-            None, ui.regenerate_week, self.bot, guild.id, week_start
-        )
+        draft = await ui.regenerate_week_async(self.bot, guild.id, week_start)
         view = ui.WeeklyDraftView(self.bot, guild.id, draft, week_start, preset_name)
         try:
             view.message = await channel.send(

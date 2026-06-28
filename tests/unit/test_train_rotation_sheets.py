@@ -61,6 +61,69 @@ def patched_tab():
         yield sheets
 
 
+# ── load_roster_members: free (name-only) vs synced (#337) ───────────────────
+
+
+class _FakeRosterWS:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def get_all_values(self):
+        return [list(r) for r in self._rows]
+
+
+def test_load_roster_free_reads_name_column_only():
+    # Sync OFF (enabled=0): read just the configured name column, no IDs, and
+    # ignore the display column even when populated.
+    rows = [
+        ["Discord ID", "Name", "Display"],
+        ["", "Alice", "Ally"],
+        ["", "Bob", ""],
+        ["", "", "ghost"],  # blank name → skipped
+    ]
+    cfg = {
+        "enabled": 0,
+        "tab_name": "My Roster",
+        "name_col": 1,
+        "display_col": 2,
+        "discord_id_col": 0,
+    }
+    with (
+        patch("config.get_member_roster_config", return_value=cfg),
+        patch("config.get_member_roster_sheet", return_value=_FakeRosterWS(rows)),
+    ):
+        out = tr.load_roster_members(GID)
+    assert out == [
+        {"name": "Alice", "discord_id": ""},
+        {"name": "Bob", "discord_id": ""},
+    ]
+
+
+def test_load_roster_synced_reads_id_and_display():
+    # Sync ON (enabled=1): prefer Display, fall back to Name, read IDs.
+    rows = [
+        ["Discord ID", "Name", "Display"],
+        ["111", "Alice", "Ally"],
+        ["222", "Bob", ""],  # blank display → falls back to Name
+    ]
+    cfg = {
+        "enabled": 1,
+        "tab_name": "Member Roster",
+        "name_col": 1,
+        "display_col": 2,
+        "discord_id_col": 0,
+    }
+    with (
+        patch("config.get_member_roster_config", return_value=cfg),
+        patch("config.get_member_roster_sheet", return_value=_FakeRosterWS(rows)),
+    ):
+        out = tr.load_roster_members(GID)
+    assert out == [
+        {"name": "Ally", "discord_id": "111"},
+        {"name": "Bob", "discord_id": "222"},
+    ]
+
+
 # ── History ──────────────────────────────────────────────────────────────────
 
 

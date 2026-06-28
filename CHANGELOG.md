@@ -17,6 +17,14 @@ and PR description.
 - Optional server-wide and intake-form pulls auto-copy filter-matching applicants into your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 - Optional write-back marks an applicant Want / Confirmed / Declined from Discord and updates your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
+## [1.5.10] — 2026-06-27
+
+### Added
+- Free alliances can now point Conductor Rotation at any roster tab and name column, so the fair daily rotation works on names alone without the Premium member sync ([#337](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/337)).
+
+### Changed
+- Role-scoped train days (Leadership, VS, Contest, Event) are now Premium; on the free plan every day rotates the full roster fairly, and a lapsed subscription falls back to that instead of leaving role days unassigned ([#337](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/337)).
+
 ## [1.5.9] — 2026-06-22
 
 ### Fixed

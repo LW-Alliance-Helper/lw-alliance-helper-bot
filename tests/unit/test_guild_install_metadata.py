@@ -166,8 +166,9 @@ def test_delete_only_affects_target_guild(temp_db):
 
 def test_admin_group_registers_globally_when_env_unset(monkeypatch):
     """With BOT_ADMIN_GUILD_IDS unset, the /admin group (and its
-    overview / guild_info / forget_guild subcommands) fall back to
-    global registration (local-dev affordance)."""
+    overview / guild_info / forget_guild / shiny_servers / shiny_import /
+    shiny_set subcommands) fall back to global registration (local-dev
+    affordance)."""
     monkeypatch.delenv("BOT_ADMIN_GUILD_IDS", raising=False)
     import importlib
     import bot as bot_module
@@ -176,7 +177,14 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
     cmds = {c.name: c for c in bot_module.bot.tree.get_commands()}
     assert "admin" in cmds
     sub_names = {c.name for c in cmds["admin"].commands}
-    assert sub_names == {"overview", "guild_info", "forget_guild"}
+    assert sub_names == {
+        "overview",
+        "guild_info",
+        "forget_guild",
+        "shiny_servers",
+        "shiny_import",
+        "shiny_set",
+    }
     assert bot_module._ADMIN_GUILD_IDS == ()
 
 
@@ -200,7 +208,14 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
         }
         assert "admin" in guild_cmds
         sub_names = {c.name for c in guild_cmds["admin"].commands}
-        assert sub_names == {"overview", "guild_info", "forget_guild"}
+        assert sub_names == {
+            "overview",
+            "guild_info",
+            "forget_guild",
+            "shiny_servers",
+            "shiny_import",
+            "shiny_set",
+        }
 
     # Unrelated guild sees nothing.
     other = {

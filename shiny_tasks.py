@@ -22,11 +22,25 @@ embedded in a Next.js page chunk, not a JSON API.
 
 from __future__ import annotations
 
+import json
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import aiohttp
+
+
+# Last War's in-game day rolls over at 00:00 server time (UTC-2, no DST), so the
+# launch *date* that anchors the 3-day shiny cycle is the server-time date of
+# the creation timestamp — not the UTC date. A server launched at, say, 00:30
+# UTC is already on the previous server-time day; using the UTC date would put
+# it one day late in the cycle (#331 — same off-by-one class as #318/#330).
+_SERVER_TZ = timezone(timedelta(hours=-2))
+
+
+def _creation_date_from_ms(ts_ms: int) -> date:
+    """Server-time (UTC-2) calendar date of a unix-millisecond launch timestamp."""
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=_SERVER_TZ).date()
 
 
 HEDGE_BASE_URL = "https://cpt-hedge.com"
@@ -212,8 +226,34 @@ def _parse_records(bundle_text: str) -> list[tuple[int, str, str]]:
         region_raw = m.group("region") or ""
         region_match = re.search(r'"([^"]*)"', region_raw)
         region = region_match.group(1) if region_match else ""
-        cd = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).date()
+        cd = _creation_date_from_ms(ts_ms)
         rows.append((sid, cd.isoformat(), region))
+    return rows
+
+
+def parse_server_records_json(text: str) -> list[tuple[int, str, str]]:
+    """Parse a JSON array of server records into rows ready for
+    `config.upsert_shiny_task_servers`.
+
+    This is the shape the source's servers page loads (and the format the
+    `/admin shiny_import` command ingests): a list of objects each carrying an
+    `id`, a `timestamp` of unix-milliseconds, and a `region` list. Returns
+    `(server_number, creation_date_iso, region)` tuples with creation dates in
+    server time (UTC-2) so they match the source's displayed dates and the
+    3-day cycle lines up. Records missing a usable id/timestamp are skipped
+    rather than aborting the whole import.
+    """
+    records = json.loads(text)
+    rows: list[tuple[int, str, str]] = []
+    for r in records:
+        try:
+            sid = int(r["id"])
+            ts_ms = int(r["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        region_list = r.get("region") or []
+        region = region_list[0] if isinstance(region_list, list) and region_list else ""
+        rows.append((sid, _creation_date_from_ms(ts_ms).isoformat(), region))
     return rows
 
 

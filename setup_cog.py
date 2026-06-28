@@ -4155,6 +4155,14 @@ async def _run_train_rotation_step(
     current = get_train_config(guild_id)
     was_on = bool(current.get("rotation_enabled"))
 
+    import premium
+
+    # Role-scoped day rules are Premium (#337); resolve once so Step 9a (roster
+    # source) and Step 9f (role-scoped days) can branch on it.
+    is_premium_flag = await premium.is_premium(
+        interaction.guild_id, interaction=interaction, bot=bot
+    )
+
     def _check(m):
         return m.author == user and m.channel == channel
 
@@ -4184,7 +4192,119 @@ async def _run_train_rotation_step(
             )
         return {"enabled": False}
 
-    # ── Steps 9a/9b: draft + confirmation channel/time (reuse reminders, or ask) ─
+    # ── Step 9a: roster source (who can be a conductor) ─────────────────────────
+    # The conductor pool comes from a roster tab in the alliance's Sheet. Free
+    # tier points us at a tab + a name column (names are all the rotation needs).
+    # Premium uses the synced Member Roster (Discord IDs included), which also
+    # unlocks the role-scoped day rules in Step 9f (#337).
+    from config import get_member_roster_config, save_member_roster_config
+
+    rcfg = get_member_roster_config(guild_id)
+    if is_premium_flag:
+        if rcfg.get("enabled"):
+            await channel.send(
+                "**Step 9a of 9 — Roster Source** 💎\n"
+                f"Using your synced **Member Roster** (tab **{rcfg.get('tab_name') or 'Member Roster'}**) "
+                "as the conductor pool. Members stay current automatically, and role-scoped "
+                "day rules are unlocked for you in a later step."
+            )
+        else:
+            await channel.send(
+                "**Step 9a of 9 — Roster Source** 💎\n"
+                "Your **Member Roster** sync isn't set up yet. Run **Member Sync** from "
+                "`/setup` to auto-populate it from Discord; that becomes the conductor pool and "
+                "unlocks role-scoped day rules. Until then, rotation reads any names in a tab "
+                "called **Member Roster**."
+            )
+    else:
+        # Free: point at a tab + name column. Saved as a sync-disabled roster
+        # config (enabled=0), which load_roster_members reads name-only (#337).
+        cur_tab = rcfg.get("tab_name") or "Member Roster"
+        cur_col_letter = _col_index_to_letter(int(rcfg.get("name_col", 1)))
+
+        class _RosterModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="Roster Source")
+                self.out = None
+                self._tab = discord.ui.TextInput(
+                    label="Tab name (your member list)",
+                    default=cur_tab,
+                    max_length=100,
+                )
+                self._col = discord.ui.TextInput(
+                    label="Name column (a letter, e.g. B)",
+                    default=cur_col_letter,
+                    max_length=3,
+                )
+                self.add_item(self._tab)
+                self.add_item(self._col)
+
+            async def on_submit(self, inter: discord.Interaction):
+                tab = self._tab.value.strip() or "Member Roster"
+                idx = _col_letter_to_index(self._col.value.strip())
+                if idx < 0:
+                    idx = 1  # default to column B on an unreadable letter
+                self.out = (tab, idx)
+                await inter.response.defer()
+                self.stop()
+
+        class _RosterView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+                self.choice = None
+                self.modal_out = None
+                self.cancelled = False
+
+            @discord.ui.button(
+                label="📋 Set roster tab + column", style=discord.ButtonStyle.primary
+            )
+            async def _set(self, inter: discord.Interaction, _btn: discord.ui.Button):
+                modal = _RosterModal()
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                # Dismissing the modal leaves the saved source untouched.
+                self.choice = "set" if modal.out else "keep"
+                self.modal_out = modal.out
+                for c in self.children:
+                    c.disabled = True
+                try:
+                    await inter.edit_original_response(view=self)
+                except Exception:
+                    pass
+                self.stop()
+
+            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.secondary)
+            async def _keep(self, inter: discord.Interaction, _btn: discord.ui.Button):
+                self.choice = "keep"
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+        roster_view = _RosterView()
+        await channel.send(
+            "**Step 9a of 9 — Roster Source**\n"
+            "Who can be a conductor? Point me at the tab in your Google Sheet that lists your "
+            "members and the column holding their names. The bot rotates fairly through that "
+            "list. *(Names are all the free rotation needs, no Discord IDs.)*\n"
+            f"Current: tab **{cur_tab}**, name column **{cur_col_letter}**.",
+            view=roster_view,
+        )
+        await wait_view_or_cancel(roster_view, cancel_event)
+        if roster_view.cancelled:
+            return None
+        if roster_view.choice is None:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return None
+        if roster_view.choice == "set" and roster_view.modal_out:
+            tab, name_idx = roster_view.modal_out
+            save_member_roster_config(guild_id, enabled=0, tab_name=tab, name_col=name_idx)
+            await channel.send(
+                f"✅ Roster source set: tab **{tab}**, name column "
+                f"**{_col_index_to_letter(name_idx)}**."
+            )
+
+    # ── Steps 9b/9c: draft + confirmation channel/time (reuse reminders, or ask) ─
     reminder_channel_id = current.get("reminder_channel_id", 0) or 0
     reminder_time = current.get("reminder_time", "22:00") or "22:00"
     if reminder_channel_id:
@@ -4201,7 +4321,7 @@ async def _run_train_rotation_step(
             current_id=0,
         )
         await channel.send(
-            "**Step 9a of 9 — Rotation Channel**\n"
+            "**Step 9b of 9 — Rotation Channel**\n"
             "Rotation posts a weekly draft and a daily confirmation. Which channel should "
             "they go in? *(Your train reminders are off, so this is just for rotation.)*",
             view=ch_view,
@@ -4219,7 +4339,7 @@ async def _run_train_rotation_step(
         )
         time_raw = await ask_keep_or_change(
             channel,
-            "**Step 9b of 9 — Rotation Time**\n"
+            "**Step 9c of 9 — Rotation Time**\n"
             "What time should the draft and daily confirmation fire? "
             f"*(in your timezone: {tz_label})*\n*(e.g. `10:00pm`, `9:00am`)*",
             default="10:00pm",
@@ -4246,10 +4366,10 @@ async def _run_train_rotation_step(
         update_train_config_field(guild_id, "reminder_channel_id", reminder_channel_id)
         update_train_config_field(guild_id, "reminder_time", reminder_time)
 
-    # ── Step 9c: weekly draft day ───────────────────────────────────────────────
+    # ── Step 9d: weekly draft day ───────────────────────────────────────────────
     day_view = _WeekdaySelectView(current=current.get("weekly_draft_day", 6))
     await channel.send(
-        "**Step 9c of 9 — Weekly Draft Day**\n"
+        "**Step 9d of 9 — Weekly Draft Day**\n"
         "Which day should the bot post the upcoming week's draft for leadership to review? "
         "*(Sunday is typical: it previews the week starting Monday. The draft posts at the "
         "time above.)*",
@@ -4263,11 +4383,11 @@ async def _run_train_rotation_step(
         return None
     weekly_draft_day = day_view.selected
 
-    # ── Step 9d: public posts (opt-in) ──────────────────────────────────────────
+    # ── Step 9e: public posts (opt-in) ──────────────────────────────────────────
     rotation_public_channel_id = 0
     pub_offer = YesNoView()
     await channel.send(
-        "**Step 9d of 9 — Public Posts**\n"
+        "**Step 9e of 9 — Public Posts**\n"
         "When you confirm each day's conductor, should the bot also announce them publicly "
         "for the whole alliance to see? *(Selecting No will record the conductor with no "
         "public post.)*",
@@ -4300,40 +4420,53 @@ async def _run_train_rotation_step(
             return None
         rotation_public_channel_id = pub_view.selected_channel.id
 
-    # ── Step 9e: rule-type roles (opt-in) ───────────────────────────────────────
+    # ── Step 9f: role-scoped days (Premium, #337) ───────────────────────────────
+    # Leadership / VS / Contest / Event days that rotate only a Discord role's
+    # members need the synced roster's Discord IDs, so they're Premium. Free tier
+    # always rotates the full roster. Saved assignments are preserved (not
+    # cleared) so a re-subscribe restores them; the draft-time Premium gate makes
+    # role days fall back to the full roster while a guild is on free.
     rule_type_roles = dict(current.get("rule_type_roles") or {})
-    roles_offer = YesNoView()
-    await channel.send(
-        "**Step 9e of 9 — Rule-Type Roles** *(optional)*\n"
-        "Day rules can be **leadership**, **vs**, **contest**, or **event** days. By default "
-        "leadership days use your main leadership role and the rest are picked by hand. Want "
-        "to tie any of these to a specific Discord role, so the bot only rotates members in "
-        "that role on those days?",
-        view=roles_offer,
-    )
-    await wait_view_or_cancel(roles_offer, cancel_event)
-    if roles_offer.cancelled:
-        return None
-    if roles_offer.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
-        return None
-    if roles_offer.selected:
-        attach_view = _RuleRoleAttachView(rule_type_roles)
+    if not is_premium_flag:
         await channel.send(
-            "Pick a rule type and a role, then **Attach role to this rule**. Repeat for as "
-            "many as you like, then hit **Done**.\n\n"
-            f"**Attached so far:**\n{attach_view.summary()}",
-            view=attach_view,
+            "**Step 9f of 9 — Role-Scoped Days** 💎\n"
+            "Leadership / VS / Contest / Event days that rotate only members in a specific "
+            "Discord role are a Premium feature. On the free plan every day rotates your full "
+            "roster fairly. Run `/upgrade` to unlock role-scoped days."
         )
-        await wait_view_or_cancel(attach_view, cancel_event)
-        if attach_view.cancelled:
+    else:
+        roles_offer = YesNoView()
+        await channel.send(
+            "**Step 9f of 9 — Role-Scoped Days** *(optional)* 💎\n"
+            "Day rules can be **leadership**, **vs**, **contest**, or **event** days. By default "
+            "leadership days use your main leadership role and the rest are picked by hand. Want "
+            "to tie any of these to a specific Discord role, so the bot only rotates members in "
+            "that role on those days?",
+            view=roles_offer,
+        )
+        await wait_view_or_cancel(roles_offer, cancel_event)
+        if roles_offer.cancelled:
             return None
-        rule_type_roles = attach_view.rule_type_roles
+        if roles_offer.selected is None:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
+            return None
+        if roles_offer.selected:
+            attach_view = _RuleRoleAttachView(rule_type_roles)
+            await channel.send(
+                "Pick a rule type and a role, then **Attach role to this rule**. Repeat for as "
+                "many as you like, then hit **Done**.\n\n"
+                f"**Attached so far:**\n{attach_view.summary()}",
+                view=attach_view,
+            )
+            await wait_view_or_cancel(attach_view, cancel_event)
+            if attach_view.cancelled:
+                return None
+            rule_type_roles = attach_view.rule_type_roles
 
-    # ── Step 9f: counted reasons ────────────────────────────────────────────────
+    # ── Step 9g: counted reasons ────────────────────────────────────────────────
     counted_raw = await ask_keep_or_change(
         channel,
-        "**Step 9f of 9 — Counted Reasons** *(most alliances keep the default)*\n"
+        "**Step 9g of 9 — Counted Reasons** *(most alliances keep the default)*\n"
         "The rotation always picks whoever has driven the fewest *counted* trains, so "
         "everyone takes a fair turn. Each reason you count here adds to a member's tally "
         "when they drive for that reason. The default counts regular turns but leaves out "
@@ -4352,7 +4485,7 @@ async def _run_train_rotation_step(
     valid = {r.strip().lower() for r in counted_raw.split(",") if r.strip()} & set(tr.REASONS)
     counted_reasons = ",".join(sorted(valid)) if valid else ""
 
-    # ── Step 9g: sheet tabs (one question; Keep / Default / Define my own) ───────
+    # ── Step 9h: sheet tabs (one question; Keep / Default / Define my own) ───────
     _DEF_HIST, _DEF_MR, _DEF_DR = "Train History", "Train Member Rules", "Train Day Rules"
     history_tab = current.get("history_tab") or _DEF_HIST
     member_rules_tab = current.get("member_rules_tab") or _DEF_MR
@@ -4445,7 +4578,7 @@ async def _run_train_rotation_step(
 
     tabs_view = _TabsChoiceView()
     await channel.send(
-        "**Step 9g of 9 — Sheet Tabs**\n"
+        "**Step 9h of 9 — Sheet Tabs**\n"
         "Rotation reads and writes three tabs. The bot creates them automatically if they "
         "don't exist yet:\n"
         f"{_tab_line('History tab', history_tab, _DEF_HIST)}\n"
@@ -4466,12 +4599,12 @@ async def _run_train_rotation_step(
         history_tab, member_rules_tab, day_rules_tab = tabs_view.modal_out
     # "keep" leaves the loaded values as-is.
 
-    # ── Step 9h: weekly pattern / preset (opt-in + naming) ──────────────────────
+    # ── Step 9i: weekly pattern / preset (opt-in + naming) ──────────────────────
     active_preset = current.get("active_schedule_preset") or tr.DEFAULT_PRESET_NAME
     open_editor = False
     preset_offer = YesNoView()
     await channel.send(
-        "**Step 9h of 9 — Weekly Pattern** *(recommended)*\n"
+        "**Step 9i of 9 — Weekly Pattern** *(recommended)*\n"
         "A weekly pattern (preset) sets what *kind* of day each weekday is, e.g. Monday = "
         "auto rotation, Friday = VS, Sunday = leadership. The bot fills in conductors from "
         "the pattern each week. Want to set one up now?",
@@ -4528,7 +4661,21 @@ async def _run_train_rotation_step(
         ),
         f"Active preset: {active_preset}",
     ]
-    if rule_type_roles:
+    # Roster source — Premium uses the synced Member Roster; free shows the tab +
+    # name column they pointed us at (#337).
+    _rsrc = get_member_roster_config(guild_id)
+    if is_premium_flag and _rsrc.get("enabled"):
+        summary_lines.insert(
+            0, f"Roster: synced Member Roster (tab {_rsrc.get('tab_name') or 'Member Roster'}) 💎"
+        )
+    else:
+        summary_lines.insert(
+            0,
+            f"Roster: tab {_rsrc.get('tab_name') or 'Member Roster'}, name column "
+            f"{_col_index_to_letter(int(_rsrc.get('name_col', 1)))}",
+        )
+    # Role-scoped day assignments only function on Premium (#337).
+    if is_premium_flag and rule_type_roles:
         summary_lines.append(
             "Rule-type roles: "
             + ", ".join(f"{tr.RULE_LABELS.get(k, k)} → <@&{v}>" for k, v in rule_type_roles.items())
@@ -10253,17 +10400,19 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if not enabled_view.selected:
         from config import save_birthday_config
 
-        # `last_train_population_date` is operational state owned by the
-        # train-auto-pop scheduler (see #89) — not a `save_birthday_config`
-        # parameter. Strip it from the splat so the disable path still
-        # works when the column exists on the loaded row.
+        # `last_train_population_date` and `ignored_conflicts` are operational
+        # state owned by the train-auto-pop scheduler and the conflict alert
+        # (see #89, #334) — not `save_birthday_config` parameters. Strip them
+        # from the splat so the disable path still works when those columns
+        # exist on the loaded row.
         save_birthday_config(
             guild_id,
             enabled=0,
             **{
                 k: v
                 for k, v in current.items()
-                if k not in ("guild_id", "enabled", "last_train_population_date")
+                if k
+                not in ("guild_id", "enabled", "last_train_population_date", "ignored_conflicts")
             },
         )
         await ask_disable_with_clear(

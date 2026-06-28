@@ -147,6 +147,11 @@ PREMIUM_FEATURES: set[str] = {
     # (linking a guild's alliance to the Map Manager web app) is Premium-gated;
     # change / unlink are not gated (you can always fix or remove an existing link).
     "map_manager",
+    # Train Conductor Rotation (#337). The rotation itself is free (full-roster
+    # fair pick from a name-only roster the alliance points us at). Role-scoped
+    # day rules — leadership / vs / contest / event days that pick from a Discord
+    # role — are Premium, since they need the synced roster's Discord IDs.
+    "train_role_days",
 }
 
 

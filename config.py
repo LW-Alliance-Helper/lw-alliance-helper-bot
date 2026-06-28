@@ -302,7 +302,8 @@ def init_db():
                 reminder_channel_id        INTEGER DEFAULT 0,
                 reminder_time              TEXT    DEFAULT '08:00',
                 dm_message                 TEXT    DEFAULT '',
-                last_train_population_date TEXT    DEFAULT ''
+                last_train_population_date TEXT    DEFAULT '',
+                ignored_conflicts          TEXT    DEFAULT '[]'
             )
         """)
         conn.commit()
@@ -1210,6 +1211,12 @@ def init_db():
             # not (Railway redeploys at 22:00 were re-firing the
             # conflict alerts). See #89.
             ("last_train_population_date", "TEXT DEFAULT ''"),
+            # JSON list of conflict keys leadership has explicitly dismissed
+            # from the interactive birthday-conflict alert, so the daily
+            # re-post stops nagging about a conflict that's been handled
+            # off-schedule. Key format is owned by train_birthdays.conflict_key
+            # ("id:<discord_id>|<bday_iso>" or "name:<lower>|<bday_iso>").
+            ("ignored_conflicts", "TEXT DEFAULT '[]'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_birthday_config ADD COLUMN {col} {definition}")
@@ -1985,6 +1992,23 @@ DS_SERVER_TIMES = [(18, 0), (23, 0)]
 CS_SERVER_TIMES = [(12, 0), (23, 0)]
 
 SERVER_TZ_OFFSET = -2  # Server Time is UTC-2.
+
+
+def server_date_for(dt: datetime) -> date:
+    """The Last War in-game (server, UTC-2) calendar date at instant `dt`.
+
+    Last War's in-game day rolls over at 00:00 server time — about two hours
+    before UTC midnight — so a guild's local *evening* clock time (e.g. the
+    default 10pm train reminder) already falls on the **next** in-game day.
+    Date-keyed schedules (the train rotation, the legacy train blurb) resolve
+    "today's" entry against this server date rather than the guild's local
+    calendar date; otherwise the announcement that fires at the reset names the
+    in-game day that just ended, landing a full day behind. `dt` must be
+    timezone-aware.
+    """
+    from datetime import timezone as _tz, timedelta
+
+    return dt.astimezone(_tz(timedelta(hours=SERVER_TZ_OFFSET))).date()
 
 
 def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
@@ -4213,6 +4237,7 @@ def get_birthday_config(guild_id: int) -> dict:
         "reminder_time": "08:00",
         "dm_message": "",
         "last_train_population_date": "",
+        "ignored_conflicts": "[]",
     }
 
 
@@ -4298,6 +4323,43 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
         conn.execute(
             "UPDATE guild_birthday_config SET last_train_population_date = ? WHERE guild_id = ?",
             (date_iso, guild_id),
+        )
+        conn.commit()
+
+
+def get_ignored_conflict_keys(guild_id: int) -> set[str]:
+    """Return the set of birthday-conflict keys leadership has dismissed
+    for this guild (see `train_birthdays.conflict_key` for the format).
+
+    Tolerates a missing row, a NULL/blank column, and a corrupt JSON
+    blob — any of which yields an empty set so the conflict alert simply
+    fires as if nothing were dismissed, rather than crashing the loop."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT ignored_conflicts FROM guild_birthday_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return set()
+    raw = dict(row).get("ignored_conflicts") or "[]"
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return set()
+    return {str(k) for k in data} if isinstance(data, list) else set()
+
+
+def mark_conflict_ignored(guild_id: int, key: str) -> None:
+    """Add `key` to this guild's dismissed birthday-conflict set so the
+    daily re-post stops alerting about it. UPDATE-only and idempotent —
+    the guild has to have a `guild_birthday_config` row already (the
+    conflict alert only fires for configured guilds, so it does)."""
+    keys = get_ignored_conflict_keys(guild_id)
+    keys.add(key)
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_birthday_config SET ignored_conflicts = ? WHERE guild_id = ?",
+            (json.dumps(sorted(keys)), guild_id),
         )
         conn.commit()
 

@@ -64,6 +64,44 @@ def test_resolve_name_from_list():
     assert ui._resolve_name_from_list(names, "Nonmember") == "Nonmember"  # off-roster passthrough
 
 
+def test_load_rotation_state_gates_role_pools_on_premium():
+    # Role pools are built only for Premium guilds (#337); free tier gets an
+    # empty role-pool map and role_rules_enabled False so the draft falls back
+    # to the full roster.
+    roster = [{"name": "Alice", "discord_id": "111"}]
+    cfg = {
+        "rule_type_roles": {"vs": 555},
+        "member_rules_tab": "",
+        "history_tab": "",
+        "counted_reasons": "",
+    }
+    bot = MagicMock()
+    guild = MagicMock()
+    bot.get_guild.return_value = guild
+    role = MagicMock()
+    role_member = MagicMock()
+    role_member.id = 111  # matches Alice's roster discord_id
+    role.members = [role_member]
+    guild.get_role.return_value = role
+
+    with (
+        patch("config.get_train_config", return_value=cfg),
+        patch("train_rotation.load_roster_members", return_value=roster),
+        patch("train_rotation.load_member_rules", return_value=[]),
+        patch("train_rotation.load_history", return_value=[]),
+        patch("train_rotation.canonicalize_history", side_effect=lambda h, r: h),
+        patch("train_rotation.parse_counted_reasons", return_value=set()),
+        patch("train_rotation_ui._resolve_leadership_role", return_value=None),
+    ):
+        premium_state = ui.load_rotation_state(bot, 1, is_premium=True)
+        free_state = ui.load_rotation_state(bot, 1, is_premium=False)
+
+    assert premium_state.role_pools.get("vs") == ["Alice"]
+    assert premium_state.role_rules_enabled is True
+    assert free_state.role_pools == {}
+    assert free_state.role_rules_enabled is False
+
+
 def test_roster_picker_populated_has_dropdown_empty_is_type_only():
     async def _noop(_name):
         return None

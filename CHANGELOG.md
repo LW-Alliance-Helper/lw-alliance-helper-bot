@@ -9,6 +9,32 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.5.10] — 2026-06-27
+
+### Added
+- Free alliances can now point Conductor Rotation at any roster tab and name column, so the fair daily rotation works on names alone without the Premium member sync ([#337](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/337)).
+
+### Changed
+- Role-scoped train days (Leadership, VS, Contest, Event) are now Premium; on the free plan every day rotates the full roster fairly, and a lapsed subscription falls back to that instead of leaving role days unassigned ([#337](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/337)).
+
+## [1.5.9] — 2026-06-22
+
+### Fixed
+- The birthday scheduling-conflict alert stops re-posting nightly once resolved, and a member placed anywhere within a week of their birthday now silences it ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
+### Added
+- The birthday scheduling-conflict alert is now interactive: place the member on an open day, show the surrounding week, or dismiss it for good ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)).
+
+## [1.5.8] — 2026-06-15
+
+### Fixed
+- Daily Shiny Tasks posts now follow the in-game server day, so a post timed just after the reset no longer lists the prior day's servers ([#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330)).
+
+## [1.5.7] — 2026-06-11
+
+### Fixed
+- Train conductor announcements now name the in-game day that's starting, not the one that just ended, so they no longer land a day behind the server reset ([#318](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/318)).
+
 ## [1.5.6] — 2026-06-08
 
 ### Changed

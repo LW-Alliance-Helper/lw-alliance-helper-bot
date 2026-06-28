@@ -736,6 +736,7 @@ async def shiny_tasks_post_task():
         get_shiny_task_servers_in_range,
         list_shiny_enabled_guild_ids,
         mark_shiny_tasks_posted,
+        server_date_for,
         stamp_loop_heartbeat,
     )
     from shiny_tasks import build_announcement_for_guild
@@ -782,6 +783,14 @@ async def shiny_tasks_post_task():
                 )
                 continue
 
+            # Resolve the shiny cycle against the Last War in-game (server,
+            # UTC-2) date, not the guild's local calendar date. The post can
+            # fire after the in-game reset (00:00 server time, ~2h before local
+            # midnight) — e.g. a 10:30pm local post — at which point the local
+            # date still names the in-game day that just ended, so the cycle
+            # would list yesterday's shiny servers (#330). Same class of bug as
+            # the train "day behind" fix (#318). See config.server_date_for.
+            shiny_today = server_date_for(guild_now)
             rows = get_shiny_task_servers_in_range(
                 int(scfg.get("server_min") or 0),
                 int(scfg.get("server_max") or 0),
@@ -790,7 +799,7 @@ async def shiny_tasks_post_task():
                 server_rows=rows,
                 server_min=int(scfg.get("server_min") or 0),
                 server_max=int(scfg.get("server_max") or 0),
-                today=guild_now.date(),
+                today=shiny_today,
                 template=scfg.get("message_template") or "",
             )
             if body is None:
@@ -1404,6 +1413,192 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
         f"`guild_configs` and other tables are untouched — clear those separately "
         f"if the request covers full config wipe. Confirm?",
         view=view,
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="shiny_servers",
+    description="(Bot owner only) Dump stored shiny_task_servers rows for a server-number range.",
+)
+@app_commands.describe(
+    min_server="Lowest server number to include (inclusive)",
+    max_server="Highest server number to include (inclusive)",
+)
+async def admin_shiny_servers_slash(
+    interaction: discord.Interaction, min_server: int, max_server: int
+):
+    """Spot-check the frozen shiny_task_servers snapshot against the source.
+    Owner-only debug tool: lists each stored server's creation_date, whether
+    it's shiny on the current in-game day, and flags rows missing from the
+    range — so a drift between the snapshot and reality is visible at a glance.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    if min_server > max_server:
+        min_server, max_server = max_server, min_server
+
+    from config import _get_conn, server_date_for  # noqa: PLC0415
+    from shiny_tasks import is_shiny_today  # noqa: PLC0415
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT server_number, creation_date, last_seen_at "
+            "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
+            "ORDER BY server_number",
+            (min_server, max_server),
+        ).fetchall()
+
+    if not rows:
+        await interaction.response.send_message(
+            f"ℹ️ No `shiny_task_servers` rows stored between **{min_server}** and **{max_server}**.",
+            ephemeral=True,
+        )
+        return
+
+    # "Today" = the Last War in-game (server, UTC-2) date — the same date the
+    # live post loop uses (see config.server_date_for) — so the Shiny? column
+    # matches what the bot would announce right now and is directly checkable
+    # against the source's "Shiny Tasks" column.
+    server_today = server_date_for(datetime.now(timezone.utc))
+
+    header = f"{'Server':>6}  {'Created':<10}  {'Shiny?':<6}  {'Last seen':<10}"
+    table = [header, "-" * len(header)]
+    shiny_nums: list[int] = []
+    for r in rows:
+        cd = (r["creation_date"] or "")[:10]
+        try:
+            is_shiny = is_shiny_today(date.fromisoformat(cd), server_today)
+        except ValueError:
+            is_shiny = False
+        if is_shiny:
+            shiny_nums.append(r["server_number"])
+        table.append(
+            f"{r['server_number']:>6}  {cd:<10}  {'yes' if is_shiny else 'no':<6}  "
+            f"{(r['last_seen_at'] or '')[:10]:<10}"
+        )
+
+    present = {r["server_number"] for r in rows}
+    missing = [n for n in range(min_server, max_server + 1) if n not in present]
+
+    summary = (
+        f"**Shiny snapshot {min_server}–{max_server}** · in-game date "
+        f"`{server_today.isoformat()}`\n"
+        f"{len(rows)} stored, {len(missing)} missing in range · "
+        f"{len(shiny_nums)} shiny today"
+    )
+    detail = (
+        f"Shiny today: {', '.join(map(str, shiny_nums)) or '(none)'}\n"
+        f"Missing rows: {', '.join(map(str, missing)) or '(none)'}\n\n" + "\n".join(table)
+    )
+
+    full = f"{summary}\n```\n{detail}\n```"
+    if len(full) <= 1900:
+        await interaction.response.send_message(full, ephemeral=True)
+    else:
+        import io  # noqa: PLC0415
+
+        fp = io.BytesIO(detail.encode("utf-8"))
+        await interaction.response.send_message(
+            content=f"{summary}\n*(full table attached)*",
+            file=discord.File(fp, filename=f"shiny_servers_{min_server}_{max_server}.txt"),
+            ephemeral=True,
+        )
+
+
+@admin_group.command(
+    name="shiny_import",
+    description="(Bot owner only) Bulk-replace the shiny server snapshot from an attached JSON export.",
+)
+@app_commands.describe(
+    file="JSON array of server records (id + timestamp + region) captured from the source.",
+)
+async def admin_shiny_import_slash(interaction: discord.Interaction, file: discord.Attachment):
+    """One-shot correction of the frozen shiny_task_servers snapshot (#331).
+    Parses the attached JSON, derives every creation date in server time
+    (UTC-2) so they match the source, and upserts the whole set — fixing
+    drifted dates and adding new servers in a single push. Servers absent from
+    the file keep their rows but age out of posts via the 30-day soft-delete
+    filter (same as the old refresh).
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    from config import upsert_shiny_task_servers  # noqa: PLC0415
+    from shiny_tasks import parse_server_records_json  # noqa: PLC0415
+
+    try:
+        raw = await file.read()
+        rows = parse_server_records_json(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        await interaction.followup.send(
+            f"⚠️ `{file.filename}` isn't UTF-8 text — attach the raw JSON export.",
+            ephemeral=True,
+        )
+        return
+    except ValueError as e:  # includes json.JSONDecodeError
+        await interaction.followup.send(
+            f"⚠️ Couldn't parse `{file.filename}` as JSON: {e}", ephemeral=True
+        )
+        return
+
+    if not rows:
+        await interaction.followup.send(
+            "⚠️ Parsed 0 usable server records — the file should be a JSON array "
+            "of objects each with an `id` and a `timestamp`.",
+            ephemeral=True,
+        )
+        return
+
+    n = upsert_shiny_task_servers(rows, seen_at=datetime.now(timezone.utc).isoformat())
+    lo, hi = min(r[0] for r in rows), max(r[0] for r in rows)
+    await interaction.followup.send(
+        f"✅ Imported **{n}** server rows (ids {lo}–{hi}). Creation dates derived "
+        f"in server time (UTC-2). Spot-check with `/admin shiny_servers`.",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="shiny_set",
+    description="(Bot owner only) Add or correct one server's creation date in the shiny snapshot.",
+)
+@app_commands.describe(
+    server="Server number (e.g. 2286)",
+    creation_date="Creation date in YYYY-MM-DD (server time) — match the date the source shows",
+    region="Region label (optional; defaults to global)",
+)
+async def admin_shiny_set_slash(
+    interaction: discord.Interaction,
+    server: int,
+    creation_date: str,
+    region: str = "global",
+):
+    """Add a newly-launched server, or correct one row, in the shiny snapshot.
+    Single-row upsert — leaves every other server untouched."""
+    if not await _require_bot_owner(interaction):
+        return
+    try:
+        d = date.fromisoformat(creation_date.strip())
+    except ValueError:
+        await interaction.response.send_message(
+            f"⚠️ `{creation_date}` isn't a valid date — use `YYYY-MM-DD` "
+            "(the creation date the source shows for that server).",
+            ephemeral=True,
+        )
+        return
+
+    from config import upsert_shiny_task_servers  # noqa: PLC0415
+
+    reg = region.strip() or "global"
+    upsert_shiny_task_servers(
+        [(server, d.isoformat(), reg)],
+        seen_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await interaction.response.send_message(
+        f"✅ Set server **{server}** → creation date `{d.isoformat()}` (region {reg}).",
         ephemeral=True,
     )
 

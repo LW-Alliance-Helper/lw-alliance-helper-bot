@@ -282,9 +282,9 @@ class TestCopySourcesEnrich:
             patch("transfer_sheets.update_cells", update),
             patch("config.update_transfer_config_field", MagicMock()),
         ):
-            total = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
+            report = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
 
-        assert total == 0  # already on the list → not appended
+        assert report["copied"] == 0  # already on the list → not appended
         append.assert_not_called()
         update.assert_called_once()
         assert update.call_args.args[2] == [(2, 1, "199M")]  # blank Power filled
@@ -303,9 +303,10 @@ class TestCopySourcesEnrich:
             patch("transfer_sheets.update_cells", update),
             patch("config.update_transfer_config_field", MagicMock()),
         ):
-            total = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
+            report = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
 
-        assert total == 1  # only New Guy is new
+        assert report["copied"] == 1  # only New Guy is new
+        assert report["sources"][0]["read"] == 2  # both source rows have a name
         assert append.call_args.args[2] == [["New Guy", "50M"]]
         assert update.call_args.args[2] == [(2, 1, "199M")]  # Bad Pew enriched
 

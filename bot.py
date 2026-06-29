@@ -1576,6 +1576,136 @@ async def admin_shiny_set_slash(
     )
 
 
+@admin_group.command(
+    name="transfer_dump",
+    description="(Bot owner only) Dump a guild's full Transfer Management setup + a live sheet probe.",
+)
+@app_commands.describe(guild_id="Discord guild ID")
+async def admin_transfer_dump_slash(interaction: discord.Interaction, guild_id: str):
+    """Everything the Transfer Management feature has saved for a guild, plus a
+    live read of each configured sheet showing how the name column and filter
+    actually resolve against the real headers and how many rows match. Sent as
+    a file so nothing is truncated. Read-only — changes no state."""
+    if not await _require_bot_owner(interaction):
+        return
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import io  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    import transfer  # noqa: PLC0415
+    import transfer_sheets  # noqa: PLC0415
+    from config import get_transfer_config  # noqa: PLC0415
+
+    cfg = get_transfer_config(gid)
+    out: list[str] = [f"# Transfer Management dump — guild {gid}", ""]
+
+    out.append("## Raw config")
+    for k in sorted(cfg):
+        out.append(f"{k} = {cfg[k]!r}")
+    out.append("")
+
+    def _dump_map(label: str, raw):
+        m = transfer.parse_column_map(raw)
+        out.append(f"## {label} column map")
+        out.append(_json.dumps(m, indent=2, ensure_ascii=False))
+        return m
+
+    a_map = _dump_map("alliance", cfg.get("alliance_column_map_json"))
+    sw_map = _dump_map("server_wide", cfg.get("server_wide_column_map_json"))
+    form_map = _dump_map("alliance_form", cfg.get("alliance_form_column_map_json"))
+
+    for label, raw in (
+        ("notification", cfg.get("notification_filter_json")),
+        ("server_wide", cfg.get("server_wide_filter_json")),
+        ("alliance_form", cfg.get("alliance_form_filter_json")),
+    ):
+        f = transfer.parse_filter(raw)
+        out.append(f"## {label} filter: {transfer.describe_filter(f)}")
+        out.append(_json.dumps(f, indent=2, ensure_ascii=False))
+
+    for label, key in (
+        ("copied_state", "copied_state_json"),
+        ("last_seen_state", "last_seen_state_json"),
+    ):
+        try:
+            blob = _json.loads(cfg.get(key) or ("[]" if "copied" in key else "{}"))
+            out.append(f"## {label}: {len(blob)} entries")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"## {label}: unparseable ({e})")
+    out.append("")
+
+    async def _probe(label, sid, tab, colmap, filt):
+        out.append(f"## LIVE probe — {label}: sheet={sid!r} tab={tab!r}")
+        if not sid or not tab:
+            out.append("(not configured)\n")
+            return
+        try:
+            header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sid, tab)
+        except Exception as e:  # noqa: BLE001
+            from config import describe_sheet_error  # noqa: PLC0415
+
+            out.append(f"READ FAILED: {describe_sheet_error(e)}\n")
+            return
+        hidx = transfer.header_index(header)
+        out.append(f"header ({len(header)} cols): {header}")
+        out.append(f"data rows: {len(rows)}")
+        nm = colmap.get("name")
+        out.append(f"name col {nm!r} → index {hidx.get(transfer._norm_header(nm)) if nm else None}")
+        cmap = colmap.get("copy_map")
+        if cmap:
+            out.append(f"copy_map (target←source): {_json.dumps(cmap, ensure_ascii=False)}")
+        if filt:
+            matched = sum(1 for r in rows if transfer.evaluate_filter(filt, r, hidx))
+            out.append(
+                f"filter '{transfer.describe_filter(filt)}' → {matched}/{len(rows)} rows match"
+            )
+            for clause in filt.get("and", []):
+                col = clause.get("column")
+                idx = hidx.get(transfer._norm_header(col))
+                samples = [transfer.cell_for(r, hidx, col) for r in rows[:8]]
+                out.append(f"  clause column {col!r} → index {idx}; first values: {samples}")
+        out.append("")
+
+    await _probe(
+        "alliance sheet",
+        (cfg.get("alliance_sheet_id") or "").strip(),
+        (cfg.get("alliance_sheet_tab") or "").strip(),
+        a_map,
+        transfer.parse_filter(cfg.get("notification_filter_json")),
+    )
+    if cfg.get("server_wide_enabled"):
+        await _probe(
+            "server_wide source",
+            (cfg.get("server_wide_sheet_id") or "").strip(),
+            (cfg.get("server_wide_sheet_tab") or "").strip(),
+            sw_map,
+            transfer.parse_filter(cfg.get("server_wide_filter_json")),
+        )
+    if cfg.get("alliance_form_enabled"):
+        await _probe(
+            "alliance_form source",
+            (cfg.get("alliance_form_sheet_id") or "").strip(),
+            (cfg.get("alliance_form_sheet_tab") or "").strip(),
+            form_map,
+            transfer.parse_filter(cfg.get("alliance_form_filter_json")),
+        )
+
+    text = "\n".join(str(x) for x in out)
+    buf = io.BytesIO(text.encode("utf-8"))
+    await interaction.followup.send(
+        f"🔁 Transfer dump for guild `{gid}` ({len(text)} chars).",
+        file=discord.File(buf, filename=f"transfer_dump_{gid}.txt"),
+        ephemeral=True,
+    )
+
+
 # Register the /growth Group on the tree once every subcommand has
 # been attached above. Global registration.
 bot.tree.add_command(growth_group)

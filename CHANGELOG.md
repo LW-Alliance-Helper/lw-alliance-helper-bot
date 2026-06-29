@@ -9,6 +9,10 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.2] - 2026-06-29
+
+Placeholder to be filled out soon
+
 ## [1.6.1] — 2026-06-28
 
 ### Added

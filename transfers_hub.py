@@ -78,6 +78,48 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
     return embed
 
 
+def _check_report_embed(report: dict) -> discord.Embed:
+    """Render the 🔄 Check now breakdown: per-source pull counts + notices posted,
+    so leadership can see exactly where applicants are (or aren't) coming through."""
+    if report.get("error"):
+        return discord.Embed(
+            title="🔄 Check now", description=f"⚠️ {report['error']}", color=discord.Color.red()
+        )
+    embed = discord.Embed(title="🔄 Check now — results", color=discord.Color.blurple())
+    lines = []
+    for s in report.get("sources", []):
+        name = "Shared sheet" if s.get("prefix") == "server_wide" else "Intake form"
+        if s.get("error"):
+            lines.append(f"**{name}:** ⚠️ {s['error']}")
+            continue
+        extra = f" · {s['enriched']} cell(s) filled" if s.get("enriched") else ""
+        lines.append(
+            f"**{name}:** read {s.get('read', 0)} · {s.get('matched', 0)} matched filter · "
+            f"{s.get('already_pulled', 0)} already pulled · "
+            f"{s.get('skipped_on_sheet', 0)} already on sheet · **{s.get('copied', 0)} copied**{extra}"
+        )
+    if not lines:
+        lines.append("No source sheets connected (the shared-sheet pull is off).")
+    embed.add_field(name="Pull from sources", value="\n".join(lines)[:1024], inline=False)
+
+    posted = []
+    if report.get("new"):
+        posted.append(f"{report['new']} new-applicant")
+    if report.get("status"):
+        posted.append(f"{report['status']} status-change")
+    if report.get("removed"):
+        posted.append(f"{report['removed']} removal")
+    embed.add_field(
+        name="Notices posted" if report.get("posted") else "Notices",
+        value=(", ".join(posted) + " notice(s)") if posted else "Nothing new to post.",
+        inline=False,
+    )
+    embed.set_footer(
+        text=f"{report.get('applicants_on_sheet', 0)} applicant(s) currently on your sheet"
+    )
+    return embed
+
+
 def _applicants_embed(header, rows, hidx, name_header, display_headers) -> discord.Embed:
     embed = discord.Embed(title="📋 Current applicants", color=discord.Color.blurple())
     count = 0
@@ -119,6 +161,9 @@ class _TransfersHubView(discord.ui.View):
             )
             view_btn.callback = self._view_applicants
             self.add_item(view_btn)
+            check_btn = discord.ui.Button(label="🔄 Check now", style=discord.ButtonStyle.primary)
+            check_btn.callback = self._check_now
+            self.add_item(check_btn)
             setup_btn = discord.ui.Button(
                 label="⚙️ Setup Transfers", style=discord.ButtonStyle.secondary
             )
@@ -144,6 +189,26 @@ class _TransfersHubView(discord.ui.View):
         from transfer_setup import _launch_transfer_setup
 
         await _launch_transfer_setup(interaction, self.bot)
+
+    async def _check_now(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        cog = self.bot.get_cog("TransferCog")
+        if cog is None:
+            await interaction.followup.send(
+                "⚠️ The transfer watcher isn't running right now. Try again in a moment.",
+                ephemeral=True,
+            )
+            return
+        cfg = config.get_transfer_config(self.guild_id)
+        try:
+            report = await cog.check_now(cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] check-now failed for guild %s: %s", self.guild_id, e)
+            await interaction.followup.send(
+                f"⚠️ Check failed: {config.describe_sheet_error(e)}", ephemeral=True
+            )
+            return
+        await interaction.followup.send(embed=_check_report_embed(report), ephemeral=True)
 
     async def _view_applicants(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)

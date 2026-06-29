@@ -773,6 +773,44 @@ class TestSelectRowsToCopy:
         assert to_copy == [["B", "2M", "Y"]]
 
 
+class TestClassifySourceRows:
+    """classify_source_rows mirrors select_rows_to_copy's selection but also
+    reports the read/matched/already_pulled/to_copy breakdown for diagnostics."""
+
+    HEADER = ["Name", "Power", "Preferred Alliance"]
+    HIDX = transfer.header_index(HEADER)
+    MAP = {"name": "Name"}
+
+    def test_breakdown_counts(self):
+        rows = [
+            ["Bad Pew", "199M", "OGV"],
+            ["Other", "50M", "XYZ"],
+            ["", "1M", "OGV"],  # blank name → not read
+        ]
+        f = {"and": [{"column": "Preferred Alliance", "op": "contains", "value": "OGV"}]}
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=f, already_copied=set()
+        )
+        assert [r[0] for r in to_copy] == ["Bad Pew"]
+        assert rep == {"read": 2, "matched": 1, "already_pulled": 0, "to_copy": 1}
+
+    def test_already_pulled_counted_not_copied(self):
+        rows = [["Bad Pew", "199M", "OGV"]]
+        seen = {transfer.identity_hash("Bad Pew")}
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=None, already_copied=seen
+        )
+        assert to_copy == []
+        assert rep == {"read": 1, "matched": 1, "already_pulled": 1, "to_copy": 0}
+
+    def test_no_filter_matches_all_named(self):
+        rows = [["A", "1M", "X"], ["B", "2M", "Y"]]
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=None, already_copied=set()
+        )
+        assert rep["read"] == 2 and rep["matched"] == 2 and rep["to_copy"] == 2
+
+
 class TestPlanBlankFill:
     """Opt-in blank-cell enrichment (#9): fill only EMPTY alliance cells from a
     matching source row; never overwrite, never touch unmatched people."""

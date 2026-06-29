@@ -2784,7 +2784,7 @@ async def _resnapshot(guild_id: int, sheet_id: str, tab: str) -> int:
     try:
         from transfer_cog import copy_sources
 
-        copied = await copy_sources(cfg, header)
+        copied = (await copy_sources(cfg, header))["copied"]
     except Exception as e:  # noqa: BLE001
         logger.warning("[TRANSFER] guild %s: source seed failed: %s", guild_id, e)
         copied = 0

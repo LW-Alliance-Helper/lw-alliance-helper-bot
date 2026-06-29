@@ -854,6 +854,42 @@ def select_rows_to_copy(
     return rows_to_copy, updated
 
 
+def classify_source_rows(source_rows, source_hidx, source_map, *, filter_obj, already_copied):
+    """Same selection as :func:`select_rows_to_copy`, but also returns a count
+    breakdown for the "Check now" / admin diagnostics. Behaviour is identical
+    (filter + copied-state dedup) — this only adds visibility into *why* rows
+    were or weren't picked. Returns ``(rows_to_copy, report)`` where ``report``
+    is ``{read, matched, already_pulled, to_copy}``:
+
+    - ``read``: rows with a resolvable name (blank-name spacer rows excluded)
+    - ``matched``: of those, how many pass ``filter_obj``
+    - ``already_pulled``: of the matched, how many are already in
+      ``already_copied`` (the copied-state dedup set) and so are skipped
+    - ``to_copy``: the remainder, the rows that would actually be appended"""
+    read = matched = already_pulled = 0
+    rows_to_copy: list = []
+    seen = set(already_copied)
+    for row in source_rows:
+        h = row_identity(row, source_hidx, source_map)
+        if h is None:
+            continue
+        read += 1
+        if not evaluate_filter(filter_obj, row, source_hidx):
+            continue
+        matched += 1
+        if h in seen:
+            already_pulled += 1
+            continue
+        rows_to_copy.append(row)
+        seen.add(h)
+    return rows_to_copy, {
+        "read": read,
+        "matched": matched,
+        "already_pulled": already_pulled,
+        "to_copy": len(rows_to_copy),
+    }
+
+
 def plan_blank_fill(
     target_header: list,
     target_rows: list,

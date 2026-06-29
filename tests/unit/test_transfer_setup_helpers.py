@@ -223,6 +223,7 @@ class TestEditMenuSections:
             "Templates",
             "Decisions",
             "Removal",
+            "Fill-in",
             "Change sheets",
             "Done",
         ):
@@ -233,12 +234,14 @@ class TestEditMenuSections:
         assert not any("Intake" in label for label in labels)
         assert not any("Decisions" in label for label in labels)
         assert not any("Removal" in label for label in labels)
+        assert not any("Fill-in" in label for label in labels)
         assert any("Filter" in label for label in labels)
 
     def test_source_to_own_hides_standalone_filter_keeps_intake(self):
         labels = self._labels(transfer_setup._MODE_SOURCE_TO_OWN)
         assert not any("Filter" in label for label in labels)
         assert any("Intake" in label for label in labels)
+        assert any("Fill-in" in label for label in labels)
         assert any("Decisions" in label for label in labels)
 
 

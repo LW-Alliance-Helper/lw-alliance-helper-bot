@@ -26,6 +26,7 @@ def test_default_config_when_unconfigured(temp_db):
     assert cfg["alliance_column_map_json"] == "{}"
     assert cfg["notification_filter_json"] == ""
     assert cfg["last_seen_state_json"] == "{}"
+    assert cfg["source_enrich_blanks"] == 0  # blank-fill enrichment is opt-in
 
 
 def test_has_transfer_config_false_then_true(temp_db):

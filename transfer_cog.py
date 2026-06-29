@@ -310,7 +310,33 @@ async def copy_sources(cfg: dict, target_header: list) -> int:
     except (ValueError, TypeError):
         copied_set = set()
 
+    # Opt-in blank-cell enrichment of existing rows (#9): read the alliance
+    # rows once so each source can fill gaps in people already on the list.
+    enrich = bool(cfg.get("source_enrich_blanks"))
+    target_map = transfer.parse_column_map(cfg.get("alliance_column_map_json")) if enrich else {}
+    target_rows = None
+    if enrich and target_map.get("name"):
+        try:
+            _th, target_rows = await asyncio.to_thread(
+                transfer_sheets.read_sheet, alliance_id, alliance_tab
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] guild %s: enrich read failed: %s", gid, e)
+            _capture(e)
+            target_rows = None
+
+    # When enrich is on, don't re-append people already on the list — enrich
+    # their blanks instead. Pre-compute their identities once.
+    target_hidx = transfer.header_index(target_header) if enrich else {}
+    existing_ids: set = set()
+    if enrich and target_rows is not None and target_map.get("name"):
+        for trow in target_rows:
+            tid = transfer.row_identity(trow, target_hidx, target_map)
+            if tid:
+                existing_ids.add(tid)
+
     total = 0
+    state_changed = False
     for prefix in ("server_wide", "alliance_form"):
         if not cfg.get(f"{prefix}_enabled"):
             continue
@@ -327,23 +353,64 @@ async def copy_sources(cfg: dict, target_header: list) -> int:
             _capture(e)
             continue
         s_hidx = transfer.header_index(s_header)
-        to_copy, updated = transfer.select_rows_to_copy(
+        s_copy_map = s_map.get("copy_map") if isinstance(s_map, dict) else None
+
+        to_copy, _updated = transfer.select_rows_to_copy(
             s_rows, s_hidx, s_map, already_copied=copied_set, filter_obj=s_filter
         )
-        if not to_copy:
-            continue
-        aligned = [transfer.align_row(s_header, r, target_header) for r in to_copy]
-        try:
-            await asyncio.to_thread(transfer_sheets.append_rows, alliance_id, alliance_tab, aligned)
-        except Exception as e:  # noqa: BLE001
-            # Don't advance copied_set, so we retry these next poll.
-            logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
-            _capture(e)
-            continue
-        total += len(aligned)
-        copied_set = updated
+        # Someone already on the list gets enriched below, not appended again.
+        if enrich and existing_ids:
+            to_copy = [
+                r for r in to_copy if transfer.row_identity(r, s_hidx, s_map) not in existing_ids
+            ]
+        if to_copy:
+            aligned = [transfer.align_row(s_header, r, target_header, s_copy_map) for r in to_copy]
+            try:
+                await asyncio.to_thread(
+                    transfer_sheets.append_rows, alliance_id, alliance_tab, aligned
+                )
+            except Exception as e:  # noqa: BLE001
+                # Don't mark these copied, so we retry them next poll.
+                logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
+                _capture(e)
+            else:
+                total += len(aligned)
+                for r in to_copy:
+                    rid = transfer.row_identity(r, s_hidx, s_map)
+                    if rid:
+                        copied_set.add(rid)
+                        state_changed = True
 
-    if total:
+        # Fill blank cells in people already on the list from this source (#9).
+        if enrich and target_rows is not None:
+            try:
+                fills = transfer.plan_blank_fill(
+                    target_header,
+                    target_rows,
+                    target_map,
+                    s_header,
+                    s_rows,
+                    s_map,
+                    copy_map=s_copy_map,
+                )
+                if fills:
+                    await asyncio.to_thread(
+                        transfer_sheets.update_cells, alliance_id, alliance_tab, fills
+                    )
+                    # Reflect the writes in our in-memory copy so a second source
+                    # doesn't re-plan the same cells (and sees them as filled).
+                    for r_num, c_idx, val in fills:
+                        ri = r_num - 2
+                        if 0 <= ri < len(target_rows):
+                            row = target_rows[ri]
+                            while len(row) <= c_idx:
+                                row.append("")
+                            row[c_idx] = val
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[TRANSFER] guild %s: enrich write failed: %s", gid, e)
+                _capture(e)
+
+    if state_changed:
         config.update_transfer_config_field(
             gid, "copied_state_json", json.dumps(sorted(copied_set))
         )

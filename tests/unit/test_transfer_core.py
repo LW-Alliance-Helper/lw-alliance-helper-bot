@@ -713,6 +713,26 @@ class TestAlignRow:
         out = transfer.align_row(["Name", "Power"], ["Bad Pew"], ["Power", "Name"])
         assert out == ["", "Bad Pew"]
 
+    def test_copy_map_overrides_name_match(self):
+        # The source calls it "THP"; our sheet calls it "Total Hero Power".
+        src_header = ["In Game Name", "THP"]
+        tgt_header = ["Name", "Total Hero Power"]
+        copy_map = {"Name": "In Game Name", "Total Hero Power": "THP"}
+        out = transfer.align_row(src_header, ["Bad Pew", "250M"], tgt_header, copy_map)
+        assert out == ["Bad Pew", "250M"]
+
+    def test_copy_map_falls_back_to_name_match_for_unmapped(self):
+        # Power lines up by name; only Tier is mapped explicitly.
+        src_header = ["Name", "Power", "Seat"]
+        tgt_header = ["Name", "Power", "Tier"]
+        copy_map = {"Tier": "Seat"}
+        out = transfer.align_row(src_header, ["Bad Pew", "199M", "Gold"], tgt_header, copy_map)
+        assert out == ["Bad Pew", "199M", "Gold"]
+
+    def test_copy_map_to_missing_source_column_is_blank(self):
+        out = transfer.align_row(["Name"], ["Bad Pew"], ["Name", "Tier"], {"Tier": "Nope"})
+        assert out == ["Bad Pew", ""]
+
 
 class TestSelectRowsToCopy:
     SRC_HEADER = ["Name", "Power", "Preferred Alliance"]
@@ -751,6 +771,83 @@ class TestSelectRowsToCopy:
             rows, self.SRC_HIDX, self.SRC_MAP, already_copied=set()
         )
         assert to_copy == [["B", "2M", "Y"]]
+
+
+class TestPlanBlankFill:
+    """Opt-in blank-cell enrichment (#9): fill only EMPTY alliance cells from a
+    matching source row; never overwrite, never touch unmatched people."""
+
+    TGT_HEADER = ["Name", "Power", "Tier"]
+    TGT_MAP = {"name": "Name"}
+    SRC_HEADER = ["Name", "Power", "Tier"]
+    SRC_MAP = {"name": "Name"}
+
+    def test_fills_only_blank_cells(self):
+        target_rows = [["Bad Pew", "", ""]]  # already on the list, missing data
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        # row 2 (first data row), cols 1 (Power) and 2 (Tier).
+        assert out == [(2, 1, "199M"), (2, 2, "Gold")]
+
+    def test_never_overwrites_existing(self):
+        target_rows = [["Bad Pew", "300M", ""]]  # Power already set by hand
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == [(2, 2, "Gold")]  # only the blank Tier is filled
+
+    def test_skips_people_not_in_source(self):
+        target_rows = [["Ghost", "", ""]]
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == []
+
+    def test_honours_copy_map_for_renamed_columns(self):
+        target_rows = [["Bad Pew", ""]]
+        source_rows = [["Bad Pew", "250M"]]
+        out = transfer.plan_blank_fill(
+            ["Name", "Total Hero Power"],
+            target_rows,
+            {"name": "Name"},
+            ["Name", "THP"],
+            source_rows,
+            {"name": "Name"},
+            copy_map={"Total Hero Power": "THP"},
+        )
+        assert out == [(2, 1, "250M")]
+
+    def test_blank_source_value_adds_nothing(self):
+        target_rows = [["Bad Pew", "", ""]]
+        source_rows = [["Bad Pew", "", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == [(2, 2, "Gold")]
 
 
 # ── Templates ────────────────────────────────────────────────────────────────

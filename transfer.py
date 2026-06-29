@@ -790,16 +790,26 @@ def compute_poll_diff(
     return PollDiff(new_applicants, status_changes, deletions, next_state)
 
 
-def align_row(source_header: list, source_row: list, target_header: list) -> list:
-    """Reorder a source row into the *target* sheet's column order by matching
-    header names (case-insensitive). Target columns with no matching source
-    header get ``""``. So a server-wide / form row copies into the alliance
-    sheet's own layout cleanly even when the two sheets order (or name) their
-    columns differently — "copy the whole row" without scrambling it."""
+def align_row(
+    source_header: list, source_row: list, target_header: list, copy_map: dict | None = None
+) -> list:
+    """Reorder a source row into the *target* sheet's column order. By default
+    columns line up by header name (case-insensitive). ``copy_map`` overrides
+    that for columns the two sheets name differently: it maps a *target* header
+    to the *source* header that feeds it (``{target_header: source_header}``).
+    A target column with neither an override nor a name match gets ``""`` — so a
+    server-wide / form row copies into the alliance sheet's own layout cleanly
+    even when the two sheets order or name their columns differently."""
     src_idx = header_index(source_header)
+    cmap = copy_map or {}
     out = []
     for h in target_header:
-        i = src_idx.get(_norm_header(h))
+        i = None
+        mapped = cmap.get(h)
+        if mapped:
+            i = src_idx.get(_norm_header(mapped))
+        if i is None:
+            i = src_idx.get(_norm_header(h))
         if i is not None and i < len(source_row):
             cell = source_row[i]
             out.append(cell if isinstance(cell, str) else str(cell))
@@ -842,6 +852,64 @@ def select_rows_to_copy(
         rows_to_copy.append(row)
         updated.add(h)
     return rows_to_copy, updated
+
+
+def plan_blank_fill(
+    target_header: list,
+    target_rows: list,
+    target_map: dict,
+    source_header: list,
+    source_rows: list,
+    source_map: dict,
+    *,
+    copy_map: dict | None = None,
+) -> list:
+    """Plan blank-cell enrichment of *existing* alliance rows from a source
+    sheet (opt-in, #9). For each alliance row whose identity matches a source
+    row, fill any alliance cell that is **blank** with the source's value —
+    never overwriting a cell the recruiter already filled in. Identity is each
+    sheet's own ``name`` (+ ``identity_extra``) via :func:`row_identity`, so a
+    person already on the list gets enriched even if they were never copied.
+
+    Returns a list of ``(row_number, col_index, value)``: ``row_number`` is the
+    1-based sheet row (the header is row 1, so the first data row is 2),
+    ``col_index`` is 0-based. ``copy_map`` (``{target_header: source_header}``)
+    resolves columns the two sheets name differently; unmapped columns fall back
+    to a same-name match, mirroring :func:`align_row`."""
+    t_hidx = header_index(target_header)
+    s_hidx = header_index(source_header)
+    cmap = copy_map or {}
+
+    # Source row per identity (first occurrence wins, matching select_rows_to_copy).
+    src_by_id: dict = {}
+    for srow in source_rows:
+        sid = row_identity(srow, s_hidx, source_map)
+        if sid is not None:
+            src_by_id.setdefault(sid, srow)
+
+    updates: list = []
+    for r_i, trow in enumerate(target_rows):
+        tid = row_identity(trow, t_hidx, target_map)
+        if tid is None:
+            continue
+        srow = src_by_id.get(tid)
+        if srow is None:
+            continue
+        for c_i, th in enumerate(target_header):
+            current = trow[c_i] if c_i < len(trow) else ""
+            if str(current).strip():
+                continue  # never overwrite an existing value
+            mapped = cmap.get(th)
+            si = s_hidx.get(_norm_header(mapped)) if mapped else None
+            if si is None:
+                si = s_hidx.get(_norm_header(th))
+            if si is None or si >= len(srow):
+                continue
+            val = srow[si]
+            if not str(val).strip():
+                continue  # source has nothing to add
+            updates.append((r_i + 2, c_i, str(val)))
+    return updates
 
 
 # ── In-game message templates ────────────────────────────────────────────────

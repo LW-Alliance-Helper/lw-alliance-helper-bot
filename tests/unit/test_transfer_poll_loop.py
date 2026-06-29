@@ -244,3 +244,84 @@ class TestPollHeartbeat:
         ):
             await type(cog).poll.coro(cog)
         stamp.assert_called_once_with("transfer_poll")
+
+
+# ── copy_sources blank-cell enrichment (#9) ──────────────────────────────────
+
+
+class TestCopySourcesEnrich:
+    def _cfg(self, **over):
+        cfg = {
+            "guild_id": GUILD_ID,
+            "alliance_sheet_id": "A",
+            "alliance_sheet_tab": "T",
+            "alliance_column_map_json": json.dumps({"name": "Name"}),
+            "copied_state_json": "[]",
+            "source_enrich_blanks": 1,
+            "server_wide_enabled": 1,
+            "server_wide_sheet_id": "S",
+            "server_wide_sheet_tab": "ST",
+            "server_wide_column_map_json": json.dumps({"name": "Name"}),
+            "server_wide_filter_json": "",
+            "alliance_form_enabled": 0,
+        }
+        cfg.update(over)
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_existing_person_enriched_not_duplicated(self):
+        def fake_read(sheet_id, tab):
+            if sheet_id == "S":  # source
+                return (["Name", "Power"], [["Bad Pew", "199M"]])
+            return (["Name", "Power"], [["Bad Pew", ""]])  # alliance (blank Power)
+
+        append, update = MagicMock(), MagicMock()
+        with (
+            patch("transfer_sheets.read_sheet", MagicMock(side_effect=fake_read)),
+            patch("transfer_sheets.append_rows", append),
+            patch("transfer_sheets.update_cells", update),
+            patch("config.update_transfer_config_field", MagicMock()),
+        ):
+            total = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
+
+        assert total == 0  # already on the list → not appended
+        append.assert_not_called()
+        update.assert_called_once()
+        assert update.call_args.args[2] == [(2, 1, "199M")]  # blank Power filled
+
+    @pytest.mark.asyncio
+    async def test_new_person_appended_and_existing_enriched(self):
+        def fake_read(sheet_id, tab):
+            if sheet_id == "S":
+                return (["Name", "Power"], [["Bad Pew", "199M"], ["New Guy", "50M"]])
+            return (["Name", "Power"], [["Bad Pew", ""]])
+
+        append, update = MagicMock(), MagicMock()
+        with (
+            patch("transfer_sheets.read_sheet", MagicMock(side_effect=fake_read)),
+            patch("transfer_sheets.append_rows", append),
+            patch("transfer_sheets.update_cells", update),
+            patch("config.update_transfer_config_field", MagicMock()),
+        ):
+            total = await transfer_cog.copy_sources(self._cfg(), ["Name", "Power"])
+
+        assert total == 1  # only New Guy is new
+        assert append.call_args.args[2] == [["New Guy", "50M"]]
+        assert update.call_args.args[2] == [(2, 1, "199M")]  # Bad Pew enriched
+
+    @pytest.mark.asyncio
+    async def test_enrich_off_does_not_touch_alliance_sheet(self):
+        def fake_read(sheet_id, tab):
+            assert sheet_id == "S"  # alliance is never read when enrich is off
+            return (["Name", "Power"], [["Bad Pew", "199M"]])
+
+        update = MagicMock()
+        with (
+            patch("transfer_sheets.read_sheet", MagicMock(side_effect=fake_read)),
+            patch("transfer_sheets.append_rows", MagicMock()),
+            patch("transfer_sheets.update_cells", update),
+            patch("config.update_transfer_config_field", MagicMock()),
+        ):
+            await transfer_cog.copy_sources(self._cfg(source_enrich_blanks=0), ["Name", "Power"])
+
+        update.assert_not_called()

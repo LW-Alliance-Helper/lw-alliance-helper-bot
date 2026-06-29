@@ -15,6 +15,8 @@ message via ``config.describe_sheet_error``.
 
 from __future__ import annotations
 
+import gspread
+
 import config
 
 
@@ -62,6 +64,19 @@ def write_cell(
     sh = config.get_spreadsheet_by_id(sheet_id)
     ws = sh.worksheet(tab)
     ws.update_cell(row_index_1based, col_index_0based + 1, value)
+
+
+def update_cells(sheet_id: str, tab: str, updates: list) -> None:
+    """Apply a batch of blank-fill writes in one round-trip. Each update is
+    ``(row_1based, col_0based, value)`` (``row_1based`` includes the header row,
+    so the first data row is 2). No-op on an empty list. ``USER_ENTERED`` so
+    numbers and booleans land naturally, the same as the copy path."""
+    if not updates:
+        return
+    sh = config.get_spreadsheet_by_id(sheet_id)
+    ws = sh.worksheet(tab)
+    cells = [gspread.Cell(row, col_0based + 1, value) for row, col_0based, value in updates]
+    ws.update_cells(cells, value_input_option="USER_ENTERED")
 
 
 def _norm(value) -> str:

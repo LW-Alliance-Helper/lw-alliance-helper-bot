@@ -1198,13 +1198,14 @@ class _FilterColumnView(discord.ui.View):
     """Single-select of the sheet's columns to filter on, paged for wide
     sheets (◀ ▶). Picking a column confirms and stops."""
 
-    def __init__(self, owner_id: int, header: list):
+    def __init__(self, owner_id: int, header: list, *, back_label: str = "↩️ Back (no filter)"):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
         self.all_headers = header
         self.column = None
         self.confirmed = False
         self.back = False
+        self._back_label = back_label
         self.per_page = _PER_PAGE
         self.page = 0
         self.pages = _page_count(header, self.per_page)
@@ -1228,9 +1229,7 @@ class _FilterColumnView(discord.ui.View):
             )
             self._next.callback = self._on_next
             self.add_item(self._next)
-        back = discord.ui.Button(
-            label="↩️ Back (no filter)", style=discord.ButtonStyle.secondary, row=1
-        )
+        back = discord.ui.Button(label=self._back_label, style=discord.ButtonStyle.secondary, row=1)
         back.callback = self._on_back
         self.add_item(back)
         self._render()
@@ -1678,6 +1677,62 @@ def _source_map_embed(column_map: dict) -> discord.Embed:
     )
 
 
+async def _source_copy_map_step(
+    channel, user_id, source_header, target_header, existing_copy_map, cancel_event
+):
+    """Line up columns the source sheet and your own sheet name differently.
+    Columns that share a name copy automatically; for the rest, let the user
+    pick which *source* column fills each of *their* columns. Returns a
+    ``{target_header: source_header}`` dict (possibly empty), or a
+    ``"CANCEL"`` / ``"TIMEOUT"`` sentinel."""
+    src_norm = {transfer._norm_header(h) for h in source_header if str(h).strip()}
+    unmatched = [
+        h for h in target_header if str(h).strip() and transfer._norm_header(h) not in src_norm
+    ]
+    # Keep only still-relevant prior choices (a target that now auto-matches or
+    # was removed drops out).
+    copy_map = {t: s for t, s in (existing_copy_map or {}).items() if t in unmatched}
+    if not unmatched:
+        return copy_map  # everything lines up by name already
+
+    shown = ", ".join(unmatched[:20]) + (" …" if len(unmatched) > 20 else "")
+    yn = _ButtonChoiceView(
+        user_id,
+        [
+            ("🔗 Map them now", "map", discord.ButtonStyle.primary),
+            ("⏭️ Skip (name-match only)", "skip", discord.ButtonStyle.secondary),
+        ],
+    )
+    await channel.send(
+        "**Line up mismatched columns**\n"
+        "These columns in *your* sheet have no same-named column in the source, so they won't "
+        f"be filled automatically: {shown}\n"
+        "Map each to a source column, or skip to copy only the columns that already share a name.",
+        view=yn,
+    )
+    await wizard_registry.wait_view_or_cancel(yn, cancel_event)
+    if yn.cancelled:
+        return "CANCEL"
+    if not yn.confirmed:
+        return "TIMEOUT"
+    if yn.value == "skip":
+        return copy_map
+
+    for t in unmatched:
+        colv = _FilterColumnView(user_id, source_header, back_label="⏭️ Skip this column")
+        await channel.send(f"Which source column fills your **{t}** column?", view=colv)
+        await wizard_registry.wait_view_or_cancel(colv, cancel_event)
+        if colv.cancelled:
+            return "CANCEL"
+        if colv.back:
+            copy_map.pop(t, None)
+            continue
+        if not colv.confirmed:
+            return "TIMEOUT"
+        copy_map[t] = colv.column
+    return copy_map
+
+
 async def _configure_source(
     channel,
     guild_id,
@@ -1690,6 +1745,7 @@ async def _configure_source(
     rows,
     current,
     cancel_event,
+    target_header=None,
     filter_intro=None,
 ):
     """Map + filter an already-entered source sheet and save its ``{prefix}_*``
@@ -1710,6 +1766,22 @@ async def _configure_source(
     if not map_view.saved:
         return "TIMEOUT"
     src_map = map_view.column_map()
+
+    # Line up columns the two sheets name differently (#3). Skipped when no
+    # target header is available (e.g. an older edit path) — name-match only.
+    if target_header:
+        cmap = await _source_copy_map_step(
+            channel,
+            user_id,
+            header,
+            target_header,
+            (existing or {}).get("copy_map"),
+            cancel_event,
+        )
+        if cmap in ("CANCEL", "TIMEOUT"):
+            return cmap
+        if cmap:
+            src_map["copy_map"] = cmap
 
     filt = await _build_filter(
         channel,
@@ -1810,6 +1882,16 @@ async def _run_source_step(
     if not sheet_view.confirmed or not sheet_view.result:
         return "TIMEOUT"
     s_id, s_tab, s_header, s_rows = sheet_view.result
+    # Read the alliance sheet's header so the copy-mapping step can line up
+    # columns the source names differently (#3).
+    target_header = None
+    a_id = (current.get("alliance_sheet_id") or "").strip()
+    a_tab = (current.get("alliance_sheet_tab") or "").strip()
+    if a_id and a_tab:
+        try:
+            target_header = await asyncio.to_thread(transfer_sheets.read_header, a_id, a_tab)
+        except Exception:  # noqa: BLE001 — fall back to name-only matching
+            target_header = None
     return await _configure_source(
         channel,
         guild_id,
@@ -1821,6 +1903,7 @@ async def _run_source_step(
         rows=s_rows,
         current=current,
         cancel_event=cancel_event,
+        target_header=target_header,
     )
 
 
@@ -1939,6 +2022,31 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
     return "OK"
 
 
+async def _step_enrich(channel, guild_id, owner_id, cancel_event):
+    """Opt into blank-cell enrichment of existing rows from the source (#9)."""
+    from setup_cog import YesNoView
+
+    view = YesNoView()
+    await channel.send(
+        "**Fill in missing details from the source?**\n"
+        "When someone is *already* on your sheet but missing data the source has (e.g. a blank "
+        "power cell), the bot can fill just the **empty** cells from the matching source row on "
+        "each check. It never overwrites anything you've already entered. Turn this on?",
+        view=view,
+    )
+    await wizard_registry.wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return "CANCEL"
+    if view.selected is None:
+        return "TIMEOUT"
+    config.update_transfer_config_field(guild_id, "source_enrich_blanks", 1 if view.selected else 0)
+    await channel.send(
+        "✅ Blank-cell fill-in is "
+        + ("on. The bot will top up empty cells from the source." if view.selected else "off.")
+    )
+    return "OK"
+
+
 # ── Decisions (write-back) ────────────────────────────────────────────────────
 
 
@@ -1962,12 +2070,19 @@ def _save_decisions(guild_id: int, decisions: list) -> None:
     )
 
 
-async def _create_decision_column(channel, sheet_id, tab, dname, kind, options) -> bool:
+async def _create_decision_column(
+    channel, sheet_id, tab, dname, kind, options, *, existing=False
+) -> bool:
     """Make sure the decision column exists on the tracked sheet and apply the
-    matching validation (checkbox for yes/no, dropdown for pick-one). Returns
+    matching validation (checkbox for yes/no, dropdown for pick-one). When
+    ``existing`` is set the column is already in the sheet (mapped, not created),
+    so the wording reflects that; ``ensure_columns`` is a no-op for it. Returns
     True on success, posting a friendly error and False if the sheet can't be
     edited."""
-    await channel.send(f"⏳ Adding **{dname}** to your sheet…")
+    await channel.send(
+        f"⏳ {'Setting up' if existing else 'Adding'} **{dname}** "
+        f"{'in' if existing else 'to'} your sheet…"
+    )
     try:
         new_header = await asyncio.to_thread(transfer_sheets.ensure_columns, sheet_id, tab, [dname])
         col_idx = transfer.header_index(new_header).get(transfer._norm_header(dname))
@@ -1987,7 +2102,9 @@ async def _create_decision_column(channel, sheet_id, tab, dname, kind, options) 
             "(the bot's service account needs edit access). Skipping it."
         )
         return False
-    await channel.send(f"✅ Added **{dname}** as {shape}.")
+    await channel.send(
+        f"✅ {'Using your existing' if existing else 'Added'} **{dname}** as {shape}."
+    )
     return True
 
 
@@ -2034,32 +2151,78 @@ async def _ask_shape_and_options(channel, user_id, dname, cancel_event, *, curre
 
 
 async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
-    """Walk a brand-new decision: name → shape → (options) → create the column.
-    Returns the decision dict, ``None`` (skipped), or a sentinel."""
-    namev = _FilterValueView(
-        user_id, prompt_title="Decision name", prompt_label="Column name, e.g. Confirmed"
+    """Walk a brand-new decision: pick or name its column → shape → (options) →
+    ensure the column + validation. The column can be a new one the bot creates
+    or an existing one already in your sheet (#8). Returns the decision dict,
+    ``None`` (skipped), or a sentinel."""
+    srcv = _ButtonChoiceView(
+        user_id,
+        [
+            ("🆕 Create a new column", "new", discord.ButtonStyle.primary),
+            ("🗂️ Use an existing column", "existing", discord.ButtonStyle.secondary),
+        ],
     )
-    namev.message = await channel.send(
-        "**Name this decision** — it becomes a column in your sheet (e.g. Confirmed, Declined, "
-        "or Status):",
-        view=namev,
+    await channel.send(
+        "**Add a decision**\nCreate a brand-new column, or map this decision to a column "
+        "that's already in your sheet?",
+        view=srcv,
     )
-    await wizard_registry.wait_view_or_cancel(namev, cancel_event)
-    if namev.cancelled:
+    await wizard_registry.wait_view_or_cancel(srcv, cancel_event)
+    if srcv.cancelled:
         return "CANCEL"
-    if not namev.confirmed:
+    if not srcv.confirmed:
         return "TIMEOUT"
-    dname = (namev.value or "").strip()
-    if not dname:
-        await channel.send("⚠️ No name entered; skipping that one.")
-        return None
+    existing = srcv.value == "existing"
+
+    if existing:
+        try:
+            header = await asyncio.to_thread(transfer_sheets.read_header, sheet_id, tab)
+        except Exception as e:  # noqa: BLE001
+            await channel.send(
+                f"⚠️ Couldn't read your sheet's columns: {config.describe_sheet_error(e)}. Skipping."
+            )
+            return None
+        if not header:
+            await channel.send("⚠️ That sheet has no header row to pick from. Skipping.")
+            return None
+        colv = _FilterColumnView(user_id, header, back_label="↩️ Back")
+        await channel.send("Pick the existing column to use for this decision:", view=colv)
+        await wizard_registry.wait_view_or_cancel(colv, cancel_event)
+        if colv.cancelled:
+            return "CANCEL"
+        if colv.back:
+            return None
+        if not colv.confirmed:
+            return "TIMEOUT"
+        dname = colv.column
+    else:
+        namev = _FilterValueView(
+            user_id, prompt_title="Decision name", prompt_label="Column name, e.g. Confirmed"
+        )
+        namev.message = await channel.send(
+            "**Name this decision** — it becomes a column in your sheet (e.g. Confirmed, Declined, "
+            "or Status):",
+            view=namev,
+        )
+        await wizard_registry.wait_view_or_cancel(namev, cancel_event)
+        if namev.cancelled:
+            return "CANCEL"
+        if not namev.confirmed:
+            return "TIMEOUT"
+        dname = (namev.value or "").strip()
+        if not dname:
+            await channel.send("⚠️ No name entered; skipping that one.")
+            return None
+
     res = await _ask_shape_and_options(channel, user_id, dname, cancel_event)
     if res in ("CANCEL", "TIMEOUT"):
         return res
     if res is None:
         return None
     kind, options = res
-    if not await _create_decision_column(channel, sheet_id, tab, dname, kind, options):
+    if not await _create_decision_column(
+        channel, sheet_id, tab, dname, kind, options, existing=existing
+    ):
         return None
     return {"column": dname, "kind": kind, "options": options}
 
@@ -2354,6 +2517,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 rows=intake_rows,
                 current=current,
                 cancel_event=cancel_event,
+                target_header=header,
             )
             if src == "CANCEL":
                 return
@@ -2537,6 +2701,17 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 await channel.send(_TIMEOUT_MSG)
                 return
 
+        # ── Fill-in (enrich) toggle — only when a source feeds the sheet (#9) ──
+        if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
+            fresh = config.get_transfer_config(guild_id)
+            if fresh.get("server_wide_enabled") or fresh.get("alliance_form_enabled"):
+                en = await _step_enrich(channel, guild_id, user.id, cancel_event)
+                if en == "CANCEL":
+                    return
+                if en == "TIMEOUT":
+                    await channel.send(_TIMEOUT_MSG)
+                    return
+
         # ── Templates (all modes) ─────────────────────────────────────────────
         if await _step_templates(channel, guild_id, user.id, current, cancel_event) != "OK":
             return  # cancel/timeout already messaged
@@ -2667,6 +2842,7 @@ class _EditMenuView(discord.ui.View):
             specs.append(("🔎 Filter", "filter", 1))
         if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
             specs.append(("📥 Intake sources", "intake", 1))
+            specs.append(("🧩 Fill-in from source", "enrich", 1))
         specs.append(("✉️ Templates", "templates", 1))
         if mode != _MODE_WATCH:
             specs.append(("🧭 Decisions", "decisions", 2))
@@ -2826,6 +3002,7 @@ async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> 
         "templates": _edit_templates,
         "decisions": _edit_decisions,
         "removal": _edit_removal,
+        "enrich": _edit_enrich,
     }
     handler = handlers.get(section)
     if handler is None:
@@ -3064,3 +3241,11 @@ async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
         return rm
     await channel.send("✅ Removal notices updated.")
     return "OK"
+
+
+async def _edit_enrich(channel, guild_id, user, cfg, cancel_event) -> str:
+    on = "on" if cfg.get("source_enrich_blanks") else "off"
+    g = await _edit_gate(channel, user.id, "Fill-in from source", f"currently {on}", cancel_event)
+    if g != "change":
+        return g
+    return await _step_enrich(channel, guild_id, user.id, cancel_event)

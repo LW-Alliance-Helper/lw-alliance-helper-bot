@@ -401,6 +401,7 @@ def init_db():
 
                 last_seen_state_json           TEXT    DEFAULT '{}',
                 copied_state_json              TEXT    DEFAULT '{}',
+                source_enrich_blanks           INTEGER DEFAULT 0,
                 last_polled_at                 TEXT    DEFAULT ''
             )
         """)
@@ -1147,6 +1148,7 @@ def init_db():
             ("template_decline", "TEXT    DEFAULT ''"),
             ("last_seen_state_json", "TEXT    DEFAULT '{}'"),
             ("copied_state_json", "TEXT    DEFAULT '{}'"),
+            ("source_enrich_blanks", "INTEGER DEFAULT 0"),
             ("last_polled_at", "TEXT    DEFAULT ''"),
         ]:
             try:
@@ -4873,6 +4875,7 @@ _TRANSFER_DEFAULTS = {
     "template_decline": "",
     "last_seen_state_json": "{}",
     "copied_state_json": "{}",
+    "source_enrich_blanks": 0,
     "last_polled_at": "",
 }
 

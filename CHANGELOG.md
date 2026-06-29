@@ -9,6 +9,19 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.1] — 2026-06-28
+
+### Added
+- Transfer Management can fill in just the blank cells of people already on your sheet from a connected source, instead of skipping them (opt-in) ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer setup maps source-sheet columns onto your own sheet's columns when they're named differently, so copied rows line up ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- A transfer decision can map to a column already in your sheet instead of always creating a new one ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer notifications can post to a thread, not just a text channel ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Fixed
+- Transfer filter setup has a Back / no-filter path, so starting a filter and changing your mind no longer traps you ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Re-running transfer setup offers Keep current for your sheets and setup type, and Keep-current buttons are consistent throughout ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer column mapping labels the "Shown in notices" picker clearly, and the style step is now named "Notification style" ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
 ## [1.6.0] — 2026-06-24
 
 ### Added

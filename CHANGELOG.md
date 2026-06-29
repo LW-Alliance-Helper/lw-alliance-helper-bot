@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.3] — 2026-06-29
+
+### Fixed
+- The buddy **Unpair / Pair / Re-pair** picker now pages through everyone with ◀/▶ buttons instead of stopping at the first 25, so alliances with more than 25 pairs or free members can reach all of them ([#341](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/341)).
+
 ## [1.6.2] — 2026-06-29
 
 ### Added

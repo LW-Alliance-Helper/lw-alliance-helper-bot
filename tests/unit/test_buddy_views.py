@@ -245,3 +245,72 @@ async def test_profession_click_writes_and_acks_when_premium():
     inter.followup.send.assert_awaited()
     sent = inter.followup.send.await_args.args[0]
     assert "War Leader" in sent and "Eve" in sent
+
+
+# ── _PickerView pagination (#341) ──────────────────────────────────────────────
+
+
+def _opts(n):
+    return [buddy_ui.discord.SelectOption(label=f"opt-{i}", value=str(i)) for i in range(n)]
+
+
+def _select(view):
+    return next(c for c in view.children if isinstance(c, buddy_ui.discord.ui.Select))
+
+
+def _buttons(view):
+    return [c for c in view.children if isinstance(c, buddy_ui.discord.ui.Button)]
+
+
+def test_picker_no_pager_at_or_below_25():
+    view = buddy_ui._PickerView(_opts(25), owner_id=1, on_pick=AsyncMock())
+    assert view._total_pages() == 1
+    assert len(_select(view).options) == 25
+    assert _buttons(view) == []  # no ◀/▶ when everything fits
+
+
+def test_picker_paginates_beyond_25_and_all_options_reachable():
+    opts = _opts(60)
+    view = buddy_ui._PickerView(opts, owner_id=1, on_pick=AsyncMock())
+    assert view._total_pages() == 3  # 25 + 25 + 10
+    # Page 1: 25 options, ◀ disabled / ▶ enabled.
+    assert [o.value for o in _select(view).options] == [str(i) for i in range(25)]
+    prev_btn, next_btn = _buttons(view)
+    assert prev_btn.disabled and not next_btn.disabled
+    # Every option shows up across the three pages with no gaps or dupes.
+    seen = list(_select(view).options)
+    view.page = 1
+    view._sync()
+    seen += list(_select(view).options)
+    view.page = 2
+    view._sync()
+    seen += list(_select(view).options)
+    assert [o.value for o in seen] == [str(i) for i in range(60)]
+    # Last page: ▶ disabled, ◀ enabled.
+    prev_btn, next_btn = _buttons(view)
+    assert next_btn.disabled and not prev_btn.disabled
+
+
+@pytest.mark.asyncio
+async def test_picker_next_prev_buttons_swap_pages():
+    view = buddy_ui._PickerView(_opts(60), owner_id=1, on_pick=AsyncMock())
+    inter = make_mock_interaction(user_id=1)
+    await view._on_next(inter)
+    assert view.page == 1
+    inter.response.edit_message.assert_awaited()
+    await view._on_prev(inter)
+    assert view.page == 0
+
+
+@pytest.mark.asyncio
+async def test_picker_callback_fires_with_selected_value_from_any_page():
+    on_pick = AsyncMock()
+    view = buddy_ui._PickerView(_opts(60), owner_id=1, on_pick=on_pick)
+    view.page = 2
+    view._sync()
+    # Page 3 carries option "57"; Select.values is read-only, so stub the
+    # selected value the way Discord would populate it on submit.
+    view._sel = MagicMock(values=["57"])
+    inter = make_mock_interaction(user_id=1)
+    await view._cb(inter)
+    on_pick.assert_awaited_once_with(inter, "57")

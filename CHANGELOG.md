@@ -9,9 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
-## [1.6.2] - 2026-06-29
+## [1.6.2] — 2026-06-29
 
-Placeholder to be filled out soon
+### Added
+- A **🔄 Check now** button on `/transfers` pulls from your sources right away and shows a read/matched/copied breakdown so you can see what came through ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Fixed
+- Re-running transfer setup re-pulls your sources from scratch, no longer skipping applicants an earlier setup run had already pulled ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- The shared-sheet pull no longer adds someone already on your sheet twice, deduping against your sheet's real contents ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
 ## [1.6.1] — 2026-06-28
 

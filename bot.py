@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #

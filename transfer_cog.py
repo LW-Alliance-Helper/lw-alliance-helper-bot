@@ -318,26 +318,27 @@ async def copy_sources(cfg: dict, target_header: list) -> dict:
     except (ValueError, TypeError):
         copied_set = set()
 
-    # Opt-in blank-cell enrichment of existing rows (#9): read the alliance
-    # rows once so each source can fill gaps in people already on the list.
+    # Always read the alliance rows once. Their identities dedup the pull
+    # against what's *actually* on the sheet — so people already on the list are
+    # never appended as duplicates, and a copied-state reset (re-setup) re-pulls
+    # cleanly without doubling anyone. Blank-cell enrichment (#9, opt-in) reuses
+    # the same read.
     enrich = bool(cfg.get("source_enrich_blanks"))
-    target_map = transfer.parse_column_map(cfg.get("alliance_column_map_json")) if enrich else {}
+    target_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
     target_rows = None
-    if enrich and target_map.get("name"):
+    if target_map.get("name"):
         try:
             _th, target_rows = await asyncio.to_thread(
                 transfer_sheets.read_sheet, alliance_id, alliance_tab
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("[TRANSFER] guild %s: enrich read failed: %s", gid, e)
+            logger.warning("[TRANSFER] guild %s: alliance read failed: %s", gid, e)
             _capture(e)
             target_rows = None
 
-    # When enrich is on, don't re-append people already on the list — enrich
-    # their blanks instead. Pre-compute their identities once.
-    target_hidx = transfer.header_index(target_header) if enrich else {}
+    target_hidx = transfer.header_index(target_header)
     existing_ids: set = set()
-    if enrich and target_rows is not None and target_map.get("name"):
+    if target_rows is not None and target_map.get("name"):
         for trow in target_rows:
             tid = transfer.row_identity(trow, target_hidx, target_map)
             if tid:
@@ -384,8 +385,8 @@ async def copy_sources(cfg: dict, target_header: list) -> dict:
         src["read"] = sel["read"]
         src["matched"] = sel["matched"]
         src["already_pulled"] = sel["already_pulled"]
-        # Someone already on the list gets enriched below, not appended again.
-        if enrich and existing_ids:
+        # Already on the sheet? Don't append a duplicate (enriched below if on).
+        if existing_ids:
             before = len(to_copy)
             to_copy = [
                 r for r in to_copy if transfer.row_identity(r, s_hidx, s_map) not in existing_ids

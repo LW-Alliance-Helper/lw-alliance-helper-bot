@@ -311,18 +311,26 @@ class TestCopySourcesEnrich:
         assert update.call_args.args[2] == [(2, 1, "199M")]  # Bad Pew enriched
 
     @pytest.mark.asyncio
-    async def test_enrich_off_does_not_touch_alliance_sheet(self):
+    async def test_enrich_off_no_blank_fill_but_still_dedups_against_sheet(self):
+        # Enrich off: the alliance sheet is still read (to dedup the pull against
+        # who's already on it), but no blank-cell writes happen.
         def fake_read(sheet_id, tab):
-            assert sheet_id == "S"  # alliance is never read when enrich is off
-            return (["Name", "Power"], [["Bad Pew", "199M"]])
+            if sheet_id == "S":  # source
+                return (["Name", "Power"], [["Bad Pew", "199M"], ["New Guy", "50M"]])
+            return (["Name", "Power"], [["Bad Pew", ""]])  # alliance: Bad Pew already on it
 
-        update = MagicMock()
+        append, update = MagicMock(), MagicMock()
         with (
             patch("transfer_sheets.read_sheet", MagicMock(side_effect=fake_read)),
-            patch("transfer_sheets.append_rows", MagicMock()),
+            patch("transfer_sheets.append_rows", append),
             patch("transfer_sheets.update_cells", update),
             patch("config.update_transfer_config_field", MagicMock()),
         ):
-            await transfer_cog.copy_sources(self._cfg(source_enrich_blanks=0), ["Name", "Power"])
+            report = await transfer_cog.copy_sources(
+                self._cfg(source_enrich_blanks=0), ["Name", "Power"]
+            )
 
-        update.assert_not_called()
+        update.assert_not_called()  # enrich off → no blank-fill writes
+        assert report["copied"] == 1  # New Guy appended; Bad Pew deduped (already on sheet)
+        assert append.call_args.args[2] == [["New Guy", "50M"]]
+        assert report["sources"][0]["skipped_on_sheet"] == 1

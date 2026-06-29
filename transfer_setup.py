@@ -2780,6 +2780,12 @@ async def _resnapshot(guild_id: int, sheet_id: str, tab: str) -> int:
 
     cfg = config.get_transfer_config(guild_id)
     column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+    # (Re)setup is a deliberate fresh start: clear the copied-row memory so the
+    # pull re-evaluates every source row against the *current* sheet + filter,
+    # instead of skipping people an earlier setup attempt already marked. Sheet-
+    # identity dedup in copy_sources keeps this from creating duplicates.
+    config.update_transfer_config_field(guild_id, "copied_state_json", "[]")
+    cfg["copied_state_json"] = "[]"
     header, rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
     try:
         from transfer_cog import copy_sources

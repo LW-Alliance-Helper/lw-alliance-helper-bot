@@ -587,17 +587,51 @@ def register_persistent_buddy_views(bot) -> int:
 
 
 class _PickerView(discord.ui.View):
-    """Generic single-select picker → callback(interaction, value)."""
+    """Generic single-select picker → callback(interaction, value).
+
+    Discord caps a Select at 25 options, so when there are more the view
+    paginates: a ◀ / ▶ button row swaps the select through pages of 25,
+    keeping every option reachable on large rosters."""
+
+    PAGE_SIZE = 25
 
     def __init__(self, options: list, owner_id: int, on_pick, *, placeholder="Pick one…"):
         super().__init__(timeout=180)
         self.owner_id = owner_id
         self._on_pick = on_pick
-        opts = options[:25]
-        sel = discord.ui.Select(placeholder=placeholder, options=opts)
+        self._options = list(options)
+        self._placeholder = placeholder
+        self.page = 0
+        self._sel: Optional[discord.ui.Select] = None
+        self._sync()
+
+    def _total_pages(self) -> int:
+        return max(1, (len(self._options) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+    def _sync(self):
+        """Rebuild the select (and pager buttons) for the current page."""
+        self.clear_items()
+        total = self._total_pages()
+        self.page = max(0, min(self.page, total - 1))
+        start = self.page * self.PAGE_SIZE
+        page_opts = self._options[start : start + self.PAGE_SIZE]
+        placeholder = self._placeholder
+        if total > 1:
+            placeholder = f"{self._placeholder} (page {self.page + 1} of {total})"
+        sel = discord.ui.Select(placeholder=placeholder, options=page_opts, row=0)
         sel.callback = self._cb
         self._sel = sel
         self.add_item(sel)
+        if total > 1:
+            self._pager_button("◀", self._on_prev, disabled=(self.page <= 0))
+            self._pager_button("▶", self._on_next, disabled=(self.page >= total - 1))
+
+    def _pager_button(self, label, cb, *, disabled):
+        btn = discord.ui.Button(
+            label=label, style=discord.ButtonStyle.secondary, row=1, disabled=disabled
+        )
+        btn.callback = cb
+        self.add_item(btn)
 
     async def interaction_check(self, inter):
         if inter.user.id != self.owner_id:
@@ -605,9 +639,20 @@ class _PickerView(discord.ui.View):
             return False
         return True
 
+    async def _on_prev(self, inter: discord.Interaction):
+        self.page -= 1
+        self._sync()
+        await inter.response.edit_message(view=self)
+
+    async def _on_next(self, inter: discord.Interaction):
+        self.page += 1
+        self._sync()
+        await inter.response.edit_message(view=self)
+
     async def _cb(self, inter: discord.Interaction):
+        value = self._sel.values[0]
         self._sel.disabled = True
-        await self._on_pick(inter, self._sel.values[0])
+        await self._on_pick(inter, value)
         self.stop()
 
 

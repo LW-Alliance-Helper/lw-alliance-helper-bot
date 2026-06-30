@@ -214,35 +214,57 @@ class TestEditMenuSections:
     def test_own_shows_every_section(self):
         labels = self._labels(transfer_setup._MODE_OWN)
         for needle in (
-            "Column mapping",
-            "Channel",
-            "Notification style",
-            "Frequency",
+            "Your Sheet Columns",
             "Filter",
-            "Intake",
-            "Templates",
-            "Decisions",
-            "Removal",
-            "Fill-in",
-            "Change sheets",
+            "Shared sheet configuration",
+            "Notifications",
+            "Message templates",
+            "Change Setup",
             "Done",
         ):
             assert any(needle in label for label in labels), needle
 
-    def test_watch_hides_intake_and_decisions_keeps_filter(self):
+    def test_watch_hides_shared_keeps_filter(self):
         labels = self._labels(transfer_setup._MODE_WATCH)
-        assert not any("Intake" in label for label in labels)
-        assert not any("Decisions" in label for label in labels)
-        assert not any("Removal" in label for label in labels)
-        assert not any("Fill-in" in label for label in labels)
+        assert not any("Shared sheet" in label for label in labels)
         assert any("Filter" in label for label in labels)
+        assert any("Your Sheet Columns" in label for label in labels)
+        assert any("Notifications" in label for label in labels)
 
-    def test_source_to_own_hides_standalone_filter_keeps_intake(self):
+    def test_source_to_own_hides_standalone_filter_keeps_shared(self):
         labels = self._labels(transfer_setup._MODE_SOURCE_TO_OWN)
         assert not any("Filter" in label for label in labels)
-        assert any("Intake" in label for label in labels)
-        assert any("Fill-in" in label for label in labels)
-        assert any("Decisions" in label for label in labels)
+        assert any("Shared sheet configuration" in label for label in labels)
+
+
+class TestSectionPickerView:
+    """The sub-menu picker carries its given sections plus a Back button."""
+
+    def test_specs_and_back(self):
+        v = transfer_setup._SectionPickerView(
+            owner_id=1, specs=[("📢 Channel", "channel"), ("⏱️ Frequency", "frequency")]
+        )
+        labels = [c.label for c in v.children]
+        assert any("Channel" in lbl for lbl in labels)
+        assert any("Frequency" in lbl for lbl in labels)
+        assert any("Back" in lbl for lbl in labels)
+
+
+class TestLinearKeepCurrent:
+    """Linear-wizard steps offer a way to keep a saved value on re-run (#1/#2)."""
+
+    def test_channel_keep_button_shown_only_with_current(self):
+        with_cur = transfer_setup._ChannelStepView(owner_id=1, current_id=555)
+        assert any("Keep current" in (getattr(c, "label", "") or "") for c in with_cur.children)
+        without = transfer_setup._ChannelStepView(owner_id=1, current_id=0)
+        assert not any("Keep current" in (getattr(c, "label", "") or "") for c in without.children)
+
+    def test_style_marks_current_choice(self):
+        v = transfer_setup._StyleStepView(owner_id=1, current="digest")
+        digest = next(c for c in v.children if "digest" in (c.label or "").lower())
+        each = next(c for c in v.children if "per applicant" in (c.label or "").lower())
+        assert "✓" in digest.label
+        assert "✓" not in each.label
 
 
 class TestDecisionsManager:

@@ -9,6 +9,15 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.4] — 2026-06-29
+
+### Added
+- Transfer filters can now combine conditions with **AND or OR** (e.g. wants OGV or Open, and power over 70M) ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Changed
+- Re-running transfer setup offers a Keep-current option for the notification channel, style, and filters so you don't redo them ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- The transfer setup edit menu is regrouped into fewer, clearer sections with plainer labels ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
 ## [1.6.3] — 2026-06-29
 
 ### Fixed

@@ -444,9 +444,30 @@ def parse_filter(raw) -> dict | None:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return None
-    if isinstance(parsed, dict) and parsed.get("and"):
+    if isinstance(parsed, dict) and (parsed.get("and") or parsed.get("clauses")):
         return parsed
     return None
+
+
+def _filter_parts(filter_obj) -> tuple[list, list]:
+    """Normalise either filter shape into ``(clauses, joins)`` where ``joins[i]``
+    (``"and"`` / ``"or"``) connects ``clauses[i]`` to ``clauses[i + 1]``, so
+    ``len(joins) == max(0, len(clauses) - 1)``.
+
+    Two stored shapes are accepted: the original all-AND ``{"and": [...]}`` and
+    the mixed ``{"clauses": [...], "joins": [...]}``. Left-to-right evaluation (no
+    operator precedence) matches how a recruiter reads the filter they built."""
+    if not isinstance(filter_obj, dict):
+        return [], []
+    if "clauses" in filter_obj:
+        clauses = list(filter_obj.get("clauses") or [])
+        joins = [str(j).lower() for j in (filter_obj.get("joins") or [])]
+    else:
+        clauses = list(filter_obj.get("and") or [])
+        joins = ["and"] * max(0, len(clauses) - 1)
+    need = max(0, len(clauses) - 1)
+    joins = (joins + ["and"] * need)[:need]
+    return clauses, joins
 
 
 def _eval_clause(clause: dict, row: list, hidx: dict) -> bool:
@@ -511,41 +532,58 @@ _OP_LABELS = {
 }
 
 
+def _describe_clause(clause: dict) -> str | None:
+    """One clause as text (``"Total Power ≥ 250M"``), or ``None`` if malformed."""
+    if not isinstance(clause, dict):
+        return None
+    col = clause.get("column", "")
+    op = clause.get("op", "")
+    val = clause.get("value")
+    label = _OP_LABELS.get(op, op)
+    if op == "in" and isinstance(val, (list, tuple)):
+        return f"{col} in [{', '.join(str(v) for v in val)}]"
+    if op in ("is_true", "is_false"):
+        return f"{col} {label}"
+    return f"{col} {label} {val}"
+
+
 def describe_filter(filter_obj) -> str:
     """Human-readable one-line summary of a filter for setup/hub embeds, e.g.
-    ``"Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"``. A falsy filter
-    reads as "every new applicant"."""
+    ``"Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"`` or a mixed
+    ``"Alliance contains OGV OR Alliance contains Open AND Power ≥ 70M"``. A
+    falsy filter reads as "every new applicant"."""
     if isinstance(filter_obj, str):
         filter_obj = parse_filter(filter_obj)
     if not filter_obj:
         return "every new applicant (no filter)"
-    parts = []
-    for clause in filter_obj.get("and", []):
-        if not isinstance(clause, dict):
-            continue
-        col = clause.get("column", "")
-        op = clause.get("op", "")
-        val = clause.get("value")
-        label = _OP_LABELS.get(op, op)
-        if op == "in" and isinstance(val, (list, tuple)):
-            parts.append(f"{col} in [{', '.join(str(v) for v in val)}]")
-        elif op in ("is_true", "is_false"):
-            parts.append(f"{col} {label}")
-        else:
-            parts.append(f"{col} {label} {val}")
-    return " AND ".join(parts) if parts else "every new applicant (no filter)"
+    clauses, joins = _filter_parts(filter_obj)
+    parts = [p for c in clauses if (p := _describe_clause(c)) is not None]
+    if not parts:
+        return "every new applicant (no filter)"
+    out = parts[0]
+    for join, part in zip(joins, parts[1:]):
+        out += f" {join.upper()} {part}"
+    return out
 
 
 def evaluate_filter(filter_obj, row: list, hidx: dict) -> bool:
-    """``True`` if ``row`` passes the (AND-of-clauses) filter. A falsy filter
-    passes everything. ``filter_obj`` may be the parsed dict or the raw stored
-    JSON string; ``hidx`` is a :func:`header_index` map."""
+    """``True`` if ``row`` passes the filter, evaluating clauses left-to-right
+    with their AND/OR connectors (no operator precedence — matches how the
+    recruiter built it). A falsy filter passes everything. ``filter_obj`` may be
+    the parsed dict or the raw stored JSON string; ``hidx`` is a
+    :func:`header_index` map."""
     if isinstance(filter_obj, str):
         filter_obj = parse_filter(filter_obj)
     if not filter_obj:
         return True
-    clauses = filter_obj.get("and") or []
-    return all(_eval_clause(c, row, hidx) for c in clauses)
+    clauses, joins = _filter_parts(filter_obj)
+    if not clauses:
+        return True
+    result = _eval_clause(clauses[0], row, hidx)
+    for join, clause in zip(joins, clauses[1:]):
+        passed = _eval_clause(clause, row, hidx)
+        result = (result or passed) if join == "or" else (result and passed)
+    return result
 
 
 # ── Change detection (Option A — row-content hashing) ────────────────────────

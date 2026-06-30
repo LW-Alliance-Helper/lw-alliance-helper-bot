@@ -1069,12 +1069,19 @@ async def _map_step(
 class _ChannelStepView(discord.ui.View):
     """Pick the text channel new-applicant / status-change notices post to."""
 
-    def __init__(self, owner_id: int):
+    def __init__(self, owner_id: int, *, current_id: int = 0):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
         self.selected_id: int | None = None
         self.confirmed = False
         self.message: discord.Message | None = None
+        # Keep current goes first + green (the repo-wide keep/change convention).
+        if current_id:
+            keep = discord.ui.Button(
+                label="✅ Keep current channel", style=discord.ButtonStyle.success
+            )
+            keep.callback = self._make_keep(current_id)
+            self.add_item(keep)
         self._sel = discord.ui.ChannelSelect(
             channel_types=[
                 discord.ChannelType.text,
@@ -1094,6 +1101,17 @@ class _ChannelStepView(discord.ui.View):
             return False
         return True
 
+    def _make_keep(self, current_id: int):
+        async def _cb(interaction: discord.Interaction):
+            self.selected_id = current_id
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(interaction, view=self)
+            self.stop()
+
+        return _cb
+
     async def _cb(self, interaction: discord.Interaction):
         self.selected_id = self._sel.values[0].id
         self.confirmed = True
@@ -1106,19 +1124,22 @@ class _ChannelStepView(discord.ui.View):
 class _StyleStepView(discord.ui.View):
     """Per-applicant message vs a batched digest when several land at once."""
 
-    def __init__(self, owner_id: int):
+    def __init__(self, owner_id: int, *, current: str | None = None):
         super().__init__(timeout=_STEP_TIMEOUT)
         self.owner_id = owner_id
         self.style: str | None = None
         self.confirmed = False
 
+        # Mark the saved choice with ✓ so re-running is a single, obvious click.
         each = discord.ui.Button(
-            label="📨 A message per applicant", style=discord.ButtonStyle.primary
+            label="📨 A message per applicant" + (" ✓" if current == "each" else ""),
+            style=discord.ButtonStyle.primary,
         )
         each.callback = self._make("each")
         self.add_item(each)
         digest = discord.ui.Button(
-            label="📋 One digest when several arrive", style=discord.ButtonStyle.secondary
+            label="📋 One digest when several arrive" + (" ✓" if current == "digest" else ""),
+            style=discord.ButtonStyle.secondary,
         )
         digest.callback = self._make("digest")
         self.add_item(digest)
@@ -1461,35 +1482,41 @@ async def _build_filter(
     intro: str | None = None,
     none_label: str = "✅ Every new applicant",
     build_label: str = "🔎 Only ones matching a filter",
+    current_filter=None,
 ):
-    """Walk the recruiter through an AND filter. Returns the filter dict,
+    """Walk the recruiter through an AND/OR filter. Returns the filter dict,
     ``None`` (no filter), or a ``"CANCEL"`` / ``"TIMEOUT"`` sentinel. Reused
     for the new-applicant notification filter, the "for us" watch filter, and
-    the source pull filter — the labels/intro adapt via the keyword args."""
+    the source pull filter — the labels/intro adapt via the keyword args. When
+    ``current_filter`` is set, a Keep-current option is offered up front."""
     if intro is None:
         intro = (
             "**New-applicant filter**\n"
             "Get pinged for *every* new applicant, or only the ones matching a filter? "
             "(Status changes always notify, filter or not.)"
         )
-    start = _ButtonChoiceView(
-        owner_id,
-        [
-            (none_label, "none", discord.ButtonStyle.secondary),
-            (build_label, "build", discord.ButtonStyle.primary),
-        ],
-    )
+    options = [
+        (none_label, "none", discord.ButtonStyle.secondary),
+        (build_label, "build", discord.ButtonStyle.primary),
+    ]
+    if current_filter:
+        intro += f"\n**Current filter:** {transfer.describe_filter(current_filter)}"
+        options.insert(0, ("↩️ Keep current filter", "keep", discord.ButtonStyle.success))
+    start = _ButtonChoiceView(owner_id, options)
     await channel.send(intro, view=start)
     await wizard_registry.wait_view_or_cancel(start, cancel_event)
     if start.cancelled:
         return "CANCEL"
     if not start.confirmed:
         return "TIMEOUT"
+    if start.value == "keep":
+        return current_filter
     if start.value == "none":
         return None
 
     hidx = transfer.header_index(header)
     clauses: list = []
+    joins: list = []  # joins[i] (and/or) connects clauses[i] to clauses[i + 1]
     while True:
         colv = _FilterColumnView(owner_id, header)
         await channel.send("Pick a column to filter on:", view=colv)
@@ -1514,22 +1541,35 @@ async def _build_filter(
             continue
         if isinstance(clause, dict):
             clauses.append(clause)
+        # joins has one extra entry while a connector is pending a clause; trim
+        # so the "so far" summary reads cleanly.
+        joins = joins[: len(clauses) - 1]
         more = _ButtonChoiceView(
             owner_id,
             [
-                ("➕ Add another", "more", discord.ButtonStyle.primary),
+                ("➕ AND another", "and", discord.ButtonStyle.primary),
+                ("➕ OR another", "or", discord.ButtonStyle.primary),
                 ("✅ Done", "done", discord.ButtonStyle.success),
             ],
         )
         await channel.send(
-            f"**Filter so far:** {transfer.describe_filter({'and': clauses})}", view=more
+            "**Filter so far:** "
+            f"{transfer.describe_filter({'clauses': clauses, 'joins': joins})}\n"
+            "Add another condition (joined with AND or OR), or finish.",
+            view=more,
         )
         await wizard_registry.wait_view_or_cancel(more, cancel_event)
         if more.cancelled:
             return "CANCEL"
         if not more.confirmed or more.value == "done":
             break
-    return {"and": clauses} if clauses else None
+        joins.append(more.value)  # connector to the next clause
+    if not clauses:
+        return None
+    joins = joins[: len(clauses) - 1]
+    if all(j == "and" for j in joins):
+        return {"and": clauses}  # canonical all-AND shape (back-compat)
+    return {"clauses": clauses, "joins": joins}
 
 
 # ── Intake sources (a shared sheet / the alliance's own form) ─────────────────
@@ -1783,6 +1823,11 @@ async def _configure_source(
         if cmap:
             src_map["copy_map"] = cmap
 
+    cur_pull_filter = (
+        transfer.parse_filter(current.get(f"{prefix}_filter_json"))
+        if current.get(f"{prefix}_sheet_id")
+        else None
+    )
     filt = await _build_filter(
         channel,
         user_id,
@@ -1796,6 +1841,7 @@ async def _configure_source(
         ),
         none_label="📥 Pull every row",
         build_label="🔎 Only rows matching a filter",
+        current_filter=cur_pull_filter,
     )
     if filt in ("CANCEL", "TIMEOUT"):
         return filt
@@ -1910,8 +1956,8 @@ async def _run_source_step(
 # ── Shared tail steps (channel / style / templates / removal / write-back) ────
 
 
-async def _step_channel(channel, owner_id, cancel_event):
-    view = _ChannelStepView(owner_id=owner_id)
+async def _step_channel(channel, owner_id, cancel_event, *, current_id: int = 0):
+    view = _ChannelStepView(owner_id=owner_id, current_id=current_id)
     view.message = await channel.send(
         "**Notification channel**\n"
         "Where should new-applicant and status-change notices post? A dedicated recruiting "
@@ -1926,8 +1972,8 @@ async def _step_channel(channel, owner_id, cancel_event):
     return ("OK", view.selected_id)
 
 
-async def _step_style(channel, owner_id, cancel_event):
-    view = _StyleStepView(owner_id=owner_id)
+async def _step_style(channel, owner_id, cancel_event, *, current: str | None = None):
+    view = _StyleStepView(owner_id=owner_id, current=current)
     await channel.send(
         "**Notification Style**\n"
         "How should notifications arrive?\n"
@@ -2592,7 +2638,9 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
         column_map = cm
 
         # ── Notification channel + style (all modes) ──────────────────────────
-        st, chan_id = await _step_channel(channel, user.id, cancel_event)
+        st, chan_id = await _step_channel(
+            channel, user.id, cancel_event, current_id=current.get("notification_channel_id") or 0
+        )
         if st == "CANCEL":
             return
         if st == "TIMEOUT":
@@ -2600,7 +2648,9 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             return
         config.update_transfer_config_field(guild_id, "notification_channel_id", chan_id)
 
-        st, style = await _step_style(channel, user.id, cancel_event)
+        st, style = await _step_style(
+            channel, user.id, cancel_event, current=current.get("notification_style")
+        )
         if st == "CANCEL":
             return
         if st == "TIMEOUT":
@@ -2620,8 +2670,11 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
 
         # ── Filter ────────────────────────────────────────────────────────────
         # Mode 1 has no notification filter: the source pull filter is the gate.
+        cur_filter = transfer.parse_filter(current.get("notification_filter_json"))
         if mode == _MODE_OWN:
-            filt = await _build_filter(channel, user.id, header, rows, cancel_event)
+            filt = await _build_filter(
+                channel, user.id, header, rows, cancel_event, current_filter=cur_filter
+            )
             if filt == "CANCEL":
                 return
             if filt == "TIMEOUT":
@@ -2646,6 +2699,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 ),
                 none_label="✅ Every new applicant on the sheet",
                 build_label="🔎 Only ones matching a filter",
+                current_filter=cur_filter,
             )
             if filt == "CANCEL":
                 return
@@ -2838,22 +2892,17 @@ class _EditMenuView(discord.ui.View):
         self.confirmed = False
         self.message: discord.Message | None = None
 
-        specs = [
-            ("🗂️ Column mapping", "mapping", 0),
-            ("📢 Channel", "channel", 0),
-            ("🎚️ Notification style", "style", 0),
-            ("⏱️ Frequency", "frequency", 0),
-        ]
+        # Top-level sections. Sub-options (decisions, fill-in, channel/style/
+        # frequency/removal) are folded into their parent's sub-menu so the main
+        # menu stays short and the labels say plainly what they touch.
+        specs = [("🗂️ Your Sheet Columns", "columns", 0)]
         if mode in (_MODE_OWN, _MODE_WATCH):
-            specs.append(("🔎 Filter", "filter", 1))
+            specs.append(("🔎 Filter", "filter", 0))
         if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
-            specs.append(("📥 Intake sources", "intake", 1))
-            specs.append(("🧩 Fill-in from source", "enrich", 1))
-        specs.append(("✉️ Templates", "templates", 1))
-        if mode != _MODE_WATCH:
-            specs.append(("🧭 Decisions", "decisions", 2))
-            specs.append(("🔔 Removal", "removal", 2))
-        specs.append(("📑 Change sheets / setup type", "resetup", 2))
+            specs.append(("📥 Shared sheet configuration", "shared", 1))
+        specs.append(("🔔 Notifications", "notifications", 1))
+        specs.append(("✉️ Message templates", "templates", 2))
+        specs.append(("📑 Change Setup", "resetup", 2))
         for label, value, row in specs:
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
             btn.callback = self._make(value)
@@ -2999,16 +3048,11 @@ async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> 
     """Dispatch one section editor. Returns ``"OK"`` / ``"KEEP"`` / ``"CANCEL"``
     / ``"TIMEOUT"``."""
     handlers = {
-        "mapping": _edit_mapping,
-        "channel": _edit_channel,
-        "style": _edit_style,
-        "frequency": _edit_frequency,
+        "columns": _edit_columns,
         "filter": _edit_filter,
-        "intake": _edit_intake,
+        "shared": _edit_shared,
+        "notifications": _edit_notifications,
         "templates": _edit_templates,
-        "decisions": _edit_decisions,
-        "removal": _edit_removal,
-        "enrich": _edit_enrich,
     }
     handler = handlers.get(section)
     if handler is None:
@@ -3255,3 +3299,144 @@ async def _edit_enrich(channel, guild_id, user, cfg, cancel_event) -> str:
     if g != "change":
         return g
     return await _step_enrich(channel, guild_id, user.id, cancel_event)
+
+
+# ── Sub-menus (one level under the main edit menu) ────────────────────────────
+#
+# Some top-level sections group several editors (Your Sheet Columns = mapping +
+# decisions; Shared sheet configuration = sheets + fill-in; Notifications =
+# channel + style + frequency + removal). Clicking one opens this secondary
+# picker so you jump straight to the one thing you want instead of clicking
+# through every sub-step.
+
+
+class _SectionPickerView(discord.ui.View):
+    """A secondary section picker. ``specs`` is ``[(label, value), …]``; the
+    chosen value lands in ``choice``. A green ↩️ Back returns to the main menu."""
+
+    def __init__(self, *, owner_id: int, specs: list):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.choice: str | None = None
+        self.confirmed = False
+        self.message: discord.Message | None = None
+        for i, (label, value) in enumerate(specs):
+            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=i // 4)
+            btn.callback = self._make(value)
+            self.add_item(btn)
+        back = discord.ui.Button(
+            label="↩️ Back", style=discord.ButtonStyle.success, row=(len(specs) // 4) + 1
+        )
+        back.callback = self._make("back")
+        self.add_item(back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _make(self, value: str):
+        async def _cb(interaction: discord.Interaction):
+            self.choice = value
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(interaction, view=self)
+            self.stop()
+
+        return _cb
+
+
+async def _run_submenu(channel, guild_id, user, cancel_event, *, title, specs, handlers) -> str:
+    """Loop a secondary section picker. ``specs`` = ``[(label, key), …]``;
+    ``handlers`` maps each key to an ``_edit_*`` coro. A single sub-item skips
+    the picker and runs directly. Returns ``"OK"`` / ``"CANCEL"`` / ``"TIMEOUT"``."""
+    if len(specs) == 1:
+        cfg = config.get_transfer_config(guild_id)
+        return await handlers[specs[0][1]](channel, guild_id, user, cfg, cancel_event)
+    msg = None
+    while True:
+        cfg = config.get_transfer_config(guild_id)
+        view = _SectionPickerView(owner_id=user.id, specs=specs)
+        if msg is not None:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+        msg = await channel.send(f"**{title}** — pick what to change, or ↩️ Back.", view=view)
+        view.message = msg
+        await wizard_registry.wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
+            return "CANCEL"
+        if not view.confirmed or view.choice in (None, "back"):
+            try:
+                await msg.edit(view=None)
+            except discord.HTTPException:
+                pass
+            return "OK" if view.choice == "back" else "TIMEOUT"
+        status = await handlers[view.choice](channel, guild_id, user, cfg, cancel_event)
+        if status in ("CANCEL", "TIMEOUT"):
+            return status
+        # OK / KEEP → loop and re-post the sub-menu.
+
+
+async def _edit_columns(channel, guild_id, user, cfg, cancel_event) -> str:
+    """Your Sheet Columns: column mapping + (writable modes) decision columns."""
+    mode = cfg.get("setup_mode") or ""
+    specs = [("🗂️ Map columns", "mapping")]
+    handlers = {"mapping": _edit_mapping, "decisions": _edit_decisions}
+    if mode != _MODE_WATCH:
+        specs.append(("🧭 Decision columns", "decisions"))
+    return await _run_submenu(
+        channel,
+        guild_id,
+        user,
+        cancel_event,
+        title="Your sheet columns",
+        specs=specs,
+        handlers=handlers,
+    )
+
+
+async def _edit_shared(channel, guild_id, user, cfg, cancel_event) -> str:
+    """Shared sheet configuration: intake sheet(s)/form + matching, and fill-in."""
+    return await _run_submenu(
+        channel,
+        guild_id,
+        user,
+        cancel_event,
+        title="Shared sheet configuration",
+        specs=[
+            ("📥 Sheets & column matching", "intake"),
+            ("🧩 Fill-in from source", "enrich"),
+        ],
+        handlers={"intake": _edit_intake, "enrich": _edit_enrich},
+    )
+
+
+async def _edit_notifications(channel, guild_id, user, cfg, cancel_event) -> str:
+    """Notifications: channel, style, frequency, and (writable modes) removal."""
+    mode = cfg.get("setup_mode") or ""
+    specs = [
+        ("📢 Channel", "channel"),
+        ("🎚️ Style", "style"),
+        ("⏱️ Frequency", "frequency"),
+    ]
+    handlers = {
+        "channel": _edit_channel,
+        "style": _edit_style,
+        "frequency": _edit_frequency,
+    }
+    if mode != _MODE_WATCH:
+        specs.append(("🔔 Removal", "removal"))
+        handlers["removal"] = _edit_removal
+    return await _run_submenu(
+        channel,
+        guild_id,
+        user,
+        cancel_event,
+        title="Notifications",
+        specs=specs,
+        handlers=handlers,
+    )

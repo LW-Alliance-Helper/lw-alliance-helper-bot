@@ -341,12 +341,22 @@ class TestParseFilter:
     def test_malformed_is_none(self):
         assert transfer.parse_filter("{bad") is None
 
-    def test_no_and_key_is_none(self):
+    def test_no_clauses_key_is_none(self):
         assert transfer.parse_filter('{"or": []}') is None
+        assert transfer.parse_filter('{"clauses": []}') is None
 
     def test_valid(self):
         f = transfer.parse_filter('{"and": [{"column": "Total Power", "op": ">=", "value": 100}]}')
         assert f == {"and": [{"column": "Total Power", "op": ">=", "value": 100}]}
+
+    def test_valid_mixed_clauses_shape(self):
+        raw = (
+            '{"clauses": [{"column": "A", "op": "contains", "value": "OGV"}, '
+            '{"column": "A", "op": "contains", "value": "Open"}], "joins": ["or"]}'
+        )
+        f = transfer.parse_filter(raw)
+        assert f["joins"] == ["or"]
+        assert len(f["clauses"]) == 2
 
 
 class TestDescribeFilter:
@@ -367,6 +377,18 @@ class TestDescribeFilter:
     def test_contains_and_raw_json(self):
         f = '{"and": [{"column": "Requested Landing Alliance", "op": "contains", "value": "OGV"}]}'
         assert transfer.describe_filter(f) == "Requested Landing Alliance contains OGV"
+
+    def test_mixed_and_or_connectors(self):
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+                {"column": "Power", "op": ">=", "value": "70M"},
+            ],
+            "joins": ["or", "and"],
+        }
+        out = transfer.describe_filter(f)
+        assert out == "Alliance contains OGV OR Alliance contains Open AND Power ≥ 70M"
 
 
 class TestEvaluateFilter:
@@ -434,6 +456,50 @@ class TestEvaluateFilter:
     def test_unknown_operator_soft_passes(self):
         f = {"and": [{"column": "Tier", "op": "regex", "value": ".*"}]}
         assert transfer.evaluate_filter(f, ROW, HIDX) is True
+
+    def test_mixed_and_or_left_to_right(self):
+        # "Alliance contains OGV OR contains Open AND Power ≥ 70M", read left to
+        # right (no precedence): (OGV OR Open) AND Power ≥ 70M.
+        hidx = transfer.header_index(["Alliance", "Power"])
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+                {"column": "Power", "op": ">=", "value": "70M"},
+            ],
+            "joins": ["or", "and"],
+        }
+        assert transfer.evaluate_filter(f, ["OGV", "80M"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Open recruitment", "80M"], hidx) is True
+        assert transfer.evaluate_filter(f, ["OGV", "50M"], hidx) is False  # power too low
+        assert transfer.evaluate_filter(f, ["Random", "80M"], hidx) is False  # neither tag
+        assert transfer.evaluate_filter(f, ["Open", "50M"], hidx) is False  # power too low
+
+    def test_pure_or(self):
+        hidx = transfer.header_index(["Alliance"])
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+            ],
+            "joins": ["or"],
+        }
+        assert transfer.evaluate_filter(f, ["OGV"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Open"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Nope"], hidx) is False
+
+    def test_short_joins_default_to_and(self):
+        # Malformed/short joins list pads with AND (defensive).
+        hidx = transfer.header_index(["A", "B"])
+        f = {
+            "clauses": [
+                {"column": "A", "op": "contains", "value": "x"},
+                {"column": "B", "op": "contains", "value": "y"},
+            ],
+            "joins": [],
+        }
+        assert transfer.evaluate_filter(f, ["x", "y"], hidx) is True
+        assert transfer.evaluate_filter(f, ["x", "z"], hidx) is False
 
 
 # ── Change detection ─────────────────────────────────────────────────────────

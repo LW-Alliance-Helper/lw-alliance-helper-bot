@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.5] — 2026-06-29
+
+### Added
+- The weekly train draft has an **Add reason** button to note why a member is a day's conductor (e.g. nominated for helping out), shown as a sub-line under their name and carried through to the daily confirmation ([#344](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/344)).
+
 ## [1.6.4] — 2026-06-29
 
 ### Added

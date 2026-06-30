@@ -634,6 +634,9 @@ def test_draft_empty_pool_needs_picking():
         counted_reasons=COUNTED,
     )
     assert all(d.member is None and d.needs_picking for d in draft)
+    # needs-picking is tracked by the flag, not by a sentinel in the note column
+    # (which is the human-reason field surfaced in the draft embed).
+    assert all(d.note == "" for d in draft)
 
 
 def test_draft_override_birthday_preempts_day_rule():

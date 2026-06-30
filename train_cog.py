@@ -860,6 +860,7 @@ class TrainCog(commands.Cog):
             member=row.member or None,
             reason=row.reason,
             needs_picking=not bool(row.member),
+            note="" if row.notes == "needs picking" else row.notes,
         )
         # 0 = alliance opted out of public posts; the confirmation just records.
         public_channel_id = tcfg.get("rotation_public_channel_id") or 0

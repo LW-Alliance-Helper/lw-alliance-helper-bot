@@ -300,16 +300,30 @@ def _conductor_mention(dd: tr.DraftDay) -> str:
     return tr.NEEDS_PICKING_LABEL
 
 
+def _reason_subline(dd: tr.DraftDay) -> str:
+    """A small indented line under the conductor showing why they're on this day
+    (a leadership-typed reason, or a birthday offset). Empty when there's nothing
+    useful to add — including a plain on-the-day birthday, whose 🎂 already shows
+    on the conductor line."""
+    note = (dd.note or "").strip()
+    if not note or note == "needs picking":
+        return ""
+    if dd.reason == "birthday" and "(" not in note:
+        return ""  # redundant with the 🎂 already on the conductor line
+    return f"\n↳ *{note}*"
+
+
 def build_weekly_draft_embed(
     draft: list[tr.DraftDay], week_start: date, preset_name: str
 ) -> discord.Embed:
     week_end = week_start + timedelta(days=6)
     # One markdown line per day (no code block) so conductors render as real
-    # @mentions and nothing wraps mid-cell. `·` separates day · rule · conductor.
+    # @mentions and nothing wraps mid-cell. `·` separates day · rule · conductor;
+    # a typed reason (if any) follows on a small indented sub-line.
     lines = [
         f"**{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}** · "
         f"{tr.RULE_LABELS_SHORT.get(dd.rule_type, tr.RULE_LABELS.get(dd.rule_type, dd.rule_type))} · "
-        f"{_conductor_mention(dd)}"
+        f"{_conductor_mention(dd)}{_reason_subline(dd)}"
         for dd in draft
     ]
     embed = discord.Embed(
@@ -335,6 +349,9 @@ def build_daily_confirm_embed(dd: tr.DraftDay) -> discord.Embed:
         reason_label = tr.RULE_LABELS.get(dd.reason, dd.reason)
         bday = " 🎂" if dd.reason == "birthday" else ""
         embed.description = f"**Conductor:** {dd.member}{bday}\n*Reason: {reason_label}*"
+        note = _reason_subline(dd)
+        if note:
+            embed.description += note
     elif dd.reason in tr.MANUAL_RULES:
         embed.description = f"{MANUAL_LABEL}. Pick today's conductor below."
     else:
@@ -1320,6 +1337,44 @@ async def post_preset_editor(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+REASON_MAX_LEN = 200  # keeps the reason sub-line tidy in the draft embed
+
+
+class _ReasonModal(discord.ui.Modal, title="Reason for this day"):
+    """Captures a free-text reason for why a member is the day's conductor
+    (e.g. "Nominated for helping with General's Trials"). Pre-filled with the
+    current reason so it edits as well as adds; blank clears it."""
+
+    def __init__(self, view: "WeeklyDraftView", dd: tr.DraftDay):
+        super().__init__()
+        self._view = view
+        self._dd = dd
+        day_label = f"{date.fromisoformat(dd.date):%a %b} {date.fromisoformat(dd.date).day}"
+        self.reason = discord.ui.TextInput(
+            label=f"Why is {dd.member or 'this day'} on {day_label}?"[:45],
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=REASON_MAX_LEN,
+            default=(dd.note or "")[:REASON_MAX_LEN],
+            placeholder="e.g. Nominated for helping with General's Trials",
+        )
+        self.add_item(self.reason)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self._dd.note = self.reason.value.strip()
+        await interaction.response.defer()
+        await asyncio.to_thread(self._view._persist_day, self._dd)
+        self._view._rebuild()
+        embed = build_weekly_draft_embed(
+            self._view.draft, self._view.week_start, self._view.preset_name
+        )
+        try:
+            if self._view.message:
+                await self._view.message.edit(embed=embed, view=self._view)
+        except discord.HTTPException:
+            pass
+
+
 class WeeklyDraftView(discord.ui.View):
     """Leadership-facing weekly draft. A day picker + shared action buttons edit
     the selected day; edits write straight to the Train History `scheduled`
@@ -1377,6 +1432,7 @@ class WeeklyDraftView(discord.ui.View):
         for label, style, cb in [
             ("⏭️ Go to next person", discord.ButtonStyle.primary, self._on_next),
             ("✏️ Assign someone", discord.ButtonStyle.secondary, self._on_assign),
+            ("📝 Add reason", discord.ButtonStyle.secondary, self._on_add_reason),
             ("✋ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
             ("🔄 Re-draft the whole week", discord.ButtonStyle.danger, self._on_regen),
         ]:
@@ -1466,7 +1522,9 @@ class WeeklyDraftView(discord.ui.View):
             role_rules_enabled=state.role_rules_enabled,
         )
         dd.member, dd.reason, dd.needs_picking = member, reason, needs
-        dd.note = "" if member else "needs picking"
+        # Rerolling replaces the conductor, so any reason typed for the old pick
+        # no longer applies — clear it.
+        dd.note = ""
         dd.discord_id = _id_for_name(state, member) if member else ""
         await asyncio.to_thread(self._persist_day, dd)
         await self._refresh(interaction)
@@ -1512,6 +1570,14 @@ class WeeklyDraftView(discord.ui.View):
             full_scope="\nShowing the **full roster**.",
         )
         await interaction.followup.send(content=picker.content(), view=picker, ephemeral=True)
+
+    async def _on_add_reason(self, interaction: discord.Interaction):
+        # Opening a modal must be the interaction's first response, so _guard_day
+        # (which never defers on the success path) has to run before the modal.
+        dd = await self._guard_day(interaction)
+        if dd is None:
+            return
+        await interaction.response.send_modal(_ReasonModal(self, dd))
 
     async def _on_set_manual(self, interaction: discord.Interaction):
         # Leave the day for leadership to assign on the day (they get prompted by
@@ -1718,7 +1784,7 @@ def load_week_draft(
                     member=None,
                     reason="auto",
                     needs_picking=True,
-                    note="needs picking",
+                    note="",
                 )
             )
         else:
@@ -1730,7 +1796,9 @@ def load_week_draft(
                     member=h.member or None,
                     reason=h.reason,
                     needs_picking=not bool(h.member),
-                    note=h.notes,
+                    # Scrub the legacy "needs picking" sentinel older sheets may
+                    # still carry in the Notes column so it never renders as a reason.
+                    note="" if h.notes == "needs picking" else h.notes,
                     discord_id=h.discord_id,  # carried for the @mention render
                 )
             )
@@ -1876,6 +1944,7 @@ class DailyConfirmView(discord.ui.View):
             member=self.dd.member or "",
             reason=self.dd.reason,
             status=tr.STATUS_SCHEDULED,
+            notes=self.dd.note,
         )
 
     async def _refresh(self, interaction: discord.Interaction):
@@ -1928,6 +1997,7 @@ class DailyConfirmView(discord.ui.View):
             reason=self.dd.reason,
             status=tr.STATUS_POSTED,
             posted_at=now_iso,
+            notes=self.dd.note,
         )
         for item in self.children:
             item.disabled = True

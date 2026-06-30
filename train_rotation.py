@@ -285,7 +285,8 @@ class DraftDay:
     member: str | None  # None → needs picking / no eligible conductor
     reason: str
     needs_picking: bool = False
-    note: str = ""  # surfaced in the draft embed, e.g. "birthday 🎂"
+    note: str = ""  # human reason surfaced in the draft embed (e.g. a birthday
+    # tag like "birthday 🎂", or a leadership-typed reason like "nominated for …")
     discord_id: str = ""  # for rendering the conductor as an @mention; "" → show the name
 
 
@@ -697,7 +698,9 @@ def generate_week_draft(
             member=member,
             reason=reason,
             needs_picking=needs,
-            note="" if member else "needs picking",
+            # `note` is the human reason column; a day that still needs picking is
+            # tracked by `needs_picking`, not by a sentinel stuffed into `note`.
+            note="",
         )
 
     return [results[iso] for iso in week_isos]

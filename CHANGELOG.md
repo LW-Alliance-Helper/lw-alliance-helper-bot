@@ -9,6 +9,16 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.6] — 2026-07-01
+
+### Fixed
+- `/setup` no longer errors when the channel it's running in is deleted, or the bot loses access to it, partway through the wizard; it stops cleanly and tells you to re-run from a channel it can post in ([#319](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/319)).
+- The `/train` hub's **Schedule presets** and **Member rules** buttons no longer occasionally fail with "Interaction failed" when the roster sheet is slow to load ([#332](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/332)).
+- Typing `!help` in a server where the bot can't post no longer raises a background error; the bot now ignores `!help` like every other `!` command ([#333](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/333)).
+
+### Changed
+- Updated bundled dependencies to current versions: discord.py, Pillow, google-auth, sentry-sdk, and python-dotenv ([#280](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/280), [#281](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/281), [#282](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/282), [#283](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/283), [#284](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/284)).
+
 ## [1.6.5] — 2026-06-29
 
 ### Added

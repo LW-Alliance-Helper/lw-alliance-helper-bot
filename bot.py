@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.6.5"
+__version__ = "1.6.6"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -75,7 +75,13 @@ intents.message_content = True
 # to fire — i.e. for Member Roster Sync's auto-resync to actually work.
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# `help_command=None` removes discord.py's built-in `!help` prefix command.
+# This bot is slash-only (see `/help`); the default prefix helper only ever
+# fired when someone typed `!help` in a server the bot shares with another
+# `!`-prefix bot, and it crashed with Forbidden (50013) whenever the bot
+# lacked send access in that channel (#333). Dropping it lets `!help` fall
+# through to the CommandNotFound swallow in on_command_error.
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # Background threads (Growth Breakdown auto-post, anything else off the
 # event loop) need to schedule coroutines onto the bot's loop without

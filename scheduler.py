@@ -1081,7 +1081,7 @@ async def post_editor(
             f"[SCHEDULER][ERROR] Draft channel {channel_id} not found for "
             f"guild {gid} — event editor for {event_key} skipped"
         )
-        return
+        return False
 
     view = EventEditorView(
         bot=bot,
@@ -1090,9 +1090,27 @@ async def post_editor(
         run_date=run_date,
         guild_id=cfg.guild_id,
     )
-    sent = await channel.send(view._render_editor_content(), view=view)
+    gid = getattr(cfg, "guild_id", "?")
+    try:
+        sent = await channel.send(view._render_editor_content(), view=view)
+    except discord.Forbidden:
+        # Bot can't post in the draft channel (missing view/send access).
+        # The alliance's to fix — log with context, don't page Sentry (#57).
+        print(
+            f"[SCHEDULER][ERROR] Missing permission to post the {event_key} "
+            f"event editor to channel {channel_id} for guild {gid} — check "
+            f"the bot's access to that channel"
+        )
+        return False
+    except discord.HTTPException as e:
+        print(
+            f"[SCHEDULER][ERROR] Failed to post {event_key} event editor for "
+            f"guild {gid} to channel {channel_id}: {e}"
+        )
+        return False
     view.message = sent
     print(f"[SCHEDULER] Event editor posted for {event_key}")
+    return True
 
 
 async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):

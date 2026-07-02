@@ -9,6 +9,12 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.7] — 2026-07-02
+
+### Fixed
+- The daily event editor no longer fails with an error when the bot can't post to the draft channel; it now tells you which channel to check and keeps working for your other events ([#57](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/57)).
+- A deleted Google Sheet or a sheet the bot was removed from no longer floods error tracking during the growth snapshot; the affected alliance is logged and skipped so everyone else's snapshot still runs ([#285](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/285), [#286](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/286)).
+
 ## [1.6.6] — 2026-07-01
 
 ### Fixed

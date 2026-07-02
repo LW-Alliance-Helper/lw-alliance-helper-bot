@@ -1715,6 +1715,52 @@ class TestDescribeSheetError:
         assert "guild=1" in msg
 
 
+class TestIsUserConfigSheetError:
+    """is_user_config_sheet_error classifies alliance-owned Sheet problems
+    (deleted/inaccessible sheet, missing tab, rate limit) as expected, so
+    background loops log + skip instead of paging Sentry (#285 / #286)."""
+
+    def test_spreadsheet_not_found_is_expected(self):
+        import gspread
+        import config
+
+        assert config.is_user_config_sheet_error(gspread.exceptions.SpreadsheetNotFound()) is True
+
+    def test_worksheet_not_found_is_expected(self):
+        import gspread
+        import config
+
+        assert (
+            config.is_user_config_sheet_error(gspread.exceptions.WorksheetNotFound("Tab")) is True
+        )
+
+    def test_api_error_403_404_429_are_expected(self):
+        import gspread
+        import config
+        from unittest.mock import MagicMock
+
+        for status in (403, 404, 429):
+            resp = MagicMock()
+            resp.status_code = status
+            resp.json.return_value = {}
+            assert config.is_user_config_sheet_error(gspread.exceptions.APIError(resp)) is True
+
+    def test_api_error_500_is_not_expected(self):
+        import gspread
+        import config
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.json.return_value = {}
+        assert config.is_user_config_sheet_error(gspread.exceptions.APIError(resp)) is False
+
+    def test_non_gspread_error_is_not_expected(self):
+        import config
+
+        assert config.is_user_config_sheet_error(RuntimeError("boom")) is False
+
+
 class TestNormalizeSpreadsheetId:
     """normalize_spreadsheet_id should extract the ID when the user pastes a
     full sheet URL into the /setup Step 5 prompt. Saving the raw URL leads to

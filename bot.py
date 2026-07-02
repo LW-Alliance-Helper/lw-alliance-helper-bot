@@ -32,7 +32,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.6.6"
+__version__ = "1.6.7"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -606,8 +606,21 @@ async def growth_task():
                     None, _run_growth_snapshot_inner, gid
                 )
             except Exception as e:
-                print(f"[GROWTH] Error during scheduled snapshot for guild {gid}: {e}")
-                sentry_sdk.capture_exception(e)
+                from config import describe_sheet_error, is_user_config_sheet_error
+
+                if is_user_config_sheet_error(e):
+                    # Deleted sheet / revoked access / missing tab is the
+                    # alliance's to fix — log it with guild context, but don't
+                    # page Sentry (regressions of #285 / #286).
+                    print(f"[GROWTH] Skipping guild {gid}: {describe_sheet_error(e, guild_id=gid)}")
+                    sentry_sdk.add_breadcrumb(
+                        category="growth",
+                        message=describe_sheet_error(e, guild_id=gid),
+                        level="info",
+                    )
+                else:
+                    print(f"[GROWTH] Error during scheduled snapshot for guild {gid}: {e}")
+                    sentry_sdk.capture_exception(e)
 
 
 @growth_task.before_loop

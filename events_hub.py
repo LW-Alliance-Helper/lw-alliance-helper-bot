@@ -357,7 +357,7 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
             if ev["five_min_warning"]:
                 five_min_warn = True
         event_key = f"event-{guild_id}-{today.isoformat()}-hub"
-        await post_editor(
+        posted = await post_editor(
             bot,
             [],
             event_key,
@@ -367,6 +367,13 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
             announcement_channel_id=announce_channel_id,
             five_min_warning=five_min_warn,
         )
+        if posted is False:
+            target = draft_channel_id or cfg.leadership_channel_id
+            await interaction.followup.send(
+                f"⚠️ I couldn't post the event editor to <#{target}> — check that "
+                "I can view and send messages in that channel.",
+                ephemeral=True,
+            )
         return
 
     next_per_group: list[tuple[date_cls, tuple[str, int]]] = []
@@ -444,7 +451,7 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
 
     event_list.sort(key=lambda x: x["dt"])
     event_key = f"event-{guild_id}-{event_date.isoformat()}-hub"
-    await post_editor(
+    posted = await post_editor(
         bot,
         event_list,
         event_key,
@@ -454,6 +461,13 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
         announcement_channel_id=announce_channel_id,
         five_min_warning=five_min_warn,
     )
+    if posted is False:
+        target = draft_channel_id or cfg.leadership_channel_id
+        await interaction.followup.send(
+            f"⚠️ I couldn't post the event editor to <#{target}> — check that "
+            "I can view and send messages in that channel.",
+            ephemeral=True,
+        )
 
 
 # ── Upcoming events: lifted from the old /events overview ────────────────────

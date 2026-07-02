@@ -1627,6 +1627,34 @@ def describe_sheet_error(e: Exception, *, guild_id=None, tab: str = None) -> str
     return f"{type(e).__name__}: {e}{suffix}"
 
 
+def is_user_config_sheet_error(e: Exception) -> bool:
+    """True when a gspread exception is caused by the alliance's own Sheet
+    configuration rather than a bug in the bot: the spreadsheet was deleted
+    or the ID is wrong (404 / SpreadsheetNotFound), the bot's service account
+    was never shared / lost access (403), a configured tab is missing
+    (WorksheetNotFound), or the Sheets API is rate-limiting (429).
+
+    Background loops should log these with `describe_sheet_error` and skip the
+    guild, but NOT page Sentry — they're operational conditions the alliance
+    owns, and capturing them as exceptions buries real bugs in noise
+    (regressions of #285 / #286).
+    """
+    import gspread
+
+    if isinstance(
+        e, (gspread.exceptions.SpreadsheetNotFound, gspread.exceptions.WorksheetNotFound)
+    ):
+        return True
+    if isinstance(e, gspread.exceptions.APIError):
+        status = None
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            status = getattr(resp, "status_code", None)
+        status = status or getattr(e, "code", None)
+        return status in (403, 404, 429)
+    return False
+
+
 def normalize_spreadsheet_id(value: str) -> str:
     """Pull a Google Sheets spreadsheet ID out of whatever the user pasted.
 

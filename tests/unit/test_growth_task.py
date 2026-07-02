@@ -273,6 +273,66 @@ class TestGrowthTaskDbErrorHandling:
         spy.assert_not_called()
 
 
+# ── Sentry-noise handling for sheet-config errors (#285 / #286) ───────────────
+
+
+class TestGrowthTaskSheetErrorSentryNoise:
+    """A guild that deleted its sheet or revoked the service account's access
+    is an operational condition the alliance owns — the loop must log + skip
+    it, not page Sentry (regressions of #285 / #286). A genuinely unexpected
+    error still captures."""
+
+    @pytest.mark.asyncio
+    async def test_deleted_sheet_does_not_capture_to_sentry(self, seeded_db):
+        import gspread
+        import bot as bot_mod
+
+        cfg = None
+        import config
+
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = 1
+        config.save_config(cfg)
+        _save_growth(TEST_GUILD_ID, frequency="monthly", snapshot_day=15)
+
+        def boom(gid):
+            raise gspread.exceptions.SpreadsheetNotFound()
+
+        fake_dt = _frozen_datetime(datetime(2026, 5, 15, 22, 0, tzinfo=ET))
+        with (
+            patch("bot.datetime", fake_dt),
+            patch("growth._run_growth_snapshot_inner", side_effect=boom),
+            patch("bot.sentry_sdk") as sentry,
+        ):
+            await bot_mod.growth_task.coro()
+
+        sentry.capture_exception.assert_not_called()
+        sentry.add_breadcrumb.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_still_captures(self, seeded_db):
+        import bot as bot_mod
+        import config
+
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = 1
+        config.save_config(cfg)
+        _save_growth(TEST_GUILD_ID, frequency="monthly", snapshot_day=15)
+
+        def boom(gid):
+            raise RuntimeError("genuinely unexpected")
+
+        fake_dt = _frozen_datetime(datetime(2026, 5, 15, 22, 0, tzinfo=ET))
+        with (
+            patch("bot.datetime", fake_dt),
+            patch("growth._run_growth_snapshot_inner", side_effect=boom),
+            patch("bot.sentry_sdk") as sentry,
+        ):
+            await bot_mod.growth_task.coro()
+
+        sentry.capture_exception.assert_called_once()
+
+
 # ── Test helpers ─────────────────────────────────────────────────────────────
 
 

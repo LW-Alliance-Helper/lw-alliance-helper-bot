@@ -72,6 +72,29 @@ def api_server_enabled() -> bool:
     return bool(os.getenv("MAPMANAGER_API_KEY", "").strip() or os.getenv("PORT", "").strip())
 
 
+def map_manager_commands_enabled() -> bool:
+    """True when the user-facing Map Manager surfaces are exposed: the
+    ``/map_manager`` command group and the ``/setup`` hub's Map Manager button.
+
+    Deliberately independent of :func:`api_server_enabled` (the inbound HTTP
+    endpoints). We ship the integration to production with the endpoints live —
+    so Map Manager can exercise them against real alliance data — while keeping
+    the commands hidden until the Map Manager side is ready to reveal them.
+    When off, the cog is never loaded, so the command group never enters the
+    tree and the global sync doesn't publish it.
+
+    Default OFF. Set ``MAP_MANAGER_COMMANDS_ENABLED`` to ``1`` / ``true`` /
+    ``yes`` / ``on`` to reveal (case-insensitive). Flipping it takes effect on
+    the next restart (Railway redeploys on an env-var change).
+    """
+    return os.getenv("MAP_MANAGER_COMMANDS_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _port() -> int:
     """The port to bind, from ``PORT`` (default 8080); falls back to the
     default on a non-numeric value rather than crashing startup."""

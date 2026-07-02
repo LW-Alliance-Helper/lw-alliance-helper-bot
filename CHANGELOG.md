@@ -17,6 +17,7 @@ and PR description.
 - Typing `!help` in a server where the bot can't post no longer raises a background error; the bot now ignores `!help` like every other `!` command ([#333](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/333)).
 
 ### Changed
+- Setup steps that offer a **Keep current** button (storm teams and time slots, growth breakdown thresholds and labels, import sheet ID) now show it first, matching the convention used everywhere else; fresh setup is unchanged ([#300](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/300)).
 - Updated bundled dependencies to current versions: discord.py, Pillow, google-auth, sentry-sdk, and python-dotenv ([#280](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/280), [#281](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/281), [#282](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/282), [#283](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/283), [#284](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/284)).
 
 ## [1.6.5] — 2026-06-29

@@ -453,7 +453,14 @@ class HelpCategorySelect(discord.ui.Select):
                 description="Back to the main /help screen",
             ),
         ]
+        # Map Manager stays out of /help until MAP_MANAGER_COMMANDS_ENABLED is
+        # set, matching the hidden command + setup button (#316/#338).
+        from api_server import map_manager_commands_enabled
+
+        mm_on = map_manager_commands_enabled()
         for cat_id, cat in HELP_CATEGORIES.items():
+            if cat_id == "map_manager" and not mm_on:
+                continue
             options.append(
                 discord.SelectOption(
                     label=cat["label"],

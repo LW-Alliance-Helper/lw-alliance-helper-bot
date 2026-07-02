@@ -239,9 +239,20 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
-    if "mapmanager_cog" not in bot.extensions:
-        await bot.load_extension("mapmanager_cog")
-        print("[INFO] Map Manager cog loaded")
+    # The Map Manager command surfaces (`/map_manager` + the /setup button)
+    # are gated behind MAP_MANAGER_COMMANDS_ENABLED so the integration can ship
+    # to production with its HTTP endpoints live for testing while the commands
+    # stay hidden until Map Manager is ready to reveal them (#316/#338). Not
+    # loading the cog keeps the command group out of the tree, so the global
+    # sync below never publishes it.
+    from api_server import map_manager_commands_enabled
+
+    if map_manager_commands_enabled():
+        if "mapmanager_cog" not in bot.extensions:
+            await bot.load_extension("mapmanager_cog")
+            print("[INFO] Map Manager cog loaded")
+    else:
+        print("[INFO] Map Manager commands hidden (MAP_MANAGER_COMMANDS_ENABLED unset)")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

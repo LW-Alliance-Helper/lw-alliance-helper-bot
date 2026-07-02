@@ -195,8 +195,12 @@ def _build_setup_hub_embed(
         f"{_premium(members_on)} Member Sync",
         f"{_free(buddy_on)} Profession Buddy System",
         f"{_premium(transfers_on)} Transfer Management",
-        f"{_premium(mapmanager_on)} Map Manager",
     ]
+    # Map Manager is hidden until MAP_MANAGER_COMMANDS_ENABLED is set (#316/#338).
+    from api_server import map_manager_commands_enabled
+
+    if map_manager_commands_enabled():
+        description_lines.append(f"{_premium(mapmanager_on)} Map Manager")
     if not setup_done:
         description_lines.insert(
             0,
@@ -250,7 +254,18 @@ class _SetupHubView(discord.ui.View):
         self.owner_user_id = owner_user_id
         self.is_premium = is_premium
         self._gate_premium_buttons()
+        self._gate_map_manager_button()
         self._refresh_release_announcement_label()
+
+    def _gate_map_manager_button(self) -> None:
+        """Drop the Map Manager button unless MAP_MANAGER_COMMANDS_ENABLED is
+        set (#316/#338). The integration ships with its HTTP endpoints live but
+        the user-facing surfaces hidden until Map Manager is ready to reveal
+        them — mirrors the cog-load gate in bot.py."""
+        from api_server import map_manager_commands_enabled
+
+        if not map_manager_commands_enabled():
+            self.remove_item(self.btn_map_manager)
 
     def _gate_premium_buttons(self) -> None:
         """Disable Premium-only buttons on free tier and prefix their

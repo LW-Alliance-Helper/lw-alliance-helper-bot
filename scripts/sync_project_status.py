@@ -227,17 +227,31 @@ def get_project_item_id(issue_node_id):
 
 
 def set_status(item_id, option_id):
-    gql(
-        """
-        mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
-          updateProjectV2ItemFieldValue(input: {
-            projectId: $p, itemId: $i, fieldId: $f
-            value: { singleSelectOptionId: $o }
-          }) { projectV2Item { id } }
-        }
-        """,
-        {"p": PROJECT_ID, "i": item_id, "f": STATUS_FIELD_ID, "o": option_id},
-    )
+    """Set a project item's Status. Returns True on success, False when the
+    item is archived.
+
+    An archived board card can't be updated (GraphQL: "The item is archived
+    and cannot be updated"). This happens when an issue that was closed — and
+    whose card got archived — is reopened: the sync then tries to walk it back
+    to In progress / Shipped and the mutation fails. That's a board-state quirk,
+    not a workflow failure, so skip it rather than crash the whole sync."""
+    try:
+        gql(
+            """
+            mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $p, itemId: $i, fieldId: $f
+                value: { singleSelectOptionId: $o }
+              }) { projectV2Item { id } }
+            }
+            """,
+            {"p": PROJECT_ID, "i": item_id, "f": STATUS_FIELD_ID, "o": option_id},
+        )
+    except RuntimeError as e:
+        if "archived" in str(e).lower():
+            return False
+        raise
+    return True
 
 
 def main():
@@ -297,8 +311,10 @@ def main():
         if item_id is None:
             print(f"  #{issue['number']}: not in project, skipped")
             continue
-        set_status(item_id, option_id)
-        print(f"  #{issue['number']}: -> {args.status}")
+        if set_status(item_id, option_id):
+            print(f"  #{issue['number']}: -> {args.status}")
+        else:
+            print(f"  #{issue['number']}: archived in project, skipped")
 
 
 if __name__ == "__main__":

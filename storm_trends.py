@@ -160,6 +160,60 @@ def query_member_log(
     }
 
 
+def _log_truthy(v) -> bool:
+    """A Per-Member Log cell counts as a hit when non-empty and not an explicit
+    no. Matches the normalisation in `query_member_log` / member_stats."""
+    s = str(v).strip().lower()
+    return bool(s) and s not in ("no", "false", "0")
+
+
+def member_attendance_summary(guild_id: int, event_type: str, lookback_events: int = 12) -> dict:
+    """Per-member storm attendance over the last ``lookback_events`` events, for
+    the Map Manager Storms page (#316).
+
+    Reads the ``<DS|CS> Member Log`` attendance column and returns
+    ``{ event_type, lookback_events, total_events, members: [{ member, attended,
+    tracked, attendance_pct, last_attended }] }``, sorted by attendance % then
+    name. ``tracked`` is the member's own logged-event count (matching
+    ``/member_stats``); ``total_events`` is the window's distinct event count.
+    Degrades to an empty member list (never raises). Not premium-gated — the read
+    is officer-facing behind the service key.
+    """
+    import storm_log
+
+    try:
+        dates, by_member = storm_log.read_member_log_window(
+            guild_id, event_type, lookback_events, storm_log.ATTENDANCE_QUESTION_KEY
+        )
+    except Exception as e:
+        logger.warning("[TRENDS] attendance summary read failed guild=%s: %s", guild_id, e)
+        dates, by_member = [], {}
+
+    members: list[dict] = []
+    for name, rows in by_member.items():
+        if not name or not name.strip():
+            continue
+        attended = sum(1 for v in rows.values() if _log_truthy(v))
+        tracked = len(rows)
+        last_attended = max((d for d, v in rows.items() if _log_truthy(v)), default="")
+        members.append(
+            {
+                "member": name,
+                "attended": attended,
+                "tracked": tracked,
+                "attendance_pct": round(attended / tracked * 100) if tracked else 0,
+                "last_attended": last_attended or None,
+            }
+        )
+    members.sort(key=lambda m: (-m["attendance_pct"], m["member"].lower()))
+    return {
+        "event_type": event_type.lower(),
+        "lookback_events": lookback_events,
+        "total_events": len(dates),
+        "members": members,
+    }
+
+
 def _team_plan_member_set(
     guild_id: int,
     event_type: str,

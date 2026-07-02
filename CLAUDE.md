@@ -385,24 +385,27 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Production is `1.5.6`. `release/1.6.0`
-  is cut from `dev` for **Transfer Management** ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)) —
-  the Premium recruiting sheet-watcher — shipping as its own release
-  (CHANGELOG written, PR to `main` is the remaining step). **Map Manager
-  integration ([#316](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/316))
-  was decoupled to `1.7.0`** and continues on the
-  `map-manager-integration-316` branch. The 1.5.x line: 1.5.2 (outage
-  catch-up [#227](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/227)
-  + member stats [#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56)
-  + buddy reliability ranking [#303](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/303)),
-  then 1.5.3–1.5.6 train-rotation UX fixes. The two big preceding
-  releases: 1.5.0 (Train Conductor Rotation
-  [#55](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/55)
-  + Profession Buddy System [#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289))
-  and 1.4.0 (Premium Storm Overhaul [#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)
-  + Participation Tracking 2.0 [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)).
-  See `CHANGELOG.md` for per-version detail.
-- ~2615 tests pass on the default (non-sheets) lane (18 sheets tests deselected).
+- 1.0.0 launched 2026-04-28. Production is `1.6.7`. **`release/1.7.0`
+  is cut from `dev` for the Map Manager integration**
+  ([#316](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/316),
+  [#338](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/338)) —
+  the authenticated bot-side HTTP API (`api_server.py`) + the
+  `/map_manager` hub. It ships to prod with the **user-facing surfaces
+  hidden behind `MAP_MANAGER_COMMANDS_ENABLED` (default off)** — the
+  `/map_manager` cog isn't loaded, and the `/setup` button + `/help`
+  category are dropped — while the HTTP endpoints stay gated by
+  `MAPMANAGER_API_KEY`. So the code deploys while the surfaces stay
+  invisible until the flag is flipped (endpoints can go live first for
+  Map Manager to test against real data). **The Procfile flips
+  `worker` → `web` this release**, so Railway must run the bot as a web
+  service (health-check tolerant of the gateway-login window — see
+  `docs/MAPMANAGER_INTEGRATION_DEPLOY.md`). The 1.6.x line shipped
+  Transfer Management (1.6.0,
+  [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)),
+  the Pillow 11→12 + dep bumps (1.6.6), and Sentry hardening (1.6.7 —
+  sheet/channel config errors log-and-skip instead of paging). See
+  `CHANGELOG.md` for per-version detail.
+- ~2880 tests pass on the default (non-sheets) lane (18 sheets tests deselected).
 - Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
   large-files), ruff lint + format (line-length 100), codespell, a

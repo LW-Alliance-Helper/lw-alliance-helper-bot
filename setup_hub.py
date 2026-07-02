@@ -52,6 +52,7 @@ HUB_BTN_SURVEY = "📋 Survey"
 HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
 HUB_BTN_BUDDY = "🤝 Buddy System"
 HUB_BTN_TRANSFERS = "🔁 Transfers"
+HUB_BTN_MAP_MANAGER = "🗺️ Map Manager"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",
@@ -163,6 +164,10 @@ def _build_setup_hub_embed(
         transfers_on = bool((config.get_transfer_config(guild.id) or {}).get("enabled"))
     except Exception:
         transfers_on = False
+    try:
+        mapmanager_on = bool(config.get_guild_alliance_mapping(guild.id))
+    except Exception:
+        mapmanager_on = False
 
     # Premium-gated features show 💎 on free tier instead of ⚪.
     def _free(state: bool) -> str:
@@ -191,6 +196,11 @@ def _build_setup_hub_embed(
         f"{_free(buddy_on)} Profession Buddy System",
         f"{_premium(transfers_on)} Transfer Management",
     ]
+    # Map Manager is hidden until MAP_MANAGER_COMMANDS_ENABLED is set (#316/#338).
+    from api_server import map_manager_commands_enabled
+
+    if map_manager_commands_enabled():
+        description_lines.append(f"{_premium(mapmanager_on)} Map Manager")
     if not setup_done:
         description_lines.insert(
             0,
@@ -244,7 +254,18 @@ class _SetupHubView(discord.ui.View):
         self.owner_user_id = owner_user_id
         self.is_premium = is_premium
         self._gate_premium_buttons()
+        self._gate_map_manager_button()
         self._refresh_release_announcement_label()
+
+    def _gate_map_manager_button(self) -> None:
+        """Drop the Map Manager button unless MAP_MANAGER_COMMANDS_ENABLED is
+        set (#316/#338). The integration ships with its HTTP endpoints live but
+        the user-facing surfaces hidden until Map Manager is ready to reveal
+        them — mirrors the cog-load gate in bot.py."""
+        from api_server import map_manager_commands_enabled
+
+        if not map_manager_commands_enabled():
+            self.remove_item(self.btn_map_manager)
 
     def _gate_premium_buttons(self) -> None:
         """Disable Premium-only buttons on free tier and prefix their
@@ -256,6 +277,7 @@ class _SetupHubView(discord.ui.View):
             self.btn_survey,
             self.btn_growth_breakdown,
             self.btn_transfers,
+            self.btn_map_manager,
         ):
             button.disabled = True
             if not button.label.startswith("💎"):
@@ -453,6 +475,12 @@ class _SetupHubView(discord.ui.View):
         from transfer_setup import _launch_transfer_setup
 
         await _launch_transfer_setup(inter, self.bot)
+
+    @discord.ui.button(label=HUB_BTN_MAP_MANAGER, style=discord.ButtonStyle.secondary, row=3)
+    async def btn_map_manager(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from mapmanager_hub import handle_mapmanager_hub
+
+        await handle_mapmanager_hub(self.bot, inter)
 
 
 # ── Slash-command entry point ────────────────────────────────────────────────

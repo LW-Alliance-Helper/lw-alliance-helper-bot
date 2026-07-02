@@ -19,6 +19,7 @@ from setup_hub import (
     HUB_BTN_BUDDY,
     HUB_BTN_EVENTS,
     HUB_BTN_GROWTH,
+    HUB_BTN_MAP_MANAGER,
     HUB_BTN_MEMBERS,
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
@@ -310,6 +311,31 @@ HELP_CATEGORIES: dict[str, dict] = {
             ),
         ],
     },
+    "map_manager": {
+        "emoji": "🗺️",
+        "label": "Map Manager 💎",
+        "description": (
+            "💎 Premium. Connect this server's alliance to the Map Manager web "
+            "app, a visual dashboard that displays your roster, growth, and storm "
+            "participation. Map Manager reads the data through the bot and renders "
+            "it on the web; your data stays in your Google Sheet. Open "
+            "`/map_manager` to link, change, or disconnect."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_MAP_MANAGER}",
+                "💎 Opens the Map Manager hub from the setup hub (same as `/map_manager`).",
+            ),
+            (
+                "/map_manager",
+                "**Map Manager hub** (server admins). Shows the current link plus "
+                "buttons.\n"
+                "**Not linked:** 🔗 Link this server (💎): enter your game server "
+                "number and alliance tag.\n"
+                "**Linked:** ✏️ Change link, 🔌 Unlink, and 🌐 Open Map Manager.",
+            ),
+        ],
+    },
     "data_portability": {
         "emoji": "📦",
         "label": "Data Portability",
@@ -427,7 +453,14 @@ class HelpCategorySelect(discord.ui.Select):
                 description="Back to the main /help screen",
             ),
         ]
+        # Map Manager stays out of /help until MAP_MANAGER_COMMANDS_ENABLED is
+        # set, matching the hidden command + setup button (#316/#338).
+        from api_server import map_manager_commands_enabled
+
+        mm_on = map_manager_commands_enabled()
         for cat_id, cat in HELP_CATEGORIES.items():
+            if cat_id == "map_manager" and not mm_on:
+                continue
             options.append(
                 discord.SelectOption(
                     label=cat["label"],

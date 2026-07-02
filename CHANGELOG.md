@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.0] — 2026-07-02
+
+### Added
+- Groundwork for the **Map Manager integration** (Premium): the bot can now expose a linked alliance's roster, growth, and storm data to the Map Manager web app through an authenticated, per-alliance API, with the data read from your Google Sheet on demand. The in-Discord commands are not visible yet and will be turned on in a later update ([#316](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/316), [#338](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/338)).
+
 ## [1.6.7] — 2026-07-02
 
 ### Fixed

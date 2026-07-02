@@ -535,6 +535,29 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_alliance_mappings — the bot's record of a guild's Map Manager
+        # link (#316). Established by the `/map_manager` hub's Link action, which calls MM's
+        # POST /api/internal/guild-links and stores the resolved ids here so
+        # the bot's own HTTP endpoints (6D) can answer "which alliance is this
+        # guild?" without a round-trip back to MM. guild_id is the PK: a guild
+        # has at most one active link, and re-running setup overwrites it.
+        # `mm_server_grouping_id` is nullable (MM returns null when it can't
+        # resolve a unique grouping — the alliance picks one via MM onboarding).
+        # `revoked_at` soft-deletes on `/unlink_mapmanager` (kept for a local
+        # audit trail, mirroring MM, which also keeps its row).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_alliance_mappings (
+                guild_id              INTEGER PRIMARY KEY,
+                alliance_name         TEXT    NOT NULL DEFAULT '',
+                server                INTEGER NOT NULL DEFAULT 0,
+                mm_alliance_id        TEXT    NOT NULL DEFAULT '',
+                mm_server_grouping_id TEXT,
+                linked_at             TEXT    NOT NULL,
+                revoked_at            TEXT
+            )
+        """)
+        conn.commit()
+
         # guild_shiny_tasks_config — per-guild Daily Shiny Tasks settings.
         # Free for all tiers. `channel_id` is the destination, `post_time`
         # is HH:MM in the guild's `timezone` (mirrors birthday reminder
@@ -1850,6 +1873,86 @@ def delete_guild_install_metadata(guild_id: int) -> bool:
         cur = conn.execute(
             "DELETE FROM guild_install_metadata WHERE guild_id = ?",
             (guild_id,),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+# ── Map Manager guild-link helpers (#316) ──────────────────────────────────────
+#
+# The bot's local record of a guild's Map Manager link. Written by the
+# `/map_manager` wizards after MM resolves the alliance / grouping ids; read by
+# the bot's own HTTP endpoints (6D) to answer guild→alliance lookups. See the
+# `guild_alliance_mappings` schema in `init_db` for the column list.
+
+
+def save_guild_alliance_mapping(
+    guild_id: int,
+    alliance_name: str,
+    server: int,
+    mm_alliance_id: str,
+    mm_server_grouping_id: Optional[str] = None,
+) -> None:
+    """Upsert the active Map Manager link for a guild.
+
+    `guild_id` is the PK, so re-linking via `/map_manager` overwrites the
+    prior mapping in place and clears `revoked_at` (matching MM, which replaces
+    the guild's active link on a re-run). `linked_at` is stamped to now.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            """INSERT INTO guild_alliance_mappings
+                   (guild_id, alliance_name, server, mm_alliance_id,
+                    mm_server_grouping_id, linked_at, revoked_at)
+               VALUES (?, ?, ?, ?, ?, ?, NULL)
+               ON CONFLICT(guild_id) DO UPDATE SET
+                    alliance_name = excluded.alliance_name,
+                    server = excluded.server,
+                    mm_alliance_id = excluded.mm_alliance_id,
+                    mm_server_grouping_id = excluded.mm_server_grouping_id,
+                    linked_at = excluded.linked_at,
+                    revoked_at = NULL""",
+            (guild_id, alliance_name, server, mm_alliance_id, mm_server_grouping_id, now),
+        )
+        conn.commit()
+
+
+def get_guild_alliance_mapping(guild_id: int, include_revoked: bool = False) -> Optional[dict]:
+    """Return the guild's Map Manager link as a dict, or None.
+
+    Defaults to the *active* link only (returns None once it's been revoked);
+    pass `include_revoked=True` to read a revoked row (e.g. so a re-link wizard
+    can show the prior details).
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_alliance_mappings WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    mapping = dict(row)
+    if not include_revoked and mapping.get("revoked_at") is not None:
+        return None
+    return mapping
+
+
+def revoke_guild_alliance_mapping(guild_id: int) -> bool:
+    """Soft-delete the guild's link by stamping `revoked_at` (the row is kept
+    for a local audit trail, mirroring MM). Returns True if an *active* link
+    was revoked, False if there was no active link to revoke.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_alliance_mappings SET revoked_at = ? "
+            "WHERE guild_id = ? AND revoked_at IS NULL",
+            (now, guild_id),
         )
         conn.commit()
         return cur.rowcount > 0

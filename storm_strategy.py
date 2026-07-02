@@ -750,6 +750,101 @@ def list_presets(guild_id: int, event_type: str) -> list[str]:
     return list(seen)
 
 
+def list_strategies(guild_id: int, event_type: str) -> list[dict]:
+    """Named strategies for MM's planner dropdown (PHASE8 §4).
+
+    The bot keys presets by name, so the stable `id` MM stores and passes back is
+    the preset name (renaming a preset invalidates a stored selection — MM
+    re-fetches and the officer re-picks). Returns `[{ id, name }]`, or `[]` when
+    none are configured. Never raises.
+    """
+    try:
+        names = list_presets(guild_id, event_type)
+    except Exception as e:  # noqa: BLE001 — never break the API on a strategy read
+        logger.warning(
+            "[STORM STRATEGY] list_strategies failed guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
+        return []
+    return [{"id": n, "name": n} for n in names]
+
+
+def zone_rules_for(guild_id: int, event_type: str, strategy_id: str | None = None) -> list[dict]:
+    """Per-zone rules for MM's planner overlay (PHASE8 §4, display only).
+
+    Resolves `strategy_id` (the preset name) to a saved strategy preset;
+    omitted/blank falls back to the first preset. The bot does NOT gate on these;
+    MM overlays them per zone and owns the leadership-only + export-exclusion
+    behaviour, so the bot just serves the rules. Returns
+    `[{ zone, min_a, min_b, min_players, max_players, priority }]` for each zone
+    with any rule set, or `[]` when nothing resolves.
+
+    `min_a` / `min_b` are the per-team power floors (single-team alliances leave
+    one at 0). **`min_players` is always 0** — the bot's strategy model has no
+    per-zone minimum player count, only a `max_players` cap. Phase-aware presets
+    fall back to the largest phase cap / first non-zero phase priority for the
+    flat `max_players` / `priority` MM v1 consumes. Never raises.
+    """
+    try:
+        name = (strategy_id or "").strip()
+        if not name:
+            names = list_presets(guild_id, event_type)
+            if not names:
+                return []
+            name = names[0]
+        preset = load_preset(guild_id, event_type, name)
+        if preset is None:
+            return []
+        rules: list[dict] = []
+        for z in preset.zones:
+            min_a = int(getattr(z, "min_power_a", 0) or 0)
+            min_b = int(getattr(z, "min_power_b", 0) or 0)
+            max_players = int(getattr(z, "max_players", 0) or 0)
+            if not max_players:  # phase-aware preset: caps live per phase
+                max_players = max(
+                    int(getattr(z, "max_phase1", 0) or 0),
+                    int(getattr(z, "max_phase2", 0) or 0),
+                    int(getattr(z, "max_phase3", 0) or 0),
+                )
+            priority = int(getattr(z, "priority", 0) or 0)
+            if not priority:  # phase-aware preset: first non-zero per-phase
+                priority = next(
+                    (
+                        p
+                        for p in (
+                            int(getattr(z, "priority_phase1", 0) or 0),
+                            int(getattr(z, "priority_phase2", 0) or 0),
+                            int(getattr(z, "priority_phase3", 0) or 0),
+                        )
+                        if p
+                    ),
+                    0,
+                )
+            if not (min_a or min_b or max_players or priority):
+                continue
+            rules.append(
+                {
+                    "zone": z.zone,
+                    "min_a": min_a,
+                    "min_b": min_b,
+                    "min_players": 0,  # bot has no per-zone minimum player count
+                    "max_players": max_players,
+                    "priority": priority,
+                }
+            )
+        return rules
+    except Exception as e:  # noqa: BLE001 — never break the API on a strategy read
+        logger.warning(
+            "[STORM STRATEGY] zone_rules_for failed guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
+        )
+        return []
+
+
 def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     """Persist a preset to the Sheet. Replaces all rows for this preset
     name with the buffer's current zones. Returns True on success."""

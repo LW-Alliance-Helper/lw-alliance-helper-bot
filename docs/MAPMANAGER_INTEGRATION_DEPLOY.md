@@ -31,6 +31,13 @@ session can't test Railway).
    key generated at MM's `/admin/api-keys`) and `MAPMANAGER_API_URL` (MM base
    URL). `PORT` is provided by Railway. The same key is presented in both
    directions.
+   - **`MAP_MANAGER_COMMANDS_ENABLED`** gates the *user-facing* surfaces
+     (`/map_manager`, the `/setup` hub button, the `/help` category) separately
+     from the endpoints above. **Default off** — production ships with the
+     endpoints live (via `MAPMANAGER_API_KEY`) but the commands hidden. Set it
+     to `1`/`true`/`yes`/`on` to reveal; the change takes effect on the next
+     restart (which re-runs the command sync). On staging, set it to `1` to test
+     the commands end-to-end.
 3. **Health-check window.** The HTTP server starts in `on_ready` — i.e. after
    the gateway logs in (a few seconds into boot), not at process start. If
    Railway's health check has a tight timeout, give it a generous one so the

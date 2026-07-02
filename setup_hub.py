@@ -305,7 +305,29 @@ class _SetupHubView(discord.ui.View):
             "⚙️ Starting setup — check the channel for prompts!",
             ephemeral=True,
         )
-        await run_setup(inter, self.bot)
+        # The wizard talks in-channel via channel.send; if that channel is
+        # deleted or the bot loses send access mid-wizard, the sends raise
+        # (NotFound 10003 / Forbidden 50013). Don't let it bubble to the view
+        # error handler — log it and tell the officer quietly (#319).
+        try:
+            await run_setup(inter, self.bot)
+        except (discord.NotFound, discord.Forbidden) as exc:
+            ch = inter.channel
+            logger.warning(
+                "Setup wizard aborted — channel unreachable (guild=%s channel=%s): %s",
+                inter.guild_id,
+                getattr(ch, "id", None),
+                exc,
+            )
+            try:
+                await inter.followup.send(
+                    "⚠️ I lost access to this channel partway through setup "
+                    "(it may have been deleted, or my permissions changed). "
+                    "Re-run `/setup` from a channel I can post in.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label=HUB_BTN_VIEW_CONFIG, style=discord.ButtonStyle.secondary, row=0)
     async def btn_view_config(self, inter: discord.Interaction, _b: discord.ui.Button):

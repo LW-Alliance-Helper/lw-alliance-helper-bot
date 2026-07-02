@@ -61,3 +61,21 @@ class TestSetupHubButtonGating:
         view = self._make_view()
         labels = [getattr(c, "label", None) for c in view.children]
         assert "🗺️ Map Manager" in labels
+
+
+class TestHelpCategoryGating:
+    """/help hides the Map Manager category until the flag is on, matching the
+    hidden command + setup button."""
+
+    def _option_values(self):
+        from help_content import HelpCategorySelect
+
+        return [o.value for o in HelpCategorySelect(is_premium=True).options]
+
+    def test_absent_when_flag_off(self, monkeypatch):
+        monkeypatch.delenv("MAP_MANAGER_COMMANDS_ENABLED", raising=False)
+        assert "map_manager" not in self._option_values()
+
+    def test_present_when_flag_on(self, monkeypatch):
+        monkeypatch.setenv("MAP_MANAGER_COMMANDS_ENABLED", "1")
+        assert "map_manager" in self._option_values()

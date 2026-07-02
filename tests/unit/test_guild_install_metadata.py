@@ -184,6 +184,7 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "shiny_servers",
         "shiny_import",
         "shiny_set",
+        "transfer_dump",
     }
     assert bot_module._ADMIN_GUILD_IDS == ()
 
@@ -215,6 +216,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "shiny_servers",
             "shiny_import",
             "shiny_set",
+            "transfer_dump",
         }
 
     # Unrelated guild sees nothing.

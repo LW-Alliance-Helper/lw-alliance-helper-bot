@@ -219,6 +219,46 @@ def test_weekly_draft_embed_requires_selection_for_unresolved_auto():
     assert tr.NEEDS_PICKING_LABEL in embed.description
 
 
+def test_weekly_draft_embed_shows_typed_reason_subline():
+    # A leadership-typed reason renders as an indented sub-line under the conductor.
+    draft = [
+        tr.DraftDay(
+            "2026-06-01", 0, tr.RULE_MANUAL, "Smeds", "manual", note="nominated for being awesome"
+        )
+    ]
+    desc = ui.build_weekly_draft_embed(draft, date(2026, 6, 1), "Standard Week").description
+    assert "↳ *nominated for being awesome*" in desc
+
+
+def test_weekly_draft_embed_omits_plain_birthday_and_sentinel_notes():
+    # A plain on-the-day birthday (🎂 already on the line) and any leftover
+    # "needs picking" sentinel never render as a reason sub-line.
+    draft = [
+        tr.DraftDay("2026-06-07", 6, tr.RULE_BIRTHDAY, "Eve", "birthday", note="birthday 🎂"),
+        tr.DraftDay(
+            "2026-06-01", 0, tr.RULE_AUTO, None, "auto", needs_picking=True, note="needs picking"
+        ),
+    ]
+    desc = ui.build_weekly_draft_embed(draft, date(2026, 6, 1), "Standard Week").description
+    assert "↳" not in desc
+
+
+def test_weekly_draft_embed_shows_birthday_offset_subline():
+    # A birthday shifted off the actual day keeps the informative offset note.
+    draft = [
+        tr.DraftDay(
+            "2026-06-07", 6, tr.RULE_BIRTHDAY, "Zoe", "birthday", note="birthday 🎂 (day before)"
+        )
+    ]
+    desc = ui.build_weekly_draft_embed(draft, date(2026, 6, 1), "Standard Week").description
+    assert "(day before)" in desc
+
+
+def test_daily_confirm_embed_shows_typed_reason():
+    dd = tr.DraftDay("2026-06-01", 0, tr.RULE_MANUAL, "Smeds", "manual", note="helped with GT")
+    assert "helped with GT" in ui.build_daily_confirm_embed(dd).description
+
+
 def test_conductor_cell_distinguishes_states():
     auto_empty = tr.DraftDay("2026-06-01", 0, tr.RULE_AUTO, None, "auto", needs_picking=True)
     manual = tr.DraftDay("2026-06-02", 1, tr.RULE_MANUAL, None, "manual", needs_picking=True)

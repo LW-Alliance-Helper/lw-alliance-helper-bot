@@ -21,6 +21,64 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from scheduler import next_event_dates, is_friday
 
+import discord
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+class TestPostEditorPermissions:
+    """post_editor must survive a channel it can't post to. A Forbidden
+    (bot removed from the channel / lost send access) is the alliance's to
+    fix — return False so callers can tell the user, and never let it
+    escalate to an unhandled CommandInvokeError -> Sentry (#57)."""
+
+    def _cfg(self):
+        return SimpleNamespace(guild_id=123, leadership_channel_id=999)
+
+    @pytest.mark.asyncio
+    async def test_forbidden_returns_false_without_raising(self):
+        import scheduler
+
+        channel = MagicMock()
+        channel.send = AsyncMock(
+            side_effect=discord.Forbidden(MagicMock(status=403), "Missing Access")
+        )
+        bot = MagicMock()
+        bot.get_channel.return_value = channel
+
+        with patch("scheduler.EventEditorView", MagicMock()):
+            result = await scheduler.post_editor(
+                bot, [], "event-key", date(2026, 5, 1), cfg=self._cfg(), draft_channel_id=999
+            )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_false(self):
+        import scheduler
+
+        bot = MagicMock()
+        bot.get_channel.return_value = None
+
+        result = await scheduler.post_editor(
+            bot, [], "event-key", date(2026, 5, 1), cfg=self._cfg(), draft_channel_id=999
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_successful_post_returns_true(self):
+        import scheduler
+
+        channel = MagicMock()
+        channel.send = AsyncMock(return_value=MagicMock())
+        bot = MagicMock()
+        bot.get_channel.return_value = channel
+
+        with patch("scheduler.EventEditorView", MagicMock()):
+            result = await scheduler.post_editor(
+                bot, [], "event-key", date(2026, 5, 1), cfg=self._cfg(), draft_channel_id=999
+            )
+        assert result is True
+
 
 class TestNextEventDates:
     """Exercises the cycle math. Anchor is when the event series began

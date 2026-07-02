@@ -508,11 +508,13 @@ def _build_presets_embed(guild_id: int, day_rules_tab: str) -> discord.Embed:
 async def _open_presets_manage(bot, interaction: discord.Interaction):
     from config import get_train_config
 
+    # Defer before the Sheets round-trip so a slow read doesn't expire the
+    # 3-second interaction token (#332).
+    await interaction.response.defer(ephemeral=True, thinking=True)
     tab = get_train_config(interaction.guild_id).get("day_rules_tab") or ""
     embed = await asyncio.to_thread(_build_presets_embed, interaction.guild_id, tab)
     view = PresetsManageView(bot, interaction.guild_id, interaction.user.id, tab)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    view.message = await interaction.original_response()
+    view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -676,11 +678,13 @@ def _build_member_rules_embed(guild_id: int, tab: str) -> discord.Embed:
 async def _open_member_rules_manage(bot, interaction: discord.Interaction):
     from config import get_train_config
 
+    # Defer before the Sheets round-trip so a slow read doesn't expire the
+    # 3-second interaction token (#332).
+    await interaction.response.defer(ephemeral=True, thinking=True)
     tab = get_train_config(interaction.guild_id).get("member_rules_tab") or ""
     embed = await asyncio.to_thread(_build_member_rules_embed, interaction.guild_id, tab)
     view = MemberRulesManageView(bot, interaction.guild_id, interaction.user.id, tab)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    view.message = await interaction.original_response()
+    view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

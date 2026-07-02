@@ -444,9 +444,30 @@ def parse_filter(raw) -> dict | None:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return None
-    if isinstance(parsed, dict) and parsed.get("and"):
+    if isinstance(parsed, dict) and (parsed.get("and") or parsed.get("clauses")):
         return parsed
     return None
+
+
+def _filter_parts(filter_obj) -> tuple[list, list]:
+    """Normalise either filter shape into ``(clauses, joins)`` where ``joins[i]``
+    (``"and"`` / ``"or"``) connects ``clauses[i]`` to ``clauses[i + 1]``, so
+    ``len(joins) == max(0, len(clauses) - 1)``.
+
+    Two stored shapes are accepted: the original all-AND ``{"and": [...]}`` and
+    the mixed ``{"clauses": [...], "joins": [...]}``. Left-to-right evaluation (no
+    operator precedence) matches how a recruiter reads the filter they built."""
+    if not isinstance(filter_obj, dict):
+        return [], []
+    if "clauses" in filter_obj:
+        clauses = list(filter_obj.get("clauses") or [])
+        joins = [str(j).lower() for j in (filter_obj.get("joins") or [])]
+    else:
+        clauses = list(filter_obj.get("and") or [])
+        joins = ["and"] * max(0, len(clauses) - 1)
+    need = max(0, len(clauses) - 1)
+    joins = (joins + ["and"] * need)[:need]
+    return clauses, joins
 
 
 def _eval_clause(clause: dict, row: list, hidx: dict) -> bool:
@@ -511,41 +532,58 @@ _OP_LABELS = {
 }
 
 
+def _describe_clause(clause: dict) -> str | None:
+    """One clause as text (``"Total Power ≥ 250M"``), or ``None`` if malformed."""
+    if not isinstance(clause, dict):
+        return None
+    col = clause.get("column", "")
+    op = clause.get("op", "")
+    val = clause.get("value")
+    label = _OP_LABELS.get(op, op)
+    if op == "in" and isinstance(val, (list, tuple)):
+        return f"{col} in [{', '.join(str(v) for v in val)}]"
+    if op in ("is_true", "is_false"):
+        return f"{col} {label}"
+    return f"{col} {label} {val}"
+
+
 def describe_filter(filter_obj) -> str:
     """Human-readable one-line summary of a filter for setup/hub embeds, e.g.
-    ``"Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"``. A falsy filter
-    reads as "every new applicant"."""
+    ``"Total Hero Power ≥ 250M AND Tier in [Pioneer, Elite]"`` or a mixed
+    ``"Alliance contains OGV OR Alliance contains Open AND Power ≥ 70M"``. A
+    falsy filter reads as "every new applicant"."""
     if isinstance(filter_obj, str):
         filter_obj = parse_filter(filter_obj)
     if not filter_obj:
         return "every new applicant (no filter)"
-    parts = []
-    for clause in filter_obj.get("and", []):
-        if not isinstance(clause, dict):
-            continue
-        col = clause.get("column", "")
-        op = clause.get("op", "")
-        val = clause.get("value")
-        label = _OP_LABELS.get(op, op)
-        if op == "in" and isinstance(val, (list, tuple)):
-            parts.append(f"{col} in [{', '.join(str(v) for v in val)}]")
-        elif op in ("is_true", "is_false"):
-            parts.append(f"{col} {label}")
-        else:
-            parts.append(f"{col} {label} {val}")
-    return " AND ".join(parts) if parts else "every new applicant (no filter)"
+    clauses, joins = _filter_parts(filter_obj)
+    parts = [p for c in clauses if (p := _describe_clause(c)) is not None]
+    if not parts:
+        return "every new applicant (no filter)"
+    out = parts[0]
+    for join, part in zip(joins, parts[1:]):
+        out += f" {join.upper()} {part}"
+    return out
 
 
 def evaluate_filter(filter_obj, row: list, hidx: dict) -> bool:
-    """``True`` if ``row`` passes the (AND-of-clauses) filter. A falsy filter
-    passes everything. ``filter_obj`` may be the parsed dict or the raw stored
-    JSON string; ``hidx`` is a :func:`header_index` map."""
+    """``True`` if ``row`` passes the filter, evaluating clauses left-to-right
+    with their AND/OR connectors (no operator precedence — matches how the
+    recruiter built it). A falsy filter passes everything. ``filter_obj`` may be
+    the parsed dict or the raw stored JSON string; ``hidx`` is a
+    :func:`header_index` map."""
     if isinstance(filter_obj, str):
         filter_obj = parse_filter(filter_obj)
     if not filter_obj:
         return True
-    clauses = filter_obj.get("and") or []
-    return all(_eval_clause(c, row, hidx) for c in clauses)
+    clauses, joins = _filter_parts(filter_obj)
+    if not clauses:
+        return True
+    result = _eval_clause(clauses[0], row, hidx)
+    for join, clause in zip(joins, clauses[1:]):
+        passed = _eval_clause(clause, row, hidx)
+        result = (result or passed) if join == "or" else (result and passed)
+    return result
 
 
 # ── Change detection (Option A — row-content hashing) ────────────────────────
@@ -790,16 +828,26 @@ def compute_poll_diff(
     return PollDiff(new_applicants, status_changes, deletions, next_state)
 
 
-def align_row(source_header: list, source_row: list, target_header: list) -> list:
-    """Reorder a source row into the *target* sheet's column order by matching
-    header names (case-insensitive). Target columns with no matching source
-    header get ``""``. So a server-wide / form row copies into the alliance
-    sheet's own layout cleanly even when the two sheets order (or name) their
-    columns differently — "copy the whole row" without scrambling it."""
+def align_row(
+    source_header: list, source_row: list, target_header: list, copy_map: dict | None = None
+) -> list:
+    """Reorder a source row into the *target* sheet's column order. By default
+    columns line up by header name (case-insensitive). ``copy_map`` overrides
+    that for columns the two sheets name differently: it maps a *target* header
+    to the *source* header that feeds it (``{target_header: source_header}``).
+    A target column with neither an override nor a name match gets ``""`` — so a
+    server-wide / form row copies into the alliance sheet's own layout cleanly
+    even when the two sheets order or name their columns differently."""
     src_idx = header_index(source_header)
+    cmap = copy_map or {}
     out = []
     for h in target_header:
-        i = src_idx.get(_norm_header(h))
+        i = None
+        mapped = cmap.get(h)
+        if mapped:
+            i = src_idx.get(_norm_header(mapped))
+        if i is None:
+            i = src_idx.get(_norm_header(h))
         if i is not None and i < len(source_row):
             cell = source_row[i]
             out.append(cell if isinstance(cell, str) else str(cell))
@@ -842,6 +890,100 @@ def select_rows_to_copy(
         rows_to_copy.append(row)
         updated.add(h)
     return rows_to_copy, updated
+
+
+def classify_source_rows(source_rows, source_hidx, source_map, *, filter_obj, already_copied):
+    """Same selection as :func:`select_rows_to_copy`, but also returns a count
+    breakdown for the "Check now" / admin diagnostics. Behaviour is identical
+    (filter + copied-state dedup) — this only adds visibility into *why* rows
+    were or weren't picked. Returns ``(rows_to_copy, report)`` where ``report``
+    is ``{read, matched, already_pulled, to_copy}``:
+
+    - ``read``: rows with a resolvable name (blank-name spacer rows excluded)
+    - ``matched``: of those, how many pass ``filter_obj``
+    - ``already_pulled``: of the matched, how many are already in
+      ``already_copied`` (the copied-state dedup set) and so are skipped
+    - ``to_copy``: the remainder, the rows that would actually be appended"""
+    read = matched = already_pulled = 0
+    rows_to_copy: list = []
+    seen = set(already_copied)
+    for row in source_rows:
+        h = row_identity(row, source_hidx, source_map)
+        if h is None:
+            continue
+        read += 1
+        if not evaluate_filter(filter_obj, row, source_hidx):
+            continue
+        matched += 1
+        if h in seen:
+            already_pulled += 1
+            continue
+        rows_to_copy.append(row)
+        seen.add(h)
+    return rows_to_copy, {
+        "read": read,
+        "matched": matched,
+        "already_pulled": already_pulled,
+        "to_copy": len(rows_to_copy),
+    }
+
+
+def plan_blank_fill(
+    target_header: list,
+    target_rows: list,
+    target_map: dict,
+    source_header: list,
+    source_rows: list,
+    source_map: dict,
+    *,
+    copy_map: dict | None = None,
+) -> list:
+    """Plan blank-cell enrichment of *existing* alliance rows from a source
+    sheet (opt-in, #9). For each alliance row whose identity matches a source
+    row, fill any alliance cell that is **blank** with the source's value —
+    never overwriting a cell the recruiter already filled in. Identity is each
+    sheet's own ``name`` (+ ``identity_extra``) via :func:`row_identity`, so a
+    person already on the list gets enriched even if they were never copied.
+
+    Returns a list of ``(row_number, col_index, value)``: ``row_number`` is the
+    1-based sheet row (the header is row 1, so the first data row is 2),
+    ``col_index`` is 0-based. ``copy_map`` (``{target_header: source_header}``)
+    resolves columns the two sheets name differently; unmapped columns fall back
+    to a same-name match, mirroring :func:`align_row`."""
+    t_hidx = header_index(target_header)
+    s_hidx = header_index(source_header)
+    cmap = copy_map or {}
+
+    # Source row per identity (first occurrence wins, matching select_rows_to_copy).
+    src_by_id: dict = {}
+    for srow in source_rows:
+        sid = row_identity(srow, s_hidx, source_map)
+        if sid is not None:
+            src_by_id.setdefault(sid, srow)
+
+    updates: list = []
+    for r_i, trow in enumerate(target_rows):
+        tid = row_identity(trow, t_hidx, target_map)
+        if tid is None:
+            continue
+        srow = src_by_id.get(tid)
+        if srow is None:
+            continue
+        for c_i, th in enumerate(target_header):
+            current = trow[c_i] if c_i < len(trow) else ""
+            if str(current).strip():
+                continue  # never overwrite an existing value
+            mapped = cmap.get(th)
+            si = s_hidx.get(_norm_header(mapped)) if mapped else None
+            if si is None:
+                si = s_hidx.get(_norm_header(th))
+            if si is None or si >= len(srow):
+                continue
+            val = srow[si]
+            if not str(val).strip():
+                continue  # source has nothing to add
+            updates.append((r_i + 2, c_i, str(val)))
+    return updates
 
 
 # ── In-game message templates ────────────────────────────────────────────────

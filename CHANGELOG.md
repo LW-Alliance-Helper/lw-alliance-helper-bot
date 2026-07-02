@@ -9,6 +9,72 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.6.7] — 2026-07-02
+
+### Fixed
+- The daily event editor no longer fails with an error when the bot can't post to the draft channel; it now tells you which channel to check and keeps working for your other events ([#57](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/57)).
+- A deleted Google Sheet or a sheet the bot was removed from no longer floods error tracking during the growth snapshot; the affected alliance is logged and skipped so everyone else's snapshot still runs ([#285](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/285), [#286](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/286)).
+
+## [1.6.6] — 2026-07-01
+
+### Fixed
+- `/setup` no longer errors when the channel it's running in is deleted, or the bot loses access to it, partway through the wizard; it stops cleanly and tells you to re-run from a channel it can post in ([#319](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/319)).
+- The `/train` hub's **Schedule presets** and **Member rules** buttons no longer occasionally fail with "Interaction failed" when the roster sheet is slow to load ([#332](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/332)).
+- Typing `!help` in a server where the bot can't post no longer raises a background error; the bot now ignores `!help` like every other `!` command ([#333](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/333)).
+
+### Changed
+- Setup steps that offer a **Keep current** button (storm teams and time slots, growth breakdown thresholds and labels, import sheet ID) now show it first, matching the convention used everywhere else; fresh setup is unchanged ([#300](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/300)).
+- Updated bundled dependencies to current versions: discord.py, Pillow, google-auth, sentry-sdk, and python-dotenv ([#280](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/280), [#281](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/281), [#282](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/282), [#283](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/283), [#284](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/284)).
+
+## [1.6.5] — 2026-06-29
+
+### Added
+- The weekly train draft has an **Add reason** button to note why a member is a day's conductor (e.g. nominated for helping out), shown as a sub-line under their name and carried through to the daily confirmation ([#344](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/344)).
+
+## [1.6.4] — 2026-06-29
+
+### Added
+- Transfer filters can now combine conditions with **AND or OR** (e.g. wants OGV or Open, and power over 70M) ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Changed
+- Re-running transfer setup offers a Keep-current option for the notification channel, style, and filters so you don't redo them ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- The transfer setup edit menu is regrouped into fewer, clearer sections with plainer labels ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+## [1.6.3] — 2026-06-29
+
+### Fixed
+- The buddy **Unpair / Pair / Re-pair** picker now pages through everyone with ◀/▶ buttons instead of stopping at the first 25, so alliances with more than 25 pairs or free members can reach all of them ([#341](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/341)).
+
+## [1.6.2] — 2026-06-29
+
+### Added
+- A **🔄 Check now** button on `/transfers` pulls from your sources right away and shows a read/matched/copied breakdown so you can see what came through ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Fixed
+- Re-running transfer setup re-pulls your sources from scratch, no longer skipping applicants an earlier setup run had already pulled ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- The shared-sheet pull no longer adds someone already on your sheet twice, deduping against your sheet's real contents ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+## [1.6.1] — 2026-06-28
+
+### Added
+- Transfer Management can fill in just the blank cells of people already on your sheet from a connected source, instead of skipping them (opt-in) ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer setup maps source-sheet columns onto your own sheet's columns when they're named differently, so copied rows line up ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- A transfer decision can map to a column already in your sheet instead of always creating a new one ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer notifications can post to a thread, not just a text channel ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+### Fixed
+- Transfer filter setup has a Back / no-filter path, so starting a filter and changing your mind no longer traps you ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Re-running transfer setup offers Keep current for your sheets and setup type, and Keep-current buttons are consistent throughout ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer column mapping labels the "Shown in notices" picker clearly, and the style step is now named "Notification style" ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
+## [1.6.0] — 2026-06-24
+
+### Added
+- **Transfer Management** (💎 Premium): watches your recruiting sheet and pings you on new applicants and status changes ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Transfer notices carry one-click in-game message drafts (apply / confirm / decline) and a full applicant record ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Optional server-wide and intake-form pulls auto-copy filter-matching applicants into your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+- Optional write-back marks an applicant Want / Confirmed / Declined from Discord and updates your sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
+
 ## [1.5.10] — 2026-06-27
 
 ### Added

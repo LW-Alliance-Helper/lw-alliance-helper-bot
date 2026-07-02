@@ -289,65 +289,165 @@ class _NoticeView(discord.ui.View):
 # ── Source copy (shared by the poll loop and setup go-live) ──────────────────
 
 
-async def copy_sources(cfg: dict, target_header: list) -> int:
+async def copy_sources(cfg: dict, target_header: list) -> dict:
     """Copy filter-matching, not-yet-copied rows from the optional intake
     sources (``server_wide`` = a shared/server-wide sheet, ``alliance_form`` =
     the alliance's own form responses) into the alliance's tracking sheet, each
     aligned to its column order. Dedup hashes persist in ``copied_state_json``
-    so a row is copied once. Returns the count copied.
+    so a row is copied once. With blank-cell enrichment on (#9), people already
+    on the list are topped up instead of re-appended.
 
-    Called once per poll by the loop, and once at go-live by the setup wizard
-    so the existing matching backlog lands in the sheet *silently* (the baseline
-    read that follows bookmarks it without notifying) — only future arrivals
-    ping. The bot only ever appends to the alliance's *own* sheet."""
+    Called once per poll by the loop, at go-live by the setup wizard, and by the
+    `/transfers` "Check now" button. The bot only ever appends to the alliance's
+    *own* sheet.
+
+    Returns a diagnostic report::
+
+        {"copied": int, "enriched": int, "sources": [
+            {"prefix", "read", "matched", "already_pulled",
+             "skipped_on_sheet", "copied", "enriched", "error"}]}
+    """
     gid = cfg["guild_id"]
     alliance_id = (cfg.get("alliance_sheet_id") or "").strip()
     alliance_tab = (cfg.get("alliance_sheet_tab") or "").strip()
+    report: dict = {"copied": 0, "enriched": 0, "sources": []}
     if not alliance_id or not alliance_tab:
-        return 0
+        return report
     try:
         copied_set = set(json.loads(cfg.get("copied_state_json") or "[]"))
     except (ValueError, TypeError):
         copied_set = set()
 
-    total = 0
+    # Always read the alliance rows once. Their identities dedup the pull
+    # against what's *actually* on the sheet — so people already on the list are
+    # never appended as duplicates, and a copied-state reset (re-setup) re-pulls
+    # cleanly without doubling anyone. Blank-cell enrichment (#9, opt-in) reuses
+    # the same read.
+    enrich = bool(cfg.get("source_enrich_blanks"))
+    target_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+    target_rows = None
+    if target_map.get("name"):
+        try:
+            _th, target_rows = await asyncio.to_thread(
+                transfer_sheets.read_sheet, alliance_id, alliance_tab
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[TRANSFER] guild %s: alliance read failed: %s", gid, e)
+            _capture(e)
+            target_rows = None
+
+    target_hidx = transfer.header_index(target_header)
+    existing_ids: set = set()
+    if target_rows is not None and target_map.get("name"):
+        for trow in target_rows:
+            tid = transfer.row_identity(trow, target_hidx, target_map)
+            if tid:
+                existing_ids.add(tid)
+
+    state_changed = False
     for prefix in ("server_wide", "alliance_form"):
         if not cfg.get(f"{prefix}_enabled"):
             continue
+        src = {
+            "prefix": prefix,
+            "read": 0,
+            "matched": 0,
+            "already_pulled": 0,
+            "skipped_on_sheet": 0,
+            "copied": 0,
+            "enriched": 0,
+            "error": None,
+        }
+        report["sources"].append(src)
         s_id = (cfg.get(f"{prefix}_sheet_id") or "").strip()
         s_tab = (cfg.get(f"{prefix}_sheet_tab") or "").strip()
         s_map = transfer.parse_column_map(cfg.get(f"{prefix}_column_map_json"))
-        if not s_id or not s_tab or not s_map.get("name"):
+        if not s_id or not s_tab:
+            src["error"] = "sheet/tab not configured"
+            continue
+        if not s_map.get("name"):
+            src["error"] = "no Name column mapped on the source"
             continue
         s_filter = transfer.parse_filter(cfg.get(f"{prefix}_filter_json"))
         try:
             s_header, s_rows = await asyncio.to_thread(transfer_sheets.read_sheet, s_id, s_tab)
         except Exception as e:  # noqa: BLE001
+            src["error"] = config.describe_sheet_error(e)
             logger.warning("[TRANSFER] guild %s: %s source read failed: %s", gid, prefix, e)
             _capture(e)
             continue
         s_hidx = transfer.header_index(s_header)
-        to_copy, updated = transfer.select_rows_to_copy(
-            s_rows, s_hidx, s_map, already_copied=copied_set, filter_obj=s_filter
-        )
-        if not to_copy:
-            continue
-        aligned = [transfer.align_row(s_header, r, target_header) for r in to_copy]
-        try:
-            await asyncio.to_thread(transfer_sheets.append_rows, alliance_id, alliance_tab, aligned)
-        except Exception as e:  # noqa: BLE001
-            # Don't advance copied_set, so we retry these next poll.
-            logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
-            _capture(e)
-            continue
-        total += len(aligned)
-        copied_set = updated
+        s_copy_map = s_map.get("copy_map") if isinstance(s_map, dict) else None
 
-    if total:
+        to_copy, sel = transfer.classify_source_rows(
+            s_rows, s_hidx, s_map, filter_obj=s_filter, already_copied=copied_set
+        )
+        src["read"] = sel["read"]
+        src["matched"] = sel["matched"]
+        src["already_pulled"] = sel["already_pulled"]
+        # Already on the sheet? Don't append a duplicate (enriched below if on).
+        if existing_ids:
+            before = len(to_copy)
+            to_copy = [
+                r for r in to_copy if transfer.row_identity(r, s_hidx, s_map) not in existing_ids
+            ]
+            src["skipped_on_sheet"] = before - len(to_copy)
+        if to_copy:
+            aligned = [transfer.align_row(s_header, r, target_header, s_copy_map) for r in to_copy]
+            try:
+                await asyncio.to_thread(
+                    transfer_sheets.append_rows, alliance_id, alliance_tab, aligned
+                )
+            except Exception as e:  # noqa: BLE001
+                # Don't mark these copied, so we retry them next poll.
+                src["error"] = f"append failed: {config.describe_sheet_error(e)}"
+                logger.warning("[TRANSFER] guild %s: append to alliance sheet failed: %s", gid, e)
+                _capture(e)
+            else:
+                src["copied"] = len(aligned)
+                report["copied"] += len(aligned)
+                for r in to_copy:
+                    rid = transfer.row_identity(r, s_hidx, s_map)
+                    if rid:
+                        copied_set.add(rid)
+                        state_changed = True
+
+        # Fill blank cells in people already on the list from this source (#9).
+        if enrich and target_rows is not None:
+            try:
+                fills = transfer.plan_blank_fill(
+                    target_header,
+                    target_rows,
+                    target_map,
+                    s_header,
+                    s_rows,
+                    s_map,
+                    copy_map=s_copy_map,
+                )
+                if fills:
+                    await asyncio.to_thread(
+                        transfer_sheets.update_cells, alliance_id, alliance_tab, fills
+                    )
+                    src["enriched"] = len(fills)
+                    report["enriched"] += len(fills)
+                    # Reflect the writes in our in-memory copy so a second source
+                    # doesn't re-plan the same cells (and sees them as filled).
+                    for r_num, c_idx, val in fills:
+                        ri = r_num - 2
+                        if 0 <= ri < len(target_rows):
+                            row = target_rows[ri]
+                            while len(row) <= c_idx:
+                                row.append("")
+                            row[c_idx] = val
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[TRANSFER] guild %s: enrich write failed: %s", gid, e)
+                _capture(e)
+
+    if state_changed:
         config.update_transfer_config_field(
             gid, "copied_state_json", json.dumps(sorted(copied_set))
         )
-    return total
+    return report
 
 
 # ── The cog ───────────────────────────────────────────────────────────────────
@@ -427,7 +527,7 @@ class TransferCog(commands.Cog):
         # rows into the alliance sheet, aligned to its columns and deduped across
         # polls, then re-read so the copied rows surface as new applicants now.
         try:
-            copied = await copy_sources(cfg, header)
+            copied = (await copy_sources(cfg, header))["copied"]
         except Exception as e:  # noqa: BLE001
             logger.warning("[TRANSFER] guild %s: source copy failed: %s", gid, e)
             _capture(e)
@@ -482,6 +582,95 @@ class TransferCog(commands.Cog):
             last_seen_state_json=json.dumps(diff.next_state),
             last_polled_at=now_iso,
         )
+
+    async def check_now(self, cfg: dict) -> dict:
+        """Run a full check immediately (ignoring the poll interval) for the
+        `/transfers` "Check now" button. Pulls from sources, posts any
+        new/changed/removed notices, and returns a breakdown of what happened
+        so the user can see exactly where rows are or aren't coming through."""
+        gid = cfg["guild_id"]
+        sheet_id = (cfg.get("alliance_sheet_id") or "").strip()
+        tab = (cfg.get("alliance_sheet_tab") or "").strip()
+        column_map = transfer.parse_column_map(cfg.get("alliance_column_map_json"))
+        if not sheet_id or not tab or not column_map.get("name"):
+            return {"error": "Not fully set up yet (a sheet and a Name column are required)."}
+
+        filter_obj = transfer.parse_filter(cfg.get("notification_filter_json"))
+        try:
+            prior_state = json.loads(cfg.get("last_seen_state_json") or "{}")
+            if not isinstance(prior_state, dict):
+                prior_state = {}
+        except (ValueError, TypeError):
+            prior_state = {}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            header, data_rows = await asyncio.to_thread(transfer_sheets.read_sheet, sheet_id, tab)
+        except Exception as e:  # noqa: BLE001
+            _capture(e)
+            return {"error": f"Couldn't read your sheet: {config.describe_sheet_error(e)}"}
+
+        try:
+            src_report = await copy_sources(cfg, header)
+        except Exception as e:  # noqa: BLE001
+            _capture(e)
+            src_report = {"copied": 0, "enriched": 0, "sources": []}
+        if src_report.get("copied"):
+            try:
+                header, data_rows = await asyncio.to_thread(
+                    transfer_sheets.read_sheet, sheet_id, tab
+                )
+            except Exception as e:  # noqa: BLE001
+                _capture(e)
+
+        hidx = transfer.header_index(header)
+        diff = transfer.compute_poll_diff(
+            data_rows, hidx, column_map, prior_state=prior_state, filter_obj=filter_obj
+        )
+        report = {
+            "copied": src_report.get("copied", 0),
+            "enriched": src_report.get("enriched", 0),
+            "sources": src_report.get("sources", []),
+            "new": len(diff.new_applicants),
+            "status": len(diff.status_changes),
+            "removed": len(diff.deletions) if cfg.get("notify_on_delete") else 0,
+            "applicants_on_sheet": len(diff.next_state),
+            "posted": False,
+        }
+
+        channel = self.bot.get_channel(cfg.get("notification_channel_id") or 0)
+        if channel is None:
+            report["error"] = "Your notification channel can't be found — check it still exists."
+            config.update_transfer_config_field(gid, "last_polled_at", now_iso)
+            return report
+
+        wb_base = None
+        decisions = transfer.decisions_for(column_map)
+        if cfg.get("writeback_enabled") and decisions:
+            wb_base = {
+                "sheet_id": sheet_id,
+                "tab": tab,
+                "column_map": column_map,
+                "decisions": decisions,
+            }
+        await self._post(
+            channel,
+            gid,
+            header,
+            hidx,
+            column_map,
+            diff,
+            cfg.get("notification_style") or "each",
+            bool(cfg.get("notify_on_delete")),
+            wb_base,
+        )
+        report["posted"] = True
+        config.update_transfer_config_fields(
+            gid,
+            last_seen_state_json=json.dumps(diff.next_state),
+            last_polled_at=now_iso,
+        )
+        return report
 
     async def _post(
         self, channel, gid, header, hidx, column_map, diff, style, notify_on_delete, wb_base=None

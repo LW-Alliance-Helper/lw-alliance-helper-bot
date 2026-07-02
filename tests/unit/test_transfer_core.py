@@ -341,12 +341,22 @@ class TestParseFilter:
     def test_malformed_is_none(self):
         assert transfer.parse_filter("{bad") is None
 
-    def test_no_and_key_is_none(self):
+    def test_no_clauses_key_is_none(self):
         assert transfer.parse_filter('{"or": []}') is None
+        assert transfer.parse_filter('{"clauses": []}') is None
 
     def test_valid(self):
         f = transfer.parse_filter('{"and": [{"column": "Total Power", "op": ">=", "value": 100}]}')
         assert f == {"and": [{"column": "Total Power", "op": ">=", "value": 100}]}
+
+    def test_valid_mixed_clauses_shape(self):
+        raw = (
+            '{"clauses": [{"column": "A", "op": "contains", "value": "OGV"}, '
+            '{"column": "A", "op": "contains", "value": "Open"}], "joins": ["or"]}'
+        )
+        f = transfer.parse_filter(raw)
+        assert f["joins"] == ["or"]
+        assert len(f["clauses"]) == 2
 
 
 class TestDescribeFilter:
@@ -367,6 +377,18 @@ class TestDescribeFilter:
     def test_contains_and_raw_json(self):
         f = '{"and": [{"column": "Requested Landing Alliance", "op": "contains", "value": "OGV"}]}'
         assert transfer.describe_filter(f) == "Requested Landing Alliance contains OGV"
+
+    def test_mixed_and_or_connectors(self):
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+                {"column": "Power", "op": ">=", "value": "70M"},
+            ],
+            "joins": ["or", "and"],
+        }
+        out = transfer.describe_filter(f)
+        assert out == "Alliance contains OGV OR Alliance contains Open AND Power ≥ 70M"
 
 
 class TestEvaluateFilter:
@@ -434,6 +456,50 @@ class TestEvaluateFilter:
     def test_unknown_operator_soft_passes(self):
         f = {"and": [{"column": "Tier", "op": "regex", "value": ".*"}]}
         assert transfer.evaluate_filter(f, ROW, HIDX) is True
+
+    def test_mixed_and_or_left_to_right(self):
+        # "Alliance contains OGV OR contains Open AND Power ≥ 70M", read left to
+        # right (no precedence): (OGV OR Open) AND Power ≥ 70M.
+        hidx = transfer.header_index(["Alliance", "Power"])
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+                {"column": "Power", "op": ">=", "value": "70M"},
+            ],
+            "joins": ["or", "and"],
+        }
+        assert transfer.evaluate_filter(f, ["OGV", "80M"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Open recruitment", "80M"], hidx) is True
+        assert transfer.evaluate_filter(f, ["OGV", "50M"], hidx) is False  # power too low
+        assert transfer.evaluate_filter(f, ["Random", "80M"], hidx) is False  # neither tag
+        assert transfer.evaluate_filter(f, ["Open", "50M"], hidx) is False  # power too low
+
+    def test_pure_or(self):
+        hidx = transfer.header_index(["Alliance"])
+        f = {
+            "clauses": [
+                {"column": "Alliance", "op": "contains", "value": "OGV"},
+                {"column": "Alliance", "op": "contains", "value": "Open"},
+            ],
+            "joins": ["or"],
+        }
+        assert transfer.evaluate_filter(f, ["OGV"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Open"], hidx) is True
+        assert transfer.evaluate_filter(f, ["Nope"], hidx) is False
+
+    def test_short_joins_default_to_and(self):
+        # Malformed/short joins list pads with AND (defensive).
+        hidx = transfer.header_index(["A", "B"])
+        f = {
+            "clauses": [
+                {"column": "A", "op": "contains", "value": "x"},
+                {"column": "B", "op": "contains", "value": "y"},
+            ],
+            "joins": [],
+        }
+        assert transfer.evaluate_filter(f, ["x", "y"], hidx) is True
+        assert transfer.evaluate_filter(f, ["x", "z"], hidx) is False
 
 
 # ── Change detection ─────────────────────────────────────────────────────────
@@ -713,6 +779,26 @@ class TestAlignRow:
         out = transfer.align_row(["Name", "Power"], ["Bad Pew"], ["Power", "Name"])
         assert out == ["", "Bad Pew"]
 
+    def test_copy_map_overrides_name_match(self):
+        # The source calls it "THP"; our sheet calls it "Total Hero Power".
+        src_header = ["In Game Name", "THP"]
+        tgt_header = ["Name", "Total Hero Power"]
+        copy_map = {"Name": "In Game Name", "Total Hero Power": "THP"}
+        out = transfer.align_row(src_header, ["Bad Pew", "250M"], tgt_header, copy_map)
+        assert out == ["Bad Pew", "250M"]
+
+    def test_copy_map_falls_back_to_name_match_for_unmapped(self):
+        # Power lines up by name; only Tier is mapped explicitly.
+        src_header = ["Name", "Power", "Seat"]
+        tgt_header = ["Name", "Power", "Tier"]
+        copy_map = {"Tier": "Seat"}
+        out = transfer.align_row(src_header, ["Bad Pew", "199M", "Gold"], tgt_header, copy_map)
+        assert out == ["Bad Pew", "199M", "Gold"]
+
+    def test_copy_map_to_missing_source_column_is_blank(self):
+        out = transfer.align_row(["Name"], ["Bad Pew"], ["Name", "Tier"], {"Tier": "Nope"})
+        assert out == ["Bad Pew", ""]
+
 
 class TestSelectRowsToCopy:
     SRC_HEADER = ["Name", "Power", "Preferred Alliance"]
@@ -751,6 +837,121 @@ class TestSelectRowsToCopy:
             rows, self.SRC_HIDX, self.SRC_MAP, already_copied=set()
         )
         assert to_copy == [["B", "2M", "Y"]]
+
+
+class TestClassifySourceRows:
+    """classify_source_rows mirrors select_rows_to_copy's selection but also
+    reports the read/matched/already_pulled/to_copy breakdown for diagnostics."""
+
+    HEADER = ["Name", "Power", "Preferred Alliance"]
+    HIDX = transfer.header_index(HEADER)
+    MAP = {"name": "Name"}
+
+    def test_breakdown_counts(self):
+        rows = [
+            ["Bad Pew", "199M", "OGV"],
+            ["Other", "50M", "XYZ"],
+            ["", "1M", "OGV"],  # blank name → not read
+        ]
+        f = {"and": [{"column": "Preferred Alliance", "op": "contains", "value": "OGV"}]}
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=f, already_copied=set()
+        )
+        assert [r[0] for r in to_copy] == ["Bad Pew"]
+        assert rep == {"read": 2, "matched": 1, "already_pulled": 0, "to_copy": 1}
+
+    def test_already_pulled_counted_not_copied(self):
+        rows = [["Bad Pew", "199M", "OGV"]]
+        seen = {transfer.identity_hash("Bad Pew")}
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=None, already_copied=seen
+        )
+        assert to_copy == []
+        assert rep == {"read": 1, "matched": 1, "already_pulled": 1, "to_copy": 0}
+
+    def test_no_filter_matches_all_named(self):
+        rows = [["A", "1M", "X"], ["B", "2M", "Y"]]
+        to_copy, rep = transfer.classify_source_rows(
+            rows, self.HIDX, self.MAP, filter_obj=None, already_copied=set()
+        )
+        assert rep["read"] == 2 and rep["matched"] == 2 and rep["to_copy"] == 2
+
+
+class TestPlanBlankFill:
+    """Opt-in blank-cell enrichment (#9): fill only EMPTY alliance cells from a
+    matching source row; never overwrite, never touch unmatched people."""
+
+    TGT_HEADER = ["Name", "Power", "Tier"]
+    TGT_MAP = {"name": "Name"}
+    SRC_HEADER = ["Name", "Power", "Tier"]
+    SRC_MAP = {"name": "Name"}
+
+    def test_fills_only_blank_cells(self):
+        target_rows = [["Bad Pew", "", ""]]  # already on the list, missing data
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        # row 2 (first data row), cols 1 (Power) and 2 (Tier).
+        assert out == [(2, 1, "199M"), (2, 2, "Gold")]
+
+    def test_never_overwrites_existing(self):
+        target_rows = [["Bad Pew", "300M", ""]]  # Power already set by hand
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == [(2, 2, "Gold")]  # only the blank Tier is filled
+
+    def test_skips_people_not_in_source(self):
+        target_rows = [["Ghost", "", ""]]
+        source_rows = [["Bad Pew", "199M", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == []
+
+    def test_honours_copy_map_for_renamed_columns(self):
+        target_rows = [["Bad Pew", ""]]
+        source_rows = [["Bad Pew", "250M"]]
+        out = transfer.plan_blank_fill(
+            ["Name", "Total Hero Power"],
+            target_rows,
+            {"name": "Name"},
+            ["Name", "THP"],
+            source_rows,
+            {"name": "Name"},
+            copy_map={"Total Hero Power": "THP"},
+        )
+        assert out == [(2, 1, "250M")]
+
+    def test_blank_source_value_adds_nothing(self):
+        target_rows = [["Bad Pew", "", ""]]
+        source_rows = [["Bad Pew", "", "Gold"]]
+        out = transfer.plan_blank_fill(
+            self.TGT_HEADER,
+            target_rows,
+            self.TGT_MAP,
+            self.SRC_HEADER,
+            source_rows,
+            self.SRC_MAP,
+        )
+        assert out == [(2, 2, "Gold")]
 
 
 # ── Templates ────────────────────────────────────────────────────────────────

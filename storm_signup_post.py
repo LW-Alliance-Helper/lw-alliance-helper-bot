@@ -559,6 +559,16 @@ async def _run_post_signup_confirm_flow(
                 super().__init__(timeout=180)
                 self.selected: int | None = None
 
+            # Defined first so Keep current always renders as the
+            # leftmost button (the Keep-current-is-always-first convention).
+            @discord.ui.button(label="Keep current default", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = current_idx if current_idx in (1, 2) else None
+                for item in self.children:
+                    item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
             @discord.ui.button(
                 label=slot_labels[0] if len(slot_labels) > 0 else "Slot 1",
                 style=discord.ButtonStyle.primary,
@@ -576,14 +586,6 @@ async def _run_post_signup_confirm_flow(
             )
             async def s2(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 2
-                for item in self.children:
-                    item.disabled = True
-                await inter.response.edit_message(view=self)
-                self.stop()
-
-            @discord.ui.button(label="Keep current default", style=discord.ButtonStyle.success)
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.selected = current_idx if current_idx in (1, 2) else None
                 for item in self.children:
                     item.disabled = True
                 await inter.response.edit_message(view=self)

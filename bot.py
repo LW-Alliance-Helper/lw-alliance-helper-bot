@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import re
 import os
+from typing import Literal
 from datetime import datetime, date, timedelta, timezone
 from dotenv import load_dotenv
 from scheduler import (
@@ -35,7 +36,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.7.1"
+__version__ = "1.7.2"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -522,9 +523,14 @@ async def support_join_watch_listener(member: discord.Member):
         return
 
     shared = support_join_watch.shared_bot_guilds(bot, member.id, member.guild.id)
+    lines = [support_join_watch.format_join_notice(member, shared)]
+    verify_line = await _verification_line(member, eligible=bool(shared))
+    if verify_line:
+        lines.append(verify_line)
+
     try:
         await channel.send(
-            support_join_watch.format_join_notice(member, shared),
+            "\n".join(lines),
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except discord.Forbidden:
@@ -535,6 +541,60 @@ async def support_join_watch_listener(member: discord.Member):
     except Exception as e:
         print(f"[JOINWATCH] Failed to post join notice: {e}")
         sentry_sdk.capture_exception(e)
+
+
+async def _try_assign_verified(member: discord.Member, role: discord.Role) -> tuple[bool, str]:
+    """Give `member` the Verified `role`. Returns (ok, note):
+      - (True, "Assigned")    — role was added just now
+      - (True, "Already had") — member already had it (no-op)
+      - (False, <reason>)     — couldn't assign; reason is user-facing
+
+    Checks the permission/hierarchy blocker first (a cheap, cache-only check)
+    so a misconfigured server produces a clear reason rather than a raw
+    Forbidden, then falls back to catching Forbidden/HTTP errors from the API.
+    """
+    if role in member.roles:
+        return True, "Already had"
+
+    me = member.guild.me
+    blocker = support_join_watch.verified_role_blocker(
+        has_manage_roles=me.guild_permissions.manage_roles,
+        bot_top_position=me.top_role.position,
+        role_position=role.position,
+        role_managed=role.managed,
+    )
+    if blocker:
+        return False, blocker
+
+    try:
+        await member.add_roles(role, reason="Auto-verified: shares a bot-installed server")
+        return True, "Assigned"
+    except discord.Forbidden:
+        return False, "missing permission (Forbidden)"
+    except discord.HTTPException as e:
+        return False, f"Discord error ({e.status})"
+
+
+async def _verification_line(member: discord.Member, *, eligible: bool) -> str | None:
+    """Build the auto-verify status line appended to a join notice, or None when
+    auto-verify isn't configured. `eligible` = the member shares ≥1 bot server.
+    """
+    raw_role = get_app_setting(support_join_watch.VERIFIED_ROLE_SETTING)
+    if not raw_role:
+        return None  # auto-verify off
+    role = member.guild.get_role(int(raw_role)) if raw_role.isdigit() else None
+    if role is None:
+        return (
+            "⚠️ Configured Verified role no longer exists — set a new one with "
+            "`/admin verify role:@Role`."
+        )
+    if not eligible:
+        return f"🔒 Not auto-verified (in no other bot-installed server); **{role.name}** withheld."
+
+    ok, note = await _try_assign_verified(member, role)
+    if ok:
+        return f"✅ {note} **{role.name}**."
+    return f"⚠️ Qualifies for **{role.name}** but I couldn't assign it: {note}."
 
 
 # ── Global slash-command error handler ──────────────────────────────────────
@@ -1818,69 +1878,98 @@ async def admin_transfer_dump_slash(interaction: discord.Interaction, guild_id: 
 bot.tree.add_command(growth_group)
 
 
+# /admin verify is one overloaded command rather than a subcommand group so a
+# bare `/admin verify` (no options) can run the scan — Discord doesn't allow a
+# subcommand *group* to be invoked on its own. Passing `channel:` and/or `role:`
+# configures those; `disable:` turns one (or both) off; no options = scan.
 @admin_group.command(
-    name="set_join_watch",
-    description="(Bot owner only) Set the hidden channel that gets support-server join notices.",
+    name="verify",
+    description="(Bot owner only) Set the join-watch channel / Verified role, or (no options) run a scan.",
 )
 @app_commands.describe(
-    channel="Channel to post join notices to. Omit to turn the watch off.",
+    channel="Set the hidden channel that receives join notices (its server = the watched server).",
+    role="Set the role to auto-assign to joiners who share a bot-installed server.",
+    disable="Turn off the watch channel, the Verified role, or both.",
 )
-async def admin_set_join_watch_slash(
-    interaction: discord.Interaction, channel: discord.TextChannel | None = None
+async def admin_verify_slash(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel | None = None,
+    role: discord.Role | None = None,
+    disable: Literal["channel", "role", "both"] | None = None,
 ):
-    """Configure (or clear) the support-server join-watch channel (#watch).
-    The channel's own guild becomes the watched 'support server' — a join to
-    that guild triggers a notice here listing the joiner's other bot-installed
-    servers. Bot-global setting (not per-guild), stored in app_settings.
+    """Consolidated join-watch + auto-verify control. With options it updates
+    config (stored in app_settings); with no options it runs the member scan
+    (and, if a Verified role is set, backfills that role onto everyone who
+    qualifies). See support_join_watch for the cross-guild logic.
     """
     if not await _require_bot_owner(interaction):
         return
 
-    if channel is None:
+    changes: list[str] = []
+
+    # Disable first, so an explicit set in the same invocation still wins.
+    if disable in ("channel", "both"):
         set_app_setting(support_join_watch.WATCH_CHANNEL_SETTING, None)
-        await interaction.response.send_message(
-            "✅ Support-server join watch **disabled**. No join notices will post.",
-            ephemeral=True,
+        changes.append("🔕 Join watch **disabled** — no join notices will post.")
+    if disable in ("role", "both"):
+        set_app_setting(support_join_watch.VERIFIED_ROLE_SETTING, None)
+        changes.append("🔕 Auto-verify **disabled** — no role will be assigned.")
+
+    if channel is not None:
+        # Verify the bot can post there before saving, so a silent Forbidden at
+        # join time doesn't go unnoticed.
+        perms = channel.permissions_for(channel.guild.me)
+        if not (perms.view_channel and perms.send_messages):
+            await interaction.response.send_message(
+                f"⚠️ I can't post in {channel.mention} — grant me **View Channel** + "
+                f"**Send Messages** there first, then re-run this.",
+                ephemeral=True,
+            )
+            return
+        set_app_setting(support_join_watch.WATCH_CHANNEL_SETTING, str(channel.id))
+        changes.append(
+            f"📍 Watch channel set to {channel.mention}. New members of "
+            f"**{channel.guild.name}** will be reported there."
         )
+
+    if role is not None:
+        if role.is_default():
+            await interaction.response.send_message(
+                "⚠️ `@everyone` can't be used as the Verified role.", ephemeral=True
+            )
+            return
+        me = role.guild.me
+        blocker = support_join_watch.verified_role_blocker(
+            has_manage_roles=me.guild_permissions.manage_roles,
+            bot_top_position=me.top_role.position,
+            role_position=role.position,
+            role_managed=role.managed,
+        )
+        set_app_setting(support_join_watch.VERIFIED_ROLE_SETTING, str(role.id))
+        line = f"🏷️ Verified role set to **{role.name}**."
+        if blocker:
+            line += f"\n   ⚠️ Heads up: {blocker} — I can't assign it until that's fixed."
+        changes.append(line)
+
+    if changes:
+        await interaction.response.send_message("\n".join(changes), ephemeral=True)
         return
 
-    # Verify the bot can actually post there before saving, so a silent
-    # Forbidden at join time doesn't go unnoticed.
-    perms = channel.permissions_for(channel.guild.me)
-    if not (perms.view_channel and perms.send_messages):
-        await interaction.response.send_message(
-            f"⚠️ I can't post in {channel.mention} — grant me **View Channel** + "
-            f"**Send Messages** there first, then re-run this.",
-            ephemeral=True,
-        )
-        return
-
-    set_app_setting(support_join_watch.WATCH_CHANNEL_SETTING, str(channel.id))
-    await interaction.response.send_message(
-        f"✅ Join watch set. New members of **{channel.guild.name}** will be "
-        f"reported in {channel.mention}, with the other bot-installed servers "
-        f"they belong to. Run `/admin scan_members` to check everyone already here.",
-        ephemeral=True,
-    )
+    # No options → run the member scan (with Verified backfill if configured).
+    await _run_verify_scan(interaction)
 
 
-@admin_group.command(
-    name="scan_members",
-    description="(Bot owner only) Report every current support-server member's bot-installed servers.",
-)
-async def admin_scan_members_slash(interaction: discord.Interaction):
+async def _run_verify_scan(interaction: discord.Interaction):
     """Backfill of the join watch: run the shared-server check against every
-    current member of the configured watch channel's guild. Sends a summary
-    plus a full per-member breakdown as an attached file, sorted so the
-    zero-overlap members (the spam-triage list) are called out first.
+    current member of the watch channel's guild, assigning the Verified role
+    (if configured) to everyone who qualifies. Sends a summary plus a full
+    per-member breakdown as an attached file, zero-overlap members first.
     """
-    if not await _require_bot_owner(interaction):
-        return
-
     raw = get_app_setting(support_join_watch.WATCH_CHANNEL_SETTING)
     if not raw:
         await interaction.response.send_message(
-            "⚠️ No join-watch channel set. Run `/admin set_join_watch` first.",
+            "⚠️ No watch channel set. Configure one first with "
+            "`/admin verify channel:#your-channel`.",
             ephemeral=True,
         )
         return
@@ -1888,7 +1977,8 @@ async def admin_scan_members_slash(interaction: discord.Interaction):
     channel = bot.get_channel(int(raw)) if raw.isdigit() else None
     if not isinstance(channel, discord.TextChannel):
         await interaction.response.send_message(
-            "⚠️ The saved join-watch channel no longer resolves — re-run `/admin set_join_watch`.",
+            "⚠️ The saved watch channel no longer resolves — re-set it with "
+            "`/admin verify channel:#your-channel`.",
             ephemeral=True,
         )
         return
@@ -1896,22 +1986,55 @@ async def admin_scan_members_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     guild = channel.guild
-    members = [m for m in guild.members if not m.bot]
+    raw_role = get_app_setting(support_join_watch.VERIFIED_ROLE_SETTING)
+    role = guild.get_role(int(raw_role)) if raw_role and raw_role.isdigit() else None
+    role_missing = bool(raw_role) and role is None
 
+    members = [m for m in guild.members if not m.bot]
     none_lines: list[str] = []
     some_lines: list[str] = []
+    assigned = already = failed = 0
+    fail_reasons: dict[str, int] = {}
+
     for m in sorted(members, key=lambda m: str(m).lower()):
         shared = support_join_watch.shared_bot_guilds(bot, m.id, guild.id)
-        if shared:
-            some_lines.append(f"{m} (ID {m.id}) → {', '.join(g.name for g in shared)}")
-        else:
+        if not shared:
             none_lines.append(f"{m} (ID {m.id})")
+            continue
+        tag = ""
+        if role is not None:
+            ok, note = await _try_assign_verified(m, role)
+            if ok and note == "Assigned":
+                assigned += 1
+                tag = "  [+Verified]"
+            elif ok:
+                already += 1
+                tag = "  [already Verified]"
+            else:
+                failed += 1
+                fail_reasons[note] = fail_reasons.get(note, 0) + 1
+                tag = f"  [FAILED: {note}]"
+        some_lines.append(f"{m} (ID {m.id}) → {', '.join(g.name for g in shared)}{tag}")
 
     report = [
         f"Support-server member scan — {guild.name} (ID {guild.id})",
         f"Total non-bot members: {len(members)}",
         f"In NO other bot-installed server: {len(none_lines)}",
         f"In at least one bot-installed server: {len(some_lines)}",
+    ]
+    if role is not None:
+        report.append(
+            f"Verified role '{role.name}': {assigned} newly assigned, "
+            f"{already} already had it, {failed} failed"
+        )
+        if fail_reasons:
+            for reason, count in sorted(fail_reasons.items(), key=lambda kv: -kv[1]):
+                report.append(f"    failure ({count}): {reason}")
+    elif role_missing:
+        report.append("Verified role: configured id no longer resolves (skipped assignment)")
+    else:
+        report.append("Verified role: not configured (report only)")
+    report += [
         "",
         "== In NO other bot-installed server ==",
         *(none_lines or ["(none)"]),
@@ -1923,11 +2046,16 @@ async def admin_scan_members_slash(interaction: discord.Interaction):
 
     import io  # noqa: PLC0415
 
+    verify_summary = ""
+    if role is not None:
+        verify_summary = f" · Verified: +{assigned} new, {already} existing" + (
+            f", {failed} failed" if failed else ""
+        )
     buf = io.BytesIO(text.encode("utf-8"))
     await interaction.followup.send(
         f"🔎 Scanned **{len(members)}** members of **{guild.name}** — "
         f"**{len(none_lines)}** in no other bot server, "
-        f"**{len(some_lines)}** with overlap. Full breakdown attached.",
+        f"**{len(some_lines)}** with overlap{verify_summary}. Full breakdown attached.",
         file=discord.File(buf, filename=f"member_scan_{guild.id}.txt"),
         ephemeral=True,
     )

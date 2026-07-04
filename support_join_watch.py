@@ -27,6 +27,10 @@ import discord
 # config.get_app_setting / set_app_setting.
 WATCH_CHANNEL_SETTING = "support_join_watch_channel_id"
 
+# app_settings key holding the role id to auto-assign to joiners who share a
+# bot-installed server ("Verified"). Unset = auto-verify off.
+VERIFIED_ROLE_SETTING = "support_verified_role_id"
+
 # Cap how many shared-guild names we spell out inline before summarising the
 # remainder, so the notice never blows Discord's 2000-char message limit for a
 # user who happens to be in dozens of bot servers.
@@ -72,3 +76,31 @@ def format_join_notice(member: discord.Member, shared: list[discord.Guild]) -> s
         f"Servers they belong to with LW Alliance Helper installed "
         f"({len(shared)}): {listed}"
     )
+
+
+def verified_role_blocker(
+    *,
+    has_manage_roles: bool,
+    bot_top_position: int,
+    role_position: int,
+    role_managed: bool,
+) -> str | None:
+    """Return a human-readable reason the bot cannot assign the Verified role,
+    or None if it can. Pure so the caller (bot.py) can pass values pulled off
+    the live discord objects and this stays unit-testable.
+
+    Order matters: report the permission gap before the hierarchy gap, since a
+    bot without Manage Roles can't assign *any* role regardless of position.
+    """
+    if not has_manage_roles:
+        return "I don't have the **Manage Roles** permission in this server"
+    if role_managed:
+        return "that role is managed by an integration and can't be assigned manually"
+    # Discord only lets a bot assign roles strictly below its own highest role;
+    # equal position counts as not-below.
+    if role_position >= bot_top_position:
+        return (
+            "the Verified role is not below my highest role "
+            "(drag my bot role above it in Server Settings → Roles)"
+        )
+    return None

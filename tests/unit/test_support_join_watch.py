@@ -119,3 +119,63 @@ def test_format_join_notice_caps_large_lists():
     # Reports the true total but only spells out the cap, plus an overflow note.
     assert "installed (40):" in msg
     assert "more)" in msg
+
+
+# ── verified_role_blocker ────────────────────────────────────────────────────
+
+
+def test_verified_role_blocker_ok():
+    """Manage Roles present, role below the bot, not managed → assignable."""
+    assert (
+        sjw.verified_role_blocker(
+            has_manage_roles=True,
+            bot_top_position=10,
+            role_position=5,
+            role_managed=False,
+        )
+        is None
+    )
+
+
+def test_verified_role_blocker_no_manage_roles():
+    reason = sjw.verified_role_blocker(
+        has_manage_roles=False,
+        bot_top_position=10,
+        role_position=5,
+        role_managed=False,
+    )
+    assert reason and "Manage Roles" in reason
+
+
+def test_verified_role_blocker_managed_role():
+    reason = sjw.verified_role_blocker(
+        has_manage_roles=True,
+        bot_top_position=10,
+        role_position=5,
+        role_managed=True,
+    )
+    assert reason and "integration" in reason
+
+
+def test_verified_role_blocker_hierarchy_equal_or_above():
+    # Equal position counts as not-below.
+    for role_pos in (10, 11):
+        reason = sjw.verified_role_blocker(
+            has_manage_roles=True,
+            bot_top_position=10,
+            role_position=role_pos,
+            role_managed=False,
+        )
+        assert reason and "highest role" in reason
+
+
+def test_verified_role_blocker_permission_checked_before_hierarchy():
+    """A bot missing Manage Roles gets the permission reason even when the role
+    is also above it — permission is the more fundamental fix."""
+    reason = sjw.verified_role_blocker(
+        has_manage_roles=False,
+        bot_top_position=5,
+        role_position=99,
+        role_managed=False,
+    )
+    assert "Manage Roles" in reason

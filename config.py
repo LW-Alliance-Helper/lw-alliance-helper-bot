@@ -851,6 +851,19 @@ def init_db():
         """)
         conn.commit()
 
+        # app_settings — bot-global key/value store (NOT per guild). For
+        # owner/support-level settings that belong to the deployment rather
+        # than any single alliance, e.g. the support-server join-watch channel
+        # (see get_app_setting / set_app_setting). Values are TEXT; callers
+        # coerce as needed.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -4528,6 +4541,29 @@ def update_roster_last_synced(guild_id: int, timestamp_iso: str):
             "UPDATE guild_member_roster_config SET last_synced_at = ? WHERE guild_id = ?",
             (timestamp_iso, guild_id),
         )
+        conn.commit()
+
+
+def get_app_setting(key: str, default: str | None = None) -> str | None:
+    """Read a bot-global setting from `app_settings`. Returns `default` if the
+    key is unset. Bot-global (not per-guild) — for deployment/support settings.
+    """
+    with _get_conn() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_app_setting(key: str, value: str | None) -> None:
+    """Insert or replace a bot-global setting. Passing None deletes the key."""
+    with _get_conn() as conn:
+        if value is None:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
         conn.commit()
 
 

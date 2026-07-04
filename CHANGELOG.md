@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.2] — 2026-07-04
+
+### Added
+- Owner-only auto-verify: the join watch can now assign a chosen role (e.g. Verified) to anyone who joins the support server and already belongs to a bot-installed server, and the member scan backfills that role onto everyone who already qualifies.
+
+### Changed
+- Consolidated the join-watch tooling into one `/admin verify` command: `channel:` sets the notice channel, `role:` sets the auto-assign role, `disable:` turns either off, and no options runs the member scan (replaces `/admin set_join_watch` and `/admin scan_members`).
+
 ## [1.7.1] — 2026-07-04
 
 ### Added

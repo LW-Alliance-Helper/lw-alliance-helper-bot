@@ -21,7 +21,10 @@ from config import (
     upsert_guild_install_metadata,
     get_guild_install_metadata,
     delete_guild_install_metadata,
+    get_app_setting,
+    set_app_setting,
 )
+import support_join_watch
 import wizard_registry
 from messages import NOT_SET_UP
 
@@ -32,7 +35,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -485,6 +488,53 @@ async def on_guild_remove(guild: discord.Guild):
         print(f"[GUILD] Could not clear install metadata for {guild.name}: {e}")
         sentry_sdk.capture_exception(e)
     await _update_presence()
+
+
+# ── Support-server join watch ────────────────────────────────────────────────
+#
+# When someone joins the support server, post a hidden-channel notice listing
+# which other bot-installed servers they're already in (owner triage aid for
+# join-and-spam accounts). The "support server" is whichever guild owns the
+# channel set via `/admin set_join_watch` — a single stored value, no env var.
+# Registered as a `@bot.listen` (not `@bot.event`) so it coexists with the
+# Member Roster cog's own on_member_join listener rather than replacing it.
+
+
+@bot.listen("on_member_join")
+async def support_join_watch_listener(member: discord.Member):
+    raw = get_app_setting(support_join_watch.WATCH_CHANNEL_SETTING)
+    if not raw:
+        return
+    try:
+        channel_id = int(raw)
+    except (TypeError, ValueError):
+        return
+
+    channel = bot.get_channel(channel_id)
+    # Only act on joins to the *same* guild that owns the watch channel, and
+    # only when it's a text channel we can post to. Skip bot joins.
+    if (
+        channel is None
+        or not isinstance(channel, discord.TextChannel)
+        or channel.guild.id != member.guild.id
+        or member.bot
+    ):
+        return
+
+    shared = support_join_watch.shared_bot_guilds(bot, member.id, member.guild.id)
+    try:
+        await channel.send(
+            support_join_watch.format_join_notice(member, shared),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except discord.Forbidden:
+        print(
+            f"[JOINWATCH] Missing permission to post join notice in "
+            f"channel {channel_id} (guild {member.guild.id})"
+        )
+    except Exception as e:
+        print(f"[JOINWATCH] Failed to post join notice: {e}")
+        sentry_sdk.capture_exception(e)
 
 
 # ── Global slash-command error handler ──────────────────────────────────────
@@ -1766,6 +1816,121 @@ async def admin_transfer_dump_slash(interaction: discord.Interaction, guild_id: 
 # Register the /growth Group on the tree once every subcommand has
 # been attached above. Global registration.
 bot.tree.add_command(growth_group)
+
+
+@admin_group.command(
+    name="set_join_watch",
+    description="(Bot owner only) Set the hidden channel that gets support-server join notices.",
+)
+@app_commands.describe(
+    channel="Channel to post join notices to. Omit to turn the watch off.",
+)
+async def admin_set_join_watch_slash(
+    interaction: discord.Interaction, channel: discord.TextChannel | None = None
+):
+    """Configure (or clear) the support-server join-watch channel (#watch).
+    The channel's own guild becomes the watched 'support server' — a join to
+    that guild triggers a notice here listing the joiner's other bot-installed
+    servers. Bot-global setting (not per-guild), stored in app_settings.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    if channel is None:
+        set_app_setting(support_join_watch.WATCH_CHANNEL_SETTING, None)
+        await interaction.response.send_message(
+            "✅ Support-server join watch **disabled**. No join notices will post.",
+            ephemeral=True,
+        )
+        return
+
+    # Verify the bot can actually post there before saving, so a silent
+    # Forbidden at join time doesn't go unnoticed.
+    perms = channel.permissions_for(channel.guild.me)
+    if not (perms.view_channel and perms.send_messages):
+        await interaction.response.send_message(
+            f"⚠️ I can't post in {channel.mention} — grant me **View Channel** + "
+            f"**Send Messages** there first, then re-run this.",
+            ephemeral=True,
+        )
+        return
+
+    set_app_setting(support_join_watch.WATCH_CHANNEL_SETTING, str(channel.id))
+    await interaction.response.send_message(
+        f"✅ Join watch set. New members of **{channel.guild.name}** will be "
+        f"reported in {channel.mention}, with the other bot-installed servers "
+        f"they belong to. Run `/admin scan_members` to check everyone already here.",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="scan_members",
+    description="(Bot owner only) Report every current support-server member's bot-installed servers.",
+)
+async def admin_scan_members_slash(interaction: discord.Interaction):
+    """Backfill of the join watch: run the shared-server check against every
+    current member of the configured watch channel's guild. Sends a summary
+    plus a full per-member breakdown as an attached file, sorted so the
+    zero-overlap members (the spam-triage list) are called out first.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    raw = get_app_setting(support_join_watch.WATCH_CHANNEL_SETTING)
+    if not raw:
+        await interaction.response.send_message(
+            "⚠️ No join-watch channel set. Run `/admin set_join_watch` first.",
+            ephemeral=True,
+        )
+        return
+
+    channel = bot.get_channel(int(raw)) if raw.isdigit() else None
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "⚠️ The saved join-watch channel no longer resolves — re-run `/admin set_join_watch`.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    guild = channel.guild
+    members = [m for m in guild.members if not m.bot]
+
+    none_lines: list[str] = []
+    some_lines: list[str] = []
+    for m in sorted(members, key=lambda m: str(m).lower()):
+        shared = support_join_watch.shared_bot_guilds(bot, m.id, guild.id)
+        if shared:
+            some_lines.append(f"{m} (ID {m.id}) → {', '.join(g.name for g in shared)}")
+        else:
+            none_lines.append(f"{m} (ID {m.id})")
+
+    report = [
+        f"Support-server member scan — {guild.name} (ID {guild.id})",
+        f"Total non-bot members: {len(members)}",
+        f"In NO other bot-installed server: {len(none_lines)}",
+        f"In at least one bot-installed server: {len(some_lines)}",
+        "",
+        "== In NO other bot-installed server ==",
+        *(none_lines or ["(none)"]),
+        "",
+        "== In at least one bot-installed server ==",
+        *(some_lines or ["(none)"]),
+    ]
+    text = "\n".join(report)
+
+    import io  # noqa: PLC0415
+
+    buf = io.BytesIO(text.encode("utf-8"))
+    await interaction.followup.send(
+        f"🔎 Scanned **{len(members)}** members of **{guild.name}** — "
+        f"**{len(none_lines)}** in no other bot server, "
+        f"**{len(some_lines)}** with overlap. Full breakdown attached.",
+        file=discord.File(buf, filename=f"member_scan_{guild.id}.txt"),
+        ephemeral=True,
+    )
 
 
 # Register the /admin Group on the tree once every subcommand has been

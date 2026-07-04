@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.1] — 2026-07-04
+
+### Added
+- Owner-only support tooling: `/admin set_join_watch` posts a notice to a chosen hidden channel whenever someone joins the support server, listing which other bot-installed servers they already belong to (or None), and `/admin scan_members` runs the same check across everyone already in the server, to help spot potential spam accounts.
+
 ## [1.7.0] — 2026-07-02
 
 ### Added

@@ -9,6 +9,11 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.3] — 2026-07-10
+
+### Changed
+- Dependency bumps: Pillow 12.3.0, aiohttp 3.14.1, sentry-sdk 2.64.0, google-auth 2.55.1, tzdata 2026.2.
+
 ## [1.7.2] — 2026-07-04
 
 ### Added

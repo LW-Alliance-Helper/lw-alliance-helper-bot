@@ -2,7 +2,7 @@ discord.py>=2.7.1
 # aiohttp ships transitively with discord.py, but the Map Manager integration
 # HTTP server (#316, api_server.py) imports it directly, so pin it explicitly.
 aiohttp>=3.14.1,<4
-gspread>=6.0.0
+gspread>=6.2.1
 google-auth>=2.55.2
 python-dotenv>=1.2.2
 tzdata>=2026.3

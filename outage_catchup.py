@@ -229,6 +229,14 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     if body is None:
         # No shinies in range today — nothing to recover. Stamp so the live
         # loop doesn't reconsider, and surface no row.
+        logger.info(
+            "[CATCHUP] No shinies in range %s-%s for guild=%s on %s — "
+            "marking posted without sending",
+            server_min,
+            server_max,
+            guild.id,
+            scheduled.date(),
+        )
         config.mark_shiny_tasks_posted(guild.id, today_iso)
         return []
 

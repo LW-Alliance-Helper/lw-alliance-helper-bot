@@ -866,6 +866,16 @@ async def before_shiny_tasks_refresh_task():
         sentry_sdk.capture_exception(e)
 
 
+# Guards the at-or-past retry (below) from re-attempting a guild that keeps
+# failing (channel not resolvable, missing permission) on every single tick
+# for the rest of the day. Keyed by guild_id, reset implicitly on restart —
+# that's fine, a restart just means one immediate retry rather than a
+# missed one. Not persisted; in-memory is enough since the only cost of
+# losing it is one extra attempt.
+_SHINY_RETRY_COOLDOWN = timedelta(minutes=5)
+_shiny_last_attempt: dict[int, datetime] = {}
+
+
 @tasks.loop(minutes=1)
 async def shiny_tasks_post_task():
     """Per-minute: walk enabled guilds, post if their configured
@@ -916,6 +926,15 @@ async def shiny_tasks_post_task():
             if guild_now < target_today:
                 continue
 
+            # Throttle retries for a guild that's overdue but keeps failing
+            # (bad channel, missing permission) — without this, at-or-past
+            # matching means it would retry every single tick for the rest
+            # of the day instead of once every few minutes.
+            last_attempt = _shiny_last_attempt.get(gid)
+            if last_attempt is not None and (guild_now - last_attempt) < _SHINY_RETRY_COOLDOWN:
+                continue
+            _shiny_last_attempt[gid] = guild_now
+
             today_iso = guild_now.date().isoformat()
             if scfg.get("last_posted_date") == today_iso:
                 # Already fired today — Railway restart inside the
@@ -954,6 +973,11 @@ async def shiny_tasks_post_task():
                 # we don't recheck (cheaply) every minute for the rest
                 # of the matched minute, and so a /view_configuration
                 # reader can see the loop fired.
+                print(
+                    f"[SHINY] No shinies in range {scfg.get('server_min')}-"
+                    f"{scfg.get('server_max')} for guild {gid} on {shiny_today} "
+                    f"(local date {today_iso}) — marking posted without sending"
+                )
                 mark_shiny_tasks_posted(gid, today_iso)
                 continue
 
@@ -1802,6 +1826,33 @@ async def admin_shiny_dump_slash(interaction: discord.Interaction, guild_id: str
     lines.append(f"guild-local now: {guild_now_str}")
 
     await interaction.response.send_message("```\n" + "\n".join(lines) + "\n```", ephemeral=True)
+
+
+@admin_group.command(
+    name="shiny_reset",
+    description="(Bot owner only) Clear a guild's last_posted_date so today's post is eligible again.",
+)
+@app_commands.describe(guild_id="Discord guild ID")
+async def admin_shiny_reset_slash(interaction: discord.Interaction, guild_id: str):
+    """Debug/support tool: clears `last_posted_date` so the per-minute loop
+    treats the guild as not-yet-posted today, without waiting for the
+    calendar to roll over. Does not itself post anything."""
+    if not await _require_bot_owner(interaction):
+        return
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    from config import mark_shiny_tasks_posted  # noqa: PLC0415
+
+    mark_shiny_tasks_posted(gid, "")
+    await interaction.response.send_message(
+        f"✅ Cleared `last_posted_date` for guild **{gid}** — eligible on the next matching tick.",
+        ephemeral=True,
+    )
 
 
 @admin_group.command(

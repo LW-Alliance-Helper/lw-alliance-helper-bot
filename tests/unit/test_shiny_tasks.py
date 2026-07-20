@@ -517,6 +517,12 @@ async def _run_loop_at(now_dt: datetime, *, send_ok: bool = True):
     fake_dt = MagicMock()
     fake_dt.now = MagicMock(return_value=now_dt)
 
+    # Each call represents an independent moment in these tests (they use
+    # arbitrary, non-chronological fake "now" values), so the retry-cooldown
+    # dict — which assumes real, forward-moving wall-clock time in
+    # production — must not carry state between calls.
+    bot_module._shiny_last_attempt.clear()
+
     with patch.object(bot_module, "bot", fake_bot), patch("bot.datetime", fake_dt):
         await bot_module.shiny_tasks_post_task.coro()
     return sent

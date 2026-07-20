@@ -588,13 +588,33 @@ class TestShinyTasksPostTask:
         assert "2264" in sent[0]
 
     @pytest.mark.asyncio
-    async def test_skips_when_minute_does_not_match(self, temp_db):
+    async def test_skips_before_target_time(self, temp_db):
         _seed_complete(TEST_GUILD_ID)
         _enable_shiny(TEST_GUILD_ID, post_time="09:00", channel_id=123)
         _seed_servers([(2264, "2026-04-29", "global")])
 
-        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 1, tzinfo=ET))
+        sent = await _run_loop_at(datetime(2026, 5, 11, 8, 59, tzinfo=ET))
         assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_fires_on_late_tick_after_target_time(self, temp_db):
+        """An at-or-past match (not an exact minute equality) so a tick
+        that lands late — e.g. the event loop was busy elsewhere right at
+        the target minute — still posts instead of silently skipping the
+        whole day (#379 follow-up)."""
+        _seed_complete(TEST_GUILD_ID)
+        _enable_shiny(
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
+        )
+        _seed_servers([(2264, "2026-04-29", "global")])
+
+        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 5, tzinfo=ET))
+        assert len(sent) == 1
+        assert "2264" in sent[0]
 
     @pytest.mark.asyncio
     async def test_last_posted_date_blocks_duplicate(self, temp_db):

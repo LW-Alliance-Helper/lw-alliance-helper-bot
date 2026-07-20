@@ -906,7 +906,14 @@ async def shiny_tasks_post_task():
                 hh, mm = int(hh), int(mm)
             except (KeyError, ValueError, AttributeError):
                 continue
-            if guild_now.hour != hh or guild_now.minute != mm:
+            # At-or-past match rather than an exact hour/minute equality — an
+            # exact match silently misses the entire day if this tick lands
+            # even a minute late (e.g. the event loop was busy with another
+            # guild's blocking Sheets call right at the target minute; the
+            # `last_posted_date` dedup below already prevents a late tick
+            # from double-posting once today's message has gone out).
+            target_today = guild_now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if guild_now < target_today:
                 continue
 
             today_iso = guild_now.date().isoformat()

@@ -1744,6 +1744,52 @@ async def admin_shiny_set_slash(
 
 
 @admin_group.command(
+    name="shiny_dump",
+    description="(Bot owner only) Dump a guild's raw shiny_tasks_config row + live channel resolution.",
+)
+@app_commands.describe(guild_id="Discord guild ID")
+async def admin_shiny_dump_slash(interaction: discord.Interaction, guild_id: str):
+    """Raw `guild_shiny_tasks_config` row for one guild — including
+    `last_posted_date`, which the friendly `/setup` view never shows — plus
+    whether `bot.get_channel` currently resolves the configured channel.
+    Read-only, for chasing silent no-posts where the per-minute loop logged
+    nothing (a clean send and a dedup-skip both produce zero log output)."""
+    if not await _require_bot_owner(interaction):
+        return
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    from config import get_config, get_shiny_tasks_config  # noqa: PLC0415
+
+    cfg = get_shiny_tasks_config(gid)
+    channel_id = cfg.get("channel_id") or 0
+    channel = bot.get_channel(channel_id)
+    guild = bot.get_guild(gid)
+    base_cfg = get_config(gid)
+
+    try:
+        tz = ZoneInfo(base_cfg.timezone or "America/New_York") if base_cfg else ET
+    except Exception:  # noqa: BLE001
+        tz = ET
+    guild_now_str = datetime.now(tz=tz).isoformat(timespec="seconds")
+
+    lines = [f"# Shiny Tasks dump — guild {gid}", ""]
+    for k in sorted(cfg):
+        lines.append(f"{k} = {cfg[k]!r}")
+    lines.append("")
+    lines.append(f"channel {channel_id} resolves via bot.get_channel: {channel!r}")
+    lines.append(f"guild cached: {guild is not None}")
+    lines.append(f"configured timezone: {base_cfg.timezone if base_cfg else '(no base config)'}")
+    lines.append(f"guild-local now: {guild_now_str}")
+
+    await interaction.response.send_message("```\n" + "\n".join(lines) + "\n```", ephemeral=True)
+
+
+@admin_group.command(
     name="transfer_dump",
     description="(Bot owner only) Dump a guild's full Transfer Management setup + a live sheet probe.",
 )

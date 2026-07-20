@@ -950,8 +950,16 @@ async def shiny_tasks_post_task():
                 mark_shiny_tasks_posted(gid, today_iso)
                 continue
 
+            print(
+                f"[SHINY] Sending post for guild {gid} to channel {channel.id} "
+                f"({getattr(channel, 'name', '?')}), body_len={len(body)}"
+            )
             try:
-                await channel.send(body)
+                sent = await channel.send(body)
+                print(
+                    f"[SHINY] Sent message id={sent.id} for guild {gid} "
+                    f"at {sent.created_at.isoformat()} jump_url={sent.jump_url}"
+                )
                 mark_shiny_tasks_posted(gid, today_iso)
             except discord.Forbidden:
                 print(

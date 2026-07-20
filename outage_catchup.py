@@ -240,10 +240,17 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
         if ch is None:
             return False
         try:
-            await ch.send(body)
+            sent = await ch.send(body)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.warning("[CATCHUP] shiny post failed for guild=%s: %s", guild.id, e)
             return False
+        logger.info(
+            "[CATCHUP] shiny post sent id=%s for guild=%s at %s jump_url=%s",
+            sent.id,
+            guild.id,
+            sent.created_at.isoformat(),
+            sent.jump_url,
+        )
         config.mark_shiny_tasks_posted(guild.id, today_iso)
         return True
 

@@ -866,6 +866,16 @@ async def before_shiny_tasks_refresh_task():
         sentry_sdk.capture_exception(e)
 
 
+# Guards the at-or-past retry (below) from re-attempting a guild that keeps
+# failing (channel not resolvable, missing permission) on every single tick
+# for the rest of the day. Keyed by guild_id, reset implicitly on restart —
+# that's fine, a restart just means one immediate retry rather than a
+# missed one. Not persisted; in-memory is enough since the only cost of
+# losing it is one extra attempt.
+_SHINY_RETRY_COOLDOWN = timedelta(minutes=5)
+_shiny_last_attempt: dict[int, datetime] = {}
+
+
 @tasks.loop(minutes=1)
 async def shiny_tasks_post_task():
     """Per-minute: walk enabled guilds, post if their configured
@@ -906,8 +916,24 @@ async def shiny_tasks_post_task():
                 hh, mm = int(hh), int(mm)
             except (KeyError, ValueError, AttributeError):
                 continue
-            if guild_now.hour != hh or guild_now.minute != mm:
+            # At-or-past match rather than an exact hour/minute equality — an
+            # exact match silently misses the entire day if this tick lands
+            # even a minute late (e.g. the event loop was busy with another
+            # guild's blocking Sheets call right at the target minute; the
+            # `last_posted_date` dedup below already prevents a late tick
+            # from double-posting once today's message has gone out).
+            target_today = guild_now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if guild_now < target_today:
                 continue
+
+            # Throttle retries for a guild that's overdue but keeps failing
+            # (bad channel, missing permission) — without this, at-or-past
+            # matching means it would retry every single tick for the rest
+            # of the day instead of once every few minutes.
+            last_attempt = _shiny_last_attempt.get(gid)
+            if last_attempt is not None and (guild_now - last_attempt) < _SHINY_RETRY_COOLDOWN:
+                continue
+            _shiny_last_attempt[gid] = guild_now
 
             today_iso = guild_now.date().isoformat()
             if scfg.get("last_posted_date") == today_iso:
@@ -947,11 +973,24 @@ async def shiny_tasks_post_task():
                 # we don't recheck (cheaply) every minute for the rest
                 # of the matched minute, and so a /view_configuration
                 # reader can see the loop fired.
+                print(
+                    f"[SHINY] No shinies in range {scfg.get('server_min')}-"
+                    f"{scfg.get('server_max')} for guild {gid} on {shiny_today} "
+                    f"(local date {today_iso}) — marking posted without sending"
+                )
                 mark_shiny_tasks_posted(gid, today_iso)
                 continue
 
+            print(
+                f"[SHINY] Sending post for guild {gid} to channel {channel.id} "
+                f"({getattr(channel, 'name', '?')}), body_len={len(body)}"
+            )
             try:
-                await channel.send(body)
+                sent = await channel.send(body)
+                print(
+                    f"[SHINY] Sent message id={sent.id} for guild {gid} "
+                    f"at {sent.created_at.isoformat()} jump_url={sent.jump_url}"
+                )
                 mark_shiny_tasks_posted(gid, today_iso)
             except discord.Forbidden:
                 print(
@@ -1739,6 +1778,105 @@ async def admin_shiny_set_slash(
     )
     await interaction.response.send_message(
         f"✅ Set server **{server}** → creation date `{d.isoformat()}` (region {reg}).",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="shiny_dump",
+    description="(Bot owner only) Dump a guild's raw shiny_tasks_config row + live channel resolution.",
+)
+@app_commands.describe(guild_id="Discord guild ID")
+async def admin_shiny_dump_slash(interaction: discord.Interaction, guild_id: str):
+    """Raw `guild_shiny_tasks_config` row for one guild — including
+    `last_posted_date`, which the friendly `/setup` view never shows — plus
+    whether `bot.get_channel` currently resolves the configured channel.
+    Read-only, for chasing silent no-posts where the per-minute loop logged
+    nothing (a clean send and a dedup-skip both produce zero log output)."""
+    if not await _require_bot_owner(interaction):
+        return
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    from config import get_config, get_shiny_tasks_config  # noqa: PLC0415
+
+    cfg = get_shiny_tasks_config(gid)
+    channel_id = cfg.get("channel_id") or 0
+    channel = bot.get_channel(channel_id)
+    guild = bot.get_guild(gid)
+    base_cfg = get_config(gid)
+
+    try:
+        tz = ZoneInfo(base_cfg.timezone or "America/New_York") if base_cfg else ET
+    except Exception:  # noqa: BLE001
+        tz = ET
+    guild_now_str = datetime.now(tz=tz).isoformat(timespec="seconds")
+
+    lines = [f"# Shiny Tasks dump — guild {gid}", ""]
+    for k in sorted(cfg):
+        lines.append(f"{k} = {cfg[k]!r}")
+    lines.append("")
+    lines.append(f"channel {channel_id} resolves via bot.get_channel: {channel!r}")
+    lines.append(f"guild cached: {guild is not None}")
+    lines.append(f"configured timezone: {base_cfg.timezone if base_cfg else '(no base config)'}")
+    lines.append(f"guild-local now: {guild_now_str}")
+
+    await interaction.response.send_message("```\n" + "\n".join(lines) + "\n```", ephemeral=True)
+
+
+@admin_group.command(
+    name="shiny_reset",
+    description="(Bot owner only) Clear a guild's last_posted_date so today's post is eligible again.",
+)
+@app_commands.describe(guild_id="Discord guild ID")
+async def admin_shiny_reset_slash(interaction: discord.Interaction, guild_id: str):
+    """Debug/support tool: clears `last_posted_date` so the per-minute loop
+    treats the guild as not-yet-posted today, without waiting for the
+    calendar to roll over. Does not itself post anything."""
+    if not await _require_bot_owner(interaction):
+        return
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    from config import mark_shiny_tasks_posted  # noqa: PLC0415
+
+    mark_shiny_tasks_posted(gid, "")
+    await interaction.response.send_message(
+        f"✅ Cleared `last_posted_date` for guild **{gid}** — eligible on the next matching tick.",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="shiny_reset_all",
+    description="(Bot owner only) Clear last_posted_date for every enabled Shiny Tasks guild.",
+)
+async def admin_shiny_reset_all_slash(interaction: discord.Interaction):
+    """Bulk version of /admin shiny_reset. Every enabled guild silently
+    got a no-op 'no shinies today' mark every night from 2026-07-17
+    onward (the frozen-snapshot staleness bug fixed in e85688f), so all
+    of them are sitting on a stale last_posted_date, not just whichever
+    guild happened to be under investigation."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    from config import list_shiny_enabled_guild_ids, mark_shiny_tasks_posted  # noqa: PLC0415
+
+    gids = list_shiny_enabled_guild_ids()
+    for gid in gids:
+        mark_shiny_tasks_posted(gid, "")
+    await interaction.followup.send(
+        f"✅ Cleared `last_posted_date` for **{len(gids)}** enabled guild(s) — "
+        "all eligible on the next matching tick.",
         ephemeral=True,
     )
 

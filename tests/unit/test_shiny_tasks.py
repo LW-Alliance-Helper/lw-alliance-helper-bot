@@ -336,13 +336,17 @@ class TestDbHelpers:
         nums = sorted(r["server_number"] for r in in_range)
         assert nums == [681, 682, 689]
 
-    def test_soft_delete_via_last_seen_at(self, temp_db):
+    def test_soft_delete_via_last_seen_at(self, temp_db, monkeypatch):
         """A server absent from a refresh > max_age_days ago is filtered
-        out, even though the row still exists in the table."""
+        out, even though the row still exists in the table — while the
+        weekly refresh is actually keeping last_seen_at current."""
+        import shiny_tasks
         from config import (
             upsert_shiny_task_servers,
             get_shiny_task_servers_in_range,
         )
+
+        monkeypatch.setattr(shiny_tasks, "SERVER_REFRESH_ENABLED", True)
 
         stale_iso = (datetime.now(tz=timezone.utc).replace(year=2020)).isoformat()
         fresh_iso = datetime.now(tz=timezone.utc).isoformat()
@@ -353,6 +357,26 @@ class TestDbHelpers:
         out = get_shiny_task_servers_in_range(681, 700, max_age_days=30)
         nums = sorted(r["server_number"] for r in out)
         assert nums == [682]  # 681 aged out
+
+    def test_soft_delete_skipped_when_refresh_disabled(self, temp_db, monkeypatch):
+        """With the weekly refresh disabled (#293 — the real, current
+        production state), last_seen_at is frozen and never advances, so
+        the staleness filter must not apply — otherwise the entire frozen
+        snapshot silently ages out and every guild's post goes empty
+        forever, which is exactly what happened in production."""
+        import shiny_tasks
+        from config import (
+            upsert_shiny_task_servers,
+            get_shiny_task_servers_in_range,
+        )
+
+        monkeypatch.setattr(shiny_tasks, "SERVER_REFRESH_ENABLED", False)
+
+        stale_iso = (datetime.now(tz=timezone.utc).replace(year=2020)).isoformat()
+        upsert_shiny_task_servers([(681, "2025-01-01", "global")], seen_at=stale_iso)
+
+        out = get_shiny_task_servers_in_range(681, 700, max_age_days=30)
+        assert [r["server_number"] for r in out] == [681]
 
     def test_upsert_refreshes_last_seen(self, temp_db):
         from config import (
@@ -517,6 +541,12 @@ async def _run_loop_at(now_dt: datetime, *, send_ok: bool = True):
     fake_dt = MagicMock()
     fake_dt.now = MagicMock(return_value=now_dt)
 
+    # Each call represents an independent moment in these tests (they use
+    # arbitrary, non-chronological fake "now" values), so the retry-cooldown
+    # dict — which assumes real, forward-moving wall-clock time in
+    # production — must not carry state between calls.
+    bot_module._shiny_last_attempt.clear()
+
     with patch.object(bot_module, "bot", fake_bot), patch("bot.datetime", fake_dt):
         await bot_module.shiny_tasks_post_task.coro()
     return sent
@@ -588,13 +618,33 @@ class TestShinyTasksPostTask:
         assert "2264" in sent[0]
 
     @pytest.mark.asyncio
-    async def test_skips_when_minute_does_not_match(self, temp_db):
+    async def test_skips_before_target_time(self, temp_db):
         _seed_complete(TEST_GUILD_ID)
         _enable_shiny(TEST_GUILD_ID, post_time="09:00", channel_id=123)
         _seed_servers([(2264, "2026-04-29", "global")])
 
-        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 1, tzinfo=ET))
+        sent = await _run_loop_at(datetime(2026, 5, 11, 8, 59, tzinfo=ET))
         assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_fires_on_late_tick_after_target_time(self, temp_db):
+        """An at-or-past match (not an exact minute equality) so a tick
+        that lands late — e.g. the event loop was busy elsewhere right at
+        the target minute — still posts instead of silently skipping the
+        whole day (#379 follow-up)."""
+        _seed_complete(TEST_GUILD_ID)
+        _enable_shiny(
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=123,
+            server_min=2200,
+            server_max=2300,
+        )
+        _seed_servers([(2264, "2026-04-29", "global")])
+
+        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 5, tzinfo=ET))
+        assert len(sent) == 1
+        assert "2264" in sent[0]
 
     @pytest.mark.asyncio
     async def test_last_posted_date_blocks_duplicate(self, temp_db):

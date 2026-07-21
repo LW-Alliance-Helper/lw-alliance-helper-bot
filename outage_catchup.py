@@ -229,6 +229,14 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     if body is None:
         # No shinies in range today — nothing to recover. Stamp so the live
         # loop doesn't reconsider, and surface no row.
+        logger.info(
+            "[CATCHUP] No shinies in range %s-%s for guild=%s on %s — "
+            "marking posted without sending",
+            server_min,
+            server_max,
+            guild.id,
+            scheduled.date(),
+        )
         config.mark_shiny_tasks_posted(guild.id, today_iso)
         return []
 
@@ -240,10 +248,17 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
         if ch is None:
             return False
         try:
-            await ch.send(body)
+            sent = await ch.send(body)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.warning("[CATCHUP] shiny post failed for guild=%s: %s", guild.id, e)
             return False
+        logger.info(
+            "[CATCHUP] shiny post sent id=%s for guild=%s at %s jump_url=%s",
+            sent.id,
+            guild.id,
+            sent.created_at.isoformat(),
+            sent.jump_url,
+        )
         config.mark_shiny_tasks_posted(guild.id, today_iso)
         return True
 

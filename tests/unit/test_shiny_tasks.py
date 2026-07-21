@@ -336,13 +336,17 @@ class TestDbHelpers:
         nums = sorted(r["server_number"] for r in in_range)
         assert nums == [681, 682, 689]
 
-    def test_soft_delete_via_last_seen_at(self, temp_db):
+    def test_soft_delete_via_last_seen_at(self, temp_db, monkeypatch):
         """A server absent from a refresh > max_age_days ago is filtered
-        out, even though the row still exists in the table."""
+        out, even though the row still exists in the table — while the
+        weekly refresh is actually keeping last_seen_at current."""
+        import shiny_tasks
         from config import (
             upsert_shiny_task_servers,
             get_shiny_task_servers_in_range,
         )
+
+        monkeypatch.setattr(shiny_tasks, "SERVER_REFRESH_ENABLED", True)
 
         stale_iso = (datetime.now(tz=timezone.utc).replace(year=2020)).isoformat()
         fresh_iso = datetime.now(tz=timezone.utc).isoformat()
@@ -353,6 +357,26 @@ class TestDbHelpers:
         out = get_shiny_task_servers_in_range(681, 700, max_age_days=30)
         nums = sorted(r["server_number"] for r in out)
         assert nums == [682]  # 681 aged out
+
+    def test_soft_delete_skipped_when_refresh_disabled(self, temp_db, monkeypatch):
+        """With the weekly refresh disabled (#293 — the real, current
+        production state), last_seen_at is frozen and never advances, so
+        the staleness filter must not apply — otherwise the entire frozen
+        snapshot silently ages out and every guild's post goes empty
+        forever, which is exactly what happened in production."""
+        import shiny_tasks
+        from config import (
+            upsert_shiny_task_servers,
+            get_shiny_task_servers_in_range,
+        )
+
+        monkeypatch.setattr(shiny_tasks, "SERVER_REFRESH_ENABLED", False)
+
+        stale_iso = (datetime.now(tz=timezone.utc).replace(year=2020)).isoformat()
+        upsert_shiny_task_servers([(681, "2025-01-01", "global")], seen_at=stale_iso)
+
+        out = get_shiny_task_servers_in_range(681, 700, max_age_days=30)
+        assert [r["server_number"] for r in out] == [681]
 
     def test_upsert_refreshes_last_seen(self, temp_db):
         from config import (

@@ -5301,19 +5301,41 @@ def get_shiny_task_servers_in_range(
     The `max_age_days` filter is the soft-delete mechanism: any server
     missing from the last N refreshes is excluded automatically. Result
     is sorted by server_number for deterministic announcement copy.
+
+    The filter only applies while the weekly refresh is actually keeping
+    `last_seen_at` current (`shiny_tasks.SERVER_REFRESH_ENABLED`). With
+    refresh disabled (#293 — upstream source gated behind an API key we
+    don't have), every row's `last_seen_at` is frozen at whenever refresh
+    was last live, so the whole snapshot silently ages past the cutoff and
+    every guild gets zero rows forever — happened for real: refresh was
+    last live 2026-06-17, and every guild's Shiny Tasks post went silently
+    empty starting 2026-07-17, discovered while chasing an unrelated report.
+    A frozen, deliberately-served snapshot isn't "stale" in the sense this
+    filter is meant to catch, so skip it entirely while refresh is off.
     """
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
-    cutoff = (_dt.now(tz=_tz.utc) - _td(days=max_age_days)).isoformat()
+    from shiny_tasks import SERVER_REFRESH_ENABLED  # noqa: PLC0415
+
     with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT server_number, creation_date, region, last_seen_at "
-            "FROM shiny_task_servers "
-            "WHERE server_number BETWEEN ? AND ? "
-            "  AND last_seen_at >= ? "
-            "ORDER BY server_number",
-            (server_min, server_max, cutoff),
-        ).fetchall()
+        if SERVER_REFRESH_ENABLED:
+            cutoff = (_dt.now(tz=_tz.utc) - _td(days=max_age_days)).isoformat()
+            rows = conn.execute(
+                "SELECT server_number, creation_date, region, last_seen_at "
+                "FROM shiny_task_servers "
+                "WHERE server_number BETWEEN ? AND ? "
+                "  AND last_seen_at >= ? "
+                "ORDER BY server_number",
+                (server_min, server_max, cutoff),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT server_number, creation_date, region, last_seen_at "
+                "FROM shiny_task_servers "
+                "WHERE server_number BETWEEN ? AND ? "
+                "ORDER BY server_number",
+                (server_min, server_max),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 

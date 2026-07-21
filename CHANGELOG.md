@@ -9,6 +9,15 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.4] — 2026-07-21
+
+### Fixed
+- Daily Shiny Tasks stopped posting for every alliance starting July 17 — a data-freshness check was silently discarding the entire server list once the (already-frozen, per #293) snapshot aged past it; every alliance's post is eligible again now.
+- Shiny Tasks no longer skips the whole day if its scheduled minute is missed due to bot load — it now fires as soon as possible instead of waiting until tomorrow.
+
+### Added
+- Owner-only Shiny Tasks diagnostics: `/admin shiny_dump`, `/admin shiny_reset`, and `/admin shiny_reset_all` for inspecting and unsticking a guild's posting state.
+
 ## [1.7.3] — 2026-07-10
 
 ### Changed

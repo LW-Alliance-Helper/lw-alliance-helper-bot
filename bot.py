@@ -1856,6 +1856,32 @@ async def admin_shiny_reset_slash(interaction: discord.Interaction, guild_id: st
 
 
 @admin_group.command(
+    name="shiny_reset_all",
+    description="(Bot owner only) Clear last_posted_date for every enabled Shiny Tasks guild.",
+)
+async def admin_shiny_reset_all_slash(interaction: discord.Interaction):
+    """Bulk version of /admin shiny_reset. Every enabled guild silently
+    got a no-op 'no shinies today' mark every night from 2026-07-17
+    onward (the frozen-snapshot staleness bug fixed in e85688f), so all
+    of them are sitting on a stale last_posted_date, not just whichever
+    guild happened to be under investigation."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    from config import list_shiny_enabled_guild_ids, mark_shiny_tasks_posted  # noqa: PLC0415
+
+    gids = list_shiny_enabled_guild_ids()
+    for gid in gids:
+        mark_shiny_tasks_posted(gid, "")
+    await interaction.followup.send(
+        f"✅ Cleared `last_posted_date` for **{len(gids)}** enabled guild(s) — "
+        "all eligible on the next matching tick.",
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
     name="transfer_dump",
     description="(Bot owner only) Dump a guild's full Transfer Management setup + a live sheet probe.",
 )

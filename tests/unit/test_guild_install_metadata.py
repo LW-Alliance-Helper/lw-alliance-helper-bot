@@ -167,8 +167,8 @@ def test_delete_only_affects_target_guild(temp_db):
 def test_admin_group_registers_globally_when_env_unset(monkeypatch):
     """With BOT_ADMIN_GUILD_IDS unset, the /admin group (and its
     overview / guild_info / forget_guild / shiny_servers / shiny_import /
-    shiny_set / shiny_dump / shiny_reset subcommands) fall back to global
-    registration (local-dev affordance)."""
+    shiny_set / shiny_dump / shiny_reset / shiny_reset_all subcommands)
+    fall back to global registration (local-dev affordance)."""
     monkeypatch.delenv("BOT_ADMIN_GUILD_IDS", raising=False)
     import importlib
     import bot as bot_module
@@ -186,6 +186,7 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "shiny_set",
         "shiny_dump",
         "shiny_reset",
+        "shiny_reset_all",
         "transfer_dump",
         "verify",
     }
@@ -221,6 +222,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "shiny_set",
             "shiny_dump",
             "shiny_reset",
+            "shiny_reset_all",
             "transfer_dump",
             "verify",
         }

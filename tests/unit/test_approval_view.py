@@ -98,7 +98,7 @@ class TestSendAsIs:
     leadership, and schedules a 5-min warning when an event_list exists."""
 
     @pytest.mark.asyncio
-    async def test_posts_draft_to_announcements_channel(self):
+    async def test_posts_draft_to_announcements_channel(self, temp_db):
         from scheduler import ApprovalView, pending_warnings
 
         pending_warnings.clear()
@@ -137,7 +137,7 @@ class TestSendAsIs:
         assert "Hello @members!" in stamp_text
 
     @pytest.mark.asyncio
-    async def test_schedules_5min_warning_when_event_list_present(self):
+    async def test_schedules_5min_warning_when_event_list_present(self, temp_db):
         from scheduler import ApprovalView, pending_warnings
 
         pending_warnings.clear()

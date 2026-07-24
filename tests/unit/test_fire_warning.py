@@ -73,7 +73,7 @@ def _event_list_with_blurb(blurb: str | None = None):
 
 class TestFireWarningHappyPath:
     @pytest.mark.asyncio
-    async def test_posts_warning_to_announcements_channel(self):
+    async def test_posts_warning_to_announcements_channel(self, temp_db):
         from scheduler import fire_warning, pending_warnings
 
         pending_warnings["evt-1"] = (
@@ -102,7 +102,7 @@ class TestFireWarningHappyPath:
         assert "5 minutes" in body, f"Warning body should mention '5 minutes': {body!r}"
 
     @pytest.mark.asyncio
-    async def test_stamps_leadership_with_auto_post_confirmation(self):
+    async def test_stamps_leadership_with_auto_post_confirmation(self, temp_db):
         from scheduler import fire_warning, pending_warnings
 
         pending_warnings.clear()
@@ -126,7 +126,7 @@ class TestFireWarningHappyPath:
         assert "auto-posted" in stamp.lower()
 
     @pytest.mark.asyncio
-    async def test_pending_entry_is_cleared_after_fire(self):
+    async def test_pending_entry_is_cleared_after_fire(self, temp_db):
         """pending_warnings is checked every scheduler tick; if we don't
         clear the entry the warning will fire again on the next tick
         and members get spammed."""
@@ -154,7 +154,7 @@ class TestFireWarningHappyPath:
 
 class TestFireWarningMissingChannels:
     @pytest.mark.asyncio
-    async def test_returns_quietly_when_announcements_channel_missing(self):
+    async def test_returns_quietly_when_announcements_channel_missing(self, temp_db):
         """If the announcement channel was deleted between scheduling
         and firing, fire_warning bails out before posting anything —
         no crash, no half-fired warning."""
@@ -172,7 +172,7 @@ class TestFireWarningMissingChannels:
         leadership.send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_announcement_still_fires_when_leadership_channel_missing(self):
+    async def test_announcement_still_fires_when_leadership_channel_missing(self, temp_db):
         """If announcements is fine but the leadership stamp channel is
         gone, the public warning still posts. Members are the priority."""
         from scheduler import fire_warning, pending_warnings
@@ -205,7 +205,7 @@ class TestFireWarningMessageContent:
     than a generic placeholder."""
 
     @pytest.mark.asyncio
-    async def test_body_uses_event_blurb_with_time_replaced(self):
+    async def test_body_uses_event_blurb_with_time_replaced(self, temp_db):
         from scheduler import fire_warning, pending_warnings
 
         pending_warnings.clear()
@@ -233,7 +233,7 @@ class TestFireWarningMessageContent:
         assert "{time}" not in body
 
     @pytest.mark.asyncio
-    async def test_empty_event_list_falls_back_to_generic_warning(self):
+    async def test_empty_event_list_falls_back_to_generic_warning(self, temp_db):
         """build_warning_message guards against an empty list; a
         generic 'Event starting in 5 minutes!' fires instead of a crash."""
         from scheduler import fire_warning, pending_warnings

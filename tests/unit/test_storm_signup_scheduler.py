@@ -37,10 +37,13 @@ class TestParseHHMM:
 
 
 class TestShouldFireNow:
-    """Post-#164: simple match. Fires when today's weekday == poll_dow
-    AND now's hour:minute == signup_time. Event date no longer derives
-    from a lead-days computation — `storm_date_helpers.next_event_date`
-    owns event-day inference (game-defined: DS=Friday, CS=Thursday)."""
+    """#365: at-or-past match, not an exact minute match. Fires when
+    today's weekday == poll_dow AND now >= signup_time, so a shared
+    per-minute tick that lands late (busy with another guild's blocking
+    Sheets call, etc.) doesn't silently skip the entire week. Event date
+    no longer derives from a lead-days computation —
+    `storm_date_helpers.next_event_date` owns event-day inference
+    (game-defined: DS=Friday, CS=Thursday)."""
 
     def test_fires_on_exact_match(self):
         # Today = Tuesday 2026-05-12; poll-day = Tuesday (1). 14:00 ET.
@@ -56,19 +59,22 @@ class TestShouldFireNow:
             is True
         )
 
-    def test_no_fire_on_wrong_minute(self):
+    def test_fires_on_late_tick_past_target_minute(self):
+        """#365 regression: a tick landing a few minutes late must still
+        fire — this is the exact bug the audit flagged (a slow tick makes
+        a guild's post silently miss the whole week)."""
         today = _dt.date(2026, 5, 12)
         assert (
             sss._should_fire_now(
                 today=today,
-                now=_dt.time(14, 1),
+                now=_dt.time(14, 5),
                 poll_dow=1,
                 signup_time=_dt.time(14, 0),
             )
-            is False
+            is True
         )
 
-    def test_no_fire_on_wrong_hour(self):
+    def test_no_fire_before_target_time(self):
         today = _dt.date(2026, 5, 12)
         assert (
             sss._should_fire_now(
@@ -169,6 +175,15 @@ class TestRunOneTick:
     """Drives _run_one_tick with a fake bot + patched post_registration
     + a frozen local clock to verify the orchestration logic."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_retry_cooldown(self):
+        """`_last_attempt` (#365) is module-level state shared across
+        ticks by design — reset it around each test so one test's
+        cooldown entry doesn't suppress the next test's attempt."""
+        sss._last_attempt.clear()
+        yield
+        sss._last_attempt.clear()
+
     def _seed(self, poll_dow: int, signup_time: str, *, enabled: bool = True):
         """Seed the test DB with a DS row that matches the test parameters."""
         import config
@@ -241,19 +256,82 @@ class TestRunOneTick:
         post_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_does_not_fire_off_minute(self, seeded_db):
+    async def test_does_not_fire_before_target_time(self, seeded_db):
         self._seed(poll_dow=1, signup_time="14:00")
         bot, _guild = self._fake_bot()
         post_mock = AsyncMock(return_value={"status": "ok"})
         with (
             patch.object(
-                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 5))
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(13, 55))
             ),
             patch("storm_signup_post.post_registration", post_mock),
         ):
             fired = await sss._run_one_tick(bot)
         assert fired == 0
         post_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fires_on_late_tick_past_target_time(self, seeded_db):
+        """#365 regression: `_run_one_tick` end-to-end for a tick landing
+        after the exact target minute — must still fire, not skip for the
+        week."""
+        self._seed(poll_dow=1, signup_time="14:00")
+        bot, _guild = self._fake_bot()
+        post_mock = AsyncMock(return_value={"status": "ok", "channel_id": 99, "message_id": 1234})
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 5))
+            ),
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
+            fired = await sss._run_one_tick(bot)
+        assert fired == 1
+        post_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_failing_retry_is_cooled_down_not_retried_every_tick(self, seeded_db):
+        """#365: once a guild+event has been attempted, a second tick
+        within the cooldown window must not attempt post_registration
+        again — otherwise at-or-past matching would hammer a guild with a
+        persistently broken channel every single minute for the rest of
+        the day."""
+        self._seed(poll_dow=1, signup_time="14:00")
+        bot, _guild = self._fake_bot()
+        sss._last_attempt.clear()
+        post_mock = AsyncMock(return_value={"status": "error", "reason": "channel not found"})
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
+            await sss._run_one_tick(bot)  # first attempt
+            await sss._run_one_tick(bot)  # immediately after — cooled down
+        assert post_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_resumes_after_cooldown_expires(self, seeded_db):
+        """Once `_RETRY_COOLDOWN` has elapsed, a still-failing guild+event
+        is eligible again."""
+        self._seed(poll_dow=1, signup_time="14:00")
+        bot, _guild = self._fake_bot()
+        sss._last_attempt.clear()
+        post_mock = AsyncMock(return_value={"status": "error", "reason": "channel not found"})
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
+            ),
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
+            await sss._run_one_tick(bot)
+            # Fast-forward the cooldown clock by backdating the recorded attempt.
+            key = (TEST_GUILD_ID, "DS")
+            sss._last_attempt[key] -= sss._RETRY_COOLDOWN
+            await sss._run_one_tick(bot)
+        assert post_mock.await_count == 2
 
     @pytest.mark.asyncio
     async def test_skips_disabled_at_fire_time(self, seeded_db):

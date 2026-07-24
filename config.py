@@ -2536,6 +2536,19 @@ def parse_storm_signup_time(value: str) -> Optional[str]:
     return f"{hour:02d}:{minute:02d}"
 
 
+def get_active_guild_configs() -> list["GuildConfig"]:
+    """Return every fully-configured guild's `GuildConfig` (setup_complete=1).
+
+    Public wrapper around the schema (#366) so callers that need to scan
+    every active guild — `scheduler.py`'s main loop, `bot.py`'s hourly
+    growth-snapshot loop — go through `_get_conn()` like the rest of this
+    module instead of each opening its own ad-hoc `sqlite3.connect(DB_PATH)`.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM guild_configs WHERE setup_complete = 1").fetchall()
+    return [GuildConfig(**dict(row)) for row in rows]
+
+
 def get_scheduled_storm_rows() -> list[dict]:
     """Return every (guild, event_type) row eligible for the auto-signup
     scheduler — structured flow on, poll-day set, and a non-empty

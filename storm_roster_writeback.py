@@ -90,8 +90,15 @@ def _read_power_index(guild_id: int, event_type: str) -> dict:
 
 
 def _delete_date_rows(ws, all_values: list[list[str]], header: list[str], event_date: str) -> None:
-    """Delete existing rows for `event_date` (used on overwrite). Walks bottom-up
-    so row indices stay valid as rows are removed."""
+    """Delete existing rows for `event_date` (used on overwrite).
+
+    Merges the matching row indices into contiguous ranges and issues one
+    `delete_rows(start, end)` call per range instead of one call per row
+    (#366) — a 20-60+ row event roster (primaries + subs across two teams,
+    up to three phases) would otherwise issue 20-60+ sequential Sheets API
+    calls on every re-sync, a real quota risk. Ranges are deleted bottom-up
+    so earlier deletes don't shift the row numbers of ranges still pending.
+    """
     try:
         date_idx = header.index("Event Date")
     except ValueError:
@@ -101,8 +108,21 @@ def _delete_date_rows(ws, all_values: list[list[str]], header: list[str], event_
         for i, row in enumerate(all_values[1:], start=2)  # row 1 = header
         if date_idx < len(row) and row[date_idx].strip() == event_date
     ]
-    for idx in reversed(to_delete):
-        ws.delete_rows(idx)
+    if not to_delete:
+        return
+
+    ranges: list[tuple[int, int]] = []
+    range_start = range_end = to_delete[0]
+    for idx in to_delete[1:]:
+        if idx == range_end + 1:
+            range_end = idx
+            continue
+        ranges.append((range_start, range_end))
+        range_start = range_end = idx
+    ranges.append((range_start, range_end))
+
+    for start, end in reversed(ranges):
+        ws.delete_rows(start, end)
 
 
 def write_mm_storm_roster(

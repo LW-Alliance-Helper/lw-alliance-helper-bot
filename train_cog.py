@@ -311,12 +311,12 @@ class TrainCog(commands.Cog):
         # ── Train Conductor Rotation (#55) ──────────────────────────────
         # Separate per-minute loop for the rotation feature: the weekly
         # draft (fires on the configured draft day) and the daily
-        # confirmation (fires every drive day). In-memory per-day dedup
-        # sets mirror `reminders_fired`; robust outage catch-up is #227's
-        # job (it will stamp this loop's heartbeat).
-        self.last_rotation_date = datetime.now(tz=ET).date()
-        self.rotation_draft_fired = set()  # guild_ids that posted a draft today
-        self.rotation_confirm_fired = set()  # guild_ids that posted a confirm today
+        # confirmation (fires every drive day). Dedup is DB-backed
+        # (guild_train_config.last_rotation_draft_date /
+        # .last_rotation_confirm_date, #367) rather than an in-memory
+        # per-day set, so it survives a Railway restart the same way the
+        # birthday auto-pop dedup does (#89); robust outage catch-up is
+        # #227's job (it will stamp this loop's heartbeat).
         self.check_reminder.start()
         self.check_rotation.start()
 
@@ -732,12 +732,6 @@ class TrainCog(commands.Cog):
         try/except isolates one misconfigured guild from the rest."""
         from config import get_config, get_train_config
 
-        today = datetime.now(tz=ET).date()
-        if self.last_rotation_date != today:
-            self.last_rotation_date = today
-            self.rotation_draft_fired = set()
-            self.rotation_confirm_fired = set()
-
         for guild in self.bot.guilds:
             try:
                 cfg = get_config(guild.id)
@@ -775,12 +769,19 @@ class TrainCog(commands.Cog):
         covers this week when it fires on a Monday, otherwise the upcoming week
         (so a Sunday draft previews the week that starts the next day)."""
         import train_rotation_ui as ui
+        from config import get_rotation_draft_last_fired, mark_rotation_draft_fired
 
         draft_day = int(tcfg.get("weekly_draft_day", 6))
         r_h, r_m = self._hm(tcfg.get("reminder_time"), "22:00")
         if guild_now.weekday() != draft_day or guild_now.hour != r_h or guild_now.minute != r_m:
             return
-        if guild.id in self.rotation_draft_fired:
+        today_iso = guild_now.date().isoformat()
+        # DB-backed dedup (#367) — mirrors the birthday auto-pop fix (#89).
+        # The old in-memory rotation_draft_fired set was wiped on every
+        # Railway restart, so a redeploy at the trigger minute could
+        # re-fire regenerate_week_async and silently discard-and-reroll a
+        # leader's manual edits to that week's draft.
+        if get_rotation_draft_last_fired(guild.id) == today_iso:
             return
 
         channel_id = tcfg.get("reminder_channel_id") or cfg.leadership_channel_id
@@ -790,7 +791,7 @@ class TrainCog(commands.Cog):
                 f"[TRAIN ROTATION] draft channel {channel_id} not resolvable for "
                 f"guild {guild.id} — weekly draft skipped"
             )
-            self.rotation_draft_fired.add(guild.id)
+            mark_rotation_draft_fired(guild.id, today_iso)
             return
 
         today = guild_now.date()
@@ -809,7 +810,7 @@ class TrainCog(commands.Cog):
             print(
                 f"[TRAIN ROTATION] missing perms to post draft in {channel_id} for guild {guild.id}"
             )
-        self.rotation_draft_fired.add(guild.id)
+        mark_rotation_draft_fired(guild.id, today_iso)
         print(f"[TRAIN ROTATION] weekly draft posted for guild {guild.id} (week of {week_start})")
 
     async def _maybe_post_daily_confirm(self, guild, cfg, tcfg, guild_now):
@@ -824,18 +825,27 @@ class TrainCog(commands.Cog):
         r_h, r_m = self._hm(tcfg.get("reminder_time"), "22:00")
         if guild_now.hour != r_h or guild_now.minute != r_m:
             return
-        if guild.id in self.rotation_confirm_fired:
-            return
-        self.rotation_confirm_fired.add(guild.id)  # mark first — one attempt/day
 
         # Resolve against the Last War in-game (server, UTC-2) date, not the
         # guild's local calendar date. The reminder fires at the in-game reset
         # (~2h before local midnight), which is already the next in-game day, so
         # the local date would name the conductor for the day that just ended —
         # the "train a day behind" bug. See config.server_date_for.
-        from config import server_date_for
+        from config import (
+            get_rotation_confirm_last_fired,
+            mark_rotation_confirm_fired,
+            server_date_for,
+        )
 
         today_iso = server_date_for(guild_now).isoformat()
+        # DB-backed dedup (#367) — mirrors the birthday auto-pop fix (#89).
+        # The old in-memory rotation_confirm_fired set was wiped on every
+        # Railway restart, so a redeploy at the trigger minute could re-post
+        # a duplicate confirmation view for the same conductor.
+        if get_rotation_confirm_last_fired(guild.id) == today_iso:
+            return
+        mark_rotation_confirm_fired(guild.id, today_iso)  # mark first — one attempt/day
+
         history = await asyncio.get_event_loop().run_in_executor(
             None, tr.load_history, guild.id, tcfg.get("history_tab") or ""
         )

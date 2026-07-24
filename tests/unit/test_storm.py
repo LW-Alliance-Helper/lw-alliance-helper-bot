@@ -3,12 +3,95 @@ Unit tests for storm.py — mail template formatting, placeholder substitution,
 build_ds_mail, build_cs_mail, parse_ds_template, parse_cs_template.
 """
 
-import pytest
 import sys, os
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
+
+
+# ── _guard (#367: migrated to storm_permissions.is_leader_or_admin) ──────────
+
+
+def _make_interaction(*, roles=(), is_admin=False):
+    interaction = MagicMock()
+    interaction.guild_id = TEST_GUILD_ID
+    member = MagicMock(spec=discord.Member)
+    member.roles = [MagicMock(name=r, spec=discord.Role) for r in roles]
+    for role, name in zip(member.roles, roles):
+        role.name = name
+    member.guild_permissions.administrator = is_admin
+    interaction.user = member
+    interaction.response = MagicMock()
+    interaction.response.is_done.return_value = False
+    interaction.response.send_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+class TestGuard:
+    """#367: storm.py's _guard used to reimplement the leadership check
+    inline and dropped the admin bypass every other structured-flow cog
+    gets via storm_permissions.is_leader_or_admin. Now delegates."""
+
+    @pytest.mark.asyncio
+    async def test_admin_without_leadership_role_passes(self, seeded_db):
+        """The bug this fix closes: an admin with no leadership role must
+        still pass, matching storm_permissions' contract."""
+        from storm import _guard
+        from config import get_or_create_config, save_config
+
+        cfg = get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        cfg.leadership_role_name = "Officers"
+        save_config(cfg)
+
+        interaction = _make_interaction(roles=(), is_admin=True)
+        assert await _guard(interaction) is True
+
+    @pytest.mark.asyncio
+    async def test_leadership_role_passes(self, seeded_db):
+        from storm import _guard
+        from config import get_or_create_config, save_config
+
+        cfg = get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        cfg.leadership_role_name = "Officers"
+        save_config(cfg)
+
+        interaction = _make_interaction(roles=("Officers",), is_admin=False)
+        assert await _guard(interaction) is True
+
+    @pytest.mark.asyncio
+    async def test_non_leader_non_admin_denied(self, seeded_db):
+        from storm import _guard
+        from config import get_or_create_config, save_config
+
+        cfg = get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        cfg.leadership_role_name = "Officers"
+        save_config(cfg)
+
+        interaction = _make_interaction(roles=("Member",), is_admin=False)
+        assert await _guard(interaction) is False
+        interaction.response.send_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_not_set_up_denied_before_role_check(self, temp_db):
+        """No guild config saved at all — must deny before ever touching
+        the role check (temp_db, unlike seeded_db, leaves setup_complete
+        unset)."""
+        from storm import _guard
+
+        interaction = _make_interaction(roles=(), is_admin=True)
+        assert await _guard(interaction) is False
+        msg = interaction.response.send_message.await_args.args[0]
+        assert "set up" in msg.lower() or "setup" in msg.lower()
 
 
 class TestBuildDsMail:

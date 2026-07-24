@@ -255,6 +255,26 @@ These are deliberate and tested. Don't refactor away:
   late-binding under test patches. Don't refactor to module-level
   unless you also update every test that patches `config.X`.
 
+### Fixing a scheduling / dedup / permission bug? Grep for siblings before closing it
+- The 2026-07-17 audit (#361/#367) found the same bug fixed once but
+  never propagated to a structurally similar or newer code path,
+  three separate times: `storm.py`'s `_guard` reimplemented the
+  leadership check instead of calling `storm_permissions
+  .is_leader_or_admin` (and silently dropped the admin bypass);
+  Train Conductor Rotation's draft/confirm dedup used an in-memory
+  set instead of the DB-backed pattern already fixed for birthday
+  auto-population after a real production incident (#89); and
+  `outage_catchup.py`'s recovery scans recomputed "today" from
+  guild-local time instead of `config.server_date_for`, reintroducing
+  a bug already fixed in the live loops (#330/#318).
+- Before closing a bug tied to one of these code-path shapes —
+  scheduling/dedup ("did this already fire today"), permission
+  checks, or server-vs-guild-local date resolution — grep the repo
+  for other places doing the same kind of thing and check whether
+  they need the same fix. A canonical helper existing (`storm_permissions
+  .is_leader_or_admin`, `config.server_date_for`, the DB-backed
+  `last_*_fired` column pattern) doesn't mean every call site uses it.
+
 ---
 
 ## Test fixtures

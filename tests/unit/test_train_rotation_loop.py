@@ -9,16 +9,18 @@ or silently stops the alliance's daily train post. Coverage:
   * Daily confirmation posts only at the configured reminder time, and only
     when today has a `scheduled` history row (not already posted / skipped).
   * `rotation_enabled = 0` → the loop does nothing for that guild.
-  * Per-day dedup sets prevent a double-post.
+  * DB-backed dedup (#367, mirrors the birthday auto-pop fix #89) prevents a
+    double-post — no longer an in-memory per-day set, since that got wiped on
+    every Railway restart and could re-fire at the trigger minute.
 """
 
 import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import pytest
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
@@ -43,9 +45,6 @@ def _make_cog():
     bot.guilds = []
     cog = train_cog.TrainCog.__new__(train_cog.TrainCog)
     cog.bot = bot
-    cog.last_rotation_date = None
-    cog.rotation_draft_fired = set()
-    cog.rotation_confirm_fired = set()
     return cog
 
 
@@ -85,7 +84,20 @@ def _guild():
     return g
 
 
-async def _run(cog, *, now, tcfg=None, history=None, draft=None, channel=None):
+async def _run(
+    cog,
+    *,
+    now,
+    tcfg=None,
+    history=None,
+    draft=None,
+    channel=None,
+    draft_last_fired="",
+    confirm_last_fired="",
+):
+    """Drive one check_rotation tick. `draft_last_fired`/`confirm_last_fired`
+    stand in for the DB-persisted dedup dates (#367) — pass the same ISO date
+    the tick will compute to simulate "already fired today"."""
     import train_cog
 
     cog.bot.guilds = [_guild()]
@@ -101,10 +113,17 @@ async def _run(cog, *, now, tcfg=None, history=None, draft=None, channel=None):
         else [tr.DraftDay("2026-06-08", 0, tr.RULE_AUTO, "Alice", "auto")]
     )
 
+    cog.mark_draft = MagicMock()
+    cog.mark_confirm = MagicMock()
+
     with (
         patch("train_cog.datetime", fake_dt),
         patch("config.get_config", return_value=_cfg()),
         patch("config.get_train_config", return_value=tcfg or _tcfg()),
+        patch("config.get_rotation_draft_last_fired", return_value=draft_last_fired),
+        patch("config.mark_rotation_draft_fired", cog.mark_draft),
+        patch("config.get_rotation_confirm_last_fired", return_value=confirm_last_fired),
+        patch("config.mark_rotation_confirm_fired", cog.mark_confirm),
         patch("train_rotation_ui.regenerate_week", MagicMock(return_value=draft)),
         patch("train_rotation.load_history", MagicMock(return_value=history or [])),
     ):
@@ -119,7 +138,7 @@ async def test_weekly_draft_posts_on_day_and_time():
     cog = _make_cog()
     chan = await _run(cog, now=SUNDAY_6PM)
     assert chan.send.await_count >= 1
-    assert GUILD_ID in cog.rotation_draft_fired
+    cog.mark_draft.assert_called_once_with(GUILD_ID, "2026-06-07")
 
 
 async def test_weekly_draft_skips_wrong_time():
@@ -127,22 +146,21 @@ async def test_weekly_draft_skips_wrong_time():
     chan = await _run(cog, now=datetime(2026, 6, 7, 9, 0, tzinfo=ET))  # Sunday, wrong hour
     # Wrong time → no draft; 9am isn't the 8am confirm time either.
     assert chan.send.await_count == 0
-    assert GUILD_ID not in cog.rotation_draft_fired
+    cog.mark_draft.assert_not_called()
 
 
 async def test_weekly_draft_dedup_prevents_double_post():
     cog = _make_cog()
-    cog.last_rotation_date = SUNDAY_6PM.date()  # same day → no midnight reset
-    cog.rotation_draft_fired = {GUILD_ID}  # already fired today
-    chan = await _run(cog, now=SUNDAY_6PM)
+    chan = await _run(cog, now=SUNDAY_6PM, draft_last_fired="2026-06-07")  # already fired today
     assert chan.send.await_count == 0
+    cog.mark_draft.assert_not_called()
 
 
 async def test_rotation_disabled_does_nothing():
     cog = _make_cog()
     chan = await _run(cog, now=SUNDAY_6PM, tcfg=_tcfg(rotation_enabled=0))
     assert chan.send.await_count == 0
-    assert GUILD_ID not in cog.rotation_draft_fired
+    cog.mark_draft.assert_not_called()
 
 
 # ── Daily confirmation ───────────────────────────────────────────────────────
@@ -153,7 +171,7 @@ async def test_daily_confirm_posts_when_scheduled_row_exists():
     history = [tr.HistoryRow("2026-06-01", "Alice", "auto", tr.STATUS_SCHEDULED)]
     chan = await _run(cog, now=MONDAY_6PM, history=history)
     assert chan.send.await_count >= 1
-    assert GUILD_ID in cog.rotation_confirm_fired
+    cog.mark_confirm.assert_called_once_with(GUILD_ID, "2026-06-01")
 
 
 async def test_daily_confirm_skips_when_already_posted():
@@ -173,11 +191,11 @@ async def test_daily_confirm_skips_when_no_row_for_today():
 
 async def test_daily_confirm_dedup_prevents_double_post():
     cog = _make_cog()
-    cog.last_rotation_date = MONDAY_6PM.date()  # same day → no midnight reset
-    cog.rotation_confirm_fired = {GUILD_ID}
     history = [tr.HistoryRow("2026-06-01", "Alice", "auto", tr.STATUS_SCHEDULED)]
-    chan = await _run(cog, now=MONDAY_6PM, history=history)
+    # 2026-06-01 18:00 ET resolves to server (UTC-2) date 2026-06-01 too.
+    chan = await _run(cog, now=MONDAY_6PM, history=history, confirm_last_fired="2026-06-01")
     assert chan.send.await_count == 0
+    cog.mark_confirm.assert_not_called()
 
 
 async def test_daily_confirm_targets_in_game_day_at_evening_reset():
@@ -207,3 +225,4 @@ async def test_daily_confirm_targets_in_game_day_at_evening_reset():
     assert chan.send.await_count >= 1
     assert captured["dd"].date == "2026-06-03"
     assert captured["dd"].member == "Bob"
+    cog.mark_confirm.assert_called_once_with(GUILD_ID, "2026-06-03")

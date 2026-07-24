@@ -54,6 +54,25 @@ class TestGuildConfig:
         cfg = config.get_config(TEST_GUILD_ID)
         assert cfg.timezone == "Europe/London"
 
+    def test_get_active_guild_configs_only_returns_setup_complete(self, temp_db):
+        """#366: scheduler.py's main loop and bot.py's growth_task both
+        scan every active guild via this helper instead of an ad-hoc
+        sqlite3.connect — only setup_complete=1 rows should come back."""
+        import config
+
+        done = config.get_or_create_config(TEST_GUILD_ID)
+        done.setup_complete = True
+        config.save_config(done)
+
+        incomplete_guild_id = TEST_GUILD_ID + 1
+        config.get_or_create_config(incomplete_guild_id)  # setup_complete defaults False
+
+        active = config.get_active_guild_configs()
+        active_ids = {c.guild_id for c in active}
+        assert TEST_GUILD_ID in active_ids
+        assert incomplete_guild_id not in active_ids
+        assert all(isinstance(c, config.GuildConfig) for c in active)
+
     def test_is_setup_complete_false_by_default(self, temp_db):
         import config
 

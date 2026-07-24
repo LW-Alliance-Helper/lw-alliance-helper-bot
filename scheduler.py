@@ -982,19 +982,14 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
 
         triggers = []
 
-        # Build triggers for every configured guild
-        import sqlite3
-        from config import DB_PATH
+        # Build triggers for every configured guild. Off the event loop
+        # (#366) — was a raw sqlite3.connect(DB_PATH) directly in this
+        # coroutine; now routed through config's own connection helper.
+        from config import get_active_guild_configs
 
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM guild_configs WHERE setup_complete = 1").fetchall()
+        active_configs = await asyncio.to_thread(get_active_guild_configs)
 
-        for row in rows:
-            from config import GuildConfig
-
-            cfg = GuildConfig(**dict(row))
-
+        for cfg in active_configs:
             for d in iter_guild_event_drafts(cfg, today):
                 # Draft trigger
                 triggers.append(

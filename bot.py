@@ -205,7 +205,7 @@ async def on_ready():
         try:
             from scripts.seed_demo import seed_demo_guild_from_env
 
-            seed_demo_guild_from_env()
+            await asyncio.to_thread(seed_demo_guild_from_env)
         except Exception as e:
             print(f"[SEED] Demo seed crashed: {type(e).__name__}: {e}")
 
@@ -706,17 +706,16 @@ async def on_app_command_error(
 @tasks.loop(hours=1)
 async def growth_task():
     """Check every hour — run snapshots for guilds whose schedule is due."""
-    from config import DB_PATH, get_growth_config
-    import sqlite3
+    from config import get_active_guild_configs, get_growth_config
 
     now = datetime.now(tz=ET)
 
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute(
-                "SELECT guild_id FROM guild_configs WHERE setup_complete = 1"
-            ).fetchall()
-        guild_ids = [r[0] for r in rows]
+        # Off the event loop (#366) — was a raw sqlite3.connect(DB_PATH)
+        # directly in this coroutine; now routed through config's own
+        # connection helper, shared with scheduler.py's main loop.
+        active_configs = await asyncio.to_thread(get_active_guild_configs)
+        guild_ids = [c.guild_id for c in active_configs]
     except Exception as e:
         print(f"[GROWTH] Could not read guild list: {e}")
         sentry_sdk.capture_exception(e)
@@ -1117,7 +1116,7 @@ async def growth_slash(interaction: discord.Interaction):
             try:
                 from growth import _run_growth_snapshot_inner
 
-                _run_growth_snapshot_inner(guild_id)
+                await asyncio.to_thread(_run_growth_snapshot_inner, guild_id)
                 await inter.followup.send(
                     f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
                     ephemeral=True,

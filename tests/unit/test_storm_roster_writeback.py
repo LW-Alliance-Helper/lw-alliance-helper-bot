@@ -91,6 +91,62 @@ def test_build_rows_aligns_to_header_and_blanks_unknown():
     assert wb.build_rows(header, "2026-06-27", [a], POWER) == [["Ada", "A", "Arsenal", "123", ""]]
 
 
+# ── _delete_date_rows (#366: batch into contiguous ranges) ───────────────────
+
+
+class _FakeWorksheet:
+    """Records every delete_rows(start, end) call instead of hitting Sheets."""
+
+    def __init__(self):
+        self.calls: list[tuple[int, int]] = []
+
+    def delete_rows(self, start_index, end_index=None):
+        self.calls.append((start_index, end_index if end_index is not None else start_index))
+
+
+HEADER = ["Event Date", "Team", "Member"]
+
+
+def _rows(*dates: str) -> list[list[str]]:
+    """Build an all_values-shaped table: header row + one data row per date."""
+    return [HEADER] + [[d, "A", "x"] for d in dates]
+
+
+def test_contiguous_matching_rows_delete_in_one_call():
+    """5 consecutive matching rows (sheet rows 2-6) must cost exactly one
+    Sheets API call, not five (#366 — a 20-60 row event roster re-sync
+    would otherwise risk the Sheets write quota)."""
+    ws = _FakeWorksheet()
+    all_values = _rows("2026-06-27", "2026-06-27", "2026-06-27", "2026-06-27", "2026-06-27")
+    wb._delete_date_rows(ws, all_values, HEADER, "2026-06-27")
+    assert ws.calls == [(2, 6)]
+
+
+def test_non_contiguous_matches_become_separate_ranges():
+    """Matching rows split by a non-matching row become two ranges — still
+    fewer calls than one-per-row, and each range's bounds are correct."""
+    ws = _FakeWorksheet()
+    # rows 2,3 match; row 4 is a different date; rows 5,6 match again.
+    all_values = _rows("2026-06-27", "2026-06-27", "2026-06-20", "2026-06-27", "2026-06-27")
+    wb._delete_date_rows(ws, all_values, HEADER, "2026-06-27")
+    # Bottom-up order so earlier deletes don't shift pending row numbers.
+    assert ws.calls == [(5, 6), (2, 3)]
+
+
+def test_single_matching_row_still_deletes():
+    ws = _FakeWorksheet()
+    all_values = _rows("2026-06-20", "2026-06-27", "2026-06-20")
+    wb._delete_date_rows(ws, all_values, HEADER, "2026-06-27")
+    assert ws.calls == [(3, 3)]
+
+
+def test_no_matching_rows_makes_no_calls():
+    ws = _FakeWorksheet()
+    all_values = _rows("2026-06-20", "2026-06-13")
+    wb._delete_date_rows(ws, all_values, HEADER, "2026-06-27")
+    assert ws.calls == []
+
+
 # ── endpoint ──────────────────────────────────────────────────────────────────
 
 

@@ -195,7 +195,7 @@ async def run_blurb_wizard_for_entry(
                 )  # may stay None if user picked nothing → falls back to default
 
         # Persist back to schedule
-        schedule = load_schedule(guild_id)
+        schedule = await asyncio.to_thread(load_schedule, guild_id)
         schedule[date_str] = {
             "name": name,
             "theme": theme,
@@ -203,7 +203,7 @@ async def run_blurb_wizard_for_entry(
             "notes": notes,
             "prompt_retrieved": True,
         }
-        save_schedule(schedule, guild_id)
+        await asyncio.to_thread(save_schedule, schedule, guild_id)
 
         # Build and post the prompt
         prompt = build_chatgpt_prompt(
@@ -298,7 +298,7 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
         await interaction.response.defer(ephemeral=True)
 
         d_iso = d.isoformat()
-        schedule = load_schedule(self.guild_id)
+        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
         existed = d_iso in schedule
         existing = schedule.get(d_iso, {})
         schedule[d_iso] = {
@@ -308,7 +308,7 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
             "notes": existing.get("notes", ""),
             "prompt_retrieved": existing.get("prompt_retrieved", False),
         }
-        save_schedule(schedule, self.guild_id)
+        await asyncio.to_thread(save_schedule, schedule, self.guild_id)
 
         verb = "Updated" if existed else "Added"
         msg = f"✅ {verb} **{name}** for **{d:%A, %B} {d.day}**."
@@ -367,7 +367,7 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
         await interaction.response.defer(ephemeral=True)
 
         new_iso = d.isoformat()
-        schedule = load_schedule(self.guild_id)
+        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
 
         # Preserve theme/tone/notes/prompt_retrieved from the original entry
         merged = {
@@ -383,7 +383,7 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
             del schedule[self.original_date_iso]
 
         schedule[new_iso] = merged
-        save_schedule(schedule, self.guild_id)
+        await asyncio.to_thread(save_schedule, schedule, self.guild_id)
 
         msg = f"✅ Updated **{new_name}** for **{d:%A, %B} {d.day}**."
 
@@ -460,7 +460,7 @@ class GeneratePromptSelectView(discord.ui.View):
             f"```\n{prompt}\n```",
             ephemeral=False,
         )
-        mark_blurb_generated(d_iso, self.guild_id)
+        await asyncio.to_thread(mark_blurb_generated, d_iso, self.guild_id)
         self.stop()
 
 
@@ -496,7 +496,7 @@ class TrainActionView(discord.ui.View):
 
     @discord.ui.button(label="✏️ Update", style=discord.ButtonStyle.primary)
     async def update(self, inter: discord.Interaction, button: discord.ui.Button):
-        schedule = load_schedule(self.guild_id)
+        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
         today = date.today()
         cutoff = today - timedelta(days=7)
         upper = today + timedelta(days=30)
@@ -522,7 +522,7 @@ class TrainActionView(discord.ui.View):
 
     @discord.ui.button(label="📋 Generate Prompt", style=discord.ButtonStyle.secondary)
     async def generate(self, inter: discord.Interaction, button: discord.ui.Button):
-        schedule = load_schedule(self.guild_id)
+        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
         today = date.today()
         upper = today + timedelta(days=14)
         entries = []
@@ -558,7 +558,7 @@ class TrainActionView(discord.ui.View):
         )
         await view.wait()
         if view.confirmed:
-            save_schedule({}, self.guild_id)
+            await asyncio.to_thread(save_schedule, {}, self.guild_id)
             await inter.followup.send("🗑️ Train schedule cleared.", ephemeral=True)
         else:
             await inter.followup.send(

@@ -500,7 +500,9 @@ class TrainCog(commands.Cog):
                     # way; that check has its own time gate.
                     if get_birthday_population_last_fired(guild.id) != today_iso:
                         try:
-                            current_schedule = load_schedule(guild.id)
+                            current_schedule = await asyncio.get_event_loop().run_in_executor(
+                                None, load_schedule, guild.id
+                            )
                             # Snapshot for change detection — check_and_add_birthdays
                             # mutates `current_schedule` in place and returns the
                             # same object, so comparing the return value to the
@@ -511,7 +513,9 @@ class TrainCog(commands.Cog):
                                 guild_id=guild.id,
                             )
                             if updated_schedule != before or conflicts:
-                                save_schedule(updated_schedule, guild.id)
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None, save_schedule, updated_schedule, guild.id
+                                )
                             if conflicts:
                                 alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
                                 if alert_channel:
@@ -560,7 +564,9 @@ class TrainCog(commands.Cog):
 
                 # Find today's birthdays
                 tab_name = bcfg.get("tab_name", "Birthdays")
-                members = load_birthdays(tab_name, guild.id)
+                members = await asyncio.get_event_loop().run_in_executor(
+                    None, load_birthdays, tab_name, guild.id
+                )
                 from datetime import date as _d2
 
                 today = _d2.today()
@@ -655,7 +661,7 @@ class TrainCog(commands.Cog):
             from config import server_date_for
 
             today_str = server_date_for(guild_now).isoformat()
-            schedule = load_schedule(guild.id)
+            schedule = await asyncio.get_event_loop().run_in_executor(None, load_schedule, guild.id)
             if today_str not in schedule:
                 self.reminders_fired.add(guild.id)
                 continue

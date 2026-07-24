@@ -838,15 +838,19 @@ async def run_ds_draft_flow(bot, channel, user, team: str, current_zones: dict, 
 
 
 async def _guard(interaction: discord.Interaction) -> bool:
+    """Setup-complete + leadership/admin gate for the legacy mail-generation
+    handlers below. Delegates the role check to `storm_permissions` (#367)
+    rather than reimplementing it — the inline version this replaced
+    predated that module and had silently dropped the admin bypass every
+    other structured-flow cog gets."""
+    from storm_permissions import deny_non_leader, is_leader_or_admin
+
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
-    if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
-        await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
-            ephemeral=True,
-        )
+    if not is_leader_or_admin(interaction):
+        await deny_non_leader(interaction)
         return False
     return True
 

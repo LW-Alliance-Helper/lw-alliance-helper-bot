@@ -194,6 +194,50 @@ class TestTrainRotationConfig:
         assert cfg["day_rules_tab"] == "Days2"
 
 
+class TestRotationDedupPersistence:
+    """#367: the weekly-draft/daily-confirm dedup used to live only in an
+    in-memory set on the TrainCog instance, wiped on every Railway restart
+    (the exact bug class already fixed for birthday auto-pop via
+    last_train_population_date, #89). These now persist to
+    guild_train_config so a redeploy at the trigger minute can't re-fire."""
+
+    def test_draft_last_fired_defaults_empty(self, temp_db):
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        assert config.get_rotation_draft_last_fired(TEST_GUILD_ID) == ""
+
+    def test_draft_last_fired_survives_a_fresh_read(self, temp_db):
+        """Simulates a restart: mark, then read again as if from a brand
+        new process — no in-memory state involved, purely the DB round-trip."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_draft_fired(TEST_GUILD_ID, "2026-06-07")
+        assert config.get_rotation_draft_last_fired(TEST_GUILD_ID) == "2026-06-07"
+
+    def test_confirm_last_fired_survives_a_fresh_read(self, temp_db):
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_confirm_fired(TEST_GUILD_ID, "2026-06-01")
+        assert config.get_rotation_confirm_last_fired(TEST_GUILD_ID) == "2026-06-01"
+
+    def test_draft_and_confirm_dedup_are_independent(self, temp_db):
+        """Marking one surface fired must not affect the other."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_draft_fired(TEST_GUILD_ID, "2026-06-07")
+        assert config.get_rotation_confirm_last_fired(TEST_GUILD_ID) == ""
+
+    def test_unconfigured_guild_returns_empty(self, temp_db):
+        import config
+
+        assert config.get_rotation_draft_last_fired(999999999) == ""
+        assert config.get_rotation_confirm_last_fired(999999999) == ""
+
+
 class TestBirthdayConfig:
     """Test guild_birthday_config save/load."""
 

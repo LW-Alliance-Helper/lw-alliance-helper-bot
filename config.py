@@ -178,7 +178,9 @@ def init_db():
                 weekly_draft_day              INTEGER DEFAULT 6,
                 rule_type_roles               TEXT    DEFAULT '{}',
                 counted_reasons               TEXT    DEFAULT '',
-                active_schedule_preset        TEXT    DEFAULT 'Standard Week'
+                active_schedule_preset        TEXT    DEFAULT 'Standard Week',
+                last_rotation_draft_date      TEXT    DEFAULT '',
+                last_rotation_confirm_date    TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -1111,6 +1113,14 @@ def init_db():
             # comma-separated reason set; empty → DEFAULT_COUNTED_REASONS at read.
             ("counted_reasons", "TEXT DEFAULT ''"),
             ("active_schedule_preset", "TEXT DEFAULT 'Standard Week'"),
+            # DB-backed dedup for the weekly-draft/daily-confirm posts (#367)
+            # — mirrors guild_birthday_config.last_train_population_date
+            # (#89): the in-memory rotation_draft_fired/rotation_confirm_fired
+            # sets on the cog instance were wiped on every Railway restart,
+            # so a redeploy at the trigger minute could re-fire and silently
+            # overwrite a leader's manual weekly edits.
+            ("last_rotation_draft_date", "TEXT DEFAULT ''"),
+            ("last_rotation_confirm_date", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -4714,6 +4724,61 @@ def has_train_config(guild_id: int) -> bool:
     return row is not None
 
 
+def get_rotation_draft_last_fired(guild_id: int) -> str:
+    """Return the ISO date the weekly rotation draft last posted for this
+    guild, or `""` when it hasn't fired yet. DB-backed dedup (#367) —
+    mirrors `get_birthday_population_last_fired` (#89): the cog's old
+    in-memory `rotation_draft_fired` set was wiped on every Railway
+    restart, so a redeploy at the trigger minute could re-fire and
+    silently discard-and-reroll a leader's manual weekly edits."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_rotation_draft_date FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return dict(row).get("last_rotation_draft_date") or ""
+
+
+def mark_rotation_draft_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_rotation_draft_date` so subsequent ticks (including
+    fresh-process ticks after a Railway restart) skip re-posting the
+    weekly draft for the rest of the day."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_train_config SET last_rotation_draft_date = ? WHERE guild_id = ?",
+            (date_iso, guild_id),
+        )
+        conn.commit()
+
+
+def get_rotation_confirm_last_fired(guild_id: int) -> str:
+    """Return the ISO date the daily rotation confirmation last posted for
+    this guild, or `""` when it hasn't fired yet. Same DB-backed dedup
+    rationale as `get_rotation_draft_last_fired` (#367)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_rotation_confirm_date FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return dict(row).get("last_rotation_confirm_date") or ""
+
+
+def mark_rotation_confirm_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_rotation_confirm_date` so subsequent ticks (including
+    fresh-process ticks after a Railway restart) skip re-posting the
+    daily confirmation for the rest of the day."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_train_config SET last_rotation_confirm_date = ? WHERE guild_id = ?",
+            (date_iso, guild_id),
+        )
+        conn.commit()
+
+
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to framework defaults."""
     import json
@@ -4762,6 +4827,8 @@ def get_train_config(guild_id: int) -> dict:
         "rule_type_roles": {},
         "counted_reasons": "",
         "active_schedule_preset": "Standard Week",
+        "last_rotation_draft_date": "",
+        "last_rotation_confirm_date": "",
     }
     return _normalize_train_templates(fallback)
 

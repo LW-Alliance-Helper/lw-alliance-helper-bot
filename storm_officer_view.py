@@ -702,6 +702,102 @@ def _format_on_behalf_ack(
     return msg
 
 
+async def _guard_owner(inter: discord.Interaction, owner_user_id: int) -> bool:
+    """Session-ownership gate shared by every ephemeral officer-view
+    surface (#375 dedupe — previously copy-pasted verbatim across four
+    View classes plus a dozen inline call sites).
+
+    Distinct from `storm_permissions.is_leader_or_admin` (the
+    leader/admin role gate that decides who can OPEN an officer view at
+    all) — this answers a narrower question: "is this the person who
+    opened THIS ephemeral session", so a second officer can't hijack
+    someone else's in-flight picker/confirm view. Sends `DENY_NOT_OWNER`
+    and returns False on mismatch; callers must return immediately when
+    this comes back False.
+    """
+    if inter.user.id != owner_user_id:
+        await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+        return False
+    return True
+
+
+def _add_pagination_row(
+    view: discord.ui.View,
+    *,
+    row: int,
+    owner_user_id: int,
+    next_label: str = "Next ▶",
+) -> None:
+    """Attach the shared `◀ Prev` / `Page N / M` / next-button pagination
+    triple to `view` (#375 dedupe — previously copy-pasted across
+    `_OnBehalfVoteView`, `_TeamPlanRosterPickerView`, and
+    `_TeamPlanSubPickerView`).
+
+    `view` must expose `page` (int), `page_count` (property), and a
+    `_build_components()` re-render method — every picker view already
+    does. Only `row` and `next_label` vary between call sites; the
+    clamp/rebuild/edit-message/HTTPException-swallow behavior is
+    identical everywhere, so it lives here once. No-op when
+    `view.page_count <= 1`, matching every prior copy's behavior.
+    """
+    if view.page_count <= 1:
+        return
+
+    prev_btn = discord.ui.Button(
+        label="◀ Prev",
+        style=discord.ButtonStyle.secondary,
+        disabled=(view.page == 0),
+        row=row,
+    )
+
+    async def _on_prev(inter: discord.Interaction):
+        if not await _guard_owner(inter, owner_user_id):
+            return
+        if view.page > 0:
+            view.page -= 1
+            view._build_components()
+            try:
+                await inter.response.edit_message(view=view)
+            except discord.HTTPException:
+                pass
+        else:
+            await inter.response.defer()
+
+    prev_btn.callback = _on_prev
+    view.add_item(prev_btn)
+
+    page_label = discord.ui.Button(
+        label=f"Page {view.page + 1} / {view.page_count}",
+        style=discord.ButtonStyle.secondary,
+        disabled=True,
+        row=row,
+    )
+    view.add_item(page_label)
+
+    next_btn = discord.ui.Button(
+        label=next_label,
+        style=discord.ButtonStyle.secondary,
+        disabled=(view.page >= view.page_count - 1),
+        row=row,
+    )
+
+    async def _on_next(inter: discord.Interaction):
+        if not await _guard_owner(inter, owner_user_id):
+            return
+        if view.page < view.page_count - 1:
+            view.page += 1
+            view._build_components()
+            try:
+                await inter.response.edit_message(view=view)
+            except discord.HTTPException:
+                pass
+        else:
+            await inter.response.defer()
+
+    next_btn.callback = _on_next
+    view.add_item(next_btn)
+
+
 class _OnBehalfVoteView(discord.ui.View):
     """Ephemeral on-behalf vote picker (#168, multi-select in #218).
 
@@ -973,60 +1069,12 @@ class _OnBehalfVoteView(discord.ui.View):
 
         # Paging row — only rendered when the roster is bigger than the
         # 25-option Select cap.
-        if self.page_count > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0),
-                row=2,
-            )
-
-            async def _on_prev(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page > 0:
-                    self.page -= 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            prev_btn.callback = _on_prev
-            self.add_item(prev_btn)
-
-            page_label = discord.ui.Button(
-                label=f"Page {self.page + 1} / {self.page_count}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=2,
-            )
-            self.add_item(page_label)
-
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1),
-                row=2,
-            )
-
-            async def _on_next(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page < self.page_count - 1:
-                    self.page += 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            next_btn.callback = _on_next
-            self.add_item(next_btn)
+        _add_pagination_row(
+            self,
+            row=2,
+            owner_user_id=self.parent_view.owner_user_id,
+            next_label="Next ▶",
+        )
 
         submit_label = "✅ Submit"
         if self.selected_members and self.selected_vote:
@@ -1109,13 +1157,7 @@ class _OnBehalfVoteView(discord.ui.View):
             self.add_item(toggle_btn)
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await _guard_owner(inter, self.parent_view.owner_user_id)
 
     async def _on_submit(self, inter: discord.Interaction):
         if not await self._guard_owner(inter):
@@ -1331,60 +1373,12 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             select.callback = _on_pick
             self.add_item(select)
 
-        if self.page_count > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0),
-                row=1,
-            )
-
-            async def _on_prev(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page > 0:
-                    self.page -= 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            prev_btn.callback = _on_prev
-            self.add_item(prev_btn)
-
-            page_label = discord.ui.Button(
-                label=f"Page {self.page + 1} / {self.page_count}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=1,
-            )
-            self.add_item(page_label)
-
-            next_pg_btn = discord.ui.Button(
-                label="Page ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1),
-                row=1,
-            )
-
-            async def _on_next_page(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page < self.page_count - 1:
-                    self.page += 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            next_pg_btn.callback = _on_next_page
-            self.add_item(next_pg_btn)
+        _add_pagination_row(
+            self,
+            row=1,
+            owner_user_id=self.parent_view.owner_user_id,
+            next_label="Page ▶",
+        )
 
         # Advance to step 2 — enabled only when 1..30 picks are made.
         pick_count = len(self.selected_target_ids)
@@ -1470,13 +1464,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             self.add_item(clear_btn)
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await _guard_owner(inter, self.parent_view.owner_user_id)
 
     async def on_timeout(self) -> None:
         for item in self.children:
@@ -1580,60 +1568,12 @@ class _TeamPlanSubPickerView(discord.ui.View):
             select.callback = _on_pick
             self.add_item(select)
 
-        if self.page_count > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0),
-                row=1,
-            )
-
-            async def _on_prev(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page > 0:
-                    self.page -= 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            prev_btn.callback = _on_prev
-            self.add_item(prev_btn)
-
-            page_label = discord.ui.Button(
-                label=f"Page {self.page + 1} / {self.page_count}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=1,
-            )
-            self.add_item(page_label)
-
-            next_pg_btn = discord.ui.Button(
-                label="Page ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1),
-                row=1,
-            )
-
-            async def _on_next_page(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                if self.page < self.page_count - 1:
-                    self.page += 1
-                    self._build_components()
-                    try:
-                        await inter.response.edit_message(view=self)
-                    except discord.HTTPException:
-                        pass
-                else:
-                    await inter.response.defer()
-
-            next_pg_btn.callback = _on_next_page
-            self.add_item(next_pg_btn)
+        _add_pagination_row(
+            self,
+            row=1,
+            owner_user_id=self.parent_view.owner_user_id,
+            next_label="Page ▶",
+        )
 
         sub_count = len(self.selected_sub_ids)
         primary_count = len(self.chosen) - sub_count
@@ -1695,13 +1635,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
         self.add_item(cancel_btn)
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await _guard_owner(inter, self.parent_view.owner_user_id)
 
     async def _on_save(self, inter: discord.Interaction):
         if not await self._guard_owner(inter):
@@ -1802,11 +1736,7 @@ async def _open_team_plan(
     those as subs. Save persists via `config.save_storm_team_plan`;
     cancel or timeout leaves any prior plan untouched.
     """
-    if inter.user.id != officer_view.owner_user_id:
-        await inter.response.send_message(
-            DENY_NOT_OWNER,
-            ephemeral=True,
-        )
+    if not await _guard_owner(inter, officer_view.owner_user_id):
         return
 
     # Log entry so the click is at least visible in Railway logs even
@@ -2160,11 +2090,7 @@ class OfficerView(discord.ui.View):
         )
 
         async def _on_filter(inter: discord.Interaction):
-            if inter.user.id != self.owner_user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
+            if not await _guard_owner(inter, self.owner_user_id):
                 return
             choice = filter_select.values[0]
             self.bucket_filter = None if choice == "_all" else choice
@@ -2186,11 +2112,7 @@ class OfficerView(discord.ui.View):
         )
 
         async def _on_behalf(inter: discord.Interaction):
-            if inter.user.id != self.owner_user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
+            if not await _guard_owner(inter, self.owner_user_id):
                 return
             # Defer first — `_read_roster_rows` is a gspread round-trip
             # that can take seconds under rate-limit pressure, and the
@@ -2258,11 +2180,7 @@ class OfficerView(discord.ui.View):
         refresh_btn = discord.ui.Button(label="🔄 Refresh", style=discord.ButtonStyle.secondary)
 
         async def _refresh(inter: discord.Interaction):
-            if inter.user.id != self.owner_user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
+            if not await _guard_owner(inter, self.owner_user_id):
                 return
             # Defer first — `refresh_buckets` does a gspread read off
             # the event loop, which can exceed Discord's 3-second
@@ -2539,11 +2457,7 @@ async def _open_team_setup(
     the saved zone assignments + pairings load on top of the freshly-
     built session.
     """
-    if inter.user.id != officer_view.owner_user_id:
-        await inter.response.send_message(
-            DENY_NOT_OWNER,
-            ephemeral=True,
-        )
+    if not await _guard_owner(inter, officer_view.owner_user_id):
         return
 
     # #240 Resume path: the saved draft already names the preset. Skip
@@ -2684,11 +2598,7 @@ async def _confirm_discard_and_setup(
     draft exists, confirm before discarding the draft. Yes → delete
     the draft + open the preset picker; Cancel → back to officer
     view, draft untouched."""
-    if inter.user.id != officer_view.owner_user_id:
-        await inter.response.send_message(
-            DENY_NOT_OWNER,
-            ephemeral=True,
-        )
+    if not await _guard_owner(inter, officer_view.owner_user_id):
         return
 
     import config
@@ -2744,13 +2654,7 @@ class _DiscardDraftConfirmView(discord.ui.View):
         self.message: Optional[discord.Message] = None
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await _guard_owner(inter, self.owner_id)
 
     @discord.ui.button(label="Yes, start over", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
@@ -2818,8 +2722,7 @@ async def _confirm_clear_votes(
     votes exist, so the officer doesn't get a confirm prompt that does
     nothing.
     """
-    if inter.user.id != officer_view.owner_user_id:
-        await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+    if not await _guard_owner(inter, officer_view.owner_user_id):
         return
 
     import config
@@ -2893,10 +2796,7 @@ class _ClearVotesConfirmView(discord.ui.View):
         self.message: Optional[discord.Message] = None
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
+        return await _guard_owner(inter, self.owner_id)
 
     @discord.ui.button(label="Yes, clear them", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
@@ -3015,12 +2915,7 @@ class _OrphanDraftDiscardView(discord.ui.View):
         self.message: Optional[discord.Message] = None
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
+        return await _guard_owner(inter, self.owner_id)
         return True
 
     @discord.ui.button(label="🗑️ Discard orphan draft", style=discord.ButtonStyle.danger)
@@ -3087,11 +2982,7 @@ class _PresetPickerView(discord.ui.View):
         )
 
         async def _on_pick(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
+            if not await _guard_owner(inter, self.owner_id):
                 return
             self.selected_preset = select.values[0]
             for item in self.children:

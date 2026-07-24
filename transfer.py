@@ -83,9 +83,12 @@ def col_index_to_letter(idx: int) -> str:
     return out
 
 
-def _norm_header(value) -> str:
+def norm_header(value) -> str:
     """Normalise a header / key for matching: trim, collapse internal
-    whitespace, casefold. So ``"Total  Power"`` and ``"total power"`` match."""
+    whitespace, casefold. So ``"Total  Power"`` and ``"total power"`` match.
+    Public because ``transfer_sheets.py`` and ``transfer_cog.py`` need the
+    same normalization (a header used for row lookups must match the header
+    used to write/read cells)."""
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
@@ -129,7 +132,7 @@ def header_index(header_row: list) -> dict:
     column."""
     out: dict = {}
     for i, h in enumerate(header_row):
-        key = _norm_header(h)
+        key = norm_header(h)
         if key and key not in out:
             out[key] = i
     return out
@@ -144,7 +147,7 @@ def cell_for(row: list, hidx: dict, header) -> str | None:
     on."""
     if not header:
         return None
-    idx = hidx.get(_norm_header(header))
+    idx = hidx.get(norm_header(header))
     if idx is None:
         idx = col_letter_to_index(str(header))  # literal-letter escape hatch
     if idx is None or idx < 0 or idx >= len(row):
@@ -286,7 +289,7 @@ def suggest_column_map(header_row: list) -> dict:
     Each header is claimed by at most one role (name > identity > status >
     display), so a column never double-books.
     """
-    items = [(i, _norm_header(h)) for i, h in enumerate(header_row)]
+    items = [(i, norm_header(h)) for i, h in enumerate(header_row)]
     claimed: set = set()
 
     def _best(synonyms):
@@ -845,9 +848,9 @@ def align_row(
         i = None
         mapped = cmap.get(h)
         if mapped:
-            i = src_idx.get(_norm_header(mapped))
+            i = src_idx.get(norm_header(mapped))
         if i is None:
-            i = src_idx.get(_norm_header(h))
+            i = src_idx.get(norm_header(h))
         if i is not None and i < len(source_row):
             cell = source_row[i]
             out.append(cell if isinstance(cell, str) else str(cell))
@@ -974,9 +977,9 @@ def plan_blank_fill(
             if str(current).strip():
                 continue  # never overwrite an existing value
             mapped = cmap.get(th)
-            si = s_hidx.get(_norm_header(mapped)) if mapped else None
+            si = s_hidx.get(norm_header(mapped)) if mapped else None
             if si is None:
-                si = s_hidx.get(_norm_header(th))
+                si = s_hidx.get(norm_header(th))
             if si is None or si >= len(srow):
                 continue
             val = srow[si]
@@ -999,7 +1002,7 @@ def field_token(header) -> str:
     """Template-placeholder token for a display column header:
     ``"Total Hero Power"`` → ``"total_hero_power"``. So a template can drop a
     chosen column's value in with ``{total_hero_power}``."""
-    return re.sub(r"\s+", "_", _norm_header(header)).strip("_")
+    return re.sub(r"\s+", "_", norm_header(header)).strip("_")
 
 
 class _SafeDict(dict):

@@ -189,7 +189,7 @@ class _WriteConfirmView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        col_idx = hidx.get(transfer._norm_header(self.status_col))
+        col_idx = hidx.get(transfer.norm_header(self.status_col))
         if col_idx is None:
             await interaction.followup.send(
                 f"⚠️ The **{self.status_col}** column isn't on the sheet anymore.", ephemeral=True

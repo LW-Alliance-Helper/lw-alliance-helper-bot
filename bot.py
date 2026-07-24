@@ -1962,7 +1962,7 @@ async def admin_transfer_dump_slash(interaction: discord.Interaction, guild_id: 
         out.append(f"header ({len(header)} cols): {header}")
         out.append(f"data rows: {len(rows)}")
         nm = colmap.get("name")
-        out.append(f"name col {nm!r} → index {hidx.get(transfer._norm_header(nm)) if nm else None}")
+        out.append(f"name col {nm!r} → index {hidx.get(transfer.norm_header(nm)) if nm else None}")
         cmap = colmap.get("copy_map")
         if cmap:
             out.append(f"copy_map (target←source): {_json.dumps(cmap, ensure_ascii=False)}")
@@ -1973,7 +1973,7 @@ async def admin_transfer_dump_slash(interaction: discord.Interaction, guild_id: 
             )
             for clause in filt.get("and", []):
                 col = clause.get("column")
-                idx = hidx.get(transfer._norm_header(col))
+                idx = hidx.get(transfer.norm_header(col))
                 samples = [transfer.cell_for(r, hidx, col) for r in rows[:8]]
                 out.append(f"  clause column {col!r} → index {idx}; first values: {samples}")
         out.append("")

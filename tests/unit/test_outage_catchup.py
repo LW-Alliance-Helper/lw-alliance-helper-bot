@@ -256,6 +256,35 @@ class TestScanShiny:
         chan.send.assert_awaited_once_with("✨ body")
         mark.assert_called_once_with(1, "2026-06-05")
 
+    @pytest.mark.asyncio
+    async def test_shiny_cycle_uses_server_date_not_guild_local_date(self):
+        """#364 regression: a post_time near the guild's local midnight can
+        already be past the Last War server (UTC-2) reset, in which case
+        `today` handed to build_announcement_for_guild must be the *next*
+        server day, not the guild-local calendar day `scheduled` carries —
+        same #330 bug class as the live shiny loop."""
+        from datetime import date
+
+        # 21:30 EDT -> 02:30 EDT window straddling the 22:00 post time on
+        # Fri 2026-06-05 local / Sat 2026-06-06 Server Time (UTC-2).
+        window = oc.OutageWindow(
+            start=datetime(2026, 6, 6, 1, 30, tzinfo=UTC),  # 21:30 EDT 6/5
+            end=datetime(2026, 6, 6, 2, 30, tzinfo=UTC),  # 22:30 EDT 6/5
+        )
+        bot = MagicMock()
+        bot.get_channel.return_value = MagicMock(name="announcements")
+        guild = MagicMock(id=1)
+        build_mock = MagicMock(return_value="✨ body")
+        with (
+            patch("config.get_shiny_tasks_config", return_value=self._scfg(post_time="22:00")),
+            patch("config.get_shiny_task_servers_in_range", return_value=[{"server_number": 150}]),
+            patch("shiny_tasks.build_announcement_for_guild", build_mock),
+        ):
+            await oc.scan_shiny(bot, guild, _cfg(), window)
+
+        build_mock.assert_called_once()
+        assert build_mock.call_args.kwargs["today"] == date(2026, 6, 6)
+
 
 def _window_friday():
     # 02:30 -> 08:10 EDT on Fri 2026-06-05
@@ -531,6 +560,31 @@ class TestScanTrainReminder:
         sent = ch.send.await_args.args[0]
         assert "/train` → 📋 Schedule overview → 📋 Generate Prompt" in sent
         assert "/train overview" not in sent
+
+    @pytest.mark.asyncio
+    async def test_schedule_lookup_uses_server_date_not_guild_local_date(self):
+        """#364 regression: same #318 bug class as the live train loop — a
+        22:00-local reminder time is already past the Last War server
+        (UTC-2) reset, so the schedule lookup must key on the *next*
+        server day, not the guild-local calendar day."""
+        window = oc.OutageWindow(
+            start=datetime(2026, 6, 6, 1, 30, tzinfo=UTC),  # 21:30 EDT 6/5
+            end=datetime(2026, 6, 6, 2, 30, tzinfo=UTC),  # 22:30 EDT 6/5
+        )
+        bot = MagicMock()
+        ch = MagicMock()
+        ch.name = "train"
+        bot.get_channel.return_value = ch
+        with (
+            patch("config.get_train_config", return_value=self._tcfg(reminder_time="22:00")),
+            # Only the server-date (6/6) row exists — a guild-local-date (6/5)
+            # lookup would find nothing and wrongly surface no reminder.
+            patch("train.load_schedule", return_value={"2026-06-06": {"name": "bob"}}),
+        ):
+            items = await oc.scan_train_reminder(bot, MagicMock(id=1), _cfg(), window)
+
+        assert len(items) == 1
+        assert items[0].title == "Train reminder: bob"
 
 
 # ── Storm sign-up adapter ────────────────────────────────────────────────────

@@ -46,7 +46,11 @@ def get_guild_cfg(guild_id: int):
 BUTTON_TIMEOUT = 3600
 
 # ── Pending 5-minute warnings ──────────────────────────────────────────────────
-pending_warnings: dict[str, datetime] = {}
+# Each value is (warn_dt, event_list, guild_id). Mirrored to the
+# `scheduler_pending_warnings` DB table (#363) so a restart in the window
+# between approval and the warning firing doesn't lose it silently — see
+# config.save_pending_warning/load_pending_warnings/delete_pending_warning.
+pending_warnings: dict[str, tuple[datetime, list[dict], int]] = {}
 
 
 # ── Event library ──────────────────────────────────────────────────────────────
@@ -751,6 +755,9 @@ class ApprovalView(discord.ui.View):
             warn_dt = first_event_warning_dt(self.event_list)
             if warn_dt:
                 pending_warnings[self.event_key] = (warn_dt, self.event_list, self.guild_id)
+                from config import save_pending_warning
+
+                save_pending_warning(self.event_key, self.guild_id, warn_dt, self.event_list)
                 print(
                     f"[SCHEDULER] 5-min warning scheduled for {warn_dt.strftime('%Y-%m-%d %H:%M %Z')}"
                 )
@@ -966,6 +973,46 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
     await bot.wait_until_ready()
     print("[SCHEDULER] Started.")
 
+    # Recover any 5-minute warnings a restart interrupted before they fired
+    # (#363). A warning whose fire time already passed is caught up
+    # immediately instead of being silently dropped; anything still ahead
+    # of `now` is folded into `pending_warnings` and picked up by the
+    # normal trigger loop below.
+    from config import load_pending_warnings
+
+    restored = load_pending_warnings()
+    if restored:
+        now = datetime.now(tz=ET)
+        for key, (warn_dt, event_list, guild_id) in restored.items():
+            if warn_dt <= now:
+                print(
+                    f"[SCHEDULER] Restart recovery: 5-min warning {key} was due "
+                    f"at {warn_dt.strftime('%Y-%m-%d %H:%M %Z')} (before startup) — firing now"
+                )
+                cfg = get_config(guild_id)
+                if cfg is None:
+                    print(
+                        f"[SCHEDULER][ERROR] Restart recovery: guild {guild_id} has no "
+                        f"config, dropping stale warning {key}"
+                    )
+                    from config import delete_pending_warning
+
+                    delete_pending_warning(key)
+                    continue
+                try:
+                    await fire_warning(bot, key, event_list, cfg)
+                except Exception as e:
+                    import traceback
+
+                    print(f"[SCHEDULER][ERROR] Restart recovery failed to fire {key}: {e}")
+                    print(traceback.format_exc())
+            else:
+                print(
+                    f"[SCHEDULER] Restart recovery: restoring 5-min warning {key} "
+                    f"due at {warn_dt.strftime('%Y-%m-%d %H:%M %Z')}"
+                )
+                pending_warnings[key] = (warn_dt, event_list, guild_id)
+
     while not bot.is_closed():
         now = datetime.now(tz=ET)
         today = now.date()
@@ -1136,4 +1183,7 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         await leadership.send(f"⏱️ **5-minute warning auto-posted** at {_ts}")
 
     pending_warnings.pop(event_key, None)
+    from config import delete_pending_warning
+
+    delete_pending_warning(event_key)
     print(f"[SCHEDULER] 5-minute warning fired for {event_key}")

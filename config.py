@@ -821,6 +821,25 @@ def init_db():
         """)
         conn.commit()
 
+        # scheduler_pending_warnings (#363) — the leadership event-draft
+        # flow's 5-minute-warning queue, persisted so a Railway restart
+        # between "announcement approved" and "warning due" doesn't
+        # silently drop the warning. `event_key` is the same key
+        # scheduler.py's in-memory `pending_warnings` dict uses; the row
+        # is written when the warning is scheduled and deleted once it
+        # fires. `event_list_json` is the serialized event list needed
+        # to render the warning message on fire/catch-up.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scheduler_pending_warnings (
+                event_key       TEXT    PRIMARY KEY,
+                guild_id        INTEGER NOT NULL,
+                warn_at         TEXT    NOT NULL,
+                event_list_json TEXT    NOT NULL,
+                created_at      TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -3175,6 +3194,99 @@ def delete_roster_draft(
         )
         conn.commit()
         return cur.rowcount
+
+
+# ── Scheduler pending warnings (#363) ─────────────────────────────────────────
+#
+# Persisted mirror of scheduler.py's in-memory `pending_warnings` dict, so a
+# restart in the window between an announcement's approval and its 5-minute
+# warning firing doesn't silently drop the warning. See the table's comment
+# in the schema block above for the shape.
+
+
+def _dump_pending_warning_events(event_list: list[dict]) -> str:
+    """Serialize an event_list for storage. Every event dict carries a
+    `dt` (datetime) alongside plain str fields (`key`/`name`/`blurb`,
+    see scheduler.py's event_list shape) — json.dumps can't handle that
+    directly, so `dt` is swapped for its isoformat string on the way out."""
+    import json
+
+    return json.dumps([{**e, "dt": e["dt"].isoformat()} if "dt" in e else e for e in event_list])
+
+
+def _load_pending_warning_events(event_list_json: str) -> list[dict]:
+    """Inverse of `_dump_pending_warning_events` — restores each event's
+    `dt` back to a real `datetime`."""
+    import json
+    from datetime import datetime
+
+    events = json.loads(event_list_json)
+    for e in events:
+        if "dt" in e:
+            e["dt"] = datetime.fromisoformat(e["dt"])
+    return events
+
+
+def save_pending_warning(
+    event_key: str,
+    guild_id: int,
+    warn_at: "datetime",
+    event_list: list[dict],
+) -> None:
+    """Persist a scheduled 5-minute warning. Called right after it's added
+    to the in-memory `pending_warnings` dict, so the two never drift for
+    longer than one event loop tick."""
+    from datetime import datetime, timezone as _tz
+
+    created_at = datetime.now(_tz.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO scheduler_pending_warnings "
+            "(event_key, guild_id, warn_at, event_list_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(event_key) DO UPDATE SET "
+            "  guild_id        = excluded.guild_id, "
+            "  warn_at         = excluded.warn_at, "
+            "  event_list_json = excluded.event_list_json, "
+            "  created_at      = excluded.created_at",
+            (
+                event_key,
+                int(guild_id),
+                warn_at.isoformat(),
+                _dump_pending_warning_events(event_list),
+                created_at,
+            ),
+        )
+        conn.commit()
+
+
+def load_pending_warnings() -> dict[str, tuple["datetime", list[dict], int]]:
+    """Return every persisted pending warning, keyed by event_key, in the
+    same `(warn_dt, event_list, guild_id)` shape scheduler.py's in-memory
+    dict uses. Called once at scheduler startup to recover any warnings a
+    restart interrupted before they fired."""
+    from datetime import datetime
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT event_key, guild_id, warn_at, event_list_json FROM scheduler_pending_warnings"
+        ).fetchall()
+    return {
+        row["event_key"]: (
+            datetime.fromisoformat(row["warn_at"]),
+            _load_pending_warning_events(row["event_list_json"]),
+            row["guild_id"],
+        )
+        for row in rows
+    }
+
+
+def delete_pending_warning(event_key: str) -> None:
+    """Remove a pending warning's persisted row. Called once it fires (or
+    is otherwise cancelled) so it isn't re-loaded on the next restart."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM scheduler_pending_warnings WHERE event_key = ?", (event_key,))
+        conn.commit()
 
 
 # ── Storm registration posts (#123, written by #124) ─────────────────────────

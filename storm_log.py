@@ -1454,7 +1454,8 @@ async def run_log_flow(bot, channel, user, event_type):
                 preselected: set[str] = set()
                 prefill_source = q.get("prefill_source") or ""
                 if prefill_source == "discord_poll":
-                    preselected = _prefill_from_discord_poll(
+                    preselected = await asyncio.to_thread(
+                        _prefill_from_discord_poll,
                         guild_id,
                         event_type,
                         log_date.isoformat(),

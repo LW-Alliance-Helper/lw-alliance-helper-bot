@@ -2618,7 +2618,9 @@ async def _open_team_setup(
 
     import storm_strategy as ss
 
-    preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
+    preset_names = await asyncio.to_thread(
+        ss.list_presets, officer_view.guild_id, officer_view.event_type
+    )
     if not preset_names:
         hub_cmd = HUB_COMMAND[officer_view.event_type]
         await inter.response.send_message(

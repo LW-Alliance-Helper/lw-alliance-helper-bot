@@ -9157,9 +9157,13 @@ async def _run_structured_flow_setup_step(
                     # header. Off the event loop in case the sheet is
                     # slow / rate-limited.
                     try:
-                        sh = get_spreadsheet(guild_id)
-                        ws = sh.worksheet(survey_tab) if sh else None
-                        header_row = await asyncio.to_thread(ws.row_values, 1) if ws else []
+
+                        def _read_survey_header():
+                            sh = get_spreadsheet(guild_id)
+                            ws = sh.worksheet(survey_tab) if sh else None
+                            return ws.row_values(1) if ws else []
+
+                        header_row = await asyncio.to_thread(_read_survey_header)
                     except Exception as e:
                         print(
                             f"[SETUP] survey Date-Modified header lookup "
@@ -10110,7 +10114,7 @@ async def wait_for_msg_simple(
     cancel_event,
     prompt: str,
     *,
-    timeout: int = 120,
+    wait_seconds: int = 120,
 ) -> str | None:
     """Minimal message-wait helper for inline use inside
     `_build_participation_question`. Returns the user's reply text
@@ -10121,7 +10125,7 @@ async def wait_for_msg_simple(
 
     await channel.send(prompt)
     try:
-        reply = await bot.wait_for("message", check=check, timeout=timeout)
+        reply = await bot.wait_for("message", check=check, timeout=wait_seconds)
         return reply.content
     except asyncio.TimeoutError:
         await channel.send("⏰ Timed out.")

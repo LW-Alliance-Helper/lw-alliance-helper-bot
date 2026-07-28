@@ -536,7 +536,7 @@ class TestEventHubViewDispatch:
         view = _make_view(event_type="DS", is_premium=True)
         inter = _make_interaction()
         with patch(
-            "storm_strategy.open_strategy_list",
+            "storm_strategy_ui.open_strategy_list",
             new=AsyncMock(),
         ) as handler:
             await _click(view, seh.HUB_BTN_PRESETS, inter)

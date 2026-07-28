@@ -599,7 +599,7 @@ class TestStormCommandsGate:
         `open_strategy_list`. Confirm that path enforces the same
         leadership gate the legacy `/<event> strategy list` subcommand
         did."""
-        from storm_strategy import open_strategy_list
+        from storm_strategy_ui import open_strategy_list
 
         interaction = make_mock_interaction()
         interaction.user.roles = []

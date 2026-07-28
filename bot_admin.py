@@ -19,11 +19,16 @@ registration is scoped to the guilds listed in `BOT_ADMIN_GUILD_IDS`
 the env var is unset (local dev) the commands fall back to global
 registration.
 
-Imports `bot` (the live Bot instance) and `ET` from bot.py -- safe because
-bot.py only imports this module at the very bottom, after both already
-exist in its namespace. Registers `admin_group` on the tree itself at
-import time (bot.tree.add_command(...) at the bottom of this file), so
-bot.py's own bottom-of-file import is the only wiring it needs.
+Reads `bot` (the live Bot instance), `ET`, and `_try_assign_verified` via
+`bot_state` -- NOT `from bot import ...`. Railway runs `python bot.py`
+directly, which loads it as `__main__`; a plain `from bot import X` inside
+a module bot.py itself imports re-executes bot.py a *second* time under
+the name "bot" (since `sys.modules` has no "bot" entry yet when running as
+__main__), which crashes -- see bot_state.py's module docstring and the
+comment above the three `bot_state.X = ...` assignments in bot.py.
+Registers `admin_group` on the tree itself at import time
+(bot.tree.add_command(...) at the bottom of this file), so bot.py's own
+bottom-of-file import is the only wiring it needs.
 """
 
 import asyncio
@@ -45,7 +50,11 @@ from config import (
     delete_guild_install_metadata,
 )
 import support_join_watch
-from bot import bot, ET, _try_assign_verified
+import bot_state
+
+bot = bot_state.bot
+ET = bot_state.ET
+_try_assign_verified = bot_state.try_assign_verified
 
 # ── Owner-only diagnostic commands ─────────────────────────────────────────────
 #

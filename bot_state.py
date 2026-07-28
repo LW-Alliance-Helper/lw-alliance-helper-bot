@@ -28,8 +28,10 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import asyncio
+    from collections.abc import Callable, Coroutine
     import discord
     from discord.ext import commands
+    from zoneinfo import ZoneInfo
 
 
 # Captured by `bot.on_ready` on first fire. Stays None until the bot
@@ -45,3 +47,19 @@ event_loop: "Optional[asyncio.AbstractEventLoop]" = None
 # than `from bot import bot` to avoid the __main__-vs-`bot`
 # double-load described above.
 bot: "Optional[commands.Bot]" = None
+
+# bot.py's timezone constant + support-join-watch helper (#372). Any
+# module split out of bot.py that needs these -- bot_admin.py does --
+# must read them from here, not `from bot import ET, _try_assign_verified`:
+# that import crashed Railway (which runs `python bot.py` as __main__)
+# with `ImportError: cannot import name '_ADMIN_GUILD_IDS' from
+# 'bot_admin'`, because bot.py's own bottom-of-file `from bot_admin
+# import _ADMIN_GUILD_IDS` triggered bot_admin's `from bot import ...`,
+# which -- since `sys.modules` has no entry for "bot" when it's running
+# as __main__ -- re-executed bot.py a second time under the name "bot",
+# which hit its own `from bot_admin import _ADMIN_GUILD_IDS` line while
+# the first bot_admin import was still mid-execution (paused before
+# `_ADMIN_GUILD_IDS` gets defined), and failed. Set in `bot.py` right
+# after each is defined.
+ET: "Optional[ZoneInfo]" = None
+try_assign_verified: "Optional[Callable[..., Coroutine]]" = None

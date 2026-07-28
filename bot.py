@@ -99,6 +99,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 import bot_state
 
 bot_state.bot = bot
+bot_state.ET = ET
 
 
 # ── Welcome DM (sent to the inviter on every new guild add) ──────────────────
@@ -573,6 +574,9 @@ async def _try_assign_verified(member: discord.Member, role: discord.Role) -> tu
         return False, "missing permission (Forbidden)"
     except discord.HTTPException as e:
         return False, f"Discord error ({e.status})"
+
+
+bot_state.try_assign_verified = _try_assign_verified
 
 
 async def _verification_line(member: discord.Member, *, eligible: bool) -> str | None:

@@ -402,7 +402,7 @@ class _EventHubView(discord.ui.View):
         # Opens the strategy list view (#169 already gives it the
         # Create/Edit/Delete inline buttons, so the hub doesn't need
         # to add a sub-hub for preset CRUD).
-        from storm_strategy import open_strategy_list
+        from storm_strategy_ui import open_strategy_list
 
         await open_strategy_list(inter, self.event_type)
 

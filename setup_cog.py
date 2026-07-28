@@ -8169,7 +8169,8 @@ class _InlineCreatePresetOffer(discord.ui.View):
             child.disabled = True
         await inter.response.edit_message(view=self)
         try:
-            from storm_strategy import seed_default_preset, open_editor_followup
+            from storm_strategy import seed_default_preset
+            from storm_strategy_ui import open_editor_followup
 
             buf = seed_default_preset(self.default_name, self.event_type)
             buf.dirty = True

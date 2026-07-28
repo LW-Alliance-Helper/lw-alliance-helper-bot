@@ -54,6 +54,25 @@ class TestGuildConfig:
         cfg = config.get_config(TEST_GUILD_ID)
         assert cfg.timezone == "Europe/London"
 
+    def test_get_active_guild_configs_only_returns_setup_complete(self, temp_db):
+        """#366: scheduler.py's main loop and bot.py's growth_task both
+        scan every active guild via this helper instead of an ad-hoc
+        sqlite3.connect — only setup_complete=1 rows should come back."""
+        import config
+
+        done = config.get_or_create_config(TEST_GUILD_ID)
+        done.setup_complete = True
+        config.save_config(done)
+
+        incomplete_guild_id = TEST_GUILD_ID + 1
+        config.get_or_create_config(incomplete_guild_id)  # setup_complete defaults False
+
+        active = config.get_active_guild_configs()
+        active_ids = {c.guild_id for c in active}
+        assert TEST_GUILD_ID in active_ids
+        assert incomplete_guild_id not in active_ids
+        assert all(isinstance(c, config.GuildConfig) for c in active)
+
     def test_is_setup_complete_false_by_default(self, temp_db):
         import config
 
@@ -192,6 +211,50 @@ class TestTrainRotationConfig:
         assert cfg["tab_name"] == "Legacy Tab"  # legacy untouched
         assert cfg["rotation_enabled"] == 0
         assert cfg["day_rules_tab"] == "Days2"
+
+
+class TestRotationDedupPersistence:
+    """#367: the weekly-draft/daily-confirm dedup used to live only in an
+    in-memory set on the TrainCog instance, wiped on every Railway restart
+    (the exact bug class already fixed for birthday auto-pop via
+    last_train_population_date, #89). These now persist to
+    guild_train_config so a redeploy at the trigger minute can't re-fire."""
+
+    def test_draft_last_fired_defaults_empty(self, temp_db):
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        assert config.get_rotation_draft_last_fired(TEST_GUILD_ID) == ""
+
+    def test_draft_last_fired_survives_a_fresh_read(self, temp_db):
+        """Simulates a restart: mark, then read again as if from a brand
+        new process — no in-memory state involved, purely the DB round-trip."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_draft_fired(TEST_GUILD_ID, "2026-06-07")
+        assert config.get_rotation_draft_last_fired(TEST_GUILD_ID) == "2026-06-07"
+
+    def test_confirm_last_fired_survives_a_fresh_read(self, temp_db):
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_confirm_fired(TEST_GUILD_ID, "2026-06-01")
+        assert config.get_rotation_confirm_last_fired(TEST_GUILD_ID) == "2026-06-01"
+
+    def test_draft_and_confirm_dedup_are_independent(self, temp_db):
+        """Marking one surface fired must not affect the other."""
+        import config
+
+        config.save_train_rotation_config(TEST_GUILD_ID, rotation_enabled=1)
+        config.mark_rotation_draft_fired(TEST_GUILD_ID, "2026-06-07")
+        assert config.get_rotation_confirm_last_fired(TEST_GUILD_ID) == ""
+
+    def test_unconfigured_guild_returns_empty(self, temp_db):
+        import config
+
+        assert config.get_rotation_draft_last_fired(999999999) == ""
+        assert config.get_rotation_confirm_last_fired(999999999) == ""
 
 
 class TestBirthdayConfig:

@@ -178,7 +178,9 @@ def init_db():
                 weekly_draft_day              INTEGER DEFAULT 6,
                 rule_type_roles               TEXT    DEFAULT '{}',
                 counted_reasons               TEXT    DEFAULT '',
-                active_schedule_preset        TEXT    DEFAULT 'Standard Week'
+                active_schedule_preset        TEXT    DEFAULT 'Standard Week',
+                last_rotation_draft_date      TEXT    DEFAULT '',
+                last_rotation_confirm_date    TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -821,6 +823,25 @@ def init_db():
         """)
         conn.commit()
 
+        # scheduler_pending_warnings (#363) — the leadership event-draft
+        # flow's 5-minute-warning queue, persisted so a Railway restart
+        # between "announcement approved" and "warning due" doesn't
+        # silently drop the warning. `event_key` is the same key
+        # scheduler.py's in-memory `pending_warnings` dict uses; the row
+        # is written when the warning is scheduled and deleted once it
+        # fires. `event_list_json` is the serialized event list needed
+        # to render the warning message on fire/catch-up.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scheduler_pending_warnings (
+                event_key       TEXT    PRIMARY KEY,
+                guild_id        INTEGER NOT NULL,
+                warn_at         TEXT    NOT NULL,
+                event_list_json TEXT    NOT NULL,
+                created_at      TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -1111,6 +1132,14 @@ def init_db():
             # comma-separated reason set; empty → DEFAULT_COUNTED_REASONS at read.
             ("counted_reasons", "TEXT DEFAULT ''"),
             ("active_schedule_preset", "TEXT DEFAULT 'Standard Week'"),
+            # DB-backed dedup for the weekly-draft/daily-confirm posts (#367)
+            # — mirrors guild_birthday_config.last_train_population_date
+            # (#89): the in-memory rotation_draft_fired/rotation_confirm_fired
+            # sets on the cog instance were wiped on every Railway restart,
+            # so a redeploy at the trigger minute could re-fire and silently
+            # overwrite a leader's manual weekly edits.
+            ("last_rotation_draft_date", "TEXT DEFAULT ''"),
+            ("last_rotation_confirm_date", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -2536,6 +2565,19 @@ def parse_storm_signup_time(value: str) -> Optional[str]:
     return f"{hour:02d}:{minute:02d}"
 
 
+def get_active_guild_configs() -> list["GuildConfig"]:
+    """Return every fully-configured guild's `GuildConfig` (setup_complete=1).
+
+    Public wrapper around the schema (#366) so callers that need to scan
+    every active guild — `scheduler.py`'s main loop, `bot.py`'s hourly
+    growth-snapshot loop — go through `_get_conn()` like the rest of this
+    module instead of each opening its own ad-hoc `sqlite3.connect(DB_PATH)`.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM guild_configs WHERE setup_complete = 1").fetchall()
+    return [GuildConfig(**dict(row)) for row in rows]
+
+
 def get_scheduled_storm_rows() -> list[dict]:
     """Return every (guild, event_type) row eligible for the auto-signup
     scheduler — structured flow on, poll-day set, and a non-empty
@@ -3175,6 +3217,99 @@ def delete_roster_draft(
         )
         conn.commit()
         return cur.rowcount
+
+
+# ── Scheduler pending warnings (#363) ─────────────────────────────────────────
+#
+# Persisted mirror of scheduler.py's in-memory `pending_warnings` dict, so a
+# restart in the window between an announcement's approval and its 5-minute
+# warning firing doesn't silently drop the warning. See the table's comment
+# in the schema block above for the shape.
+
+
+def _dump_pending_warning_events(event_list: list[dict]) -> str:
+    """Serialize an event_list for storage. Every event dict carries a
+    `dt` (datetime) alongside plain str fields (`key`/`name`/`blurb`,
+    see scheduler.py's event_list shape) — json.dumps can't handle that
+    directly, so `dt` is swapped for its isoformat string on the way out."""
+    import json
+
+    return json.dumps([{**e, "dt": e["dt"].isoformat()} if "dt" in e else e for e in event_list])
+
+
+def _load_pending_warning_events(event_list_json: str) -> list[dict]:
+    """Inverse of `_dump_pending_warning_events` — restores each event's
+    `dt` back to a real `datetime`."""
+    import json
+    from datetime import datetime
+
+    events = json.loads(event_list_json)
+    for e in events:
+        if "dt" in e:
+            e["dt"] = datetime.fromisoformat(e["dt"])
+    return events
+
+
+def save_pending_warning(
+    event_key: str,
+    guild_id: int,
+    warn_at: "datetime",
+    event_list: list[dict],
+) -> None:
+    """Persist a scheduled 5-minute warning. Called right after it's added
+    to the in-memory `pending_warnings` dict, so the two never drift for
+    longer than one event loop tick."""
+    from datetime import datetime, timezone as _tz
+
+    created_at = datetime.now(_tz.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO scheduler_pending_warnings "
+            "(event_key, guild_id, warn_at, event_list_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(event_key) DO UPDATE SET "
+            "  guild_id        = excluded.guild_id, "
+            "  warn_at         = excluded.warn_at, "
+            "  event_list_json = excluded.event_list_json, "
+            "  created_at      = excluded.created_at",
+            (
+                event_key,
+                int(guild_id),
+                warn_at.isoformat(),
+                _dump_pending_warning_events(event_list),
+                created_at,
+            ),
+        )
+        conn.commit()
+
+
+def load_pending_warnings() -> dict[str, tuple["datetime", list[dict], int]]:
+    """Return every persisted pending warning, keyed by event_key, in the
+    same `(warn_dt, event_list, guild_id)` shape scheduler.py's in-memory
+    dict uses. Called once at scheduler startup to recover any warnings a
+    restart interrupted before they fired."""
+    from datetime import datetime
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT event_key, guild_id, warn_at, event_list_json FROM scheduler_pending_warnings"
+        ).fetchall()
+    return {
+        row["event_key"]: (
+            datetime.fromisoformat(row["warn_at"]),
+            _load_pending_warning_events(row["event_list_json"]),
+            row["guild_id"],
+        )
+        for row in rows
+    }
+
+
+def delete_pending_warning(event_key: str) -> None:
+    """Remove a pending warning's persisted row. Called once it fires (or
+    is otherwise cancelled) so it isn't re-loaded on the next restart."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM scheduler_pending_warnings WHERE event_key = ?", (event_key,))
+        conn.commit()
 
 
 # ── Storm registration posts (#123, written by #124) ─────────────────────────
@@ -4714,6 +4849,61 @@ def has_train_config(guild_id: int) -> bool:
     return row is not None
 
 
+def get_rotation_draft_last_fired(guild_id: int) -> str:
+    """Return the ISO date the weekly rotation draft last posted for this
+    guild, or `""` when it hasn't fired yet. DB-backed dedup (#367) —
+    mirrors `get_birthday_population_last_fired` (#89): the cog's old
+    in-memory `rotation_draft_fired` set was wiped on every Railway
+    restart, so a redeploy at the trigger minute could re-fire and
+    silently discard-and-reroll a leader's manual weekly edits."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_rotation_draft_date FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return dict(row).get("last_rotation_draft_date") or ""
+
+
+def mark_rotation_draft_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_rotation_draft_date` so subsequent ticks (including
+    fresh-process ticks after a Railway restart) skip re-posting the
+    weekly draft for the rest of the day."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_train_config SET last_rotation_draft_date = ? WHERE guild_id = ?",
+            (date_iso, guild_id),
+        )
+        conn.commit()
+
+
+def get_rotation_confirm_last_fired(guild_id: int) -> str:
+    """Return the ISO date the daily rotation confirmation last posted for
+    this guild, or `""` when it hasn't fired yet. Same DB-backed dedup
+    rationale as `get_rotation_draft_last_fired` (#367)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_rotation_confirm_date FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return dict(row).get("last_rotation_confirm_date") or ""
+
+
+def mark_rotation_confirm_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_rotation_confirm_date` so subsequent ticks (including
+    fresh-process ticks after a Railway restart) skip re-posting the
+    daily confirmation for the rest of the day."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_train_config SET last_rotation_confirm_date = ? WHERE guild_id = ?",
+            (date_iso, guild_id),
+        )
+        conn.commit()
+
+
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to framework defaults."""
     import json
@@ -4762,6 +4952,8 @@ def get_train_config(guild_id: int) -> dict:
         "rule_type_roles": {},
         "counted_reasons": "",
         "active_schedule_preset": "Standard Week",
+        "last_rotation_draft_date": "",
+        "last_rotation_confirm_date": "",
     }
     return _normalize_train_templates(fallback)
 

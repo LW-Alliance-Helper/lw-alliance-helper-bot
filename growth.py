@@ -548,11 +548,47 @@ def _get_spreadsheet(guild_id: int = None):
     return get_spreadsheet(guild_id)
 
 
-def _safe_float(val: str) -> float:
-    """Parse a string to float, returning 0.0 if blank or invalid."""
+def _col_index(letter: str) -> int | None:
+    """Spreadsheet column letter → 0-based index (``A`` → 0, ``AA`` → 26).
+    Returns ``None`` for a blank / non-alphabetic value. Inverse of
+    :func:`_col_letter`; bare ``ord()`` arithmetic raises TypeError past ``Z``."""
+    if not letter:
+        return None
+    letter = str(letter).strip().upper()
+    if not letter or not letter.isalpha():
+        return None
+    idx = 0
+    for ch in letter:
+        idx = idx * 26 + (ord(ch) - ord("A") + 1)
+    return idx - 1
+
+
+# gspread's `get_all_values()` returns the *formatted* display string, so a
+# power cell with a thousands-separator number format comes back as
+# "65,200,000" — which bare `float()` rejects. Every other numeric reader in
+# the repo already normalises this (`_parse_growth_cell` below,
+# `survey._parse_numeric`, `storm_strategy.parse_power`); this one didn't, so
+# every metric big enough to carry a comma snapshotted as 0 while small ones
+# (drone level) came through fine.
+_MAGNITUDE = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+
+def _safe_float(val) -> float:
+    """Parse a sheet cell to float, returning 0.0 if blank or invalid.
+
+    Tolerates thousands separators ("65,200,000"), stray spaces/underscores,
+    and the K/M/B shorthand alliances hand-type ("250M", "1.2b")."""
+    if val is None:
+        return 0.0
+    s = str(val).strip().replace(",", "").replace("_", "").replace(" ", "").lower()
+    if not s:
+        return 0.0
+    multiplier = 1
+    if s[-1] in _MAGNITUDE:
+        multiplier, s = _MAGNITUDE[s[-1]], s[:-1]
     try:
-        return float(str(val).strip()) if val and str(val).strip() else 0.0
-    except ValueError:
+        return float(s) * multiplier
+    except (ValueError, TypeError):
         return 0.0
 
 
@@ -579,8 +615,23 @@ def load_member_data(guild_id: int = None) -> list[dict]:
         ws = sh.worksheet(tab_source)
         rows = ws.get_all_values()
 
-        name_idx = ord(name_col.upper()) - ord("A")
-        metric_idxs = {m["label"]: ord(m["col"].upper()) - ord("A") for m in metrics}
+        # Two-letter columns ("AA") are reachable on a survey tab with enough
+        # questions; bare `ord()` raised TypeError there, which the except
+        # below swallowed into an empty list and a silently skipped snapshot.
+        name_idx = _col_index(name_col)
+        if name_idx is None:
+            print(f"[GROWTH] Invalid name column '{name_col}' for guild {guild_id}")
+            return []
+        metric_idxs = {}
+        for m in metrics:
+            idx = _col_index(m.get("col"))
+            if idx is None:
+                print(
+                    f"[GROWTH] Skipping metric '{m.get('label')}' for guild {guild_id} "
+                    f"— invalid column '{m.get('col')}'"
+                )
+                continue
+            metric_idxs[m["label"]] = idx
 
         members = []
         for i, row in enumerate(rows[start_row - 1 :], start=start_row):
@@ -731,7 +782,11 @@ def _run_growth_snapshot_inner(guild_id: int = None):
                 col_name = f"{label} ({month_label})"
                 if col_name in header_row:
                     col_idx = header_row.index(col_name)
-                    col_letter = chr(ord("A") + col_idx)
+                    # `_col_letter`, not bare ord() arithmetic — a growth tab
+                    # accumulating metric columns crosses Z within a few
+                    # snapshots, and chr(ord("A") + 26) is "[", an invalid A1
+                    # range that fails the whole batch write.
+                    col_letter = _col_letter(col_idx)
                     val = member.get(label, "")
                     updates.append(
                         {

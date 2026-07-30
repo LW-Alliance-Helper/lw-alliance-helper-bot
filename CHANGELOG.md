@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.5] — 2026-07-30
+
+### Fixed
+- Growth snapshots recorded `0` for every metric large enough to show a thousands separator, such as squad powers and total kills; all metrics now record their real value ([#415](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/415)).
+- The growth section of `/my_stats` and `/member_stats` now shows real numbers instead of `0` for those same metrics ([#415](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/415)).
+- Growth snapshots no longer fail once your tracking tab grows past column Z ([#415](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/415)).
+- A growth metric pointed at a source column past Z, such as `AA`, no longer causes the snapshot to be skipped ([#415](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/415)).
+
 ## [1.7.4] — 2026-07-21
 
 ### Fixed

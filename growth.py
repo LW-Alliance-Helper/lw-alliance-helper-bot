@@ -54,8 +54,21 @@ DEFAULT_BUCKET_LABELS: dict[str, str] = {
     "increased": "Increased",
     "steady": "Steady",
     "low": "Low",
-    "none": "None",
+    # "No Change", not "None" — on the embed a bucket headed "None" reads as
+    # "we have no data for these members" rather than "these members grew 0-5%",
+    # which is the opposite of what it means (#417). The canonical key stays
+    # `none`, so saved `breakdown_bucket_filter` values and any per-guild
+    # `breakdown_labels` override are unaffected.
+    "none": "No Change",
     "decline": "Decline",
+}
+
+# Display labels this file used to write, keyed lowercase → canonical bucket.
+# `read_latest_breakdown` folds these into its reverse map so cells written
+# before a rename still classify. Never remove an entry: the sheet is the
+# historical record and those cells are never rewritten.
+_LEGACY_BUCKET_LABELS: dict[str, str] = {
+    "none": "none",
 }
 
 
@@ -472,6 +485,9 @@ def upsert_member_power(
         ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
+    # An OCR reading can be the first thing to create a period's column, so it
+    # formats them the same way the scheduled snapshot does (#417).
+    _apply_number_format(ws, header_row, [f"{label} ({period})" for label in sent_labels], guild_id)
     return {"written": upserted > 0, "rows": upserted}
 
 
@@ -801,6 +817,10 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         if updates:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
 
+        # Give this period's columns the same thousands-separator format the
+        # alliance already keeps on their source columns (#417).
+        _apply_number_format(ws, header_row, new_headers, guild_id)
+
         print(
             f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})"
         )
@@ -961,10 +981,16 @@ def _write_breakdown_for_snapshot(
             if prev_row is not None and m in prev_idxs:
                 idx = prev_idxs[m]
                 if idx < len(prev_row):
-                    try:
-                        prev_val = float(prev_row[idx]) if prev_row[idx] else 0.0
-                    except (ValueError, TypeError):
-                        prev_val = 0.0
+                    # `_safe_float`, not bare float() (#417). The growth tab
+                    # carries a thousands-separator number format, so gspread's
+                    # FORMATTED_VALUE read hands back "57,150,000"; float()
+                    # raised, the except zeroed the baseline, and prev <= 0
+                    # reads as "no baseline" in classify_bucket — so every
+                    # member fell out of every bucket and the embed rendered
+                    # "No members in the included buckets" for each metric big
+                    # enough to carry a comma. Drone level (3 digits) was the
+                    # only survivor. Same normalisation the sibling readers use.
+                    prev_val = _safe_float(prev_row[idx])
 
             pct_val = compute_pct_change(prev_val, curr_val)
             bucket = classify_bucket(prev_val, curr_val, thresholds=thresholds)
@@ -1027,6 +1053,40 @@ def _col_letter(idx0: int) -> str:
         if n < 0:
             break
     return letters
+
+
+# Thousands-separator pattern for snapshot columns. Growth metrics are whole
+# numbers (power, kills, drone level), so `#,##0` matches what alliances apply
+# to their own source columns by hand.
+_NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+
+
+def _apply_number_format(ws, header_row: list[str], headers: list[str], guild_id=None) -> None:
+    """Format each of `headers`' columns (row 2 down) with `_NUMBER_FORMAT`.
+
+    A fresh period otherwise lands as a bare ``65190000`` beside the previous
+    period's ``57,150,000``, which is unreadable across a wide growth tab
+    (#417). Formatting the column rather than writing pre-formatted strings
+    keeps the cells genuine numbers, so every reader that parses them back
+    keeps working.
+
+    Best-effort: the snapshot values are already committed by the time this
+    runs, so a Sheets failure logs and returns instead of failing the write.
+    """
+    ranges = []
+    for h in headers:
+        try:
+            idx = header_row.index(h)
+        except ValueError:
+            continue
+        letter = _col_letter(idx)
+        ranges.append(f"{letter}2:{letter}")
+    if not ranges:
+        return
+    try:
+        ws.format(ranges, _NUMBER_FORMAT)
+    except Exception as e:
+        print(f"[GROWTH] Could not apply number format for guild {guild_id}: {e}")
 
 
 def _maybe_post_breakdown(
@@ -1135,6 +1195,11 @@ def read_latest_breakdown(guild_id: int) -> dict:
         display = label_overrides.get(bucket_key) or default_label
         label_to_key[str(display).strip().lower()] = bucket_key
         label_to_key[default_label.strip().lower()] = bucket_key  # always accept canonical too
+    # Retired default labels, so rows written before a rename still round-trip.
+    # `none` was displayed as "None" until #417; every breakdown tab in the
+    # fleet has historical cells carrying it.
+    for legacy_label, bucket_key in _LEGACY_BUCKET_LABELS.items():
+        label_to_key.setdefault(legacy_label, bucket_key)
 
     try:
         sh = _get_spreadsheet(guild_id)

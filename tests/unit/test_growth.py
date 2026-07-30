@@ -726,7 +726,7 @@ class TestFormatBreakdownEmbed:
         assert "Decline" in power_field and "Carol" in power_field
         # Empty buckets aren't rendered.
         assert "Low" not in power_field
-        assert "None" not in power_field
+        assert "No Change" not in power_field
 
     def test_bucket_filter_omits_unselected_buckets(self):
         from growth import format_breakdown_embed
@@ -906,6 +906,98 @@ class TestSnapshotBreakdownWriting:
         # combined writes shouldn't include any 'Decline' or extra bucket.
         assert sum(1 for v in values_only if v == "Increased") == 1
         assert not any(v == "Decline" for v in values_only)
+
+    def test_breakdown_baseline_parses_comma_formatted_prev(self, seeded_db):
+        """#417: the growth tab carries a thousands-separator number format, so
+        gspread returns "100,000,000" for the previous period. A bare float()
+        raised, the except zeroed the baseline, and classify_bucket treats
+        prev <= 0 as "no baseline" — so every member with a comma-carrying
+        value silently fell out of every bucket and the embed rendered "No
+        members in the included buckets"."""
+        from datetime import datetime
+        from growth import _run_growth_snapshot_inner
+
+        self._seed_config()
+
+        month_label = datetime.now().strftime("%b %Y")
+        prev_label = "Apr 2026"
+        growth_header = ["Name", f"Power ({prev_label})"]
+        # The formatted read, exactly as gspread hands it back.
+        growth_rows = [["Alice", "100,000,000"]]
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=growth_header,
+            growth_rows=growth_rows,
+            members=[],
+        )
+
+        members = [{"name": "Alice", "row_index": 2, "Power": 130_000_000.0}]  # +30%
+        with (
+            patch("growth._get_spreadsheet", return_value=mock_sh),
+            patch("growth.load_member_data", return_value=members),
+        ):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        values_only = []
+        for call_args in bd_ws.batch_update.call_args_list:
+            for entry in call_args[0][0]:
+                values_only.append(entry["values"][0][0])
+        assert any(v == "30.00%" for v in values_only), (
+            f"comma-formatted baseline was not parsed: {values_only}"
+        )
+        assert any(v == "Increased" for v in values_only)
+
+    def test_snapshot_formats_new_period_columns(self, seeded_db):
+        """#417: a fresh period must land with the same thousands-separator
+        format the alliance keeps on their source columns, instead of a bare
+        65190000 beside the previous period's 57,150,000."""
+        from datetime import datetime
+        from growth import _run_growth_snapshot_inner
+
+        self._seed_config()
+
+        month_label = datetime.now().strftime("%b %Y")
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=["Name", "Power (Apr 2026)"],
+            growth_rows=[["Alice", "100"]],
+            members=[],
+        )
+
+        members = [{"name": "Alice", "row_index": 2, "Power": 130.0}]
+        with (
+            patch("growth._get_spreadsheet", return_value=mock_sh),
+            patch("growth.load_member_data", return_value=members),
+        ):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        assert growth_ws.format.called, "no number format applied to the new period"
+        ranges, fmt = growth_ws.format.call_args[0]
+        assert fmt == {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+        # Column C is this period's `Power ({month})`, appended after
+        # Name + Power (Apr 2026). Formatted row 2 down so the header keeps
+        # its own styling.
+        assert ranges == ["C2:C"], f"unexpected format target for {month_label}: {ranges}"
+
+    def test_number_format_failure_does_not_fail_snapshot(self, seeded_db):
+        """The values are already committed when the format call runs, so a
+        Sheets error there must not propagate."""
+        from growth import _run_growth_snapshot_inner
+
+        self._seed_config()
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=["Name", "Power (Apr 2026)"],
+            growth_rows=[["Alice", "100"]],
+            members=[],
+        )
+        growth_ws.format = MagicMock(side_effect=Exception("429 quota"))
+
+        members = [{"name": "Alice", "row_index": 2, "Power": 130.0}]
+        with (
+            patch("growth._get_spreadsheet", return_value=mock_sh),
+            patch("growth.load_member_data", return_value=members),
+        ):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)  # must not raise
+
+        assert growth_ws.batch_update.called
 
     def test_duplicate_period_still_writes_missing_breakdown(self, seeded_db):
         """Regression for #85. The seeder (or a previous in-period
@@ -1128,11 +1220,45 @@ class TestReadLatestBreakdown:
         assert result["prev_period_label"] == "Apr 2026"
         assert result["curr_period_label"] == "May 2026"
         assert result["metric_labels"] == ["Power"]
-        # Latest transition: Alice → Increased, Bob → None.
+        # Latest transition: Alice → Increased, Bob → No Change. Bob's cell
+        # carries the pre-#417 "None" label, which must still round-trip.
         assert result["summary"]["Power"]["increased"] == ["Alice"]
         assert result["summary"]["Power"]["none"] == ["Bob"]
         # Earlier transition's data must not leak through.
         assert result["summary"]["Power"]["decline"] == []
+
+    def test_current_and_legacy_none_labels_both_map(self, seeded_db):
+        """#417 renamed the `none` bucket's display label from "None" to "No
+        Change". Breakdown tabs are never rewritten, so a single tab can hold
+        both spellings and both must classify."""
+        from growth import read_latest_breakdown
+        from config import save_growth_config
+
+        save_growth_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Powers",
+            name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth",
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
+            data_start_row=2,
+        )
+        bd_values = [
+            ["Name", "Apr 2026 - May 2026 Power %", "Apr 2026 - May 2026 Power Bucket"],
+            ["Alice", "1.00%", "None"],  # written before the rename
+            ["Bob", "2.00%", "No Change"],  # written after
+        ]
+        bd_ws = MagicMock()
+        bd_ws.get_all_values = MagicMock(return_value=bd_values)
+        mock_sh = MagicMock()
+        mock_sh.worksheet = MagicMock(return_value=bd_ws)
+        with patch("growth._get_spreadsheet", return_value=mock_sh):
+            result = read_latest_breakdown(TEST_GUILD_ID)
+
+        assert result["summary"]["Power"]["none"] == ["Alice", "Bob"]
 
 
 # ── Next-snapshot date helper ─────────────────────────────────────────────────

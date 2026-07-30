@@ -9,6 +9,15 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.7.6] — 2026-07-30
+
+### Fixed
+- Growth Breakdown reported "No members in the included buckets" for every metric large enough to show a thousands separator, such as squad powers; those metrics now bucket correctly ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
+
+### Changed
+- Growth snapshots now write each new period's columns with thousands separators, matching the formatting alliances keep on their own source columns ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
+- The growth bucket for 0-5% change is now labelled "No Change" instead of "None", which read as though the bot had no data for those members ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
+
 ## [1.7.5] — 2026-07-30
 
 ### Fixed

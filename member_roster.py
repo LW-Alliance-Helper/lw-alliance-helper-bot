@@ -248,6 +248,50 @@ def read_roster_members(guild_id: int) -> list[dict]:
     return parse_roster_rows(rcfg, values)
 
 
+def roster_identity_map(guild_id: int) -> dict[str, str]:
+    """Norm-name → stable per-member identity, for every roster row that has one.
+
+    Used to key long-lived per-member sheet rows (growth snapshots, #418) on
+    something that survives an in-game name change, with the name left as the
+    fallback.
+
+    Deliberately looser than `parse_roster_rows`, which nulls any non-numeric
+    Discord-ID cell: here **any** non-empty cell counts. Alliances hand-maintain
+    that column with their own stable keys for members who aren't in Discord
+    (`no-disc-3` and the like), and those are exactly as good a join key as a
+    real snowflake as long as they don't get renumbered. Alliances that leave
+    the column empty simply get an empty map and stay on name matching.
+
+    Never raises — an unreadable or unconfigured roster yields `{}`."""
+    import config
+
+    try:
+        rcfg = config.get_member_roster_config(guild_id)
+        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
+    except Exception as e:
+        print(f"[ROSTER] Could not read roster identities for guild {guild_id}: {e}")
+        return {}
+
+    if not values or len(values) < 2:
+        return {}
+
+    did_col = int(rcfg.get("discord_id_col", 0))
+    name_col = int(rcfg.get("name_col", 1))
+    disp_col = int(rcfg.get("display_col", 2))
+
+    out: dict[str, str] = {}
+    for row in values[1:]:
+        identity = _roster_cell(row, did_col)
+        if not identity:
+            continue
+        # Both spellings map to the same identity: the growth tab may carry
+        # either, depending on which the source tab was pointed at.
+        for candidate in (_roster_cell(row, name_col), _roster_cell(row, disp_col)):
+            if candidate:
+                out.setdefault(candidate.strip().lower(), identity)
+    return out
+
+
 def add_ocr_members(guild_id: int, members: list[dict]) -> dict:
     """Merge-add OCR'd member names to the Member Roster tab (handoff §6.3).
 

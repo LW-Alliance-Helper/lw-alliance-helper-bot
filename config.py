@@ -363,6 +363,16 @@ def init_db():
         # opt-in for "applicant removed from your sheet" notices (only fired
         # when a status had been set). Empty-string template fields mean
         # "use the defaults.py default".
+        #
+        # The `sheet_error_*` trio is the stuck-watcher notice (#413).
+        # `sheet_error_signature` is a stable key for the problem currently
+        # blocking the poll (scope + error class + tab, see
+        # transfer.sheet_error_signature); a non-empty value means "the
+        # watcher is stuck and leadership has been told". `sheet_error_detail`
+        # is the human-readable diagnosis behind it, rendered on the
+        # `/transfers` hub. `sheet_error_notified_at` timestamps the last
+        # leadership post so an unresolved problem re-nudges daily instead of
+        # once per poll. All three clear on the first clean read.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_transfer_config (
                 guild_id                       INTEGER PRIMARY KEY,
@@ -404,7 +414,11 @@ def init_db():
                 last_seen_state_json           TEXT    DEFAULT '{}',
                 copied_state_json              TEXT    DEFAULT '{}',
                 source_enrich_blanks           INTEGER DEFAULT 0,
-                last_polled_at                 TEXT    DEFAULT ''
+                last_polled_at                 TEXT    DEFAULT '',
+
+                sheet_error_signature          TEXT    DEFAULT '',
+                sheet_error_detail             TEXT    DEFAULT '',
+                sheet_error_notified_at        TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -1215,6 +1229,9 @@ def init_db():
             ("copied_state_json", "TEXT    DEFAULT '{}'"),
             ("source_enrich_blanks", "INTEGER DEFAULT 0"),
             ("last_polled_at", "TEXT    DEFAULT ''"),
+            ("sheet_error_signature", "TEXT    DEFAULT ''"),
+            ("sheet_error_detail", "TEXT    DEFAULT ''"),
+            ("sheet_error_notified_at", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_transfer_config ADD COLUMN {col} {definition}")
@@ -5236,6 +5253,9 @@ _TRANSFER_DEFAULTS = {
     "copied_state_json": "{}",
     "source_enrich_blanks": 0,
     "last_polled_at": "",
+    "sheet_error_signature": "",
+    "sheet_error_detail": "",
+    "sheet_error_notified_at": "",
 }
 
 _TRANSFER_FIELDS = set(_TRANSFER_DEFAULTS)

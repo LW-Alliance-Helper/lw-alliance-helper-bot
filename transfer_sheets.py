@@ -32,6 +32,18 @@ def read_sheet(sheet_id: str, tab: str) -> tuple[list, list]:
     return values[0], values[1:]
 
 
+def list_tab_names(sheet_id: str) -> list:
+    """Every worksheet tab name in a spreadsheet, in sheet order.
+
+    Used by the stuck-watcher notice (#413): when a configured tab is missing,
+    the alert lists the tabs that *do* exist, so a rename ("Form Responses 1"
+    to "Form Responses 2") is obvious instead of something the alliance has to
+    go diff by hand. Raises on open failure like every other read here.
+    """
+    sh = config.get_spreadsheet_by_id(sheet_id)
+    return [ws.title for ws in sh.worksheets()]
+
+
 def read_header(sheet_id: str, tab: str) -> list:
     """Just the header row (row 1) of a sheet tab. Used by the wizard to
     drive auto-mapping without pulling every data row."""

@@ -989,6 +989,77 @@ def plan_blank_fill(
     return updates
 
 
+# ── Stuck-watcher notices (#413) ─────────────────────────────────────────────
+
+# How long an unresolved sheet problem stays quiet between leadership nudges.
+# The poll itself runs every `poll_frequency_minutes`, so without this the
+# alliance would get a post per poll; without *any* re-nudge a single post
+# scrolls out of the channel and the watcher is silently dead again.
+SHEET_ERROR_RENOTIFY_HOURS = 24
+
+# Scope labels for `sheet_error_signature`. These are the three sheets a poll
+# touches, and they're user-facing (they name which sheet to go fix).
+SHEET_SCOPE_LABELS = {
+    "alliance": "your transfer sheet",
+    "server_wide": "the shared sheet you pull from",
+    "alliance_form": "your intake form's responses sheet",
+}
+
+
+def sheet_error_signature(scope: str, error_type: str, tab: str = "") -> str:
+    """A stable key for "which problem is currently blocking the watcher".
+
+    Built from the *scope* (which of the three sheets failed), the exception
+    class name, and the tab involved — deliberately **not** the full diagnosis
+    string, which can carry volatile detail (an API's error message wording)
+    that would make the same problem look new on every poll and re-alert the
+    alliance each time.
+
+    Comparing this against the stored signature is what turns "raises every 30
+    minutes forever" into "one post, then quiet".
+    """
+    return "|".join([(scope or "").strip(), (error_type or "").strip(), (tab or "").strip()])
+
+
+def sheet_error_scope(signature: str) -> str:
+    """The scope back out of a stored signature (``""`` when there isn't one),
+    so the recovery notice can name the sheet that came back rather than
+    guessing at the alliance sheet."""
+    return (signature or "").split("|")[0].strip()
+
+
+def should_notify_sheet_error(
+    prior_signature: str,
+    prior_notified_at: str,
+    new_signature: str,
+    now: datetime,
+    *,
+    renotify_hours: int = SHEET_ERROR_RENOTIFY_HOURS,
+) -> bool:
+    """Whether to post a leadership notice for the sheet problem identified by
+    ``new_signature``.
+
+    ``True`` when this is a different problem than the one already reported (or
+    the first problem at all), or when the same problem has gone unfixed for
+    ``renotify_hours``. ``False`` while the same problem is inside its quiet
+    window. An unparseable/missing stored timestamp notifies, so a bad value
+    can't wedge the alliance into permanent silence.
+    """
+    if not new_signature:
+        return False
+    if (prior_signature or "") != new_signature:
+        return True
+    if not prior_notified_at:
+        return True
+    try:
+        last = datetime.fromisoformat(prior_notified_at)
+    except (ValueError, TypeError):
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(hours=max(1, int(renotify_hours or 1)))
+
+
 # ── In-game message templates ────────────────────────────────────────────────
 
 

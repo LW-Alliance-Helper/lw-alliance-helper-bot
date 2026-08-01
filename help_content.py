@@ -23,6 +23,7 @@ from setup_hub import (
     HUB_BTN_MEMBERS,
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
+    HUB_BTN_SURVEY_TRANSLATE,
     HUB_BTN_TRAIN,
     HUB_BTN_TRANSFERS,
     STORM_SETUP_NAV,
@@ -208,6 +209,11 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "/survey remind",
                 "Send now or schedule. Free: channel post. 💎 Premium: also DM via roster.",
+            ),
+            (
+                f"/setup → {HUB_BTN_SURVEY_TRANSLATE}",
+                "Add your translate bot to every survey thread so members who "
+                "don't read English can translate the questions in place.",
             ),
         ],
     },

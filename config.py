@@ -64,6 +64,12 @@ class GuildConfig:
     # Defaults to enabled so existing alliances see the next release;
     # surfaced as a toggle in the `/setup` re-entry hub.
     release_announcements_enabled: int = 1
+    # Optional translation-helper bot added to every survey thread.
+    # Survey threads are private (member + this bot only), so a
+    # third-party translate bot can't see the prompts unless it's added
+    # as a thread member. 0 = no helper configured (the default).
+    # Set via `/setup` → Survey translation.
+    survey_translate_bot_id: int = 0
 
     def parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse 'HH:MM' into (hour, minute)."""
@@ -118,7 +124,8 @@ def init_db():
                 tab_survey_history       TEXT    DEFAULT 'Survey History',
                 tab_member_default       TEXT    DEFAULT 'Season 5 - Off-Season',
                 setup_complete           INTEGER DEFAULT 0,
-                release_announcements_enabled INTEGER DEFAULT 1
+                release_announcements_enabled INTEGER DEFAULT 1,
+                survey_translate_bot_id  INTEGER DEFAULT 0
             )
         """)
         conn.commit()
@@ -1494,6 +1501,20 @@ def init_db():
             print(
                 "[CONFIG] Added last_seen_version to guild_install_metadata (existing rows backfilled to '1.3.3')"
             )
+        except Exception:
+            pass
+
+        # ── Survey translation helper ──────────────────────────────────────────
+        # Optional third-party translate bot added to each private survey
+        # thread so non-English speakers can translate the prompts in place.
+        # Defaults to 0 (no helper), so existing alliances see no change
+        # until they pick one from the `/setup` hub.
+        try:
+            conn.execute(
+                "ALTER TABLE guild_configs ADD COLUMN survey_translate_bot_id INTEGER DEFAULT 0"
+            )
+            conn.commit()
+            print("[CONFIG] Added survey_translate_bot_id to guild_configs")
         except Exception:
             pass
 

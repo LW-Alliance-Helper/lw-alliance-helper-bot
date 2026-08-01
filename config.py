@@ -2082,14 +2082,56 @@ def save_guild_event(guild_id: int, event: dict):
         conn.commit()
 
 
-def delete_guild_event(guild_id: int, short_key: str):
-    """Soft-delete an event by marking it inactive."""
+def set_guild_event_active(guild_id: int, short_key: str, active: bool) -> bool:
+    """Pause (``active=False``) or resume (``active=True``) an event.
+
+    Pausing is the reversible stop: the row keeps its name, blurb, time,
+    anchor and interval, and every runtime reader already filters on
+    ``active = 1``, so nothing fires while it's off. Returns False when no
+    such event exists for the guild.
+    """
     with _get_conn() as conn:
-        conn.execute(
-            "UPDATE guild_events SET active = 0 WHERE guild_id = ? AND short_key = ?",
+        cur = conn.execute(
+            "UPDATE guild_events SET active = ? WHERE guild_id = ? AND short_key = ?",
+            (1 if active else 0, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def set_guild_event_anchor(guild_id: int, short_key: str, anchor_date: str) -> bool:
+    """Re-point a repeating event's anchor date (ISO ``YYYY-MM-DD``).
+
+    Resuming a paused event usually needs this — the in-game cycle can
+    shift over a season break, and `scheduler.next_event_dates` derives
+    every future firing from the anchor. Returns False when no such event
+    exists for the guild.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_events SET anchor_date = ? WHERE guild_id = ? AND short_key = ?",
+            (anchor_date, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_guild_event(guild_id: int, short_key: str) -> bool:
+    """Permanently remove an event row.
+
+    This is destructive and unrecoverable — the reversible stop is
+    `set_guild_event_active(..., False)`. Removing the row also frees the
+    `short_key`, so re-creating an event of the same name gets its
+    original slug back instead of a `_2` suffix. Returns False when no
+    such event exists for the guild.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM guild_events WHERE guild_id = ? AND short_key = ?",
             (guild_id, short_key),
         )
         conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Storm event fixed Server Time constants ───────────────────────────────────

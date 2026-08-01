@@ -6,6 +6,7 @@ get_storm_slot_labels, get_storm_slot_for_key.
 
 import pytest
 import sys, os
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -96,6 +97,89 @@ class TestFormat24hTo12h:
         """Don't mangle garbage — let the caller surface it instead
         of swallowing the value silently."""
         assert self.fmt("garbage") == "garbage"
+
+
+class TestParseMonthDay:
+    """`_parse_month_day` turns the officer-typed anchor date in the
+    `/events` → Create wizard into an ISO date. It used to accept only
+    `March 30` / `Mar 30`, so an officer typing `7/30` got kicked out of
+    the wizard; format tolerance now comes from the canonical permissive
+    parser (`storm_date_helpers.parse_event_date`) while the backward-
+    leaning year rule stays local."""
+
+    def setup_method(self):
+        from setup_cog import _parse_month_day
+
+        self.parse = _parse_month_day
+
+    # Reference "today" for every anchored assertion below.
+    TODAY = date(2026, 4, 25)
+
+    def test_full_month_name(self):
+        assert self.parse("February 20", today=self.TODAY) == "2026-02-20"
+
+    def test_abbreviated_month_name(self):
+        assert self.parse("Feb 20", today=self.TODAY) == "2026-02-20"
+
+    def test_numeric_slash(self):
+        """The reported break: `7/30` for July 30."""
+        assert self.parse("7/30", today=self.TODAY) == "2025-07-30"
+
+    def test_numeric_slash_zero_padded(self):
+        assert self.parse("02/20", today=self.TODAY) == "2026-02-20"
+
+    def test_numeric_dash(self):
+        assert self.parse("2-20", today=self.TODAY) == "2026-02-20"
+
+    def test_ordinal_suffix(self):
+        assert self.parse("February 20th", today=self.TODAY) == "2026-02-20"
+
+    def test_day_first_with_month_name(self):
+        assert self.parse("20 February", today=self.TODAY) == "2026-02-20"
+
+    def test_today_token(self):
+        assert self.parse("today", today=self.TODAY) == "2026-04-25"
+
+    def test_explicit_year_is_taken_as_typed(self):
+        """A 4-digit year is the officer's word — don't second-guess it
+        with the backward-leaning rule."""
+        assert self.parse("2027-07-30", today=self.TODAY) == "2027-07-30"
+        assert self.parse("7/30/2024", today=self.TODAY) == "2024-07-30"
+
+    def test_within_31_days_stays_this_year(self):
+        assert self.parse("May 2", today=self.TODAY) == "2026-05-02"
+
+    def test_beyond_31_days_rolls_back_a_year(self):
+        assert self.parse("December 3", today=self.TODAY) == "2025-12-03"
+
+    def test_whitespace_tolerated(self):
+        assert self.parse("  7 / 30  ", today=self.TODAY) == "2025-07-30"
+
+    def test_unparseable_returns_none(self):
+        assert self.parse("not a date", today=self.TODAY) is None
+        assert self.parse("", today=self.TODAY) is None
+        assert self.parse("   ", today=self.TODAY) is None
+
+    def test_impossible_date_returns_none(self):
+        assert self.parse("Feb 30", today=self.TODAY) is None
+        assert self.parse("13/45", today=self.TODAY) is None
+
+    def test_leap_day_needs_an_explicit_year(self):
+        """Year-less `Feb 29` is genuinely ambiguous (and unparseable —
+        strptime's implicit year 1900 isn't a leap year), so it's
+        rejected; spelling the year out works."""
+        assert self.parse("Feb 29", today=self.TODAY) is None
+        assert self.parse("2028-02-29", today=self.TODAY) == "2028-02-29"
+
+    def test_defaults_to_real_today_when_not_injected(self):
+        """Production call-sites omit `today`; make sure the default path
+        still returns a same-month/day ISO string."""
+        from datetime import date as _date
+
+        result = self.parse("February 20")
+        assert result is not None
+        assert _date.fromisoformat(result).month == 2
+        assert _date.fromisoformat(result).day == 20
 
 
 class TestFormatTimeWithTz:

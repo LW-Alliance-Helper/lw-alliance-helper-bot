@@ -1688,11 +1688,157 @@ class TestGuildEvents:
                 "active": 1,
             },
         )
+        # Delete is permanent — the row is gone, not just flagged. Pausing
+        # is the reversible stop (see TestPauseResumeEvent below).
+        assert config.delete_guild_event(TEST_GUILD_ID, "siege") is True
+        assert config.get_guild_event(TEST_GUILD_ID, "siege") is None
+        all_events = config.get_guild_events(TEST_GUILD_ID, active_only=False)
+        assert not any(e["short_key"] == "siege" for e in all_events)
+
+    def test_delete_unknown_event_reports_false(self, temp_db):
+        import config
+
+        assert config.delete_guild_event(TEST_GUILD_ID, "never-existed") is False
+
+    def test_delete_frees_the_short_key_for_reuse(self, temp_db):
+        """The create wizard dedups `short_key` against every row, active
+        or not. A permanent delete has to release the slug or re-creating
+        an event of the same name silently becomes `..._2`."""
+        import config
+
+        row = {
+            "short_key": "siege",
+            "name": "Zombie Siege",
+            "timezone": "America/New_York",
+            "default_time": "22:00",
+            "announcement_blurb": "!",
+            "schedule_type": "manual",
+            "anchor_date": "",
+            "interval_days": 0,
+            "draft_channel_id": 0,
+            "announcement_channel_id": 0,
+            "draft_time": "12:00",
+            "five_min_warning": 0,
+            "active": 1,
+        }
+        config.save_guild_event(TEST_GUILD_ID, row)
         config.delete_guild_event(TEST_GUILD_ID, "siege")
-        # Events are soft-deleted (active=0), not removed
-        # get_guild_events with active_only=True should exclude it
-        active_events = config.get_guild_events(TEST_GUILD_ID, active_only=True)
-        assert not any(e["short_key"] == "siege" for e in active_events)
+        existing = {
+            e["short_key"] for e in config.get_guild_events(TEST_GUILD_ID, active_only=False)
+        }
+        assert "siege" not in existing
+
+
+class TestPauseResumeEvent:
+    """`active` is the reversible off switch behind ⏸️ Pause or resume.
+    Every runtime reader filters on `active = 1`, so flipping the flag is
+    the whole mechanism — the row and its settings stay untouched."""
+
+    EVENT = {
+        "short_key": "marauder",
+        "name": "Plague Marauder",
+        "timezone": "America/New_York",
+        "default_time": "22:15",
+        "announcement_blurb": "Marauder at {time}!",
+        "schedule_type": "repeating",
+        "anchor_date": "2026-03-30",
+        "interval_days": 3,
+        "draft_channel_id": 111,
+        "announcement_channel_id": 222,
+        "draft_time": "12:00",
+        "five_min_warning": 1,
+        "active": 1,
+    }
+
+    def _seed(self, config):
+        config.save_guild_event(TEST_GUILD_ID, dict(self.EVENT))
+
+    def test_pause_hides_from_active_but_keeps_the_row(self, temp_db):
+        import config
+
+        self._seed(config)
+        assert config.set_guild_event_active(TEST_GUILD_ID, "marauder", False) is True
+
+        assert config.get_guild_events(TEST_GUILD_ID, active_only=True) == []
+        paused = config.get_guild_event(TEST_GUILD_ID, "marauder")
+        assert paused is not None
+        assert paused["active"] == 0
+
+    def test_pause_preserves_every_setting(self, temp_db):
+        """The whole point of pausing over deleting: come back next season
+        and the blurb, time, anchor and interval are exactly as left."""
+        import config
+
+        self._seed(config)
+        config.set_guild_event_active(TEST_GUILD_ID, "marauder", False)
+        paused = config.get_guild_event(TEST_GUILD_ID, "marauder")
+        for field in (
+            "name",
+            "announcement_blurb",
+            "default_time",
+            "anchor_date",
+            "interval_days",
+            "draft_channel_id",
+            "announcement_channel_id",
+        ):
+            assert paused[field] == self.EVENT[field], field
+
+    def test_resume_puts_it_back_in_the_active_list(self, temp_db):
+        import config
+
+        self._seed(config)
+        config.set_guild_event_active(TEST_GUILD_ID, "marauder", False)
+        assert config.set_guild_event_active(TEST_GUILD_ID, "marauder", True) is True
+
+        active = config.get_guild_events(TEST_GUILD_ID, active_only=True)
+        assert [e["short_key"] for e in active] == ["marauder"]
+
+    def test_toggle_is_idempotent(self, temp_db):
+        import config
+
+        self._seed(config)
+        config.set_guild_event_active(TEST_GUILD_ID, "marauder", False)
+        config.set_guild_event_active(TEST_GUILD_ID, "marauder", False)
+        assert config.get_guild_event(TEST_GUILD_ID, "marauder")["active"] == 0
+
+    def test_unknown_event_reports_false(self, temp_db):
+        import config
+
+        assert config.set_guild_event_active(TEST_GUILD_ID, "nope", False) is False
+
+    def test_set_anchor_repoints_the_cycle(self, temp_db):
+        import config
+
+        self._seed(config)
+        assert config.set_guild_event_anchor(TEST_GUILD_ID, "marauder", "2026-07-30") is True
+        assert config.get_guild_event(TEST_GUILD_ID, "marauder")["anchor_date"] == "2026-07-30"
+
+    def test_set_anchor_leaves_other_fields_alone(self, temp_db):
+        import config
+
+        self._seed(config)
+        config.set_guild_event_anchor(TEST_GUILD_ID, "marauder", "2026-07-30")
+        ev = config.get_guild_event(TEST_GUILD_ID, "marauder")
+        assert ev["interval_days"] == 3
+        assert ev["announcement_blurb"] == "Marauder at {time}!"
+        assert ev["active"] == 1
+
+    def test_set_anchor_on_unknown_event_reports_false(self, temp_db):
+        import config
+
+        assert config.set_guild_event_anchor(TEST_GUILD_ID, "nope", "2026-07-30") is False
+
+    def test_pause_is_scoped_to_one_guild(self, temp_db):
+        """Two alliances running the same preset must not pause each
+        other's copy — short_key is only unique per guild."""
+        import config
+
+        other_guild = TEST_GUILD_ID + 1
+        self._seed(config)
+        config.save_guild_event(other_guild, dict(self.EVENT))
+
+        config.set_guild_event_active(TEST_GUILD_ID, "marauder", False)
+        assert config.get_guild_event(other_guild, "marauder")["active"] == 1
 
     def test_events_isolated_per_guild(self, temp_db):
         import config

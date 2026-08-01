@@ -19,6 +19,7 @@ from setup_hub import (
     HUB_BTN_SETUP_WIZARD,
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
+    HUB_BTN_SURVEY_TRANSLATE,
     HUB_BTN_TRAIN,
     HUB_BTN_VIEW_CONFIG,
     STORM_SETUP_NAV,
@@ -40,6 +41,7 @@ def test_hub_button_labels_match_expected_text():
     assert HUB_BTN_MEMBERS == "👥 Member Sync"
     assert HUB_BTN_SURVEY == "📋 Survey"
     assert HUB_BTN_BREAKDOWN == "📊 Growth Breakdown"
+    assert HUB_BTN_SURVEY_TRANSLATE == "🌐 Survey translation"
 
 
 def test_storm_setup_nav_builds_correctly():

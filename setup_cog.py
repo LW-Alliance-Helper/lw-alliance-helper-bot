@@ -2014,6 +2014,9 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
 
+    translate_bot = (
+        f"<@{cfg.survey_translate_bot_id}>" if cfg.survey_translate_bot_id else "*not set*"
+    )
     s_lines = [
         f"**Survey Channel:** {_channel(cfg.survey_channel_id)}",
         f"**Notify Channel:** {_channel(cfg.survey_notify_channel_id)}",
@@ -2021,6 +2024,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**History Tab:** {survey.get('tab_history', '*not set*')}",
         f"**Questions:** {len(survey.get('questions') or [])}",
         f"**Intro Message:** {_yn(survey.get('intro_message'))}",
+        f"**Translation Helper:** {translate_bot}",
     ]
     embed.add_field(name="📋 Survey", value="\n".join(s_lines)[:1024], inline=False)
 

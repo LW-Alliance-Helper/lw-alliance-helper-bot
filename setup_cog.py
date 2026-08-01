@@ -147,34 +147,53 @@ def _format_time_with_tz(time_str: str, tz_name: str | None) -> str:
     return f"{base} {abbr}" if abbr else base
 
 
-def _parse_month_day(raw: str) -> str:
+def _parse_month_day(raw: str, *, today=None) -> str | None:
     """
-    Parse 'Month Day' into YYYY-MM-DD using the most recent occurrence.
-    Always looks backward — never assumes a future date.
+    Parse an officer-typed date into YYYY-MM-DD using the most recent
+    occurrence. Always looks backward — never assumes a far-future date.
     Examples (today = April 25 2026):
       'February 20' → 2026-02-20  (already passed this year)
       'December 3'  → 2025-12-03  (hasn't happened yet this year, so last year)
       'May 2'       → 2026-05-02  (upcoming this year, but within ~5 days so still this year)
-    Rule: if the date this year is in the future beyond today, use last year.
+    Rule: if the date this year is more than 31 days out, use last year.
+
+    Format tolerance is delegated to `storm_date_helpers.parse_event_date`
+    (the canonical permissive parser), so `7/30`, `2026-07-30`, `July 30th`,
+    `30 Jul`, `today` and weekday names all parse — not just `Month Day`.
+    Only the year-selection rule is ours: `parse_event_date` infers
+    the *next* occurrence, which is wrong for an anchor date that leans
+    backward, so we re-derive the year from the parsed month/day.
+
+    `today` is injectable for tests; production callers omit it.
     """
     import re
-    from datetime import date, datetime
+    from datetime import date
 
-    raw = raw.strip()
+    from storm_date_helpers import parse_event_date
+
+    if not raw or not raw.strip():
+        return None
+    today = today or date.today()
+    parsed = parse_event_date(raw, today=today)
+    if parsed is None:
+        return None
+
+    # An explicit 4-digit year is the officer's word — take it as typed.
+    if re.search(r"\d{4}", raw):
+        return parsed.isoformat()
+
     try:
-        parsed = datetime.strptime(raw, "%B %d")
+        this_year = parsed.replace(year=today.year)
     except ValueError:
-        try:
-            parsed = datetime.strptime(raw, "%b %d")
-        except ValueError:
-            return None
-    today = date.today()
-    this_year = date(today.year, parsed.month, parsed.day)
-    last_year = date(today.year - 1, parsed.month, parsed.day)
-    # Allow up to 31 days in the future (next upcoming event within a month)
-    # Anything further out uses last year's date
+        # Feb 29 typed in a non-leap current year — keep the parser's date.
+        return parsed.isoformat()
+    # Allow up to 31 days in the future (next upcoming event within a month).
+    # Anything further out uses last year's date.
     if (this_year - today).days > 31:
-        return last_year.isoformat()
+        try:
+            return this_year.replace(year=today.year - 1).isoformat()
+        except ValueError:
+            return this_year.isoformat()
     return this_year.isoformat()
 
 

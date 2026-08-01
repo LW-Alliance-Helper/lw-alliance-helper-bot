@@ -171,6 +171,10 @@ def parse_event_date(
     # commas-as-separators so "May 18, 2026" parses through "%B %d %Y".
     s_norm = _ORDINAL_RE.sub(r"\1", s).replace(",", " ")
     s_norm = re.sub(r"\s+", " ", s_norm).strip()
+    # Collapse spacing around numeric separators ("5 / 18" -> "5/18") so the
+    # strptime patterns below don't each need an optional-whitespace variant.
+    # Matches what `train_birthdays.parse_birthday` already tolerates.
+    s_norm = re.sub(r"\s*([-/.])\s*", r"\1", s_norm)
 
     for fmt in _FORMATS_WITH_YEAR:
         try:

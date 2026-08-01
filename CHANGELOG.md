@@ -9,6 +9,27 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.0] — 2026-08-01
+
+### Added
+- Alliances can name a translate bot that gets added to every private survey thread, so members who don't read English can translate their survey; free on every tier ([#422](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/422)).
+- `/events` gains **⏸️ Pause or resume**, so an event can be stopped for a season and turned back on later with every setting intact instead of being deleted and re-created ([#421](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/421)).
+- Resuming a repeating event offers a fresh anchor date, since the in-game cycle often shifts over a season break ([#421](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/421)).
+- The transfer watcher now tells leadership when a tracked sheet tab is renamed, deleted, or loses access, instead of failing silently ([#413](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/413)).
+
+### Fixed
+- The `/events` anchor date now accepts `7/30`, `2026-07-30`, `July 30th`, `today` and more, and a date it can't read costs one retry instead of ending the whole wizard ([#420](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/420)).
+- The train reminder loop no longer blocks the bot on its Sheets calls, which could stall every other timed post for the minute ([#362](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/362)).
+- Pending 5-minute event warnings survive a restart instead of being dropped silently ([#363](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/363)).
+- Outage catch-up now resolves Shiny and train recovery dates against server time, so a recovery scan no longer looks at the wrong day ([#364](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/364)).
+- The storm sign-up auto-post fires at or past its target time rather than on an exact minute match, so a busy minute can no longer skip an alliance's weekly post ([#365](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/365)).
+- Repo-wide sweep moving blocking Sheets and file calls off the event loop, removing a class of stalls that affected every timed feature ([#366](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/366)).
+- Storm leadership checks no longer drop the server-admin bypass, and train rotation dedup now survives a restart ([#367](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/367)).
+
+### Changed
+- Deleting an event from `/events` is now permanent and says so, with **⏸️ Pause or resume** offered as the reversible alternative ([#421](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/421)).
+- Internal restructuring with no change in behaviour: `storm_strategy.py` split into data and UI ([#371](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/371)), `train_rotation_ui.py` split by surface ([#373](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/373)), the `/admin` toolkit moved out of `bot.py` ([#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372)), and duplicated picker and pagination code removed from `transfer_setup.py` ([#374](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/374)) and `storm_officer_view.py` ([#375](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/375)).
+
 ## [1.7.6] — 2026-07-30
 
 ### Fixed

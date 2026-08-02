@@ -160,6 +160,15 @@ INPUT_INVALID_NO_EXAMPLE = "⚠️ Please enter a {type}. Run {recovery} to try 
 # future-leaning flows (sign-up, officer view) want future hints.
 DATE_PARSE_REJECT = "⚠️ `{raw}` isn't a date I can parse. Try {examples}."
 
+# Date didn't parse *inside a wizard step* — the user gets another shot
+# without losing the answers they've already given. Caller passes {raw}
+# and a flow-tailored {examples} list, same as DATE_PARSE_REJECT.
+DATE_PARSE_RETRY = "⚠️ `{raw}` isn't a date I can parse. Try {examples}. Let's try once more."
+
+# Same but after N failed tries — the wizard bails out and tells the user
+# how to re-enter. Caller passes the recovery hint as {recovery}.
+DATE_PARSE_GIVE_UP = "⚠️ Could not read that date after a few tries. Run {recovery} to start again."
+
 
 # ── Footers ──────────────────────────────────────────────────────────────────
 

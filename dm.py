@@ -15,6 +15,8 @@ roster knows the member and the guild is premium) or the plain name —
 used to swap pings into announcement templates.
 """
 
+import asyncio
+
 import discord
 
 import premium
@@ -69,7 +71,7 @@ async def send_dm(
     """DM a member resolved through the Member Roster sheet. Premium-gated."""
     if not await premium.is_premium(guild_id, bot=bot):
         return False
-    did = lookup_discord_id_for_name(guild_id, name)
+    did = await asyncio.to_thread(lookup_discord_id_for_name, guild_id, name)
     if not did:
         return False
     return await send_dm_to_id(bot, guild_id, did, content=content, embed=embed)
@@ -82,5 +84,5 @@ async def mention_or_name(bot, guild_id: int, name: str) -> str:
     """
     if not await premium.is_premium(guild_id, bot=bot):
         return name
-    did = lookup_discord_id_for_name(guild_id, name)
+    did = await asyncio.to_thread(lookup_discord_id_for_name, guild_id, name)
     return f"<@{did}>" if did else name

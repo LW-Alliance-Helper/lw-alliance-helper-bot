@@ -40,6 +40,7 @@ HUB_BTN_RESET = "🗑️ Reset configuration"
 HUB_BTN_RELEASE_ANN = (
     "📢 Release announcements"  # base; live label suffixed in _refresh_release_announcement_label
 )
+HUB_BTN_SURVEY_TRANSLATE = "🌐 Survey translation"
 HUB_BTN_TRAIN = "🚂 Train"
 HUB_BTN_GROWTH = "📈 Growth"
 HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
@@ -397,6 +398,15 @@ class _SetupHubView(discord.ui.View):
                 "back on anytime by clicking this button again."
             )
         await inter.response.send_message(msg, ephemeral=True)
+
+    @discord.ui.button(label=HUB_BTN_SURVEY_TRANSLATE, style=discord.ButtonStyle.secondary, row=0)
+    async def btn_survey_translation(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """Pick the translate bot added to each private survey thread. Guild-wide
+        (it applies to every survey, default and extra), free on every tier, and
+        deliberately not a step inside the per-survey wizard for that reason."""
+        from survey import run_translation_helper_setup
+
+        await run_translation_helper_setup(inter)
 
     # ── Row 1: free-tier features ────────────────────────────────────────────
 

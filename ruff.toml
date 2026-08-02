@@ -15,11 +15,16 @@ line-length = 100
 [lint]
 # Lint scope is real bugs and dead code: pyflakes (F) for undefined names
 # (F821), dead locals (F841), and f-string / syntax mistakes; E9 for syntax
-# errors. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
+# errors; ASYNC (flake8-async) for stdlib-level blocking calls inside
+# `async def` (blocking sleep/subprocess/pathlib/file-I/O, async-with-timeout
+# params -- see #366). ASYNC does NOT know about our own blocking I/O
+# (gspread, sqlite) since those aren't stdlib -- that class of bug still
+# needs a human grep, ASYNC only catches new stdlib-level regressions going
+# forward. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
 # and import sorting (I) are intentionally left off -- whitespace/layout is
 # the formatter's job, and we don't want the linter second-guessing the
 # author's `if x: return` style choices.
-select = ["E9", "F"]
+select = ["E9", "F", "ASYNC"]
 
 # F401 (unused import) and F811 (redefinition) are DELIBERATELY OFF. This
 # codebase uses two patterns ruff's autofix actively breaks:
@@ -38,8 +43,10 @@ ignore = ["F401", "F811"]
 [lint.per-file-ignores]
 # Tests legitimately pull conftest helpers via star-import (F403/F405) and
 # bind-and-discard locals -- a captured mock or intermediate value kept for
-# clarity but not asserted on (F841).
-"tests/**" = ["F403", "F405", "F841"]
+# clarity but not asserted on (F841). ASYNC109 (async def with a `timeout`
+# param) fires on fakes that intentionally mimic discord.py's own
+# `wait_for(..., timeout=...)` signature -- renaming would break the fake.
+"tests/**" = ["F403", "F405", "F841", "ASYNC109"]
 
 [format]
 # Defaults otherwise (double quotes -- the codebase is already ~95%

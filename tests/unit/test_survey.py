@@ -4,8 +4,10 @@ update_squad_powers, append_survey_history (with mocked sheets).
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, AsyncMock, MagicMock, call
 import sys, os
+
+import discord
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -370,3 +372,137 @@ class TestAppendSurveyHistory:
         assert "Timestamp" in header_row
         assert "Discord ID" in header_row
         assert "Power" in header_row
+
+
+class TestAddTranslationHelper:
+    """Survey threads are private, so a translate bot only sees the prompts if
+    it's added as a thread member. Every failure path has to degrade to an
+    untranslated-but-working survey, never a blocked member."""
+
+    def _thread_and_guild(self, *, helper=None, add_error=None):
+        thread = MagicMock()
+        thread.id = 555
+        thread.add_user = AsyncMock(side_effect=add_error)
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.get_member = MagicMock(return_value=helper)
+        return thread, guild
+
+    async def test_adds_configured_helper(self):
+        from survey import add_translation_helper
+
+        helper = MagicMock()
+        helper.bot = True
+        thread, guild = self._thread_and_guild(helper=helper)
+
+        assert await add_translation_helper(thread, guild, 42) is True
+        thread.add_user.assert_awaited_once_with(helper)
+
+    async def test_no_helper_configured_is_a_noop(self):
+        from survey import add_translation_helper
+
+        thread, guild = self._thread_and_guild()
+
+        assert await add_translation_helper(thread, guild, 0) is False
+        thread.add_user.assert_not_awaited()
+        # Never even looks the member up when the feature is off.
+        guild.get_member.assert_not_called()
+
+    async def test_helper_no_longer_in_guild_is_skipped(self):
+        from survey import add_translation_helper
+
+        thread, guild = self._thread_and_guild(helper=None)
+
+        assert await add_translation_helper(thread, guild, 42) is False
+        thread.add_user.assert_not_awaited()
+
+    async def test_missing_guild_is_skipped(self):
+        from survey import add_translation_helper
+
+        thread = MagicMock()
+        thread.add_user = AsyncMock()
+
+        assert await add_translation_helper(thread, None, 42) is False
+        thread.add_user.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            discord.Forbidden(MagicMock(status=403), "missing access"),
+            discord.HTTPException(MagicMock(status=500), "boom"),
+        ],
+    )
+    async def test_discord_failures_do_not_raise(self, error):
+        from survey import add_translation_helper
+
+        helper = MagicMock()
+        thread, guild = self._thread_and_guild(helper=helper, add_error=error)
+
+        # The survey must continue even when the helper can't be added.
+        assert await add_translation_helper(thread, guild, 42) is False
+
+
+class TestDescribeHelperGaps:
+    """Thread members inherit parent-channel permissions, so a helper that
+    can't view the survey channel or post in its threads is useless. Both are
+    silent at survey time, so they're reported when the bot is picked."""
+
+    def _channel_granting(self, *, view=True, send_in_threads=True):
+        channel = MagicMock()
+        perms = MagicMock()
+        perms.view_channel = view
+        perms.send_messages_in_threads = send_in_threads
+        channel.permissions_for = MagicMock(return_value=perms)
+        return channel
+
+    def test_no_gaps_when_fully_permitted(self):
+        from survey import _describe_helper_gaps
+
+        assert _describe_helper_gaps(MagicMock(), self._channel_granting()) == []
+
+    def test_reports_missing_view_channel(self):
+        from survey import _describe_helper_gaps
+
+        gaps = _describe_helper_gaps(MagicMock(), self._channel_granting(view=False))
+        assert gaps == ["**View Channel**"]
+
+    def test_reports_missing_send_in_threads(self):
+        from survey import _describe_helper_gaps
+
+        gaps = _describe_helper_gaps(MagicMock(), self._channel_granting(send_in_threads=False))
+        assert gaps == ["**Send Messages in Threads**"]
+
+    def test_reports_both_gaps(self):
+        from survey import _describe_helper_gaps
+
+        gaps = _describe_helper_gaps(
+            MagicMock(), self._channel_granting(view=False, send_in_threads=False)
+        )
+        assert gaps == ["**View Channel**", "**Send Messages in Threads**"]
+
+
+class TestTranslationHelperConfig:
+    """The setting is guild-level (one helper for every survey, default and
+    extra) and defaults to off so existing alliances see no change."""
+
+    def test_defaults_to_no_helper(self, seeded_db):
+        from config import get_config
+
+        assert get_config(TEST_GUILD_ID).survey_translate_bot_id == 0
+
+    def test_round_trips_through_update_config_field(self, seeded_db):
+        from config import get_config, update_config_field
+
+        update_config_field(TEST_GUILD_ID, "survey_translate_bot_id", 987654321)
+        assert get_config(TEST_GUILD_ID).survey_translate_bot_id == 987654321
+
+        update_config_field(TEST_GUILD_ID, "survey_translate_bot_id", 0)
+        assert get_config(TEST_GUILD_ID).survey_translate_bot_id == 0
+
+    def test_survives_save_config_round_trip(self, seeded_db):
+        from config import get_config, save_config
+
+        cfg = get_config(TEST_GUILD_ID)
+        cfg.survey_translate_bot_id = 111222333
+        save_config(cfg)
+        assert get_config(TEST_GUILD_ID).survey_translate_bot_id == 111222333

@@ -88,8 +88,12 @@ def _channel():
 @contextmanager
 def _env(*, read_return=(HEADER, []), read_exc=None, is_premium=True):
     """Patch the loop's external edges: the Sheets read, the source-copy pull
-    (isolated to 0 here — exercised in test_transfer_core), the poll-time
-    premium check, and the two config writers (spied, not hitting a DB)."""
+    (isolated to an empty report here — exercised in test_transfer_core), the
+    poll-time premium check, and the two config writers (spied, not hitting a
+    DB). Stuck-watcher notices are covered in
+    test_transfer_sheet_error_notice.py; the plain `RuntimeError` used for the
+    read-failure case here is deliberately not an alliance-fixable error, so it
+    doesn't reach that path."""
     read = MagicMock()
     if read_exc is not None:
         read.side_effect = read_exc
@@ -97,9 +101,10 @@ def _env(*, read_return=(HEADER, []), read_exc=None, is_premium=True):
         read.return_value = read_return
     fields_spy = MagicMock()
     field_spy = MagicMock()
+    empty_report = {"copied": 0, "enriched": 0, "sources": []}
     with (
         patch("transfer_sheets.read_sheet", read),
-        patch("transfer_cog.copy_sources", AsyncMock(return_value=0)),
+        patch("transfer_cog.copy_sources", AsyncMock(return_value=empty_report)),
         patch("premium.is_premium", AsyncMock(return_value=is_premium)),
         patch("config.update_transfer_config_fields", fields_spy),
         patch("config.update_transfer_config_field", field_spy),

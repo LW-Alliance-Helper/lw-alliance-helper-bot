@@ -172,8 +172,16 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
     monkeypatch.delenv("BOT_ADMIN_GUILD_IDS", raising=False)
     import importlib
     import bot as bot_module
+    import bot_admin as bot_admin_module
 
+    # bot.py's own reload rebuilds `bot` (a fresh commands.Bot(), fresh
+    # tree) -- but bot_admin.py, already in sys.modules, isn't
+    # re-executed by that alone (#372: admin_group used to live directly
+    # in bot.py, so one reload was enough). Reload it too, in this order,
+    # so it rebinds to the FRESH `bot` and re-registers admin_group
+    # (with a freshly-read BOT_ADMIN_GUILD_IDS) onto the new tree.
     importlib.reload(bot_module)
+    importlib.reload(bot_admin_module)
     cmds = {c.name: c for c in bot_module.bot.tree.get_commands()}
     assert "admin" in cmds
     sub_names = {c.name for c in cmds["admin"].commands}
@@ -190,7 +198,11 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "transfer_dump",
         "verify",
     }
-    assert bot_module._ADMIN_GUILD_IDS == ()
+    # bot.py's own `_ADMIN_GUILD_IDS` is a `from bot_admin import ...`
+    # snapshot taken during its reload above -- it doesn't retroactively
+    # pick up bot_admin's later reload, so assert against the module
+    # that actually computes the value.
+    assert bot_admin_module._ADMIN_GUILD_IDS == ()
 
 
 def test_admin_group_restricted_to_env_guilds(monkeypatch):
@@ -201,8 +213,12 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
 
     monkeypatch.setenv("BOT_ADMIN_GUILD_IDS", "111111111111111111,222222222222222222")
     import bot as bot_module
+    import bot_admin as bot_admin_module
 
+    # See test_admin_group_registers_globally_when_env_unset for why both
+    # reload, in this order.
     importlib.reload(bot_module)
+    importlib.reload(bot_admin_module)
 
     global_names = {c.name for c in bot_module.bot.tree.get_commands()}
     assert "admin" not in global_names
@@ -234,7 +250,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
     }
     assert "admin" not in other
 
-    assert bot_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)
+    assert bot_admin_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)
 
 
 def test_admin_guild_ids_ignores_garbage_entries(monkeypatch):
@@ -246,6 +262,8 @@ def test_admin_guild_ids_ignores_garbage_entries(monkeypatch):
         "BOT_ADMIN_GUILD_IDS", "111111111111111111, , not-a-number,222222222222222222"
     )
     import bot as bot_module
+    import bot_admin as bot_admin_module
 
     importlib.reload(bot_module)
-    assert bot_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)
+    importlib.reload(bot_admin_module)
+    assert bot_admin_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)

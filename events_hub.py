@@ -12,7 +12,15 @@ existing event flow:
   - 📆 Upcoming events → cycle projections (lifted from /events overview)
   - 📜 Event log       → recent approved posts (lifted from /events log)
   - ➕ Create an event → preset picker OR define-your-own free-text flow
-  - 🗑️ Delete an event → picker over guild_events + soft-delete
+  - ⏸️ Pause or resume → toggle `guild_events.active`, re-anchoring a
+                         repeating event on the way back on
+  - 🗑️ Delete an event → picker over guild_events + permanent row removal
+
+Pause vs delete is a deliberate split: pausing an event between seasons
+keeps every setting and is one click to undo, while delete is the
+irreversible door for events an alliance is genuinely done with. Before
+this split, delete was the only stop available and it soft-deleted with
+no way back, so an off-season pause looked like permanent data loss.
 
 Event creation moved out of `/setup → 📣 Events` so leadership can manage
 their event roster from one home (`/events`) instead of crawling through
@@ -37,6 +45,9 @@ import discord
 from messages import (
     CANCEL_BACKPEDAL,
     CANCEL_PLAIN,
+    DATE_PARSE_GIVE_UP,
+    DATE_PARSE_REJECT,
+    DATE_PARSE_RETRY,
     DENY_NOT_OWNER,
     GENERIC_CMD_TIMEOUT,
     INPUT_INVALID_NO_EXAMPLE,
@@ -64,7 +75,14 @@ EVENTS_HUB_BTN_TODAY = "📅 Today's events"
 EVENTS_HUB_BTN_UPCOMING = "📆 Upcoming events"
 EVENTS_HUB_BTN_LOG = "📜 Event log"
 EVENTS_HUB_BTN_CREATE = "➕ Create an event"
+EVENTS_HUB_BTN_PAUSE = "⏸️ Pause or resume"
 EVENTS_HUB_BTN_DELETE = "🗑️ Delete an event"
+
+# Anchor-date formats we advertise, shared by the wizard prompt and the
+# retry notice so the examples we suggest never drift from each other.
+# The parser accepts more than this (see `_parse_month_day`); these are
+# the four shapes officers actually type.
+ANCHOR_DATE_EXAMPLES = "`March 30`, `7/30`, `2026-07-30`, or `today`"
 
 
 # ── Preset library ──────────────────────────────────────────────────────────
@@ -143,6 +161,38 @@ def _preset_by_key(key: str) -> Optional[dict]:
 # ── Embed builder ────────────────────────────────────────────────────────────
 
 
+def describe_event_schedule(ev: dict, *, today: Optional[date_cls] = None) -> str:
+    """One-line plain-English summary of when an event fires next.
+
+    Shared by the hub embed's event list and the resume preview, so the
+    schedule an officer reads before resuming is rendered by exactly the
+    same code that lists it afterwards. Never raises — a malformed anchor
+    or interval degrades to an explanatory string rather than blanking the
+    surface it's embedded in.
+    """
+    from scheduler import next_event_dates
+
+    today = today or date_cls.today()
+    if ev.get("schedule_type") != "repeating" or not ev.get("anchor_date"):
+        return "Manual (add it to a draft from the editor)"
+    try:
+        anchor = date_cls.fromisoformat(ev["anchor_date"])
+        interval = int(ev["interval_days"] or 0)
+        upcoming = (
+            next_event_dates(from_date=today, count=1, anchor=anchor, cycle=interval)
+            if interval > 0
+            else []
+        )
+    except (ValueError, TypeError):
+        return "Schedule invalid (re-create the event)"
+    if not upcoming:
+        return f"Recurring every {interval} days (next instance not yet computable)"
+    nxt = upcoming[0]
+    days = (nxt - today).days
+    when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+    return f"Next event instance: {nxt:%a %b} {nxt.day} ({when}) - every {interval} days"
+
+
 def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
     """Build the hub embed showing the alliance's current event config
     plus a one-glance "what's available right now" summary.
@@ -152,7 +202,6 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
     is also the discovery surface for new alliances, so the empty
     state needs to render usefully."""
     import config
-    from scheduler import next_event_dates
 
     embed = discord.Embed(
         title=EVENTS_HUB_TITLE,
@@ -168,9 +217,11 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
     except Exception:
         cfg = None
     try:
-        events = config.get_guild_events(guild.id, active_only=True)
+        all_events = config.get_guild_events(guild.id, active_only=False)
     except Exception:
-        events = []
+        all_events = []
+    events = [e for e in all_events if e.get("active")]
+    paused = [e for e in all_events if not e.get("active")]
 
     # Foundation block: channels + draft cadence.
     draft_id = cfg.event_draft_channel_id if cfg else 0
@@ -196,43 +247,27 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
         )
     else:
         today = date_cls.today()
-        lines = []
-        for ev in events:
-            name = ev.get("name") or "(unnamed)"
-            if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
-                try:
-                    anchor = date_cls.fromisoformat(ev["anchor_date"])
-                    interval = int(ev["interval_days"] or 0)
-                    upcoming = (
-                        next_event_dates(
-                            from_date=today,
-                            count=1,
-                            anchor=anchor,
-                            cycle=interval,
-                        )
-                        if interval > 0
-                        else []
-                    )
-                    if upcoming:
-                        nxt = upcoming[0]
-                        days = (nxt - today).days
-                        when = (
-                            "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-                        )
-                        lines.append(
-                            f"**{name}** - Next event instance: {nxt:%a %b} {nxt.day} ({when}) - every {interval} days"
-                        )
-                    else:
-                        lines.append(
-                            f"**{name}** - Recurring every {interval} days (next instance not yet computable)"
-                        )
-                except (ValueError, TypeError):
-                    lines.append(f"**{name}** - Schedule invalid (re-create the event)")
-            else:
-                lines.append(f"**{name}** - Manual (add it to a draft from the editor)")
+        lines = [
+            f"**{ev.get('name') or '(unnamed)'}** - {describe_event_schedule(ev, today=today)}"
+            for ev in events
+        ]
         embed.add_field(
             name=f"Events ({len(events)})",
             value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    # Paused events keep every setting and fire nothing. Surfaced here so
+    # an off-season pause is visible rather than looking like the event
+    # vanished — that ambiguity is what made the old delete-only flow feel
+    # unrecoverable.
+    if paused:
+        paused_names = ", ".join(f"**{e.get('name') or '(unnamed)'}**" for e in paused)
+        embed.add_field(
+            name=f"Paused ({len(paused)})",
+            value=(f"{paused_names}\n*Click* **{EVENTS_HUB_BTN_PAUSE}** *to turn them back on.*")[
+                :1024
+            ],
             inline=False,
         )
 
@@ -245,17 +280,20 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
 class _EventsHubView(discord.ui.View):
     """Hub button grid. Each button dispatches into the matching flow.
 
-    Layout (2 rows, 5 buttons):
+    Layout (2 rows, 6 buttons):
         Row 0 (read surfaces):
           📅 Today's events (blue) | 📆 Upcoming events (secondary) |
           📜 Event log (secondary)
         Row 1 (write surfaces):
-          ➕ Create an event (green) | 🗑️ Delete an event (red)
+          ➕ Create an event (green) | ⏸️ Pause or resume (secondary) |
+          🗑️ Delete an event (red)
 
-    The two write surfaces sit on their own row so they don't visually
+    The write surfaces sit on their own row so they don't visually
     compete with the read-only buttons above. Today's events takes the
     primary-blue style since that's the most common "I'm about to
-    publish today's draft" action.
+    publish today's draft" action. Pause sits between Create and Delete
+    deliberately: it's the reversible middle ground, and putting it next
+    to the red button makes it the obvious alternative to deleting.
     """
 
     def __init__(self, bot, guild_id: int, owner_user_id: int):
@@ -287,6 +325,7 @@ class _EventsHubView(discord.ui.View):
         self._add(EVENTS_HUB_BTN_LOG, discord.ButtonStyle.secondary, 0, self._on_log)
         # Row 1: write surfaces
         self._add(EVENTS_HUB_BTN_CREATE, discord.ButtonStyle.success, 1, self._on_create)
+        self._add(EVENTS_HUB_BTN_PAUSE, discord.ButtonStyle.secondary, 1, self._on_pause)
         self._add(EVENTS_HUB_BTN_DELETE, discord.ButtonStyle.danger, 1, self._on_delete)
 
     def _add(self, label, style, row, callback):
@@ -307,6 +346,9 @@ class _EventsHubView(discord.ui.View):
 
     async def _on_create(self, inter: discord.Interaction) -> None:
         await _open_create_picker(self.bot, inter)
+
+    async def _on_pause(self, inter: discord.Interaction) -> None:
+        await _open_pause_picker(inter)
 
     async def _on_delete(self, inter: discord.Interaction) -> None:
         await _open_delete_picker(inter)
@@ -913,22 +955,31 @@ async def _run_create_event_wizard(
     interval_days = preset["interval_days"] if preset else 7
 
     if schedule_type == "repeating":
-        anchor_raw = await ask_text(
-            f"**{name} — Anchor Date**\n"
-            "Enter a recent or upcoming date when this event occurs. "
-            "Type the month and day (e.g. `March 30`, `April 14`)."
-        )
-        if not anchor_raw:
-            return
-        parsed_anchor = _parse_month_day(anchor_raw)
-        if not parsed_anchor:
-            await channel.send(
-                f"⚠️ Could not read that date. Try `March 30`. Run "
-                f"`{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}** to try again."
+        attempts_left = 3
+        while True:
+            anchor_raw = await ask_text(
+                f"**{name} — Anchor Date**\n"
+                "Enter a recent or upcoming date when this event occurs.\n"
+                f"*(e.g. {ANCHOR_DATE_EXAMPLES})*"
             )
-            wizard_registry.unregister(user.id, cancel_event)
-            return
-        anchor_date = parsed_anchor
+            if not anchor_raw:
+                return
+            parsed_anchor = _parse_month_day(anchor_raw)
+            if parsed_anchor:
+                anchor_date = parsed_anchor
+                break
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    DATE_PARSE_GIVE_UP.format(
+                        recovery=f"`{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}**",
+                    )
+                )
+                wizard_registry.unregister(user.id, cancel_event)
+                return
+            await channel.send(
+                DATE_PARSE_RETRY.format(raw=anchor_raw, examples=ANCHOR_DATE_EXAMPLES)
+            )
 
         interval_prompt = (
             f"**{name} — Cycle Interval**\n"
@@ -1033,16 +1084,217 @@ async def _run_create_event_wizard(
     logger.info("[EVENTS HUB] Created event %s for guild %s", short_key, guild_id)
 
 
+# ── Pause / resume flow ──────────────────────────────────────────────────────
+#
+# Pausing is the reversible stop an alliance actually wants between
+# seasons: the row keeps its name, blurb, time, anchor and interval, and
+# every runtime reader filters on `active = 1`, so nothing fires while
+# it's off. Resuming a *repeating* event offers a fresh anchor date,
+# because the in-game cycle routinely shifts over a season break and
+# `scheduler.next_event_dates` derives every future firing from the
+# anchor — resuming onto a stale cycle would post on the wrong days.
+
+
+# Button labels for the pause/resume confirmation step. Module-level so
+# the modal's retry copy can name the button the officer needs to click
+# without the two strings drifting apart.
+_RESUME_BTN_KEEP = "▶️ Resume with this schedule"
+_RESUME_BTN_REANCHOR = "📅 Set a new anchor date"
+_PAUSE_BTN_CONFIRM = "⏸️ Yes, pause it"
+
+
+class _AnchorDateModal(discord.ui.Modal):
+    """Re-anchor a repeating event and resume it in one submit.
+
+    A modal rather than a channel prompt so re-anchoring stays inside the
+    ephemeral hub surface — no public wizard messages, and no `wait_for`
+    timeout to lose the flow to. A date we can't parse leaves the picker
+    message and its buttons intact, so the officer just clicks through
+    again instead of restarting.
+    """
+
+    def __init__(self, guild_id: int, short_key: str, name: str, current_anchor: str):
+        super().__init__(title=f"Anchor date: {name}"[:45])
+        self.guild_id = guild_id
+        self.short_key = short_key
+        self.event_name = name
+        self.field = discord.ui.TextInput(
+            label="When did this event last run?",
+            placeholder="March 30 · 7/30 · 2026-07-30 · today",
+            default=current_anchor or None,
+            required=True,
+            max_length=40,
+        )
+        self.add_item(self.field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from config import get_guild_event, set_guild_event_active, set_guild_event_anchor
+        from setup_cog import _parse_month_day
+
+        raw = self.field.value.strip()
+        parsed = _parse_month_day(raw)
+        if not parsed:
+            await interaction.response.send_message(
+                DATE_PARSE_REJECT.format(raw=raw, examples=ANCHOR_DATE_EXAMPLES)
+                + f" **{_RESUME_BTN_REANCHOR}** is still there, click it to try again.",
+                ephemeral=True,
+            )
+            return
+
+        set_guild_event_anchor(self.guild_id, self.short_key, parsed)
+        set_guild_event_active(self.guild_id, self.short_key, True)
+        ev = get_guild_event(self.guild_id, self.short_key) or {}
+        await interaction.response.edit_message(
+            content=(
+                f"▶️ Resumed **{self.event_name}**, anchored to {parsed}.\n"
+                f"{describe_event_schedule(ev)}"
+            ),
+            view=None,
+        )
+        logger.info(
+            "[EVENTS HUB] Resumed event %s for guild %s with new anchor %s",
+            self.short_key,
+            self.guild_id,
+            parsed,
+        )
+
+
+async def _open_pause_picker(interaction: discord.Interaction) -> None:
+    """Dropdown over every event — active and paused — that toggles the
+    picked one. Active events pause after a confirm; paused repeating
+    events get a resume-as-is / re-anchor choice; paused manual events
+    resume straight away (they have no cycle to drift)."""
+    from config import get_guild_event, get_guild_events, set_guild_event_active
+
+    guild_id = interaction.guild_id
+    events = get_guild_events(guild_id, active_only=False)
+    if not events:
+        await interaction.response.send_message(
+            f"ℹ️ No events configured yet. Click **{EVENTS_HUB_BTN_CREATE}** to add one first.",
+            ephemeral=True,
+        )
+        return
+
+    today = date_cls.today()
+    # Active first, then paused — matches the hub embed's reading order.
+    events.sort(key=lambda e: 0 if e.get("active") else 1)
+    options = [
+        discord.SelectOption(
+            label=e["name"][:100],
+            value=e["short_key"],
+            emoji="▶️" if e.get("active") else "⏸️",
+            description=(
+                describe_event_schedule(e, today=today)[:100]
+                if e.get("active")
+                else "Paused - pick to turn it back on"
+            ),
+        )
+        for e in events[:25]
+    ]
+    select = discord.ui.Select(placeholder="Pick an event to pause or resume…", options=options)
+    view = discord.ui.View(timeout=180)
+    view.add_item(select)
+
+    async def on_pick(inter: discord.Interaction):
+        chosen_key = inter.data["values"][0]
+        ev = get_guild_event(guild_id, chosen_key) or {}
+        name = ev.get("name") or chosen_key
+        is_active = bool(ev.get("active"))
+        confirm = discord.ui.View(timeout=180)
+
+        async def do_pause(c_inter: discord.Interaction):
+            set_guild_event_active(guild_id, chosen_key, False)
+            await c_inter.response.edit_message(
+                content=(
+                    f"⏸️ Paused **{name}**. It stops posting immediately and keeps "
+                    f"every setting.\nTurn it back on any time from "
+                    f"**{EVENTS_HUB_BTN_PAUSE}**."
+                ),
+                view=None,
+            )
+            logger.info("[EVENTS HUB] Paused event %s for guild %s", chosen_key, guild_id)
+
+        async def do_resume(c_inter: discord.Interaction):
+            set_guild_event_active(guild_id, chosen_key, True)
+            fresh = get_guild_event(guild_id, chosen_key) or {}
+            await c_inter.response.edit_message(
+                content=f"▶️ Resumed **{name}**.\n{describe_event_schedule(fresh)}",
+                view=None,
+            )
+            logger.info("[EVENTS HUB] Resumed event %s for guild %s", chosen_key, guild_id)
+
+        async def do_reanchor(c_inter: discord.Interaction):
+            await c_inter.response.send_modal(
+                _AnchorDateModal(guild_id, chosen_key, name, ev.get("anchor_date") or "")
+            )
+
+        async def do_cancel(c_inter: discord.Interaction):
+            await c_inter.response.edit_message(
+                content=CANCEL_BACKPEDAL.format(detail=f"**{name}** is unchanged."),
+                view=None,
+            )
+
+        if is_active:
+            prompt = (
+                f"**{name}** is running - {describe_event_schedule(ev, today=today)}\n\n"
+                "Pausing stops it posting but keeps every setting, so you can "
+                "turn it back on later."
+            )
+            buttons = [
+                (_PAUSE_BTN_CONFIRM, discord.ButtonStyle.primary, do_pause),
+                ("↩️ Cancel", discord.ButtonStyle.secondary, do_cancel),
+            ]
+        elif ev.get("schedule_type") == "repeating":
+            prompt = (
+                f"**{name}** is paused. On its saved schedule it would next fire:\n"
+                f"{describe_event_schedule(ev, today=today)}\n\n"
+                "If the in-game cycle shifted while it was off, set a new anchor "
+                "date instead - the anchor is what every future date is counted from."
+            )
+            buttons = [
+                (_RESUME_BTN_KEEP, discord.ButtonStyle.success, do_resume),
+                (_RESUME_BTN_REANCHOR, discord.ButtonStyle.primary, do_reanchor),
+                ("↩️ Cancel", discord.ButtonStyle.secondary, do_cancel),
+            ]
+        else:
+            prompt = (
+                f"**{name}** is paused. It's a manual event, so resuming just "
+                "makes it available in the draft editor again."
+            )
+            buttons = [
+                ("▶️ Resume it", discord.ButtonStyle.success, do_resume),
+                ("↩️ Cancel", discord.ButtonStyle.secondary, do_cancel),
+            ]
+
+        for label, style, callback in buttons:
+            btn = discord.ui.Button(label=label[:80], style=style)
+            btn.callback = callback
+            confirm.add_item(btn)
+
+        await inter.response.edit_message(content=prompt, view=confirm)
+
+    select.callback = on_pick
+    await interaction.response.send_message(
+        "Pick an event to pause or resume:",
+        view=view,
+        ephemeral=True,
+    )
+
+
 # ── Delete flow ──────────────────────────────────────────────────────────────
 
 
 async def _open_delete_picker(interaction: discord.Interaction) -> None:
-    """Dropdown over active events, then a confirmation step before
-    the soft-delete fires. Mirrors the delete flow inside the old
-    setup-wizard step 5 but accessible directly from the hub."""
+    """Dropdown over every event, then a confirmation step before the row
+    is permanently removed.
+
+    Delete is the irreversible door; **{EVENTS_HUB_BTN_PAUSE}** is the
+    reversible one, and the confirm copy says so. Paused events are listed
+    too — an event you paused and then decided you're done with is exactly
+    the thing you'd come here to clear out."""
     from config import get_guild_events, delete_guild_event, get_guild_event
 
-    events = get_guild_events(interaction.guild_id, active_only=True)
+    events = get_guild_events(interaction.guild_id, active_only=False)
     if not events:
         await interaction.response.send_message(
             f"ℹ️ No events to delete. Click **{EVENTS_HUB_BTN_CREATE}** to add one first.",
@@ -1051,7 +1303,13 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
         return
 
     options = [
-        discord.SelectOption(label=e["name"][:100], value=e["short_key"]) for e in events[:25]
+        discord.SelectOption(
+            label=e["name"][:100],
+            value=e["short_key"],
+            emoji="▶️" if e.get("active") else "⏸️",
+            description=None if e.get("active") else "Currently paused",
+        )
+        for e in events[:25]
     ]
     select = discord.ui.Select(placeholder="🗑️ Pick an event to delete…", options=options)
     view = discord.ui.View(timeout=180)
@@ -1063,7 +1321,9 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
         name = (ev or {}).get("name") or chosen_key
 
         confirm = discord.ui.View(timeout=60)
-        yes_btn = discord.ui.Button(label="🗑️ Yes, delete", style=discord.ButtonStyle.danger)
+        yes_btn = discord.ui.Button(
+            label="🗑️ Yes, delete permanently", style=discord.ButtonStyle.danger
+        )
         no_btn = discord.ui.Button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
 
         async def do_delete(c_inter: discord.Interaction):
@@ -1071,7 +1331,7 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
             for item in confirm.children:
                 item.disabled = True
             await c_inter.response.edit_message(
-                content=f"🗑️ Deleted **{name}**.",
+                content=f"🗑️ Deleted **{name}** permanently.",
                 view=confirm,
             )
             confirm.stop()
@@ -1098,8 +1358,10 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
         select.disabled = True
         await inter.response.edit_message(view=view)
         await inter.followup.send(
-            f"Delete **{name}**? This soft-deletes the event — "
-            "scheduled posts stop firing, but the row stays in the DB.",
+            f"Delete **{name}** permanently? Its name, blurb, time and "
+            "schedule are gone for good and this can't be undone.\n"
+            f"To stop it for a season and keep everything, use "
+            f"**{EVENTS_HUB_BTN_PAUSE}** instead.",
             view=confirm,
             ephemeral=True,
         )

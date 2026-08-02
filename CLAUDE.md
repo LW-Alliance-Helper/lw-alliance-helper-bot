@@ -151,7 +151,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
 | `train_rotation.py` / `train_rotation_ui.py` / `train_hub.py` | Train Conductor Rotation (#55, free, opt-in): fairness selection (fewest drives → oldest last-driven → **stable random** tie-break seeded by the day, replacing the old alphabetical fallback) + `Train History`/`Member Rules`/`Day Rules` Sheet I/O. Fairness counts the **whole** history sheet as fact — any membered row counts (no posted/reason needed, blank reason counts), only the drafted week + future excluded via the `before` boundary; identity is **Discord-ID-first, name-fallback** (`canonicalize_history` + the appended `Discord ID` history column, stamped on write via `roster_id_map`). UI = buffered preset editor, weekly draft view (with ◀/▶ week nav), daily confirmation view. `train_hub.py` is the single `/train` hub (embed + button grid, Events-hub pattern) that fronts both rotation and the legacy blurb surface. The `check_rotation` loop (weekly draft + daily confirm) lives in `train_cog.py`; rotation gates on the `rotation_enabled` train-config flag. No strategy axis — auto/manual is derived from rule type + role; per-rule-type roles scope candidate pools; birthday mode is derived from the Birthday setup. | ~2.8K total |
 | `storm.py` / `storm_log.py` | Desert/Canyon Storm: drafts, participation, reminders. | ~2.5K total |
-| `transfer.py` / `transfer_cog.py` / `transfer_setup.py` / `transfer_sheets.py` / `transfers_hub.py` | Transfer Management ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16), Premium, 1.6.0): passive sheet-watcher over an alliance's recruiting sheet. `transfer.py` is the Discord-free core (header-name column addressing, AND-filter DSL, `compute_poll_diff` against `last_seen_state_json`, template render). `transfer_cog.py` is the per-minute poll loop posting new-applicant / status-change / removal notices (each or digest) with message drafts, full-record view, and opt-in decision write-back to the alliance's **own** sheet. `transfer_setup.py` is the wizard (largest piece); `transfers_hub.py` the `/transfers` front door. Optional server-wide / intake-form source pulls auto-copy filter-matching rows. Only Name is privileged; everything else is free-choice display/filter. State-diff poll self-heals after outages → no `outage_catchup` adapter (by design). | ~4.8K total |
+| `transfer.py` / `transfer_cog.py` / `transfer_setup.py` / `transfer_sheets.py` / `transfers_hub.py` | Transfer Management ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16), Premium, 1.6.0): passive sheet-watcher over an alliance's recruiting sheet. `transfer.py` is the Discord-free core (header-name column addressing, AND-filter DSL, `compute_poll_diff` against `last_seen_state_json`, template render). `transfer_cog.py` is the per-minute poll loop posting new-applicant / status-change / removal notices (each or digest) with message drafts, full-record view, and opt-in decision write-back to the alliance's **own** sheet. `transfer_setup.py` is the wizard (largest piece); `transfers_hub.py` the `/transfers` front door. Optional server-wide / intake-form source pulls auto-copy filter-matching rows. Only Name is privileged; everything else is free-choice display/filter. State-diff poll self-heals after outages → no `outage_catchup` adapter (by design). A sheet problem the alliance owns (renamed/deleted tab, deleted sheet, revoked access) posts one leadership-channel notice plus a `/transfers` hub warning instead of failing silently — deduplicated by `transfer.sheet_error_signature` via the `sheet_error_*` columns with a 24h re-nudge, cleared with a recovery line on the first clean read (#413). 429s and bot bugs deliberately don't alert (`sheet_problem_kind` vs `config.is_user_config_sheet_error` answer two different questions). | ~4.8K total |
 | `survey.py` | Squad-power surveys + scheduled reminders. | ~1.6K |
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
@@ -254,6 +254,32 @@ These are deliberate and tested. Don't refactor away:
 - `from config import X` *inside* a function is **deliberate** for
   late-binding under test patches. Don't refactor to module-level
   unless you also update every test that patches `config.X`.
+
+### Fixing a scheduling / dedup / permission bug? Grep for siblings before closing it
+- The 2026-07-17 audit (#361/#367) found the same bug fixed once but
+  never propagated to a structurally similar or newer code path,
+  three separate times: `storm.py`'s `_guard` reimplemented the
+  leadership check instead of calling `storm_permissions
+  .is_leader_or_admin` (and silently dropped the admin bypass);
+  Train Conductor Rotation's draft/confirm dedup used an in-memory
+  set instead of the DB-backed pattern already fixed for birthday
+  auto-population after a real production incident (#89); and
+  `outage_catchup.py`'s recovery scans recomputed "today" from
+  guild-local time instead of `config.server_date_for`, reintroducing
+  a bug already fixed in the live loops (#330/#318). A fourth turned up
+  in #413: the transfer poll loop still Sentry-captured every sheet
+  read failure, though `config.is_user_config_sheet_error` had been
+  added in 1.6.7 (#285/#286) precisely so alliance-owned Sheet problems
+  log-and-skip instead of paging. One alliance's renamed tab produced
+  445 events in 9 days. #414 tracks the same shape in `train.py`,
+  `member_roster.py`, and `storm.py`.
+- Before closing a bug tied to one of these code-path shapes —
+  scheduling/dedup ("did this already fire today"), permission
+  checks, or server-vs-guild-local date resolution — grep the repo
+  for other places doing the same kind of thing and check whether
+  they need the same fix. A canonical helper existing (`storm_permissions
+  .is_leader_or_admin`, `config.server_date_for`, the DB-backed
+  `last_*_fired` column pattern) doesn't mean every call site uses it.
 
 ---
 

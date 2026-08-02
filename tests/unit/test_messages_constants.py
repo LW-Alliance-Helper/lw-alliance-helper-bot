@@ -14,7 +14,9 @@ from messages import (
     CANCEL_BACKPEDAL,
     CANCEL_BACKPEDAL_DEFAULT,
     CANCEL_PLAIN,
+    DATE_PARSE_GIVE_UP,
     DATE_PARSE_REJECT,
+    DATE_PARSE_RETRY,
     DENY_ADMIN_OR_ROLE,
     DENY_NOT_OWNER,
     FEATURE_NOT_CONFIGURED,
@@ -132,6 +134,15 @@ def test_date_parse_reject():
     assert DATE_PARSE_REJECT == "⚠️ `{raw}` isn't a date I can parse. Try {examples}."
 
 
+def test_date_parse_retry_constants():
+    assert DATE_PARSE_RETRY == (
+        "⚠️ `{raw}` isn't a date I can parse. Try {examples}. Let's try once more."
+    )
+    assert DATE_PARSE_GIVE_UP == (
+        "⚠️ Could not read that date after a few tries. Run {recovery} to start again."
+    )
+
+
 # ── Footers ──────────────────────────────────────────────────────────
 
 
@@ -161,5 +172,7 @@ def test_templates_format_with_documented_params():
     assert INPUT_INVALID.format(type="row number", example="2", recovery="`/setup` → 📈 Growth")
     assert INPUT_INVALID_NO_EXAMPLE.format(type="whole number", recovery="`/events`")
     assert DATE_PARSE_REJECT.format(raw="blarg", examples="`May 18`, `5/18`")
+    assert DATE_PARSE_RETRY.format(raw="blarg", examples="`May 18`, `5/18`")
+    assert DATE_PARSE_GIVE_UP.format(recovery="`/events` → ➕ Create an event")
     assert TIER_COMPARISON.format(free_limit="7-day window", premium_limit="30 days")
     assert SETUP_POINTER_FOOTER.format(wizard="📈 Growth")

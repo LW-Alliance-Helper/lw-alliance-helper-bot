@@ -676,6 +676,217 @@ async def _finalize_survey_thread(thread):
         print(f"[SURVEY] Could not delete thread: {e}")
 
 
+# ── Translation helper ─────────────────────────────────────────────────────────
+
+
+async def add_translation_helper(thread: discord.Thread, guild, helper_id: int) -> bool:
+    """
+    Add the guild's configured translation-helper bot to a survey thread.
+
+    Survey threads are private (`invitable=False`), so a third-party
+    translate bot can't read the prompts, and therefore can't translate
+    them, unless it's an explicit thread member. Alliances with
+    non-English speakers point `survey_translate_bot_id` at their
+    translate bot and it gets added alongside the member.
+
+    Returns True when the helper was added. Every failure path returns
+    False and logs: the survey itself must never be blocked by this, so a
+    departed bot, a permissions gap on the parent channel, or a Discord
+    hiccup degrades to an untranslated (but working) survey.
+    """
+    if not helper_id or guild is None:
+        return False
+
+    helper = guild.get_member(helper_id)
+    if helper is None:
+        print(
+            f"[SURVEY] Translation helper {helper_id} is no longer in guild "
+            f"{guild.id}, skipping. Pick a new one in /setup."
+        )
+        return False
+
+    try:
+        await thread.add_user(helper)
+    except discord.Forbidden:
+        print(
+            f"[SURVEY] Could not add translation helper {helper} to thread "
+            f"{thread.id} (guild {guild.id}): missing access. It likely can't "
+            f"view the survey channel."
+        )
+        return False
+    except discord.HTTPException as e:
+        print(
+            f"[SURVEY] Could not add translation helper {helper} to thread "
+            f"{thread.id} (guild {guild.id}): {e}"
+        )
+        return False
+    return True
+
+
+def _describe_helper_gaps(helper: discord.Member, survey_channel: discord.abc.GuildChannel) -> list:
+    """
+    Return the permissions the helper bot is missing on the survey channel.
+
+    A thread member inherits its permissions from the parent channel, so a
+    translate bot that can't view the survey channel can't be added at all,
+    and one that can't post in threads can be added but never answers.
+    Both are silent failures at survey time, so they're surfaced at
+    pick time instead.
+    """
+    perms = survey_channel.permissions_for(helper)
+    gaps = []
+    if not perms.view_channel:
+        gaps.append("**View Channel**")
+    if not perms.send_messages_in_threads:
+        gaps.append("**Send Messages in Threads**")
+    return gaps
+
+
+class _TranslationHelperView(discord.ui.View):
+    """Pick (or clear) the translate bot added to every survey thread."""
+
+    def __init__(self, current_id: int):
+        super().__init__(timeout=180)
+        self.current_id = current_id
+
+        select = discord.ui.UserSelect(
+            placeholder="Pick your translation bot…",
+            min_values=1,
+            max_values=1,
+        )
+        select.callback = self._on_select
+        self._select = select
+        self.add_item(select)
+
+        self.btn_clear.disabled = not current_id
+
+    async def _on_select(self, inter: discord.Interaction):
+        from config import get_config, get_or_create_config, update_config_field
+
+        # A guild UserSelect resolves to a Member, but fall back to the raw
+        # value so an uncached pick can't crash the callback.
+        picked = self._select.values[0]
+        helper = inter.guild.get_member(picked.id) or picked
+
+        # Survey threads are private to one member. A human added to every
+        # thread would silently read every member's answers, so restrict
+        # this to bots. That privacy boundary is the whole point of the
+        # setting.
+        if not getattr(helper, "bot", False):
+            await inter.response.send_message(
+                f"⚠️ **{helper.display_name}** isn't a bot. Survey threads are private "
+                "between the member and me, so only a translate **bot** can be added "
+                "here. Adding a person would let them read every member's answers.",
+                ephemeral=True,
+            )
+            return
+
+        cfg = get_config(inter.guild_id) or get_or_create_config(inter.guild_id)
+        update_config_field(inter.guild_id, "survey_translate_bot_id", helper.id)
+
+        lines = [
+            f"🌐 **{helper.mention} will be added to every new survey thread.**",
+            "",
+            "Members can now use its translate commands or reactions on the survey "
+            "prompts, right inside their own thread.",
+        ]
+
+        survey_channel = inter.guild.get_channel(int(cfg.survey_channel_id or 0))
+        if survey_channel is None:
+            lines += [
+                "",
+                "⚠️ No survey channel is configured yet, so I can't check whether this "
+                f"bot has access. Set one up in `/setup` → {HUB_BTN_SURVEY}.",
+            ]
+        elif isinstance(helper, discord.Member):
+            gaps = _describe_helper_gaps(helper, survey_channel)
+            if gaps:
+                lines += [
+                    "",
+                    f"⚠️ It's missing {' and '.join(gaps)} on {survey_channel.mention}. "
+                    "Survey threads inherit that channel's permissions, so fix this or "
+                    "the bot won't be able to help in the thread.",
+                ]
+
+        lines += [
+            "",
+            "-# Heads up: this bot will be able to read everything in members' survey "
+            "threads while they're open. Threads are deleted once the survey is submitted.",
+        ]
+
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(
+            inter, content="\n".join(lines), embed=None, view=self
+        )
+        self.stop()
+
+    @discord.ui.button(label="🚫 Remove helper", style=discord.ButtonStyle.danger)
+    async def btn_clear(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from config import update_config_field
+
+        update_config_field(inter.guild_id, "survey_translate_bot_id", 0)
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(
+            inter,
+            content=(
+                "🚫 **Translation helper removed.** New survey threads will only "
+                "contain the member and me."
+            ),
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+
+async def run_translation_helper_setup(interaction: discord.Interaction):
+    """
+    `/setup` → Survey translation. Picks the third-party translate bot that
+    gets added to each private survey thread.
+
+    Survey threads are created `invitable=False` with only the member and
+    this bot as members, which is what keeps one member's answers private
+    from the rest of the alliance. It also means a server-wide translate
+    bot can't see the prompts. Alliances with non-English speakers name
+    their translate bot here and it's added at thread creation.
+    """
+    from config import get_config
+
+    cfg = get_config(interaction.guild_id)
+    current_id = int((cfg.survey_translate_bot_id if cfg else 0) or 0)
+    current = interaction.guild.get_member(current_id) if current_id else None
+
+    if current_id and current is None:
+        current_state = (
+            f"⚠️ Previously set to a bot that's no longer in this server (`{current_id}`)."
+        )
+    elif current:
+        current_state = f"Currently: {current.mention}"
+    else:
+        current_state = "Currently: *no helper. Survey prompts are English only.*"
+
+    embed = discord.Embed(
+        title="🌐 Survey Translation Helper",
+        color=discord.Color.blurple(),
+        description=(
+            "Survey threads are private between the member and me, so a translate "
+            "bot in your server can't see the prompts. That's why members can't "
+            "translate their survey.\n\n"
+            "Pick your translate bot below and I'll add it to every new survey "
+            "thread, so members can translate the questions in place.\n\n"
+            f"{current_state}"
+        ),
+    )
+    embed.set_footer(text="Only bots can be picked. Free for every alliance.")
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=_TranslationHelperView(current_id),
+        ephemeral=True,
+    )
+
+
 # ── Persistent survey button ───────────────────────────────────────────────────
 
 
@@ -725,6 +936,8 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
             ephemeral=True,
         )
         return
+
+    await add_translation_helper(thread, interaction.guild, cfg.survey_translate_bot_id)
 
     await interaction.followup.send(
         f"🚀 Your thread is ready — head over here to get started: {thread.mention}",

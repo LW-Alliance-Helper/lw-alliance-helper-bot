@@ -215,6 +215,13 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     server_max = int(scfg.get("server_max") or 0)
     channel_id = int(scfg.get("channel_id") or 0)
 
+    # Resolve the shiny cycle against the Last War in-game (server, UTC-2)
+    # date, not the guild-local date `scheduled` carries — same #330 fix as
+    # the live loop (bot.py's shiny_tasks_post_task); the dedup key above
+    # (`today_iso`) correctly stays guild-local, matching the live loop's
+    # `last_posted_date` semantics. See config.server_date_for.
+    shiny_today = config.server_date_for(scheduled)
+
     # Only surface a row when there is actually something to post today.
     rows = config.get_shiny_task_servers_in_range(server_min, server_max)
     from shiny_tasks import build_announcement_for_guild
@@ -223,19 +230,20 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
         server_rows=rows,
         server_min=server_min,
         server_max=server_max,
-        today=scheduled.date(),
+        today=shiny_today,
         template=scfg.get("message_template") or "",
     )
     if body is None:
         # No shinies in range today — nothing to recover. Stamp so the live
         # loop doesn't reconsider, and surface no row.
         logger.info(
-            "[CATCHUP] No shinies in range %s-%s for guild=%s on %s — "
-            "marking posted without sending",
+            "[CATCHUP] No shinies in range %s-%s for guild=%s on %s "
+            "(local date %s) — marking posted without sending",
             server_min,
             server_max,
             guild.id,
-            scheduled.date(),
+            shiny_today,
+            today_iso,
         )
         config.mark_shiny_tasks_posted(guild.id, today_iso)
         return []
@@ -458,7 +466,10 @@ async def scan_train_reminder(bot, guild, cfg, window: OutageWindow) -> list[Mis
     from train import load_schedule
 
     schedule = load_schedule(guild.id)
-    today_str = scheduled.date().isoformat()
+    # Key the schedule lookup against the Last War in-game (server, UTC-2)
+    # date, not `scheduled`'s guild-local date — same #318 fix as the live
+    # loop (train_cog.py's check_reminder). See config.server_date_for.
+    today_str = config.server_date_for(scheduled).isoformat()
     entry = schedule.get(today_str)
     if not entry:
         return []  # no conductor scheduled today

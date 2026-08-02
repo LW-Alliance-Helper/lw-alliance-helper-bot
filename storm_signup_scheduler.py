@@ -4,15 +4,20 @@ Auto-scheduler for the storm sign-up post (#131 + Rule H / #164).
 Every minute, checks each guild with structured_flow_enabled=1 AND a
 configured (poll_day_of_week, signup_time) schedule. When today's
 weekday in the alliance's tz matches `poll_day_of_week` AND the
-current minute matches `signup_time`, it fires the sign-up post via
-the shared `storm_signup_post.post_registration` helper.
+current time is at or past `signup_time` (#365 — not an exact minute
+match, so a tick that lands late doesn't silently skip the whole
+week), it fires the sign-up post via the shared
+`storm_signup_post.post_registration` helper.
 
 Event day is game-defined (DS = Friday, CS = Thursday); the event
 date in the post comes from `storm_date_helpers.next_event_date`.
 
 Idempotence is preserved by `storm_registration_posts` — the post
 helper itself short-circuits if a registration already exists for
-the target event date.
+the target event date. A per-(guild, event_type) retry cooldown
+(`_RETRY_COOLDOWN`) bounds how often a guild that keeps failing (bad
+channel, missing permission) gets retried, now that a match isn't a
+one-shot-per-minute event.
 """
 
 from __future__ import annotations
@@ -71,18 +76,34 @@ def _should_fire_now(
     """Decide whether the scheduler should fire for this guild right
     now.
 
-    Fires when today's weekday matches `poll_dow` AND hour:minute of
-    `now` matches `signup_time`. The minute match is exact — the loop
-    runs once per minute, so we rely on the loop cadence rather than
-    a wider window (which would risk double-fires).
+    Fires when today's weekday matches `poll_dow` AND `now` is at or past
+    `signup_time` — not an exact minute match (#365). A shared per-minute
+    tick that runs long (many guilds, a slow Sheets call earlier in the
+    loop) can land on a guild's row a minute or more late; an exact match
+    would then silently skip that guild's post for the entire week with no
+    retry. `post_registration`'s own idempotent short-circuit (a
+    `storm_registration_posts` row already exists for the event date)
+    prevents a late tick from double-posting — the retry-cooldown in
+    `_run_one_tick` bounds how often a *failing* guild gets retried. This
+    mirrors the fix already shipped for the Shiny Tasks loop after the
+    exact-match version silently missed three consecutive nights in
+    production (see bot.py's `shiny_tasks_post_task`).
     """
     if poll_dow < 0 or poll_dow > 6:
         return False
     if today.weekday() != poll_dow:
         return False
-    if now.hour != signup_time.hour or now.minute != signup_time.minute:
-        return False
-    return True
+    return now >= signup_time
+
+
+# Guards the at-or-past retry (#365) from re-attempting a guild+event that
+# keeps failing (bad channel, missing permission, transient Sheets/Discord
+# error) on every single tick for the rest of the day. Keyed by
+# (guild_id, event_type) since a guild can have both DS and CS scheduled.
+# Not persisted; in-memory is enough since the only cost of losing it on
+# restart is one extra attempt. Mirrors bot.py's `_shiny_last_attempt`.
+_RETRY_COOLDOWN = _dt.timedelta(minutes=5)
+_last_attempt: dict[tuple[int, str], _dt.datetime] = {}
 
 
 def _scheduled_storm_rows() -> list[dict]:
@@ -126,6 +147,17 @@ async def _run_one_tick(bot: discord.Client) -> int:
             signup_time=signup_time,
         ):
             continue
+
+        # Throttle retries for a guild+event that's overdue but keeps
+        # failing — without this, at-or-past matching would retry every
+        # single tick for the rest of the day instead of once every few
+        # minutes (#365).
+        cooldown_key = (guild_id, event_type)
+        last_attempt = _last_attempt.get(cooldown_key)
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        if last_attempt is not None and (now_utc - last_attempt) < _RETRY_COOLDOWN:
+            continue
+        _last_attempt[cooldown_key] = now_utc
 
         # Resolve the guild from the bot cache. Bot must be ready and
         # actually in the guild; skip silently otherwise (the next tick

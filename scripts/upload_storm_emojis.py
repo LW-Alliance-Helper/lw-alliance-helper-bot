@@ -73,6 +73,25 @@ def _load_and_resize(path: pathlib.Path) -> bytes:
     return resized
 
 
+def _find_icon_files() -> list[pathlib.Path]:
+    """Enumerate the storm-icon PNGs to upload. Plain filesystem
+    walk — kept out of `_upload_all` (an `async def`) since Path's
+    blocking methods (`.exists()`/`.glob()`) don't belong on the
+    event loop, even in a short-lived one-shot script like this."""
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    asset_dirs = [
+        repo_root / "assets" / "storm_icons" / "ds",
+        repo_root / "assets" / "storm_icons" / "cs",
+    ]
+    paths: list[pathlib.Path] = []
+    for directory in asset_dirs:
+        if not directory.exists():
+            print(f"[skip] {directory} doesn't exist")
+            continue
+        paths.extend(sorted(directory.glob("*.png")))
+    return paths
+
+
 async def _upload_all(token: str) -> dict[str, int]:
     """Connect to Discord just long enough to enumerate + upload the
     app emojis. Doesn't actually start the gateway connection — emoji
@@ -85,33 +104,24 @@ async def _upload_all(token: str) -> dict[str, int]:
         existing_by_name = {e.name: e.id for e in existing}
         print(f"[init] {len(existing_by_name)} application emojis already present")
 
-        repo_root = pathlib.Path(__file__).resolve().parent.parent
-        asset_dirs = [
-            repo_root / "assets" / "storm_icons" / "ds",
-            repo_root / "assets" / "storm_icons" / "cs",
-        ]
         result: dict[str, int] = {}
-        for directory in asset_dirs:
-            if not directory.exists():
-                print(f"[skip] {directory} doesn't exist")
+        for path in _find_icon_files():
+            name = _stem_from_filename(path)
+            if name in existing_by_name:
+                result[name] = existing_by_name[name]
+                print(f"[skip] {name} already uploaded (id={result[name]})")
                 continue
-            for path in sorted(directory.glob("*.png")):
-                name = _stem_from_filename(path)
-                if name in existing_by_name:
-                    result[name] = existing_by_name[name]
-                    print(f"[skip] {name} already uploaded (id={result[name]})")
-                    continue
-                try:
-                    payload = _load_and_resize(path)
-                    emoji = await client.create_application_emoji(
-                        name=name,
-                        image=payload,
-                    )
-                except Exception as e:
-                    print(f"[FAIL] {name}: {e}")
-                    continue
-                result[name] = emoji.id
-                print(f"[ok]   {name} → {emoji.id}")
+            try:
+                payload = _load_and_resize(path)
+                emoji = await client.create_application_emoji(
+                    name=name,
+                    image=payload,
+                )
+            except Exception as e:
+                print(f"[FAIL] {name}: {e}")
+                continue
+            result[name] = emoji.id
+            print(f"[ok]   {name} → {emoji.id}")
         return result
     finally:
         await client.close()

@@ -147,34 +147,53 @@ def _format_time_with_tz(time_str: str, tz_name: str | None) -> str:
     return f"{base} {abbr}" if abbr else base
 
 
-def _parse_month_day(raw: str) -> str:
+def _parse_month_day(raw: str, *, today=None) -> str | None:
     """
-    Parse 'Month Day' into YYYY-MM-DD using the most recent occurrence.
-    Always looks backward — never assumes a future date.
+    Parse an officer-typed date into YYYY-MM-DD using the most recent
+    occurrence. Always looks backward — never assumes a far-future date.
     Examples (today = April 25 2026):
       'February 20' → 2026-02-20  (already passed this year)
       'December 3'  → 2025-12-03  (hasn't happened yet this year, so last year)
       'May 2'       → 2026-05-02  (upcoming this year, but within ~5 days so still this year)
-    Rule: if the date this year is in the future beyond today, use last year.
+    Rule: if the date this year is more than 31 days out, use last year.
+
+    Format tolerance is delegated to `storm_date_helpers.parse_event_date`
+    (the canonical permissive parser), so `7/30`, `2026-07-30`, `July 30th`,
+    `30 Jul`, `today` and weekday names all parse — not just `Month Day`.
+    Only the year-selection rule is ours: `parse_event_date` infers
+    the *next* occurrence, which is wrong for an anchor date that leans
+    backward, so we re-derive the year from the parsed month/day.
+
+    `today` is injectable for tests; production callers omit it.
     """
     import re
-    from datetime import date, datetime
+    from datetime import date
 
-    raw = raw.strip()
+    from storm_date_helpers import parse_event_date
+
+    if not raw or not raw.strip():
+        return None
+    today = today or date.today()
+    parsed = parse_event_date(raw, today=today)
+    if parsed is None:
+        return None
+
+    # An explicit 4-digit year is the officer's word — take it as typed.
+    if re.search(r"\d{4}", raw):
+        return parsed.isoformat()
+
     try:
-        parsed = datetime.strptime(raw, "%B %d")
+        this_year = parsed.replace(year=today.year)
     except ValueError:
-        try:
-            parsed = datetime.strptime(raw, "%b %d")
-        except ValueError:
-            return None
-    today = date.today()
-    this_year = date(today.year, parsed.month, parsed.day)
-    last_year = date(today.year - 1, parsed.month, parsed.day)
-    # Allow up to 31 days in the future (next upcoming event within a month)
-    # Anything further out uses last year's date
+        # Feb 29 typed in a non-leap current year — keep the parser's date.
+        return parsed.isoformat()
+    # Allow up to 31 days in the future (next upcoming event within a month).
+    # Anything further out uses last year's date.
     if (this_year - today).days > 31:
-        return last_year.isoformat()
+        try:
+            return this_year.replace(year=today.year - 1).isoformat()
+        except ValueError:
+            return this_year.isoformat()
     return this_year.isoformat()
 
 
@@ -2014,6 +2033,9 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
 
+    translate_bot = (
+        f"<@{cfg.survey_translate_bot_id}>" if cfg.survey_translate_bot_id else "*not set*"
+    )
     s_lines = [
         f"**Survey Channel:** {_channel(cfg.survey_channel_id)}",
         f"**Notify Channel:** {_channel(cfg.survey_notify_channel_id)}",
@@ -2021,6 +2043,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**History Tab:** {survey.get('tab_history', '*not set*')}",
         f"**Questions:** {len(survey.get('questions') or [])}",
         f"**Intro Message:** {_yn(survey.get('intro_message'))}",
+        f"**Translation Helper:** {translate_bot}",
     ]
     embed.add_field(name="📋 Survey", value="\n".join(s_lines)[:1024], inline=False)
 
@@ -8169,7 +8192,8 @@ class _InlineCreatePresetOffer(discord.ui.View):
             child.disabled = True
         await inter.response.edit_message(view=self)
         try:
-            from storm_strategy import seed_default_preset, open_editor_followup
+            from storm_strategy import seed_default_preset
+            from storm_strategy_ui import open_editor_followup
 
             buf = seed_default_preset(self.default_name, self.event_type)
             buf.dirty = True
@@ -9157,9 +9181,13 @@ async def _run_structured_flow_setup_step(
                     # header. Off the event loop in case the sheet is
                     # slow / rate-limited.
                     try:
-                        sh = get_spreadsheet(guild_id)
-                        ws = sh.worksheet(survey_tab) if sh else None
-                        header_row = await asyncio.to_thread(ws.row_values, 1) if ws else []
+
+                        def _read_survey_header():
+                            sh = get_spreadsheet(guild_id)
+                            ws = sh.worksheet(survey_tab) if sh else None
+                            return ws.row_values(1) if ws else []
+
+                        header_row = await asyncio.to_thread(_read_survey_header)
                     except Exception as e:
                         print(
                             f"[SETUP] survey Date-Modified header lookup "
@@ -10110,7 +10138,7 @@ async def wait_for_msg_simple(
     cancel_event,
     prompt: str,
     *,
-    timeout: int = 120,
+    wait_seconds: int = 120,
 ) -> str | None:
     """Minimal message-wait helper for inline use inside
     `_build_participation_question`. Returns the user's reply text
@@ -10121,7 +10149,7 @@ async def wait_for_msg_simple(
 
     await channel.send(prompt)
     try:
-        reply = await bot.wait_for("message", check=check, timeout=timeout)
+        reply = await bot.wait_for("message", check=check, timeout=wait_seconds)
         return reply.content
     except asyncio.TimeoutError:
         await channel.send("⏰ Timed out.")

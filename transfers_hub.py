@@ -23,6 +23,12 @@ import wizard_registry
 logger = logging.getLogger(__name__)
 
 TRANSFERS_HUB_CMD = "/transfers"
+
+# Named UI surface referenced from other modules' copy (transfer_cog's
+# stuck-watcher notice tells leadership to click it), so it lives as a
+# constant rather than a duplicated literal.
+SETUP_TRANSFERS_BTN = "⚙️ Setup Transfers"
+
 _DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
 # Mirrors transfer_setup._MODE_LABELS (kept local to avoid importing the wizard
@@ -74,8 +80,41 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
         extras.append("removal notices ✅")
     if extras:
         embed.add_field(name="Extras", value=" · ".join(extras), inline=False)
+    _add_sheet_problem_field(embed, cfg)
     embed.set_footer(text="Buttons below")
     return embed
+
+
+def _add_sheet_problem_field(embed: discord.Embed, cfg: dict) -> None:
+    """Surface a stuck watcher on the hub (#413).
+
+    The leadership-channel alert can be missed or scrolled past, and the hub is
+    where someone goes to ask "is this working?" — so a recorded sheet problem
+    has to be visible right here, not just inferable from a silent channel.
+    Recolours the embed, because the status line above still says Active (the
+    config *is* active; the sheet behind it is what's broken).
+
+    This is the status surface; the leadership-channel notice carries the
+    problem-specific fix steps. The action line here has to stay true for every
+    problem kind, so it names both routes rather than assuming a re-pick.
+    """
+    signature = (cfg.get("sheet_error_signature") or "").strip()
+    if not signature:
+        return
+    detail = (cfg.get("sheet_error_detail") or "").strip()
+    which = transfer.SHEET_SCOPE_LABELS.get(
+        transfer.sheet_error_scope(signature), "one of your transfer sheets"
+    )
+    embed.color = discord.Color.red()
+    embed.add_field(
+        name=f"⚠️ Stopped: I can't read {which}",
+        value=(
+            f"{detail}\n\nNo applicants are being picked up until this is fixed. Sort it out "
+            f"on the spreadsheet, or click **{SETUP_TRANSFERS_BTN}** to point me somewhere "
+            "else."
+        ).strip()[:1024],
+        inline=False,
+    )
 
 
 def _check_report_embed(report: dict) -> discord.Embed:
@@ -165,11 +204,11 @@ class _TransfersHubView(discord.ui.View):
             check_btn.callback = self._check_now
             self.add_item(check_btn)
             setup_btn = discord.ui.Button(
-                label="⚙️ Setup Transfers", style=discord.ButtonStyle.secondary
+                label=SETUP_TRANSFERS_BTN, style=discord.ButtonStyle.secondary
             )
         else:
             setup_btn = discord.ui.Button(
-                label="⚙️ Setup Transfers", style=discord.ButtonStyle.primary
+                label=SETUP_TRANSFERS_BTN, style=discord.ButtonStyle.primary
             )
         setup_btn.callback = self._setup
         self.add_item(setup_btn)

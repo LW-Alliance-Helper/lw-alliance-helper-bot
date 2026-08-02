@@ -83,9 +83,12 @@ def col_index_to_letter(idx: int) -> str:
     return out
 
 
-def _norm_header(value) -> str:
+def norm_header(value) -> str:
     """Normalise a header / key for matching: trim, collapse internal
-    whitespace, casefold. So ``"Total  Power"`` and ``"total power"`` match."""
+    whitespace, casefold. So ``"Total  Power"`` and ``"total power"`` match.
+    Public because ``transfer_sheets.py`` and ``transfer_cog.py`` need the
+    same normalization (a header used for row lookups must match the header
+    used to write/read cells)."""
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
@@ -129,7 +132,7 @@ def header_index(header_row: list) -> dict:
     column."""
     out: dict = {}
     for i, h in enumerate(header_row):
-        key = _norm_header(h)
+        key = norm_header(h)
         if key and key not in out:
             out[key] = i
     return out
@@ -144,7 +147,7 @@ def cell_for(row: list, hidx: dict, header) -> str | None:
     on."""
     if not header:
         return None
-    idx = hidx.get(_norm_header(header))
+    idx = hidx.get(norm_header(header))
     if idx is None:
         idx = col_letter_to_index(str(header))  # literal-letter escape hatch
     if idx is None or idx < 0 or idx >= len(row):
@@ -286,7 +289,7 @@ def suggest_column_map(header_row: list) -> dict:
     Each header is claimed by at most one role (name > identity > status >
     display), so a column never double-books.
     """
-    items = [(i, _norm_header(h)) for i, h in enumerate(header_row)]
+    items = [(i, norm_header(h)) for i, h in enumerate(header_row)]
     claimed: set = set()
 
     def _best(synonyms):
@@ -845,9 +848,9 @@ def align_row(
         i = None
         mapped = cmap.get(h)
         if mapped:
-            i = src_idx.get(_norm_header(mapped))
+            i = src_idx.get(norm_header(mapped))
         if i is None:
-            i = src_idx.get(_norm_header(h))
+            i = src_idx.get(norm_header(h))
         if i is not None and i < len(source_row):
             cell = source_row[i]
             out.append(cell if isinstance(cell, str) else str(cell))
@@ -974,9 +977,9 @@ def plan_blank_fill(
             if str(current).strip():
                 continue  # never overwrite an existing value
             mapped = cmap.get(th)
-            si = s_hidx.get(_norm_header(mapped)) if mapped else None
+            si = s_hidx.get(norm_header(mapped)) if mapped else None
             if si is None:
-                si = s_hidx.get(_norm_header(th))
+                si = s_hidx.get(norm_header(th))
             if si is None or si >= len(srow):
                 continue
             val = srow[si]
@@ -984,6 +987,77 @@ def plan_blank_fill(
                 continue  # source has nothing to add
             updates.append((r_i + 2, c_i, str(val)))
     return updates
+
+
+# ── Stuck-watcher notices (#413) ─────────────────────────────────────────────
+
+# How long an unresolved sheet problem stays quiet between leadership nudges.
+# The poll itself runs every `poll_frequency_minutes`, so without this the
+# alliance would get a post per poll; without *any* re-nudge a single post
+# scrolls out of the channel and the watcher is silently dead again.
+SHEET_ERROR_RENOTIFY_HOURS = 24
+
+# Scope labels for `sheet_error_signature`. These are the three sheets a poll
+# touches, and they're user-facing (they name which sheet to go fix).
+SHEET_SCOPE_LABELS = {
+    "alliance": "your transfer sheet",
+    "server_wide": "the shared sheet you pull from",
+    "alliance_form": "your intake form's responses sheet",
+}
+
+
+def sheet_error_signature(scope: str, error_type: str, tab: str = "") -> str:
+    """A stable key for "which problem is currently blocking the watcher".
+
+    Built from the *scope* (which of the three sheets failed), the exception
+    class name, and the tab involved — deliberately **not** the full diagnosis
+    string, which can carry volatile detail (an API's error message wording)
+    that would make the same problem look new on every poll and re-alert the
+    alliance each time.
+
+    Comparing this against the stored signature is what turns "raises every 30
+    minutes forever" into "one post, then quiet".
+    """
+    return "|".join([(scope or "").strip(), (error_type or "").strip(), (tab or "").strip()])
+
+
+def sheet_error_scope(signature: str) -> str:
+    """The scope back out of a stored signature (``""`` when there isn't one),
+    so the recovery notice can name the sheet that came back rather than
+    guessing at the alliance sheet."""
+    return (signature or "").split("|")[0].strip()
+
+
+def should_notify_sheet_error(
+    prior_signature: str,
+    prior_notified_at: str,
+    new_signature: str,
+    now: datetime,
+    *,
+    renotify_hours: int = SHEET_ERROR_RENOTIFY_HOURS,
+) -> bool:
+    """Whether to post a leadership notice for the sheet problem identified by
+    ``new_signature``.
+
+    ``True`` when this is a different problem than the one already reported (or
+    the first problem at all), or when the same problem has gone unfixed for
+    ``renotify_hours``. ``False`` while the same problem is inside its quiet
+    window. An unparseable/missing stored timestamp notifies, so a bad value
+    can't wedge the alliance into permanent silence.
+    """
+    if not new_signature:
+        return False
+    if (prior_signature or "") != new_signature:
+        return True
+    if not prior_notified_at:
+        return True
+    try:
+        last = datetime.fromisoformat(prior_notified_at)
+    except (ValueError, TypeError):
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(hours=max(1, int(renotify_hours or 1)))
 
 
 # ── In-game message templates ────────────────────────────────────────────────
@@ -999,7 +1073,7 @@ def field_token(header) -> str:
     """Template-placeholder token for a display column header:
     ``"Total Hero Power"`` → ``"total_hero_power"``. So a template can drop a
     chosen column's value in with ``{total_hero_power}``."""
-    return re.sub(r"\s+", "_", _norm_header(header)).strip("_")
+    return re.sub(r"\s+", "_", norm_header(header)).strip("_")
 
 
 class _SafeDict(dict):

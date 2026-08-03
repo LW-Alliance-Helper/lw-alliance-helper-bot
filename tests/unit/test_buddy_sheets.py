@@ -238,3 +238,151 @@ def test_read_all_professions_locates_columns_by_header(sheets):
     assert by_id["1"].name == "Wanda"
     assert by_id["1"].profession == "War Leader"
     assert by_id["3"].profession == "Engineer"
+
+
+# ── Opt-out column + from-scratch rebuild (#427) ─────────────────────────────
+
+
+def test_include_column_absent_leaves_everyone_eligible(sheets):
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Discord ID", "Name", "Profession"],
+            ["1", "Wanda", "War Leader"],
+            ["3", "Eve", "Engineer"],
+        ]
+    )
+    # Header configured but not present on the tab — must not exclude anyone.
+    members = buddy.read_all_professions(GID, "Squad Powers", "Profession", "In Buddy System")
+    assert [m.included for m in members] == [True, True]
+
+
+@pytest.mark.parametrize("cell", ["no", "No", "FALSE", "0", " off ", "left", "exclude"])
+def test_include_column_excludes_on_falsy_values(sheets, cell):
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Discord ID", "Name", "Profession", "In Buddy System"],
+            ["1", "Wanda", "War Leader", cell],
+            ["3", "Eve", "Engineer", ""],
+        ]
+    )
+    members = buddy.read_all_professions(GID, "Squad Powers", "Profession", "In Buddy System")
+    by_id = {m.discord_id: m for m in members}
+    assert by_id["1"].included is False
+    # A blank cell means "still in" — the opt-out has to be deliberate.
+    assert by_id["3"].included is True
+
+
+def test_excluded_member_is_not_resurrected_by_their_buddy_tab_row(sheets):
+    """The #427 regression: blanking a departed member's Profession cell wasn't
+    enough, because their leftover Buddies-tab row re-implied a profession and
+    merge_members kept it. The exclusion must outrank the fallback."""
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Discord ID", "Name", "Profession", "In Buddy System"],
+            # Departed: profession blanked AND marked out.
+            ["1", "Walt", "", "no"],
+            ["2", "Wanda", "War Leader", ""],
+            ["3", "Eve", "Engineer", ""],
+        ]
+    )
+    sheets["Buddy System"] = FakeWS(
+        [
+            list(buddy.BUDDY_HEADER),
+            # Walt still sits in the left (War Leader) block from the last save.
+            ["1", "Walt", "", "3", "Eve", "", "", "", ""],
+        ]
+    )
+    primary = buddy.read_all_professions(GID, "Squad Powers", "Profession", "In Buddy System")
+    fallback = buddy.read_members_from_buddy_tab(GID, "Buddy System")
+
+    # merge_members alone keeps Walt — that's the old, broken behaviour.
+    assert "1" in {m.discord_id for m in buddy.merge_members(primary, fallback)}
+    # eligible_members drops him.
+    assert "1" not in {m.discord_id for m in buddy.eligible_members(primary, fallback)}
+
+
+def test_eligible_members_matches_merge_when_nothing_excluded(sheets):
+    primary = [Member(name="Wanda", discord_id="2", profession="War Leader")]
+    fallback = [Member(name="Eve", discord_id="3", profession="Engineer")]
+    assert {m.discord_id for m in buddy.eligible_members(primary, fallback)} == {"2", "3"}
+
+
+def test_exclusion_matches_by_name_when_no_discord_id(sheets):
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Name", "Profession", "In Buddy System"],
+            ["Walt", "War Leader", "no"],
+        ]
+    )
+    sheets["Buddy System"] = FakeWS(
+        [list(buddy.BUDDY_HEADER), ["", "Walt", "", "", "", "", "", "", ""]]
+    )
+    primary = buddy.read_all_professions(GID, "Squad Powers", "Profession", "In Buddy System")
+    fallback = buddy.read_members_from_buddy_tab(GID, "Buddy System")
+    assert buddy.eligible_members(primary, fallback) == []
+
+
+def test_names_dropped_by_reports_tab_members_missing_from_result():
+    result = buddy.PairingResult(
+        pairs=[Pair("Wanda", "2", "Eve", "3")],
+        unpaired_wl=[Member(name="Wes", discord_id="4", profession="War Leader")],
+        unpaired_eng=[],
+    )
+    current = [
+        Member(name="Wanda", discord_id="2"),
+        Member(name="Eve", discord_id="3"),
+        Member(name="Wes", discord_id="4"),
+        Member(name="Walt", discord_id="1"),
+        Member(name="Ada", discord_id="9"),
+        Member(name="ada", discord_id="9"),  # duplicate block on the same row
+    ]
+    # Sorted, deduped, and only the people the result no longer carries.
+    assert buddy.names_dropped_by(result, current) == ["Ada", "Walt"]
+
+
+def test_from_scratch_rebuild_sheds_buddy_tab_only_members(sheets):
+    """`Re-pair from scratch` used to keep departed members because it only
+    discarded pairings, not the pool. It now rebuilds the pool from Squad
+    Powers alone, so a leftover Buddies-tab row no longer carries anyone."""
+    import buddy_ui
+
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Discord ID", "Name", "Profession"],
+            ["2", "Wanda", "War Leader"],
+            ["3", "Eve", "Engineer"],
+        ]
+    )
+    sheets["Buddy System"] = FakeWS(
+        [
+            list(buddy.BUDDY_HEADER),
+            # Walt has been taken off Squad Powers but is still on this tab.
+            ["1", "Walt", "", "3", "Eve", "", "", "", ""],
+            ["2", "Wanda", "", "", "", "", "", "", ""],
+        ]
+    )
+    cfg = {
+        "profession_tab": "Squad Powers",
+        "profession_col_header": "Profession",
+        "buddy_tab": "Buddy System",
+        "include_col_header": "",
+    }
+
+    kept = buddy_ui.compute_autofill(GID, cfg, from_scratch=False)
+    assert "Walt" in _all_names(kept)
+
+    rebuilt, dropped = buddy_ui.preview_scratch_rebuild(GID, cfg)
+    assert "Walt" not in _all_names(rebuilt)
+    assert dropped == ["Walt"]
+    # And the people who are still on Squad Powers survive the rebuild.
+    assert {"Wanda", "Eve"} <= _all_names(rebuilt)
+
+
+def _all_names(result) -> set:
+    names = set()
+    for p in result.pairs:
+        names.add(p.war_leader)
+        names.add(p.engineer)
+    for m in list(result.unpaired_wl) + list(result.unpaired_eng):
+        names.add(m.name)
+    return names

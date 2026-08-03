@@ -212,6 +212,12 @@ def init_db():
         # `persistent_message_id`/`persistent_channel_id` track the single
         # self-service profession message per guild (Premium), re-registered
         # on on_ready like the storm sign-up views.
+        #
+        # `include_col_header` (#427, default empty = off) names an optional
+        # column on the Squad Powers tab. A cell reading no/false/0 takes that
+        # member out of the buddy pool without touching their Profession cell,
+        # so an alliance that keeps departed members on the sheet for the
+        # historical record can drop them from pairing in one edit.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_buddy_config (
                 guild_id               INTEGER PRIMARY KEY,
@@ -228,7 +234,8 @@ def init_db():
                 scarcity_priority      TEXT    DEFAULT 'alphabetical',
                 reliability_enabled       INTEGER DEFAULT 0,
                 reliability_tab           TEXT    DEFAULT '',
-                reliability_column        TEXT    DEFAULT ''
+                reliability_column        TEXT    DEFAULT '',
+                include_col_header        TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -1188,6 +1195,10 @@ def init_db():
             ("reliability_enabled", "INTEGER DEFAULT 0"),
             ("reliability_tab", "TEXT    DEFAULT ''"),
             ("reliability_column", "TEXT    DEFAULT ''"),
+            # Opt-out column (#427): an optional header on the Squad Powers tab
+            # whose cell excludes a member from the buddy pool when it reads
+            # no/false/0. Empty = no column configured, every row is eligible.
+            ("include_col_header", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -5221,6 +5232,7 @@ _BUDDY_DEFAULTS = {
     "reliability_enabled": 0,
     "reliability_tab": "",
     "reliability_column": "",
+    "include_col_header": "",
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

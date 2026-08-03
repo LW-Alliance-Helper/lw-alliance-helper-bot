@@ -91,7 +91,8 @@ def _load_members(guild_id: int, cfg: dict, *, use_buddy_tab: bool = True) -> li
     fallback = (
         buddy.read_members_from_buddy_tab(guild_id, cfg.get("buddy_tab")) if use_buddy_tab else []
     )
-    members = buddy.eligible_members(members, fallback)
+    roster = buddy.read_roster_index(guild_id) if cfg.get("roster_filter_enabled") else None
+    members = buddy.eligible_members(members, fallback, roster)
     if _wl_priority(cfg) == "power":
         buddy.read_power_for_members(guild_id, members)
     if _eng_priority(cfg) == "reliability":
@@ -146,6 +147,42 @@ def preview_scratch_rebuild(guild_id: int, cfg: dict):
     result = compute_autofill(guild_id, cfg, from_scratch=True)
     current = buddy.read_members_from_buddy_tab(guild_id, cfg.get("buddy_tab"))
     return result, buddy.names_dropped_by(result, current)
+
+
+def roster_warning(guild_id: int, cfg: dict) -> str:
+    """One line naming members the roster intersect is dropping, or "" — sync,
+    for to_thread.
+
+    Only meaningful when the roster filter is on. Leadership sees this after a
+    buddy action so a matching problem (a renamed member, a typo'd roster tab)
+    reads as "check the roster" instead of "the bot lost people" (#428)."""
+    if not cfg.get("roster_filter_enabled"):
+        return ""
+    roster = buddy.read_roster_index(guild_id)
+    if not roster:
+        # The empty-roster guard already left the pool unfiltered; say so,
+        # because otherwise nothing signals that the filter isn't working.
+        return (
+            "⚠️ Couldn't read your member roster, so nobody was filtered out by it. "
+            "Check the roster tab in `/setup` → 🤝 Buddy System."
+        )
+    missing = buddy.members_missing_from_roster(
+        buddy.read_all_professions(
+            guild_id,
+            cfg.get("profession_tab"),
+            cfg.get("profession_col_header"),
+            cfg.get("include_col_header") or "",
+        ),
+        roster,
+    )
+    if not missing:
+        return ""
+    shown = ", ".join(missing[:5]) + (f" and {len(missing) - 5} more" if len(missing) > 5 else "")
+    return (
+        f"ℹ️ {len(missing)} on **{cfg.get('profession_tab') or 'Squad Powers'}** "
+        f"{'are' if len(missing) > 1 else 'is'} not on your member roster, "
+        f"so they were left out: {shown}."
+    )
 
 
 def save_result(guild_id: int, cfg: dict, result) -> bool:

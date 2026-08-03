@@ -9,6 +9,17 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.2] — 2026-08-03
+
+### Added
+- An optional opt-out column on your Squad Powers tab takes someone out of the buddy list without touching the rest of their row ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- The buddy list can be limited to people on your member roster, so a departure drops out of pairing on its own; free alliances can point at any roster tab ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
+- **♻️ Re-pair from scratch** now names who it will remove before you confirm ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- Members on your Squad Powers tab who aren't on your member roster are reported after a buddy action, so a name that doesn't match reads as something to fix rather than the bot losing people ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
+
+### Fixed
+- **♻️ Re-pair from scratch** kept members already removed from Squad Powers, so taking someone out meant hand-editing two tabs in a particular order ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+
 ## [1.8.1] — 2026-08-03
 
 ### Added

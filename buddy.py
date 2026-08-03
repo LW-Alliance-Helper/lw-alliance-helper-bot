@@ -73,6 +73,11 @@ class Member:
     # Engineer reliability (#303): higher = more reliable. Only read/used when
     # the alliance turns on reliability ranking; 0.0 = unranked (sorts last).
     reliability: float = 0.0
+    # Opt-out column (#427). False only when the alliance configured an include
+    # column and this member's cell reads no/false/0. Never trust this flag on a
+    # Member that came off the Buddies tab — that reader can't see the column.
+    # `eligible_members` is the only thing that should act on it.
+    included: bool = True
 
 
 @dataclass
@@ -95,6 +100,118 @@ def _member_key(m: Member) -> str:
     """Identity key: Discord ID when present (robust to renames), else name."""
     did = (m.discord_id or "").strip()
     return did or _norm(m.name)
+
+
+# Cell values that take a member out of the pool. Anything else (including a
+# blank cell, and including a missing column) leaves them in — the opt-out has
+# to be deliberate, never the result of a header the alliance hasn't filled in.
+_EXCLUDE_VALUES = ("no", "n", "false", "0", "off", "left", "exclude")
+
+
+def _is_excluded_value(raw: str) -> bool:
+    return (raw or "").strip().lower() in _EXCLUDE_VALUES
+
+
+@dataclass
+class RosterIndex:
+    """Who the alliance roster tab says is currently here (#428).
+
+    Two sets rather than one key set because identity is tier-dependent: a
+    synced (Premium) roster carries Discord IDs, a hand-maintained free one
+    carries names only. A member counts as on the roster if *either* matches.
+
+    Falsy when empty, which is load-bearing: an unreadable or misconfigured
+    roster must never be treated as "nobody is in the alliance"."""
+
+    ids: set = field(default_factory=set)
+    names: set = field(default_factory=set)
+
+    def __bool__(self) -> bool:
+        return bool(self.ids or self.names)
+
+    def has(self, m: Member) -> bool:
+        did = (m.discord_id or "").strip()
+        return (did and did in self.ids) or (_norm(m.name) in self.names)
+
+
+def build_roster_index(rows: list) -> RosterIndex:
+    """``[{"name":…, "discord_id":…}]`` (train_rotation.load_roster_members) →
+    RosterIndex."""
+    idx = RosterIndex()
+    for r in rows or []:
+        did = str(r.get("discord_id") or "").strip()
+        nm = _norm(r.get("name") or "")
+        if did:
+            idx.ids.add(did)
+        if nm:
+            idx.names.add(nm)
+    return idx
+
+
+def eligible_members(
+    primary: list[Member],
+    fallback: list[Member],
+    roster: RosterIndex | None = None,
+) -> list[Member]:
+    """The single place that decides who is in the buddy pool.
+
+    ``primary`` is the Squad Powers read (authoritative, and the only source
+    that can see the opt-out column); ``fallback`` is the buddy-tab read, which
+    only ever supplies professions for members Squad Powers can't classify.
+
+    Exclusions are collected from ``primary`` and applied to the *merged* list.
+    Doing it here rather than inside either reader is what stops an opted-out
+    member from being resurrected by their leftover Buddies-tab row: that row
+    carries a position-implied profession, so ``merge_members`` would otherwise
+    keep it whenever the Squad Powers row has no classifiable profession.
+
+    ``roster`` (#428) additionally restricts the pool to people on the alliance
+    roster tab, so a departure drops out with no sheet editing at all. **An
+    empty or None roster skips the intersect entirely** rather than emptying
+    the pool: ``load_roster_members`` returns [] on a renamed tab, revoked
+    access or any read failure, and silently un-pairing an entire alliance over
+    a transient Sheets error is far worse than briefly keeping a leaver.
+    """
+    excluded = {_member_key(m) for m in primary if not m.included}
+    merged = merge_members(primary, fallback)
+    if excluded:
+        merged = [m for m in merged if _member_key(m) not in excluded]
+    if not roster:
+        return merged
+    return [m for m in merged if roster.has(m)]
+
+
+def members_missing_from_roster(primary: list[Member], roster: RosterIndex | None) -> list[str]:
+    """Names on the profession tab, with a real profession, that the roster
+    doesn't know about — sorted.
+
+    These are the people the roster intersect silently removes, and on the free
+    tier a typo in the roster tab is enough to cause it. Surfacing the count is
+    what keeps a matching problem from looking like the bot lost members."""
+    if not roster:
+        return []
+    missing = [
+        m.name for m in primary if _classify(m.profession) and m.included and not roster.has(m)
+    ]
+    return sorted({n for n in missing if n}, key=_norm)
+
+
+def read_roster_index(guild_id: int) -> RosterIndex:
+    """Read the alliance roster tab → RosterIndex. Empty on any failure.
+
+    Delegates to ``train_rotation.load_roster_members``, the same public reader
+    Conductor Rotation uses, so both features agree on who is in the alliance
+    and both get the free/Premium tier split (#337) for free: a synced roster
+    yields Discord IDs, a hand-maintained one yields names only. Hand-typed
+    non-Discord rows come along because that reader takes every row on the tab.
+    """
+    try:
+        from train_rotation import load_roster_members
+
+        return build_roster_index(load_roster_members(guild_id))
+    except Exception as e:
+        print(f"[BUDDY] read_roster_index failed for guild {guild_id}: {e}")
+        return RosterIndex()
 
 
 # ── Pairing algorithm ─────────────────────────────────────────────────────────
@@ -452,6 +569,36 @@ def merge_members(primary: list, fallback: list) -> list:
     return list(by_key.values())
 
 
+def _result_names(result: PairingResult) -> list[str]:
+    """Every member name a pairing result carries, paired or not."""
+    names: list[str] = []
+    for p in result.pairs:
+        names.append(p.war_leader)
+        names.append(p.engineer)
+    for m in list(result.unpaired_wl) + list(result.unpaired_eng):
+        names.append(m.name)
+    return [n for n in names if n]
+
+
+def names_dropped_by(result: PairingResult, current: list[Member]) -> list[str]:
+    """Names on the Buddies tab that ``result`` no longer carries, sorted.
+
+    Used to tell leadership who a from-scratch rebuild would remove before they
+    confirm it (#427). Matched on normalised name rather than identity key
+    because the point is to render names back to a human, and a departed member
+    may well have no Discord ID on either surface."""
+    kept = {_norm(n) for n in _result_names(result)}
+    dropped: list[str] = []
+    seen: set[str] = set()
+    for m in current:
+        key = _norm(m.name)
+        if not key or key in kept or key in seen:
+            continue
+        seen.add(key)
+        dropped.append(m.name)
+    return sorted(dropped, key=_norm)
+
+
 def _resolve_profession_columns(guild_id: int, profession_tab: str, profession_col_header: str):
     """Read the Squad Powers header and return ``(username_letter, id_letter,
     prof_letter)`` for building live-lookup formulas, or None when the header
@@ -590,11 +737,21 @@ def save_pairs(
     return _rewrite(ws, BUDDY_HEADER, body, guild_id, buddy_tab)
 
 
-def read_all_professions(guild_id: int, profession_tab: str, profession_col_header: str) -> list:
+def read_all_professions(
+    guild_id: int,
+    profession_tab: str,
+    profession_col_header: str,
+    include_col_header: str = "",
+) -> list:
     """Read the Squad Powers tab → list[Member] with true professions.
 
     Columns are located by header (case-insensitive) so a reordered survey
-    still works. Returns [] when the tab is missing or unreadable."""
+    still works. Returns [] when the tab is missing or unreadable.
+
+    ``include_col_header`` (#427) optionally names an opt-out column. A member
+    whose cell reads no/false/0 comes back with ``included=False``; everyone
+    else, including every row when the header is blank or not found on the tab,
+    comes back included. Acting on the flag is ``eligible_members``' job."""
     import config
 
     if not profession_tab:
@@ -619,6 +776,9 @@ def read_all_professions(guild_id: int, profession_tab: str, profession_col_head
     id_idx = find("discord id")
     name_idx = find("username", "name")
     prof_idx = find((profession_col_header or "profession").strip().lower())
+    # -1 when the alliance hasn't configured an opt-out column, or configured
+    # one whose header isn't on the tab. Both mean "no exclusions".
+    inc_idx = find(include_col_header.strip().lower()) if (include_col_header or "").strip() else -1
 
     out: list[Member] = []
     for row in values[1:]:
@@ -627,7 +787,8 @@ def read_all_professions(guild_id: int, profession_tab: str, profession_col_head
         prof = _cell(row, prof_idx) if prof_idx >= 0 else ""
         if not (did or nm):
             continue
-        out.append(Member(name=nm, discord_id=did, profession=prof))
+        included = not _is_excluded_value(_cell(row, inc_idx)) if inc_idx >= 0 else True
+        out.append(Member(name=nm, discord_id=did, profession=prof, included=included))
     return out
 
 

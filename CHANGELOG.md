@@ -12,13 +12,13 @@ and PR description.
 ## [1.8.2] — 2026-08-03
 
 ### Added
-- The Buddy System can read an optional opt-out column on your Squad Powers tab, so a member who has left (or who just doesn't want a buddy) drops out of pairing without touching the rest of their row ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
-- The buddy list can be limited to people on your member roster, so a departure leaves the pairing list on its own; with Member Sync the roster keeps itself current, and free alliances point at any roster tab ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
+- An optional opt-out column on your Squad Powers tab takes someone out of the buddy list without touching the rest of their row ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- The buddy list can be limited to people on your member roster, so a departure drops out of pairing on its own; free alliances can point at any roster tab ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
 - **♻️ Re-pair from scratch** now names who it will remove before you confirm ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
 - Members on your Squad Powers tab who aren't on your member roster are reported after a buddy action, so a name that doesn't match reads as something to fix rather than the bot losing people ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
 
 ### Fixed
-- **♻️ Re-pair from scratch** kept members who had already been removed from Squad Powers, because it rebuilt the pairings but not the member list. Removing someone no longer means hand-editing two tabs in a particular order ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- **♻️ Re-pair from scratch** kept members already removed from Squad Powers, so taking someone out meant hand-editing two tabs in a particular order ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
 
 ## [1.8.1] — 2026-08-03
 

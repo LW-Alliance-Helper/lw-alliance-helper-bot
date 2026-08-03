@@ -9,6 +9,18 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.1] — 2026-08-03
+
+### Added
+- `/survey` is now a hub listing every survey you have, with Add, Edit, Remove, Post, Reminders, and Translation as buttons ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+- `/setup` → 📋 Survey opens that same hub, so both doors show the same thing ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+
+### Fixed
+- Free-tier alliances can configure their survey again; the only route to the survey wizard was a Premium-gated button, which left a documented free feature unreachable ([#425](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/425)).
+
+### Changed
+- `/survey overview`, `/survey post`, and `/survey remind` are replaced by buttons on the `/survey` hub. Survey buttons already posted in your channels keep working ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+
 ## [1.8.0] — 2026-08-01
 
 ### Added

@@ -23,10 +23,17 @@ from setup_hub import (
     HUB_BTN_MEMBERS,
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
-    HUB_BTN_SURVEY_TRANSLATE,
     HUB_BTN_TRAIN,
     HUB_BTN_TRANSFERS,
     STORM_SETUP_NAV,
+)
+from survey_hub import (
+    SURVEY_HUB_BTN_ADD,
+    SURVEY_HUB_BTN_EDIT,
+    SURVEY_HUB_BTN_POST,
+    SURVEY_HUB_BTN_REMIND,
+    SURVEY_HUB_BTN_REMOVE,
+    SURVEY_HUB_BTN_TRANSLATE,
 )
 
 
@@ -199,23 +206,25 @@ HELP_CATEGORIES: dict[str, dict] = {
         ),
         "commands": [
             (
-                f"/setup → {HUB_BTN_SURVEY}",
-                "Configure questions, channels, sheet tabs, and the intro.",
+                "/survey",
+                "The survey hub: lists every survey you have, with buttons for "
+                "everything below. `/setup` → 📋 Survey opens the same screen.",
             ),
             (
-                "/survey overview",
-                "View configured surveys. 💎 Premium gets Add / Edit / Remove "
-                "for managing multiple.",
+                f"{SURVEY_HUB_BTN_EDIT} / {SURVEY_HUB_BTN_ADD}",
+                "Configure questions, channels, sheet tabs, and the intro. "
+                "💎 Premium adds extra named surveys.",
             ),
-            ("/survey post", "Post or repost the answer button."),
+            (f"{SURVEY_HUB_BTN_POST}", "Post or repost the answer button."),
             (
-                "/survey remind",
+                f"{SURVEY_HUB_BTN_REMIND}",
                 "Send now or schedule. Free: channel post. 💎 Premium: also DM via roster.",
             ),
             (
-                f"/setup → {HUB_BTN_SURVEY_TRANSLATE}",
-                "Add your translate bot to every survey thread so members who "
-                "don't read English can translate the questions in place.",
+                f"{SURVEY_HUB_BTN_TRANSLATE}",
+                "Add your translate bot to every survey thread so members who don't "
+                "read the language you write your questions in can translate them "
+                "in place.",
             ),
         ],
     },
@@ -390,14 +399,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/members sync", "Manually re-sync the roster now."),
             (
                 "Multiple named surveys",
-                "Manage from `/survey overview` directly via Add / Edit / Remove.",
+                f"Manage from `/survey` via {SURVEY_HUB_BTN_ADD} / "
+                f"{SURVEY_HUB_BTN_EDIT} / {SURVEY_HUB_BTN_REMOVE}.",
             ),
             (
                 "DM-mode reminders",
-                "`/survey remind` plus the **🔔 Send DM reminder to roster** "
-                "button on `/desertstorm` and `/canyonstorm` all gain "
-                "DM-via-roster delivery; survey reminders can also schedule "
-                "recurring DMs.",
+                f"`/survey` → {SURVEY_HUB_BTN_REMIND} plus the "
+                "**🔔 Send DM reminder to roster** button on `/desertstorm` and "
+                "`/canyonstorm` all gain DM-via-roster delivery; survey reminders "
+                "can also schedule recurring DMs.",
             ),
             (
                 "✨ More",

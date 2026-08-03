@@ -53,8 +53,8 @@ EXPECTED_COG_COMMANDS = {
         "setup",
     },
     "SurveyCog": {
-        # Top-level: just /survey group. Subcommands (overview / post
-        # / remind) are introspected separately.
+        # /survey is a single hub command (no subcommands) since the #426 hub
+        # rework replaced overview / post / remind with buttons.
         "survey",
     },
     "TrainCog": {
@@ -197,18 +197,17 @@ class TestCogRegistration:
                 pass
 
     @pytest.mark.asyncio
-    async def test_survey_cog_survey_group_has_expected_subcommands(self, seeded_db):
-        """/survey is a top-level Group containing overview / post /
-        remind."""
+    async def test_survey_is_a_flat_hub_command_with_no_subcommands(self, seeded_db):
+        """`/survey` is a single hub command, not a Group. Guards against the
+        overview / post / remind subcommands creeping back alongside the hub
+        (which would collide on the `survey` name)."""
         from survey import SurveyCog
 
         cog = _make_cog(SurveyCog)
         try:
-            assert _subcommands_on(cog.survey_group) == {
-                "overview",
-                "post",
-                "remind",
-            }
+            assert not hasattr(cog, "survey_group")
+            survey_cmd = next(c for c in cog.get_app_commands() if c.name == "survey")
+            assert not isinstance(survey_cmd, app_commands.Group)
         finally:
             try:
                 cog.check_scheduled_reminders.cancel()
@@ -423,7 +422,7 @@ class TestSetupHubLaunchersGateNonAdmins:
             "_launch_growth_setup",
             "_launch_birthday_setup",
             "_launch_event_setup",
-            "_launch_survey_setup",
+            "_launch_survey_hub",
             "_launch_shiny_tasks_setup",
             "_launch_buddy_setup",
         ],
@@ -628,19 +627,11 @@ class TestStormCommandsGate:
 
 
 class TestSurveyCommandsGate:
-    """Post-#199: survey commands live under the /survey group as
-    `survey_overview`, `survey_post`, and `survey_remind` on the cog."""
+    """Post-#426 the three survey subcommands collapsed into the single
+    `/survey` hub, so the leadership gate has one place left to hold."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "command_attr",
-        [
-            "survey_post",
-            "survey_overview",
-            "survey_remind",
-        ],
-    )
-    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db):
         from survey import SurveyCog
 
         cog = _make_cog(SurveyCog)
@@ -648,8 +639,7 @@ class TestSurveyCommandsGate:
             interaction = make_mock_interaction()
             interaction.user.roles = []  # no leadership role
 
-            cmd = getattr(cog, command_attr)
-            await cmd.callback(cog, interaction)
+            await cog.survey.callback(cog, interaction)
 
             content, _ = _last_message(interaction)
             assert "leadership" in (content or "").lower()

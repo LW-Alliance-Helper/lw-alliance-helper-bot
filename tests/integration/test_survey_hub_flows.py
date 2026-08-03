@@ -1,15 +1,16 @@
 """
-Phase 4 of the full-coverage suite: /survey overview and /survey remind hub flows.
+Phase 4 of the full-coverage suite: the /survey hub and its reminder flows.
 
 Covers:
 
-  * /survey on Premium renders the manage view (list + Add/Edit/Remove)
-  * /survey on free tier shows the single-survey detail view
-  * /survey_remind hub: cancel
-  * /survey_remind hub → Send now → channel post (free tier path)
-  * /survey_remind hub → Send now → DM via roster (Premium path)
-  * /survey_remind hub → Manage scheduled → Off (disable)
-  * /survey_remind hub → Manage scheduled → Daily + channel destination
+  * /survey on Premium renders every hub action ungated
+  * /survey on free tier renders the same hub with Add / Remove 💎-gated,
+    and Edit / Translation still usable (the free-tier lockout fix)
+  * Reminders hub: cancel
+  * Reminders hub → Send now → channel post (free tier path)
+  * Reminders hub → Send now → DM via roster (Premium path)
+  * Reminders hub → Manage scheduled → Off (disable)
+  * Reminders hub → Manage scheduled → Daily + channel destination
   * Scheduled-reminder helpers (_send_reminder_to_channel,
     _send_reminder_via_dm) work end-to-end on the helper layer
   * SurveyCog.check_scheduled_reminders fires when frequency/day/time
@@ -74,12 +75,16 @@ def _captured_followups(interaction):
 
 
 class TestSurveyCommandRendering:
-    """`/survey` switches between single-detail and manage-view based on
-    Premium status."""
+    """`/survey` renders one hub on both tiers; only the button gating differs.
+
+    Before the hub consolidation the free tier got a separate read-only detail
+    view and the whole surface sat behind a Premium-disabled `/setup` button,
+    which left free alliances unable to configure their (free) survey at all.
+    """
 
     @pytest.mark.asyncio
     @pytest.mark.free_tier_only
-    async def test_free_tier_shows_single_detail_view(self, seeded_db):
+    async def test_free_tier_gets_the_hub_with_premium_actions_disabled(self, seeded_db):
         import premium
 
         premium.clear_cache()
@@ -94,13 +99,31 @@ class TestSurveyCommandRendering:
             interaction = _make_followup_interaction()
             interaction.entitlements = []  # free tier
 
-            await cog.survey_overview.callback(cog, interaction)
+            await cog.survey.callback(cog, interaction)
 
-            # Free-tier path uses response.send_message with an embed.
             sent = interaction.response.send_message.call_args
-            embed = sent.kwargs.get("embed") if sent else None
+            assert sent is not None
+            embed = sent.kwargs.get("embed")
+            view = sent.kwargs.get("view")
             assert embed is not None
-            assert "Survey Configuration" in (embed.title or "")
+            assert "Surveys" in (embed.title or "")
+            assert view is not None
+
+            by_label = {getattr(c, "label", ""): c for c in view.children}
+            # Extras are Premium, so Add and Remove are off with a 💎 prefix.
+            add = next(c for lbl, c in by_label.items() if "Add Survey" in lbl)
+            remove = next(c for lbl, c in by_label.items() if "Remove Survey" in lbl)
+            assert add.disabled and add.label.startswith("💎")
+            assert remove.disabled and remove.label.startswith("💎")
+
+            # Editing the default survey and the translation helper stay free —
+            # this is the free-tier lockout fix.
+            editish = next(
+                c for lbl, c in by_label.items() if "Edit Survey" in lbl or "Set Up Survey" in lbl
+            )
+            translate = next(c for lbl, c in by_label.items() if "Translation" in lbl)
+            assert not editish.disabled
+            assert not translate.disabled
         finally:
             try:
                 cog.check_scheduled_reminders.cancel()
@@ -139,25 +162,27 @@ class TestSurveyCommandRendering:
             interaction = _make_followup_interaction(guild_id=PREMIUM_TEST_GUILD_ID)
             interaction.entitlements = []
 
-            await cog.survey_overview.callback(cog, interaction)
+            await cog.survey.callback(cog, interaction)
 
-            # Premium path defers, then uses followup.send with a view + embed.
-            assert interaction.response.defer.called
-
-            sent = interaction.followup.send.call_args
+            # Fresh interaction, so the hub responds directly (no defer) —
+            # same idiom as the train and setup hubs.
+            sent = interaction.response.send_message.call_args
             assert sent is not None
-            # Either the view is in args/kwargs; Discord SDK accepts both.
             view = sent.kwargs.get("view")
             embed = sent.kwargs.get("embed")
-            assert view is not None, "Premium /survey should include a manage view"
+            assert view is not None, "/survey should include the hub view"
             assert embed is not None
-            assert "Configured Surveys" in (embed.title or "")
+            assert "Surveys" in (embed.title or "")
 
-            # View should expose Add / Edit / Remove buttons.
+            # View should expose every action, with no 💎 prefixes on Premium.
             labels = {getattr(c, "label", "") for c in view.children}
-            assert any("Add" in l for l in labels)
-            assert any("Edit" in l for l in labels)
-            assert any("Remove" in l for l in labels)
+            assert any("Add Survey" in l for l in labels)
+            assert any("Edit Survey" in l or "Set Up Survey" in l for l in labels)
+            assert any("Remove Survey" in l for l in labels)
+            assert any("Post Survey" in l for l in labels)
+            assert any("Reminders" in l for l in labels)
+            assert any("Translation" in l for l in labels)
+            assert not any(l.startswith("💎") for l in labels)
         finally:
             try:
                 cog.check_scheduled_reminders.cancel()
@@ -173,7 +198,7 @@ class TestSurveyRemindHubCancel:
 
     @pytest.mark.asyncio
     async def test_hub_cancel_exits_quietly(self, seeded_db):
-        from survey import SurveyCog, _ReminderHubView
+        from survey import SurveyCog, _ReminderHubView, _run_remind_hub
 
         bot = MagicMock()
         bot.add_view = MagicMock()
@@ -196,7 +221,7 @@ class TestSurveyRemindHubCancel:
 
             interaction.response.send_message = AsyncMock(side_effect=_send)
 
-            await cog.survey_remind.callback(cog, interaction)
+            await _run_remind_hub(interaction, cog.bot)
 
             # No further steps — followup never had to fire a destination
             # picker or schedule wizard.
@@ -225,7 +250,13 @@ class TestSurveyRemindSendNowChannel:
 
         premium.clear_cache()
 
-        from survey import SurveyCog, _ReminderHubView, _DestinationPickView, _ChannelPickView
+        from survey import (
+            SurveyCog,
+            _ReminderHubView,
+            _DestinationPickView,
+            _ChannelPickView,
+            _run_remind_hub,
+        )
 
         bot = MagicMock()
         bot.add_view = MagicMock()
@@ -276,7 +307,7 @@ class TestSurveyRemindSendNowChannel:
 
             interaction.followup.send = AsyncMock(side_effect=_drive_followup_send)
 
-            await cog.survey_remind.callback(cog, interaction)
+            await _run_remind_hub(interaction, cog.bot)
 
             # The helper should have called bot.get_channel with the picked
             # ID and then sent the reminder body.

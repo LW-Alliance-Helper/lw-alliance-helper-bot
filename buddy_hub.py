@@ -68,6 +68,20 @@ def _build_hub_embed(guild_id: int, cfg: dict, *, is_premium: bool) -> discord.E
     return embed
 
 
+# Enough names to see who's going without pushing the confirmation past
+# Discord's message limit; the count in the sentence above carries the rest.
+_MAX_NAMED_DROPS = 15
+
+
+def _name_list(names: list) -> str:
+    """Bulleted preview of names, truncated with a remainder count."""
+    shown = [f"• {n}" for n in names[:_MAX_NAMED_DROPS]]
+    extra = len(names) - _MAX_NAMED_DROPS
+    if extra > 0:
+        shown.append(f"• …and {extra} more")
+    return "\n".join(shown)
+
+
 class _ConfirmView(discord.ui.View):
     def __init__(self, owner_id: int, on_confirm):
         super().__init__(timeout=60)
@@ -282,15 +296,18 @@ class _BuddyHubView(discord.ui.View):
     async def _from_scratch(self, inter: discord.Interaction):
         if not await self._premium_guard(inter, "buddy_auto_assign"):
             return
+        import config
+
+        # Compute before confirming so the warning can name who leaves the list.
+        # The rebuild reads the pool from Squad Powers alone, so anyone the
+        # alliance has taken off it (or opted out) drops here rather than being
+        # carried back in by their old Buddies-tab row (#427).
+        await inter.response.defer(ephemeral=True, thinking=True)
+        cfg = config.get_buddy_config(self.guild_id)
+        result, dropped = await asyncio.to_thread(ui.preview_scratch_rebuild, self.guild_id, cfg)
 
         async def _do(i: discord.Interaction):
-            import config
-
             await i.response.defer(ephemeral=True, thinking=True)
-            cfg = config.get_buddy_config(self.guild_id)
-            result = await asyncio.to_thread(
-                ui.compute_autofill, self.guild_id, cfg, from_scratch=True
-            )
             await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
             await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
             embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
@@ -299,15 +316,27 @@ class _BuddyHubView(discord.ui.View):
                 if cfg.get("reliability_enabled")
                 else ""
             )
+            drop_note = f" {len(dropped)} removed from the list." if dropped else ""
             await i.followup.send(
-                content=f"♻️ Rebuilt every pairing from scratch.{rel_note}",
+                content=f"♻️ Rebuilt every pairing from scratch.{rel_note}{drop_note}",
                 embed=embed,
                 ephemeral=True,
             )
 
-        await inter.response.send_message(
+        warning = (
             "⚠️ This ignores existing pairings and rebuilds the whole list. "
-            "People may get a different buddy. Continue?",
+            "People may get a different buddy."
+        )
+        if dropped:
+            warning += (
+                f"\n\n**{len(dropped)} will be removed from the list** — the rebuild reads "
+                f"who's eligible from **{cfg.get('profession_tab') or 'Squad Powers'}**, and "
+                f"{'they are' if len(dropped) > 1 else 'this person is'} not there with a "
+                f"profession:\n{_name_list(dropped)}\n\n"
+                "If that's not what you expected, cancel and check that tab first."
+            )
+        await inter.followup.send(
+            content=f"{warning}\n\nContinue?",
             view=_ConfirmView(inter.user.id, _do),
             ephemeral=True,
         )

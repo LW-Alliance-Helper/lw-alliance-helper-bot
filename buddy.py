@@ -73,6 +73,11 @@ class Member:
     # Engineer reliability (#303): higher = more reliable. Only read/used when
     # the alliance turns on reliability ranking; 0.0 = unranked (sorts last).
     reliability: float = 0.0
+    # Opt-out column (#427). False only when the alliance configured an include
+    # column and this member's cell reads no/false/0. Never trust this flag on a
+    # Member that came off the Buddies tab — that reader can't see the column.
+    # `eligible_members` is the only thing that should act on it.
+    included: bool = True
 
 
 @dataclass
@@ -95,6 +100,36 @@ def _member_key(m: Member) -> str:
     """Identity key: Discord ID when present (robust to renames), else name."""
     did = (m.discord_id or "").strip()
     return did or _norm(m.name)
+
+
+# Cell values that take a member out of the pool. Anything else (including a
+# blank cell, and including a missing column) leaves them in — the opt-out has
+# to be deliberate, never the result of a header the alliance hasn't filled in.
+_EXCLUDE_VALUES = ("no", "n", "false", "0", "off", "left", "exclude")
+
+
+def _is_excluded_value(raw: str) -> bool:
+    return (raw or "").strip().lower() in _EXCLUDE_VALUES
+
+
+def eligible_members(primary: list[Member], fallback: list[Member]) -> list[Member]:
+    """The single place that decides who is in the buddy pool.
+
+    ``primary`` is the Squad Powers read (authoritative, and the only source
+    that can see the opt-out column); ``fallback`` is the buddy-tab read, which
+    only ever supplies professions for members Squad Powers can't classify.
+
+    Exclusions are collected from ``primary`` and applied to the *merged* list.
+    Doing it here rather than inside either reader is what stops an opted-out
+    member from being resurrected by their leftover Buddies-tab row: that row
+    carries a position-implied profession, so ``merge_members`` would otherwise
+    keep it whenever the Squad Powers row has no classifiable profession.
+    """
+    excluded = {_member_key(m) for m in primary if not m.included}
+    merged = merge_members(primary, fallback)
+    if not excluded:
+        return merged
+    return [m for m in merged if _member_key(m) not in excluded]
 
 
 # ── Pairing algorithm ─────────────────────────────────────────────────────────
@@ -452,6 +487,36 @@ def merge_members(primary: list, fallback: list) -> list:
     return list(by_key.values())
 
 
+def _result_names(result: PairingResult) -> list[str]:
+    """Every member name a pairing result carries, paired or not."""
+    names: list[str] = []
+    for p in result.pairs:
+        names.append(p.war_leader)
+        names.append(p.engineer)
+    for m in list(result.unpaired_wl) + list(result.unpaired_eng):
+        names.append(m.name)
+    return [n for n in names if n]
+
+
+def names_dropped_by(result: PairingResult, current: list[Member]) -> list[str]:
+    """Names on the Buddies tab that ``result`` no longer carries, sorted.
+
+    Used to tell leadership who a from-scratch rebuild would remove before they
+    confirm it (#427). Matched on normalised name rather than identity key
+    because the point is to render names back to a human, and a departed member
+    may well have no Discord ID on either surface."""
+    kept = {_norm(n) for n in _result_names(result)}
+    dropped: list[str] = []
+    seen: set[str] = set()
+    for m in current:
+        key = _norm(m.name)
+        if not key or key in kept or key in seen:
+            continue
+        seen.add(key)
+        dropped.append(m.name)
+    return sorted(dropped, key=_norm)
+
+
 def _resolve_profession_columns(guild_id: int, profession_tab: str, profession_col_header: str):
     """Read the Squad Powers header and return ``(username_letter, id_letter,
     prof_letter)`` for building live-lookup formulas, or None when the header
@@ -590,11 +655,21 @@ def save_pairs(
     return _rewrite(ws, BUDDY_HEADER, body, guild_id, buddy_tab)
 
 
-def read_all_professions(guild_id: int, profession_tab: str, profession_col_header: str) -> list:
+def read_all_professions(
+    guild_id: int,
+    profession_tab: str,
+    profession_col_header: str,
+    include_col_header: str = "",
+) -> list:
     """Read the Squad Powers tab → list[Member] with true professions.
 
     Columns are located by header (case-insensitive) so a reordered survey
-    still works. Returns [] when the tab is missing or unreadable."""
+    still works. Returns [] when the tab is missing or unreadable.
+
+    ``include_col_header`` (#427) optionally names an opt-out column. A member
+    whose cell reads no/false/0 comes back with ``included=False``; everyone
+    else, including every row when the header is blank or not found on the tab,
+    comes back included. Acting on the flag is ``eligible_members``' job."""
     import config
 
     if not profession_tab:
@@ -619,6 +694,9 @@ def read_all_professions(guild_id: int, profession_tab: str, profession_col_head
     id_idx = find("discord id")
     name_idx = find("username", "name")
     prof_idx = find((profession_col_header or "profession").strip().lower())
+    # -1 when the alliance hasn't configured an opt-out column, or configured
+    # one whose header isn't on the tab. Both mean "no exclusions".
+    inc_idx = find(include_col_header.strip().lower()) if (include_col_header or "").strip() else -1
 
     out: list[Member] = []
     for row in values[1:]:
@@ -627,7 +705,8 @@ def read_all_professions(guild_id: int, profession_tab: str, profession_col_head
         prof = _cell(row, prof_idx) if prof_idx >= 0 else ""
         if not (did or nm):
             continue
-        out.append(Member(name=nm, discord_id=did, profession=prof))
+        included = not _is_excluded_value(_cell(row, inc_idx)) if inc_idx >= 0 else True
+        out.append(Member(name=nm, discord_id=did, profession=prof, included=included))
     return out
 
 

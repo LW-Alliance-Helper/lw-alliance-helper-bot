@@ -1649,16 +1649,22 @@ async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
     await run_event_setup(interaction, bot)
 
 
-async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
+async def _launch_survey_hub(interaction: discord.Interaction, bot) -> None:
+    """
+    Open the survey hub from the `/setup` hub's 📋 Survey button.
+
+    Keeps that door's existing admin-or-leadership gate (the `/survey`
+    command applies `survey._guard` instead), then hands off to the same
+    hub surface both doors share.
+    """
     if not _has_leadership_or_admin(interaction):
         await _send_ack(
-            interaction, "⛔ You need the leadership role (or admin) to open the survey wizard."
+            interaction, "⛔ You need the leadership role (or admin) to manage surveys."
         )
         return
-    if not await _check_wizard_can_run(interaction, "setup"):
-        return
-    await _send_ack(interaction, "⚙️ Starting survey setup — check the channel for prompts!")
-    await run_survey_setup(interaction, bot)
+    from survey_hub import handle_survey_hub
+
+    await handle_survey_hub(bot, interaction)
 
 
 async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> None:
@@ -6183,8 +6189,15 @@ async def run_survey_setup(
     embed.add_field(name="Stats Tab", value=tab_squad_powers, inline=True)
     embed.add_field(name="History Tab", value=tab_history, inline=True)
     embed.add_field(name="Questions", value=q_summary[:1024], inline=False)
+    from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_TRANSLATE
+
     embed.set_footer(
-        text=f"Run {next_step_cmd} again to update. Run /survey post to post the survey button."
+        text=(
+            f"Run {next_step_cmd} again to update. Run /survey and click "
+            f"{SURVEY_HUB_BTN_POST} to post the survey button, or "
+            f"{SURVEY_HUB_BTN_TRANSLATE} if your members don't all read the "
+            f"language you write your questions in."
+        )
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

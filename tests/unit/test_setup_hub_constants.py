@@ -19,10 +19,18 @@ from setup_hub import (
     HUB_BTN_SETUP_WIZARD,
     HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
-    HUB_BTN_SURVEY_TRANSLATE,
     HUB_BTN_TRAIN,
     HUB_BTN_VIEW_CONFIG,
     STORM_SETUP_NAV,
+)
+from survey_hub import (
+    SURVEY_HUB_BTN_ADD,
+    SURVEY_HUB_BTN_EDIT,
+    SURVEY_HUB_BTN_POST,
+    SURVEY_HUB_BTN_REMIND,
+    SURVEY_HUB_BTN_REMOVE,
+    SURVEY_HUB_BTN_SETUP,
+    SURVEY_HUB_BTN_TRANSLATE,
 )
 
 
@@ -41,7 +49,16 @@ def test_hub_button_labels_match_expected_text():
     assert HUB_BTN_MEMBERS == "👥 Member Sync"
     assert HUB_BTN_SURVEY == "📋 Survey"
     assert HUB_BTN_BREAKDOWN == "📊 Growth Breakdown"
-    assert HUB_BTN_SURVEY_TRANSLATE == "🌐 Survey translation"
+
+
+def test_survey_hub_button_labels_match_expected_text():
+    assert SURVEY_HUB_BTN_ADD == "➕ Add Survey"
+    assert SURVEY_HUB_BTN_EDIT == "✏️ Edit Survey"
+    assert SURVEY_HUB_BTN_SETUP == "⚙️ Set Up Survey"
+    assert SURVEY_HUB_BTN_REMOVE == "🗑️ Remove Survey"
+    assert SURVEY_HUB_BTN_POST == "📮 Post Survey"
+    assert SURVEY_HUB_BTN_REMIND == "🔔 Reminders"
+    assert SURVEY_HUB_BTN_TRANSLATE == "🌐 Survey Translation"
 
 
 def test_storm_setup_nav_builds_correctly():

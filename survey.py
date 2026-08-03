@@ -8,10 +8,11 @@ the questions, then:
   - Appends a timestamped row to the Survey History sheet
   - Archives the thread
 
-Slash commands (under the /survey group):
-  /survey overview — Show configured survey(s); Premium: Add / Edit / Remove
-  /survey post     — Post (or repost) the persistent survey button (leadership)
-  /survey remind   — DM roster members or schedule recurring reminders (Premium)
+`/survey` is a single hub command (embed + button grid, see
+`survey_hub.py`). It replaced the `/survey overview | post | remind`
+subcommand group: the list view, posting the button, reminders,
+Add / Edit / Remove, and the translation helper are all buttons there now.
+The `/setup` hub's 📋 Survey button opens the same surface.
 
 Multi-survey support (Premium): a guild may have a "default" survey plus
 any number of extras, each with its own questions, channel, intro message,
@@ -30,13 +31,13 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
 from messages import (
-    GENERIC_CMD_TIMEOUT,
+    HUB_TIMEOUT,
     NOT_SET_UP,
-    SETUP_POINTER_FOOTER,
     TIME_PARSE_GIVE_UP,
     TIME_PARSE_RETRY,
 )
 from setup_hub import HUB_BTN_SURVEY
+from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_REMIND
 import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1092,104 +1093,14 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
 # ── Multi-survey manage view (Premium /survey UX) ─────────────────────────────
 
 
-class _SurveyManageView(discord.ui.View):
-    """
-    The button row shown beneath `/survey`'s list view for premium guilds.
-    Replaces the old `/setup → 📋 Survey_extra` and `/remove_survey` slash
-    commands — Add / Edit / Remove all live here so leadership has one
-    surface for survey management.
-    """
-
-    def __init__(self, has_extras: bool):
-        super().__init__(timeout=180)
-        # Disable Remove when there are no extras, since the default
-        # survey can't be removed via this flow.
-        for item in self.children:
-            if getattr(item, "label", "") == "🗑️ Remove Survey":
-                item.disabled = not has_extras
-
-    @discord.ui.button(label="➕ Add Survey", style=discord.ButtonStyle.success)
-    async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-        from setup_cog import run_create_new_extra_survey
-
-        for item in self.children:
-            item.disabled = True
-        await wizard_registry.safe_edit_response(inter, view=self)
-        await run_create_new_extra_survey(inter, inter.client)
-        self.stop()
-
-    @discord.ui.button(label="✏️ Edit Survey", style=discord.ButtonStyle.primary)
-    async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-        from setup_cog import run_pick_survey_to_edit
-
-        for item in self.children:
-            item.disabled = True
-        await wizard_registry.safe_edit_response(inter, view=self)
-        await run_pick_survey_to_edit(inter, inter.client)
-        self.stop()
-
-    @discord.ui.button(label="🗑️ Remove Survey", style=discord.ButtonStyle.danger)
-    async def remove_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-        from setup_cog import run_remove_extra_survey
-
-        for item in self.children:
-            item.disabled = True
-        await wizard_registry.safe_edit_response(inter, view=self)
-        await run_remove_extra_survey(inter, inter.client)
-        self.stop()
-
-
-async def _send_survey_manage_view(interaction: discord.Interaction, bot):
-    """
-    Render the premium /survey list view with Add / Edit / Remove buttons.
-    Called from the /survey command after the premium check passes.
-    Assumes the caller has already deferred ephemerally.
-    """
-    from config import list_surveys
-
-    surveys = list_surveys(interaction.guild_id)
-    has_extras = any((s.get("survey_id") or "default") != "default" for s in surveys)
-
-    embed = discord.Embed(
-        title="📋 Configured Surveys",
-        color=discord.Color.blurple(),
-        description=(
-            "💎 **Premium** — manage every survey from here.\n"
-            "Use the buttons below to **Add**, **Edit**, or **Remove** a survey."
-        ),
-    )
-    for s in surveys[:25]:
-        sid = s.get("survey_id") or "default"
-        name = s.get("survey_name") or sid
-        n_q = len(s.get("questions") or [])
-        tab = s.get("tab_squad_powers") or "*not set*"
-        ch_id = int(s.get("survey_channel_id") or 0)
-        ch_str = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
-        embed.add_field(
-            name=f"{name}" + (" *(default)*" if sid == "default" else ""),
-            value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
-            inline=False,
-        )
-    embed.set_footer(
-        text="Use /survey post to publish the answer button. /survey remind to send or schedule reminders."
-    )
-
-    view = _SurveyManageView(has_extras=has_extras)
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
-
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 
 class SurveyCog(commands.Cog):
-    # /survey is a top-level slash-command group containing overview /
-    # post / remind. `/survey overview` shows the configured surveys
-    # (Premium: Add / Edit / Remove buttons; free: detail view) and is
-    # the replacement for bare /survey.
-    survey_group = app_commands.Group(
-        name="survey",
-        description="Alliance squad-power surveys",
-    )
+    # `/survey` is a single top-level hub command (embed + button grid via
+    # survey_hub.handle_survey_hub) — the same shape as `/train`, `/events`,
+    # and the storm hubs. It replaced the `/survey overview | post | remind`
+    # subcommand group (#426). The scheduled-reminder loop lives here too.
 
     def __init__(self, bot):
         self.bot = bot
@@ -1340,137 +1251,84 @@ class SurveyCog(commands.Cog):
     async def _before_check_scheduled(self):
         await self.bot.wait_until_ready()
 
-    @survey_group.command(
-        name="post",
-        description="Post (or repost) the survey button in its configured channel",
+    @app_commands.command(
+        name="survey",
+        description="Open the survey hub for this alliance",
     )
-    async def survey_post(self, interaction: discord.Interaction):
+    @app_commands.guild_only()
+    async def survey(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
-        await interaction.response.defer(ephemeral=True)
+        from survey_hub import handle_survey_hub
 
-        from config import get_config
+        await handle_survey_hub(self.bot, interaction)
 
-        cfg = get_config(interaction.guild_id)
-        if not cfg:
-            await interaction.followup.send(
-                "⚙️ Bot not configured. Run `/setup` first.", ephemeral=True
-            )
-            return
 
-        # Premium guilds with multiple surveys pick which one to post.
-        survey = await _pick_survey(
-            interaction,
-            prompt="📋 You have multiple surveys configured — which one do you want to post?",
-        )
-        if survey is None:
-            await interaction.followup.send(
-                "⏰ Picker timed out. Run `/survey post` again.", ephemeral=True
-            )
-            return
+# ── Post the survey button ────────────────────────────────────────────────────
 
-        survey_id = survey.get("survey_id") or "default"
-        channel_id = int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            await interaction.followup.send(
-                f"⚠️ Could not find the survey channel for **{survey.get('survey_name', 'this survey')}**.",
-                ephemeral=True,
-            )
-            return
 
-        intro = survey.get("intro_message") or (
-            "**Let us know your Squad Powers!**\n\n"
-            "Please fill out this survey each week, if possible, to help us keep track of "
-            "squad powers, better balance our Desert Storm teams, track alliance growth, "
-            "and prepare for season events!"
-        )
+async def run_post_survey(interaction: discord.Interaction, bot):
+    """
+    Post (or repost) a survey's Answer button in its configured channel.
 
-        view = build_survey_button_view(survey_id)
-        await channel.send(intro, view=view)
+    Was `/survey post` before the hub consolidation; now the
+    📮 Post Survey button. Reposting is safe and supported: votes and
+    responses key off the member, not the message, and the button's
+    `custom_id` is stable, so old posts keep working too.
+
+    Precondition: the caller has already responded to `interaction` (the
+    hub disables its grid via `safe_edit_response` before dispatching), so
+    everything here goes out through `followup`.
+    """
+    from config import get_config
+
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        await interaction.followup.send("⚙️ Bot not configured. Run `/setup` first.", ephemeral=True)
+        return
+
+    # Premium guilds with multiple surveys pick which one to post.
+    survey = await _pick_survey(
+        interaction,
+        prompt="📋 You have multiple surveys configured. Which one do you want to post?",
+    )
+    if survey is None:
         await interaction.followup.send(
-            f"✅ Survey button posted for **{survey.get('survey_name', 'Default')}** in {channel.mention}.",
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_POST), ephemeral=True
+        )
+        return
+
+    survey_id = survey.get("survey_id") or "default"
+    channel_id = int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        await interaction.followup.send(
+            f"⚠️ Could not find the survey channel for **{survey.get('survey_name', 'this survey')}**.",
             ephemeral=True,
         )
+        return
 
-    @survey_group.command(
-        name="overview",
-        description="Show configured survey(s); Premium gets Add / Edit / Remove buttons here",
+    intro = survey.get("intro_message") or (
+        "**Let us know your Squad Powers!**\n\n"
+        "Please fill out this survey each week, if possible, to help us keep track of "
+        "squad powers, better balance our Desert Storm teams, track alliance growth, "
+        "and prepare for season events!"
     )
-    async def survey_overview(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
 
-        from config import list_surveys, get_survey_config
-        import premium as _prem
-
-        is_premium_flag = await _prem.is_premium(
-            interaction.guild_id,
-            interaction=interaction,
-            bot=self.bot,
+    view = build_survey_button_view(survey_id)
+    try:
+        await channel.send(intro, view=view)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"⚠️ I can't post in {channel.mention}. Check my permissions there and try again.",
+            ephemeral=True,
         )
-
-        # Premium tier: always show the list view + Add / Edit / Remove
-        # buttons, regardless of how many surveys are configured. This is
-        # the consolidated multi-survey UX — one command, three buttons.
-        if is_premium_flag:
-            await interaction.response.defer(ephemeral=True)
-            await _send_survey_manage_view(interaction, self.bot)
-            return
-
-        # Free tier: single-survey detail view (matches prior behavior).
-        scfg = get_survey_config(interaction.guild_id)
-        questions = scfg.get("questions") or []
-
-        embed = discord.Embed(
-            title="📋 Survey Configuration",
-            color=discord.Color.blurple(),
-        )
-
-        if not questions:
-            embed.description = (
-                "*No survey questions configured. Run `/setup → 📋 Survey` to add some.*"
-            )
-        else:
-            lines = []
-            for i, q in enumerate(questions, start=1):
-                qtype = q.get("type", "text")
-                if qtype == "dropdown":
-                    options = ", ".join(q.get("options") or [])
-                    lines.append(f"**{i}. {q['label']}** *(dropdown: {options})*")
-                else:
-                    lines.append(f"**{i}. {q['label']}** *(text)*")
-                if q.get("help"):
-                    lines.append(f"   _{q['help']}_")
-            embed.description = "\n".join(lines)[:4000]
-
-        embed.add_field(
-            name="Stats Tab", value=scfg.get("tab_squad_powers", "*not set*"), inline=False
-        )
-        embed.add_field(
-            name="History Tab", value=scfg.get("tab_history", "*not set*"), inline=False
-        )
-        embed.add_field(
-            name="Intro Message",
-            value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
-            inline=False,
-        )
-        embed.set_footer(
-            text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_SURVEY)
-            + " Run /survey post to post the button.",
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @survey_group.command(
-        name="remind",
-        description="Send a survey reminder now or manage scheduled reminders",
+        return
+    await interaction.followup.send(
+        f"✅ Survey button posted for **{survey.get('survey_name', 'Default')}** in {channel.mention}.",
+        ephemeral=True,
     )
-    async def survey_remind(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        await _run_remind_hub(interaction, self.bot)
 
 
 # ── Reminder helpers ──────────────────────────────────────────────────────────
@@ -1558,7 +1416,7 @@ async def _send_reminder_via_dm(bot, guild_id: int, body: str) -> tuple[int, int
 
 
 class _ReminderHubView(discord.ui.View):
-    """Top-level picker shown by /survey remind."""
+    """Top-level picker shown by the hub's Reminders button."""
 
     def __init__(self):
         super().__init__(timeout=120)
@@ -1690,7 +1548,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey remind` again.",
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND),
             ephemeral=True,
         )
         return
@@ -1707,7 +1565,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     await dest_view.wait()
     if dest_view.choice is None:
         await interaction.followup.send(
-            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
         )
         return
 
@@ -1719,7 +1577,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
         await ch_view.wait()
         if ch_view.channel is None:
             await interaction.followup.send(
-                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+                HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
             )
             return
         ok = await _send_reminder_to_channel(bot, interaction.guild_id, ch_view.channel.id, body)
@@ -1826,7 +1684,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey remind` again.",
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND),
             ephemeral=True,
         )
         return
@@ -1875,7 +1733,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     await freq_view.wait()
     if freq_view.choice is None:
         await interaction.followup.send(
-            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
         )
         return
 
@@ -1894,7 +1752,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         )
         await interaction.followup.send(
             f"✅ Scheduled reminders disabled for **{survey_name}**. "
-            f"Run `/survey remind` again to re-enable.",
+            f"Run `/survey` and click **{SURVEY_HUB_BTN_REMIND}** to re-enable.",
             ephemeral=True,
         )
         return
@@ -1911,7 +1769,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         await day_view.wait()
         if day_view.day is None:
             await interaction.followup.send(
-                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+                HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
             )
             return
         new_day = day_view.day
@@ -1937,7 +1795,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     await dest_view.wait()
     if dest_view.choice is None:
         await interaction.followup.send(
-            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
         )
         return
 
@@ -1953,7 +1811,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         await ch_view.wait()
         if ch_view.channel is None:
             await interaction.followup.send(
-                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+                HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
             )
             return
         new_channel = ch_view.channel.id
@@ -1988,7 +1846,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         f"**When:** {when}\n"
         f"**Where:** {where}\n"
         f"**Message:** {('*custom*' if new_msg else '*default*')}\n\n"
-        f"Run `/survey remind` again any time to update or disable.",
+        f"Run `/survey` and click **{SURVEY_HUB_BTN_REMIND}** any time to update or disable.",
         ephemeral=True,
     )
 
@@ -2048,7 +1906,7 @@ async def _ask_time(
         await view.wait()
         if view.modal is None or view.modal.value is None:
             await interaction.followup.send(
-                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+                HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
             )
             return ("", False)
         raw = view.modal.value
@@ -2060,7 +1918,7 @@ async def _ask_time(
         attempts_left -= 1
         if attempts_left <= 0:
             await interaction.followup.send(
-                TIME_PARSE_GIVE_UP.format(recovery="`/survey remind`"),
+                TIME_PARSE_GIVE_UP.format(recovery=f"`/survey` → **{SURVEY_HUB_BTN_REMIND}**"),
                 ephemeral=True,
             )
             return ("", False)
@@ -2135,7 +1993,7 @@ async def _ask_reminder_message(
     await view.wait()
     if view.modal is None or not view.modal.confirmed:
         await interaction.followup.send(
-            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            HUB_TIMEOUT.format(cmd="survey", hub_btn=SURVEY_HUB_BTN_REMIND), ephemeral=True
         )
         return ("", False)
     return ((view.modal.value or "").strip(), True)

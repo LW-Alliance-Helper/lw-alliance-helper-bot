@@ -40,7 +40,6 @@ HUB_BTN_RESET = "🗑️ Reset configuration"
 HUB_BTN_RELEASE_ANN = (
     "📢 Release announcements"  # base; live label suffixed in _refresh_release_announcement_label
 )
-HUB_BTN_SURVEY_TRANSLATE = "🌐 Survey translation"
 HUB_BTN_TRAIN = "🚂 Train"
 HUB_BTN_GROWTH = "📈 Growth"
 HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
@@ -273,9 +272,15 @@ class _SetupHubView(discord.ui.View):
         labels with 💎. Mirrors the same idiom as storm_event_hub."""
         if self.is_premium:
             return
+        # NOTE: btn_survey is deliberately NOT gated. Surveys are a free
+        # feature (one survey, 5 questions), but gating this button left the
+        # free tier with no route to `run_survey_setup` at all — the wizard
+        # was unreachable and `survey_questions: {"free": 5}` was a cap
+        # nobody could hit. The Survey button now opens the survey hub,
+        # which gates Add / Remove (the Premium multi-survey actions)
+        # per-button instead.
         for button in (
             self.btn_members,
-            self.btn_survey,
             self.btn_growth_breakdown,
             self.btn_transfers,
             self.btn_map_manager,
@@ -399,15 +404,6 @@ class _SetupHubView(discord.ui.View):
             )
         await inter.response.send_message(msg, ephemeral=True)
 
-    @discord.ui.button(label=HUB_BTN_SURVEY_TRANSLATE, style=discord.ButtonStyle.secondary, row=0)
-    async def btn_survey_translation(self, inter: discord.Interaction, _b: discord.ui.Button):
-        """Pick the translate bot added to each private survey thread. Guild-wide
-        (it applies to every survey, default and extra), free on every tier, and
-        deliberately not a step inside the per-survey wizard for that reason."""
-        from survey import run_translation_helper_setup
-
-        await run_translation_helper_setup(inter)
-
     # ── Row 1: free-tier features ────────────────────────────────────────────
 
     @discord.ui.button(label=HUB_BTN_TRAIN, style=discord.ButtonStyle.secondary, row=1)
@@ -470,9 +466,12 @@ class _SetupHubView(discord.ui.View):
 
     @discord.ui.button(label=HUB_BTN_SURVEY, style=discord.ButtonStyle.secondary, row=3)
     async def btn_survey(self, inter: discord.Interaction, _b: discord.ui.Button):
-        from setup_cog import _launch_survey_setup
+        """Opens the survey hub (list + Add / Edit / Remove / Post / Reminders /
+        Translation), not the wizard directly — the wizard is behind that hub's
+        Edit button. Same surface `/survey` renders."""
+        from setup_cog import _launch_survey_hub
 
-        await _launch_survey_setup(inter, self.bot)
+        await _launch_survey_hub(inter, self.bot)
 
     @discord.ui.button(label=HUB_BTN_BREAKDOWN, style=discord.ButtonStyle.secondary, row=3)
     async def btn_growth_breakdown(self, inter: discord.Interaction, _b: discord.ui.Button):

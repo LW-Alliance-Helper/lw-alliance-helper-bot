@@ -235,7 +235,8 @@ def init_db():
                 reliability_enabled       INTEGER DEFAULT 0,
                 reliability_tab           TEXT    DEFAULT '',
                 reliability_column        TEXT    DEFAULT '',
-                include_col_header        TEXT    DEFAULT ''
+                include_col_header        TEXT    DEFAULT '',
+                roster_filter_enabled     INTEGER DEFAULT 0
             )
         """)
         conn.commit()
@@ -1199,6 +1200,10 @@ def init_db():
             # whose cell excludes a member from the buddy pool when it reads
             # no/false/0. Empty = no column configured, every row is eligible.
             ("include_col_header", "TEXT    DEFAULT ''"),
+            # Roster-sourced eligibility (#428, opt-in). When on, the buddy pool
+            # is intersected against the alliance roster tab shared with
+            # Conductor Rotation, so a departure drops out with no sheet edit.
+            ("roster_filter_enabled", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -5233,6 +5238,7 @@ _BUDDY_DEFAULTS = {
     "reliability_tab": "",
     "reliability_column": "",
     "include_col_header": "",
+    "roster_filter_enabled": 0,
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

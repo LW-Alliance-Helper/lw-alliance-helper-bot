@@ -112,7 +112,47 @@ def _is_excluded_value(raw: str) -> bool:
     return (raw or "").strip().lower() in _EXCLUDE_VALUES
 
 
-def eligible_members(primary: list[Member], fallback: list[Member]) -> list[Member]:
+@dataclass
+class RosterIndex:
+    """Who the alliance roster tab says is currently here (#428).
+
+    Two sets rather than one key set because identity is tier-dependent: a
+    synced (Premium) roster carries Discord IDs, a hand-maintained free one
+    carries names only. A member counts as on the roster if *either* matches.
+
+    Falsy when empty, which is load-bearing: an unreadable or misconfigured
+    roster must never be treated as "nobody is in the alliance"."""
+
+    ids: set = field(default_factory=set)
+    names: set = field(default_factory=set)
+
+    def __bool__(self) -> bool:
+        return bool(self.ids or self.names)
+
+    def has(self, m: Member) -> bool:
+        did = (m.discord_id or "").strip()
+        return (did and did in self.ids) or (_norm(m.name) in self.names)
+
+
+def build_roster_index(rows: list) -> RosterIndex:
+    """``[{"name":…, "discord_id":…}]`` (train_rotation.load_roster_members) →
+    RosterIndex."""
+    idx = RosterIndex()
+    for r in rows or []:
+        did = str(r.get("discord_id") or "").strip()
+        nm = _norm(r.get("name") or "")
+        if did:
+            idx.ids.add(did)
+        if nm:
+            idx.names.add(nm)
+    return idx
+
+
+def eligible_members(
+    primary: list[Member],
+    fallback: list[Member],
+    roster: RosterIndex | None = None,
+) -> list[Member]:
     """The single place that decides who is in the buddy pool.
 
     ``primary`` is the Squad Powers read (authoritative, and the only source
@@ -124,12 +164,54 @@ def eligible_members(primary: list[Member], fallback: list[Member]) -> list[Memb
     member from being resurrected by their leftover Buddies-tab row: that row
     carries a position-implied profession, so ``merge_members`` would otherwise
     keep it whenever the Squad Powers row has no classifiable profession.
+
+    ``roster`` (#428) additionally restricts the pool to people on the alliance
+    roster tab, so a departure drops out with no sheet editing at all. **An
+    empty or None roster skips the intersect entirely** rather than emptying
+    the pool: ``load_roster_members`` returns [] on a renamed tab, revoked
+    access or any read failure, and silently un-pairing an entire alliance over
+    a transient Sheets error is far worse than briefly keeping a leaver.
     """
     excluded = {_member_key(m) for m in primary if not m.included}
     merged = merge_members(primary, fallback)
-    if not excluded:
+    if excluded:
+        merged = [m for m in merged if _member_key(m) not in excluded]
+    if not roster:
         return merged
-    return [m for m in merged if _member_key(m) not in excluded]
+    return [m for m in merged if roster.has(m)]
+
+
+def members_missing_from_roster(primary: list[Member], roster: RosterIndex | None) -> list[str]:
+    """Names on the profession tab, with a real profession, that the roster
+    doesn't know about — sorted.
+
+    These are the people the roster intersect silently removes, and on the free
+    tier a typo in the roster tab is enough to cause it. Surfacing the count is
+    what keeps a matching problem from looking like the bot lost members."""
+    if not roster:
+        return []
+    missing = [
+        m.name for m in primary if _classify(m.profession) and m.included and not roster.has(m)
+    ]
+    return sorted({n for n in missing if n}, key=_norm)
+
+
+def read_roster_index(guild_id: int) -> RosterIndex:
+    """Read the alliance roster tab → RosterIndex. Empty on any failure.
+
+    Delegates to ``train_rotation.load_roster_members``, the same public reader
+    Conductor Rotation uses, so both features agree on who is in the alliance
+    and both get the free/Premium tier split (#337) for free: a synced roster
+    yields Discord IDs, a hand-maintained one yields names only. Hand-typed
+    non-Discord rows come along because that reader takes every row on the tab.
+    """
+    try:
+        from train_rotation import load_roster_members
+
+        return build_roster_index(load_roster_members(guild_id))
+    except Exception as e:
+        print(f"[BUDDY] read_roster_index failed for guild {guild_id}: {e}")
+        return RosterIndex()
 
 
 # ── Pairing algorithm ─────────────────────────────────────────────────────────

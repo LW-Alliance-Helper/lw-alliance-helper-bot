@@ -287,8 +287,10 @@ class _BuddyHubView(discord.ui.View):
         await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         rel_note = " Engineers ordered by reliability." if cfg.get("reliability_enabled") else ""
+        roster_note = await asyncio.to_thread(ui.roster_warning, self.guild_id, cfg)
         await inter.followup.send(
-            content=f"🪄 Buddies assigned (existing pairs kept).{rel_note}",
+            content=f"🪄 Buddies assigned (existing pairs kept).{rel_note}"
+            + (f"\n\n{roster_note}" if roster_note else ""),
             embed=embed,
             ephemeral=True,
         )
@@ -317,8 +319,10 @@ class _BuddyHubView(discord.ui.View):
                 else ""
             )
             drop_note = f" {len(dropped)} removed from the list." if dropped else ""
+            roster_note = await asyncio.to_thread(ui.roster_warning, self.guild_id, cfg)
             await i.followup.send(
-                content=f"♻️ Rebuilt every pairing from scratch.{rel_note}{drop_note}",
+                content=f"♻️ Rebuilt every pairing from scratch.{rel_note}{drop_note}"
+                + (f"\n\n{roster_note}" if roster_note else ""),
                 embed=embed,
                 ephemeral=True,
             )
@@ -328,12 +332,22 @@ class _BuddyHubView(discord.ui.View):
             "People may get a different buddy."
         )
         if dropped:
+            prof_tab = cfg.get("profession_tab") or "Squad Powers"
+            # With the roster filter on, "eligible" is two tabs, not one — don't
+            # tell leadership to go check a profession that may be perfectly fine.
+            if cfg.get("roster_filter_enabled"):
+                because = (
+                    f"the rebuild only keeps people who are on your member roster **and** have "
+                    f"a profession on **{prof_tab}**"
+                )
+                where = "those two tabs"
+            else:
+                because = f"the rebuild reads who's eligible from **{prof_tab}**"
+                where = "that tab"
             warning += (
-                f"\n\n**{len(dropped)} will be removed from the list** — the rebuild reads "
-                f"who's eligible from **{cfg.get('profession_tab') or 'Squad Powers'}**, and "
-                f"{'they are' if len(dropped) > 1 else 'this person is'} not there with a "
-                f"profession:\n{_name_list(dropped)}\n\n"
-                "If that's not what you expected, cancel and check that tab first."
+                f"\n\n**{len(dropped)} will be removed from the list** — {because}:\n"
+                f"{_name_list(dropped)}\n\n"
+                f"If that's not what you expected, cancel and check {where} first."
             )
         await inter.followup.send(
             content=f"{warning}\n\nContinue?",

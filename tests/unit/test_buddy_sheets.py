@@ -386,3 +386,109 @@ def _all_names(result) -> set:
     for m in list(result.unpaired_wl) + list(result.unpaired_eng):
         names.add(m.name)
     return names
+
+
+# ── Roster-sourced eligibility (#428) ────────────────────────────────────────
+
+
+def test_build_roster_index_collects_ids_and_names():
+    idx = buddy.build_roster_index(
+        [{"name": "Wanda", "discord_id": "2"}, {"name": "Eve", "discord_id": ""}]
+    )
+    assert idx.ids == {"2"}
+    assert idx.names == {"wanda", "eve"}
+    assert idx
+
+
+def test_roster_index_matches_by_id_or_name():
+    """Identity is tier-dependent: a synced roster has Discord IDs, a
+    hand-maintained one has names only. Either match keeps a member."""
+    idx = buddy.build_roster_index([{"name": "Wanda", "discord_id": "2"}])
+    # Renamed on Squad Powers but the ID still matches.
+    assert idx.has(Member(name="Wanda The Great", discord_id="2"))
+    # No ID anywhere (free tier) but the name matches, case-insensitively.
+    assert idx.has(Member(name="  wanda ", discord_id=""))
+    assert not idx.has(Member(name="Walt", discord_id="99"))
+
+
+def test_roster_intersect_drops_members_not_on_the_roster():
+    primary = [
+        Member(name="Wanda", discord_id="2", profession="War Leader"),
+        Member(name="Eve", discord_id="3", profession="Engineer"),
+        Member(name="Walt", discord_id="1", profession="War Leader"),  # left
+    ]
+    roster = buddy.build_roster_index(
+        [{"name": "Wanda", "discord_id": "2"}, {"name": "Eve", "discord_id": "3"}]
+    )
+    kept = {m.discord_id for m in buddy.eligible_members(primary, [], roster)}
+    assert kept == {"2", "3"}
+
+
+def test_empty_roster_skips_the_intersect_instead_of_emptying_the_pool():
+    """load_roster_members returns [] on a renamed tab, revoked access or any
+    read failure. Applying that naively would un-pair the whole alliance, so an
+    empty roster must leave the pool untouched."""
+    primary = [
+        Member(name="Wanda", discord_id="2", profession="War Leader"),
+        Member(name="Eve", discord_id="3", profession="Engineer"),
+    ]
+    for roster in (None, buddy.RosterIndex(), buddy.build_roster_index([])):
+        kept = {m.discord_id for m in buddy.eligible_members(primary, [], roster)}
+        assert kept == {"2", "3"}, f"empty roster {roster!r} emptied the pool"
+
+
+def test_read_roster_index_degrades_to_empty_on_failure():
+    with patch("train_rotation.load_roster_members", side_effect=RuntimeError("boom")):
+        assert not buddy.read_roster_index(GID)
+
+
+def test_members_missing_from_roster_only_counts_real_candidates():
+    primary = [
+        Member(name="Wanda", discord_id="2", profession="War Leader"),
+        Member(name="Walt", discord_id="1", profession="War Leader"),  # off roster
+        Member(name="Nobody", discord_id="7", profession=""),  # no profession
+        Member(name="OptedOut", discord_id="8", profession="Engineer", included=False),
+    ]
+    roster = buddy.build_roster_index([{"name": "Wanda", "discord_id": "2"}])
+    # Only the member who'd otherwise have been paired counts as a near-miss.
+    assert buddy.members_missing_from_roster(primary, roster) == ["Walt"]
+    # No roster configured means no warning at all.
+    assert buddy.members_missing_from_roster(primary, None) == []
+
+
+def test_roster_filter_end_to_end_drops_departed_member(sheets):
+    import buddy_ui
+
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Discord ID", "Name", "Profession"],
+            ["2", "Wanda", "War Leader"],
+            ["3", "Eve", "Engineer"],
+            ["1", "Walt", "War Leader"],
+        ]
+    )
+    cfg = {
+        "profession_tab": "Squad Powers",
+        "profession_col_header": "Profession",
+        "buddy_tab": "Buddy System",
+        "include_col_header": "",
+        "roster_filter_enabled": 1,
+    }
+    roster_rows = [{"name": "Wanda", "discord_id": "2"}, {"name": "Eve", "discord_id": "3"}]
+    with patch("train_rotation.load_roster_members", return_value=roster_rows):
+        result = buddy_ui.compute_autofill(GID, cfg)
+        assert "Walt" not in _all_names(result)
+        assert {"Wanda", "Eve"} <= _all_names(result)
+        assert "Walt" in buddy_ui.roster_warning(GID, cfg)
+
+    # Roster unreadable: pool stays intact and leadership is told why.
+    with patch("train_rotation.load_roster_members", return_value=[]):
+        result = buddy_ui.compute_autofill(GID, cfg)
+        assert "Walt" in _all_names(result)
+        assert "Couldn't read your member roster" in buddy_ui.roster_warning(GID, cfg)
+
+
+def test_roster_warning_silent_when_filter_off(sheets):
+    import buddy_ui
+
+    assert buddy_ui.roster_warning(GID, {"roster_filter_enabled": 0}) == ""

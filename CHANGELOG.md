@@ -9,6 +9,29 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.2] — 2026-08-03
+
+### Added
+- An optional opt-out column on your Squad Powers tab takes someone out of the buddy list without touching the rest of their row ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- The buddy list can be limited to people on your member roster, so a departure drops out of pairing on its own; free alliances can point at any roster tab ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
+- **♻️ Re-pair from scratch** now names who it will remove before you confirm ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+- Members on your Squad Powers tab who aren't on your member roster are reported after a buddy action, so a name that doesn't match reads as something to fix rather than the bot losing people ([#428](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/428)).
+
+### Fixed
+- **♻️ Re-pair from scratch** kept members already removed from Squad Powers, so taking someone out meant hand-editing two tabs in a particular order ([#427](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/427)).
+
+## [1.8.1] — 2026-08-03
+
+### Added
+- `/survey` is now a hub listing every survey you have, with Add, Edit, Remove, Post, Reminders, and Translation as buttons ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+- `/setup` → 📋 Survey opens that same hub, so both doors show the same thing ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+
+### Fixed
+- Free-tier alliances can configure their survey again; the only route to the survey wizard was a Premium-gated button, which left a documented free feature unreachable ([#425](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/425)).
+
+### Changed
+- `/survey overview`, `/survey post`, and `/survey remind` are replaced by buttons on the `/survey` hub. Survey buttons already posted in your channels keep working ([#426](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/426)).
+
 ## [1.8.0] — 2026-08-01
 
 ### Added

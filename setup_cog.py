@@ -1649,16 +1649,22 @@ async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
     await run_event_setup(interaction, bot)
 
 
-async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
+async def _launch_survey_hub(interaction: discord.Interaction, bot) -> None:
+    """
+    Open the survey hub from the `/setup` hub's 📋 Survey button.
+
+    Keeps that door's existing admin-or-leadership gate (the `/survey`
+    command applies `survey._guard` instead), then hands off to the same
+    hub surface both doors share.
+    """
     if not _has_leadership_or_admin(interaction):
         await _send_ack(
-            interaction, "⛔ You need the leadership role (or admin) to open the survey wizard."
+            interaction, "⛔ You need the leadership role (or admin) to manage surveys."
         )
         return
-    if not await _check_wizard_can_run(interaction, "setup"):
-        return
-    await _send_ack(interaction, "⚙️ Starting survey setup — check the channel for prompts!")
-    await run_survey_setup(interaction, bot)
+    from survey_hub import handle_survey_hub
+
+    await handle_survey_hub(bot, interaction)
 
 
 async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> None:
@@ -4747,6 +4753,16 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         fields = [
             ("Buddy Tab", current.get("buddy_tab") or "Buddy System"),
             (
+                "Opt-out column",
+                f"`{current.get('include_col_header')}`"
+                if current.get("include_col_header")
+                else "*not set — everyone on the profession tab is eligible*",
+            ),
+            (
+                "Limited to your member roster",
+                "✅ Yes" if current.get("roster_filter_enabled") else "❌ No",
+            ),
+            (
                 "Two Engineers per War Leader",
                 "✅ Yes" if current.get("engineer_doubling") else "❌ No",
             ),
@@ -4782,7 +4798,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
-    await channel.send("**Step 1 of 7 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await channel.send("**Step 1 of 9 — Turn on the Profession Buddy System?**", view=enabled_view)
     await wait_view_or_cancel(enabled_view, cancel_event)
     if enabled_view.cancelled:
         wizard_registry.unregister(user.id, cancel_event)
@@ -4831,7 +4847,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Buddy tab name ────────────────────────────────────────────────
     buddy_tab = await ask_keep_or_change(
         channel,
-        "**Step 2 of 7 — Buddy List Tab**\n"
+        "**Step 2 of 9 — Buddy List Tab**\n"
         "Which tab in your Google Sheet should hold the buddy list? The bot owns "
         "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
         "⚠️ *The bot will create it if it doesn't exist.*",
@@ -4845,10 +4861,95 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if buddy_tab is None:
         return
 
-    # ── Step 3: Engineer doubling ─────────────────────────────────────────────
+    # ── Step 3: Opt-out column (#427) ─────────────────────────────────────────
+    # Optional. Blank keeps every row on the profession tab eligible, which is
+    # the pre-#427 behaviour and what every existing alliance gets on upgrade.
+    inc_view = YesNoView()
+    await channel.send(
+        "**Step 3 of 9 — Leave people out of the buddy list?**\n"
+        f"Some alliances keep members on the **{profession_tab}** tab after they leave, "
+        "so the historical record stays intact. Others have members who just don't want "
+        "a buddy.\n\n"
+        f"Do you want a column on **{profession_tab}** that takes someone out of the buddy "
+        "list without touching the rest of their row?",
+        view=inc_view,
+    )
+    await wait_view_or_cancel(inc_view, cancel_event)
+    if inc_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    include_col_header = ""
+    if inc_view.selected:
+        include_col_header = await ask_keep_or_change(
+            channel,
+            "**Step 3a of 9 — Which column?**\n"
+            f"Type the **header name** exactly as it appears in row 1 of **{profession_tab}** "
+            "(not the column letter, so you can move it later without breaking anything).\n\n"
+            "The bot leaves someone out when their cell reads **no**, **false**, **0**, "
+            "**off**, **left** or **exclude**. Blank cells stay in the list, so you only "
+            "have to fill it in for the people you're taking out.",
+            default="In Buddy System",
+            current=current.get("include_col_header", ""),
+            modal_title="Opt-out Column Header",
+            modal_label="Column header name",
+            timeout_cmd="setup_buddy",
+            cancel_event=cancel_event,
+        )
+        if include_col_header is None:
+            return
+        include_col_header = (include_col_header or "").strip()
+
+    # ── Step 4: Roster-sourced eligibility (#428) ─────────────────────────────
+    # Shares the one roster config with Conductor Rotation (guild_member_roster
+    # _config), so `enabled` is what splits synced-Premium from hand-maintained
+    # free — the same split load_roster_members already handles (#337). Opt-in,
+    # and gated on the alliance actually having a roster configured.
+    from config import get_member_roster_config, has_member_roster_config
+
+    roster_cfg = get_member_roster_config(guild_id)
+    roster_tab_name = roster_cfg.get("tab_name") or "Member Roster"
+    roster_synced = bool(roster_cfg.get("enabled"))
+    roster_filter_enabled = 0
+
+    if not has_member_roster_config(guild_id):
+        await channel.send(
+            "**Step 4 of 9 — Keep the list in step with your roster** *(skipped)*\n"
+            "You haven't pointed the bot at a member roster yet. Set one up via `/setup` → "
+            "👥 Member Sync (or 🚂 Train → Conductor Rotation) and re-run this wizard to have "
+            "departures drop out of the buddy list on their own."
+        )
+    else:
+        roster_view = YesNoView()
+        if roster_synced:
+            blurb = (
+                f"Your **{roster_tab_name}** tab is synced from Discord 💎, so it drops people "
+                "automatically when they leave. Point the buddy list at it and departures "
+                "leave the pairing list on their own, with nothing to edit."
+            )
+        else:
+            blurb = (
+                f"Your **{roster_tab_name}** tab is one you maintain by hand. Point the buddy "
+                "list at it and removing someone there also removes them here, so it's one "
+                "edit in one place instead of two.\n"
+                "💎 *With Member Sync, that tab keeps itself current and departures drop out "
+                "with no edit at all.*"
+            )
+        await channel.send(
+            f"**Step 4 of 9 — Keep the list in step with your roster?**\n{blurb}\n\n"
+            "Only people on that tab would be eligible for a buddy.",
+            view=roster_view,
+        )
+        await wait_view_or_cancel(roster_view, cancel_event)
+        if roster_view.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        roster_filter_enabled = 1 if roster_view.selected else 0
+
+    # ── Step 5: Engineer doubling ─────────────────────────────────────────────
     dbl_view = YesNoView()
     await channel.send(
-        "**Step 3 of 7 — Two Engineers per War Leader?**\n"
+        "**Step 5 of 9 — Two Engineers per War Leader?**\n"
         "When you have more Engineers than War Leaders, should we allow War Leaders "
         "to have 2 Engineers paired with them?",
         view=dbl_view,
@@ -4882,7 +4983,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if power_source_available:
         scarcity_view = YesNoView()
         await channel.send(
-            "**Step 4 of 7 — When Engineers are scarce**\n"
+            "**Step 6 of 9 — When Engineers are scarce**\n"
             "If you have more War Leaders than Engineers, should we prioritize your "
             "strongest War Leaders first? (Note that this will read from your existing "
             "Power data source if you have one set up.)",
@@ -4914,7 +5015,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     rel_view = YesNoView()
     await channel.send(
-        "**Step 5 of 7 — Rank Engineers by reliability?**\n"
+        "**Step 7 of 9 — Rank Engineers by reliability?**\n"
         "Keep a 1-5 reliability score for your Engineers somewhere in your Google "
         "Sheet (higher = more dependable) and the bot will pair your most reliable "
         "Engineers with your top War Leaders. Leave this off to order Engineers "
@@ -5041,7 +5142,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
         rel_choice = _RelChoiceView()
         await channel.send(
-            "**Step 5a of 7 — Where are your reliability scores?**\n"
+            "**Step 7a of 9 — Where are your reliability scores?**\n"
             "The bot reads each Engineer's 1-5 score from here (it never writes to it) "
             "and matches members the same way it reads power:\n"
             f"{_rel_line('Tab name', disp_tab, default_rel_tab)}\n"
@@ -5076,7 +5177,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     )
     alerts_view = YesNoView()
     await channel.send(
-        "**Step 6 of 7 — Leadership alerts**\n"
+        "**Step 8 of 9 — Leadership alerts**\n"
         "When a member swaps profession and the bot re-pairs people, should it post a "
         "heads-up to a leadership channel?\n"
         "💎 Premium: these posts send only while Premium is active.",
@@ -5118,7 +5219,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     dm_view = YesNoView()
     await channel.send(
-        "**Step 7 of 7 — Buddy DMs**\n"
+        "**Step 9 of 9 — Buddy DMs**\n"
         "Should the bot DM members their buddy when it changes?\n"
         "💎 Premium: these DMs send only while Premium is active.",
         view=dm_view,
@@ -5158,6 +5259,8 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     update_buddy_config_field(guild_id, "buddy_tab", buddy_tab)
     update_buddy_config_field(guild_id, "profession_tab", profession_tab)
     update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
+    update_buddy_config_field(guild_id, "include_col_header", include_col_header)
+    update_buddy_config_field(guild_id, "roster_filter_enabled", roster_filter_enabled)
     update_buddy_config_field(guild_id, "engineer_doubling", engineer_doubling)
     update_buddy_config_field(guild_id, "scarcity_priority", scarcity_priority)
     update_buddy_config_field(guild_id, "reliability_enabled", reliability_enabled)
@@ -5172,6 +5275,10 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         color=discord.Color.green(),
         description=(
             f"**Buddy tab:** {buddy_tab}\n"
+            f"**Opt-out column:** "
+            f"{f'`{include_col_header}` on {profession_tab}' if include_col_header else 'not set'}\n"
+            f"**Limited to your member roster:** "
+            f"{f'✅ Yes ({roster_tab_name})' if roster_filter_enabled else '❌ No'}\n"
             f"**Two Engineers per War Leader:** {'✅ Yes' if engineer_doubling else '❌ No'}\n"
             f"**When Engineers are scarce:** "
             f"{'strongest first' if scarcity_priority == 'strongest_first' else 'alphabetical'}\n"
@@ -6183,8 +6290,15 @@ async def run_survey_setup(
     embed.add_field(name="Stats Tab", value=tab_squad_powers, inline=True)
     embed.add_field(name="History Tab", value=tab_history, inline=True)
     embed.add_field(name="Questions", value=q_summary[:1024], inline=False)
+    from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_TRANSLATE
+
     embed.set_footer(
-        text=f"Run {next_step_cmd} again to update. Run /survey post to post the survey button."
+        text=(
+            f"Run {next_step_cmd} again to update. Run /survey and click "
+            f"{SURVEY_HUB_BTN_POST} to post the survey button, or "
+            f"{SURVEY_HUB_BTN_TRANSLATE} if your members don't all read the "
+            f"language you write your questions in."
+        )
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

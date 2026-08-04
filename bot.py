@@ -244,6 +244,11 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    # Loaded after every feature cog, so each one has registered its
+    # config_health subjects before the first notifier pass can render them.
+    if "config_health_cog" not in bot.extensions:
+        await bot.load_extension("config_health_cog")
+        print("[INFO] Config health cog loaded")
     # The Map Manager command surfaces (`/map_manager` + the /setup button)
     # are gated behind MAP_MANAGER_COMMANDS_ENABLED so the integration can ship
     # to production with its HTTP endpoints live for testing while the commands

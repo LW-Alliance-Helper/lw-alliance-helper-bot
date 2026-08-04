@@ -379,15 +379,11 @@ def init_db():
         # when a status had been set). Empty-string template fields mean
         # "use the defaults.py default".
         #
-        # The `sheet_error_*` trio is the stuck-watcher notice (#413).
-        # `sheet_error_signature` is a stable key for the problem currently
-        # blocking the poll (scope + error class + tab, see
-        # transfer.sheet_error_signature); a non-empty value means "the
-        # watcher is stuck and leadership has been told". `sheet_error_detail`
-        # is the human-readable diagnosis behind it, rendered on the
-        # `/transfers` hub. `sheet_error_notified_at` timestamps the last
-        # leadership post so an unresolved problem re-nudges daily instead of
-        # once per poll. All three clear on the first clean read.
+        # The stuck-watcher notice this feature pioneered (#413) used to keep
+        # its state in a `sheet_error_*` trio here. It now lives in
+        # guild_config_health, shared with every other feature that can have
+        # its config rot (#414 / #379); see the migration block below for the
+        # port and drop.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_transfer_config (
                 guild_id                       INTEGER PRIMARY KEY,
@@ -429,11 +425,7 @@ def init_db():
                 last_seen_state_json           TEXT    DEFAULT '{}',
                 copied_state_json              TEXT    DEFAULT '{}',
                 source_enrich_blanks           INTEGER DEFAULT 0,
-                last_polled_at                 TEXT    DEFAULT '',
-
-                sheet_error_signature          TEXT    DEFAULT '',
-                sheet_error_detail             TEXT    DEFAULT '',
-                sheet_error_notified_at        TEXT    DEFAULT ''
+                last_polled_at                 TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -871,6 +863,51 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_config_health (#414 / #379) — one row per piece of a guild's
+        # configuration that is currently broken, across every feature. A
+        # guild points the bot at things it owns (Google Sheets, Discord
+        # channels) and those rot: a tab gets renamed, a spreadsheet gets
+        # unshared, a channel gets deleted or the bot's role loses View
+        # Channel. The feature then stops working silently.
+        #
+        # #413 proved the notice shape on the transfer watcher, but stored
+        # its state as three columns on guild_transfer_config, which does not
+        # survive contact with ~18 configured-channel fields plus the sheet
+        # fields. One row per broken subject does; absence of a row means
+        # healthy, so a healthy guild costs one indexed lookup.
+        #
+        # `subject` is the stable id of the thing that broke
+        # ("transfer.alliance_sheet", "shiny.post_channel") and is what the
+        # copy registry in config_health.py keys off. `signature` is the
+        # dedup key: kind plus a stable discriminator (tab name, channel id),
+        # deliberately never the full diagnosis string, whose wording can
+        # shift and make the same problem look new on every poll.
+        # `notified_at` NULL means recorded but not yet posted, which is what
+        # lets the notifier batch a reorg that broke six subjects into one
+        # digest instead of six embeds.
+        #
+        # `resolved_at` is a tombstone rather than an immediate delete: an
+        # alliance that was told the feature was dead needs to hear that their
+        # fix worked, and routing that through the same notifier keeps every
+        # Discord send (and the channel-fallback logic behind it) in one
+        # place. The notifier posts the recovery and then deletes the row. A
+        # row that resolves before it was ever notified is dropped silently,
+        # since nobody was told there was a problem in the first place.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_config_health (
+                guild_id      INTEGER NOT NULL,
+                subject       TEXT    NOT NULL,
+                kind          TEXT    NOT NULL,
+                signature     TEXT    NOT NULL,
+                detail        TEXT    NOT NULL DEFAULT '',
+                first_seen_at TEXT    NOT NULL,
+                notified_at   TEXT,
+                resolved_at   TEXT,
+                PRIMARY KEY (guild_id, subject)
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -1252,14 +1289,69 @@ def init_db():
             ("copied_state_json", "TEXT    DEFAULT '{}'"),
             ("source_enrich_blanks", "INTEGER DEFAULT 0"),
             ("last_polled_at", "TEXT    DEFAULT ''"),
-            ("sheet_error_signature", "TEXT    DEFAULT ''"),
-            ("sheet_error_detail", "TEXT    DEFAULT ''"),
-            ("sheet_error_notified_at", "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_transfer_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_transfer_config")
+            except Exception:
+                pass
+
+        # The #413 stuck-watcher trio moved to guild_config_health, which is
+        # keyed per broken subject rather than per feature (#414 / #379).
+        # Carry any live problem across first: an alliance whose watcher is
+        # stuck right now has already been told, and dropping the columns
+        # without porting the state would re-notify them on the deploy that
+        # ships this. The old signature is "scope|kind|tab", so the scope it
+        # starts with is what names the subject.
+        try:
+            stuck = conn.execute(
+                "SELECT guild_id, sheet_error_signature, sheet_error_detail, "
+                "       sheet_error_notified_at "
+                "FROM guild_transfer_config "
+                "WHERE COALESCE(sheet_error_signature, '') != ''"
+            ).fetchall()
+        except Exception:
+            stuck = []  # already migrated on an earlier boot
+        for row in stuck:
+            signature = (row["sheet_error_signature"] or "").strip()
+            parts = signature.split("|")
+            scope = parts[0].strip() if parts else ""
+            kind = parts[1].strip() if len(parts) > 1 else ""
+            if not scope or not kind:
+                continue
+            notified_at = (row["sheet_error_notified_at"] or "").strip() or None
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO guild_config_health "
+                    "(guild_id, subject, kind, signature, detail, first_seen_at, notified_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["guild_id"],
+                        f"transfer.{scope}",
+                        kind,
+                        signature,
+                        row["sheet_error_detail"] or "",
+                        notified_at or datetime.now(timezone.utc).isoformat(),
+                        notified_at,
+                    ),
+                )
+                conn.commit()
+                print(
+                    f"[CONFIG] Ported transfer sheet error for guild "
+                    f"{row['guild_id']} into guild_config_health"
+                )
+            except Exception:
+                pass
+        for col in (
+            "sheet_error_signature",
+            "sheet_error_detail",
+            "sheet_error_notified_at",
+        ):
+            try:
+                conn.execute(f"ALTER TABLE guild_transfer_config DROP COLUMN {col}")
+                conn.commit()
+                print(f"[CONFIG] Dropped {col} from guild_transfer_config")
             except Exception:
                 pass
 
@@ -5334,9 +5426,6 @@ _TRANSFER_DEFAULTS = {
     "copied_state_json": "{}",
     "source_enrich_blanks": 0,
     "last_polled_at": "",
-    "sheet_error_signature": "",
-    "sheet_error_detail": "",
-    "sheet_error_notified_at": "",
 }
 
 _TRANSFER_FIELDS = set(_TRANSFER_DEFAULTS)

@@ -23,6 +23,7 @@ from config import (
     GuildConfig,
     normalize_spreadsheet_id,
 )
+import config_health
 import premium
 import wizard_registry
 from messages import (
@@ -1912,8 +1913,24 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     def _enabled(v) -> str:
         return "✅ Enabled" if v else "❌ Disabled"
 
+    # #379: every channel line in this embed goes through _channel, so making
+    # it health-aware covers all of them at once. Checked live rather than
+    # read from stored rows: detection is reactive, so a channel that broke
+    # since its loop last ran has no row yet, and this screen is exactly where
+    # someone goes to ask "is my setup still good?".
+    #
+    # Cache-only, because this renders a dozen-plus channels in one embed and
+    # the precise check costs a REST call each. The ⚠️ is a prompt to look, not
+    # a diagnosis; the config-health digest carries the full explanation.
+    unreachable_channels: list[int] = []
+
     def _channel(v) -> str:
-        return f"<#{v}>" if v else "*not set*"
+        if not v:
+            return "*not set*"
+        if config_health.check_channel(interaction.client, v) is not None:
+            unreachable_channels.append(v)
+            return f"<#{v}> ⚠️"
+        return f"<#{v}>"
 
     def _col_letter(idx) -> str:
         try:
@@ -2087,6 +2104,24 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             f"**Custom Message:** {_yn(shiny.get('message_template'))}",
         ]
     embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
+
+    # Explain the ⚠️ once rather than per line, and say what it costs them.
+    # A channel the bot can't reach is a feature that has silently stopped,
+    # which is the whole point of #379.
+    if unreachable_channels:
+        count = len(unreachable_channels)
+        embed.color = discord.Color.red()
+        embed.add_field(
+            name="⚠️ Channels I can't post in",
+            value=(
+                f"{count} channel{'s' if count != 1 else ''} above {'are' if count != 1 else 'is'} "
+                f"marked ⚠️: either the channel was deleted, or my role lost **View Channel** or "
+                f"**Send Messages** there. Anything scheduled to post {'there' if count == 1 else 'in them'} "
+                f"is not running. Fix the channel permissions, or re-pick the channel in the "
+                f"matching section above."
+            )[:1024],
+            inline=False,
+        )
 
     if is_premium_flag:
         embed.set_footer(

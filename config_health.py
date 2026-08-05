@@ -328,6 +328,104 @@ def _delete(guild_id: int, subjects: list[str]) -> None:
         conn.commit()
 
 
+# ── Channels (#379) ──────────────────────────────────────────────────────────
+
+
+def check_channel(bot, channel_id) -> str | None:
+    """Health of a configured channel from cache alone, or ``None`` if fine.
+
+    Free: a channel the bot can see answers view/send out of
+    ``permissions_for``, no REST call. Cheap enough for a per-minute loop,
+    which is the whole reason the clock-driven post loops can adopt this.
+
+    ``CHANNEL_GONE`` is deliberately the ambiguous answer. discord.py's cache
+    only holds channels the gateway sent, and the gateway omits channels the
+    bot cannot view, so a deleted channel and one the bot lost View Channel on
+    are indistinguishable from here. :func:`check_channel_precise` separates
+    them with one REST call, and the copy for this kind covers both.
+
+    An unset channel is not a problem: plenty of guilds deliberately leave an
+    optional post channel blank.
+    """
+    if not channel_id:
+        return None
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        return CHANNEL_GONE
+    guild = getattr(channel, "guild", None)
+    me = getattr(guild, "me", None)
+    if me is None or not hasattr(channel, "permissions_for"):
+        return None  # DM or a shape we can't reason about; don't invent a problem
+    try:
+        perms = channel.permissions_for(me)
+    except Exception:  # noqa: BLE001 - a permissions lookup must not break a loop
+        return None
+    view = getattr(perms, "view_channel", None)
+    send = getattr(perms, "send_messages", None)
+    if not isinstance(view, bool) or not isinstance(send, bool):
+        # Not a Permissions object. Every caller is inside a per-minute loop or
+        # a rendering path, so an unreadable shape resolves to "no problem"
+        # rather than a raised AttributeError or an invented alert.
+        return None
+    if not view:
+        return CHANNEL_NO_VIEW
+    if not send:
+        return CHANNEL_NO_SEND
+    return None
+
+
+async def check_channel_precise(bot, channel_id) -> str | None:
+    """:func:`check_channel`, but resolves the deleted-vs-invisible ambiguity.
+
+    Costs one REST call, and only in the ambiguous case. Affordable when a
+    human is waiting on a `/setup` screen; not affordable per-minute across
+    every channel field of every guild, which is why the loops use the cheap
+    version and this backs the pull surfaces.
+    """
+    cheap = check_channel(bot, channel_id)
+    if cheap != CHANNEL_GONE:
+        return cheap
+    try:
+        await bot.fetch_channel(int(channel_id))
+    except discord.NotFound:
+        return CHANNEL_GONE
+    except discord.Forbidden:
+        return CHANNEL_NO_VIEW
+    except (discord.HTTPException, Exception):  # noqa: BLE001
+        return CHANNEL_GONE  # can't tell; report the cheap answer
+    # Fetchable but not in cache: the bot can reach it, so treat as healthy.
+    return None
+
+
+def note_channel(bot, guild_id: int, subject: str, channel_id) -> bool:
+    """Record or clear a configured channel's health. ``True`` if it's usable.
+
+    The one call a clock-driven post loop makes in place of its old
+    ``if channel is None: continue``. Recording and clearing are both DB-only,
+    so this is safe on every tick.
+    """
+    if not guild_id:
+        return bool(channel_id)
+    kind = check_channel(bot, channel_id)
+    if kind is None:
+        clear(guild_id, subject)
+        return bool(channel_id)
+    record(guild_id, subject, kind, "", discriminator=str(channel_id))
+    return False
+
+
+def resolve_configured_channel(bot, guild_id: int, subject: str, channel_id):
+    """The channel if the bot can actually post in it, else ``None``.
+
+    Records the problem as a side effect, so a loop that skips a guild has
+    already told the alliance why. Returning ``None`` rather than raising
+    keeps the existing skip-and-continue shape of every caller.
+    """
+    if not note_channel(bot, guild_id, subject, channel_id):
+        return None
+    return bot.get_channel(int(channel_id))
+
+
 # ── Copy ─────────────────────────────────────────────────────────────────────
 
 STUCK_TITLE = "⚠️ Some of your setup needs attention"
@@ -343,7 +441,10 @@ _REASONS = {
         "I don't have permission to open that spreadsheet any more. Its sharing "
         "settings were most likely changed."
     ),
-    CHANNEL_GONE: "That channel no longer exists. It was most likely deleted.",
+    CHANNEL_GONE: (
+        "I can't find that channel at all. It was either deleted, or my role lost "
+        "**View Channel** there so I can no longer see it."
+    ),
     CHANNEL_NO_VIEW: (
         "I can't see that channel any more. My role most likely lost **View Channel** "
         "there, which happens easily during a channel reorg."
@@ -358,7 +459,10 @@ _FIXES = {
         "In Google Sheets, use **Share** to give the bot's service account Editor "
         "access to that spreadsheet."
     ),
-    CHANNEL_GONE: "Pick a different channel in setup.",
+    CHANNEL_GONE: (
+        "If the channel still exists, give my role **View Channel** and **Send Messages** "
+        "there. If it's gone, pick a different channel in setup."
+    ),
     CHANNEL_NO_VIEW: (
         "Give my role **View Channel** and **Send Messages** there in the channel's "
         "permission settings, or pick a different channel in setup."

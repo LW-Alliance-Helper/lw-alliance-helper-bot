@@ -29,7 +29,32 @@ from typing import Optional
 import discord
 from discord.ext import tasks
 
+import config_health
+from storm_event_hub import HUB_BTN_POST_SIGNUP
+
 logger = logging.getLogger(__name__)
+
+# #379: the configured storm sign-up channel. DS and CS share the field name
+# but not the value, and the scheduler already handles them as one loop, so
+# one subject covers both — a broken channel is one fix either way.
+SIGNUP_CHANNEL_SUBJECT = "storm.signup_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=SIGNUP_CHANNEL_SUBJECT,
+        label="your storm sign-up channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_POST_SIGNUP,
+    )
+)
+
+# post_registration's status strings, mapped to what the alliance is told.
+# "forbidden" means the channel resolved but the send was refused, which is a
+# different fix from a channel the bot cannot see at all.
+_CHANNEL_STATUS_KINDS = {
+    "channel_gone": config_health.CHANNEL_GONE,
+    "forbidden": config_health.CHANNEL_NO_SEND,
+}
 
 
 _VALID_EVENT_TYPES = ("DS", "CS")
@@ -199,6 +224,7 @@ async def _run_one_tick(bot: discord.Client) -> int:
         status = result.get("status")
         if status == "ok":
             fired += 1
+            config_health.clear(guild_id, SIGNUP_CHANNEL_SUBJECT)
             logger.info(
                 "[STORM SCHEDULER] auto-posted sign-up for guild=%s event=%s/%s "
                 "channel=%s message=%s",
@@ -213,6 +239,19 @@ async def _run_one_tick(bot: discord.Client) -> int:
             # in the same minute) already posted. Quiet.
             pass
         else:
+            # #379: an unattended auto-post that can't reach its channel used
+            # to be a log line and nothing else. `post_registration` already
+            # distinguishes the two channel failures, so map them straight
+            # across; anything else is not a channel problem and stays a log.
+            kind = _CHANNEL_STATUS_KINDS.get(status)
+            if kind:
+                config_health.record(
+                    guild_id,
+                    SIGNUP_CHANNEL_SUBJECT,
+                    kind,
+                    "",
+                    discriminator=str(result.get("channel_id") or ""),
+                )
             logger.warning(
                 "[STORM SCHEDULER] auto-post for guild=%s event=%s/%s returned %s (details=%s)",
                 guild_id,

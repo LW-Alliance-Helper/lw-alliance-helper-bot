@@ -56,6 +56,29 @@ PATCHED_TODAY_ISO = "2026-05-16"
 # ── Fixtures and helpers ─────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _no_config_health_db():
+    """Neutralise the #379 channel-health recording for these tests.
+
+    The reminder loop now records channel health, which needs a database these
+    tests don't stand up. `check_channel` is stubbed healthy as well as the
+    writes, because the mock channels here are AsyncMocks whose
+    `permissions_for` returns a coroutine — harmless, but it produces an
+    unawaited-coroutine warning on every run.
+
+    The skip-a-bad-channel behaviour these tests assert still works through
+    the stub: a guild whose `get_channel` returns None still resolves to None
+    and is still skipped. The real permission logic is covered in
+    test_config_health_channels.py.
+    """
+    with (
+        patch("config_health.record", MagicMock()),
+        patch("config_health.clear", MagicMock()),
+        patch("config_health.check_channel", MagicMock(return_value=None)),
+    ):
+        yield
+
+
 def _make_cog():
     """A real TrainCog instance with a mocked bot. Subsequent tests
     overwrite `cog.bot.guilds` and patch the config loaders. The

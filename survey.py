@@ -38,7 +38,20 @@ from messages import (
 )
 from setup_hub import HUB_BTN_SURVEY
 from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_REMIND
+import config_health
 import wizard_registry
+
+# #379: the channel the scheduled survey reminder posts to.
+SURVEY_REMINDER_CHANNEL_SUBJECT = "survey.reminder_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=SURVEY_REMINDER_CHANNEL_SUBJECT,
+        label="your survey reminder channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_SURVEY,
+    )
+)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -1220,7 +1233,13 @@ class SurveyCog(commands.Cog):
                         f"survey={survey_id} sent={sent} skipped={skipped}"
                     )
                 elif channel_id:
-                    ok = await _send_reminder_to_channel(self.bot, guild_id, channel_id, body)
+                    ok = await _send_reminder_to_channel(
+                        self.bot,
+                        guild_id,
+                        channel_id,
+                        body,
+                        health_subject=SURVEY_REMINDER_CHANNEL_SUBJECT,
+                    )
                     if not ok:
                         print(
                             f"[SURVEY] Channel reminder failed for guild={guild_id} "
@@ -1344,12 +1363,25 @@ def _default_reminder_body(survey: dict) -> str:
     )
 
 
-async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: str) -> bool:
-    """Post a reminder body to a guild channel. Returns True on success."""
-    channel = bot.get_channel(channel_id)
+async def _send_reminder_to_channel(
+    bot, guild_id: int, channel_id: int, body: str, *, health_subject: str = ""
+) -> bool:
+    """Post a reminder body to a guild channel. Returns True on success.
+
+    ``health_subject`` opts this call into config-health recording (#379).
+    Passed by the scheduled loop, which posts with nobody watching, and
+    deliberately not by "remind now", where the user gets an inline error and
+    a duplicate leadership notice would just be noise.
+    """
+    if health_subject:
+        channel = config_health.resolve_configured_channel(
+            bot, guild_id, health_subject, channel_id
+        )
+    else:
+        channel = bot.get_channel(channel_id)
     if channel is None:
         print(
-            f"[REMINDER] Channel {channel_id} not resolvable (guild={guild_id}) "
+            f"[REMINDER] Channel {channel_id} not usable (guild={guild_id}) "
             f"— scheduled reminder skipped"
         )
         return False

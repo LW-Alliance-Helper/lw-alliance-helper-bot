@@ -158,6 +158,75 @@ def _row_to_problem(row) -> Problem:
     )
 
 
+def sheet_problem_kind(e: Exception) -> str | None:
+    """Which alliance-fixable problem a gspread exception represents, or ``None``.
+
+    ``None`` covers everything the alliance can't act on: a rate limit (429,
+    which clears itself and would be a false alarm), a transient 5xx, or a bug
+    in the bot. Those still log and skip; they just don't raise an alarm.
+
+    Kept separate from ``config.is_user_config_sheet_error`` on purpose: that
+    answers "should Sentry care", which includes 429. This answers "should the
+    alliance be told", which does not.
+
+    Lives here rather than in any one feature because transfer, train, the
+    member roster and storm all read alliance-owned sheets and all classify
+    the same failures (#414). #413 wrote it inside ``transfer_cog``, which was
+    right when transfer was the only caller.
+    """
+    import gspread
+
+    if isinstance(e, gspread.exceptions.WorksheetNotFound):
+        return MISSING_TAB
+    if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
+        return MISSING_SHEET
+    if isinstance(e, gspread.exceptions.APIError):
+        status = None
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            status = getattr(resp, "status_code", None)
+        status = status or getattr(e, "code", None)
+        if status == 404:
+            return MISSING_SHEET
+        if status == 403:
+            return NO_ACCESS
+    return None
+
+
+def record_sheet_failure(
+    guild_id: int,
+    subject: str,
+    e: Exception,
+    *,
+    tab: str = "",
+    detail: str = "",
+    now: datetime | None = None,
+) -> bool:
+    """Classify a sheet exception and record it. ``True`` if it was recorded.
+
+    The one-liner for the common case: a feature caught something reading or
+    writing an alliance sheet and wants the alliance told if it is theirs to
+    fix. ``False`` means the failure was transient or a bot bug, so the caller
+    should keep whatever Sentry / logging behaviour it already had.
+
+    Callers with something more specific to say pass ``detail``; otherwise the
+    generic per-kind copy is used. ``tab`` becomes the dedup discriminator, so
+    a rename from one bad tab to a different bad tab reads as a new problem.
+    """
+    if not guild_id:
+        return False  # legacy single-guild call path, nothing to attribute it to
+    kind = sheet_problem_kind(e)
+    if kind is None:
+        return False
+    if kind == MISSING_TAB and tab and not detail:
+        detail = (
+            f"That spreadsheet no longer has a tab named `{tab}`. It was most likely "
+            "renamed, or the tab was deleted."
+        )
+    record(guild_id, subject, kind, detail, discriminator=tab, now=now)
+    return True
+
+
 def is_new_problem(guild_id: int, subject: str, kind: str, *, discriminator: str = "") -> bool:
     """Whether recording this would be a *different* problem than what's stored.
 

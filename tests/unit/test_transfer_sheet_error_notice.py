@@ -1,30 +1,31 @@
 """
-Tests for the stuck-watcher notice (#413) — telling an alliance their transfer
-watcher has stopped because of a sheet problem they own.
+Tests for the transfer watcher's half of the stuck-watcher notice (#413).
 
 The production incident: an intake-form tab was renamed without updating the
 bot's setup, so the poll loop raised `WorksheetNotFound` every 30 minutes for
 9 days (445 Sentry events), pulled nothing, and told nobody.
 
-Covered here:
+The notice *mechanism* moved to config_health in #414 / #379 and is covered by
+test_config_health.py: dedup, the daily re-nudge, the digest, the recovery
+line, and where a notice lands. What's left here is the part that stayed
+transfer-specific, and the wiring between the two:
 
-  * `sheet_error_signature` / `should_notify_sheet_error` — the pure dedup
-    logic: one post per problem, a daily re-nudge while it stays unfixed, and
-    an immediate post when the problem *changes*.
   * `sheet_problem_kind` — which gspread failures are the alliance's to fix
     (missing tab, missing sheet, no access) versus transient or a bot bug (429,
-    5xx, non-gspread). Only the former alerts.
-  * A missing alliance tab posts one leadership-channel notice, records the
-    signature, and does NOT capture to Sentry (the #285 / #286 treatment this
+    5xx, non-gspread). Only the former records anything.
+  * The reason copy, which names the tab and lists the tabs that *do* exist so
+    a rename is obvious on sight.
+  * The tab listing costs a network round-trip, so it happens once per new
+    problem rather than on every poll.
+  * A poll that can't read the alliance sheet records against the right
+    subject, and does NOT capture to Sentry (the #285 / #286 treatment this
     loop never adopted).
-  * The same failure on a later poll stays quiet; a *different* failure posts
-    again.
-  * A missing-tab notice lists the tabs that do exist, so a rename is obvious.
-  * A broken optional source (server-wide / intake form) alerts even though
-    the alliance sheet itself reads fine.
-  * A clean poll after a recorded problem posts a recovery line and clears all
-    three stored fields.
-  * A genuine bug (non-gspread) still pages Sentry and raises no user notice.
+  * Every broken optional source records, not just the first — under #413's
+    single notice slot a second broken source stayed hidden until the first was
+    fixed.
+  * A clean read clears the alliance scope; a genuine bug still pages Sentry
+    and records nothing.
+  * The `/transfers` hub renders whatever config_health is holding.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import json
 import os
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import gspread
@@ -43,16 +44,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
+import config_health  # noqa: E402
 import transfer  # noqa: E402
 import transfer_cog  # noqa: E402
+import transfers_hub  # noqa: E402
 
 GUILD_ID = 4242
 NOTIFY_CHAN_ID = 9001
-LEADERSHIP_CHAN_ID = 7001
 NOW = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
 
 HEADER = ["Name", "Power", "Confirmed"]
 COLUMN_MAP = {"name": "Name", "identity_extra": [], "status": ["Confirmed"], "display": ["Power"]}
+
+ALLIANCE_SUBJECT = "transfer.alliance"
+FORM_SUBJECT = "transfer.alliance_form"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -79,153 +84,66 @@ def _cfg(**over):
         "notification_style": "each",
         "notify_on_delete": 0,
         "writeback_enabled": 0,
-        "sheet_error_signature": "",
-        "sheet_error_detail": "",
-        "sheet_error_notified_at": "",
+        "alliance_form_sheet_id": "FORM_SHEET",
+        "alliance_form_sheet_tab": "Form Responses 1",
+        "server_wide_sheet_id": "SHARED_SHEET",
+        "server_wide_sheet_tab": "Shared",
     }
     cfg.update(over)
     return cfg
 
 
-def _channel():
-    chan = AsyncMock()
-    chan.send = AsyncMock(return_value=MagicMock(name="sent_msg"))
-    return chan
-
-
-def _make_cog(notify_chan=None, leadership_chan=None):
-    """A TransferCog without `__init__` (which would start the live loop), whose
-    bot resolves the notification channel and the leadership channel to two
-    different mocks so we can assert *where* a notice landed."""
+def _make_cog():
+    """A TransferCog without `__init__`, which would start the live loop."""
     cog = transfer_cog.TransferCog.__new__(transfer_cog.TransferCog)
-    bot = MagicMock()
-    mapping = {NOTIFY_CHAN_ID: notify_chan, LEADERSHIP_CHAN_ID: leadership_chan}
-    bot.get_channel = MagicMock(side_effect=lambda cid: mapping.get(cid))
-    cog.bot = bot
+    cog.bot = MagicMock()
+    cog.bot.get_channel = MagicMock(return_value=None)
     return cog
 
 
 @contextmanager
-def _env(*, read_exc=None, stored=None, tab_names=None, leadership_channel_id=LEADERSHIP_CHAN_ID):
-    """Patch the loop's edges. `stored` is the transfer config row the notice
-    path reads back (i.e. what a *previous* poll recorded); `tab_names` is what
-    listing the spreadsheet's tabs returns."""
+def _env(*, read_exc=None, tab_names=None, list_exc=None, sources=None):
+    """Patch the loop's edges. Recording goes to the real (temp) DB, so tests
+    assert on stored state rather than on a spy."""
     read = MagicMock()
     if read_exc is not None:
         read.side_effect = read_exc
     else:
         read.return_value = (HEADER, [])
 
-    core_cfg = MagicMock()
-    core_cfg.leadership_channel_id = leadership_channel_id
+    lister = MagicMock()
+    if list_exc is not None:
+        lister.side_effect = list_exc
+    else:
+        lister.return_value = list(tab_names or [])
 
-    fields_spy = MagicMock()
-    field_spy = MagicMock()
     capture_spy = MagicMock()
+    report = {"copied": 0, "enriched": 0, "sources": list(sources or [])}
     with (
         patch("transfer_sheets.read_sheet", read),
-        patch(
-            "transfer_sheets.list_tab_names",
-            MagicMock(return_value=list(tab_names or [])),
-        ),
-        patch(
-            "transfer_cog.copy_sources",
-            AsyncMock(return_value={"copied": 0, "enriched": 0, "sources": []}),
-        ),
+        patch("transfer_sheets.list_tab_names", lister),
+        patch("transfer_cog.copy_sources", AsyncMock(return_value=report)),
         patch("premium.is_premium", AsyncMock(return_value=True)),
-        patch("config.get_config", MagicMock(return_value=core_cfg)),
-        patch("config.get_transfer_config", MagicMock(return_value=stored or _cfg())),
-        patch("config.update_transfer_config_fields", fields_spy),
-        patch("config.update_transfer_config_field", field_spy),
+        patch("config.update_transfer_config_field", MagicMock()),
+        patch("config.update_transfer_config_fields", MagicMock()),
         patch("transfer_cog._capture", capture_spy),
     ):
-        yield {
-            "read": read,
-            "fields": fields_spy,
-            "field": field_spy,
-            "capture": capture_spy,
-        }
+        yield {"read": read, "capture": capture_spy, "lister": lister}
 
 
-def _saved(fields_spy) -> dict:
-    """Merge every `update_transfer_config_fields` kwarg set into one dict."""
-    out = {}
-    for call in fields_spy.call_args_list:
-        out.update(call.kwargs)
-    return out
+def _stored(subject: str):
+    return next((p for p in config_health.problems(GUILD_ID) if p.subject == subject), None)
 
 
-def _embeds(chan) -> list:
-    return [c.kwargs["embed"] for c in chan.send.call_args_list if "embed" in c.kwargs]
-
-
-def _embed_text(embed) -> str:
-    parts = [embed.title or "", embed.description or ""]
-    parts += [f"{f.name} {f.value}" for f in embed.fields]
-    return "\n".join(parts)
-
-
-# ── Pure dedup logic ─────────────────────────────────────────────────────────
-
-
-class TestSignature:
-    def test_same_problem_same_signature(self):
-        a = transfer.sheet_error_signature("alliance", "missing_tab", "Form Responses 1")
-        b = transfer.sheet_error_signature("alliance", "missing_tab", "Form Responses 1")
-        assert a == b
-
-    def test_scope_kind_and_tab_all_distinguish(self):
-        base = transfer.sheet_error_signature("alliance", "missing_tab", "Applicants")
-        assert base != transfer.sheet_error_signature("server_wide", "missing_tab", "Applicants")
-        assert base != transfer.sheet_error_signature("alliance", "no_access", "Applicants")
-        assert base != transfer.sheet_error_signature("alliance", "missing_tab", "Other")
-
-    def test_scope_round_trips_for_the_recovery_notice(self):
-        sig = transfer.sheet_error_signature("alliance_form", "missing_tab", "Form Responses 1")
-        assert transfer.sheet_error_scope(sig) == "alliance_form"
-
-    def test_scope_of_no_signature_is_blank(self):
-        assert transfer.sheet_error_scope("") == ""
-
-
-class TestShouldNotify:
-    SIG = "alliance|missing_tab|Applicants"
-
-    def test_first_problem_notifies(self):
-        assert transfer.should_notify_sheet_error("", "", self.SIG, NOW) is True
-
-    def test_same_problem_inside_quiet_window_stays_silent(self):
-        """The whole point: 48 polls a day must not be 48 posts a day."""
-        an_hour_ago = (NOW - timedelta(hours=1)).isoformat()
-        assert transfer.should_notify_sheet_error(self.SIG, an_hour_ago, self.SIG, NOW) is False
-
-    def test_same_problem_renudges_after_a_day(self):
-        stale = (NOW - timedelta(hours=25)).isoformat()
-        assert transfer.should_notify_sheet_error(self.SIG, stale, self.SIG, NOW) is True
-
-    def test_different_problem_notifies_immediately(self):
-        an_hour_ago = (NOW - timedelta(hours=1)).isoformat()
-        assert (
-            transfer.should_notify_sheet_error(
-                self.SIG, an_hour_ago, "alliance|no_access|Applicants", NOW
-            )
-            is True
-        )
-
-    def test_unparseable_timestamp_notifies_rather_than_wedging_silent(self):
-        assert transfer.should_notify_sheet_error(self.SIG, "not-a-date", self.SIG, NOW) is True
-
-    def test_no_problem_never_notifies(self):
-        assert transfer.should_notify_sheet_error("", "", "", NOW) is False
-
-
-# ── Which failures are the alliance's to fix ─────────────────────────────────
+# ── Classification ───────────────────────────────────────────────────────────
 
 
 class TestSheetProblemKind:
     def test_missing_tab(self):
-        exc = gspread.exceptions.WorksheetNotFound("Form Responses 1")
-        assert transfer_cog.sheet_problem_kind(exc) == transfer_cog.MISSING_TAB
+        assert (
+            transfer_cog.sheet_problem_kind(gspread.exceptions.WorksheetNotFound("x"))
+            == transfer_cog.MISSING_TAB
+        )
 
     def test_missing_spreadsheet(self):
         assert (
@@ -240,8 +158,9 @@ class TestSheetProblemKind:
         assert transfer_cog.sheet_problem_kind(_api_error(403)) == transfer_cog.NO_ACCESS
 
     def test_rate_limit_is_not_alertable(self):
-        """429 clears itself. Alerting on it would be a false alarm, even
-        though `is_user_config_sheet_error` counts it as alliance-owned."""
+        """429 clears itself, so telling the alliance would be a false alarm.
+        Deliberately different from is_user_config_sheet_error, which counts it
+        as alliance-owned for Sentry purposes."""
         assert transfer_cog.sheet_problem_kind(_api_error(429)) is None
 
     def test_server_error_is_not_alertable(self):
@@ -251,356 +170,220 @@ class TestSheetProblemKind:
         assert transfer_cog.sheet_problem_kind(RuntimeError("boom")) is None
 
 
-# ── The copy tells you the right thing to go do ──────────────────────────────
+# ── Subject registration ─────────────────────────────────────────────────────
 
 
-class TestFixInstruction:
-    def test_no_access_points_at_sharing_not_at_setup(self):
-        """Re-picking the sheet doesn't fix a permissions problem, so a 403
-        must not send leadership into the setup wizard as step one."""
-        text = transfer_cog._fix_instruction(transfer_cog.NO_ACCESS)
-        assert "Share" in text
-        assert text.index("Share") < text.index("/transfers")
+class TestSubjectRegistration:
+    def test_every_watched_sheet_has_copy(self):
+        """An unregistered subject renders as "part of your setup", which would
+        make the notice useless for naming which sheet to go fix."""
+        for scope, label in transfer.SHEET_SCOPE_LABELS.items():
+            subject = config_health.get_subject(f"transfer.{scope}")
+            assert subject.label == label
+            assert subject.fix_hub == transfers_hub.TRANSFERS_HUB_CMD
+            assert subject.fix_btn == transfers_hub.SETUP_TRANSFERS_BTN
 
-    def test_missing_tab_offers_both_ways_round(self):
-        text = transfer_cog._fix_instruction(transfer_cog.MISSING_TAB)
-        assert "rename the tab back" in text
-        assert "/transfers" in text
 
-    def test_missing_sheet_points_at_re_picking_the_spreadsheet(self):
-        assert "re-pick the spreadsheet" in transfer_cog._fix_instruction(
-            transfer_cog.MISSING_SHEET
-        )
+# ── Reason copy ──────────────────────────────────────────────────────────────
 
-    def test_every_kind_promises_a_follow_up(self):
-        """The alliance needs to know the bot will confirm the fix worked,
-        otherwise they can't tell a fixed sheet from a still-broken one."""
-        for kind in (transfer_cog.MISSING_TAB, transfer_cog.MISSING_SHEET, transfer_cog.NO_ACCESS):
-            assert "post here as soon as" in transfer_cog._fix_instruction(kind)
 
+class TestProblemReason:
     def test_missing_tab_reason_names_the_tab(self):
-        reason = transfer_cog._problem_reason(transfer_cog.MISSING_TAB, "Form Responses 1")
-        assert "Form Responses 1" in reason
+        text = transfer_cog._problem_reason(transfer_cog.MISSING_TAB, "Applicants")
+        assert "Applicants" in text
 
     def test_missing_tab_reason_survives_an_unknown_tab(self):
-        assert transfer_cog._problem_reason(transfer_cog.MISSING_TAB, "")
+        text = transfer_cog._problem_reason(transfer_cog.MISSING_TAB, "")
+        assert "the tab I was told to watch" in text
+
+    def test_tabs_hint_is_included_when_known(self):
+        """The fix is obvious the moment you can see the real names."""
+        text = transfer_cog._problem_reason(transfer_cog.MISSING_TAB, "Applicants", "`A`, `B`")
+        assert "`A`, `B`" in text
+
+    def test_no_access_reason_talks_about_permission(self):
+        text = transfer_cog._problem_reason(transfer_cog.NO_ACCESS, "")
+        assert "permission" in text
 
 
-# ── The /transfers hub surface ───────────────────────────────────────────────
+# ── Recording from the poll ──────────────────────────────────────────────────
 
 
-class TestHubProblemField:
-    def _embed(self, cfg):
-        import discord
-
-        import transfers_hub
-
-        embed = discord.Embed(title="🔁 Transfer Management", color=discord.Color.blurple())
-        transfers_hub._add_sheet_problem_field(embed, cfg)
-        return embed
-
-    def test_recorded_problem_is_visible_and_recoloured(self):
-        """A leadership post can be scrolled past; the hub is where someone
-        checks "is this actually running?"."""
-        import discord
-
-        embed = self._embed(
-            {
-                "sheet_error_signature": transfer.sheet_error_signature(
-                    "alliance_form", transfer_cog.MISSING_TAB, "Form Responses 1"
-                ),
-                "sheet_error_detail": "That spreadsheet no longer has a tab named `x`.",
-            }
-        )
-        assert embed.color == discord.Color.red()
-        text = _embed_text(embed)
-        assert "intake form" in text  # names which sheet
-        assert "Setup Transfers" in text  # and the way out
-
-    def test_healthy_config_adds_nothing(self):
-        import discord
-
-        embed = self._embed({"sheet_error_signature": "", "sheet_error_detail": ""})
-        assert embed.fields == []
-        assert embed.color == discord.Color.blurple()
-
-    def test_signature_without_a_detail_still_warns(self):
-        """A row written by an older build (or a partial write) must not render
-        a blank warning."""
-        embed = self._embed(
-            {
-                "sheet_error_signature": transfer.sheet_error_signature(
-                    "alliance", transfer_cog.MISSING_TAB, "Applicants"
-                ),
-                "sheet_error_detail": "",
-            }
-        )
-        assert len(embed.fields) == 1
-        assert "transfer sheet" in _embed_text(embed)
-
-
-# ── The poll loop: alerting ──────────────────────────────────────────────────
-
-
-class TestPollAlertsOnMissingTab:
+class TestPollRecordsProblems:
     @pytest.mark.asyncio
-    async def test_posts_to_leadership_records_signature_and_skips_sentry(self):
-        notify_chan, leadership_chan = _channel(), _channel()
-        cog = _make_cog(notify_chan, leadership_chan)
-        exc = gspread.exceptions.WorksheetNotFound("Applicants")
-
-        with _env(read_exc=exc) as env:
+    async def test_missing_tab_records_against_the_alliance_subject(self, temp_db):
+        cog = _make_cog()
+        with _env(read_exc=gspread.exceptions.WorksheetNotFound("Applicants")) as env:
             await cog._poll_guild(_cfg(), NOW)
 
-        # The alert goes to leadership, not to the recruiting channel.
-        assert len(_embeds(leadership_chan)) == 1
-        notify_chan.send.assert_not_called()
-
-        embed = _embeds(leadership_chan)[0]
-        assert "stuck" in (embed.title or "").lower()
-        text = _embed_text(embed)
-        assert "renamed" in text  # names the likely cause
-        assert "/transfers" in text  # and the fix path
-
-        saved = _saved(env["fields"])
-        assert saved["sheet_error_signature"] == transfer.sheet_error_signature(
-            "alliance", transfer_cog.MISSING_TAB, "Applicants"
-        )
-        assert saved["sheet_error_notified_at"] == NOW.isoformat()
-        assert saved["sheet_error_detail"]
-
-        # The Sentry flood this issue is about.
+        problem = _stored(ALLIANCE_SUBJECT)
+        assert problem is not None
+        assert problem.kind == transfer_cog.MISSING_TAB
+        assert "Applicants" in problem.detail
         env["capture"].assert_not_called()
-        # Clock still advances, so a broken sheet backs off to the interval.
-        env["field"].assert_called_once_with(GUILD_ID, "last_polled_at", NOW.isoformat())
 
     @pytest.mark.asyncio
-    async def test_notice_lists_the_tabs_that_do_exist(self):
-        """The rename is only obvious if you can see the current names."""
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        exc = gspread.exceptions.WorksheetNotFound("Form Responses 1")
-
-        with _env(read_exc=exc, tab_names=["Roster", "Form Responses 2"]):
-            await cog._poll_guild(_cfg(alliance_sheet_tab="Form Responses 1"), NOW)
-
-        text = _embed_text(_embeds(leadership_chan)[0])
-        assert "Form Responses 2" in text
-        assert "Roster" in text
-
-    @pytest.mark.asyncio
-    async def test_notice_survives_an_unlistable_spreadsheet(self):
-        """A deleted spreadsheet can't be listed either — send the notice
-        anyway, minus the hint."""
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-
-        with _env(read_exc=gspread.exceptions.WorksheetNotFound("Applicants")) as env:
-            with patch(
-                "transfer_sheets.list_tab_names", MagicMock(side_effect=RuntimeError("gone"))
-            ):
-                await cog._poll_guild(_cfg(), NOW)
-            assert len(_embeds(leadership_chan)) == 1
-            assert _saved(env["fields"])["sheet_error_signature"]
-
-    @pytest.mark.asyncio
-    async def test_no_leadership_channel_still_records_for_the_hub(self):
-        cog = _make_cog(_channel(), None)
-
+    async def test_notice_lists_the_tabs_that_do_exist(self, temp_db):
+        cog = _make_cog()
         with _env(
-            read_exc=gspread.exceptions.SpreadsheetNotFound(), leadership_channel_id=0
+            read_exc=gspread.exceptions.WorksheetNotFound("Applicants"),
+            tab_names=["Roster", "Applicants 2026"],
+        ):
+            await cog._poll_guild(_cfg(), NOW)
+
+        assert "`Applicants 2026`" in _stored(ALLIANCE_SUBJECT).detail
+
+    @pytest.mark.asyncio
+    async def test_tabs_are_listed_once_per_problem_not_once_per_poll(self, temp_db):
+        """The listing is a network round-trip. #413 paid it only when actually
+        posting; the equivalent here is only when the problem is new."""
+        cog = _make_cog()
+        with _env(
+            read_exc=gspread.exceptions.WorksheetNotFound("Applicants"), tab_names=["Roster"]
         ) as env:
             await cog._poll_guild(_cfg(), NOW)
-
-        saved = _saved(env["fields"])
-        assert saved["sheet_error_signature"] == transfer.sheet_error_signature(
-            "alliance", transfer_cog.MISSING_SHEET, "Applicants"
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_failure_still_records_so_it_does_not_retry_every_poll(self):
-        leadership_chan = _channel()
-        leadership_chan.send = AsyncMock(
-            side_effect=__import__("discord").Forbidden(MagicMock(status=403), "no perms")
-        )
-        cog = _make_cog(_channel(), leadership_chan)
-
-        with _env(read_exc=gspread.exceptions.WorksheetNotFound("Applicants")) as env:
+            await cog._poll_guild(_cfg(), NOW)
             await cog._poll_guild(_cfg(), NOW)
 
-        assert _saved(env["fields"])["sheet_error_notified_at"] == NOW.isoformat()
+        assert env["lister"].call_count == 1
 
-
-class TestPollAlertDedup:
     @pytest.mark.asyncio
-    async def test_same_problem_next_poll_stays_quiet(self):
-        """445 events became 1 post. This is the test that pins that."""
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        sig = transfer.sheet_error_signature("alliance", transfer_cog.MISSING_TAB, "Applicants")
-        already = _cfg(
-            sheet_error_signature=sig,
-            sheet_error_detail="stale detail",
-            sheet_error_notified_at=(NOW - timedelta(hours=1)).isoformat(),
-        )
-
+    async def test_unlistable_spreadsheet_still_records(self, temp_db):
+        cog = _make_cog()
         with _env(
-            read_exc=gspread.exceptions.WorksheetNotFound("Applicants"), stored=already
-        ) as env:
+            read_exc=gspread.exceptions.WorksheetNotFound("Applicants"),
+            list_exc=RuntimeError("gone"),
+        ):
             await cog._poll_guild(_cfg(), NOW)
 
-        leadership_chan.send.assert_not_called()
-        saved = _saved(env["fields"])
-        assert saved["sheet_error_signature"] == sig
-        assert "sheet_error_notified_at" not in saved  # quiet window preserved
+        assert _stored(ALLIANCE_SUBJECT) is not None
 
     @pytest.mark.asyncio
-    async def test_same_problem_renudges_the_next_day(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        sig = transfer.sheet_error_signature("alliance", transfer_cog.MISSING_TAB, "Applicants")
-        already = _cfg(
-            sheet_error_signature=sig,
-            sheet_error_notified_at=(NOW - timedelta(hours=25)).isoformat(),
-        )
-
-        with _env(read_exc=gspread.exceptions.WorksheetNotFound("Applicants"), stored=already):
+    async def test_rate_limit_records_nothing(self, temp_db):
+        cog = _make_cog()
+        with _env(read_exc=_api_error(429)):
             await cog._poll_guild(_cfg(), NOW)
 
-        assert len(_embeds(leadership_chan)) == 1
+        assert config_health.problems(GUILD_ID) == []
 
     @pytest.mark.asyncio
-    async def test_a_different_problem_posts_immediately(self):
-        """They fixed the tab name, but the sheet is now unshared. That's news."""
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        already = _cfg(
-            sheet_error_signature=transfer.sheet_error_signature(
-                "alliance", transfer_cog.MISSING_TAB, "Applicants"
-            ),
-            sheet_error_notified_at=(NOW - timedelta(minutes=5)).isoformat(),
-        )
-
-        with _env(read_exc=_api_error(403), stored=already) as env:
+    async def test_bot_bug_pages_sentry_and_records_nothing(self, temp_db):
+        cog = _make_cog()
+        with _env(read_exc=RuntimeError("boom")) as env:
             await cog._poll_guild(_cfg(), NOW)
 
-        assert len(_embeds(leadership_chan)) == 1
-        assert "Editor" in _embed_text(_embeds(leadership_chan)[0])
-        assert _saved(env["fields"])["sheet_error_signature"] == transfer.sheet_error_signature(
-            "alliance", transfer_cog.NO_ACCESS, "Applicants"
-        )
-
-
-class TestPollTransientAndBugs:
-    @pytest.mark.asyncio
-    async def test_rate_limit_does_not_alarm_the_alliance(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-
-        with _env(read_exc=_api_error(429)) as env:
-            await cog._poll_guild(_cfg(), NOW)
-
-        leadership_chan.send.assert_not_called()
-        env["capture"].assert_not_called()  # alliance-owned per #285/#286
-        env["fields"].assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_bot_bug_still_pages_sentry_and_posts_nothing(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-
-        with _env(read_exc=RuntimeError("real bug")) as env:
-            await cog._poll_guild(_cfg(), NOW)
-
-        leadership_chan.send.assert_not_called()
+        assert config_health.problems(GUILD_ID) == []
         env["capture"].assert_called_once()
-
-
-# ── Optional sources ─────────────────────────────────────────────────────────
 
 
 class TestSourceProblems:
     @pytest.mark.asyncio
-    async def test_broken_source_alerts_even_when_the_alliance_sheet_is_fine(self):
-        """The reported incident: the alliance sheet read fine, the intake
-        form's tab was the renamed one."""
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        exc = gspread.exceptions.WorksheetNotFound("Form Responses 1")
-        src_report = {
-            "copied": 0,
-            "enriched": 0,
-            "sources": [{"prefix": "alliance_form", "error": "missing tab", "exc": exc}],
-        }
-        cfg = _cfg(
-            alliance_form_enabled=1,
-            alliance_form_sheet_id="FORM_SHEET",
-            alliance_form_sheet_tab="Form Responses 1",
-        )
+    async def test_broken_source_records_even_when_the_alliance_sheet_is_fine(self, temp_db):
+        cog = _make_cog()
+        sources = [
+            {
+                "prefix": "alliance_form",
+                "exc": gspread.exceptions.WorksheetNotFound("Form Responses 1"),
+            }
+        ]
+        with _env(sources=sources):
+            await cog._poll_guild(_cfg(), NOW)
 
-        with _env(tab_names=["Form Responses 2"]) as env:
-            with patch("transfer_cog.copy_sources", AsyncMock(return_value=src_report)):
-                await cog._poll_guild(cfg, NOW)
+        assert _stored(FORM_SUBJECT) is not None
+        assert _stored(ALLIANCE_SUBJECT) is None
 
-        assert len(_embeds(leadership_chan)) == 1
-        text = _embed_text(_embeds(leadership_chan)[0])
-        assert "intake form" in text  # named in the alliance's terms
-        assert "Form Responses 2" in text
-        assert _saved(env["fields"])["sheet_error_signature"] == transfer.sheet_error_signature(
-            "alliance_form", transfer_cog.MISSING_TAB, "Form Responses 1"
-        )
+    @pytest.mark.asyncio
+    async def test_two_broken_sources_both_record(self, temp_db):
+        """Under #413's single notice slot the second stayed hidden until the
+        first was fixed."""
+        cog = _make_cog()
+        sources = [
+            {"prefix": "alliance_form", "exc": gspread.exceptions.WorksheetNotFound("Form")},
+            {"prefix": "server_wide", "exc": gspread.exceptions.SpreadsheetNotFound()},
+        ]
+        with _env(sources=sources):
+            await cog._poll_guild(_cfg(), NOW)
 
+        subjects = {p.subject for p in config_health.problems(GUILD_ID)}
+        assert subjects == {FORM_SUBJECT, "transfer.server_wide"}
 
-# ── Recovery ─────────────────────────────────────────────────────────────────
+    @pytest.mark.asyncio
+    async def test_fixing_one_source_does_not_silence_the_other(self, temp_db):
+        cog = _make_cog()
+        both = [
+            {"prefix": "alliance_form", "exc": gspread.exceptions.WorksheetNotFound("Form")},
+            {"prefix": "server_wide", "exc": gspread.exceptions.SpreadsheetNotFound()},
+        ]
+        with _env(sources=both):
+            await cog._poll_guild(_cfg(), NOW)
+        with _env(sources=both[:1]):
+            await cog._poll_guild(_cfg(), NOW)
+
+        subjects = {p.subject for p in config_health.problems(GUILD_ID)}
+        assert subjects == {FORM_SUBJECT}
 
 
 class TestRecovery:
     @pytest.mark.asyncio
-    async def test_clean_poll_after_a_problem_says_so_and_clears(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        broken = _cfg(
-            sheet_error_signature=transfer.sheet_error_signature(
-                "alliance", transfer_cog.MISSING_TAB, "Applicants"
-            ),
-            sheet_error_detail="That spreadsheet no longer has a tab named `Applicants`.",
-            sheet_error_notified_at=(NOW - timedelta(hours=2)).isoformat(),
-        )
-
-        with _env() as env:
-            await cog._poll_guild(broken, NOW)
-
-        recovery = [e for e in _embeds(leadership_chan) if "again" in (e.title or "")]
-        assert len(recovery) == 1
-        saved = _saved(env["fields"])
-        assert saved["sheet_error_signature"] == ""
-        assert saved["sheet_error_detail"] == ""
-        assert saved["sheet_error_notified_at"] == ""
-
-    @pytest.mark.asyncio
-    async def test_recovery_names_the_source_that_came_back(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-        broken = _cfg(
-            sheet_error_signature=transfer.sheet_error_signature(
-                "server_wide", transfer_cog.MISSING_TAB, "Transfers"
-            ),
-            sheet_error_notified_at=(NOW - timedelta(hours=2)).isoformat(),
-        )
+    async def test_clean_poll_clears_the_alliance_problem(self, temp_db):
+        cog = _make_cog()
+        with _env(read_exc=gspread.exceptions.WorksheetNotFound("Applicants")):
+            await cog._poll_guild(_cfg(), NOW)
+        assert _stored(ALLIANCE_SUBJECT) is not None
 
         with _env():
-            await cog._poll_guild(broken, NOW)
-
-        recovery = [e for e in _embeds(leadership_chan) if "again" in (e.title or "")]
-        assert "shared sheet" in _embed_text(recovery[0])
+            await cog._poll_guild(_cfg(), NOW)
+        assert _stored(ALLIANCE_SUBJECT) is None
 
     @pytest.mark.asyncio
-    async def test_healthy_poll_posts_no_recovery_noise(self):
-        leadership_chan = _channel()
-        cog = _make_cog(_channel(), leadership_chan)
-
-        with _env() as env:
+    async def test_healthy_poll_records_nothing(self, temp_db):
+        cog = _make_cog()
+        with _env():
             await cog._poll_guild(_cfg(), NOW)
+        assert config_health.problems(GUILD_ID) == []
 
-        leadership_chan.send.assert_not_called()
-        assert "sheet_error_signature" not in _saved(env["fields"])
+
+# ── Hub surface ──────────────────────────────────────────────────────────────
+
+
+class TestHubProblemField:
+    def _embed(self, guild_id):
+        import discord
+
+        embed = discord.Embed(title="t", color=discord.Color.blurple())
+        transfers_hub._add_sheet_problem_field(embed, guild_id)
+        return embed
+
+    def test_recorded_problem_is_visible_and_recoloured(self, temp_db):
+        """A channel post can be missed; the hub is where someone goes to ask
+        "is this working?"."""
+        import discord
+
+        config_health.record(
+            GUILD_ID, ALLIANCE_SUBJECT, transfer_cog.MISSING_TAB, "tab `Applicants` is gone"
+        )
+        embed = self._embed(GUILD_ID)
+        assert embed.color == discord.Color.red()
+        text = "\n".join(f"{f.name} {f.value}" for f in embed.fields)
+        assert "your transfer sheet" in text
+        assert "Applicants" in text
+        assert transfers_hub.SETUP_TRANSFERS_BTN in text
+
+    def test_healthy_config_adds_nothing(self, temp_db):
+        embed = self._embed(GUILD_ID)
+        assert embed.fields == []
+
+    def test_every_broken_sheet_shows_not_just_one(self, temp_db):
+        config_health.record(GUILD_ID, ALLIANCE_SUBJECT, transfer_cog.MISSING_TAB, "a")
+        config_health.record(GUILD_ID, FORM_SUBJECT, transfer_cog.MISSING_SHEET, "b")
+        assert len(self._embed(GUILD_ID).fields) == 2
+
+    def test_a_problem_without_detail_still_warns(self, temp_db):
+        config_health.record(GUILD_ID, ALLIANCE_SUBJECT, transfer_cog.NO_ACCESS, "")
+        text = "\n".join(f"{f.name} {f.value}" for f in self._embed(GUILD_ID).fields)
+        assert "your transfer sheet" in text
+        assert "permission" in text
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

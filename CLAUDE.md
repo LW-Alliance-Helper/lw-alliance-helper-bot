@@ -213,6 +213,39 @@ These are deliberate and tested. Don't refactor away:
 - Defaults live in `defaults.py` (or alongside the calling code as
   `DEFAULT_*` constants for storm).
 
+### Telling an alliance their config broke
+- A guild points the bot at things it owns (a Google Sheet, a Discord
+  channel) and those rot: a tab gets renamed, a spreadsheet gets
+  unshared, a channel gets deleted or the bot's role loses View
+  Channel. The feature then stops silently. `config_health.py` is the
+  one mechanism for saying so (#414/#379, generalized out of #413).
+- **Recording is a sync DB write at the failure site.**
+  `config_health.record(guild_id, subject, kind, detail)` on failure,
+  `config_health.clear(guild_id, subject)` on a clean read. No Discord
+  I/O, no async, safe to call every tick — `record` holds the quiet
+  window open for a repeat of the same problem. Never post from the
+  failure site.
+- **`config_health_cog` posts**, every 15 min, batching everything a
+  guild owes into one digest. That batching is the point: one channel
+  reorg can break several subjects, and six red posts read as six
+  emergencies.
+- **Register the subject at import time** in the module that owns it:
+  `config_health.register(Subject(key="feature.thing", label="…",
+  fix_hub=…, fix_btn=…))`. `label` is what the *alliance* calls it, and
+  the fix must name the surface that actually fixes that subject —
+  pointing a permissions failure at the setup wizard sends leadership
+  down a path that can't work.
+- **Never Sentry-capture config rot.** It's the alliance's to fix, and
+  capturing buries real bugs (the `config.is_user_config_sheet_error`
+  reasoning, #285/#286).
+- Expensive `detail` (a network round-trip to list a spreadsheet's real
+  tab names) goes behind `config_health.is_new_problem(...)` so it's
+  paid once per problem, not once per tick.
+- Pull surfaces read `config_health.problems(guild_id)` /
+  `problems_for_subjects(...)`. Detection is reactive, so a hub or
+  `/setup` screen that wants live truth about a *channel* should check
+  it on render rather than trusting stored rows alone.
+
 ### Schema migrations
 - Add ALTER TABLE entries to the for-loop in `init_db()`. Each in
   try/except so re-runs don't crash. Log `[CONFIG] Added X to Y` on
@@ -275,7 +308,9 @@ These are deliberate and tested. Don't refactor away:
   added in 1.6.7 (#285/#286) precisely so alliance-owned Sheet problems
   log-and-skip instead of paging. One alliance's renamed tab produced
   445 events in 9 days. #414 tracks the same shape in `train.py`,
-  `member_roster.py`, and `storm.py`.
+  `member_roster.py`, and `storm.py`, and #379 the channel equivalent;
+  both now build on `config_health.py` rather than reimplementing
+  #413's notice a second and third time.
 - Before closing a bug tied to one of these code-path shapes —
   scheduling/dedup ("did this already fire today"), permission
   checks, or server-vs-guild-local date resolution — grep the repo

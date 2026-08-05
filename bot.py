@@ -15,6 +15,7 @@ from scheduler import (
     is_friday,
 )
 from stats_publisher import publish_alliance_count
+from sentry_filter import before_send as sentry_before_send
 from zoneinfo import ZoneInfo
 from config import (
     init_db,
@@ -46,6 +47,10 @@ __version__ = "1.8.3"
 #   * send_default_pii=False — no Discord user IDs / IPs in events.
 #   * environment — read from $ENV (defaults to "production"); local dev
 #     should set ENV=development to keep dev errors out of prod alerts.
+#   * before_send — drops upstream failures nobody can fix from the code
+#     (see sentry_filter). Every high-priority event auto-files a GitHub
+#     issue, so unfixable events cost backlog attention, not just inbox
+#     space. Dropped events are still logged.
 # See docs/PREMIUM_SETUP.md / privacy.html "Data Sharing" for what data
 # this sends.
 _sentry_dsn = os.getenv("SENTRY_DSN")
@@ -56,6 +61,7 @@ if _sentry_dsn:
         environment=os.getenv("ENV", "production"),
         traces_sample_rate=0.0,
         send_default_pii=False,
+        before_send=sentry_before_send,
     )
     print(
         f"[INFO] Sentry initialised (env={os.getenv('ENV', 'production')}, release={__version__})"

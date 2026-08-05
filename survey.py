@@ -945,7 +945,30 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
         ephemeral=True,
     )
 
-    await run_survey(interaction.client, thread, interaction.user, survey=survey_cfg)
+    # A survey runs for as long as the member takes to answer it, and the
+    # thread can be deleted out from under it at any point — by an officer
+    # tidying up, by Discord's own thread cleanup, or by the member leaving.
+    # Every prompt, retry and timeout message in run_survey is a thread.send,
+    # so once the thread is gone the flow cannot do anything except stop
+    # (#432, reported as NotFound 10003 from the timeout branch of
+    # ask_numeric). Nothing has been written to the sheet at that point: the
+    # save happens only after the last answer.
+    #
+    # Caught at this boundary rather than at 20-odd send sites, because a
+    # vanished thread invalidates the whole run rather than any single
+    # message, and there is nobody left to tell either way.
+    try:
+        await run_survey(interaction.client, thread, interaction.user, survey=survey_cfg)
+    except discord.NotFound:
+        print(
+            f"[SURVEY] Thread {thread.id} disappeared mid-survey "
+            f"(guild={interaction.guild_id}, user={interaction.user.id}) — abandoning the run"
+        )
+    except discord.Forbidden:
+        print(
+            f"[SURVEY] Lost access to thread {thread.id} mid-survey "
+            f"(guild={interaction.guild_id}, user={interaction.user.id}) — abandoning the run"
+        )
 
 
 class SurveyButtonView(discord.ui.View):

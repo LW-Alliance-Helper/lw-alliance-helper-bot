@@ -447,13 +447,14 @@ def upsert_member_power(
         if col_name not in header_row:
             header_row.append(col_name)
             header_changed = True
+    prev_len = len(header_row)
+    id_idx = _identity_column(header_row)
+    header_changed = header_changed or len(header_row) != prev_len
     if header_changed:
         ws.update("A1", [header_row], value_input_option="USER_ENTERED")
 
-    name_to_row: dict[str, int] = {}
-    for i, row in enumerate(all_values[1:], start=2):
-        if row and row[0].strip():
-            name_to_row[row[0].strip().lower()] = i
+    identities = load_identity_map(guild_id)
+    id_to_row, name_to_row = build_row_maps(all_values[1:], id_idx, start=2)
 
     updates: list[dict] = []
     new_member_rows: list[list[str]] = []
@@ -466,14 +467,29 @@ def upsert_member_power(
         member_labels = [label for label in values if label in metric_labels]
         if not name or not member_labels:
             continue
-        row_idx = name_to_row.get(name.lower())
+        # MM sends the Discord ID alongside the OCR'd name (handoff §6.2), so
+        # prefer it outright and only fall back to resolving the name against
+        # the roster when the payload didn't carry one.
+        identity = str(m.get("discord_id") or "").strip() or identities.get(name.lower(), "")
+        row_idx = resolve_row(name, identity, id_to_row, name_to_row)
         if row_idx is None:
             # Reserve a row; the append is batched after the loop (#40 quota).
             new_row = [name] + [""] * (len(header_row) - 1)
+            if identity:
+                new_row[id_idx] = identity
             row_idx = len(all_values) + 1
             new_member_rows.append(new_row)
             all_values.append(new_row)
             name_to_row[name.lower()] = row_idx
+            if identity:
+                id_to_row[identity] = row_idx
+        elif identity:
+            existing = all_values[row_idx - 1] if row_idx - 1 < len(all_values) else []
+            if _row_identity(existing, id_idx) != identity:
+                updates.append({"range": f"{_col_letter(id_idx)}{row_idx}", "values": [[identity]]})
+            stored_name = existing[0].strip() if existing else ""
+            if stored_name and stored_name.lower() != name.lower():
+                updates.append({"range": f"A{row_idx}", "values": [[name]]})
         for label in member_labels:
             col_idx = header_row.index(f"{label} ({period})")
             updates.append(
@@ -577,6 +593,101 @@ def _col_index(letter: str) -> int | None:
     for ch in letter:
         idx = idx * 26 + (ord(ch) - ord("A") + 1)
     return idx - 1
+
+
+# ── Member identity across snapshots (#418) ──────────────────────────────────
+#
+# Growth rows used to be keyed on name alone, so a member who changed their
+# in-game name stopped matching their own history and got a second row: the old
+# name holding the last period, the new one holding the current period with no
+# baseline. The breakdown needs a previous value to compute a percentage, so
+# *both* halves silently fell out of every bucket.
+#
+# Same fix Train Conductor Rotation got in #305/#306: stamp a stable identity
+# on each row and match on that first, leaving the name as the fallback for
+# rows written before this shipped and for alliances that keep no ID column.
+
+ID_HEADER = "Discord ID"
+
+
+def _identity_column(header_row: list[str]) -> int:
+    """0-based index of the growth tab's identity column, appending the header
+    to `header_row` in place when it isn't there yet."""
+    if ID_HEADER not in header_row:
+        header_row.append(ID_HEADER)
+    return header_row.index(ID_HEADER)
+
+
+def _row_identity(row: list[str], id_idx: int) -> str:
+    return row[id_idx].strip() if 0 <= id_idx < len(row) else ""
+
+
+def _set_cell(row: list[str], idx: int, value: str) -> None:
+    """Write a cell into an in-memory row, padding short rows first.
+
+    Rows read back from a tab that predates a column are shorter than it. The
+    snapshot hands its `all_values` straight to the breakdown writer, so
+    keeping the in-memory copy in step with the queued writes keeps both
+    passes reading the same picture."""
+    if idx < 0:
+        return
+    if len(row) <= idx:
+        row.extend([""] * (idx + 1 - len(row)))
+    row[idx] = value
+
+
+def build_row_maps(
+    rows: list[list[str]], id_idx: int, start: int
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Index existing sheet rows by identity and by name.
+
+    `rows` is the data region (header already stripped); `start` is the sheet
+    row number of `rows[0]`. Later duplicates don't clobber earlier ones, so a
+    tab that already grew a duplicate row from this bug keeps resolving to the
+    first (older, baseline-carrying) one."""
+    id_to_row: dict[str, int] = {}
+    name_to_row: dict[str, int] = {}
+    for offset, row in enumerate(rows):
+        if not row or not row[0].strip():
+            continue
+        i = start + offset
+        name_to_row.setdefault(row[0].strip().lower(), i)
+        identity = _row_identity(row, id_idx)
+        if identity:
+            id_to_row.setdefault(identity, i)
+    return id_to_row, name_to_row
+
+
+def resolve_row(
+    name: str,
+    identity: str,
+    id_to_row: dict[str, int],
+    name_to_row: dict[str, int],
+) -> int | None:
+    """The sheet row for this member: identity first, name second.
+
+    Identity wins outright — that's what makes a rename survivable. Falling
+    through to the name covers rows written before identities were stamped and
+    alliances whose roster carries no IDs at all."""
+    if identity:
+        row_idx = id_to_row.get(identity)
+        if row_idx is not None:
+            return row_idx
+    return name_to_row.get(name.strip().lower())
+
+
+def load_identity_map(guild_id: int) -> dict[str, str]:
+    """Norm-name → stable identity for the alliance roster, or `{}`.
+
+    `{}` (unconfigured roster, unreadable sheet, or an empty ID column) means
+    every lookup misses and matching degrades to names, exactly as before."""
+    try:
+        from member_roster import roster_identity_map
+
+        return roster_identity_map(guild_id)
+    except Exception as e:
+        print(f"[GROWTH] Could not load roster identities for guild {guild_id}: {e}")
+        return {}
 
 
 # gspread's `get_all_values()` returns the *formatted* display string, so a
@@ -766,32 +877,52 @@ def _run_growth_snapshot_inner(guild_id: int = None):
             if new_header not in header_row:
                 header_row.append(new_header)
 
+        # Identity column, so a later rename still finds this row (#418).
+        id_idx = _identity_column(header_row)
+
         # Write updated header
         ws.update("A1", [header_row], value_input_option="USER_ENTERED")
 
-        # Build name → row index map
-        name_to_row = {}
-        for i, row in enumerate(all_values[1:], start=2):
-            if row and row[0].strip():
-                name_to_row[row[0].strip().lower()] = i
+        identities = load_identity_map(guild_id)
+        id_to_row, name_to_row = build_row_maps(all_values[1:], id_idx, start=2)
 
         # Write data rows
         updates = []
         new_member_rows = []
         for member in members:
             name = member["name"]
-            row_idx = name_to_row.get(name.lower())
+            identity = identities.get(name.strip().lower(), "")
+            row_idx = resolve_row(name, identity, id_to_row, name_to_row)
 
             if row_idx is None:
                 # Reserve a row for this new member; the actual sheet append is
                 # batched into one call after the loop so a roster of 60+ members
                 # doesn't exhaust the 60/min Sheets write quota (#40).
                 new_row = [name] + [""] * (len(header_row) - 1)
+                if identity:
+                    new_row[id_idx] = identity
                 row_idx = len(all_values) + 1
                 new_member_rows.append(new_row)
                 all_values.append(new_row)
                 name_to_row[name.lower()] = row_idx
+                if identity:
+                    id_to_row[identity] = row_idx
                 print(f"[GROWTH] New member added: {name}")
+            elif identity:
+                existing = all_values[row_idx - 1] if row_idx - 1 < len(all_values) else []
+                # Stamp the identity on rows that predate this column, and
+                # re-point the name cell when the row was found by identity but
+                # still carries the member's old name.
+                if _row_identity(existing, id_idx) != identity:
+                    updates.append(
+                        {"range": f"{_col_letter(id_idx)}{row_idx}", "values": [[identity]]}
+                    )
+                    _set_cell(existing, id_idx, identity)
+                stored_name = existing[0].strip() if existing else ""
+                if stored_name and stored_name.lower() != name.strip().lower():
+                    updates.append({"range": f"A{row_idx}", "values": [[name]]})
+                    _set_cell(existing, 0, name)
+                    print(f"[GROWTH] Member renamed: {stored_name} → {name}")
 
             # Write each metric value into its column
             for label in metric_labels:
@@ -932,11 +1063,22 @@ def _write_breakdown_for_snapshot(
         if col_name in growth_header:
             prev_idxs[m] = growth_header.index(col_name)
 
-    # Build name → prev-row index map on the growth tab pre-snapshot view.
-    growth_name_to_row = {}
-    for i, row in enumerate(all_values[1:], start=1):
-        if row and row[0].strip():
-            growth_name_to_row[row[0].strip().lower()] = row
+    # Baseline lookup on the growth tab's pre-snapshot view. Identity-first
+    # (#418) — a member who renamed this period carries their history on a row
+    # still filed under the old name, and that row holds the only baseline
+    # there is. Missing it is what silently dropped renamed members out of
+    # every bucket.
+    identities = load_identity_map(guild_id)
+    growth_id_idx = header_row.index(ID_HEADER) if ID_HEADER in header_row else -1
+    growth_rows_by_id: dict[str, list[str]] = {}
+    growth_rows_by_name: dict[str, list[str]] = {}
+    for row in all_values[1:]:
+        if not row or not row[0].strip():
+            continue
+        growth_rows_by_name.setdefault(row[0].strip().lower(), row)
+        identity = _row_identity(row, growth_id_idx)
+        if identity:
+            growth_rows_by_id.setdefault(identity, row)
 
     # Render labels (Premium override → fallback to defaults).
     label_overrides = gcfg.get("breakdown_labels") or {}
@@ -945,11 +1087,9 @@ def _write_breakdown_for_snapshot(
     def _label_for(bucket: str) -> str:
         return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
 
-    # Build name → row index on breakdown tab; new members append.
-    bd_name_to_row = {}
-    for i, row in enumerate(bd_existing[1:], start=2):
-        if row and row[0].strip():
-            bd_name_to_row[row[0].strip().lower()] = i
+    # Build identity/name → row index on breakdown tab; new members append.
+    bd_id_idx = _identity_column(bd_header)
+    bd_id_to_row, bd_name_to_row = build_row_maps(bd_existing[1:], bd_id_idx, start=2)
 
     appended_rows: list[list[str]] = []
     updates: list[dict] = []
@@ -964,13 +1104,31 @@ def _write_breakdown_for_snapshot(
 
     for member in members:
         name = member["name"]
-        prev_row = growth_name_to_row.get(name.lower())
-        bd_row_idx = bd_name_to_row.get(name.lower())
+        identity = identities.get(name.strip().lower(), "")
+        prev_row = None
+        if identity:
+            prev_row = growth_rows_by_id.get(identity)
+        if prev_row is None:
+            prev_row = growth_rows_by_name.get(name.lower())
+        bd_row_idx = resolve_row(name, identity, bd_id_to_row, bd_name_to_row)
         if bd_row_idx is None:
             new_row = [name] + [""] * (len(bd_header) - 1)
+            if identity:
+                new_row[bd_id_idx] = identity
             bd_row_idx = len(bd_existing) + len(appended_rows) + 1
             appended_rows.append(new_row)
             bd_name_to_row[name.lower()] = bd_row_idx
+            if identity:
+                bd_id_to_row[identity] = bd_row_idx
+        elif identity:
+            existing = bd_existing[bd_row_idx - 1] if bd_row_idx - 1 < len(bd_existing) else []
+            if _row_identity(existing, bd_id_idx) != identity:
+                updates.append(
+                    {"range": f"{_col_letter(bd_id_idx)}{bd_row_idx}", "values": [[identity]]}
+                )
+            stored_name = existing[0].strip() if existing else ""
+            if stored_name and stored_name.lower() != name.strip().lower():
+                updates.append({"range": f"A{bd_row_idx}", "values": [[name]]})
 
         for m in metric_labels:
             pct_col_name = f"{transition_prefix} {m} %"

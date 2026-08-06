@@ -17,9 +17,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+import config_health
 from config import get_config
 from messages import SETUP_POINTER_FOOTER
-from setup_hub import HUB_BTN_BIRTHDAYS
+from setup_hub import HUB_BTN_BIRTHDAYS, HUB_BTN_TRAIN
 from train import (
     ET,
     active_wizards,
@@ -64,6 +65,22 @@ def _render_dm_body(template: str, *, name: str = "") -> str:
 
 # Alias used inside slash commands so the `date` parameter name doesn't shadow it
 date_cls = date
+
+
+# #379: the daily reminder, the weekly rotation draft and the daily rotation
+# confirmation all post to the same configured channel (reminder_channel_id,
+# falling back to the leadership channel), so they share one subject. Three
+# notices for one broken channel would be three notices for one fix.
+TRAIN_REMINDER_CHANNEL_SUBJECT = "train.reminder_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=TRAIN_REMINDER_CHANNEL_SUBJECT,
+        label="your Train reminder channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_TRAIN,
+    )
+)
 
 
 def _pretty_day(iso: str) -> str:
@@ -671,13 +688,15 @@ class TrainCog(commands.Cog):
 
             # Get reminder channel — fall back to leadership channel
             channel_id = train_cfg.get("reminder_channel_id") or cfg.leadership_channel_id
-            channel = self.bot.get_channel(channel_id)
+            channel = config_health.resolve_configured_channel(
+                self.bot, guild.id, TRAIN_REMINDER_CHANNEL_SUBJECT, channel_id
+            )
             if channel is None:
-                # Marked fired so we don't retry every minute, but log the
-                # symptom — leadership won't notice "reminder stopped firing"
-                # unless we surface the channel-resolve failure here.
+                # Marked fired so we don't retry every minute. Recording it is
+                # what closes #379's gap: leadership won't notice "the reminder
+                # stopped firing", so the digest has to say so.
                 print(
-                    f"[TRAIN] Reminder channel {channel_id} not resolvable "
+                    f"[TRAIN] Reminder channel {channel_id} not usable "
                     f"for guild {guild.id} — daily reminder skipped"
                 )
                 self.reminders_fired.add(guild.id)
@@ -791,10 +810,12 @@ class TrainCog(commands.Cog):
             return
 
         channel_id = tcfg.get("reminder_channel_id") or cfg.leadership_channel_id
-        channel = self.bot.get_channel(channel_id)
+        channel = config_health.resolve_configured_channel(
+            self.bot, guild.id, TRAIN_REMINDER_CHANNEL_SUBJECT, channel_id
+        )
         if channel is None:
             print(
-                f"[TRAIN ROTATION] draft channel {channel_id} not resolvable for "
+                f"[TRAIN ROTATION] draft channel {channel_id} not usable for "
                 f"guild {guild.id} — weekly draft skipped"
             )
             mark_rotation_draft_fired(guild.id, today_iso)
@@ -861,10 +882,12 @@ class TrainCog(commands.Cog):
             return
 
         channel_id = tcfg.get("reminder_channel_id") or cfg.leadership_channel_id
-        channel = self.bot.get_channel(channel_id)
+        channel = config_health.resolve_configured_channel(
+            self.bot, guild.id, TRAIN_REMINDER_CHANNEL_SUBJECT, channel_id
+        )
         if channel is None:
             print(
-                f"[TRAIN ROTATION] confirm channel {channel_id} not resolvable for "
+                f"[TRAIN ROTATION] confirm channel {channel_id} not usable for "
                 f"guild {guild.id} — daily confirmation skipped"
             )
             return

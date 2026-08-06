@@ -16,6 +16,7 @@ from scheduler import (
 )
 from stats_publisher import publish_alliance_count
 from sentry_filter import before_send as sentry_before_send
+import config_health
 from zoneinfo import ZoneInfo
 from config import (
     init_db,
@@ -889,6 +890,23 @@ async def before_shiny_tasks_refresh_task():
 _SHINY_RETRY_COOLDOWN = timedelta(minutes=5)
 _shiny_last_attempt: dict[int, datetime] = {}
 
+# #379: the configured Shiny Tasks post channel, as a config-health subject.
+# Registered here because this loop is the only thing that reads it, and
+# bot.py's loops deliberately stayed in this module (#372).
+SHINY_POST_CHANNEL_SUBJECT = "shiny.post_channel"
+
+# Imported rather than duplicated so a rename of the hub button stays one line.
+from setup_hub import HUB_BTN_SHINY as _HUB_BTN_SHINY  # noqa: E402
+
+config_health.register(
+    config_health.Subject(
+        key=SHINY_POST_CHANNEL_SUBJECT,
+        label="your Daily Shiny Tasks channel",
+        fix_hub="/setup",
+        fix_btn=_HUB_BTN_SHINY,
+    )
+)
+
 
 @tasks.loop(minutes=1)
 async def shiny_tasks_post_task():
@@ -955,10 +973,17 @@ async def shiny_tasks_post_task():
                 # configured minute, or the loop somehow ran twice.
                 continue
 
-            channel = bot.get_channel(scfg.get("channel_id") or 0)
+            # #379: this is the branch that started the ticket. Several
+            # alliances had their configured channel go unreachable in a
+            # channel reorg, and the loop skipped them silently for days with
+            # nothing but this print. Now it also records, so the config-health
+            # digest tells leadership and the /setup screen shows it.
+            channel = config_health.resolve_configured_channel(
+                bot, gid, SHINY_POST_CHANNEL_SUBJECT, scfg.get("channel_id") or 0
+            )
             if channel is None:
                 print(
-                    f"[SHINY] Channel {scfg.get('channel_id')} not resolvable "
+                    f"[SHINY] Channel {scfg.get('channel_id')} not usable "
                     f"for guild {gid} — skipping post"
                 )
                 continue
@@ -1011,6 +1036,16 @@ async def shiny_tasks_post_task():
                     f"[SHINY] Missing send permission in channel "
                     f"{channel.id} ({getattr(channel, 'name', '?')}) "
                     f"for guild {gid}"
+                )
+                # The pre-flight said we could post, so the permission changed
+                # between the check and the send, or an overwrite the cache
+                # hadn't caught up on. Record it either way.
+                config_health.record(
+                    gid,
+                    SHINY_POST_CHANNEL_SUBJECT,
+                    config_health.CHANNEL_NO_SEND,
+                    "",
+                    discriminator=str(channel.id),
                 )
             except discord.HTTPException as e:
                 print(f"[SHINY] HTTP error posting for guild {gid}: {e}")

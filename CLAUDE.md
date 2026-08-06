@@ -245,6 +245,21 @@ These are deliberate and tested. Don't refactor away:
   `problems_for_subjects(...)`. Detection is reactive, so a hub or
   `/setup` screen that wants live truth about a *channel* should check
   it on render rather than trusting stored rows alone.
+- **Channels (#379):** a clock-driven post loop replaces its
+  `channel = bot.get_channel(id); if channel is None: continue` with
+  `config_health.resolve_configured_channel(bot, guild_id, subject, id)`,
+  which records/clears as a side effect and returns `None` unless the
+  bot can actually *post* there. `check_channel` is the cache-only
+  predicate behind it — free, no REST call, safe per-minute. It cannot
+  tell a deleted channel from one the bot lost View Channel on (the
+  gateway omits invisible channels from cache), so it reports
+  `CHANNEL_GONE` for both and the copy covers both causes;
+  `check_channel_precise` spends one REST call to separate them where a
+  human is waiting. Loops that already classify their own failure (the
+  storm sign-up scheduler's status dict) map straight to a kind instead.
+- Several loops sharing one configured channel share one subject — the
+  three train loops all post to `reminder_channel_id`, and three notices
+  for one broken channel would be three notices for one fix.
 
 ### Schema migrations
 - Add ALTER TABLE entries to the for-loop in `init_db()`. Each in

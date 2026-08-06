@@ -331,7 +331,11 @@ class TestScheduledReminderMultiGuildIsolation:
 
         sent_to: list[int] = []
 
-        async def fake_send(bot, gid, channel_id, body):
+        # **kwargs so this double survives the caller growing keyword-only
+        # arguments — the scheduled path now passes `health_subject` (#379),
+        # and a stale signature here fails as a TypeError for *every* guild,
+        # which looks exactly like the isolation bug this test exists to catch.
+        async def fake_send(bot, gid, channel_id, body, **kwargs):
             if gid == gid_a:
                 raise RuntimeError("A is down")
             sent_to.append(gid)

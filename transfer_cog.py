@@ -125,35 +125,10 @@ for _scope, _label in transfer.SHEET_SCOPE_LABELS.items():
     )
 
 
-def sheet_problem_kind(e: Exception) -> str | None:
-    """Which alliance-fixable problem this exception represents, or ``None``.
-
-    ``None`` covers everything the alliance can't act on: a rate limit (429,
-    which clears itself and would be a false alarm), a transient 5xx, or a bug
-    in the bot. Those still log and skip; they just don't raise an alarm in the
-    leadership channel.
-
-    Kept separate from ``config.is_user_config_sheet_error`` on purpose: that
-    answers "should Sentry care", which includes 429. This answers "should the
-    alliance be told", which does not.
-    """
-    import gspread
-
-    if isinstance(e, gspread.exceptions.WorksheetNotFound):
-        return MISSING_TAB
-    if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-        return MISSING_SHEET
-    if isinstance(e, gspread.exceptions.APIError):
-        status = None
-        resp = getattr(e, "response", None)
-        if resp is not None:
-            status = getattr(resp, "status_code", None)
-        status = status or getattr(e, "code", None)
-        if status == 404:
-            return MISSING_SHEET
-        if status == 403:
-            return NO_ACCESS
-    return None
+# Moved to config_health in #414, once train, the member roster and storm
+# needed the same classification. Re-exported so this module's own call sites
+# and their tests keep reading in transfer terms.
+sheet_problem_kind = config_health.sheet_problem_kind
 
 
 def _problem_reason(kind: str, tab: str, tabs_hint: str = "") -> str:

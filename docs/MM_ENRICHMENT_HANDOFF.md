@@ -51,6 +51,11 @@ is needed — just confirm against this behavior.
   unknown labels are ignored. Metrics/columns MM didn't send are never touched.
 - `rows` = members upserted; `written` = `rows > 0`. No-ops when growth isn't
   configured.
+- **Send `discord_id` whenever you have it.** It's the match key: a member who
+  renamed in-game since the last reading still lands on their existing row
+  (which carries their history), and the row's name cell is refreshed to the
+  new name. With `discord_id: null` we fall back to matching on `name`, and a
+  rename creates a second row that breaks the member's growth history (#418).
 - **MM note:** the keys in `values` must be the alliance's configured metric
   labels — the same ones `/sheet/growth` and `/sheet/roster` return. Pull them
   from the growth metric list; don't hardcode. (Writes always target the current

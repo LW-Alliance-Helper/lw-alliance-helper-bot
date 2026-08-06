@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import wizard_registry
 
+import config_health
 from config import get_config
 from messages import NOT_SET_UP
 
@@ -61,6 +62,48 @@ active_wizards: dict[int, asyncio.Event] = {}
 #   F: Prompt Retrieved (TRUE/FALSE)
 #
 # All reads/writes go through gspread using the same service account as the rest of the bot
+
+
+# ── Config-health reporting (#414) ───────────────────────────────────────────
+#
+# Every read and write below used to swallow a sheet failure into a print and
+# hand back an empty schedule, which reads to the caller as "nothing is
+# scheduled" rather than "I couldn't look". Nine days of that is what #413
+# cost the transfer watcher. These now record against config_health, which
+# tells leadership once, re-nudges daily, and confirms recovery.
+#
+# Recorded from *every* call path, not just the reminder loop. The interactive
+# ones look like they need no help because the user is right there, but the
+# empty-dict fallback means they see a blank schedule, not an error.
+
+TRAIN_SCHEDULE_SUBJECT = "train.schedule"
+
+config_health.register(
+    config_health.Subject(
+        key=TRAIN_SCHEDULE_SUBJECT,
+        label="your Train Schedule tab",
+        fix_hub="/setup",
+        fix_btn="🚂 Train",
+    )
+)
+
+
+def _train_tab_name(guild_id: int = None) -> str:
+    cfg = get_config(guild_id) if guild_id else None
+    return (cfg.tab_train_schedule if cfg else "") or "Train Schedule"
+
+
+def _note_train_sheet_error(e: Exception, guild_id: int = None) -> None:
+    """Record an alliance-fixable Train Schedule failure. No-op otherwise."""
+    config_health.record_sheet_failure(
+        guild_id, TRAIN_SCHEDULE_SUBJECT, e, tab=_train_tab_name(guild_id)
+    )
+
+
+def _note_train_sheet_ok(guild_id: int = None) -> None:
+    """A clean read or write is the recovery signal, from any call path."""
+    if guild_id:
+        config_health.clear(guild_id, TRAIN_SCHEDULE_SUBJECT)
 
 
 def _get_train_sheet(guild_id: int = None):
@@ -106,14 +149,16 @@ def load_schedule(guild_id: int = None) -> dict:
                 "notes": row[4].strip() if len(row) > 4 else "",
                 "prompt_retrieved": row[5].strip().upper() == "TRUE" if len(row) > 5 else False,
             }
+        _note_train_sheet_ok(guild_id)
         return schedule
     except Exception as e:
         from config import describe_sheet_error
 
         print(
             f"[TRAIN] Error loading schedule: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
+        _note_train_sheet_error(e, guild_id)
         return {}
 
 
@@ -145,13 +190,15 @@ def save_schedule(schedule: dict, guild_id: int = None):
 
         ws.update("A2", rows, value_input_option="USER_ENTERED")
         print(f"[TRAIN] Schedule saved to sheet ({len(rows)} entries)")
+        _note_train_sheet_ok(guild_id)
     except Exception as e:
         from config import describe_sheet_error
 
         print(
             f"[TRAIN] Error saving schedule: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
+        _note_train_sheet_error(e, guild_id)
 
 
 def mark_blurb_generated(date_str: str, guild_id: int = None):
@@ -159,6 +206,7 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
     try:
         ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
+        _note_train_sheet_ok(guild_id)
         for i, row in enumerate(rows[1:], start=2):
             if row and row[0].strip() == date_str:
                 ws.update(f"F{i}", [["TRUE"]], value_input_option="USER_ENTERED")
@@ -170,8 +218,9 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
 
         print(
             f"[TRAIN] Error marking blurb generated for {date_str}: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
+        _note_train_sheet_error(e, guild_id)
 
 
 def blurb_generated_today(guild_id: int = None) -> bool:
@@ -180,6 +229,7 @@ def blurb_generated_today(guild_id: int = None) -> bool:
         today = date.today().isoformat()
         ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
+        _note_train_sheet_ok(guild_id)
         for row in rows[1:]:
             if row and row[0].strip() == today:
                 return len(row) > 5 and row[5].strip().upper() == "TRUE"
@@ -189,8 +239,9 @@ def blurb_generated_today(guild_id: int = None) -> bool:
 
         print(
             f"[TRAIN] Error checking blurb log: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
+        _note_train_sheet_error(e, guild_id)
         return False
 
 
@@ -199,6 +250,7 @@ def load_blurb_log(guild_id: int = None) -> set:
     try:
         ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
+        _note_train_sheet_ok(guild_id)
         return {
             row[0].strip()
             for row in rows[1:]
@@ -209,8 +261,9 @@ def load_blurb_log(guild_id: int = None) -> set:
 
         print(
             f"[TRAIN] Error loading blurb log: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='Train Schedule')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
+        _note_train_sheet_error(e, guild_id)
         return set()
 
 

@@ -181,7 +181,8 @@ def test_upsert_power_updates_existing_and_appends(monkeypatch):
     # THP column (not sent) never added.
     assert {"range": "B2", "values": [[150]]} in ws.updates
     assert {"range": "B4", "values": [[50]]} in ws.updates
-    assert ws.appended == [["Cara", ""]]
+    # Trailing blank is the Discord ID column (#418); MM sent no ID for Cara.
+    assert ws.appended == [["Cara", "", ""]]
     assert all("THP" not in h for h in ws.values[0])
 
 
@@ -195,9 +196,40 @@ def test_upsert_power_creates_period_column_when_missing(monkeypatch):
         period_label="Jun 2026",
     )
     assert result == {"written": True, "rows": 1}
-    assert ("A1", [["Name", "Power (Jun 2026)"]]) in ws.header_updates
-    assert ws.appended == [["Ada", ""]]
+    assert ("A1", [["Name", "Power (Jun 2026)", "Discord ID"]]) in ws.header_updates
+    assert ws.appended == [["Ada", "", ""]]
     assert {"range": "B2", "values": [[100]]} in ws.updates
+
+
+def test_upsert_power_matches_on_the_discord_id_mm_sends(monkeypatch):
+    """A member who renamed in-game since the last reading still lands on their
+    own row, because MM sends the Discord ID alongside the OCR'd name (#418)."""
+    ws = FakeWS([["Name", "Power (Jun 2026)", "Discord ID"], ["Sylvia", "100", "111"]])
+    _patch_growth(monkeypatch, ws, _growth_cfg())
+
+    result = growth.upsert_member_power(
+        TEST_GUILD_ID,
+        [{"name": "SyIvia", "discord_id": "111", "values": {"Power": 150}}],
+        period_label="Jun 2026",
+    )
+    assert result == {"written": True, "rows": 1}
+    assert ws.appended == []
+    assert {"range": "B2", "values": [[150]]} in ws.updates
+    # Stale name cell refreshed to the current in-game name.
+    assert {"range": "A2", "values": [["SyIvia"]]} in ws.updates
+
+
+def test_upsert_power_stamps_the_id_on_a_row_that_predates_the_column(monkeypatch):
+    ws = FakeWS([["Name", "Power (Jun 2026)"], ["Ada", "100"]])
+    _patch_growth(monkeypatch, ws, _growth_cfg())
+
+    growth.upsert_member_power(
+        TEST_GUILD_ID,
+        [{"name": "Ada", "discord_id": "111", "values": {"Power": 150}}],
+        period_label="Jun 2026",
+    )
+    assert ws.appended == []
+    assert {"range": "C2", "values": [["111"]]} in ws.updates
 
 
 def test_upsert_power_not_configured_is_noop(monkeypatch):

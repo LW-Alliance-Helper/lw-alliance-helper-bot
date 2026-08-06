@@ -30,6 +30,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config_health
 import premium
 from config import (
     get_config,
@@ -49,6 +50,31 @@ logger = logging.getLogger(__name__)
 # Header for the bot-maintained presence column. Storm readers also
 # search this exact string — keep them in sync.
 DISCORD_FLAG_COLUMN_HEADER = "Is this user in Discord?"
+
+
+# ── Config-health reporting (#414) ───────────────────────────────────────────
+#
+# Auto-sync is the silent path: it fires on member-join/leave/role-change with
+# nobody watching, so a renamed roster tab used to stop the feature dead with
+# only a Railway log line to show for it. `/members sync` and the setup wizard
+# report inline, but they still clear a recorded problem on success — someone
+# who just fixed their sheet and re-ran the sync deserves the recovery notice.
+ROSTER_SHEET_SUBJECT = "roster.sheet"
+
+config_health.register(
+    config_health.Subject(
+        key=ROSTER_SHEET_SUBJECT,
+        label="your Member Roster tab",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_MEMBERS,
+    )
+)
+
+
+def _note_roster_sheet_ok(guild_id: int) -> None:
+    """A clean roster write is the recovery signal, from any call path."""
+    if guild_id:
+        config_health.clear(guild_id, ROSTER_SHEET_SUBJECT)
 
 
 # ── Sync logic (pure-ish; takes a guild and config) ───────────────────────────
@@ -246,6 +272,50 @@ def read_roster_members(guild_id: int) -> list[dict]:
         print(f"[ROSTER] Could not read roster for guild {guild_id}: {e}")
         return []
     return parse_roster_rows(rcfg, values)
+
+
+def roster_identity_map(guild_id: int) -> dict[str, str]:
+    """Norm-name → stable per-member identity, for every roster row that has one.
+
+    Used to key long-lived per-member sheet rows (growth snapshots, #418) on
+    something that survives an in-game name change, with the name left as the
+    fallback.
+
+    Deliberately looser than `parse_roster_rows`, which nulls any non-numeric
+    Discord-ID cell: here **any** non-empty cell counts. Alliances hand-maintain
+    that column with their own stable keys for members who aren't in Discord
+    (`no-disc-3` and the like), and those are exactly as good a join key as a
+    real snowflake as long as they don't get renumbered. Alliances that leave
+    the column empty simply get an empty map and stay on name matching.
+
+    Never raises — an unreadable or unconfigured roster yields `{}`."""
+    import config
+
+    try:
+        rcfg = config.get_member_roster_config(guild_id)
+        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
+    except Exception as e:
+        print(f"[ROSTER] Could not read roster identities for guild {guild_id}: {e}")
+        return {}
+
+    if not values or len(values) < 2:
+        return {}
+
+    did_col = int(rcfg.get("discord_id_col", 0))
+    name_col = int(rcfg.get("name_col", 1))
+    disp_col = int(rcfg.get("display_col", 2))
+
+    out: dict[str, str] = {}
+    for row in values[1:]:
+        identity = _roster_cell(row, did_col)
+        if not identity:
+            continue
+        # Both spellings map to the same identity: the growth tab may carry
+        # either, depending on which the source tab was pointed at.
+        for candidate in (_roster_cell(row, name_col), _roster_cell(row, disp_col)):
+            if candidate:
+                out.setdefault(candidate.strip().lower(), identity)
+    return out
 
 
 def add_ocr_members(guild_id: int, members: list[dict]) -> dict:
@@ -853,17 +923,28 @@ class MemberRosterCog(commands.Cog):
                 f"[ROSTER] Auto-sync failed: "
                 f"{describe_sheet_error(e, guild_id=guild.id, tab=cfg.get('tab_name'))}"
             )
-            # Auto-sync runs on every member-join/leave/role-change, so a
-            # transient error gets re-tried naturally. But unexpected bugs
-            # (template typos, schema drift) should land in Sentry instead
-            # of only stdout — the channel post path already logs, this
-            # surfaces non-Discord-API failures for triage.
+            # A sheet problem the alliance owns (renamed tab, unshared
+            # spreadsheet, revoked access) is theirs to fix, so it goes to
+            # them via config_health rather than to Sentry — capturing it
+            # buries real bugs under one guild's renamed tab (#285/#286,
+            # #414). This path is the silent one: auto-sync fires on
+            # member-join/leave/role-change with nobody watching, so before
+            # #414 a broken roster tab just stopped syncing forever.
+            if config_health.record_sheet_failure(
+                guild.id, ROSTER_SHEET_SUBJECT, e, tab=cfg.get("tab_name") or ""
+            ):
+                return
+            # Anything else (template typos, schema drift) is a bug and still
+            # pages, since a transient error re-tries naturally on the next
+            # member event.
             try:
                 import sentry_sdk
 
                 sentry_sdk.capture_exception(e)
             except Exception:
                 pass
+        else:
+            _note_roster_sheet_ok(guild.id)
 
     @members_group.command(
         name="overview",
@@ -1018,6 +1099,12 @@ class MemberRosterCog(commands.Cog):
                 f"[ROSTER] /members sync failed: "
                 f"{describe_sheet_error(e, guild_id=interaction.guild_id, tab=cfg['tab_name'])}"
             )
+            # Recorded as well as shown: the inline message is ephemeral and
+            # seen by one person, and if they walk away the feature is still
+            # broken with nobody else told.
+            config_health.record_sheet_failure(
+                interaction.guild_id, ROSTER_SHEET_SUBJECT, e, tab=cfg.get("tab_name") or ""
+            )
             await interaction.followup.send(
                 f"⚠️ Sync failed: {diagnosis}\nMake sure the bot has access to your sheet "
                 f"and that the **{cfg['tab_name']}** tab can be written to.",
@@ -1025,6 +1112,7 @@ class MemberRosterCog(commands.Cog):
             )
             return
 
+        _note_roster_sheet_ok(interaction.guild_id)
         await interaction.followup.send(
             f"✅ Synced {count} members to the {cfg['tab_name']} tab.",
             ephemeral=True,
@@ -1510,6 +1598,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             f"[ROSTER] /setup → 👥 Member Sync initial sync failed: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab=cfg['tab_name'])}"
         )
+        config_health.record_sheet_failure(
+            guild_id, ROSTER_SHEET_SUBJECT, e, tab=cfg.get("tab_name") or ""
+        )
         await channel.send(
             f"✅ Saved configuration but the initial sync failed: {diagnosis}\n"
             f"Try running `/members sync` once you've fixed the issue."
@@ -1517,6 +1608,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
 
+    _note_roster_sheet_ok(guild_id)
     embed = discord.Embed(
         title="✅ Member Roster Sync Configured",
         color=discord.Color.gold(),

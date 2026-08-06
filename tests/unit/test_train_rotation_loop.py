@@ -38,6 +38,24 @@ SUNDAY_6PM = datetime(2026, 6, 7, 18, 0, tzinfo=ET)  # 2026-06-07 is a Sunday
 MONDAY_6PM = datetime(2026, 6, 1, 18, 0, tzinfo=ET)  # 2026-06-01 is a Monday
 
 
+@pytest.fixture(autouse=True)
+def _no_config_health_db():
+    """Neutralise the #379 channel-health recording for these tests.
+
+    These exercise scheduling, not config health, and don't stand up a
+    database. `check_channel` is stubbed healthy alongside the writes because
+    the AsyncMock channels here return a coroutine from `permissions_for`,
+    which is harmless but noisy. Real permission logic lives in
+    test_config_health_channels.py.
+    """
+    with (
+        patch("config_health.record", MagicMock()),
+        patch("config_health.clear", MagicMock()),
+        patch("config_health.check_channel", MagicMock(return_value=None)),
+    ):
+        yield
+
+
 def _make_cog():
     import train_cog
 

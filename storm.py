@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import discord
+import config_health
 from config import get_config
 from messages import HUB_TIMEOUT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
@@ -132,6 +133,62 @@ def _get_spreadsheet(guild_id: int = None):
     return get_spreadsheet(guild_id)
 
 
+# ── Config-health reporting (#414) ───────────────────────────────────────────
+#
+# The sharpest of the three #414 shapes. A failed read here falls back to
+# defaults and returns normally, so nothing downstream can tell a broken sheet
+# from a healthy one. For DS that means empty zones, which reads as "nobody is
+# assigned yet". For CS it is worse: CS_DEFAULTS is populated, so a renamed tab
+# yields a full-looking zone layout that is not the alliance's, in a draft that
+# looks perfectly normal.
+#
+# Recorded from every call path for that reason. These sites are all
+# interactive, but "interactive" only helps when the user can tell something
+# went wrong, and here they cannot.
+#
+# DS and CS assignments share one tab (`cfg.tab_ds_assignments`), so they are
+# one subject: telling an alliance twice that the same tab is missing would be
+# two notices for one fix.
+STORM_ASSIGNMENTS_SUBJECT = "storm.assignments"
+
+config_health.register(
+    config_health.Subject(
+        key=STORM_ASSIGNMENTS_SUBJECT,
+        label="your DS/CS Assignments tab",
+        fix_hub=HUB_COMMAND,
+        fix_btn=HUB_BTN_DRAFT,
+    )
+)
+
+
+def _assignments_tab_name(guild_id: int = None) -> str:
+    cfg = get_config(guild_id) if guild_id else None
+    return (cfg.tab_ds_assignments if cfg else "") or "DS Assignments"
+
+
+def _note_assignments_error(e: Exception, guild_id: int = None) -> bool:
+    """Record an alliance-fixable assignments-sheet failure. ``True`` if recorded."""
+    return config_health.record_sheet_failure(
+        guild_id, STORM_ASSIGNMENTS_SUBJECT, e, tab=_assignments_tab_name(guild_id)
+    )
+
+
+def _note_assignments_ok(guild_id: int = None) -> None:
+    if guild_id:
+        config_health.clear(guild_id, STORM_ASSIGNMENTS_SUBJECT)
+
+
+def assignments_unreadable(guild_id: int = None) -> bool:
+    """Whether the assignments sheet is currently recorded as broken.
+
+    Lets the draft flows say "these are defaults because I couldn't read your
+    sheet" instead of silently presenting defaults as if they were saved.
+    """
+    if not guild_id:
+        return False
+    return bool(config_health.problems_for_subjects(guild_id, [STORM_ASSIGNMENTS_SUBJECT]))
+
+
 def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
     """
     Load saved DS assignments for the given team ("A" or "B").
@@ -187,6 +244,7 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
                 if name:
                     subs.append(name)
 
+        _note_assignments_ok(guild_id)
         if zones:
             print(f"[STORM] Loaded Team {team} assignments ({len(zones)} zones, {len(subs)} subs)")
             return zones, subs
@@ -200,8 +258,13 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
 
         print(
             f"[STORM] Error loading Team {team} assignments: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_assignments_tab_name(guild_id))}"
         )
+        # Still returns defaults so the draft flow keeps working, but the
+        # problem is now on record: `assignments_unreadable` lets the caller
+        # say these are defaults because the sheet couldn't be read, rather
+        # than presenting them as the alliance's saved assignments.
+        _note_assignments_error(e, guild_id)
         default_zones, default_subs = DEFAULTS[team]
         return dict(default_zones), list(default_subs)
 
@@ -253,14 +316,16 @@ def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None
         ws.clear()
         ws.update("A1", rows, value_input_option="USER_ENTERED")
         print(f"[STORM] Team {team} assignments saved ({len(zones)} zones, {len(subs)} sub pairs)")
+        _note_assignments_ok(guild_id)
 
     except Exception as e:
         from config import describe_sheet_error
 
         print(
             f"[STORM] Error saving Team {team} assignments: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_assignments_tab_name(guild_id))}"
         )
+        _note_assignments_error(e, guild_id)
 
 
 # ── Template builder & parser ──────────────────────────────────────────────────
@@ -920,6 +985,16 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
 
     await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
 
+    # Say so when the starting template isn't actually theirs (#414). Both
+    # loaders fall back silently, so without this the officer drafts on top of
+    # defaults believing they're editing last event's saved assignments.
+    if assignments_unreadable(interaction.guild_id):
+        await channel.send(
+            f"⚠️ I couldn't read your **{_assignments_tab_name(interaction.guild_id)}** tab, so "
+            f"this draft starts from defaults rather than your saved assignments. "
+            f"Anything you post will still save normally once the tab is readable again."
+        )
+
     # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
     if is_ds:
         await run_ds_draft_flow(bot, channel, interaction.user, team, zones, subs)
@@ -1093,6 +1168,7 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
                     zones[key] = _split_legacy_subs(raw) if raw else []
                 else:
                     zones[key] = raw
+        _note_assignments_ok(guild_id)
         if zones:
             print(f"[STORM] Loaded CS Team {team} assignments ({len(zones)} zones)")
             return zones
@@ -1104,8 +1180,9 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
 
         print(
             f"[STORM] Error loading CS Team {team} assignments: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_assignments_tab_name(guild_id))}"
         )
+        _note_assignments_error(e, guild_id)
         return dict(CS_DEFAULTS[team])
 
 
@@ -1154,13 +1231,15 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
         ws.clear()
         ws.update("A1", rows, value_input_option="USER_ENTERED")
         print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
+        _note_assignments_ok(guild_id)
     except Exception as e:
         from config import describe_sheet_error
 
         print(
             f"[STORM] Error saving CS Team {team} assignments: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=_assignments_tab_name(guild_id))}"
         )
+        _note_assignments_error(e, guild_id)
 
 
 # ── CS Template builder & parser ───────────────────────────────────────────────

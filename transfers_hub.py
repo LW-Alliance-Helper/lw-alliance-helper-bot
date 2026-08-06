@@ -15,6 +15,7 @@ import logging
 import discord
 
 import config
+import config_health
 import premium
 import transfer
 import transfer_sheets
@@ -43,7 +44,7 @@ _MODE_LABELS = {
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
 
-def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
+def _hub_embed(cfg: dict, configured: bool, guild_id: int = 0) -> discord.Embed:
     embed = discord.Embed(title="🔁 Transfer Management", color=discord.Color.blurple())
     if not configured:
         embed.description = (
@@ -80,12 +81,13 @@ def _hub_embed(cfg: dict, configured: bool) -> discord.Embed:
         extras.append("removal notices ✅")
     if extras:
         embed.add_field(name="Extras", value=" · ".join(extras), inline=False)
-    _add_sheet_problem_field(embed, cfg)
+    if guild_id:
+        _add_sheet_problem_field(embed, guild_id)
     embed.set_footer(text="Buttons below")
     return embed
 
 
-def _add_sheet_problem_field(embed: discord.Embed, cfg: dict) -> None:
+def _add_sheet_problem_field(embed: discord.Embed, guild_id: int) -> None:
     """Surface a stuck watcher on the hub (#413).
 
     The leadership-channel alert can be missed or scrolled past, and the hub is
@@ -94,27 +96,30 @@ def _add_sheet_problem_field(embed: discord.Embed, cfg: dict) -> None:
     Recolours the embed, because the status line above still says Active (the
     config *is* active; the sheet behind it is what's broken).
 
-    This is the status surface; the leadership-channel notice carries the
+    This is the status surface; the leadership notice carries the
     problem-specific fix steps. The action line here has to stay true for every
     problem kind, so it names both routes rather than assuming a re-pick.
+
+    Reads from config_health rather than the transfer config since #414 / #379,
+    so all three watched sheets can show at once instead of competing for one
+    slot.
     """
-    signature = (cfg.get("sheet_error_signature") or "").strip()
-    if not signature:
+    problems = config_health.problems_for_subjects(
+        guild_id, [f"transfer.{scope}" for scope in transfer.SHEET_SCOPE_LABELS]
+    )
+    if not problems:
         return
-    detail = (cfg.get("sheet_error_detail") or "").strip()
-    which = transfer.SHEET_SCOPE_LABELS.get(
-        transfer.sheet_error_scope(signature), "one of your transfer sheets"
-    )
     embed.color = discord.Color.red()
-    embed.add_field(
-        name=f"⚠️ Stopped: I can't read {which}",
-        value=(
-            f"{detail}\n\nNo applicants are being picked up until this is fixed. Sort it out "
-            f"on the spreadsheet, or click **{SETUP_TRANSFERS_BTN}** to point me somewhere "
-            "else."
-        ).strip()[:1024],
-        inline=False,
-    )
+    for problem in problems:
+        embed.add_field(
+            name=f"⚠️ Stopped: I can't read {problem.label}"[:256],
+            value=(
+                f"{config_health.describe(problem)}\n\nNo applicants are being picked up "
+                f"until this is fixed. Sort it out on the spreadsheet, or click "
+                f"**{SETUP_TRANSFERS_BTN}** to point me somewhere else."
+            ).strip()[:1024],
+            inline=False,
+        )
 
 
 def _check_report_embed(report: dict) -> discord.Embed:
@@ -314,7 +319,7 @@ async def handle_transfers_hub(bot, interaction: discord.Interaction) -> None:
 
     cfg = config.get_transfer_config(interaction.guild_id)
     configured = bool((cfg.get("alliance_sheet_id") or "").strip())
-    embed = _hub_embed(cfg, configured)
+    embed = _hub_embed(cfg, configured, interaction.guild_id)
     view = _TransfersHubView(bot, interaction.guild_id, interaction.user.id, configured=configured)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     view.message = await interaction.original_response()

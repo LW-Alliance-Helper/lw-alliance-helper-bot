@@ -22,13 +22,16 @@ configures it.
 When a poll can't read a sheet the alliance controls (a renamed or deleted
 tab, a deleted spreadsheet, revoked service-account access), the watcher used
 to log, capture to Sentry, and go quiet — leaving the feature dead for days
-with nobody told (#413). Those errors now post one leadership-channel notice
-naming what broke and how to fix it, deduplicated by
-``transfer.sheet_error_signature`` with a daily re-nudge, surfaced on the
-`/transfers` hub, and cleared with a recovery line on the first clean read.
-They're also classified through ``config.is_user_config_sheet_error`` so an
-alliance's own Sheet misconfiguration no longer pages Sentry (the #285 / #286
-treatment, which this loop never adopted).
+with nobody told (#413). Those failures are now recorded through
+``config_health``, which posts one leadership notice naming what broke and how
+to fix it, re-nudges daily, surfaces on the `/transfers` hub, and confirms
+recovery on the first clean read. This feature prototyped that notice; #414 /
+#379 generalized it so every feature whose config can rot shares one
+mechanism, and what stays here is the gspread-specific classification plus the
+tab-list hint. They're also classified through
+``config.is_user_config_sheet_error`` so an alliance's own Sheet
+misconfiguration no longer pages Sentry (the #285 / #286 treatment, which this
+loop never adopted).
 """
 
 from __future__ import annotations
@@ -43,10 +46,12 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
+import config_health
 import premium
 import transfer
 import transfer_sheets
 import wizard_registry
+from transfers_hub import SETUP_TRANSFERS_BTN, TRANSFERS_HUB_CMD
 
 try:
     import sentry_sdk
@@ -90,60 +95,62 @@ def _capture_unless_alliance_owned(e: Exception, gid, where: str) -> None:
         _capture(e)
 
 
-# ── Stuck-watcher notices (#413) ──────────────────────────────────────────────
+# ── Stuck-watcher notices (#413, generalized in #414 / #379) ─────────────────
+#
+# The notice shape this feature pioneered now lives in config_health, shared
+# with every other feature whose config can rot. What stays here is the part
+# that is genuinely transfer-specific: classifying a gspread exception, and
+# the tab-list hint that makes a rename obvious on sight.
 
-_STUCK_TITLE = "⚠️ Transfer watch is stuck"
-_RECOVERED_TITLE = "✅ Transfer watch is working again"
-
-# Problem kinds worth telling the alliance about: durable, and theirs to fix.
-MISSING_TAB = "missing_tab"
-MISSING_SHEET = "missing_sheet"
-NO_ACCESS = "no_access"
-
-
-def sheet_problem_kind(e: Exception) -> str | None:
-    """Which alliance-fixable problem this exception represents, or ``None``.
-
-    ``None`` covers everything the alliance can't act on: a rate limit (429,
-    which clears itself and would be a false alarm), a transient 5xx, or a bug
-    in the bot. Those still log and skip; they just don't raise an alarm in the
-    leadership channel.
-
-    Kept separate from ``config.is_user_config_sheet_error`` on purpose: that
-    answers "should Sentry care", which includes 429. This answers "should the
-    alliance be told", which does not.
-    """
-    import gspread
-
-    if isinstance(e, gspread.exceptions.WorksheetNotFound):
-        return MISSING_TAB
-    if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-        return MISSING_SHEET
-    if isinstance(e, gspread.exceptions.APIError):
-        status = None
-        resp = getattr(e, "response", None)
-        if resp is not None:
-            status = getattr(resp, "status_code", None)
-        status = status or getattr(e, "code", None)
-        if status == 404:
-            return MISSING_SHEET
-        if status == 403:
-            return NO_ACCESS
-    return None
+# Kind constants re-exported so the classification below and its tests keep
+# reading in transfer terms.
+MISSING_TAB = config_health.MISSING_TAB
+MISSING_SHEET = config_health.MISSING_SHEET
+NO_ACCESS = config_health.NO_ACCESS
 
 
-def _problem_reason(kind: str, tab: str) -> str:
+def _subject_for(scope: str) -> str:
+    """The config_health subject key for one of the three watched sheets."""
+    return f"transfer.{scope}"
+
+
+for _scope, _label in transfer.SHEET_SCOPE_LABELS.items():
+    config_health.register(
+        config_health.Subject(
+            key=_subject_for(_scope),
+            label=_label,
+            fix_hub=TRANSFERS_HUB_CMD,
+            fix_btn=SETUP_TRANSFERS_BTN,
+        )
+    )
+
+
+# Moved to config_health in #414, once train, the member roster and storm
+# needed the same classification. Re-exported so this module's own call sites
+# and their tests keep reading in transfer terms.
+sheet_problem_kind = config_health.sheet_problem_kind
+
+
+def _problem_reason(kind: str, tab: str, tabs_hint: str = "") -> str:
     """Plain-language "what's wrong" line for a notice.
 
     Written for leadership, not for a log: ``config.describe_sheet_error`` is
     the log-side diagnosis and points at the wrong command for this feature.
+
+    More specific than config_health's generic per-kind copy, which is why it
+    is passed in as the problem's ``detail`` rather than left to the default:
+    naming the tab, and listing the tabs the spreadsheet actually has, is what
+    turns "the watcher is stuck" into a rename anyone can spot on sight.
     """
     if kind == MISSING_TAB:
         named = f"a tab named `{tab}`" if tab else "the tab I was told to watch"
-        return (
+        reason = (
             f"That spreadsheet no longer has {named}. It was most likely renamed, "
             "or the tab was deleted."
         )
+        if tabs_hint:
+            reason += f"\n\nTabs on that spreadsheet right now: {tabs_hint}"
+        return reason
     if kind == MISSING_SHEET:
         return (
             "I can't open that spreadsheet at all. It may have been deleted, moved to a "
@@ -174,169 +181,58 @@ def _existing_tabs_hint(sheet_id: str) -> str:
     return ", ".join(f"`{n}`" for n in names[:20])
 
 
-def _fix_instruction(kind: str) -> str:
-    """The "How to fix it" line, matched to the problem.
-
-    A permissions failure isn't fixed by re-picking the sheet, so pointing at
-    setup for a 403 would send leadership down the wrong path.
-    """
-    from transfers_hub import SETUP_TRANSFERS_BTN, TRANSFERS_HUB_CMD
-
-    keep_checking = (
-        " I'll keep checking on every poll and post here as soon as I can read it again."
-    )
-    if kind == NO_ACCESS:
-        return (
-            "In Google Sheets, use **Share** to give the bot's service account Editor access "
-            f"to that spreadsheet. If you'd rather point at a different sheet, run "
-            f"{TRANSFERS_HUB_CMD} and click **{SETUP_TRANSFERS_BTN}**." + keep_checking
-        )
-    if kind == MISSING_TAB:
-        return (
-            f"Either rename the tab back, or run {TRANSFERS_HUB_CMD}, click "
-            f"**{SETUP_TRANSFERS_BTN}**, and pick the tab's new name." + keep_checking
-        )
-    return (
-        f"Run {TRANSFERS_HUB_CMD}, click **{SETUP_TRANSFERS_BTN}**, and re-pick the "
-        "spreadsheet." + keep_checking
-    )
-
-
-def _stuck_embed(scope: str, kind: str, reason: str, tabs_hint: str) -> discord.Embed:
-    """The leadership-channel notice for a watcher blocked on a sheet problem.
-
-    Names the sheet in the alliance's own terms, says what's wrong in plain
-    language, and gives the fix that actually applies.
-    """
-    which = transfer.SHEET_SCOPE_LABELS.get(scope, "one of your transfer sheets")
-    embed = discord.Embed(
-        title=_STUCK_TITLE,
-        description=(
-            f"I can't read {which}, so transfer notifications have stopped. "
-            "New applicants aren't being picked up until this is sorted out."
-        ),
-        color=discord.Color.red(),
-    )
-    embed.add_field(name="What's wrong", value=reason[:1024], inline=False)
-    if tabs_hint:
-        embed.add_field(
-            name="Tabs on that spreadsheet right now",
-            value=tabs_hint[:1024],
-            inline=False,
-        )
-    embed.add_field(name="How to fix it", value=_fix_instruction(kind)[:1024], inline=False)
-    return embed
-
-
-def _leadership_channel(bot, gid: int):
-    """The guild's configured leadership channel, or ``None``.
-
-    Sheet problems go here rather than to the transfer notification channel:
-    they're an admin task for whoever runs setup, not a recruiting notice.
-    """
-    cfg = config.get_config(gid)
-    channel_id = getattr(cfg, "leadership_channel_id", 0) or 0 if cfg else 0
-    if not channel_id:
-        return None
-    return bot.get_channel(channel_id)
-
-
 async def note_sheet_problem(
     bot, gid: int, scope: str, tab: str, sheet_id: str, e: Exception, now: datetime
 ):
-    """Record an alliance-fixable sheet failure and tell leadership, once.
+    """Record an alliance-fixable sheet failure for the config-health notifier.
 
     Called from the poll loop only: the wizard and the hub's Check now already
     report read failures inline, where the user is looking. No-op for problems
     the alliance can't act on (see :func:`sheet_problem_kind`).
 
-    Stores the problem signature so a failure that repeats every poll posts
-    once and then goes quiet, re-nudging daily until it's fixed. A failed send
-    still records the signature, so a broken leadership channel can't turn this
-    into a post-attempt-every-poll loop. ``now`` is the poll's clock, passed in
-    so the quiet window is measured against the same instant the poll stamped.
+    No Discord I/O here any more. The notifier owns posting, which is what lets
+    a guild whose reorg broke several things get one digest instead of one
+    embed per subject. Safe to call on every poll: ``record`` holds the quiet
+    window open for a repeat of the same problem.
+
+    The tab-list hint is the one expensive bit, so it is fetched only when the
+    problem is actually new, preserving #413's one-round-trip-per-problem
+    behaviour rather than paying it on every poll. It is also skipped unless a
+    rename is the plausible cause: if the whole spreadsheet is unreachable,
+    listing its tabs would fail too.
     """
     kind = sheet_problem_kind(e)
     if kind is None:
         return
-    reason = _problem_reason(kind, tab)
-    signature = transfer.sheet_error_signature(scope, kind, tab)
-    cfg = config.get_transfer_config(gid)
-    notify = transfer.should_notify_sheet_error(
-        cfg.get("sheet_error_signature") or "",
-        cfg.get("sheet_error_notified_at") or "",
-        signature,
-        now,
-    )
-    if not notify:
-        # Same problem, still inside its quiet window. Keep the stored reason
-        # fresh (the hub renders it) but don't post again.
-        config.update_transfer_config_fields(
-            gid, sheet_error_signature=signature, sheet_error_detail=reason
-        )
-        return
-
-    channel = _leadership_channel(bot, gid)
-    if channel is None:
-        logger.info(
-            "[TRANSFER] guild %s: watcher stuck (%s) but no resolvable leadership channel; "
-            "the /transfers hub will still show it",
-            gid,
-            signature,
-        )
-    else:
-        # Only worth a round-trip when a rename is the likely cause; if the
-        # whole spreadsheet is unreachable, listing its tabs would fail too.
-        tabs_hint = ""
-        if kind == MISSING_TAB and sheet_id:
-            tabs_hint = await asyncio.to_thread(_existing_tabs_hint, sheet_id)
-        try:
-            await channel.send(embed=_stuck_embed(scope, kind, reason, tabs_hint))
-        except (discord.Forbidden, discord.HTTPException) as send_err:
-            logger.warning(
-                "[TRANSFER] guild %s: could not post stuck-watcher notice: %s", gid, send_err
-            )
-
-    config.update_transfer_config_fields(
+    subject = _subject_for(scope)
+    tabs_hint = ""
+    if (
+        kind == MISSING_TAB
+        and sheet_id
+        and config_health.is_new_problem(gid, subject, kind, discriminator=tab)
+    ):
+        tabs_hint = await asyncio.to_thread(_existing_tabs_hint, sheet_id)
+    config_health.record(
         gid,
-        sheet_error_signature=signature,
-        sheet_error_detail=reason,
-        sheet_error_notified_at=now.isoformat(),
+        subject,
+        kind,
+        _problem_reason(kind, tab, tabs_hint),
+        discriminator=tab,
+        now=now,
     )
 
 
-async def clear_sheet_problem(bot, gid: int, cfg: dict) -> None:
-    """Clear a recorded sheet problem after a clean poll, and say so.
+def clear_sheet_problem(gid: int, scope: str = "") -> None:
+    """Mark the watched sheets healthy after a clean poll.
 
-    The recovery line matters: the alliance was told the watcher was dead, went
-    and changed something, and needs to know whether it worked. No-op when
-    nothing was recorded, which is the overwhelmingly common case, so a healthy
-    guild's poll costs one dict lookup.
+    Clears every scope by default, because a clean alliance-sheet read is the
+    signal that the poll got all the way through. The notifier turns whatever
+    was outstanding into a single recovery line; the alliance was told the
+    watcher was dead and needs to know their fix took.
     """
-    signature = cfg.get("sheet_error_signature") or ""
-    if not signature:
-        return
-    which = transfer.SHEET_SCOPE_LABELS.get(
-        transfer.sheet_error_scope(signature), "your transfer sheets"
-    )
-    channel = _leadership_channel(bot, gid)
-    if channel is not None:
-        try:
-            await channel.send(
-                embed=discord.Embed(
-                    title=_RECOVERED_TITLE,
-                    description=(
-                        f"I can read {which} again. Back to watching for new applicants "
-                        "and status changes."
-                    ),
-                    color=discord.Color.green(),
-                )
-            )
-        except (discord.Forbidden, discord.HTTPException) as e:
-            logger.warning("[TRANSFER] guild %s: could not post recovery notice: %s", gid, e)
-    config.update_transfer_config_fields(
-        gid, sheet_error_signature="", sheet_error_detail="", sheet_error_notified_at=""
-    )
+    scopes = [scope] if scope else list(transfer.SHEET_SCOPE_LABELS)
+    for s in scopes:
+        config_health.clear(gid, _subject_for(s))
 
 
 def _display_status_value(value) -> str:
@@ -805,16 +701,17 @@ class TransferCog(commands.Cog):
         # Optional source pulls (server-wide / intake form): copy matching whole
         # rows into the alliance sheet, aligned to its columns and deduped across
         # polls, then re-read so the copied rows surface as new applicants now.
-        source_problem = None
+        source_problems: list[tuple[str, Exception]] = []
         try:
             src_report = await copy_sources(cfg, header)
             copied = src_report["copied"]
-            # First broken source wins the one notice slot; a second one gets
-            # reported after this one is fixed. Two simultaneously-broken
-            # sources is rare, and one clear alert beats two competing ones.
-            source_problem = next(
-                ((s["prefix"], s["exc"]) for s in src_report["sources"] if s.get("exc")), None
-            )
+            # Every broken source gets recorded, not just the first. Under
+            # #413's single notice slot a second broken source stayed hidden
+            # until the first was fixed; per-subject rows mean both can be
+            # reported, and the digest still renders them as one post.
+            source_problems = [
+                (s["prefix"], s["exc"]) for s in src_report["sources"] if s.get("exc")
+            ]
         except Exception as e:  # noqa: BLE001
             _capture_unless_alliance_owned(e, gid, "source copy failed")
             copied = 0
@@ -826,10 +723,12 @@ class TransferCog(commands.Cog):
             except Exception as e:  # noqa: BLE001
                 _capture_unless_alliance_owned(e, gid, "re-read after copy failed")
 
-        # The alliance sheet read cleanly. Either a source is still broken, or
-        # everything works and any recorded problem is over.
-        if source_problem is not None:
-            prefix, exc = source_problem
+        # The alliance sheet read cleanly, so that scope is healthy either way.
+        # Each source clears or records on its own, so fixing one doesn't
+        # silence a notice about the other.
+        clear_sheet_problem(gid, "alliance")
+        broken_scopes = {prefix for prefix, _ in source_problems}
+        for prefix, exc in source_problems:
             await note_sheet_problem(
                 self.bot,
                 gid,
@@ -839,8 +738,9 @@ class TransferCog(commands.Cog):
                 exc,
                 now,
             )
-        else:
-            await clear_sheet_problem(self.bot, gid, cfg)
+        for scope in transfer.SHEET_SCOPE_LABELS:
+            if scope != "alliance" and scope not in broken_scopes:
+                clear_sheet_problem(gid, scope)
 
         hidx = transfer.header_index(header)
         diff = transfer.compute_poll_diff(
@@ -915,7 +815,7 @@ class TransferCog(commands.Cog):
 
         # Reading cleanly here is as good a recovery signal as a poll: someone
         # who just fixed their sheet clicks Check now to confirm it.
-        await clear_sheet_problem(self.bot, gid, cfg)
+        clear_sheet_problem(gid, "alliance")
 
         try:
             src_report = await copy_sources(cfg, header)

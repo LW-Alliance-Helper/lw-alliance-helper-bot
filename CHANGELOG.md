@@ -9,6 +9,23 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.3] — 2026-08-05
+
+### Added
+- The bot now tells your leadership channel when something it was told to use has stopped working, whether that's a renamed sheet tab, a spreadsheet it can no longer open, or a channel it can't post in, so a feature can't go quiet for days without anyone noticing ([#433](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/433)).
+- Failures reading your Train Schedule, Member Roster, and DS/CS Assignments tabs are reported that way, instead of the feature quietly doing nothing ([#414](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/414)).
+- Scheduled posts that can't reach their channel now say so, covering Daily Shiny Tasks, train reminders, the weekly rotation draft and daily confirmation, survey reminders, and storm sign-up ([#379](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/379)).
+- `/setup` → 🗂️ View configuration marks any channel the bot can no longer post in, so you can check your whole setup at a glance ([#379](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/379)).
+
+### Fixed
+- Growth tracking keeps a member's history when they change their in-game name, instead of starting them over as a new person ([#418](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/418)).
+- A survey no longer breaks when its private thread is deleted while someone is part-way through answering ([#432](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/432)).
+- The DS/CS draft now warns you when it started from default assignments because your sheet couldn't be read, rather than presenting them as your saved ones ([#414](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/414)).
+- The alliance-count badge on the website survives a GitHub hiccup instead of skipping that day's update ([#382](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/382)).
+
+### Changed
+- Error reporting ignores Discord and GitHub outages and bad-token restarts, so real bugs surface faster ([#377](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/377), [#378](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/378), [#416](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/416)).
+
 ## [1.8.2] — 2026-08-03
 
 ### Added

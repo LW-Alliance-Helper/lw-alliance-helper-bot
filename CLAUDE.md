@@ -87,6 +87,14 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   write the CHANGELOG entry on the release branch right before
   opening the PR to main, not on individual feature branches. Sentry
   reads `__version__` for release tagging — keep it accurate.
+- **Release-branch PR is titled `Release X.Y.Z`.** Plain, no
+  conventional-commit prefix — a `chore(release):` title makes the one
+  PR that ships to production read like a dependency bump in the PR
+  list. An optional short suffix is fine on a headline release
+  (`Release 1.6.0: Transfer Management`, `Release 1.5.0 — Train
+  Conductor Rotation + Profession Buddy System`); recent patch releases
+  are plain. Note the *commit* on the release branch is the opposite:
+  it does use `chore(release): X.Y.Z - <summary>`.
 - **Release-branch PR description is the slim CHANGELOG entry.** When
   opening `release/X.Y.Z` → `main`, paste the CHANGELOG section for
   that version into the PR body (plus a short "Closes #…" footer for

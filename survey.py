@@ -167,6 +167,68 @@ def _get_spreadsheet(guild_id: int = None):
     return get_spreadsheet(guild_id)
 
 
+def survey_question_keys_and_labels(questions: list) -> tuple[list[str], list[str]]:
+    """Split a question list into the keys answers are stored under and the
+    column labels those answers are written beneath."""
+    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+    return q_keys, q_labels
+
+
+def survey_header_rows(questions: list) -> tuple[list[str], list[str]]:
+    """Row 1 for a survey's two tabs: (current answers, submission history).
+
+    One definition shared by the wizard, which seeds these the moment a
+    survey is saved, and the two write paths, which still fall back to
+    writing them if they find a blank tab.
+    """
+    _, q_labels = survey_question_keys_and_labels(questions)
+    return (
+        ["Username", "Discord ID"] + q_labels + ["Date Modified"],
+        ["Timestamp", "Discord ID", "Username"] + q_labels,
+    )
+
+
+def seed_survey_headers(
+    guild_id: int, *, tab_responses: str, tab_history: str, questions: list
+) -> list[str]:
+    """Label both of a survey's tabs as soon as the survey is saved.
+
+    Without this the tabs sit blank until the first member submits, and
+    an alliance opening their sheet in the meantime has two untitled
+    tabs to guess at — easy to start typing roster data into by hand,
+    under no headers, in the wrong columns.
+
+    Only writes a tab whose row 1 is still empty, so re-running the
+    wizard never relabels columns that existing rows were written
+    under. Returns the tabs actually seeded, for the wizard to report.
+    """
+    from config import get_or_create_worksheet
+
+    sh = _get_spreadsheet(guild_id)
+    responses_header, history_header = survey_header_rows(questions)
+    seeded: list[str] = []
+
+    for tab_name, header, add_filter in (
+        (tab_responses, responses_header, False),
+        (tab_history, history_header, True),
+    ):
+        if not tab_name:
+            continue
+        ws = get_or_create_worksheet(sh, tab_name)
+        if any(ws.row_values(1)):
+            continue
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        if add_filter:
+            try:
+                ws.set_basic_filter()
+            except Exception:
+                pass
+        seeded.append(tab_name)
+
+    return seeded
+
+
 def update_squad_powers(
     discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
 ):
@@ -194,12 +256,13 @@ def update_squad_powers(
 
     _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year}"
-    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
-    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+    q_keys, _ = survey_question_keys_and_labels(questions)
 
-    # Ensure header row exists
+    # The wizard seeds this when the survey is saved. Still handled here
+    # for surveys configured before it did, and for a tab recreated after
+    # someone deleted it.
     if not rows or not any(rows[0]):
-        header = ["Username", "Discord ID"] + q_labels + ["Date Modified"]
+        header, _unused = survey_header_rows(questions)
         ws.update("A1", [header], value_input_option="USER_ENTERED")
         rows = ws.get_all_values()
 
@@ -233,12 +296,11 @@ def append_survey_history(
     )
     ws = get_or_create_worksheet(sh, tab_name)
 
-    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
-    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+    q_keys, _ = survey_question_keys_and_labels(questions)
 
     existing = ws.row_values(1)
     if not any(existing):
-        header = ["Timestamp", "Discord ID", "Username"] + q_labels
+        _unused, header = survey_header_rows(questions)
         ws.update("A1", [header], value_input_option="USER_ENTERED")
         try:
             ws.set_basic_filter()

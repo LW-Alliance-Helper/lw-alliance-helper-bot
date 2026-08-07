@@ -6696,6 +6696,33 @@ async def run_survey_setup(
         )
         next_step_cmd = "/survey"  # premium UI surfaces edit/remove from there
 
+    # Label both tabs now that the question list is final. Steps 3 and 4
+    # create the tabs but run before Step 6, so this is the first moment
+    # the headers are knowable. Leaving them blank until the first member
+    # submits invites an alliance to hand-enter data under no headers.
+    from survey import seed_survey_headers
+    from config import describe_sheet_error
+
+    try:
+        seeded = await asyncio.to_thread(
+            seed_survey_headers,
+            guild_id,
+            tab_responses=tab_squad_powers,
+            tab_history=tab_history,
+            questions=questions,
+        )
+    except Exception as e:
+        print(f"[SETUP] Survey header seed failed guild={guild_id}: {describe_sheet_error(e)}")
+        seeded = []
+        await channel.send(
+            "⚠️ I couldn't add the column headers to your sheet just now. Your "
+            "survey is saved, and I'll add them the first time a member submits."
+        )
+    if seeded:
+        await channel.send(
+            "📑 Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
+        )
+
     q_summary = "\n".join(
         f"• **{q['label']}** — {q['type']}"
         + (f" ({', '.join(q['options'])})" if q["type"] == "dropdown" else "")

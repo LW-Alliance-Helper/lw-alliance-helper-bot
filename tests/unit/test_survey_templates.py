@@ -356,6 +356,92 @@ class TestPostedIntroFallback:
         assert "Squad Powers" not in intro
 
 
+class TestSeedSurveyHeaders:
+    """Tabs get labelled when the survey is saved, not when the first
+    member submits, so an alliance opening their sheet in between doesn't
+    find two blank tabs to guess at."""
+
+    QUESTIONS = [
+        {"key": "agree", "label": "Agree?", "type": "dropdown", "options": ["Yes", "No"]},
+        {"key": "notes", "label": "Notes", "type": "text"},
+    ]
+
+    def _sheet(self, *, responses_row1=None, history_row1=None):
+        responses = MagicMock()
+        responses.row_values = MagicMock(return_value=responses_row1 or [])
+        history = MagicMock()
+        history.row_values = MagicMock(return_value=history_row1 or [])
+        sh = MagicMock()
+        sh.worksheet = MagicMock(
+            side_effect=lambda name: responses if name == "VP Buff" else history
+        )
+        return sh, responses, history
+
+    def test_writes_both_headers_on_blank_tabs(self, seeded_db):
+        from survey import seed_survey_headers
+
+        sh, responses, history = self._sheet()
+        with patch("survey._get_spreadsheet", return_value=sh):
+            seeded = seed_survey_headers(
+                TEST_GUILD_ID,
+                tab_responses="VP Buff",
+                tab_history="VP Buff History",
+                questions=self.QUESTIONS,
+            )
+
+        assert seeded == ["VP Buff", "VP Buff History"]
+        assert responses.update.call_args[0][1] == [
+            ["Username", "Discord ID", "Agree?", "Notes", "Date Modified"]
+        ]
+        assert history.update.call_args[0][1] == [
+            ["Timestamp", "Discord ID", "Username", "Agree?", "Notes"]
+        ]
+
+    def test_leaves_a_tab_that_already_has_a_header_alone(self, seeded_db):
+        """Re-running the wizard must not relabel columns that existing
+        rows were written under."""
+        from survey import seed_survey_headers
+
+        sh, responses, history = self._sheet(responses_row1=["Username", "Discord ID", "Old"])
+        with patch("survey._get_spreadsheet", return_value=sh):
+            seeded = seed_survey_headers(
+                TEST_GUILD_ID,
+                tab_responses="VP Buff",
+                tab_history="VP Buff History",
+                questions=self.QUESTIONS,
+            )
+
+        assert seeded == ["VP Buff History"]
+        responses.update.assert_not_called()
+
+    def test_history_tab_gets_a_filter_row(self, seeded_db):
+        from survey import seed_survey_headers
+
+        sh, responses, history = self._sheet()
+        with patch("survey._get_spreadsheet", return_value=sh):
+            seed_survey_headers(
+                TEST_GUILD_ID,
+                tab_responses="VP Buff",
+                tab_history="VP Buff History",
+                questions=self.QUESTIONS,
+            )
+
+        history.set_basic_filter.assert_called_once()
+        responses.set_basic_filter.assert_not_called()
+
+    def test_header_definition_matches_what_the_write_paths_produce(self):
+        """One definition, so a seeded header can't drift from the row
+        that later lands under it."""
+        from survey import survey_header_rows, survey_question_keys_and_labels
+
+        responses_header, history_header = survey_header_rows(self.QUESTIONS)
+        q_keys, q_labels = survey_question_keys_and_labels(self.QUESTIONS)
+
+        assert responses_header == ["Username", "Discord ID"] + q_labels + ["Date Modified"]
+        assert history_header == ["Timestamp", "Discord ID", "Username"] + q_labels
+        assert q_keys == ["agree", "notes"]
+
+
 class TestSurveyWritesCreateTheirTabs:
     """A tab deleted after setup must not cost a member their answers."""
 

@@ -29,6 +29,25 @@ Older entries use a range header (`**1.7.1 to 1.7.4** — 2026-07-21`),
 from when several quiet releases got bundled into one post. Those still
 resolve, but new releases each get their own block.
 
+**Bursts share a message.** Over half of this project's releases land
+within 24 hours of the previous one, and the closest pair was 13 minutes
+apart, so a release shipping within 12 hours of the last post is appended
+to that Discord message rather than firing a fresh notification. A run of
+hotfixes reads as one entry that grows:
+
+```
+**1.7.5** — 2026-07-30
+- Growth snapshots record real numbers again
+
+**1.7.6** — 2026-07-30
+- Growth Breakdown buckets comma-formatted metrics
+```
+
+That's automatic and needs nothing from you — keep writing one block per
+release. If the window has passed, the combined message would pass 2000
+characters, or the stored message can't be found, it starts a new one
+instead. The fallback is always to say something.
+
 ## Compactness (this is the part that keeps getting missed)
 
 Every bullet states the bare change and stops. Not what the change does,

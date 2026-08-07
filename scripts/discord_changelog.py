@@ -18,8 +18,10 @@ blocking deploys on a red job).
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_PATH = Path("docs/DISCORD_CHANGELOG.md")
@@ -58,6 +60,48 @@ def find_block(content: str, version: str) -> str | None:
     return None
 
 
+# How long after a post a following release still counts as the same
+# burst. Over half of this project's releases land within 24h of the
+# previous one and some within minutes, so each one getting its own
+# message would read as spam. Inside the window they share a message.
+DEFAULT_BURST_WINDOW_HOURS = 12
+
+
+def plan_post(
+    block: str | None,
+    state: dict | None,
+    *,
+    now: float,
+    window_seconds: float,
+    limit: int = DISCORD_CONTENT_LIMIT,
+) -> dict:
+    """Decide whether this release starts a new message or joins the last.
+
+    Returns `{"action": "none"|"post"|"patch", "content": str,
+    "message_id": str}`.
+
+    `patch` appends to the message the previous release posted, so a run
+    of hotfixes reads as one growing entry instead of three
+    notifications. Anything that makes appending unsafe or impossible —
+    no stored message, the window elapsed, the combined text passing
+    Discord's limit — falls back to `post`. The fallback is always to
+    say something, never to drop a release.
+    """
+    if not block or is_no_post(block):
+        return {"action": "none", "content": "", "message_id": ""}
+
+    message_id = (state or {}).get("message_id") or ""
+    posted_at = (state or {}).get("posted_at") or 0
+    previous = (state or {}).get("content") or ""
+
+    if message_id and previous and 0 <= (now - posted_at) <= window_seconds:
+        combined = f"{previous}\n\n{block}"
+        if len(combined) <= limit:
+            return {"action": "patch", "content": combined, "message_id": message_id}
+
+    return {"action": "post", "content": block, "message_id": ""}
+
+
 def is_no_post(block: str) -> bool:
     """True when a block exists purely to record "this one doesn't post".
 
@@ -86,6 +130,22 @@ def main(argv: list[str] | None = None) -> int:
             "validate that this version has a block (or an explicit "
             f"'{NO_POST_MARKER}') and exit non-zero if not. For the release PR."
         ),
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="emit JSON telling the workflow whether to post, patch, or do nothing",
+    )
+    parser.add_argument(
+        "--state",
+        type=Path,
+        help="JSON file holding the last post's message id, timestamp and content",
+    )
+    parser.add_argument(
+        "--window-hours",
+        type=float,
+        default=DEFAULT_BURST_WINDOW_HOURS,
+        help="releases within this many hours of the last post share its message",
     )
     args = parser.parse_args(argv)
 
@@ -127,19 +187,40 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.version}: {state}")
         return 0
 
+    if block is not None and len(block) > args.limit and not is_no_post(block):
+        print(
+            f"Block for {args.version} is {len(block)} chars, over the {args.limit} limit",
+            file=sys.stderr,
+        )
+        block = None
+
+    if args.plan:
+        state = None
+        if args.state:
+            try:
+                state = json.loads(args.state.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                # No stored message means we simply start a new one. Losing
+                # the state costs an extra message, never a dropped release.
+                print(
+                    f"No usable post state ({type(e).__name__}) — starting fresh", file=sys.stderr
+                )
+        plan = plan_post(
+            block,
+            state,
+            now=time.time(),
+            window_seconds=args.window_hours * 3600,
+            limit=args.limit,
+        )
+        print(json.dumps(plan))
+        return 0
+
     if block is None:
         print(f"No block for {args.version} in {args.path}", file=sys.stderr)
         return 0
 
     if is_no_post(block):
         print(f"{args.version} is marked {NO_POST_MARKER} — nothing to send", file=sys.stderr)
-        return 0
-
-    if len(block) > args.limit:
-        print(
-            f"Block for {args.version} is {len(block)} chars, over the {args.limit} limit",
-            file=sys.stderr,
-        )
         return 0
 
     print(block)

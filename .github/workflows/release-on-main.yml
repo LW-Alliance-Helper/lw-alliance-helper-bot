@@ -75,58 +75,106 @@ jobs:
             --target "${{ github.sha }}"
           echo "Created release $TAG at ${{ github.sha }}"
 
+      # Remembers the message the last release posted, so a run of
+      # releases inside the burst window appends to it instead of firing
+      # a fresh notification each time. Best-effort by design: a cache
+      # miss just starts a new message, which costs an extra post and
+      # never drops a release.
+      - name: Restore last changelog post
+        if: steps.tag_check.outputs.skip == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: .changelog-post-state.json
+          key: discord-changelog-state-
+          restore-keys: discord-changelog-state-
+
       # Posts the curated block from docs/DISCORD_CHANGELOG.md to the
       # support server's #changelog channel (#92).
       #
       # This step must never fail the workflow. Railway's "Wait for CI
       # checks" is on, so a red job on main means the release never
-      # deploys — and a missing Discord post is not worth blocking a
-      # deploy over. Every failure path below logs and exits 0, with
-      # continue-on-error as a second guard.
+      # deploys — and a Discord post is not worth blocking a deploy over.
+      # Every failure path below logs and exits 0, with continue-on-error
+      # as a second guard.
       - name: Post changelog to Discord
+        id: discord
         if: steps.tag_check.outputs.skip == 'false'
         continue-on-error: true
         env:
           WEBHOOK_URL: ${{ secrets.CHANGELOG_WEBHOOK_URL }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          summary() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
           if [ -z "$WEBHOOK_URL" ]; then
             echo "::notice::CHANGELOG_WEBHOOK_URL not set — skipping Discord post."
-            echo "No webhook configured; skipped Discord post." >> "$GITHUB_STEP_SUMMARY"
+            summary "### Discord changelog"
+            summary "No webhook configured, so nothing was posted."
             exit 0
           fi
 
-          # Prints nothing (and still exits 0) when the file, the block, or
-          # a short-enough block is missing. Reasons go to stderr.
-          python3 scripts/discord_changelog.py "$VERSION" > discord-post.txt
+          # Decides post-vs-append and composes the text. Reasons for
+          # doing nothing go to stderr.
+          python3 scripts/discord_changelog.py "$VERSION" \
+            --plan --state .changelog-post-state.json > plan.json
 
-          if [ ! -s discord-post.txt ]; then
-            echo "::warning::No usable block for $VERSION in docs/DISCORD_CHANGELOG.md — nothing posted."
-            {
-              echo "### Discord changelog"
-              echo "Nothing posted for \`$VERSION\` — see the step log for why."
-              echo "Add or trim the block in \`docs/DISCORD_CHANGELOG.md\` and post by hand,"
-              echo "or leave it for the next release to cover as a range."
-            } >> "$GITHUB_STEP_SUMMARY"
+          ACTION=$(jq -r '.action' plan.json)
+          if [ "$ACTION" = "none" ]; then
+            echo "::warning::Nothing to post for $VERSION."
+            summary "### Discord changelog"
+            summary "Nothing posted for \`$VERSION\` — see the step log for why."
             exit 0
           fi
 
-          STATUS=$(jq -Rs '{content: .}' discord-post.txt \
-            | curl -sS -o /dev/null -w '%{http_code}' \
-                -X POST -H 'Content-Type: application/json' \
-                -d @- "$WEBHOOK_URL") || STATUS="000"
+          jq -r '.content' plan.json > content.txt
+          MSG_ID=$(jq -r '.message_id' plan.json)
+          PAYLOAD=$(jq -Rs '{content: .}' content.txt)
 
-          if [ "$STATUS" = "204" ] || [ "$STATUS" = "200" ]; then
-            echo "Posted $VERSION changelog to Discord."
-            {
-              echo "### Discord changelog"
-              echo "Posted \`$VERSION\` to #changelog."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Discord webhook returned HTTP $STATUS — post it by hand."
-            {
-              echo "### Discord changelog"
-              echo "Webhook returned **HTTP $STATUS**. The release shipped; post \`$VERSION\` by hand."
-            } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ACTION" = "patch" ]; then
+            HTTP=$(printf '%s' "$PAYLOAD" | curl -sS -o resp.json -w '%{http_code}' \
+              -X PATCH -H 'Content-Type: application/json' \
+              -d @- "$WEBHOOK_URL/messages/$MSG_ID") || HTTP="000"
+            if [ "$HTTP" = "200" ]; then
+              echo "Appended $VERSION to Discord message $MSG_ID."
+              summary "### Discord changelog"
+              summary "Appended \`$VERSION\` to the running #changelog message."
+            else
+              echo "::warning::PATCH returned HTTP $HTTP — posting a new message instead."
+              ACTION="post"
+            fi
+          fi
+
+          if [ "$ACTION" = "post" ]; then
+            # `wait=true` makes Discord return the created message, which
+            # is the only way to learn the id we need to append to later.
+            HTTP=$(printf '%s' "$PAYLOAD" | curl -sS -o resp.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              -d @- "$WEBHOOK_URL?wait=true") || HTTP="000"
+            if [ "$HTTP" = "200" ] || [ "$HTTP" = "204" ]; then
+              MSG_ID=$(jq -r '.id // ""' resp.json 2>/dev/null || echo "")
+              echo "Posted $VERSION to Discord (message ${MSG_ID:-unknown})."
+              summary "### Discord changelog"
+              summary "Posted \`$VERSION\` to #changelog."
+            else
+              echo "::warning::Discord webhook returned HTTP $HTTP — post it by hand."
+              summary "### Discord changelog"
+              summary "Webhook returned **HTTP $HTTP**. The release shipped; post \`$VERSION\` by hand."
+              exit 0
+            fi
+          fi
+
+          if [ -n "$MSG_ID" ] && [ "$MSG_ID" != "null" ]; then
+            jq -n --arg id "$MSG_ID" --arg content "$(cat content.txt)" \
+              '{message_id: $id, posted_at: now, content: $content}' \
+              > .changelog-post-state.json
+            echo "saved=true" >> "$GITHUB_OUTPUT"
           fi
           exit 0
+
+      - name: Save last changelog post
+        if: steps.discord.outputs.saved == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .changelog-post-state.json
+          key: discord-changelog-state-${{ github.run_id }}

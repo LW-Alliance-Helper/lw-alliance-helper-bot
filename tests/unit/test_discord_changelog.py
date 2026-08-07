@@ -299,15 +299,72 @@ class TestShippedFile:
         with open(os.path.join(root, "docs", "DISCORD_CHANGELOG.md"), encoding="utf-8") as f:
             return f.read()
 
-    @pytest.mark.parametrize("version", ["1.8.1", "1.8.2", "1.8.3", "1.8.4"])
-    def test_every_seeded_release_resolves(self, version):
+    # Every version that was actually posted to the channel.
+    POSTED = [
+        "1.2.0",
+        "1.3.0",
+        "1.4.0",
+        "1.4.1",
+        "1.4.2",
+        "1.4.3",
+        "1.4.4",
+        "1.4.5",
+        "1.4.6",
+        "1.5.0",
+        "1.5.1",
+        "1.5.2",
+        "1.5.3",
+        "1.5.4",
+        "1.5.5",
+        "1.5.6",
+        "1.5.7",
+        "1.5.8",
+        "1.5.9",
+        "1.5.10",
+        "1.6.0",
+        "1.6.1",
+        "1.6.2",
+        "1.6.3",
+        "1.6.4",
+        "1.6.5",
+        "1.6.6",
+        "1.6.7",
+        "1.7.0",
+        "1.7.5",
+        "1.7.6",
+        "1.8.0",
+        "1.8.1",
+        "1.8.2",
+        "1.8.3",
+        "1.8.4",
+    ]
+
+    @pytest.mark.parametrize("version", POSTED)
+    def test_every_archived_release_resolves(self, version):
         block = find_block(self._content(), version)
         assert block is not None, f"no block for {version}"
         assert block.splitlines()[0].startswith(f"**{version}**")
 
-    @pytest.mark.parametrize("version", ["1.8.1", "1.8.2", "1.8.3", "1.8.4"])
+    @pytest.mark.parametrize("version", ["1.7.1", "1.7.4"])
+    def test_a_range_header_resolves_for_the_versions_it_names(self, version):
+        """Only the endpoints are matched — the versions between them are
+        covered by prose inside the block, not by the header."""
+        assert find_block(self._content(), version).startswith("**1.7.1 to 1.7.4**")
+
+    @pytest.mark.parametrize("version", POSTED)
     def test_every_block_fits_in_a_discord_message(self, version):
         assert len(find_block(self._content(), version)) <= 2000
+
+    def test_1_5_10_is_not_confused_with_1_5_1(self):
+        """The archive contains both, so the boundary guard has to hold."""
+        assert find_block(self._content(), "1.5.1").startswith("**1.5.1**")
+        assert find_block(self._content(), "1.5.10").startswith("**1.5.10**")
+
+    def test_versions_that_never_posted_have_no_block(self):
+        """1.4.7 was folded into the 1.5.0 post, 1.7.2 and 1.7.3 into the
+        1.7.1-to-1.7.4 one, and 1.3.1-1.3.4 never posted at all."""
+        for version in ("1.0.19", "1.1.7", "1.3.1", "1.3.4", "1.4.7", "1.7.2", "1.7.3"):
+            assert find_block(self._content(), version) is None, version
 
     def test_the_preamble_is_never_posted(self):
         assert "Discord changelog posts" not in (find_block(self._content(), "1.8.4") or "")

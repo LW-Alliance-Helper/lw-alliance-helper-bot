@@ -1791,6 +1791,67 @@ def get_or_create_worksheet(
         return ws
 
 
+def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str = "") -> list[str]:
+    """Merge a config-driven column list into a tab's existing header.
+
+    Sheet writers whose columns come from an editable question list can't
+    just write `desired` over row 1: rows already stored were written
+    under the old column order, and relabelling them in place silently
+    turns every historical answer into a lie about a different question.
+
+    So columns are only ever **added**, never removed or reordered. A
+    question dropped from the config keeps its column and its history; a
+    question added gets a fresh column on the right; a *renamed* one
+    reads as a drop plus an add, which leaves the old answers intact
+    under the old label rather than mislabelling them.
+
+    `pin_last` names a column that must stay rightmost (the survey
+    responses tab's "Date Modified"). New columns land before it, which
+    shifts it, so a caller using `pin_last` has to remap existing rows
+    into the returned layout rather than just rewriting row 1.
+
+    Returns the merged header. Compare it against `existing` to decide
+    whether the sheet needs writing at all.
+    """
+    if not any(existing):
+        return list(desired)
+
+    # Trailing blanks are what Sheets pads a short header row with.
+    merged = list(existing)
+    while merged and not merged[-1]:
+        merged.pop()
+
+    tail: list[str] = []
+    if pin_last and merged and merged[-1] == pin_last:
+        tail = [merged.pop()]
+
+    for col in desired:
+        if pin_last and col == pin_last:
+            continue
+        if col and col not in merged:
+            merged.append(col)
+
+    # A tab that predates the pinned column, or has it stranded somewhere
+    # other than the right edge, still has to end up with it rightmost.
+    if pin_last and not tail and pin_last in desired:
+        if pin_last in merged:
+            merged.remove(pin_last)
+        tail = [pin_last]
+
+    return merged + tail
+
+
+def row_for_header(header: list[str], values_by_column: dict) -> list[str]:
+    """Lay values out to match `header`, by column name rather than order.
+
+    The other half of `merge_sheet_header`: once columns can move, a row
+    built positionally from the question list lands in the wrong cells.
+    Columns with nothing to say are written blank rather than skipped, so
+    the row stays aligned.
+    """
+    return [str(values_by_column.get(col, "")) for col in header]
+
+
 def power_column_letter_to_index(letter: str) -> int:
     """Convert a single column letter (A-Z) to a 0-indexed integer.
 

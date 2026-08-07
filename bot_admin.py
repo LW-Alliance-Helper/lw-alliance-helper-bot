@@ -971,68 +971,29 @@ async def _run_verify_scan(interaction: discord.Interaction):
 
 @admin_group.command(
     name="changelog",
-    description="(Bot owner only) Set the #changelog channel, preview a release's post, or re-post it.",
+    description="(Bot owner only) Check changelog posting, preview a release's post, or re-post it.",
 )
 @app_commands.describe(
-    channel="Channel the bot posts each release's changelog entry to.",
-    version="Preview the post for this version instead of changing anything.",
+    version="Preview the post for this version instead of showing status.",
     repost="Post the current version's entry again, even if it already went out.",
-    disable="Stop posting release changelogs.",
 )
 async def admin_changelog_slash(
     interaction: discord.Interaction,
-    channel: discord.TextChannel | None = None,
     version: str | None = None,
     repost: bool = False,
-    disable: bool = False,
 ):
-    """Control the support-server changelog posts (#92).
+    """Inspect the support-server changelog posts (#92).
 
-    The post text itself lives in `docs/DISCORD_CHANGELOG.md` and ships
-    with the bot, so there's nothing to type here — this only points the
-    bot at a channel and offers a preview before a release goes out.
+    The destination is `CHANGELOG_CHANNEL_ID` in Railway, and the post
+    text lives in `docs/DISCORD_CHANGELOG.md` and ships with the bot, so
+    there's nothing to configure here. This is for seeing where things
+    stand and previewing a post before a release goes out.
     """
     if not await _require_bot_owner(interaction):
         return
 
     import changelog_post
     from bot import __version__
-
-    if disable:
-        set_app_setting(changelog_post.CHANNEL_SETTING, None)
-        await interaction.response.send_message(
-            "🔕 Release changelog posting **disabled**.", ephemeral=True
-        )
-        return
-
-    if channel is not None:
-        perms = channel.permissions_for(channel.guild.me)
-        # Editing its own earlier message is how a burst of releases stays
-        # one entry, so Read Message History matters as much as posting.
-        missing = [
-            name
-            for name, ok in (
-                ("View Channel", perms.view_channel),
-                ("Send Messages", perms.send_messages),
-                ("Read Message History", perms.read_message_history),
-            )
-            if not ok
-        ]
-        if missing:
-            await interaction.response.send_message(
-                f"⚠️ I need {', '.join(f'**{m}**' for m in missing)} in {channel.mention} "
-                f"before I can post there.",
-                ephemeral=True,
-            )
-            return
-        set_app_setting(changelog_post.CHANNEL_SETTING, str(channel.id))
-        await interaction.response.send_message(
-            f"📍 Release changelogs will post to {channel.mention}.\n"
-            f"Currently running **{__version__}**; its entry posts on the next "
-            f"deploy if it hasn't already gone out.",
-            ephemeral=True,
-        )
-        return
 
     if version:
         block = changelog_post.load_block(version)
@@ -1058,14 +1019,48 @@ async def admin_changelog_slash(
         await interaction.followup.send(f"📜 {result}", ephemeral=True)
         return
 
-    raw = get_app_setting(changelog_post.CHANNEL_SETTING)
-    last = get_app_setting(changelog_post.LAST_VERSION_SETTING) or "nothing yet"
-    where = f"<#{raw}>" if raw else "*not set*"
-    await interaction.response.send_message(
-        f"📜 **Release changelog**\nChannel: {where}\nLast posted: **{last}**\n"
+    # Permissions are checked live rather than trusted from when the
+    # channel was configured — the same reasoning as config_health, since
+    # a role edit months later is exactly how this goes quiet.
+    channel_id = changelog_post.configured_channel_id()
+    lines = [
+        "📜 **Release changelog**",
         f"Running: **{__version__}**",
-        ephemeral=True,
-    )
+        f"Last posted: **{get_app_setting(changelog_post.LAST_VERSION_SETTING) or 'nothing yet'}**",
+    ]
+
+    if not channel_id:
+        lines.append(f"Channel: *not set* — set `{changelog_post.CHANNEL_ENV_VAR}` in Railway")
+    else:
+        ch = bot.get_channel(channel_id)
+        if ch is None:
+            lines.append(f"Channel: `{channel_id}` ⚠️ not found, or I can't see it")
+        else:
+            perms = ch.permissions_for(ch.guild.me)
+            # Editing its own earlier message is how a burst of releases
+            # stays one entry, so Read Message History matters as much as
+            # posting does.
+            missing = [
+                name
+                for name, ok in (
+                    ("View Channel", perms.view_channel),
+                    ("Send Messages", perms.send_messages),
+                    ("Read Message History", perms.read_message_history),
+                )
+                if not ok
+            ]
+            lines.append(
+                f"Channel: {ch.mention}"
+                + (f" ⚠️ missing {', '.join(missing)}" if missing else " ✅")
+            )
+
+    block = changelog_post.load_block(__version__)
+    if block is None:
+        lines.append(f"This version: ⚠️ no usable block in `{changelog_post.CHANGELOG_PATH.name}`")
+    elif changelog_post.is_no_post(block):
+        lines.append(f"This version: marked `{changelog_post.NO_POST_MARKER}`")
+
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 # Register the /admin Group on the tree once every subcommand has been

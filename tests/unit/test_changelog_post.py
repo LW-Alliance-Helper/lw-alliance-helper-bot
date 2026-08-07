@@ -53,13 +53,11 @@ def bot(channel):
 
 
 @pytest.fixture
-def configured(seeded_db, tmp_path):
-    """Changelog channel set and the block file pointed at a temp copy."""
-    from config import set_app_setting
-
+def configured(seeded_db, tmp_path, monkeypatch):
+    """Channel env var set and the block file pointed at a temp copy."""
     path = tmp_path / "DISCORD_CHANGELOG.md"
     path.write_text(BLOCK_FILE, encoding="utf-8")
-    set_app_setting(changelog_post.CHANNEL_SETTING, "999")
+    monkeypatch.setenv(changelog_post.CHANNEL_ENV_VAR, "999")
     with patch.object(changelog_post, "CHANGELOG_PATH", path):
         yield path
 
@@ -111,15 +109,28 @@ class TestRestartSafety:
 
 class TestNotConfigured:
     @pytest.mark.asyncio
-    async def test_no_channel_set_does_nothing_and_records_nothing(self, seeded_db, bot, channel):
+    async def test_no_channel_set_does_nothing_and_records_nothing(
+        self, seeded_db, bot, channel, monkeypatch
+    ):
         from config import get_app_setting
 
+        monkeypatch.delenv(changelog_post.CHANNEL_ENV_VAR, raising=False)
         result = await changelog_post.maybe_post_changelog(bot, "1.9.0")
 
         assert "no changelog channel" in result
         channel.send.assert_not_awaited()
-        # Nothing recorded, so pointing it at a channel later still posts.
+        # Nothing recorded, so setting the env var later still posts.
         assert not get_app_setting(changelog_post.LAST_VERSION_SETTING)
+
+    @pytest.mark.parametrize("raw", ["", "   ", "not-a-number", "#changelog"])
+    def test_a_junk_channel_id_reads_as_unset(self, raw, monkeypatch):
+        """Better to post nothing than to crash on_ready parsing an int."""
+        monkeypatch.setenv(changelog_post.CHANNEL_ENV_VAR, raw)
+        assert changelog_post.configured_channel_id() == 0
+
+    def test_a_real_channel_id_parses(self, monkeypatch):
+        monkeypatch.setenv(changelog_post.CHANNEL_ENV_VAR, " 12345 ")
+        assert changelog_post.configured_channel_id() == 12345
 
     @pytest.mark.asyncio
     async def test_a_channel_the_bot_cannot_see_reports_rather_than_raising(self, configured, bot):

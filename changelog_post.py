@@ -22,6 +22,7 @@ fails the release PR when a version has no block, which is what makes
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -47,12 +48,33 @@ NO_POST_MARKER = "NO POST"
 # otherwise be a burst of notifications.
 BURST_WINDOW_SECONDS = 12 * 3600
 
-# app_settings keys. Bot-global, not per guild — there is one support
-# server and one changelog channel.
-CHANNEL_SETTING = "changelog_channel_id"
+# The destination is deploy config, not runtime state: one support
+# server, one channel, set once and never touched again. Keeping it in
+# Railway alongside DISCORD_TOKEN and MAPMANAGER_API_KEY also means it
+# survives a volume reset — if it lived in SQLite and that were ever
+# lost, posting would silently stop, which is the exact failure this
+# feature exists to prevent. It also makes the staging service's
+# separate (or absent) channel visible rather than implied by which
+# database it happens to be pointed at.
+CHANNEL_ENV_VAR = "CHANGELOG_CHANNEL_ID"
+
+# What *is* runtime state: what we've already said, and where. Losing
+# this costs at worst a duplicate message, never a silent stop.
 LAST_VERSION_SETTING = "changelog_last_version"
 LAST_MESSAGE_SETTING = "changelog_last_message_id"
 LAST_POSTED_AT_SETTING = "changelog_last_posted_at"
+
+
+def configured_channel_id() -> int:
+    """The channel to post to, or 0 when the env var is unset or junk."""
+    raw = (os.getenv(CHANNEL_ENV_VAR) or "").strip()
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("[CHANGELOG] %s is not a channel id: %r", CHANNEL_ENV_VAR, raw)
+        return 0
 
 
 # ── Pure helpers (shared with scripts/discord_changelog.py) ──────────────
@@ -179,9 +201,9 @@ async def maybe_post_changelog(bot, version: str, *, force: bool = False) -> str
     """
     from config import get_app_setting, set_app_setting
 
-    raw_channel = get_app_setting(CHANNEL_SETTING)
-    if not raw_channel:
-        return "no changelog channel configured"
+    channel_id = configured_channel_id()
+    if not channel_id:
+        return f"no changelog channel configured ({CHANNEL_ENV_VAR} unset)"
 
     if not force and (get_app_setting(LAST_VERSION_SETTING) or "") == version:
         return f"{version} already posted"
@@ -198,9 +220,9 @@ async def maybe_post_changelog(bot, version: str, *, force: bool = False) -> str
         set_app_setting(LAST_VERSION_SETTING, version)
         return f"{version} is marked {NO_POST_MARKER}"
 
-    channel = bot.get_channel(int(raw_channel))
+    channel = bot.get_channel(channel_id)
     if channel is None:
-        log.warning("[CHANGELOG] Channel %s not found or not visible", raw_channel)
+        log.warning("[CHANGELOG] Channel %s not found or not visible", channel_id)
         return "changelog channel not found"
 
     # Passed explicitly rather than leaning on plan_post's default, which
@@ -222,7 +244,7 @@ async def maybe_post_changelog(bot, version: str, *, force: bool = False) -> str
     try:
         message = await channel.send(plan["content"])
     except discord.Forbidden:
-        log.warning("[CHANGELOG] Missing permission to post in %s", raw_channel)
+        log.warning("[CHANGELOG] Missing permission to post in %s", channel_id)
         return "cannot post in the changelog channel"
     except discord.HTTPException as e:
         log.warning("[CHANGELOG] Post failed: %s", e)

@@ -73,9 +73,11 @@ release. If the window has passed, the combined message would pass 2000
 characters, or the stored message was deleted, it starts a new one
 instead. The fallback is always to say something.
 
-Set the channel once with `/admin changelog channel:`. `/admin changelog
-version:1.9.0` previews a post without sending it, and `repost:True`
-sends the running version again if one goes out wrong.
+The destination is the `CHANGELOG_CHANNEL_ID` env var in Railway.
+`/admin changelog` shows where things stand (including whether the bot
+can still post there), `version:1.9.0` previews a post without sending
+it, and `repost:True` sends the running version again if one goes out
+wrong.
 
 ## Compactness (this is the part that keeps getting missed)
 

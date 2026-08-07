@@ -969,6 +969,100 @@ async def _run_verify_scan(interaction: discord.Interaction):
     )
 
 
+@admin_group.command(
+    name="changelog",
+    description="(Bot owner only) Check changelog posting, preview a release's post, or re-post it.",
+)
+@app_commands.describe(
+    version="Preview the post for this version instead of showing status.",
+    repost="Post the current version's entry again, even if it already went out.",
+)
+async def admin_changelog_slash(
+    interaction: discord.Interaction,
+    version: str | None = None,
+    repost: bool = False,
+):
+    """Inspect the support-server changelog posts (#92).
+
+    The destination is `CHANGELOG_CHANNEL_ID` in Railway, and the post
+    text lives in `docs/DISCORD_CHANGELOG.md` and ships with the bot, so
+    there's nothing to configure here. This is for seeing where things
+    stand and previewing a post before a release goes out.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    import changelog_post
+    from bot import __version__
+
+    if version:
+        block = changelog_post.load_block(version)
+        if block is None:
+            await interaction.response.send_message(
+                f"⚠️ No usable block for **{version}** in `docs/DISCORD_CHANGELOG.md`.",
+                ephemeral=True,
+            )
+        elif changelog_post.is_no_post(block):
+            await interaction.response.send_message(
+                f"🔕 **{version}** is marked `{changelog_post.NO_POST_MARKER}` — it won't post.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"**{version}** would post:\n\n{block}", ephemeral=True
+            )
+        return
+
+    if repost:
+        await interaction.response.defer(ephemeral=True)
+        result = await changelog_post.maybe_post_changelog(bot, __version__, force=True)
+        await interaction.followup.send(f"📜 {result}", ephemeral=True)
+        return
+
+    # Permissions are checked live rather than trusted from when the
+    # channel was configured — the same reasoning as config_health, since
+    # a role edit months later is exactly how this goes quiet.
+    channel_id = changelog_post.configured_channel_id()
+    lines = [
+        "📜 **Release changelog**",
+        f"Running: **{__version__}**",
+        f"Last posted: **{get_app_setting(changelog_post.LAST_VERSION_SETTING) or 'nothing yet'}**",
+    ]
+
+    if not channel_id:
+        lines.append(f"Channel: *not set* — set `{changelog_post.CHANNEL_ENV_VAR}` in Railway")
+    else:
+        ch = bot.get_channel(channel_id)
+        if ch is None:
+            lines.append(f"Channel: `{channel_id}` ⚠️ not found, or I can't see it")
+        else:
+            perms = ch.permissions_for(ch.guild.me)
+            # Editing its own earlier message is how a burst of releases
+            # stays one entry, so Read Message History matters as much as
+            # posting does.
+            missing = [
+                name
+                for name, ok in (
+                    ("View Channel", perms.view_channel),
+                    ("Send Messages", perms.send_messages),
+                    ("Read Message History", perms.read_message_history),
+                )
+                if not ok
+            ]
+            lines.append(
+                f"Channel: {ch.mention}"
+                + (f" ⚠️ missing {', '.join(missing)}" if missing else " ✅")
+            )
+
+    block = changelog_post.load_block(__version__)
+    if block is None:
+        lines.append(f"This version: ⚠️ no usable block in `{changelog_post.CHANGELOG_PATH.name}`")
+    elif changelog_post.is_no_post(block):
+        lines.append(f"This version: marked `{changelog_post.NO_POST_MARKER}`")
+
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
 # Register the /admin Group on the tree once every subcommand has been
 # attached above. The Group-level guilds= kwarg propagates to all its
 # subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the

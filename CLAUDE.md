@@ -95,6 +95,25 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   Conductor Rotation + Profession Buddy System`); recent patch releases
   are plain. Note the *commit* on the release branch is the opposite:
   it does use `chore(release): X.Y.Z - <summary>`.
+- **Release branches also write the Discord changelog block.** Add the
+  release's post to `docs/DISCORD_CHANGELOG.md` next to the CHANGELOG
+  entry. The **bot** posts it to the support server's `#changelog` from
+  `on_ready` (`changelog_post.py`), not CI — the release workflow runs
+  before Railway finishes deploying, so a post from there could announce
+  a release that then fails to deploy ([#92](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/92)).
+  The destination is the `CHANGELOG_CHANNEL_ID` env var (deploy config,
+  so it survives a volume reset and the staging service's is visibly
+  separate); `/admin changelog` shows status, previews a version, or
+  re-posts. Consecutive releases inside 12 hours append to the running
+  message instead of each pinging.
+  The post is *not* derived from CHANGELOG.md — it merges related
+  bullets, drops anything an alliance can't act on, and caps at five
+  lines. Rules and a worked example are in that file's preamble.
+  **Every release posts.** `release-changelog-check.yml` fails the
+  release PR when `__version__` moves without a matching block, so a
+  release can't ship without one; to skip one deliberately, write its
+  block with a `NO POST: <reason>` line rather than leaving a hole. The
+  announcements channel stays fully manual.
 - **Release-branch PR description is the slim CHANGELOG entry.** When
   opening `release/X.Y.Z` → `main`, paste the CHANGELOG section for
   that version into the PR body (plus a short "Closes #…" footer for

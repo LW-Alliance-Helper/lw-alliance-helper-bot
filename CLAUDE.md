@@ -95,6 +95,17 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   Conductor Rotation + Profession Buddy System`); recent patch releases
   are plain. Note the *commit* on the release branch is the opposite:
   it does use `chore(release): X.Y.Z - <summary>`.
+- **Release branches also write the Discord changelog block.** Add the
+  release's post to `docs/DISCORD_CHANGELOG.md` next to the CHANGELOG
+  entry. `release-on-main.yml` finds the block whose header names the
+  version and posts it to the support server's `#changelog` webhook once
+  the release lands, so nothing is copy-pasted by hand ([#92](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/92)).
+  The post is *not* derived from CHANGELOG.md — it merges related
+  bullets, drops anything an alliance can't act on, and caps at five
+  lines. Rules and a worked example are in that file's preamble. A
+  release with nothing alliance-facing gets no block, posts nothing, and
+  is covered later by a range header. The announcements channel stays
+  fully manual.
 - **Release-branch PR description is the slim CHANGELOG entry.** When
   opening `release/X.Y.Z` → `main`, paste the CHANGELOG section for
   that version into the PR body (plus a short "Closes #…" footer for

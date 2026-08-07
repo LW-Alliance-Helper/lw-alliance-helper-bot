@@ -74,3 +74,59 @@ jobs:
             --notes-file release-notes.md \
             --target "${{ github.sha }}"
           echo "Created release $TAG at ${{ github.sha }}"
+
+      # Posts the curated block from docs/DISCORD_CHANGELOG.md to the
+      # support server's #changelog channel (#92).
+      #
+      # This step must never fail the workflow. Railway's "Wait for CI
+      # checks" is on, so a red job on main means the release never
+      # deploys — and a missing Discord post is not worth blocking a
+      # deploy over. Every failure path below logs and exits 0, with
+      # continue-on-error as a second guard.
+      - name: Post changelog to Discord
+        if: steps.tag_check.outputs.skip == 'false'
+        continue-on-error: true
+        env:
+          WEBHOOK_URL: ${{ secrets.CHANGELOG_WEBHOOK_URL }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::notice::CHANGELOG_WEBHOOK_URL not set — skipping Discord post."
+            echo "No webhook configured; skipped Discord post." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Prints nothing (and still exits 0) when the file, the block, or
+          # a short-enough block is missing. Reasons go to stderr.
+          python3 scripts/discord_changelog.py "$VERSION" > discord-post.txt
+
+          if [ ! -s discord-post.txt ]; then
+            echo "::warning::No usable block for $VERSION in docs/DISCORD_CHANGELOG.md — nothing posted."
+            {
+              echo "### Discord changelog"
+              echo "Nothing posted for \`$VERSION\` — see the step log for why."
+              echo "Add or trim the block in \`docs/DISCORD_CHANGELOG.md\` and post by hand,"
+              echo "or leave it for the next release to cover as a range."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          STATUS=$(jq -Rs '{content: .}' discord-post.txt \
+            | curl -sS -o /dev/null -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' \
+                -d @- "$WEBHOOK_URL") || STATUS="000"
+
+          if [ "$STATUS" = "204" ] || [ "$STATUS" = "200" ]; then
+            echo "Posted $VERSION changelog to Discord."
+            {
+              echo "### Discord changelog"
+              echo "Posted \`$VERSION\` to #changelog."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Discord webhook returned HTTP $STATUS — post it by hand."
+            {
+              echo "### Discord changelog"
+              echo "Webhook returned **HTTP $STATUS**. The release shipped; post \`$VERSION\` by hand."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0

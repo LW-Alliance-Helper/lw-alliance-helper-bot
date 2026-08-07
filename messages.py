@@ -59,6 +59,24 @@ CANCEL_BACKPEDAL_DEFAULT = "↩️ Cancelled. No changes made."
 # deleted."). Always end {detail} with a period.
 CANCEL_BACKPEDAL = "↩️ Cancelled. {detail}"
 
+# The app's commands are installed here but the bot user never joined.
+# Happens when a guild install grants `applications.commands` without
+# the `bot` scope, so the commands register and are invocable with no
+# bot member behind them. Every gate below misdiagnoses that state
+# (NOT_SET_UP tells them to run /setup for a bot that isn't present),
+# so it's checked globally before any command body runs. Recovery is a
+# re-invite from the setup guide, which carries the right scopes.
+BOT_NOT_IN_GUILD = (
+    "⚠️ **I'm not actually in this server yet.**\n\n"
+    "My commands show up here, but I was never added as a member, so I can't see "
+    "channels, post messages, or save any settings. This was a problem with my "
+    "install link, not anything you did.\n\n"
+    "**To fix it:** someone with the **Manage Server** permission needs to add me "
+    "again from the setup guide, which asks for everything I need:\n"
+    "<https://lw-alliance-helper.github.io/setup.html>\n\n"
+    "Nothing is lost. Once I'm in properly, run `/setup` and carry on from there."
+)
+
 # Bot's core setup hasn't been completed yet on this guild. Surfaces
 # in every feature command that runs before /setup has been walked.
 NOT_SET_UP = "⚙️ This bot hasn't been set up yet. Run `/setup` to get started."

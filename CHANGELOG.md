@@ -9,6 +9,12 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.4] — 2026-08-07
+
+### Fixed
+- Servers that added the app without the bot itself are now told so, with a link to re-invite it, instead of being told to run `/setup` for a bot that was never in the server ([#443](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/443)).
+- The invite link now asks for Attach Files and Manage Channels, so the setup wizard's ➕ Create a new channel button works and storm roster images can post in servers that restrict the default role ([#443](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/443)).
+
 ## [1.8.3] — 2026-08-05
 
 ### Added

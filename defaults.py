@@ -158,6 +158,127 @@ DEFAULT_SURVEY_INTRO = (
 )
 
 
+# ── Survey templates ────────────────────────────────────────────────────────
+#
+# A survey is a generic thing: a set of questions, a tab holding each
+# member's latest answers, and a tab holding every submission. The
+# squad-power question set above is one *template* for that, not the
+# baseline every other survey deviates from — it's simply the set the
+# module was first built around.
+#
+# Adding a template is data, not code: append an entry here and it shows
+# up in the "Add Survey" picker. Each entry supplies the question set,
+# the suggested tab names, a prefilled intro, and the wizard copy that
+# should surround it, so a template can speak in its own language.
+#
+# Template dict fields:
+#   key / name / emoji / description — picker UI.
+#   suggested_survey_name — offered as the survey's display name.
+#   tab_responses / tab_history — suggested tab names. `None` means
+#       "derive them from the survey name" (what SCRATCH does).
+#   questions / intro_message — what the wizard prefills.
+#   *_step_label / *_step_prompt / intro_step_example — the per-step
+#       wizard copy this template speaks in.
+
+SURVEY_TEMPLATE_SCRATCH = "scratch"
+SURVEY_TEMPLATE_SQUAD_POWER = "squad_power"
+
+SURVEY_TEMPLATES = {
+    SURVEY_TEMPLATE_SQUAD_POWER: {
+        "key": SURVEY_TEMPLATE_SQUAD_POWER,
+        "name": "Squad Power Survey",
+        "emoji": "⚔️",
+        "description": "Squad powers and types, drone and gorilla levels, profession, and more.",
+        "suggested_survey_name": "Squad Power Survey",
+        "tab_responses": "Squad Powers",
+        "tab_history": "Survey History",
+        "questions": DEFAULT_SURVEY_QUESTIONS,
+        "intro_message": DEFAULT_SURVEY_INTRO,
+        "responses_step_label": "Member Statistics Tab",
+        "responses_step_prompt": (
+            "Which tab should hold each member's current statistics? "
+            "We update their row here every time they submit."
+        ),
+        "history_step_label": "Survey History Tab",
+        "history_step_prompt": (
+            "Which tab should hold the full history of every submission? "
+            "We add a row here each time, so you keep a record over time."
+        ),
+        "intro_step_example": (
+            "Please fill out this survey each week to help us track squad powers, "
+            "balance our teams, and prepare for season events!"
+        ),
+    },
+    SURVEY_TEMPLATE_SCRATCH: {
+        "key": SURVEY_TEMPLATE_SCRATCH,
+        "name": "Start from scratch",
+        "emoji": "✏️",
+        "description": "Build your own questions from nothing.",
+        "suggested_survey_name": None,
+        "tab_responses": None,
+        "tab_history": None,
+        "questions": [],
+        "intro_message": "",
+        "responses_step_label": "Current Answers Tab",
+        "responses_step_prompt": (
+            "Which tab should hold each member's current answers? "
+            "We update their row here every time they submit."
+        ),
+        "history_step_label": "Answer History Tab",
+        "history_step_prompt": (
+            "Which tab should hold the full history of every submission? "
+            "We add a row here each time, so you keep a record over time."
+        ),
+        "intro_step_example": (
+            "Please take a moment to fill this out. It helps leadership keep "
+            "our records current and plan around what everyone tells us."
+        ),
+    },
+}
+
+# Order the picker offers real templates in. `scratch` is deliberately
+# absent — it's the other half of the fork, not a list entry.
+SURVEY_TEMPLATE_PICKER_ORDER = [SURVEY_TEMPLATE_SQUAD_POWER]
+
+# Google caps a tab name at 100 chars and rejects these characters
+# outright. A survey named "Q3: Buff Agreement?" must not produce a tab
+# name the Sheets API refuses to create.
+_SHEET_TAB_FORBIDDEN = str.maketrans({c: " " for c in "[]*?/\\:"})
+_SHEET_TAB_MAX = 100
+
+
+def survey_template(key: str | None) -> dict:
+    """Return a template dict by key, falling back to the scratch template.
+
+    Guilds configured before templates existed carry `squad_power`
+    (backfilled), and anything unrecognised degrades to scratch rather
+    than raising mid-wizard.
+    """
+    return SURVEY_TEMPLATES.get(key or "", SURVEY_TEMPLATES[SURVEY_TEMPLATE_SCRATCH])
+
+
+def sanitize_sheet_tab_name(name: str, *, fallback: str = "Survey") -> str:
+    """Coerce arbitrary text into something Sheets will accept as a tab name."""
+    cleaned = " ".join((name or "").translate(_SHEET_TAB_FORBIDDEN).split())
+    cleaned = cleaned.strip("'")[:_SHEET_TAB_MAX].strip()
+    return cleaned or fallback
+
+
+def derive_survey_tab_names(survey_name: str) -> tuple[str, str]:
+    """Suggest the two tab names for a survey with no template-supplied ones.
+
+    Every survey needs its *own* pair of tabs — two surveys sharing a
+    history tab append their answers positionally under the first
+    survey's headers. Deriving both from the survey name means the
+    suggested defaults are already unique, so leadership never has to
+    reason about it.
+    """
+    base = sanitize_sheet_tab_name(survey_name)
+    history_suffix = " History"
+    history_base = base[: _SHEET_TAB_MAX - len(history_suffix)].strip()
+    return base, f"{history_base}{history_suffix}"
+
+
 # ── Storm mail templates (neutral baseline; alliances customise via /setup) ──
 
 DEFAULT_DS_TEMPLATE = """\

@@ -5330,39 +5330,240 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     print(f"[SETUP] Buddy System enabled for guild {guild_id}")
 
 
-async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
-    """
-    Premium-only: ask leadership for a display name for a new extra survey,
-    derive a unique slug for `survey_id`, then dispatch to
-    `run_survey_setup` to walk through the standard wizard. Called by the
-    `[➕ Add Survey]` button on `/survey` for premium guilds.
-    """
-    import re as _re
-    from config import list_surveys
+async def _ask_new_survey_template(channel, cancel_event) -> str | None:
+    """Ask whether a new survey starts from a template or from scratch.
 
-    channel = interaction.channel
-    user = interaction.user
+    Returns a template key from `defaults.SURVEY_TEMPLATES`, or None if
+    leadership cancelled or let the step time out. The template drives
+    the whole wizard afterwards: its language, its suggested tab names,
+    and the questions it prefills.
+    """
+    from defaults import (
+        SURVEY_TEMPLATES,
+        SURVEY_TEMPLATE_PICKER_ORDER,
+        SURVEY_TEMPLATE_SCRATCH,
+    )
+    from survey_hub import SURVEY_HUB_BTN_ADD
+
+    class StartChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+            self.start_choice = None
+
+        @discord.ui.button(label="📋 Start from a template", style=discord.ButtonStyle.primary)
+        async def from_template(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.start_choice = "template"
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Start from scratch", style=discord.ButtonStyle.secondary)
+        async def from_scratch(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.start_choice = "scratch"
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+    start_view = StartChoiceView()
+    await channel.send(
+        "💎 **Add a Survey**\n"
+        "A survey is any set of questions you want to ask your members. Their "
+        "latest answers go in one tab of your sheet, and every submission is "
+        "kept in a second tab.\n\n"
+        "Start from a ready-made template, or build your own questions from scratch?",
+        view=start_view,
+    )
+    await wait_view_or_cancel(start_view, cancel_event)
+    if start_view.cancelled:
+        return None
+    if not start_view.start_choice:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=SURVEY_HUB_BTN_ADD))
+        return None
+
+    if start_view.start_choice == "scratch":
+        return SURVEY_TEMPLATE_SCRATCH
+
+    class TemplatePickView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+            self.selected = None
+            select = discord.ui.Select(
+                placeholder="Pick a template...",
+                options=[
+                    discord.SelectOption(
+                        label=SURVEY_TEMPLATES[k]["name"],
+                        description=SURVEY_TEMPLATES[k]["description"][:100],
+                        emoji=SURVEY_TEMPLATES[k]["emoji"],
+                        value=k,
+                    )
+                    for k in SURVEY_TEMPLATE_PICKER_ORDER
+                ],
+            )
+
+            async def _cb(inter: discord.Interaction):
+                self.selected = select.values[0]
+                select.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Template: **{SURVEY_TEMPLATES[self.selected]['name']}**",
+                    view=self,
+                )
+                self.stop()
+
+            select.callback = _cb
+            self.add_item(select)
+
+    pick_view = TemplatePickView()
+    await channel.send(
+        "**Pick a template**\n"
+        "Each one comes with its questions already written. You can edit, "
+        "add to, or remove any of them later in this wizard.",
+        view=pick_view,
+    )
+    await wait_view_or_cancel(pick_view, cancel_event)
+    if pick_view.cancelled:
+        return None
+    if not pick_view.selected:
+        await channel.send(WIZARD_TIMEOUT.format(wizard=SURVEY_HUB_BTN_ADD))
+        return None
+    return pick_view.selected
+
+
+async def _ask_new_survey_name(channel, bot, user, cancel_event, tpl: dict) -> str | None:
+    """Ask what the new survey should be called.
+
+    A template offers its own name as a one-click default; the scratch
+    path asks for free text. Returns None on cancel or timeout.
+    """
+    from survey_hub import SURVEY_HUB_BTN_ADD
+
+    suggested = tpl.get("suggested_survey_name")
+
+    if suggested:
+
+        class NameChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+                self.survey_name = None
+                self.answered = False
+
+                use_btn = discord.ui.Button(
+                    label=f"✅ Use this name: {suggested}"[:80],
+                    style=discord.ButtonStyle.success,
+                )
+
+                async def _use_cb(inter: discord.Interaction):
+                    self.survey_name = suggested
+                    self.answered = True
+                    for item in self.children:
+                        item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content=f"✅ Name: **{suggested}**", view=self
+                    )
+                    self.stop()
+
+                use_btn.callback = _use_cb
+                self.add_item(use_btn)
+
+                own_btn = discord.ui.Button(
+                    label="✏️ Name it myself", style=discord.ButtonStyle.secondary
+                )
+
+                async def _own_cb(inter: discord.Interaction):
+                    modal = TextInputModal(
+                        "Survey Name", "What should this survey be called?", default=suggested
+                    )
+                    await inter.response.send_modal(modal)
+                    await modal.wait()
+                    self.survey_name = (modal.value or suggested).strip()[:60] or suggested
+                    self.answered = True
+                    for item in self.children:
+                        item.disabled = True
+                    try:
+                        await inter.message.edit(
+                            content=f"✅ Name: **{self.survey_name}**", view=self
+                        )
+                    except discord.HTTPException:
+                        pass
+                    self.stop()
+
+                own_btn.callback = _own_cb
+                self.add_item(own_btn)
+
+        name_view = NameChoiceView()
+        await channel.send(
+            "**Name your survey**\n"
+            "This is what leadership and members will see when they pick or "
+            "take this survey.",
+            view=name_view,
+        )
+        await wait_view_or_cancel(name_view, cancel_event)
+        if name_view.cancelled:
+            return None
+        if not name_view.answered:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=SURVEY_HUB_BTN_ADD))
+            return None
+        return name_view.survey_name
 
     def check(m):
         return m.author == user and m.channel == channel
 
     await channel.send(
-        "💎 **Add a Survey**\n"
-        "Type a short display name for the new survey (e.g. `Off-Season Powers` "
-        "or `Recruit Intake`). This is what leadership and members will see."
+        "**Name your survey**\n"
+        "Type a short display name for it (e.g. `VP Buff Agreement` or "
+        "`Recruit Intake`). This is what leadership and members will see."
     )
-    try:
-        name_reply = await bot.wait_for("message", check=check, timeout=180)
-    except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Click **➕ Add Survey** on `/survey` again to retry.")
-        return
+    name_reply = await wizard_registry.wait_or_cancel(
+        bot.wait_for("message", check=check, timeout=180), cancel_event
+    )
+    if name_reply is None:
+        if not cancel_event.is_set():
+            await channel.send(WIZARD_TIMEOUT.format(wizard=SURVEY_HUB_BTN_ADD))
+        return None
 
     survey_name = (name_reply.content or "").strip()[:60]
     if not survey_name:
         await channel.send(
-            "⚠️ Empty name — aborting. Click **➕ Add Survey** on `/survey` to try again."
+            f"⚠️ That name was empty, so nothing was created. "
+            f"Click **{SURVEY_HUB_BTN_ADD}** on `/survey` to try again."
         )
-        return
+        return None
+    return survey_name
+
+
+async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
+    """
+    Premium-only: ask whether the new survey starts from a template or from
+    scratch, name it, derive a unique slug for `survey_id`, then dispatch to
+    `run_survey_setup` to walk through the standard wizard. Called by the
+    `[➕ Add Survey]` button on `/survey` for premium guilds.
+    """
+    import re as _re
+    from config import list_surveys
+    from defaults import survey_template
+
+    channel = interaction.channel
+    user = interaction.user
+
+    # The template and name steps run before `run_survey_setup` registers
+    # its own cancel event, so they get one of their own — otherwise
+    # /cancel does nothing until the wizard proper starts.
+    cancel_event = wizard_registry.register(user.id)
+    try:
+        template_key = await _ask_new_survey_template(channel, cancel_event)
+        if template_key is None:
+            return
+        tpl = survey_template(template_key)
+
+        survey_name = await _ask_new_survey_name(channel, bot, user, cancel_event, tpl)
+        if survey_name is None:
+            return
+    finally:
+        # Released before dispatching so the wizard's own registration
+        # is the only live one for this user.
+        wizard_registry.unregister(user.id, cancel_event)
 
     extras = [
         s
@@ -5386,6 +5587,7 @@ async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
         bot,
         target_survey_id=survey_id,
         target_survey_name=survey_name,
+        template=template_key,
     )
 
 
@@ -5512,6 +5714,8 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
                     bot,
                     target_survey_id=target_id,
                     target_survey_name=(target.get("survey_name") if target else None),
+                    # Keep speaking the language this survey was built in.
+                    template=(target.get("template") if target else None),
                 )
 
             sel.callback = _cb
@@ -5524,11 +5728,107 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
     )
 
 
+async def _ensure_survey_tab(channel, guild_id: int, tab_name: str) -> None:
+    """Create `tab_name` in the guild's spreadsheet if it isn't there yet.
+
+    Leadership shouldn't have to go and hand-create two tabs before the
+    wizard will work — the storm structured-flow surfaces already create
+    their own tabs, and a survey needing a fresh pair per survey is the
+    place that needs it most.
+
+    Reports what happened either way, so "we made this for you" is never
+    silent. A sheet the alliance owns can be missing, unshared or renamed;
+    that's their problem to fix and it must not end the wizard, so it
+    degrades to the old "make sure this tab exists" instruction.
+    """
+    from config import get_spreadsheet, get_or_create_worksheet, describe_sheet_error
+
+    def _work():
+        sh = get_spreadsheet(guild_id)
+        existed = True
+        try:
+            sh.worksheet(tab_name)
+        except Exception:
+            existed = False
+        get_or_create_worksheet(sh, tab_name)
+        return existed
+
+    try:
+        existed = await asyncio.to_thread(_work)
+    except Exception as e:
+        print(f"[SETUP] Survey tab ensure failed guild={guild_id}: {describe_sheet_error(e)}")
+        await channel.send(
+            f"⚠️ I couldn't check your Google Sheet just now, so I haven't created "
+            f"**{tab_name}**. Setup will continue, but please make sure that tab "
+            f"exists in your sheet before members start submitting."
+        )
+        return
+
+    if existed:
+        await channel.send(f"✅ Found **{tab_name}** in your sheet.")
+    else:
+        await channel.send(f"✅ Created **{tab_name}** in your sheet.")
+
+
+async def _ask_survey_tab(
+    channel,
+    *,
+    prompt: str,
+    default: str,
+    current: str,
+    modal_title: str,
+    cancel_event,
+    guild_id: int,
+    claimed_tabs: dict,
+    also_claimed: dict,
+) -> str | None:
+    """Ask for one of a survey's two tab names, then make sure it exists.
+
+    Re-prompts on a name another survey already uses. Two surveys sharing
+    a tab corrupts silently rather than erroring: `append_survey_history`
+    only writes a header row when row 1 is empty, so the second survey's
+    answers land positionally under the first survey's column names.
+
+    `claimed_tabs` maps casefolded tab name → owning survey name for every
+    *other* survey. `also_claimed` is the same shape for tabs picked
+    earlier in this same wizard run, which stops a survey's own two tabs
+    from being pointed at each other.
+    """
+    while True:
+        tab = await ask_keep_or_change(
+            channel,
+            prompt,
+            default=default,
+            current=current,
+            modal_title=modal_title,
+            modal_label="Tab name",
+            timeout_cmd="setup_survey",
+            cancel_event=cancel_event,
+        )
+        if tab is None:
+            return None
+
+        owner = claimed_tabs.get(tab.casefold()) or also_claimed.get(tab.casefold())
+        if owner:
+            await channel.send(
+                f"⚠️ **{tab}** is already used by **{owner}**. Every survey needs its "
+                f"own two tabs, because sharing one would write both surveys' answers "
+                f"into the same columns. Please pick a different name."
+            )
+            # Don't re-offer the rejected name as the pre-filled default.
+            current = ""
+            continue
+
+        await _ensure_survey_tab(channel, guild_id, tab)
+        return tab
+
+
 async def run_survey_setup(
     interaction: discord.Interaction,
     bot,
     target_survey_id: str | None = None,
     target_survey_name: str | None = None,
+    template: str | None = None,
 ):
     """
     Walk an admin through configuring a survey.
@@ -5538,6 +5838,12 @@ async def run_survey_setup(
         (`guild_survey_config` row).
       • Any other id  — edits or creates an entry in `guild_extra_surveys`,
         which premium guilds use for additional named surveys.
+
+    `template` names the entry in `defaults.SURVEY_TEMPLATES` this survey
+    was built from. It decides the language every step speaks in, the tab
+    names suggested, and the questions offered at Step 6. Passing None
+    reads the template already saved on the survey, so re-running the
+    wizard on a survey reads the way it did when it was created.
     """
     import wizard_registry
 
@@ -5556,8 +5862,9 @@ async def run_survey_setup(
         save_extra_survey,
         has_survey_config,
         get_config,
+        survey_tabs_in_use,
     )
-    from defaults import DEFAULT_SURVEY_QUESTIONS
+    from defaults import derive_survey_tab_names, survey_template
 
     if target_survey_id is None:
         current = get_survey_config(guild_id)
@@ -5580,6 +5887,29 @@ async def run_survey_setup(
         saved_notify_ch = current.get("notify_channel_id") or 0
     questions = list(current.get("questions") or [])
 
+    # An explicit template wins (creating a survey); otherwise fall back to
+    # whatever this survey was built from (re-editing one).
+    template_key = template or current.get("template") or "squad_power"
+    tpl = survey_template(template_key)
+
+    # Tab names this survey should suggest. A template supplies its own;
+    # anything else derives both from the survey name so the suggestion
+    # is unique to this survey and can't collide with another one's.
+    tpl_tab_responses = tpl.get("tab_responses")
+    tpl_tab_history = tpl.get("tab_history")
+    if not (tpl_tab_responses and tpl_tab_history):
+        derived_responses, derived_history = derive_survey_tab_names(target_survey_name or "Survey")
+        tpl_tab_responses = tpl_tab_responses or derived_responses
+        tpl_tab_history = tpl_tab_history or derived_history
+
+    # A template's suggested tab names are shared by every guild using
+    # that template, so the second squad-power survey in a guild would be
+    # handed a name the first one already owns. Fall back to name-derived
+    # suggestions rather than defaulting leadership into a rejection.
+    claimed_tabs = survey_tabs_in_use(guild_id, exclude_survey_id=(target_survey_id or "default"))
+    if tpl_tab_responses.casefold() in claimed_tabs or tpl_tab_history.casefold() in claimed_tabs:
+        tpl_tab_responses, tpl_tab_history = derive_survey_tab_names(target_survey_name or "Survey")
+
     # ── If already configured, show summary and offer edit or cancel ─────────
     if survey_already_configured:
         q_count = len(questions)
@@ -5592,8 +5922,8 @@ async def run_survey_setup(
                 "Notification Channel",
                 f"<#{saved_notify_ch}>" if saved_notify_ch else "*not set*",
             ),
-            ("Stats Tab", current.get("tab_squad_powers") or "*not set*"),
-            ("History Tab", current.get("tab_history") or "*not set*"),
+            (tpl["responses_step_label"], current.get("tab_squad_powers") or "*not set*"),
+            (tpl["history_step_label"], current.get("tab_history") or "*not set*"),
             ("Questions", f"{q_count} configured" if q_count else "*none*"),
         ]
         title = (
@@ -5618,10 +5948,23 @@ async def run_survey_setup(
         guild_id, interaction=interaction, bot=interaction.client
     )
 
+    # Names offered by the "➕ Create a new channel" button. A named survey
+    # suggests channels named after itself; the guild's main survey keeps
+    # the names it has always suggested.
+    if target_survey_id and target_survey_name:
+        import re as _re
+
+        _slug = _re.sub(r"[^a-z0-9]+", "-", target_survey_name.lower()).strip("-") or "survey"
+        suggested_survey_channel = _slug[:90]
+        suggested_notify_channel = f"{_slug[:80]}-responses"
+    else:
+        suggested_survey_channel = "squad-survey"
+        suggested_notify_channel = "survey-responses"
+
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
         "Select the survey channel...",
-        suggested_name="squad-survey",
+        suggested_name=suggested_survey_channel,
         include_threads=is_premium_flag,
         guild=interaction.guild,
         current_id=saved_survey_ch,
@@ -5644,7 +5987,7 @@ async def run_survey_setup(
     # ── Step 2: Survey notification channel ───────────────────────────────────
     notify_ch_view = ChannelSelectStep(
         "Select the survey notification channel...",
-        suggested_name="survey-responses",
+        suggested_name=suggested_notify_channel,
         include_threads=is_premium_flag,
         guild=interaction.guild,
         current_id=saved_notify_ch,
@@ -5664,34 +6007,42 @@ async def run_survey_setup(
         return
     survey_notify_channel_id = notify_ch_view.selected_channel.id
 
-    # ── Step 3: Squad Powers tab ───────────────────────────────────────────────
-    tab_squad_powers = await ask_keep_or_change(
+    # ── Steps 3 and 4: this survey's own pair of tabs ──────────────────────────
+    # Stated up front rather than per-step: leadership picking tab names is
+    # the moment the one-pair-per-survey rule matters, and it's cheaper to
+    # explain once than to reject a name and explain then.
+    await channel.send(
+        "📑 **Next: your two sheet tabs**\n"
+        "This survey needs its own pair of tabs, separate from any other "
+        "survey's: one holding each member's current answers, one holding "
+        "every submission over time. **I'll create them for you** if they "
+        "aren't in your sheet yet."
+    )
+
+    tab_squad_powers = await _ask_survey_tab(
         channel,
-        "**Step 3 of 6 — Member Statistics Tab**\n"
-        "Which tab stores your members' statistics? We will update this sheet on each submission.\n"
-        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default="Squad Powers",
+        prompt=(f"**Step 3 of 6 — {tpl['responses_step_label']}**\n{tpl['responses_step_prompt']}"),
+        default=tpl_tab_responses,
         current=current.get("tab_squad_powers", ""),
-        modal_title="Member Statistics Tab",
-        modal_label="Tab name",
-        timeout_cmd="setup_survey",
+        modal_title=tpl["responses_step_label"],
         cancel_event=cancel_event,
+        guild_id=guild_id,
+        claimed_tabs=claimed_tabs,
+        also_claimed={},
     )
     if tab_squad_powers is None:
         return
 
-    # ── Step 4: Survey History tab ─────────────────────────────────────────────
-    tab_history = await ask_keep_or_change(
+    tab_history = await _ask_survey_tab(
         channel,
-        "**Step 4 of 6 — Survey History Tab**\n"
-        "Which tab stores the full history of all submissions?\n"
-        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default="Survey History",
+        prompt=(f"**Step 4 of 6 — {tpl['history_step_label']}**\n{tpl['history_step_prompt']}"),
+        default=tpl_tab_history,
         current=current.get("tab_history", ""),
-        modal_title="Survey History Tab",
-        modal_label="Tab name",
-        timeout_cmd="setup_survey",
+        modal_title=tpl["history_step_label"],
         cancel_event=cancel_event,
+        guild_id=guild_id,
+        claimed_tabs=claimed_tabs,
+        also_claimed={tab_squad_powers.casefold(): target_survey_name or "this survey"},
     )
     if tab_history is None:
         return
@@ -5703,12 +6054,16 @@ async def run_survey_setup(
     # so they don't have to retype a paragraph just to tweak channels
     # or questions.
     saved_intro = (current.get("intro_message") or "").strip()
+    # A template ships a written intro, so a brand-new template survey gets
+    # the same Keep/Edit choice as a re-run rather than a blank page.
+    offered_intro = saved_intro or (tpl.get("intro_message") or "").strip()
     intro_message: str | None = None
 
-    if saved_intro:
+    if offered_intro:
         # Preview is truncated to keep the embed readable when leadership
         # has saved a long intro.
-        preview = saved_intro if len(saved_intro) <= 500 else saved_intro[:500] + "…"
+        preview = offered_intro if len(offered_intro) <= 500 else offered_intro[:500] + "…"
+        intro_source_line = "**Currently saved:**" if saved_intro else "**The template suggests:**"
 
         class IntroChoiceView(discord.ui.View):
             def __init__(self):
@@ -5738,32 +6093,31 @@ async def run_survey_setup(
         await channel.send(
             "**Step 5 of 6 — Survey Intro Message**\n"
             "Members see this introductory message before taking the survey.\n\n"
-            f"**Currently saved:**\n>>> {preview}",
+            f"{intro_source_line}\n>>> {preview}",
             view=intro_view,
         )
         await wait_view_or_cancel(intro_view, cancel_event)
         if intro_view.cancelled:
             return
         if intro_view.intro_choice == "keep":
-            intro_message = saved_intro
+            intro_message = offered_intro
         elif intro_view.intro_choice == "edit":
             await channel.send(
-                "Type the new intro message below. Use the example from "
-                "the previous step as a guide, or paste in your own."
+                "Type the new intro message below. Use the one above as a "
+                "guide, or paste in your own."
             )
         else:
             await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
             return
 
     if intro_message is None:
-        if not saved_intro:
+        if not offered_intro:
             await channel.send(
                 "**Step 5 of 6 — Survey Intro Message**\n"
                 "When your survey is posted, what introductory message do you want your members to see "
                 "before they take the survey?\n\n"
                 "**Example:**\n"
-                "*Please fill out this survey each week to help us track squad powers, "
-                "balance our teams, and prepare for season events!*"
+                f"*{tpl['intro_step_example']}*"
             )
         intro_reply = await wizard_registry.wait_or_cancel(
             bot.wait_for("message", check=check, timeout=300),
@@ -5778,75 +6132,107 @@ async def run_survey_setup(
         intro_message = intro_reply.content.strip()
 
     # ── Step 6: Survey Questions ───────────────────────────────────────────────
-    # Show default questions and ask keep/edit/scratch
-    default_q_list = "\n".join(
-        f"{i + 1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
-        for i, q in enumerate(DEFAULT_SURVEY_QUESTIONS)
-    )
-    existing_q_list = (
-        "\n".join(
-            f"{i + 1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
-            for i, q in enumerate(questions)
+    # What's on offer depends on what exists: the template's question set
+    # (if it has one) and whatever this survey already had. A scratch
+    # survey being configured for the first time has neither, so there's
+    # nothing to choose between and it goes straight to the builder.
+    def _summarise(qs):
+        return "\n".join(
+            f"{i + 1}. **{q['label']}** — "
+            + (
+                "dropdown: " + ", ".join(q["options"])
+                if q["type"] == "dropdown"
+                else q.get("type", "text")
+            )
+            for i, q in enumerate(qs)
         )
-        if questions
-        else "*(no questions configured yet)*"
-    )
 
-    class QuestionStartView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.choice = None
+    template_questions = list(tpl.get("questions") or [])
+    has_template_qs = bool(template_questions)
+    has_existing_qs = bool(questions)
 
-        @discord.ui.button(label="✅ Use default questions", style=discord.ButtonStyle.success)
-        async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.choice = "default"
-            for item in self.children:
-                item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content="✅ Using default questions.", view=self
+    if not has_template_qs and not has_existing_qs:
+        q_choice = "scratch"
+    else:
+        body = "**Step 6 of 6 — Survey Questions**\n\n"
+        if has_template_qs:
+            body += (
+                f"**Questions from the {tpl['name']} template:**\n"
+                f"{_summarise(template_questions)}\n\n"
             )
-            self.stop()
+        if has_existing_qs:
+            body += f"**This survey's current questions:**\n{_summarise(questions)}\n\n"
+        body += "How would you like to set up this survey's questions?"
 
-        @discord.ui.button(label="✏️ Edit existing questions", style=discord.ButtonStyle.primary)
-        async def edit_existing(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.choice = "edit"
-            for item in self.children:
-                item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content="✏️ Entering edit mode...", view=self
-            )
-            self.stop()
+        class QuestionStartView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+                self.choice = None
 
-        @discord.ui.button(label="🔄 Start from scratch", style=discord.ButtonStyle.secondary)
-        async def start_scratch(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.choice = "scratch"
-            for item in self.children:
-                item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content="🔄 Starting from scratch...", view=self
-            )
-            self.stop()
+                # Built explicitly rather than with decorators so the
+                # options can vary — decorator buttons can't be
+                # conditionally added.
+                def _add(label, style, choice, ack):
+                    btn = discord.ui.Button(label=label[:80], style=style)
 
-    q_start_view = QuestionStartView()
-    await channel.send(
-        "**Step 6 of 6 — Survey Questions**\n\n"
-        f"**Default questions (Last War):**\n{default_q_list}\n\n"
-        f"**Your existing questions:**\n{existing_q_list}\n\n"
-        "Would you like to use the defaults, edit your existing questions, or start from scratch?",
-        view=q_start_view,
-    )
-    await wait_view_or_cancel(q_start_view, cancel_event)
-    if q_start_view.cancelled:
-        return
-    if not q_start_view.choice:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
-        return
+                    async def _cb(inter: discord.Interaction):
+                        self.choice = choice
+                        for item in self.children:
+                            item.disabled = True
+                        await wizard_registry.safe_edit_response(inter, content=ack, view=self)
+                        self.stop()
 
-    if q_start_view.choice == "default":
-        questions = list(DEFAULT_SURVEY_QUESTIONS)
+                    btn.callback = _cb
+                    self.add_item(btn)
 
-    elif q_start_view.choice in ("edit", "scratch"):
-        if q_start_view.choice == "scratch":
+                if has_template_qs:
+                    _add(
+                        "✅ Use these questions",
+                        discord.ButtonStyle.success,
+                        "template_asis",
+                        f"✅ Using the {tpl['name']} questions.",
+                    )
+                    _add(
+                        "✏️ Edit these questions",
+                        discord.ButtonStyle.primary,
+                        "template_edit",
+                        "✏️ Loading the template's questions so you can edit them...",
+                    )
+                if has_existing_qs:
+                    # Both edit buttons can be on screen at once when a
+                    # template survey is re-run. The labels mirror the two
+                    # headings in the message body so it's clear which set
+                    # each one opens.
+                    _add(
+                        "✏️ Edit this survey's questions",
+                        discord.ButtonStyle.primary,
+                        "edit",
+                        "✏️ Entering edit mode...",
+                    )
+                _add(
+                    "🔄 Start from scratch",
+                    discord.ButtonStyle.secondary,
+                    "scratch",
+                    "🔄 Starting from scratch...",
+                )
+
+        q_start_view = QuestionStartView()
+        await channel.send(body, view=q_start_view)
+        await wait_view_or_cancel(q_start_view, cancel_event)
+        if q_start_view.cancelled:
+            return
+        if not q_start_view.choice:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
+            return
+        q_choice = q_start_view.choice
+
+    if q_choice == "template_asis":
+        questions = list(template_questions)
+
+    else:
+        if q_choice == "template_edit":
+            questions = list(template_questions)
+        elif q_choice == "scratch":
             questions = []
 
         # ── Question builder loop ──────────────────────────────────────────────
@@ -5862,7 +6248,7 @@ async def run_survey_setup(
                         + (
                             "dropdown: " + ", ".join(q["options"])
                             if q["type"] == "dropdown"
-                            else "text"
+                            else q.get("type", "text")
                         )
                         + (f" *(help: {q['placeholder']})*" if q.get("placeholder") else "")
                         for i, q in enumerate(questions)
@@ -6283,7 +6669,9 @@ async def run_survey_setup(
     if target_survey_id is None:
         # Default survey: legacy single-row storage, plus the channel IDs go
         # to guild_configs so older code that reads them stays happy.
-        save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
+        save_survey_config(
+            guild_id, tab_squad_powers, tab_history, questions, intro_message, template_key
+        )
         from config import update_config_field
 
         update_config_field(guild_id, "survey_channel_id", survey_channel_id)
@@ -6304,8 +6692,36 @@ async def run_survey_setup(
             notify_channel_id=survey_notify_channel_id,
             reminder_message=current.get("reminder_message", "") or "",
             reminder_enabled=int(current.get("reminder_enabled") or 0),
+            template=template_key,
         )
         next_step_cmd = "/survey"  # premium UI surfaces edit/remove from there
+
+    # Label both tabs now that the question list is final. Steps 3 and 4
+    # create the tabs but run before Step 6, so this is the first moment
+    # the headers are knowable. Leaving them blank until the first member
+    # submits invites an alliance to hand-enter data under no headers.
+    from survey import seed_survey_headers
+    from config import describe_sheet_error
+
+    try:
+        seeded = await asyncio.to_thread(
+            seed_survey_headers,
+            guild_id,
+            tab_responses=tab_squad_powers,
+            tab_history=tab_history,
+            questions=questions,
+        )
+    except Exception as e:
+        print(f"[SETUP] Survey header seed failed guild={guild_id}: {describe_sheet_error(e)}")
+        seeded = []
+        await channel.send(
+            "⚠️ I couldn't add the column headers to your sheet just now. Your "
+            "survey is saved, and I'll add them the first time a member submits."
+        )
+    if seeded:
+        await channel.send(
+            "📑 Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
+        )
 
     q_summary = "\n".join(
         f"• **{q['label']}** — {q['type']}"
@@ -6322,8 +6738,8 @@ async def run_survey_setup(
     embed.add_field(
         name="Notification Channel", value=f"<#{survey_notify_channel_id}>", inline=True
     )
-    embed.add_field(name="Stats Tab", value=tab_squad_powers, inline=True)
-    embed.add_field(name="History Tab", value=tab_history, inline=True)
+    embed.add_field(name=tpl["responses_step_label"], value=tab_squad_powers, inline=True)
+    embed.add_field(name=tpl["history_step_label"], value=tab_history, inline=True)
     embed.add_field(name="Questions", value=q_summary[:1024], inline=False)
     from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_TRANSLATE
 

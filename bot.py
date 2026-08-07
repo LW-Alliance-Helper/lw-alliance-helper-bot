@@ -29,7 +29,7 @@ from config import (
 )
 import support_join_watch
 import wizard_registry
-from messages import NOT_SET_UP
+from messages import BOT_NOT_IN_GUILD, NOT_SET_UP
 
 load_dotenv()
 
@@ -38,7 +38,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.8.3"
+__version__ = "1.8.4"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -185,6 +185,56 @@ async def guard(interaction: discord.Interaction) -> bool:
         )
         return False
     return True
+
+
+# ── Install-scope guard ────────────────────────────────────────────────────────
+
+
+async def reject_commands_only_install(interaction: discord.Interaction) -> bool:
+    """Global tree check: refuse commands from guilds the bot never joined.
+
+    A guild can install the app with `applications.commands` but without
+    the `bot` scope, which registers every command while no bot member
+    joins. Commands are invocable but nothing they do can succeed, and
+    each gate downstream misreports the cause: `guard` sends NOT_SET_UP,
+    telling leadership to run `/setup` for a bot that was never there.
+
+    A resolvable `guild_id` with no cached guild is the signal. Every
+    command carries `@app_commands.guild_only()` and none declares a
+    user-install context, so the bot is a member of every guild it can
+    legitimately be commanded from.
+
+    Returning False makes discord.py flag the interaction failed and stop
+    without raising, so this never reaches `on_app_command_error` and
+    never doubles up on the reply.
+    """
+    # Before READY the guild cache is still filling and an empty lookup
+    # proves nothing. Let those through rather than risk telling a
+    # correctly-installed alliance that the bot isn't there.
+    if not bot.is_ready():
+        return True
+    if interaction.guild_id is None or bot.get_guild(interaction.guild_id) is not None:
+        return True
+
+    print(
+        f"[INSTALL] Command in guild {interaction.guild_id} with no bot member "
+        f"(commands-only install)"
+    )
+    # Deliberately not Sentry-captured: this is an install-link problem,
+    # not a bug, and every affected guild would report it on every use.
+    try:
+        await interaction.response.send_message(BOT_NOT_IN_GUILD, ephemeral=True)
+    except discord.HTTPException:
+        # Interaction already expired or Discord rejected the reply. The
+        # command is refused either way.
+        pass
+    return False
+
+
+# discord.py invokes this as `self.interaction_check(interaction)`, so an
+# instance attribute shadows the no-op default and receives the
+# interaction directly.
+bot.tree.interaction_check = reject_commands_only_install
 
 
 # ── Bot events ─────────────────────────────────────────────────────────────────

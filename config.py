@@ -1791,6 +1791,67 @@ def get_or_create_worksheet(
         return ws
 
 
+def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str = "") -> list[str]:
+    """Merge a config-driven column list into a tab's existing header.
+
+    Sheet writers whose columns come from an editable question list can't
+    just write `desired` over row 1: rows already stored were written
+    under the old column order, and relabelling them in place silently
+    turns every historical answer into a lie about a different question.
+
+    So columns are only ever **added**, never removed or reordered. A
+    question dropped from the config keeps its column and its history; a
+    question added gets a fresh column on the right; a *renamed* one
+    reads as a drop plus an add, which leaves the old answers intact
+    under the old label rather than mislabelling them.
+
+    `pin_last` names a column that must stay rightmost (the survey
+    responses tab's "Date Modified"). New columns land before it, which
+    shifts it, so a caller using `pin_last` has to remap existing rows
+    into the returned layout rather than just rewriting row 1.
+
+    Returns the merged header. Compare it against `existing` to decide
+    whether the sheet needs writing at all.
+    """
+    if not any(existing):
+        return list(desired)
+
+    # Trailing blanks are what Sheets pads a short header row with.
+    merged = list(existing)
+    while merged and not merged[-1]:
+        merged.pop()
+
+    tail: list[str] = []
+    if pin_last and merged and merged[-1] == pin_last:
+        tail = [merged.pop()]
+
+    for col in desired:
+        if pin_last and col == pin_last:
+            continue
+        if col and col not in merged:
+            merged.append(col)
+
+    # A tab that predates the pinned column, or has it stranded somewhere
+    # other than the right edge, still has to end up with it rightmost.
+    if pin_last and not tail and pin_last in desired:
+        if pin_last in merged:
+            merged.remove(pin_last)
+        tail = [pin_last]
+
+    return merged + tail
+
+
+def row_for_header(header: list[str], values_by_column: dict) -> list[str]:
+    """Lay values out to match `header`, by column name rather than order.
+
+    The other half of `merge_sheet_header`: once columns can move, a row
+    built positionally from the question list lands in the wrong cells.
+    Columns with nothing to say are written blank rather than skipped, so
+    the row stays aligned.
+    """
+    return [str(values_by_column.get(col, "")) for col in header]
+
+
 def power_column_letter_to_index(letter: str) -> int:
     """Convert a single column letter (A-Z) to a 0-indexed integer.
 
@@ -4483,6 +4544,134 @@ def save_extra_survey(
             ),
         )
         conn.commit()
+
+
+# Every per-guild configurable sheet tab, as
+# (table, tab column, config field, what the alliance calls the feature).
+# `field` is what a wizard passes as `exclude_field` so a step doesn't
+# report a collision with the value it's currently editing.
+_TAB_OWNERS = [
+    ("guild_configs", "tab_train_schedule", "tab_train_schedule", "your train schedule"),
+    ("guild_configs", "tab_ds_assignments", "tab_ds_assignments", "your Desert Storm assignments"),
+    ("guild_configs", "tab_sitouts", "tab_sitouts", "your storm sit-outs"),
+    ("guild_configs", "tab_member_default", "tab_member_default", "your default member tab"),
+    ("guild_train_config", "tab_name", "train_tab_name", "your train schedule"),
+    ("guild_buddy_config", "buddy_tab", "buddy_tab", "your Buddy System list"),
+    ("guild_growth_config", "tab_growth", "tab_growth", "your Growth Tracking snapshots"),
+    ("guild_growth_config", "tab_breakdown", "tab_breakdown", "your Growth Breakdown"),
+    ("guild_growth_config", "tab_source", "tab_source", "your Growth data source"),
+    ("guild_birthday_config", "tab_name", "birthday_tab_name", "your Birthdays list"),
+    ("guild_member_roster_config", "tab_name", "roster_tab_name", "your Member Roster"),
+]
+
+# Storm rows are keyed by (guild, event_type), so their labels name the event.
+_STORM_TAB_OWNERS = [
+    ("tab_name", "storm_tab_name", "{label} assignments"),
+    ("participation_tab_name", "participation_tab_name", "{label} participation log"),
+    ("participation_roster_tab", "participation_roster_tab", "{label} participation roster"),
+]
+
+# `buddy_config.profession_tab` is deliberately pointed at the survey's
+# stats tab — profession's single source of truth is that survey, not a
+# second copy. It's a legitimate overlap, so it's never reported as a
+# collision. See `follow_survey_tab_rename`.
+_INTENTIONAL_TAB_READERS = {"profession_tab"}
+
+
+def tabs_in_use(
+    guild_id: int,
+    exclude_field: str | None = None,
+    exclude_survey_id: str | None = None,
+) -> dict[str, str]:
+    """Map every sheet tab this guild has configured to the feature using it.
+
+    Keys are casefolded tab names; values are what the *alliance* calls
+    the feature, so a wizard can say "that's your Growth Breakdown"
+    rather than naming a column. `exclude_field` drops the field being
+    edited right now, so re-running a wizard and keeping your own tab
+    name isn't a collision with yourself.
+
+    Deliberate cross-references (see `_INTENTIONAL_TAB_READERS`) are left
+    out entirely — reporting those as collisions would train leadership
+    to click past a warning that's wrong.
+
+    Read-only and only called from wizard steps, so the handful of
+    queries here is not a hot path.
+    """
+    claimed: dict[str, str] = {}
+
+    def _claim(tab, label):
+        tab = (tab or "").strip()
+        if tab:
+            claimed.setdefault(tab.casefold(), label)
+
+    with _get_conn() as conn:
+        for table, column, field, label in _TAB_OWNERS:
+            if field == exclude_field or field in _INTENTIONAL_TAB_READERS:
+                continue
+            try:
+                row = conn.execute(
+                    f"SELECT {column} FROM {table} WHERE guild_id = ?", (guild_id,)
+                ).fetchone()
+            except Exception:
+                continue  # table not migrated in this DB yet
+            if row:
+                _claim(row[0], label)
+
+        for column, field, label_fmt in _STORM_TAB_OWNERS:
+            if field == exclude_field:
+                continue
+            try:
+                rows = conn.execute(
+                    f"SELECT event_type, {column} FROM guild_storm_config WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchall()
+            except Exception:
+                continue
+            for event_type, tab in rows:
+                label = "Desert Storm" if (event_type or "").upper() == "DS" else "Canyon Storm"
+                _claim(tab, label_fmt.format(label=f"your {label}"))
+
+    # Surveys carry their own names, so they're worth naming individually.
+    # `exclude_survey_id` is how the survey wizard keeps its own tabs out:
+    # re-running it and keeping your own names is not a collision, and the
+    # survey-vs-survey case is already a hard rejection upstream.
+    for tab, owner in survey_tabs_in_use(guild_id, exclude_survey_id).items():
+        claimed.setdefault(tab, f"the {owner} survey" if owner != "Default" else "your main survey")
+
+    return claimed
+
+
+def follow_survey_tab_rename(guild_id: int, old_tab: str, new_tab: str) -> bool:
+    """Re-point the Buddy System at a renamed survey stats tab.
+
+    Profession's single source of truth is the survey's stats tab, but
+    the two are configured in different wizards and stored in different
+    columns with nothing linking them. Renaming the tab in survey setup
+    used to leave the buddy config pointing at a name that no longer
+    exists, and the breakage only showed up later as a config-health
+    notice against a feature leadership hadn't touched.
+
+    Returns True when it actually moved something.
+    """
+    old_tab = (old_tab or "").strip()
+    new_tab = (new_tab or "").strip()
+    if not old_tab or not new_tab or old_tab.casefold() == new_tab.casefold():
+        return False
+
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT profession_tab FROM guild_buddy_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        if not row or (row[0] or "").strip().casefold() != old_tab.casefold():
+            return False
+        conn.execute(
+            "UPDATE guild_buddy_config SET profession_tab = ? WHERE guild_id = ?",
+            (new_tab, guild_id),
+        )
+        conn.commit()
+    print(f"[CONFIG] Buddy profession_tab followed survey rename '{old_tab}' → '{new_tab}'")
+    return True
 
 
 def survey_tabs_in_use(guild_id: int, exclude_survey_id: str | None = None) -> dict[str, str]:

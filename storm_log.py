@@ -1078,9 +1078,21 @@ def append_participation_row(
 ) -> None:
     """
     Append a row to the configured participation tab. Header columns are:
-    Date | Event | <one column per configured question, in order>.
+    Date | Event | <one column per configured question>.
+
+    Participation questions are editable after events have been logged,
+    so the header is reconciled rather than assumed: columns are added on
+    the right and never reordered, and each answer is placed under its own
+    column name. Writing rows positionally against a header written once,
+    long ago, is what filed #440 — the same reconciliation
+    `write_member_log` has always done.
     """
-    from config import get_participation_config
+    from config import (
+        get_participation_config,
+        get_or_create_worksheet,
+        merge_sheet_header,
+        row_for_header,
+    )
 
     pcfg = get_participation_config(guild_id, event_type)
     tab = pcfg.get("tab_name") or (
@@ -1089,27 +1101,24 @@ def append_participation_row(
     questions = pcfg.get("questions") or []
 
     sh = _get_spreadsheet(guild_id)
-    try:
-        ws = sh.worksheet(tab)
-    except Exception:
-        # Create the tab if it doesn't exist
-        ws = sh.add_worksheet(title=tab, rows=200, cols=max(8, len(questions) + 4))
+    ws = get_or_create_worksheet(sh, tab, rows=200, cols=max(8, len(questions) + 4))
 
-    headers = ["Date", "Event"] + [q.get("label", q.get("key", "?")) for q in questions]
-    existing_header = ws.row_values(1)
-    if not any(existing_header):
-        ws.update("A1", [headers], value_input_option="USER_ENTERED")
+    desired = ["Date", "Event"] + [q.get("label", q.get("key", "?")) for q in questions]
+    existing_header = [c for c in ws.row_values(1) if c]
+    header = merge_sheet_header(existing_header, desired)
+    if header != existing_header:
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
 
-    row = [
-        f"{log_date.month}/{log_date.day}/{log_date.year}",
-        event_type.upper(),
-    ]
+    by_column: dict = {}
     for q in questions:
         val = answers.get(q.get("key", ""), "")
         if isinstance(val, list):
             val = ", ".join(str(v) for v in val)
-        row.append(str(val) if val is not None else "")
-    ws.append_row(row, value_input_option="USER_ENTERED")
+        by_column[q.get("label", q.get("key", "?"))] = "" if val is None else val
+    by_column["Date"] = f"{log_date.month}/{log_date.day}/{log_date.year}"
+    by_column["Event"] = event_type.upper()
+
+    ws.append_row(row_for_header(header, by_column), value_input_option="USER_ENTERED")
     print(
         f"[LOG] Participation row appended for guild={guild_id} "
         f"event={event_type} date={log_date.isoformat()}"

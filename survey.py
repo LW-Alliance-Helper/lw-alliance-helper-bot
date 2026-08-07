@@ -175,18 +175,75 @@ def survey_question_keys_and_labels(questions: list) -> tuple[list[str], list[st
     return q_keys, q_labels
 
 
+# Bot-owned columns. Named so the merge logic can tell them apart from
+# the alliance's own question columns, which come and go with the config.
+SURVEY_MODIFIED_COLUMN = "Date Modified"
+SURVEY_RESPONSES_BASE = ["Username", "Discord ID"]
+SURVEY_HISTORY_BASE = ["Timestamp", "Discord ID", "Username"]
+
+
 def survey_header_rows(questions: list) -> tuple[list[str], list[str]]:
     """Row 1 for a survey's two tabs: (current answers, submission history).
 
     One definition shared by the wizard, which seeds these the moment a
-    survey is saved, and the two write paths, which still fall back to
-    writing them if they find a blank tab.
+    survey is saved, and the two write paths, which reconcile against
+    whatever the tab already has.
     """
     _, q_labels = survey_question_keys_and_labels(questions)
     return (
-        ["Username", "Discord ID"] + q_labels + ["Date Modified"],
-        ["Timestamp", "Discord ID", "Username"] + q_labels,
+        SURVEY_RESPONSES_BASE + q_labels + [SURVEY_MODIFIED_COLUMN],
+        SURVEY_HISTORY_BASE + q_labels,
     )
+
+
+def _values_by_column(
+    questions: list,
+    data: dict,
+    username: str,
+    discord_id: str,
+    stamp: str,
+    *,
+    stamp_column: str = SURVEY_MODIFIED_COLUMN,
+) -> dict:
+    """Map every column this survey can write to the value going in it.
+
+    Answers arrive keyed by question *key* but are stored under the
+    question *label*, which is what the sheet's header holds. The
+    bot-owned columns are written last so a question labelled
+    "Username" can't overwrite the identity column the upsert matches on.
+    """
+    by_column: dict = {}
+    for i, q in enumerate(questions):
+        key = q.get("key", f"field_{i}")
+        value = data.get(key, "")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        by_column[q.get("label", key)] = "" if value is None else value
+
+    by_column["Username"] = username
+    by_column["Discord ID"] = discord_id
+    by_column[stamp_column] = stamp
+    return by_column
+
+
+def _remap_rows_to_header(rows: list[list[str]], header: list[str]) -> list[list[str]]:
+    """Rewrite stored rows into a new column layout, matching by name.
+
+    Used when a tab's header has to change shape. Every value follows its
+    own column, so an answer written under "Drone Level" stays under
+    "Drone Level" wherever that column ends up. Columns the old sheet
+    didn't have come out blank.
+    """
+    if not rows:
+        return []
+    old_header = [c for c in rows[0] if c]
+    out = [list(header)]
+    for row in rows[1:]:
+        if not any(row):
+            continue
+        by_column = {col: (row[i] if i < len(row) else "") for i, col in enumerate(old_header)}
+        out.append([by_column.get(col, "") for col in header])
+    return out
 
 
 def seed_survey_headers(
@@ -237,13 +294,17 @@ def update_squad_powers(
     Columns are derived from the survey's question config. If `survey` is
     provided (multi-survey path), its questions/tab override the default.
     """
-    from config import get_survey_config
+    from config import (
+        get_survey_config,
+        get_or_create_worksheet,
+        merge_sheet_header,
+        row_for_header,
+    )
 
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
-    from config import get_or_create_worksheet
 
     questions = survey_cfg.get("questions") or []
     sh = _get_spreadsheet(guild_id)
@@ -256,17 +317,25 @@ def update_squad_powers(
 
     _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year}"
-    q_keys, _ = survey_question_keys_and_labels(questions)
 
-    # The wizard seeds this when the survey is saved. Still handled here
-    # for surveys configured before it did, and for a tab recreated after
-    # someone deleted it.
-    if not rows or not any(rows[0]):
-        header, _unused = survey_header_rows(questions)
-        ws.update("A1", [header], value_input_option="USER_ENTERED")
-        rows = ws.get_all_values()
+    desired, _unused = survey_header_rows(questions)
+    existing_header = rows[0] if rows else []
+    header = merge_sheet_header(existing_header, desired, pin_last=SURVEY_MODIFIED_COLUMN)
 
-    new_row = [username, discord_id] + [data.get(k, "") for k in q_keys] + [now_str]
+    # This tab holds one row per member, so when the columns move it can
+    # afford to be remapped wholesale — which keeps "Date Modified"
+    # rightmost instead of stranding it mid-header. The history tab can't
+    # (it grows without bound), so it only ever gains columns on the right.
+    if header != [c for c in existing_header if c]:
+        rows = _remap_rows_to_header(rows, header)
+        ws.update("A1", rows or [header], value_input_option="USER_ENTERED")
+        if not rows:
+            rows = [header]
+        print(f"[SURVEY] Rebuilt '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
+
+    new_row = row_for_header(
+        header, _values_by_column(questions, data, username, discord_id, now_str)
+    )
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip() == discord_id:
@@ -282,7 +351,13 @@ def append_survey_history(
     discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
 ):
     """Append a timestamped row to the Survey History sheet."""
-    from config import get_config, get_survey_config, get_or_create_worksheet
+    from config import (
+        get_config,
+        get_survey_config,
+        get_or_create_worksheet,
+        merge_sheet_header,
+        row_for_header,
+    )
 
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
@@ -296,20 +371,31 @@ def append_survey_history(
     )
     ws = get_or_create_worksheet(sh, tab_name)
 
-    q_keys, _ = survey_question_keys_and_labels(questions)
+    _unused, desired = survey_header_rows(questions)
+    existing = [c for c in ws.row_values(1) if c]
+    header = merge_sheet_header(existing, desired)
 
-    existing = ws.row_values(1)
-    if not any(existing):
-        _unused, header = survey_header_rows(questions)
+    if not existing:
         ws.update("A1", [header], value_input_option="USER_ENTERED")
         try:
             ws.set_basic_filter()
         except Exception:
             pass
+    elif header != existing:
+        # Append-only: this tab is every submission ever, so columns are
+        # added on the right and never reordered. Rows already stored
+        # keep meaning exactly what they meant when they were written.
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        print(
+            f"[SURVEY] Extended '{tab_name}' header for guild={guild_id} to {len(header)} columns"
+        )
 
     _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year} {_now:%H:%M} UTC"
-    row = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
+    row = row_for_header(
+        header,
+        _values_by_column(questions, data, username, discord_id, now_str, stamp_column="Timestamp"),
+    )
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
 

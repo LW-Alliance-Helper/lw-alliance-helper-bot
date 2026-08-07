@@ -1,0 +1,50 @@
+name: Discord changelog block present
+
+# Every release posts to the support server's #changelog (#92), so the
+# block has to exist before the release lands. Checking it here, on the
+# PR into main, is the whole point: a red check on a PR is harmless,
+# whereas a red job on main would block the Railway deploy.
+#
+# Skips when __version__ is unchanged against main (docs-only PRs, and
+# any PR that isn't a release). Hotfixes pushed straight to main never
+# open a PR, so they bypass this — release-on-main.yml warns loudly in
+# its job summary if their block is missing.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  changelog-block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare version against main
+        id: version
+        run: |
+          VERSION=$(grep -oP '__version__ = "\K[^"]+' bot.py)
+          if [ -z "$VERSION" ]; then
+            echo "Could not parse __version__ from bot.py" >&2
+            exit 1
+          fi
+
+          BASE=$(git show "origin/${{ github.base_ref }}:bot.py" 2>/dev/null \
+            | grep -oP '__version__ = "\K[^"]+' || echo "")
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$VERSION" = "$BASE" ]; then
+            echo "__version__ is unchanged at $VERSION — not a release PR."
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "__version__ moves $BASE -> $VERSION — release PR."
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require a Discord changelog block
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          python3 scripts/discord_changelog.py "${{ steps.version.outputs.version }}" --check

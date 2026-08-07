@@ -27,6 +27,12 @@ DEFAULT_PATH = Path("docs/DISCORD_CHANGELOG.md")
 # Discord hard-caps webhook `content` at 2000 characters.
 DISCORD_CONTENT_LIMIT = 2000
 
+# Marker that opts a release out of posting. Every release posts unless
+# its block says this, so forgetting to write one is caught by
+# `--check` on the release PR rather than discovered as a quiet channel
+# weeks later.
+NO_POST_MARKER = "NO POST"
+
 
 def find_block(content: str, version: str) -> str | None:
     """Return the post whose header names `version`, or None.
@@ -52,6 +58,17 @@ def find_block(content: str, version: str) -> str | None:
     return None
 
 
+def is_no_post(block: str) -> bool:
+    """True when a block exists purely to record "this one doesn't post".
+
+    Keeping the version in the file with a reason is better than leaving
+    a hole, because a hole is indistinguishable from having forgotten.
+    """
+    return any(
+        line.strip().upper().startswith(NO_POST_MARKER) for line in (block or "").splitlines()[1:]
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", help="version being released, e.g. 1.8.4")
@@ -62,17 +79,60 @@ def main(argv: list[str] | None = None) -> int:
         default=DISCORD_CONTENT_LIMIT,
         help="max characters Discord will accept",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "validate that this version has a block (or an explicit "
+            f"'{NO_POST_MARKER}') and exit non-zero if not. For the release PR."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
         content = args.path.read_text(encoding="utf-8")
     except FileNotFoundError:
         print(f"{args.path} not found", file=sys.stderr)
-        return 0
+        return 1 if args.check else 0
 
     block = find_block(content, args.version)
+
+    if args.check:
+        if block is None:
+            print(
+                f"No Discord changelog block for {args.version} in {args.path}.\n"
+                f"\n"
+                f"Every release posts to #changelog. Add a block:\n"
+                f"\n"
+                f"    **{args.version}** — YYYY-MM-DD\n"
+                f"    - what changed, one line each, max 5\n"
+                f"\n"
+                f"or opt this release out explicitly:\n"
+                f"\n"
+                f"    **{args.version}** — YYYY-MM-DD\n"
+                f"    {NO_POST_MARKER}: nothing alliance-facing\n"
+                f"\n"
+                f"See the preamble in {args.path} for how to write one.",
+                file=sys.stderr,
+            )
+            return 1
+        if not is_no_post(block) and len(block) > args.limit:
+            print(
+                f"Block for {args.version} is {len(block)} chars, over Discord's "
+                f"{args.limit} limit. Trim it.",
+                file=sys.stderr,
+            )
+            return 1
+        state = NO_POST_MARKER if is_no_post(block) else "will post"
+        print(f"{args.version}: {state}")
+        return 0
+
     if block is None:
         print(f"No block for {args.version} in {args.path}", file=sys.stderr)
+        return 0
+
+    if is_no_post(block):
+        print(f"{args.version} is marked {NO_POST_MARKER} — nothing to send", file=sys.stderr)
         return 0
 
     if len(block) > args.limit:

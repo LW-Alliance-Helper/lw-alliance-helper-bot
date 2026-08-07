@@ -13,9 +13,21 @@ should read in Discord. Nothing is transformed on the way out.
 - Max 5 bullets, one thing changed per bullet.
 - No links, no bold, no emoji, no trailing periods. Backticks stay on
   slash commands.
-- A release with nothing alliance-facing gets **no block at all**. Nothing
-  posts, and the next release covers the gap with a range header
-  (`**1.7.1 to 1.7.4** — 2026-07-21`), which still matches on version.
+
+**Every release posts.** `release-changelog-check.yml` fails the release
+PR when `__version__` moves and this file has no block for it, so a
+release can't ship without one. To skip a release deliberately, say so in
+its block rather than leaving a hole — a hole is indistinguishable from
+having forgotten:
+
+```
+**1.8.6** — 2026-08-12
+NO POST: dependency bumps only
+```
+
+Older entries use a range header (`**1.7.1 to 1.7.4** — 2026-07-21`),
+from when several quiet releases got bundled into one post. Those still
+resolve, but new releases each get their own block.
 
 ## Compactness (this is the part that keeps getting missed)
 

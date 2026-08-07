@@ -104,6 +104,76 @@ class TestMain:
         assert out.out.strip().startswith("**1.9.0**")
 
 
+class TestNoPost:
+    """Skipping a release is explicit, so a hole always means forgotten."""
+
+    SKIPPED = """---
+
+**1.9.0** — 2026-09-01
+NO POST: dependency bumps only
+"""
+
+    def test_a_marked_block_sends_nothing(self, tmp_path, capsys):
+        from scripts.discord_changelog import is_no_post
+
+        path = tmp_path / "d.md"
+        path.write_text(self.SKIPPED, encoding="utf-8")
+        code = main(["1.9.0", "--path", str(path)])
+        out = capsys.readouterr()
+
+        assert code == 0
+        assert out.out.strip() == ""
+        assert "NO POST" in out.err
+        assert is_no_post(find_block(self.SKIPPED, "1.9.0"))
+
+    def test_a_marked_block_still_satisfies_the_release_check(self, tmp_path, capsys):
+        path = tmp_path / "d.md"
+        path.write_text(self.SKIPPED, encoding="utf-8")
+        assert main(["1.9.0", "--path", str(path), "--check"]) == 0
+
+    def test_a_normal_block_is_not_treated_as_skipped(self):
+        from scripts.discord_changelog import is_no_post
+
+        assert not is_no_post(find_block(FILE, "1.8.4"))
+
+    def test_the_marker_is_only_honoured_in_the_body(self):
+        """A header mentioning it must not silence a real post."""
+        from scripts.discord_changelog import is_no_post
+
+        assert not is_no_post("**1.9.0** — NO POST era\n- a real change")
+
+
+class TestCheckMode:
+    """Gate on the release PR — this is what makes 'every release posts' true."""
+
+    def test_a_missing_block_fails_the_release_pr(self, tmp_path, capsys):
+        path = tmp_path / "d.md"
+        path.write_text(FILE, encoding="utf-8")
+        code = main(["2.0.0", "--path", str(path), "--check"])
+        err = capsys.readouterr().err
+
+        assert code == 1
+        assert "No Discord changelog block for 2.0.0" in err
+        assert "NO POST" in err, "the failure must show how to opt out"
+
+    def test_a_present_block_passes(self, tmp_path, capsys):
+        path = tmp_path / "d.md"
+        path.write_text(FILE, encoding="utf-8")
+        assert main(["1.8.4", "--path", str(path), "--check"]) == 0
+
+    def test_an_over_long_block_fails_before_it_reaches_main(self, tmp_path, capsys):
+        """Better to fail the PR than to warn after the release shipped."""
+        path = tmp_path / "d.md"
+        path.write_text("---\n\n**1.9.0** — 2026-09-01\n" + ("- pad\n" * 400), encoding="utf-8")
+        code = main(["1.9.0", "--path", str(path), "--check"])
+
+        assert code == 1
+        assert "over Discord's" in capsys.readouterr().err
+
+    def test_a_missing_file_fails_the_check(self, tmp_path):
+        assert main(["1.9.0", "--path", str(tmp_path / "nope.md"), "--check"]) == 1
+
+
 class TestShippedFile:
     """The real file has to parse, or the first release using this posts
     nothing and nobody finds out until the channel stays quiet."""

@@ -181,10 +181,15 @@ def update_squad_powers(
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
+    from config import get_or_create_worksheet
+
     questions = survey_cfg.get("questions") or []
     sh = _get_spreadsheet(guild_id)
     tab_name = survey_cfg.get("tab_squad_powers") or "Squad Powers"
-    ws = sh.worksheet(tab_name)
+    # Created rather than looked up: the wizard makes both tabs up front,
+    # but a member submitting into a tab that was deleted or renamed since
+    # would otherwise lose their answers to a WorksheetNotFound.
+    ws = get_or_create_worksheet(sh, tab_name)
     rows = ws.get_all_values()
 
     _now = datetime.now(timezone.utc)
@@ -214,7 +219,7 @@ def append_survey_history(
     discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
 ):
     """Append a timestamped row to the Survey History sheet."""
-    from config import get_config, get_survey_config
+    from config import get_config, get_survey_config, get_or_create_worksheet
 
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
@@ -226,7 +231,7 @@ def append_survey_history(
     tab_name = survey_cfg.get("tab_history") or (
         cfg.tab_survey_history if cfg else "Survey History"
     )
-    ws = sh.worksheet(tab_name)
+    ws = get_or_create_worksheet(sh, tab_name)
 
     q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
     q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
@@ -1351,12 +1356,7 @@ async def run_post_survey(interaction: discord.Interaction, bot):
         )
         return
 
-    intro = survey.get("intro_message") or (
-        "**Let us know your Squad Powers!**\n\n"
-        "Please fill out this survey each week, if possible, to help us keep track of "
-        "squad powers, better balance our Desert Storm teams, track alliance growth, "
-        "and prepare for season events!"
-    )
+    intro = survey.get("intro_message") or _default_posted_intro(survey)
 
     view = build_survey_button_view(survey_id)
     try:
@@ -1370,6 +1370,26 @@ async def run_post_survey(interaction: discord.Interaction, bot):
     await interaction.followup.send(
         f"✅ Survey button posted for **{survey.get('survey_name', 'Default')}** in {channel.mention}.",
         ephemeral=True,
+    )
+
+
+def _default_posted_intro(survey: dict) -> str:
+    """Headline + body posted above the survey button when none is saved.
+
+    Falls back to the survey's own template so a non-squad-power survey
+    never announces itself as a squad-power one. A survey built from
+    scratch speaks in its own name.
+    """
+    from defaults import SURVEY_TEMPLATE_SQUAD_POWER, survey_template
+
+    tpl = survey_template(survey.get("template"))
+    if tpl["key"] == SURVEY_TEMPLATE_SQUAD_POWER:
+        return f"**Let us know your Squad Powers!**\n\n{tpl['intro_message']}"
+
+    name = survey.get("survey_name") or "our latest survey"
+    return (
+        f"**{name}**\n\n"
+        "Please take a moment to fill this out. Click the button below to get started."
     )
 
 

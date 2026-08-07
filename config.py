@@ -279,7 +279,8 @@ def init_db():
                 tab_squad_powers TEXT    DEFAULT 'Squad Powers',
                 tab_history      TEXT    DEFAULT 'Survey History',
                 questions        TEXT    DEFAULT '',
-                intro_message    TEXT    DEFAULT ''
+                intro_message    TEXT    DEFAULT '',
+                template         TEXT    DEFAULT 'squad_power'
             )
         """)
         # guild_extra_surveys — additional named surveys (Premium feature)
@@ -288,12 +289,18 @@ def init_db():
                 guild_id              INTEGER NOT NULL,
                 survey_id             TEXT    NOT NULL,
                 survey_name           TEXT    NOT NULL,
-                tab_squad_powers      TEXT    DEFAULT 'Squad Powers',
-                tab_history           TEXT    DEFAULT 'Survey History',
+                -- No 'Squad Powers' / 'Survey History' defaults here on
+                -- purpose: every extra survey needs its *own* pair of
+                -- tabs, and a shared default is how two surveys end up
+                -- appending to one history tab under the wrong headers.
+                -- The wizard always supplies both explicitly.
+                tab_squad_powers      TEXT    DEFAULT '',
+                tab_history           TEXT    DEFAULT '',
                 questions             TEXT    DEFAULT '',
                 intro_message         TEXT    DEFAULT '',
                 survey_channel_id     INTEGER DEFAULT 0,
                 notify_channel_id     INTEGER DEFAULT 0,
+                template              TEXT    DEFAULT 'squad_power',
                 PRIMARY KEY (guild_id, survey_id)
             )
         """)
@@ -1146,6 +1153,20 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_extra_surveys ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_extra_surveys")
+            except Exception:
+                pass
+
+        # ── Survey template key (both survey tables) ───────────────────────────
+        # Which template a survey was built from. Drives the wizard's
+        # language, its suggested tab names, and its prefilled questions.
+        # Backfills to 'squad_power' deliberately: every survey configured
+        # before templates existed walked the squad-power-flavoured wizard,
+        # and re-editing one should read exactly as it always has.
+        for table in ("guild_survey_config", "guild_extra_surveys"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN template TEXT DEFAULT 'squad_power'")
+                conn.commit()
+                print(f"[CONFIG] Added template to {table}")
             except Exception:
                 pass
 
@@ -4284,23 +4305,37 @@ def get_survey_config(guild_id: int) -> dict:
         "tab_history": "Survey History",
         "questions": [],
         "intro_message": "",
+        "template": "squad_power",
     }
 
 
 def save_survey_config(
-    guild_id: int, tab_squad_powers: str, tab_history: str, questions: list, intro_message: str
+    guild_id: int,
+    tab_squad_powers: str,
+    tab_history: str,
+    questions: list,
+    intro_message: str,
+    template: str = "squad_power",
 ):
     """Insert or replace a guild's default survey config."""
     import json
 
     with _get_conn() as conn:
         conn.execute(
-            "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message, template) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_squad_powers=excluded.tab_squad_powers, tab_history=excluded.tab_history, "
-            "questions=excluded.questions, intro_message=excluded.intro_message",
-            (guild_id, tab_squad_powers, tab_history, json.dumps(questions), intro_message),
+            "questions=excluded.questions, intro_message=excluded.intro_message, "
+            "template=excluded.template",
+            (
+                guild_id,
+                tab_squad_powers,
+                tab_history,
+                json.dumps(questions),
+                intro_message,
+                template,
+            ),
         )
         conn.commit()
 
@@ -4328,6 +4363,7 @@ def list_surveys(guild_id: int) -> list[dict]:
             "tab_history": default_cfg.get("tab_history", "Survey History"),
             "questions": default_cfg.get("questions", []),
             "intro_message": default_cfg.get("intro_message", ""),
+            "template": default_cfg.get("template") or "squad_power",
             "survey_channel_id": 0,  # default uses guild-level channel
             "notify_channel_id": 0,
         }
@@ -4364,6 +4400,7 @@ def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
             "tab_history": cfg.get("tab_history", "Survey History"),
             "questions": cfg.get("questions", []),
             "intro_message": cfg.get("intro_message", ""),
+            "template": cfg.get("template") or "squad_power",
             "survey_channel_id": 0,
             "notify_channel_id": 0,
             "reminder_message": cfg.get("reminder_message", ""),
@@ -4397,14 +4434,15 @@ def save_extra_survey(
     survey_id: str,
     *,
     survey_name: str,
-    tab_squad_powers: str = "Squad Powers",
-    tab_history: str = "Survey History",
+    tab_squad_powers: str = "",
+    tab_history: str = "",
     questions: list = None,
     intro_message: str = "",
     survey_channel_id: int = 0,
     notify_channel_id: int = 0,
     reminder_message: str = "",
     reminder_enabled: int = 0,
+    template: str = "squad_power",
 ):
     """Insert or replace a non-default named survey for a guild."""
     import json
@@ -4416,8 +4454,8 @@ def save_extra_survey(
             "INSERT INTO guild_extra_surveys "
             "(guild_id, survey_id, survey_name, tab_squad_powers, tab_history, "
             " questions, intro_message, survey_channel_id, notify_channel_id, "
-            " reminder_message, reminder_enabled) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " reminder_message, reminder_enabled, template) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, survey_id) DO UPDATE SET "
             " survey_name=excluded.survey_name, "
             " tab_squad_powers=excluded.tab_squad_powers, "
@@ -4427,7 +4465,8 @@ def save_extra_survey(
             " survey_channel_id=excluded.survey_channel_id, "
             " notify_channel_id=excluded.notify_channel_id, "
             " reminder_message=excluded.reminder_message, "
-            " reminder_enabled=excluded.reminder_enabled",
+            " reminder_enabled=excluded.reminder_enabled, "
+            " template=excluded.template",
             (
                 guild_id,
                 survey_id,
@@ -4440,9 +4479,37 @@ def save_extra_survey(
                 notify_channel_id,
                 reminder_message,
                 reminder_enabled,
+                template,
             ),
         )
         conn.commit()
+
+
+def survey_tabs_in_use(guild_id: int, exclude_survey_id: str | None = None) -> dict[str, str]:
+    """Map every tab name already claimed by a survey to the survey using it.
+
+    Keys are casefolded tab names (Sheets tab names are case-insensitive
+    for our purposes) so the wizard can reject a collision before it
+    happens. Two surveys sharing a history tab is silently destructive:
+    `append_survey_history` only writes a header when row 1 is empty, so
+    the second survey's answers land positionally under the first
+    survey's column names.
+
+    `exclude_survey_id` skips the survey currently being edited, so
+    re-running the wizard and keeping your own tab names isn't a
+    collision with yourself.
+    """
+    claimed: dict[str, str] = {}
+    for s in list_surveys(guild_id):
+        sid = s.get("survey_id") or "default"
+        if exclude_survey_id is not None and sid == exclude_survey_id:
+            continue
+        label = s.get("survey_name") or sid
+        for key in ("tab_squad_powers", "tab_history"):
+            tab = (s.get(key) or "").strip()
+            if tab:
+                claimed.setdefault(tab.casefold(), label)
+    return claimed
 
 
 def save_survey_reminder(

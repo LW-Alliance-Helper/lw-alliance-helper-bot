@@ -969,6 +969,105 @@ async def _run_verify_scan(interaction: discord.Interaction):
     )
 
 
+@admin_group.command(
+    name="changelog",
+    description="(Bot owner only) Set the #changelog channel, preview a release's post, or re-post it.",
+)
+@app_commands.describe(
+    channel="Channel the bot posts each release's changelog entry to.",
+    version="Preview the post for this version instead of changing anything.",
+    repost="Post the current version's entry again, even if it already went out.",
+    disable="Stop posting release changelogs.",
+)
+async def admin_changelog_slash(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel | None = None,
+    version: str | None = None,
+    repost: bool = False,
+    disable: bool = False,
+):
+    """Control the support-server changelog posts (#92).
+
+    The post text itself lives in `docs/DISCORD_CHANGELOG.md` and ships
+    with the bot, so there's nothing to type here — this only points the
+    bot at a channel and offers a preview before a release goes out.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    import changelog_post
+    from bot import __version__
+
+    if disable:
+        set_app_setting(changelog_post.CHANNEL_SETTING, None)
+        await interaction.response.send_message(
+            "🔕 Release changelog posting **disabled**.", ephemeral=True
+        )
+        return
+
+    if channel is not None:
+        perms = channel.permissions_for(channel.guild.me)
+        # Editing its own earlier message is how a burst of releases stays
+        # one entry, so Read Message History matters as much as posting.
+        missing = [
+            name
+            for name, ok in (
+                ("View Channel", perms.view_channel),
+                ("Send Messages", perms.send_messages),
+                ("Read Message History", perms.read_message_history),
+            )
+            if not ok
+        ]
+        if missing:
+            await interaction.response.send_message(
+                f"⚠️ I need {', '.join(f'**{m}**' for m in missing)} in {channel.mention} "
+                f"before I can post there.",
+                ephemeral=True,
+            )
+            return
+        set_app_setting(changelog_post.CHANNEL_SETTING, str(channel.id))
+        await interaction.response.send_message(
+            f"📍 Release changelogs will post to {channel.mention}.\n"
+            f"Currently running **{__version__}**; its entry posts on the next "
+            f"deploy if it hasn't already gone out.",
+            ephemeral=True,
+        )
+        return
+
+    if version:
+        block = changelog_post.load_block(version)
+        if block is None:
+            await interaction.response.send_message(
+                f"⚠️ No usable block for **{version}** in `docs/DISCORD_CHANGELOG.md`.",
+                ephemeral=True,
+            )
+        elif changelog_post.is_no_post(block):
+            await interaction.response.send_message(
+                f"🔕 **{version}** is marked `{changelog_post.NO_POST_MARKER}` — it won't post.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"**{version}** would post:\n\n{block}", ephemeral=True
+            )
+        return
+
+    if repost:
+        await interaction.response.defer(ephemeral=True)
+        result = await changelog_post.maybe_post_changelog(bot, __version__, force=True)
+        await interaction.followup.send(f"📜 {result}", ephemeral=True)
+        return
+
+    raw = get_app_setting(changelog_post.CHANNEL_SETTING)
+    last = get_app_setting(changelog_post.LAST_VERSION_SETTING) or "nothing yet"
+    where = f"<#{raw}>" if raw else "*not set*"
+    await interaction.response.send_message(
+        f"📜 **Release changelog**\nChannel: {where}\nLast posted: **{last}**\n"
+        f"Running: **{__version__}**",
+        ephemeral=True,
+    )
+
+
 # Register the /admin Group on the tree once every subcommand has been
 # attached above. The Group-level guilds= kwarg propagates to all its
 # subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the

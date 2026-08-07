@@ -1,8 +1,11 @@
 # Discord changelog posts
 
 What gets posted to `#changelog` in the support server, one block per
-release, newest first. `release-on-main.yml` picks the block whose header
-contains the version being released and posts it verbatim.
+release, newest first. The **bot** posts it, from `on_ready`, picking the
+block whose header names the version it's running and sending it
+verbatim. Not CI: the release workflow finishes before Railway has
+deployed, so a post from there could announce a release that then fails
+to ship. See `changelog_post.py`.
 
 **This file is the post, not a summary of it.** Write it the way it
 should read in Discord. Nothing is transformed on the way out.
@@ -53,9 +56,9 @@ its own block, and bursts are handled below.
 
 **Bursts share a message.** Over half of this project's releases land
 within 24 hours of the previous one, and the closest pair was 13 minutes
-apart, so a release shipping within 12 hours of the last post is appended
-to that Discord message rather than firing a fresh notification. A run of
-hotfixes reads as one entry that grows:
+apart, so a release deploying within 12 hours of the last post is
+appended to that Discord message rather than firing a fresh
+notification. A run of hotfixes reads as one entry that grows:
 
 ```
 **1.7.5** — 2026-07-30
@@ -67,8 +70,12 @@ hotfixes reads as one entry that grows:
 
 That's automatic and needs nothing from you — keep writing one block per
 release. If the window has passed, the combined message would pass 2000
-characters, or the stored message can't be found, it starts a new one
+characters, or the stored message was deleted, it starts a new one
 instead. The fallback is always to say something.
+
+Set the channel once with `/admin changelog channel:`. `/admin changelog
+version:1.9.0` previews a post without sending it, and `repost:True`
+sends the running version again if one goes out wrong.
 
 ## Compactness (this is the part that keeps getting missed)
 
@@ -111,8 +118,8 @@ they'd never have seen.
 ## When to write it
 
 On the release branch, alongside the CHANGELOG entry and the release PR
-body. If it's missing when the release lands, the workflow logs it and
-posts nothing rather than posting something wrong.
+body. The release PR fails without one, so it can't be skipped by
+accident.
 
 ---
 

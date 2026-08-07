@@ -97,9 +97,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   it does use `chore(release): X.Y.Z - <summary>`.
 - **Release branches also write the Discord changelog block.** Add the
   release's post to `docs/DISCORD_CHANGELOG.md` next to the CHANGELOG
-  entry. `release-on-main.yml` finds the block whose header names the
-  version and posts it to the support server's `#changelog` webhook once
-  the release lands, so nothing is copy-pasted by hand ([#92](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/92)).
+  entry. The **bot** posts it to the support server's `#changelog` from
+  `on_ready` (`changelog_post.py`), not CI — the release workflow runs
+  before Railway finishes deploying, so a post from there could announce
+  a release that then fails to deploy ([#92](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/92)).
+  Point it at a channel once with `/admin changelog channel:`; state
+  lives in `app_settings`, and consecutive releases inside 12 hours
+  append to the running message instead of each pinging.
   The post is *not* derived from CHANGELOG.md — it merges related
   bullets, drops anything an alliance can't act on, and caps at five
   lines. Rules and a worked example are in that file's preamble.

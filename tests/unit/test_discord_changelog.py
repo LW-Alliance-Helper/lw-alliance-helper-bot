@@ -1,10 +1,9 @@
 """
-Unit tests for scripts/discord_changelog.py (#92).
+Unit tests for the Discord changelog post (#92).
 
-The workflow posts whatever this prints, so an empty result is the
-"say nothing" signal and every failure path has to reach it without
-raising. A crash here would go red on main, and Railway's "Wait for CI
-checks" would then block the production deploy for a missing Discord post.
+Covers the shared matching logic in `changelog_post.py` and the CLI in
+`scripts/discord_changelog.py` that gates the release PR. The bot-side
+posting itself is covered in `test_changelog_post.py`.
 """
 
 import pytest
@@ -12,7 +11,8 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from scripts.discord_changelog import find_block, main
+from changelog_post import find_block
+from scripts.discord_changelog import main
 
 FILE = """# Discord changelog posts
 
@@ -114,7 +114,7 @@ NO POST: dependency bumps only
 """
 
     def test_a_marked_block_sends_nothing(self, tmp_path, capsys):
-        from scripts.discord_changelog import is_no_post
+        from changelog_post import is_no_post
 
         path = tmp_path / "d.md"
         path.write_text(self.SKIPPED, encoding="utf-8")
@@ -132,13 +132,13 @@ NO POST: dependency bumps only
         assert main(["1.9.0", "--path", str(path), "--check"]) == 0
 
     def test_a_normal_block_is_not_treated_as_skipped(self):
-        from scripts.discord_changelog import is_no_post
+        from changelog_post import is_no_post
 
         assert not is_no_post(find_block(FILE, "1.8.4"))
 
     def test_the_marker_is_only_honoured_in_the_body(self):
         """A header mentioning it must not silence a real post."""
-        from scripts.discord_changelog import is_no_post
+        from changelog_post import is_no_post
 
         assert not is_no_post("**1.9.0** — NO POST era\n- a real change")
 
@@ -189,7 +189,7 @@ class TestPlanPost:
         }
 
     def _plan(self, block, state, **kw):
-        from scripts.discord_changelog import plan_post
+        from changelog_post import plan_post
 
         return plan_post(
             block, state, now=self.NOW, window_seconds=kw.pop("window", self.WINDOW), **kw
@@ -202,7 +202,7 @@ class TestPlanPost:
 
     def test_a_release_inside_the_window_appends_to_the_last_message(self):
         plan = self._plan("**1.7.6** — 2026-07-30\n- a fix", self._state(2 * 3600))
-        assert plan["action"] == "patch"
+        assert plan["action"] == "edit"
         assert plan["message_id"] == "123"
         assert plan["content"].startswith("**1.7.5**")
         assert plan["content"].endswith("- a fix")
@@ -235,59 +235,7 @@ class TestPlanPost:
     def test_the_burst_window_is_configurable(self):
         block = "**1.7.6** — 2026-07-30\n- a fix"
         assert self._plan(block, self._state(5 * 3600), window=3600)["action"] == "post"
-        assert self._plan(block, self._state(5 * 3600), window=6 * 3600)["action"] == "patch"
-
-
-class TestPlanCli:
-    def test_plan_emits_json_the_workflow_can_read(self, tmp_path, capsys):
-        import json
-
-        path = tmp_path / "d.md"
-        path.write_text(FILE, encoding="utf-8")
-        code = main(["1.8.4", "--path", str(path), "--plan"])
-        plan = json.loads(capsys.readouterr().out)
-
-        assert code == 0
-        assert plan["action"] == "post"
-        assert plan["content"].startswith("**1.8.4**")
-
-    def test_an_unreadable_state_file_still_plans_a_post(self, tmp_path, capsys):
-        import json
-
-        path = tmp_path / "d.md"
-        path.write_text(FILE, encoding="utf-8")
-        state = tmp_path / "state.json"
-        state.write_text("not json at all", encoding="utf-8")
-
-        code = main(["1.8.4", "--path", str(path), "--plan", "--state", str(state)])
-        out = capsys.readouterr()
-
-        assert code == 0
-        assert json.loads(out.out)["action"] == "post"
-        assert "No usable post state" in out.err
-
-    def test_a_stored_recent_message_plans_an_append(self, tmp_path, capsys):
-        import json, time
-
-        path = tmp_path / "d.md"
-        path.write_text(FILE, encoding="utf-8")
-        state = tmp_path / "state.json"
-        state.write_text(
-            json.dumps(
-                {
-                    "message_id": "999",
-                    "posted_at": time.time() - 600,
-                    "content": "**1.8.3** — d\n- x",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        main(["1.8.4", "--path", str(path), "--plan", "--state", str(state)])
-        plan = json.loads(capsys.readouterr().out)
-
-        assert plan["action"] == "patch"
-        assert plan["message_id"] == "999"
+        assert self._plan(block, self._state(5 * 3600), window=6 * 3600)["action"] == "edit"
 
 
 class TestShippedFile:

@@ -341,6 +341,112 @@ class TestAskSurveyTab:
         ensure.assert_not_awaited()
 
 
+class TestSurveyConfiguredView:
+    """The confirmation embed offers the two things leadership almost
+    always wants next, instead of sending them back out to /survey."""
+
+    def _view(self, bot=None, owner_id=7):
+        import setup_cog
+
+        return setup_cog.SurveyConfiguredView(
+            bot or MagicMock(),
+            guild_id=TEST_GUILD_ID,
+            survey_id="vp-buff-agreement",
+            survey_name="VP Buff Agreement",
+            template_key="scratch",
+            owner_id=owner_id,
+        )
+
+    def test_offers_post_and_edit(self):
+        from survey_hub import SURVEY_HUB_BTN_EDIT, SURVEY_HUB_BTN_POST
+
+        labels = [c.label for c in self._view().children]
+        assert labels == [SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_EDIT]
+
+    @pytest.mark.asyncio
+    async def test_only_the_person_who_ran_setup_can_use_them(self):
+        view = self._view(owner_id=7)
+        interaction = MagicMock()
+        interaction.user.id = 99
+        interaction.response.send_message = AsyncMock()
+
+        assert await view.interaction_check(interaction) is False
+        assert (
+            "belong to whoever ran the setup" in (interaction.response.send_message.call_args[0][0])
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_wizard_runner_passes_the_check(self):
+        view = self._view(owner_id=7)
+        interaction = MagicMock()
+        interaction.user.id = 7
+
+        assert await view.interaction_check(interaction) is True
+
+    @pytest.mark.asyncio
+    async def test_post_button_posts_that_survey_without_a_picker(self, seeded_db):
+        import config, setup_cog
+
+        config.save_extra_survey(
+            TEST_GUILD_ID,
+            "vp-buff-agreement",
+            survey_name="VP Buff Agreement",
+            tab_squad_powers="VP Buff Agreement",
+            tab_history="VP Buff Agreement History",
+            template="scratch",
+        )
+        view = self._view()
+        interaction = MagicMock()
+        interaction.response.edit_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        with patch(
+            "survey.post_survey_to_its_channel", AsyncMock(return_value=(True, "✅ posted"))
+        ) as post:
+            await setup_cog.SurveyConfiguredView._on_post(view, interaction)
+
+        assert post.await_args[0][2]["survey_id"] == "vp-buff-agreement"
+        interaction.followup.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_post_button_reports_a_survey_deleted_since_setup(self, seeded_db):
+        import setup_cog
+
+        view = self._view()
+        interaction = MagicMock()
+        interaction.response.edit_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        await setup_cog.SurveyConfiguredView._on_post(view, interaction)
+
+        assert "no longer configured" in interaction.followup.send.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_edit_button_reopens_the_wizard_on_the_same_survey(self):
+        import setup_cog
+
+        view = self._view()
+        interaction = MagicMock()
+        interaction.response.edit_message = AsyncMock()
+
+        with patch("setup_cog.run_survey_setup", AsyncMock()) as run:
+            await setup_cog.SurveyConfiguredView._on_edit(view, interaction)
+
+        assert run.await_args.kwargs["target_survey_id"] == "vp-buff-agreement"
+        assert run.await_args.kwargs["template"] == "scratch"
+
+    @pytest.mark.asyncio
+    async def test_timeout_strips_the_buttons(self):
+        import setup_cog
+
+        view = self._view()
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", AsyncMock()) as expire:
+            await setup_cog.SurveyConfiguredView.on_timeout(view)
+
+        expire.assert_awaited_once()
+
+
 class TestPostedIntroFallback:
     def test_squad_power_survey_keeps_its_headline(self):
         from survey import _default_posted_intro

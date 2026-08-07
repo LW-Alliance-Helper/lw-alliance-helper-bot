@@ -5512,8 +5512,8 @@ async def _ask_new_survey_name(channel, bot, user, cancel_event, tpl: dict) -> s
 
     await channel.send(
         "**Name your survey**\n"
-        "Type a short display name for it (e.g. `VP Buff Agreement` or "
-        "`Recruit Intake`). This is what leadership and members will see."
+        "Type a short display name for it (e.g. `Alliance Feedback` or "
+        "`New Member Intake`). This is what leadership and members will see."
     )
     name_reply = await wizard_registry.wait_or_cancel(
         bot.wait_for("message", check=check, timeout=180), cancel_event
@@ -5726,6 +5726,96 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
         view=_EditPickView(),
         ephemeral=True,
     )
+
+
+# The confirmation embed's buttons stay live well past a wizard step —
+# leadership often reads the summary, checks their sheet, then posts.
+SURVEY_CONFIRM_VIEW_TIMEOUT = 900  # 15 minutes
+
+
+class SurveyConfiguredView(discord.ui.View):
+    """Post or edit the survey straight off the wizard's confirmation embed.
+
+    Those are the two things leadership almost always wants next, and
+    both otherwise mean leaving, running `/survey`, and picking this
+    survey out of a list they just came from.
+
+    Restricted to whoever ran the wizard: the embed sits in a shared
+    leadership channel, and these buttons act on a survey the clicker
+    may not have configured. Anyone else gets there through `/survey`.
+    """
+
+    def __init__(
+        self,
+        bot,
+        *,
+        guild_id: int,
+        survey_id: str | None,
+        survey_name: str,
+        template_key: str,
+        owner_id: int,
+    ):
+        super().__init__(timeout=SURVEY_CONFIRM_VIEW_TIMEOUT)
+        self.message = None
+        self._bot = bot
+        self._guild_id = guild_id
+        self._survey_id = survey_id
+        self._survey_name = survey_name
+        self._template_key = template_key
+        self._owner_id = owner_id
+
+        from survey_hub import SURVEY_HUB_BTN_EDIT, SURVEY_HUB_BTN_POST
+
+        post_btn = discord.ui.Button(label=SURVEY_HUB_BTN_POST, style=discord.ButtonStyle.success)
+        post_btn.callback = self._on_post
+        self.add_item(post_btn)
+
+        edit_btn = discord.ui.Button(label=SURVEY_HUB_BTN_EDIT, style=discord.ButtonStyle.secondary)
+        edit_btn.callback = self._on_edit
+        self.add_item(edit_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self._owner_id:
+            return True
+        await interaction.response.send_message(
+            "⛔ These buttons belong to whoever ran the setup. Use `/survey` to post or edit a survey.",
+            ephemeral=True,
+        )
+        return False
+
+    async def _disable(self, interaction: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_post(self, interaction: discord.Interaction):
+        from config import get_survey
+        from survey import post_survey_to_its_channel
+
+        await self._disable(interaction)
+        self.stop()
+        survey = get_survey(self._guild_id, self._survey_id or "default")
+        if survey is None:
+            await interaction.followup.send(
+                f"⚠️ **{self._survey_name}** is no longer configured.", ephemeral=True
+            )
+            return
+        _ok, message = await post_survey_to_its_channel(self._bot, self._guild_id, survey)
+        await interaction.followup.send(message, ephemeral=True)
+
+    async def _on_edit(self, interaction: discord.Interaction):
+        await self._disable(interaction)
+        self.stop()
+        await run_survey_setup(
+            interaction,
+            self._bot,
+            target_survey_id=self._survey_id,
+            target_survey_name=self._survey_name if self._survey_id else None,
+            template=self._template_key,
+        )
+
+    async def on_timeout(self):
+        await wizard_registry.expire_view_message(self.message, command_hint="`/survey`")
 
 
 async def _ensure_survey_tab(channel, guild_id: int, tab_name: str) -> None:
@@ -6384,7 +6474,7 @@ async def run_survey_setup(
                     )
                     await channel.send(
                         f"**{q_num} — Label**\n"
-                        f"What is the label for this question? (e.g. `1st Squad Power`, `Profession`)"
+                        f"What is the label for this question? (e.g. `Time Zone`, `Preferred Role`)"
                         + label_extra
                     )
                     try:
@@ -6483,7 +6573,7 @@ async def run_survey_setup(
                         f"**{q_num} — Help Text**\n"
                         f"Do you want to show help text for this question? "
                         f"This appears as a hint to help members answer correctly.\n"
-                        f"*(e.g. `e.g. 43.27` or `What is your first squad's power?`)*\n"
+                        f"*(e.g. `Pick the closest match` or `Use your in-game name`)*\n"
                         f"Type your help text, or type `none` to skip." + help_extra
                     )
                     try:
@@ -6505,7 +6595,7 @@ async def run_survey_setup(
                         await channel.send(
                             f"**{q_num} — Options**\n"
                             f"Enter the options as comma-separated values. Maximum of 25.\n"
-                            f"*(e.g. `Missile, Air, Tank`)*" + opts_extra
+                            f"*(e.g. `Yes, No, Not sure`)*" + opts_extra
                         )
                         try:
                             opts_reply = await bot.wait_for("message", check=check, timeout=120)
@@ -6741,17 +6831,24 @@ async def run_survey_setup(
     embed.add_field(name=tpl["responses_step_label"], value=tab_squad_powers, inline=True)
     embed.add_field(name=tpl["history_step_label"], value=tab_history, inline=True)
     embed.add_field(name="Questions", value=q_summary[:1024], inline=False)
-    from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_TRANSLATE
+    from survey_hub import SURVEY_HUB_BTN_TRANSLATE
 
     embed.set_footer(
         text=(
             f"Run {next_step_cmd} again to update. Run /survey and click "
-            f"{SURVEY_HUB_BTN_POST} to post the survey button, or "
             f"{SURVEY_HUB_BTN_TRANSLATE} if your members don't all read the "
             f"language you write your questions in."
         )
     )
-    await channel.send(embed=embed)
+    confirm_view = SurveyConfiguredView(
+        bot,
+        guild_id=guild_id,
+        survey_id=target_survey_id,
+        survey_name=target_survey_name or "Default",
+        template_key=template_key,
+        owner_id=user.id,
+    )
+    confirm_view.message = await channel.send(embed=embed, view=confirm_view)
     wizard_registry.unregister(user.id, cancel_event)
     print(
         f"[SETUP] Survey config saved for guild {guild_id} "

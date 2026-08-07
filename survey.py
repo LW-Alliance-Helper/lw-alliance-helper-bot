@@ -1408,31 +1408,38 @@ async def run_post_survey(interaction: discord.Interaction, bot):
         )
         return
 
+    ok, message = await post_survey_to_its_channel(bot, interaction.guild_id, survey)
+    await interaction.followup.send(message, ephemeral=True)
+
+
+async def post_survey_to_its_channel(bot, guild_id: int, survey: dict) -> tuple[bool, str]:
+    """Post one survey's Answer button in the channel it's configured for.
+
+    Shared by the 📮 Post Survey hub button, which picks a survey first,
+    and the same button on the wizard's confirmation embed, which already
+    knows which survey it just configured. Returns `(ok, message)` for the
+    caller to relay however it responds to its own interaction.
+    """
+    from config import get_config
+
+    cfg = get_config(guild_id)
+    name = survey.get("survey_name") or "Default"
     survey_id = survey.get("survey_id") or "default"
-    channel_id = int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
+    channel_id = int(survey.get("survey_channel_id") or 0) or (cfg.survey_channel_id if cfg else 0)
     channel = bot.get_channel(channel_id)
     if channel is None:
-        await interaction.followup.send(
-            f"⚠️ Could not find the survey channel for **{survey.get('survey_name', 'this survey')}**.",
-            ephemeral=True,
-        )
-        return
+        return False, f"⚠️ Could not find the survey channel for **{name}**."
 
     intro = survey.get("intro_message") or _default_posted_intro(survey)
 
-    view = build_survey_button_view(survey_id)
     try:
-        await channel.send(intro, view=view)
+        await channel.send(intro, view=build_survey_button_view(survey_id))
     except discord.Forbidden:
-        await interaction.followup.send(
+        return (
+            False,
             f"⚠️ I can't post in {channel.mention}. Check my permissions there and try again.",
-            ephemeral=True,
         )
-        return
-    await interaction.followup.send(
-        f"✅ Survey button posted for **{survey.get('survey_name', 'Default')}** in {channel.mention}.",
-        ephemeral=True,
-    )
+    return True, f"✅ Survey button posted for **{name}** in {channel.mention}."
 
 
 def _default_posted_intro(survey: dict) -> str:

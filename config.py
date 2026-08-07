@@ -279,7 +279,8 @@ def init_db():
                 tab_squad_powers TEXT    DEFAULT 'Squad Powers',
                 tab_history      TEXT    DEFAULT 'Survey History',
                 questions        TEXT    DEFAULT '',
-                intro_message    TEXT    DEFAULT ''
+                intro_message    TEXT    DEFAULT '',
+                template         TEXT    DEFAULT 'squad_power'
             )
         """)
         # guild_extra_surveys — additional named surveys (Premium feature)
@@ -288,12 +289,18 @@ def init_db():
                 guild_id              INTEGER NOT NULL,
                 survey_id             TEXT    NOT NULL,
                 survey_name           TEXT    NOT NULL,
-                tab_squad_powers      TEXT    DEFAULT 'Squad Powers',
-                tab_history           TEXT    DEFAULT 'Survey History',
+                -- No 'Squad Powers' / 'Survey History' defaults here on
+                -- purpose: every extra survey needs its *own* pair of
+                -- tabs, and a shared default is how two surveys end up
+                -- appending to one history tab under the wrong headers.
+                -- The wizard always supplies both explicitly.
+                tab_squad_powers      TEXT    DEFAULT '',
+                tab_history           TEXT    DEFAULT '',
                 questions             TEXT    DEFAULT '',
                 intro_message         TEXT    DEFAULT '',
                 survey_channel_id     INTEGER DEFAULT 0,
                 notify_channel_id     INTEGER DEFAULT 0,
+                template              TEXT    DEFAULT 'squad_power',
                 PRIMARY KEY (guild_id, survey_id)
             )
         """)
@@ -1149,6 +1156,20 @@ def init_db():
             except Exception:
                 pass
 
+        # ── Survey template key (both survey tables) ───────────────────────────
+        # Which template a survey was built from. Drives the wizard's
+        # language, its suggested tab names, and its prefilled questions.
+        # Backfills to 'squad_power' deliberately: every survey configured
+        # before templates existed walked the squad-power-flavoured wizard,
+        # and re-editing one should read exactly as it always has.
+        for table in ("guild_survey_config", "guild_extra_surveys"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN template TEXT DEFAULT 'squad_power'")
+                conn.commit()
+                print(f"[CONFIG] Added template to {table}")
+            except Exception:
+                pass
+
         # ── guild_survey_config migrations (default survey reminder fields) ────
         # Mirrors guild_extra_surveys so the default survey can have its own
         # scheduled reminder config too. Free guilds use channel posts;
@@ -1768,6 +1789,67 @@ def get_or_create_worksheet(
                 # learn the gspread API surface.
                 ws.append_row(list(header_row), value_input_option="RAW")
         return ws
+
+
+def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str = "") -> list[str]:
+    """Merge a config-driven column list into a tab's existing header.
+
+    Sheet writers whose columns come from an editable question list can't
+    just write `desired` over row 1: rows already stored were written
+    under the old column order, and relabelling them in place silently
+    turns every historical answer into a lie about a different question.
+
+    So columns are only ever **added**, never removed or reordered. A
+    question dropped from the config keeps its column and its history; a
+    question added gets a fresh column on the right; a *renamed* one
+    reads as a drop plus an add, which leaves the old answers intact
+    under the old label rather than mislabelling them.
+
+    `pin_last` names a column that must stay rightmost (the survey
+    responses tab's "Date Modified"). New columns land before it, which
+    shifts it, so a caller using `pin_last` has to remap existing rows
+    into the returned layout rather than just rewriting row 1.
+
+    Returns the merged header. Compare it against `existing` to decide
+    whether the sheet needs writing at all.
+    """
+    if not any(existing):
+        return list(desired)
+
+    # Trailing blanks are what Sheets pads a short header row with.
+    merged = list(existing)
+    while merged and not merged[-1]:
+        merged.pop()
+
+    tail: list[str] = []
+    if pin_last and merged and merged[-1] == pin_last:
+        tail = [merged.pop()]
+
+    for col in desired:
+        if pin_last and col == pin_last:
+            continue
+        if col and col not in merged:
+            merged.append(col)
+
+    # A tab that predates the pinned column, or has it stranded somewhere
+    # other than the right edge, still has to end up with it rightmost.
+    if pin_last and not tail and pin_last in desired:
+        if pin_last in merged:
+            merged.remove(pin_last)
+        tail = [pin_last]
+
+    return merged + tail
+
+
+def row_for_header(header: list[str], values_by_column: dict) -> list[str]:
+    """Lay values out to match `header`, by column name rather than order.
+
+    The other half of `merge_sheet_header`: once columns can move, a row
+    built positionally from the question list lands in the wrong cells.
+    Columns with nothing to say are written blank rather than skipped, so
+    the row stays aligned.
+    """
+    return [str(values_by_column.get(col, "")) for col in header]
 
 
 def power_column_letter_to_index(letter: str) -> int:
@@ -4284,23 +4366,37 @@ def get_survey_config(guild_id: int) -> dict:
         "tab_history": "Survey History",
         "questions": [],
         "intro_message": "",
+        "template": "squad_power",
     }
 
 
 def save_survey_config(
-    guild_id: int, tab_squad_powers: str, tab_history: str, questions: list, intro_message: str
+    guild_id: int,
+    tab_squad_powers: str,
+    tab_history: str,
+    questions: list,
+    intro_message: str,
+    template: str = "squad_power",
 ):
     """Insert or replace a guild's default survey config."""
     import json
 
     with _get_conn() as conn:
         conn.execute(
-            "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message, template) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_squad_powers=excluded.tab_squad_powers, tab_history=excluded.tab_history, "
-            "questions=excluded.questions, intro_message=excluded.intro_message",
-            (guild_id, tab_squad_powers, tab_history, json.dumps(questions), intro_message),
+            "questions=excluded.questions, intro_message=excluded.intro_message, "
+            "template=excluded.template",
+            (
+                guild_id,
+                tab_squad_powers,
+                tab_history,
+                json.dumps(questions),
+                intro_message,
+                template,
+            ),
         )
         conn.commit()
 
@@ -4328,6 +4424,7 @@ def list_surveys(guild_id: int) -> list[dict]:
             "tab_history": default_cfg.get("tab_history", "Survey History"),
             "questions": default_cfg.get("questions", []),
             "intro_message": default_cfg.get("intro_message", ""),
+            "template": default_cfg.get("template") or "squad_power",
             "survey_channel_id": 0,  # default uses guild-level channel
             "notify_channel_id": 0,
         }
@@ -4364,6 +4461,7 @@ def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
             "tab_history": cfg.get("tab_history", "Survey History"),
             "questions": cfg.get("questions", []),
             "intro_message": cfg.get("intro_message", ""),
+            "template": cfg.get("template") or "squad_power",
             "survey_channel_id": 0,
             "notify_channel_id": 0,
             "reminder_message": cfg.get("reminder_message", ""),
@@ -4397,14 +4495,15 @@ def save_extra_survey(
     survey_id: str,
     *,
     survey_name: str,
-    tab_squad_powers: str = "Squad Powers",
-    tab_history: str = "Survey History",
+    tab_squad_powers: str = "",
+    tab_history: str = "",
     questions: list = None,
     intro_message: str = "",
     survey_channel_id: int = 0,
     notify_channel_id: int = 0,
     reminder_message: str = "",
     reminder_enabled: int = 0,
+    template: str = "squad_power",
 ):
     """Insert or replace a non-default named survey for a guild."""
     import json
@@ -4416,8 +4515,8 @@ def save_extra_survey(
             "INSERT INTO guild_extra_surveys "
             "(guild_id, survey_id, survey_name, tab_squad_powers, tab_history, "
             " questions, intro_message, survey_channel_id, notify_channel_id, "
-            " reminder_message, reminder_enabled) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " reminder_message, reminder_enabled, template) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, survey_id) DO UPDATE SET "
             " survey_name=excluded.survey_name, "
             " tab_squad_powers=excluded.tab_squad_powers, "
@@ -4427,7 +4526,8 @@ def save_extra_survey(
             " survey_channel_id=excluded.survey_channel_id, "
             " notify_channel_id=excluded.notify_channel_id, "
             " reminder_message=excluded.reminder_message, "
-            " reminder_enabled=excluded.reminder_enabled",
+            " reminder_enabled=excluded.reminder_enabled, "
+            " template=excluded.template",
             (
                 guild_id,
                 survey_id,
@@ -4440,9 +4540,165 @@ def save_extra_survey(
                 notify_channel_id,
                 reminder_message,
                 reminder_enabled,
+                template,
             ),
         )
         conn.commit()
+
+
+# Every per-guild configurable sheet tab, as
+# (table, tab column, config field, what the alliance calls the feature).
+# `field` is what a wizard passes as `exclude_field` so a step doesn't
+# report a collision with the value it's currently editing.
+_TAB_OWNERS = [
+    ("guild_configs", "tab_train_schedule", "tab_train_schedule", "your train schedule"),
+    ("guild_configs", "tab_ds_assignments", "tab_ds_assignments", "your Desert Storm assignments"),
+    ("guild_configs", "tab_sitouts", "tab_sitouts", "your storm sit-outs"),
+    ("guild_configs", "tab_member_default", "tab_member_default", "your default member tab"),
+    ("guild_train_config", "tab_name", "train_tab_name", "your train schedule"),
+    ("guild_buddy_config", "buddy_tab", "buddy_tab", "your Buddy System list"),
+    ("guild_growth_config", "tab_growth", "tab_growth", "your Growth Tracking snapshots"),
+    ("guild_growth_config", "tab_breakdown", "tab_breakdown", "your Growth Breakdown"),
+    ("guild_growth_config", "tab_source", "tab_source", "your Growth data source"),
+    ("guild_birthday_config", "tab_name", "birthday_tab_name", "your Birthdays list"),
+    ("guild_member_roster_config", "tab_name", "roster_tab_name", "your Member Roster"),
+]
+
+# Storm rows are keyed by (guild, event_type), so their labels name the event.
+_STORM_TAB_OWNERS = [
+    ("tab_name", "storm_tab_name", "{label} assignments"),
+    ("participation_tab_name", "participation_tab_name", "{label} participation log"),
+    ("participation_roster_tab", "participation_roster_tab", "{label} participation roster"),
+]
+
+# `buddy_config.profession_tab` is deliberately pointed at the survey's
+# stats tab — profession's single source of truth is that survey, not a
+# second copy. It's a legitimate overlap, so it's never reported as a
+# collision. See `follow_survey_tab_rename`.
+_INTENTIONAL_TAB_READERS = {"profession_tab"}
+
+
+def tabs_in_use(
+    guild_id: int,
+    exclude_field: str | None = None,
+    exclude_survey_id: str | None = None,
+) -> dict[str, str]:
+    """Map every sheet tab this guild has configured to the feature using it.
+
+    Keys are casefolded tab names; values are what the *alliance* calls
+    the feature, so a wizard can say "that's your Growth Breakdown"
+    rather than naming a column. `exclude_field` drops the field being
+    edited right now, so re-running a wizard and keeping your own tab
+    name isn't a collision with yourself.
+
+    Deliberate cross-references (see `_INTENTIONAL_TAB_READERS`) are left
+    out entirely — reporting those as collisions would train leadership
+    to click past a warning that's wrong.
+
+    Read-only and only called from wizard steps, so the handful of
+    queries here is not a hot path.
+    """
+    claimed: dict[str, str] = {}
+
+    def _claim(tab, label):
+        tab = (tab or "").strip()
+        if tab:
+            claimed.setdefault(tab.casefold(), label)
+
+    with _get_conn() as conn:
+        for table, column, field, label in _TAB_OWNERS:
+            if field == exclude_field or field in _INTENTIONAL_TAB_READERS:
+                continue
+            try:
+                row = conn.execute(
+                    f"SELECT {column} FROM {table} WHERE guild_id = ?", (guild_id,)
+                ).fetchone()
+            except Exception:
+                continue  # table not migrated in this DB yet
+            if row:
+                _claim(row[0], label)
+
+        for column, field, label_fmt in _STORM_TAB_OWNERS:
+            if field == exclude_field:
+                continue
+            try:
+                rows = conn.execute(
+                    f"SELECT event_type, {column} FROM guild_storm_config WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchall()
+            except Exception:
+                continue
+            for event_type, tab in rows:
+                label = "Desert Storm" if (event_type or "").upper() == "DS" else "Canyon Storm"
+                _claim(tab, label_fmt.format(label=f"your {label}"))
+
+    # Surveys carry their own names, so they're worth naming individually.
+    # `exclude_survey_id` is how the survey wizard keeps its own tabs out:
+    # re-running it and keeping your own names is not a collision, and the
+    # survey-vs-survey case is already a hard rejection upstream.
+    for tab, owner in survey_tabs_in_use(guild_id, exclude_survey_id).items():
+        claimed.setdefault(tab, f"the {owner} survey" if owner != "Default" else "your main survey")
+
+    return claimed
+
+
+def follow_survey_tab_rename(guild_id: int, old_tab: str, new_tab: str) -> bool:
+    """Re-point the Buddy System at a renamed survey stats tab.
+
+    Profession's single source of truth is the survey's stats tab, but
+    the two are configured in different wizards and stored in different
+    columns with nothing linking them. Renaming the tab in survey setup
+    used to leave the buddy config pointing at a name that no longer
+    exists, and the breakage only showed up later as a config-health
+    notice against a feature leadership hadn't touched.
+
+    Returns True when it actually moved something.
+    """
+    old_tab = (old_tab or "").strip()
+    new_tab = (new_tab or "").strip()
+    if not old_tab or not new_tab or old_tab.casefold() == new_tab.casefold():
+        return False
+
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT profession_tab FROM guild_buddy_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        if not row or (row[0] or "").strip().casefold() != old_tab.casefold():
+            return False
+        conn.execute(
+            "UPDATE guild_buddy_config SET profession_tab = ? WHERE guild_id = ?",
+            (new_tab, guild_id),
+        )
+        conn.commit()
+    print(f"[CONFIG] Buddy profession_tab followed survey rename '{old_tab}' → '{new_tab}'")
+    return True
+
+
+def survey_tabs_in_use(guild_id: int, exclude_survey_id: str | None = None) -> dict[str, str]:
+    """Map every tab name already claimed by a survey to the survey using it.
+
+    Keys are casefolded tab names (Sheets tab names are case-insensitive
+    for our purposes) so the wizard can reject a collision before it
+    happens. Two surveys sharing a history tab is silently destructive:
+    `append_survey_history` only writes a header when row 1 is empty, so
+    the second survey's answers land positionally under the first
+    survey's column names.
+
+    `exclude_survey_id` skips the survey currently being edited, so
+    re-running the wizard and keeping your own tab names isn't a
+    collision with yourself.
+    """
+    claimed: dict[str, str] = {}
+    for s in list_surveys(guild_id):
+        sid = s.get("survey_id") or "default"
+        if exclude_survey_id is not None and sid == exclude_survey_id:
+            continue
+        label = s.get("survey_name") or sid
+        for key in ("tab_squad_powers", "tab_history"):
+            tab = (s.get(key) or "").strip()
+            if tab:
+                claimed.setdefault(tab.casefold(), label)
+    return claimed
 
 
 def save_survey_reminder(

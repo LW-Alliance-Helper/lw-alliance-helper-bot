@@ -38,7 +38,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.8.4"
+__version__ = "1.8.5"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -379,6 +379,24 @@ async def on_ready():
     # major/minor comparison + opt-out gating.
     for g in bot.guilds:
         await maybe_post_release_announcement(g, bot, __version__)
+
+    # Support-server #changelog post (#92). Deliberately here rather than
+    # in CI: the release workflow runs on merge to main, before Railway
+    # has finished deploying, so a post from there could announce a
+    # release that then fails to deploy. Posting from the running bot
+    # means the version it names is the version actually serving.
+    #
+    # `on_ready` fires again on every gateway reconnect and redeploy;
+    # `maybe_post_changelog` dedupes on the stored version so this isn't
+    # a repost each time.
+    try:
+        from changelog_post import maybe_post_changelog
+
+        result = await maybe_post_changelog(bot, __version__)
+        print(f"[CHANGELOG] {result}")
+    except Exception as e:
+        print(f"[CHANGELOG] Post check failed: {type(e).__name__}: {e}")
+        sentry_sdk.capture_exception(e)
 
     # Re-register persistent storm sign-up Views so their buttons keep
     # working after a restart. Fed from `storm_registration_posts`; safely

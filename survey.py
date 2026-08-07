@@ -167,6 +167,125 @@ def _get_spreadsheet(guild_id: int = None):
     return get_spreadsheet(guild_id)
 
 
+def survey_question_keys_and_labels(questions: list) -> tuple[list[str], list[str]]:
+    """Split a question list into the keys answers are stored under and the
+    column labels those answers are written beneath."""
+    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+    return q_keys, q_labels
+
+
+# Bot-owned columns. Named so the merge logic can tell them apart from
+# the alliance's own question columns, which come and go with the config.
+SURVEY_MODIFIED_COLUMN = "Date Modified"
+SURVEY_RESPONSES_BASE = ["Username", "Discord ID"]
+SURVEY_HISTORY_BASE = ["Timestamp", "Discord ID", "Username"]
+
+
+def survey_header_rows(questions: list) -> tuple[list[str], list[str]]:
+    """Row 1 for a survey's two tabs: (current answers, submission history).
+
+    One definition shared by the wizard, which seeds these the moment a
+    survey is saved, and the two write paths, which reconcile against
+    whatever the tab already has.
+    """
+    _, q_labels = survey_question_keys_and_labels(questions)
+    return (
+        SURVEY_RESPONSES_BASE + q_labels + [SURVEY_MODIFIED_COLUMN],
+        SURVEY_HISTORY_BASE + q_labels,
+    )
+
+
+def _values_by_column(
+    questions: list,
+    data: dict,
+    username: str,
+    discord_id: str,
+    stamp: str,
+    *,
+    stamp_column: str = SURVEY_MODIFIED_COLUMN,
+) -> dict:
+    """Map every column this survey can write to the value going in it.
+
+    Answers arrive keyed by question *key* but are stored under the
+    question *label*, which is what the sheet's header holds. The
+    bot-owned columns are written last so a question labelled
+    "Username" can't overwrite the identity column the upsert matches on.
+    """
+    by_column: dict = {}
+    for i, q in enumerate(questions):
+        key = q.get("key", f"field_{i}")
+        value = data.get(key, "")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        by_column[q.get("label", key)] = "" if value is None else value
+
+    by_column["Username"] = username
+    by_column["Discord ID"] = discord_id
+    by_column[stamp_column] = stamp
+    return by_column
+
+
+def _remap_rows_to_header(rows: list[list[str]], header: list[str]) -> list[list[str]]:
+    """Rewrite stored rows into a new column layout, matching by name.
+
+    Used when a tab's header has to change shape. Every value follows its
+    own column, so an answer written under "Drone Level" stays under
+    "Drone Level" wherever that column ends up. Columns the old sheet
+    didn't have come out blank.
+    """
+    if not rows:
+        return []
+    old_header = [c for c in rows[0] if c]
+    out = [list(header)]
+    for row in rows[1:]:
+        if not any(row):
+            continue
+        by_column = {col: (row[i] if i < len(row) else "") for i, col in enumerate(old_header)}
+        out.append([by_column.get(col, "") for col in header])
+    return out
+
+
+def seed_survey_headers(
+    guild_id: int, *, tab_responses: str, tab_history: str, questions: list
+) -> list[str]:
+    """Label both of a survey's tabs as soon as the survey is saved.
+
+    Without this the tabs sit blank until the first member submits, and
+    an alliance opening their sheet in the meantime has two untitled
+    tabs to guess at — easy to start typing roster data into by hand,
+    under no headers, in the wrong columns.
+
+    Only writes a tab whose row 1 is still empty, so re-running the
+    wizard never relabels columns that existing rows were written
+    under. Returns the tabs actually seeded, for the wizard to report.
+    """
+    from config import get_or_create_worksheet
+
+    sh = _get_spreadsheet(guild_id)
+    responses_header, history_header = survey_header_rows(questions)
+    seeded: list[str] = []
+
+    for tab_name, header, add_filter in (
+        (tab_responses, responses_header, False),
+        (tab_history, history_header, True),
+    ):
+        if not tab_name:
+            continue
+        ws = get_or_create_worksheet(sh, tab_name)
+        if any(ws.row_values(1)):
+            continue
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        if add_filter:
+            try:
+                ws.set_basic_filter()
+            except Exception:
+                pass
+        seeded.append(tab_name)
+
+    return seeded
+
+
 def update_squad_powers(
     discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
 ):
@@ -175,30 +294,48 @@ def update_squad_powers(
     Columns are derived from the survey's question config. If `survey` is
     provided (multi-survey path), its questions/tab override the default.
     """
-    from config import get_survey_config
+    from config import (
+        get_survey_config,
+        get_or_create_worksheet,
+        merge_sheet_header,
+        row_for_header,
+    )
 
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
+
     questions = survey_cfg.get("questions") or []
     sh = _get_spreadsheet(guild_id)
     tab_name = survey_cfg.get("tab_squad_powers") or "Squad Powers"
-    ws = sh.worksheet(tab_name)
+    # Created rather than looked up: the wizard makes both tabs up front,
+    # but a member submitting into a tab that was deleted or renamed since
+    # would otherwise lose their answers to a WorksheetNotFound.
+    ws = get_or_create_worksheet(sh, tab_name)
     rows = ws.get_all_values()
 
     _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year}"
-    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
-    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
 
-    # Ensure header row exists
-    if not rows or not any(rows[0]):
-        header = ["Username", "Discord ID"] + q_labels + ["Date Modified"]
-        ws.update("A1", [header], value_input_option="USER_ENTERED")
-        rows = ws.get_all_values()
+    desired, _unused = survey_header_rows(questions)
+    existing_header = rows[0] if rows else []
+    header = merge_sheet_header(existing_header, desired, pin_last=SURVEY_MODIFIED_COLUMN)
 
-    new_row = [username, discord_id] + [data.get(k, "") for k in q_keys] + [now_str]
+    # This tab holds one row per member, so when the columns move it can
+    # afford to be remapped wholesale — which keeps "Date Modified"
+    # rightmost instead of stranding it mid-header. The history tab can't
+    # (it grows without bound), so it only ever gains columns on the right.
+    if header != [c for c in existing_header if c]:
+        rows = _remap_rows_to_header(rows, header)
+        ws.update("A1", rows or [header], value_input_option="USER_ENTERED")
+        if not rows:
+            rows = [header]
+        print(f"[SURVEY] Rebuilt '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
+
+    new_row = row_for_header(
+        header, _values_by_column(questions, data, username, discord_id, now_str)
+    )
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip() == discord_id:
@@ -214,7 +351,13 @@ def append_survey_history(
     discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
 ):
     """Append a timestamped row to the Survey History sheet."""
-    from config import get_config, get_survey_config
+    from config import (
+        get_config,
+        get_survey_config,
+        get_or_create_worksheet,
+        merge_sheet_header,
+        row_for_header,
+    )
 
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
@@ -226,23 +369,33 @@ def append_survey_history(
     tab_name = survey_cfg.get("tab_history") or (
         cfg.tab_survey_history if cfg else "Survey History"
     )
-    ws = sh.worksheet(tab_name)
+    ws = get_or_create_worksheet(sh, tab_name)
 
-    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
-    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+    _unused, desired = survey_header_rows(questions)
+    existing = [c for c in ws.row_values(1) if c]
+    header = merge_sheet_header(existing, desired)
 
-    existing = ws.row_values(1)
-    if not any(existing):
-        header = ["Timestamp", "Discord ID", "Username"] + q_labels
+    if not existing:
         ws.update("A1", [header], value_input_option="USER_ENTERED")
         try:
             ws.set_basic_filter()
         except Exception:
             pass
+    elif header != existing:
+        # Append-only: this tab is every submission ever, so columns are
+        # added on the right and never reordered. Rows already stored
+        # keep meaning exactly what they meant when they were written.
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        print(
+            f"[SURVEY] Extended '{tab_name}' header for guild={guild_id} to {len(header)} columns"
+        )
 
     _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year} {_now:%H:%M} UTC"
-    row = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
+    row = row_for_header(
+        header,
+        _values_by_column(questions, data, username, discord_id, now_str, stamp_column="Timestamp"),
+    )
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
 
@@ -1341,35 +1494,57 @@ async def run_post_survey(interaction: discord.Interaction, bot):
         )
         return
 
+    ok, message = await post_survey_to_its_channel(bot, interaction.guild_id, survey)
+    await interaction.followup.send(message, ephemeral=True)
+
+
+async def post_survey_to_its_channel(bot, guild_id: int, survey: dict) -> tuple[bool, str]:
+    """Post one survey's Answer button in the channel it's configured for.
+
+    Shared by the 📮 Post Survey hub button, which picks a survey first,
+    and the same button on the wizard's confirmation embed, which already
+    knows which survey it just configured. Returns `(ok, message)` for the
+    caller to relay however it responds to its own interaction.
+    """
+    from config import get_config
+
+    cfg = get_config(guild_id)
+    name = survey.get("survey_name") or "Default"
     survey_id = survey.get("survey_id") or "default"
-    channel_id = int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
+    channel_id = int(survey.get("survey_channel_id") or 0) or (cfg.survey_channel_id if cfg else 0)
     channel = bot.get_channel(channel_id)
     if channel is None:
-        await interaction.followup.send(
-            f"⚠️ Could not find the survey channel for **{survey.get('survey_name', 'this survey')}**.",
-            ephemeral=True,
-        )
-        return
+        return False, f"⚠️ Could not find the survey channel for **{name}**."
 
-    intro = survey.get("intro_message") or (
-        "**Let us know your Squad Powers!**\n\n"
-        "Please fill out this survey each week, if possible, to help us keep track of "
-        "squad powers, better balance our Desert Storm teams, track alliance growth, "
-        "and prepare for season events!"
-    )
+    intro = survey.get("intro_message") or _default_posted_intro(survey)
 
-    view = build_survey_button_view(survey_id)
     try:
-        await channel.send(intro, view=view)
+        await channel.send(intro, view=build_survey_button_view(survey_id))
     except discord.Forbidden:
-        await interaction.followup.send(
+        return (
+            False,
             f"⚠️ I can't post in {channel.mention}. Check my permissions there and try again.",
-            ephemeral=True,
         )
-        return
-    await interaction.followup.send(
-        f"✅ Survey button posted for **{survey.get('survey_name', 'Default')}** in {channel.mention}.",
-        ephemeral=True,
+    return True, f"✅ Survey button posted for **{name}** in {channel.mention}."
+
+
+def _default_posted_intro(survey: dict) -> str:
+    """Headline + body posted above the survey button when none is saved.
+
+    Falls back to the survey's own template so a non-squad-power survey
+    never announces itself as a squad-power one. A survey built from
+    scratch speaks in its own name.
+    """
+    from defaults import SURVEY_TEMPLATE_SQUAD_POWER, survey_template
+
+    tpl = survey_template(survey.get("template"))
+    if tpl["key"] == SURVEY_TEMPLATE_SQUAD_POWER:
+        return f"**Let us know your Squad Powers!**\n\n{tpl['intro_message']}"
+
+    name = survey.get("survey_name") or "our latest survey"
+    return (
+        f"**{name}**\n\n"
+        "Please take a moment to fill this out. Click the button below to get started."
     )
 
 

@@ -679,7 +679,7 @@ class TestRunSurveySetup:
     """Test /setup_survey saves survey config correctly."""
 
     @pytest.mark.asyncio
-    async def test_survey_setup_uses_default_questions(self, seeded_db):
+    async def test_survey_setup_uses_template_questions(self, seeded_db):
         import config
         from setup_cog import run_survey_setup
 
@@ -693,22 +693,22 @@ class TestRunSurveySetup:
             MagicMock(confirmed=True, selected_channel=survey_channel, wait=AsyncMock()),
             MagicMock(confirmed=True, selected_channel=notify_channel, wait=AsyncMock()),
         ]
-        q_view = MagicMock(choice="default", wait=AsyncMock())
 
         # Step 5 intro message arrives via bot.wait_for
         bot.wait_for = AsyncMock(return_value=MagicMock(content="Please submit weekly!"))
 
         with (
             patch("setup_cog.ChannelSelectStep", side_effect=ch_views),
-            patch("setup_cog.QuestionStartView", return_value=q_view)
-            if False
-            else patch_keep_or_change(["Squad Powers", "Survey History"]),
+            patch("setup_cog._ensure_survey_tab", AsyncMock()),
+            patch_keep_or_change(["Squad Powers", "Survey History"]),
         ):
-            # Two patches — survey wizard creates QuestionStartView inline,
-            # which we resolve via the send handler below.
+            # The wizard builds its step views inline, so the choices are
+            # injected through the send handler rather than by patching the
+            # classes. `intro_choice` covers Step 5, which offers the
+            # template's intro rather than asking for free text.
             make_send_handler(
                 interaction.channel,
-                view_overrides={"choice": "default"},
+                view_overrides={"choice": "template_asis", "intro_choice": "keep"},
             )
             await run_survey_setup(interaction, bot)
 
@@ -719,7 +719,9 @@ class TestRunSurveySetup:
         survey_cfg = config.get_survey_config(TEST_GUILD_ID)
         assert survey_cfg["tab_squad_powers"] == "Squad Powers"
         assert survey_cfg["tab_history"] == "Survey History"
-        assert len(survey_cfg["questions"]) > 0  # defaults loaded
+        assert len(survey_cfg["questions"]) > 0  # template questions loaded
+        # The guild's main survey is the squad-power one, and stays so.
+        assert survey_cfg["template"] == "squad_power"
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):

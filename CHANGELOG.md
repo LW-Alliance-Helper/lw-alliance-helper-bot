@@ -9,6 +9,22 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.5] — 2026-08-07
+
+### Added
+- A new survey now starts from a template or from scratch, and that choice sets the wizard's wording, the tab names it suggests, and the questions it offers ([#439](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/439)).
+- Both of a survey's sheet tabs are created and given their column headers for you, so nothing has to exist in your sheet before you start ([#439](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/439)).
+- Naming a sheet tab another feature already writes to now warns you, and renaming your main survey's stats tab re-points the Buddy System at the new name ([#441](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/441)).
+
+### Fixed
+- Editing a survey's or a storm participation log's questions no longer writes later answers into columns whose headers no longer describe them ([#440](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/440)).
+- Two surveys can no longer be pointed at one sheet tab, which used to append one survey's answers under the other's column names with no warning ([#439](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/439)).
+- A survey with no intro message written no longer announces itself to members as a squad-power survey ([#439](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/439)).
+
+### Changed
+- The survey question builder's prompts, and the name examples offered for a new survey, are no longer written around squad powers ([#439](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/439)).
+- Each release now posts its own entry to the support server's changelog channel ([#92](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/92)).
+
 ## [1.8.4] — 2026-08-07
 
 ### Fixed

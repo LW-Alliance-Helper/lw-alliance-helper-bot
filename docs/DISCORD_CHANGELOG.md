@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.8.5** — 2026-08-07
+- Add a survey from a template or from scratch, in your own wording
+- A survey's two sheet tabs are created and labelled for you
+- Editing a survey's questions no longer shifts later answers into the wrong columns
+- Two surveys can no longer share a sheet tab
+- Naming a tab another feature already uses now warns you
+
+---
+
 **1.8.4** — 2026-08-07
 - Adding the app without the bot now says so, with a re-invite link
 - The invite link asks for Attach Files and Manage Channels

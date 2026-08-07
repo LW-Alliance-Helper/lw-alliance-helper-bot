@@ -1007,6 +1007,46 @@ async def ask_keep_or_change(
     return view.value
 
 
+async def warn_if_tab_claimed(
+    channel,
+    guild_id: int,
+    tab: str,
+    *,
+    exclude_field: str,
+    exclude_survey_id: str | None = None,
+) -> bool:
+    """Tell leadership when a tab they just named already belongs elsewhere.
+
+    A warning, not a rejection: some overlaps are deliberate (pointing
+    two features at one roster tab is a reasonable thing to want), and
+    the bot can't tell those from a typo. What it can do is make sure
+    nobody discovers it by finding one feature's columns written over
+    another's.
+
+    Returns True when a warning was posted, for callers that want to
+    know. Never raises — a warning failing must not end a wizard.
+    """
+    try:
+        from config import tabs_in_use
+
+        owner = tabs_in_use(
+            guild_id, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
+        ).get((tab or "").casefold())
+    except Exception as e:
+        print(f"[SETUP] tab claim check failed guild={guild_id}: {type(e).__name__}: {e}")
+        return False
+
+    if not owner:
+        return False
+
+    await channel.send(
+        f"⚠️ Heads up: **{tab}** is also {owner}. Two features writing to one "
+        f"tab will overwrite each other's columns. That's fine if you meant "
+        f"it, otherwise pick a different tab here or in that feature's setup."
+    )
+    return True
+
+
 async def ask_proceed_with_existing_config(
     channel,
     *,
@@ -2526,6 +2566,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     )
     if tab_source is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_source, exclude_field="tab_source")
 
     # ── Step 3: Data start row ────────────────────────────────────────────────
     start_raw = await ask_keep_or_change(
@@ -2795,6 +2836,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     )
     if tab_growth is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_growth, exclude_field="tab_growth")
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
     # Custom-interval frequency is a premium-only feature.
@@ -3066,6 +3108,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     )
     if tab_breakdown is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_breakdown, exclude_field="tab_breakdown")
 
     # ── Step 2: Auto-post toggle + channel ────────────────────────────────
     autopost_view = YesNoView()
@@ -3597,6 +3640,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     )
     if tab_name is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_name, exclude_field="train_tab_name")
 
     # ── Step 2: Generate blurbs? ───────────────────────────────────────────────
     blurb_view = YesNoView()
@@ -4895,6 +4939,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     )
     if buddy_tab is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, buddy_tab, exclude_field="buddy_tab")
 
     # ── Step 3: Opt-out column (#427) ─────────────────────────────────────────
     # Optional. Blank keeps every row on the profession tab eligible, which is
@@ -5871,6 +5916,8 @@ async def _ask_survey_tab(
     guild_id: int,
     claimed_tabs: dict,
     also_claimed: dict,
+    exclude_field: str = "",
+    exclude_survey_id: str | None = None,
 ) -> str | None:
     """Ask for one of a survey's two tab names, then make sure it exists.
 
@@ -5909,6 +5956,16 @@ async def _ask_survey_tab(
             current = ""
             continue
 
+        # Another *survey* sharing this tab is always wrong, so it's
+        # rejected above. Another feature is only probably wrong, so it
+        # gets a warning and the step still proceeds (#441).
+        await warn_if_tab_claimed(
+            channel,
+            guild_id,
+            tab,
+            exclude_field=exclude_field,
+            exclude_survey_id=exclude_survey_id,
+        )
         await _ensure_survey_tab(channel, guild_id, tab)
         return tab
 
@@ -5953,6 +6010,7 @@ async def run_survey_setup(
         has_survey_config,
         get_config,
         survey_tabs_in_use,
+        follow_survey_tab_rename,
     )
     from defaults import derive_survey_tab_names, survey_template
 
@@ -6119,6 +6177,8 @@ async def run_survey_setup(
         guild_id=guild_id,
         claimed_tabs=claimed_tabs,
         also_claimed={},
+        exclude_field="survey_tab",
+        exclude_survey_id=(target_survey_id or "default"),
     )
     if tab_squad_powers is None:
         return
@@ -6133,6 +6193,8 @@ async def run_survey_setup(
         guild_id=guild_id,
         claimed_tabs=claimed_tabs,
         also_claimed={tab_squad_powers.casefold(): target_survey_name or "this survey"},
+        exclude_field="survey_tab",
+        exclude_survey_id=(target_survey_id or "default"),
     )
     if tab_history is None:
         return
@@ -6759,6 +6821,16 @@ async def run_survey_setup(
     if target_survey_id is None:
         # Default survey: legacy single-row storage, plus the channel IDs go
         # to guild_configs so older code that reads them stays happy.
+        #
+        # The Buddy System reads profession off this tab by name, from a
+        # different wizard and a different column. Renaming it here used to
+        # leave buddy pointing at a tab that no longer exists (#441).
+        previous_tab = current.get("tab_squad_powers", "")
+        if follow_survey_tab_rename(guild_id, previous_tab, tab_squad_powers):
+            await channel.send(
+                f"🔗 Your Buddy System read professions from **{previous_tab}**, "
+                f"so I've pointed it at **{tab_squad_powers}** too."
+            )
         save_survey_config(
             guild_id, tab_squad_powers, tab_history, questions, intro_message, template_key
         )
@@ -7052,6 +7124,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     )
     if tab_name is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_name, exclude_field="storm_tab_name")
 
     # ── Step 2: Which teams? ───────────────────────────────────────────────────
     saved_teams_raw = (current.get("teams") or "both").strip()
@@ -8204,6 +8277,7 @@ async def _run_storm_participation_step(
     )
     if tab_name is None:
         return None
+    await warn_if_tab_claimed(channel, guild_id, tab_name, exclude_field="participation_tab_name")
 
     # ── 6.3 Roster source ──────────────────────────────────────────────────────
     # Smart "current" suggestion: prefer a previously-saved roster source
@@ -11123,6 +11197,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     )
     if tab_name is None:
         return
+    await warn_if_tab_claimed(channel, guild_id, tab_name, exclude_field="birthday_tab_name")
 
     # discord_id_col is no longer asked in the wizard — preserve any existing
     # value so save_birthday_config doesn't clobber it.

@@ -27,8 +27,13 @@ import re
 import time
 from pathlib import Path
 
-import discord
-import sentry_sdk
+# `discord` and `sentry_sdk` are imported inside `maybe_post_changelog`
+# rather than here on purpose. Everything above that function is pure
+# text handling, and `scripts/discord_changelog.py` imports it to gate
+# the release PR — a job that installs no dependencies, because a check
+# on a markdown file shouldn't need the bot's whole dependency tree.
+# Importing them at module level broke that job (it passed locally only
+# because a dev machine has them installed).
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +204,9 @@ async def maybe_post_changelog(bot, version: str, *, force: bool = False) -> str
 
     Returns a short status string for logging and the `/admin` surface.
     """
+    import discord
+    import sentry_sdk
+
     from config import get_app_setting, set_app_setting
 
     channel_id = configured_channel_id()

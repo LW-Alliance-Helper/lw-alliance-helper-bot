@@ -238,6 +238,42 @@ class TestPlanPost:
         assert self._plan(block, self._state(5 * 3600), window=6 * 3600)["action"] == "edit"
 
 
+class TestRunsWithoutBotDependencies:
+    """The release-PR gate installs nothing — it's a check on a markdown
+    file, so it shouldn't need the bot's dependency tree. Importing
+    `discord` at module scope in `changelog_post` broke that job while
+    passing locally, because a dev machine has it installed."""
+
+    def _without(self, *modules):
+        """Run the gate in a subprocess with `modules` unimportable."""
+        import subprocess
+        import sys
+
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        blocked = "".join(f"sys.modules[{m!r}] = None\n" for m in modules)
+        code = (
+            "import sys, runpy\n"
+            + blocked
+            + "sys.argv = ['scripts/discord_changelog.py', '1.8.5', '--check']\n"
+            "runpy.run_path('scripts/discord_changelog.py', run_name='__main__')\n"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", code], cwd=root, capture_output=True, text=True
+        )
+
+    def test_the_gate_runs_without_discord_or_sentry(self):
+        result = self._without("discord", "sentry_sdk")
+        assert result.returncode == 0, result.stderr
+        assert "will post" in result.stdout
+
+    def test_the_pure_helpers_import_without_them(self):
+        """Guards the seam: anything above `maybe_post_changelog` has to
+        stay dependency-free."""
+        result = self._without("discord", "sentry_sdk")
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "ImportError" not in result.stderr
+
+
 class TestShippedFile:
     """The real file has to parse, or the first release using this posts
     nothing and nobody finds out until the channel stays quiet."""

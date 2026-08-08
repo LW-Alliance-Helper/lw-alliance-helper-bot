@@ -136,6 +136,12 @@ def _parse_magnitude_input(raw: str, magnitude: str | None = None) -> int | None
     return int(round(value * multiplier))
 
 
+#: Public alias. `alliance_duel.py` parses power and duel-score cells with the
+#: same shorthand rules members type into surveys (#400); reaching into the
+#: underscore name from another module would hide that dependency.
+parse_magnitude_input = _parse_magnitude_input
+
+
 def _fmt_response_value(value, qtype: str | None) -> str:
     """Comma-format numeric responses for the leadership notification embed.
 

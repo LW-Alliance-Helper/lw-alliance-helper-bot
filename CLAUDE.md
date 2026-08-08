@@ -9,6 +9,31 @@ repo auto-load this; chats outside this repo don't see it. Companion
 repo `../lw-alliance-helper.github.io` (the website) has its own
 `CLAUDE.md`.
 
+**Changing anything a user sees? Read `notes/UX.md` and
+`notes/DESIGN.md` first.** They're the contract for every user-facing
+surface, and they live in the **private** notes repo rather than here.
+This file owns engineering patterns, workflow, and release process;
+those two own the product's users, language, and visual conventions,
+and `messages.py` owns the shared copy constants themselves.
+
+| File | Owns | Read it when |
+|---|---|---|
+| `notes/UX.md` | Audiences, operating constraints, principles, interaction standards, naming, glossary, voice | Any slash command, hub, wizard, embed, button label, DM, scheduled post, or error message changes |
+| `notes/DESIGN.md` | Surface types, color semantics, emoji catalog, button styles + grid, embed anatomy, Discord limits, ephemerality, view timeouts | Same trigger, plus anything that renders |
+
+`/ux-review` runs both as a checklist: with no argument it audits the
+diff; given a surface name or issue it produces a pre-flight brief
+before the code is written. Without the notes repo cloned it has no
+contract to check against and will say so instead of guessing.
+
+**They're private deliberately** (settled 2026-08-08). They're our own
+design and UX reasoning, which is worth more to a competitor than to
+any user, and the closest competitor's known weakness is precisely a
+lack of this kind of context. Don't copy them into this tree, don't
+quote them into this file, and see `notes/README.md` for the full
+reasoning. Verifying their contents is
+[#451](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/451).
+
 ---
 
 ## Working agreement
@@ -466,51 +491,110 @@ Test suite: **3073 collected**, 18 skipped on the free-tier lane and
 
 ---
 
-## Parked work (local-only docs)
+## Where things get pushed (three repos, read before you commit)
 
-Working docs that don't belong in the public tree live under `notes/`
-(gitignored). They're cross-session scratch space for planning, design
-parks, audit notes, recruiter prep, and ad-hoc test plans. Anything
-that should ship as a tracked reference belongs in `docs/` instead.
+**This repo is PUBLIC.** So is the website. Assume anything you commit
+here is world-readable the moment it's pushed.
 
-Current contents (worth being aware of when picking up new work):
+| Repo | Visibility | Lives at | Push rule |
+|---|---|---|---|
+| `lw-alliance-helper-bot` | **Public** | this directory | Release-branch workflow (see Working agreement) |
+| `lw-alliance-helper.github.io` | **Public** | `../lw-alliance-helper.github.io` | Straight to `main` |
+| `lw-alliance-helper-notes` | **Private** | `notes/`, nested inside this repo | Straight to `main`, from inside `notes/` |
 
-- **`notes/AUDIT_2026-04-30.md`** — pre-launch code-quality audit,
-  **fully shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema
-  drops ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit
-  was structured but should not generate new work.
+`notes/` is its own independent git repo cloned into this one, and is
+listed in this repo's `.gitignore`, so the outer repo never descends
+into it. From inside `notes/`, git commands act on the private repo;
+from here, they act on the bot. **Two repos, two commit habits** — work
+that touches both needs a commit in each.
+
+It is deliberately **not a submodule**: a submodule writes
+`.gitmodules` into this public repo, which would publish the private
+repo's URL and its existence.
+
+### What goes where
+
+- **`notes/` (private)** holds anything whose reasoning is worth more
+  to a competitor than to a user: the `UX.md` / `DESIGN.md` contracts,
+  `STRATEGY.md`, design parks, competitive research, planning, audit
+  notes, ad-hoc test plans.
+- **`docs/` (public)** is tracked reference that ships with the repo.
+  **Not a place for captured data.** Third-party datasets, scraped
+  snapshots, and anything pulled from behind someone else's auth wall
+  do not belong in a public repo even transiently.
+- **This file (public)** may *name* a file in `notes/`, the way the
+  list below does, but **must not quote its content**. A rule or
+  decision that lives in `notes/` gets referenced here, not restated.
+
+That boundary was set on 2026-08-08, after competitor-teardown examples
+were inlined into the design docs and had to be stripped back out
+before the branch was pushed, and again after the design docs
+themselves were found to belong on the private side.
+
+### Parked work
+
+Current contents, verified 2026-08-08 (worth being aware of when
+picking up new work):
+
+- **`notes/README.md`** — what the private repo is, how it's wired into
+  this one, and why the design docs live there.
+- **`notes/UX.md`** / **`notes/DESIGN.md`** — the user-facing contract.
+  See the pointer at the top of this file.
+- **`notes/STRATEGY.md`** — commercial positions (pricing, localisation,
+  self-host, fork). Moved out of this file on 2026-08-08 because this
+  file is public.
 - **`notes/DESIGN_transfer_management.md`** — spec + build log for the
   Premium transfer-tracking feature ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)),
   now **built and shipping in 1.6.0**. Kept for the reconciliation
   decisions (header-name addressing, only-Name-is-special, the
   intentional no-outage-adapter call).
+- **`notes/DESIGN_alliance_duel_vs.md`** — Alliance Duel (VS) design,
+  ground truth for [#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398).
+- **`notes/DESIGN_config_health.md`** — shared config-health notices,
+  ground truth for the #414 / #379 work.
+- **`notes/COMPETITOR_*.md`** — competitive research, each with its own
+  intake protocol for filing a new dump. **Don't name the subjects in
+  this file** — see the boundary rule above.
 - **`notes/PLANNING.md`** — cross-session work tracker.
-- **`notes/DEV_TEST_PLAN_*.md`** — ad-hoc test plans for a specific
-  release-batch dev validation session. Delete after the batch ships
-  unless something in there warrants tracking as an issue.
 
-When a chat session starts on `notes/DESIGN_transfer_management.md`,
-that doc is the ground truth.
+The pre-launch `AUDIT_2026-04-30.md` and the per-batch
+`DEV_TEST_PLAN_*.md` files listed here previously are gone; both had
+shipped. Don't go looking for them.
+
+When a chat session starts on a `notes/DESIGN_*.md`, that doc is the
+ground truth for its feature.
+
+### Capture artifacts
+
+`docs/server_json.json` (untracked, ~1MB) is a Shiny Tasks server
+snapshot captured for `/admin shiny_import`, per the manual maintenance
+process in `docs/hedge_data_source.md`. It is third-party data from
+behind an auth wall, which is why it's gitignored rather than
+committed.
+
+**Captures are disposable.** The source rotates its chunk URL every
+deploy, so the process says to capture fresh each time. A stale
+snapshot on disk is a hazard (someone imports it and reintroduces the
+drifted dates from
+[#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330) /
+[#331](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/331)),
+not an asset. Delete after importing.
+
+Note the gitignore entry for it currently exists only on the
+`alliance-duel-vs-core` branch, not on `main`.
 
 ---
 
-## Strategic decisions (don't second-guess in passing)
+## Strategic decisions
 
-These have been thought through. Reopening them needs a real reason:
+Moved to `notes/STRATEGY.md` on 2026-08-08. Pricing, localisation,
+self-host, and fork positions are commercial decisions with their
+reasoning attached, which is worth real money to a competitor and
+nothing to a user, and this file is public.
 
-- **Localisation:** English only at launch. Korean first when signal
-  demands it (non-English alliances install but don't convert).
-- **Pricing:** single Premium tier at $4.99/mo. Don't introduce a Pro
-  tier without 6+ months of usage data. **Never** move existing
-  Premium features to a higher tier — that's a takeaway and customers
-  resent it.
-- **Attribution footer:** post-first-customer, not pre-launch.
-- **Self-host pivot:** kill criteria = user stops playing LW. Until
-  then, hosted by user.
-- **Game-agnostic abstraction:** keep architecture clean enough that
-  a fork to another First Fun game (or similar mobile 4X) is plausible
-  in 2–4 weeks if the opportunity arises. Don't preemptively
-  abstract — fork when needed.
+They still bind: **don't second-guess them in passing.** Read them
+there before proposing anything that touches pricing, tiers, language
+support, or hosting.
 
 ---
 

@@ -362,3 +362,41 @@ def test_the_wizard_imports_and_exposes_its_entry_point():
     # Wizard steps get the typing-and-thought timeout tier, not the 120s
     # confirm tier.
     assert w.STEP_TIMEOUT == 300
+
+
+def test_timeout_hints_name_the_button_not_just_the_command():
+    # UX.md principle 3: "/setup" alone is useless when it has fourteen
+    # buttons. expire_view_message's own docstring shows the expected form.
+    import inspect
+
+    import alliance_duel_wizard as w
+
+    source = inspect.getsource(w)
+    assert 'command_hint="/setup"' not in source
+    assert source.count("command_hint=ads.VS_SETUP_NAV") == 2
+
+
+def test_recovery_copy_says_start_again_once_the_flow_has_ended():
+    # "try again" is for retyping one input with the flow still alive.
+    # Both of these sit after the wizard has ended.
+    import inspect
+
+    import alliance_duel_wizard as w
+
+    source = inspect.getsource(w)
+    assert "to try again" not in source
+    assert source.count("to start again") == 2
+
+
+def test_wizard_button_labels_fit_on_mobile():
+    import alliance_duel_setup as a_setup
+    import alliance_duel_wizard as w
+
+    for label in (
+        "🏆 Set up Alliance Duel (VS)",
+        "✏️ Change alliance or mode",
+        a_setup.MODE_BTN_OWN,
+        a_setup.MODE_BTN_FULL,
+    ):
+        assert len(label) <= 35, f"{label!r} is {len(label)} chars"
+    assert w.STEP_TIMEOUT == 300

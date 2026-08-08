@@ -23,7 +23,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_setup as ads
 import config
-from messages import CANCEL_BACKPEDAL_DEFAULT, WIZARD_TIMEOUT
+from messages import CANCEL_BACKPEDAL_DEFAULT
 from setup_hub import HUB_BTN_VS
 from wizard_registry import expire_view_message, safe_edit_response
 
@@ -31,10 +31,6 @@ logger = logging.getLogger(__name__)
 
 #: A wizard step involving typing or thought, per the DESIGN.md timeout tiers.
 STEP_TIMEOUT = 300
-
-
-def _timeout_copy() -> str:
-    return WIZARD_TIMEOUT.format(wizard=HUB_BTN_VS)
 
 
 class OwnAllianceModal(discord.ui.Modal, title="Your alliance"):
@@ -75,7 +71,7 @@ class OwnAllianceModal(discord.ui.Modal, title="Your alliance"):
         if key is None:
             await interaction.followup.send(
                 "⚠️ I need both an alliance tag and a warzone. "
-                f"Run `/setup` and click **{HUB_BTN_VS}** to try again.",
+                f"Run `/setup` and click **{HUB_BTN_VS}** to start again.",
                 ephemeral=True,
             )
             return
@@ -104,7 +100,7 @@ class TrackingModeView(discord.ui.View):
         self.message: discord.Message | None = None
 
     async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="/setup")
+        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await self._parent.owns(interaction)
@@ -152,7 +148,7 @@ class VSSetupView(discord.ui.View):
         return False
 
     async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="/setup")
+        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await self.owns(interaction)
@@ -178,7 +174,7 @@ class VSSetupView(discord.ui.View):
             await interaction.followup.send(
                 "⚠️ I saved your settings, but could not reach your sheet to "
                 f"create the **{tab_name}** tab. Check the bot still has access, "
-                f"then run `/setup` and click **{HUB_BTN_VS}** to try again.",
+                f"then run `/setup` and click **{HUB_BTN_VS}** to start again.",
                 ephemeral=True,
             )
             return
@@ -248,11 +244,11 @@ async def run_vs_setup(interaction: discord.Interaction, bot=None) -> None:
     )
     view = VSSetupView(guild_id, interaction.user.id)
     if cfg.get("enabled"):
-        view.btn_start.label = "✏️ Change my alliance or tracking mode"
+        view.btn_start.label = "✏️ Change alliance or mode"
         view.btn_start.style = discord.ButtonStyle.secondary
 
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     view.message = await interaction.original_response()
 
 
-__all__ = ["run_vs_setup", "VSSetupView", "TrackingModeView", "OwnAllianceModal", "_timeout_copy"]
+__all__ = ["run_vs_setup", "VSSetupView", "TrackingModeView", "OwnAllianceModal"]

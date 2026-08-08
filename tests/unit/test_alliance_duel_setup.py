@@ -286,3 +286,79 @@ def test_a_bot_bug_still_raises(monkeypatch):
 class _FakeWorksheet:
     def get_all_values(self):
         return [list(ad.SHEET_COLUMNS)]
+
+
+# ── /setup grid and /help wiring ──────────────────────────────────────────────
+
+
+def test_the_vs_button_is_premium_gated_on_the_free_tier():
+    import setup_hub
+
+    free = setup_hub._SetupHubView(None, 1, 1, is_premium=False)
+    # DESIGN.md: locked controls render disabled, not hidden, so the free tier
+    # can see the shape of the paid product.
+    assert free.btn_vs.disabled is True
+    assert free.btn_vs.label.startswith("💎")
+    # Disabled, but still rendered. Hiding is reserved for deploy-flagged
+    # surfaces, which is a different thing.
+    assert free.btn_vs in free.children
+
+
+def test_the_vs_button_is_live_on_premium():
+    import setup_hub
+
+    paid = setup_hub._SetupHubView(None, 1, 1, is_premium=True)
+    assert paid.btn_vs.disabled is False
+    assert paid.btn_vs.label == setup_hub.HUB_BTN_VS
+
+
+def test_the_vs_button_sits_in_the_combat_events_row():
+    import setup_hub
+
+    view = setup_hub._SetupHubView(None, 1, 1, is_premium=True)
+    assert view.btn_vs.row == 2, "VS belongs with the other event features"
+    per_row = {}
+    for child in view.children:
+        per_row[child.row] = per_row.get(child.row, 0) + 1
+    # Five buttons per row is Discord's cap; 25 components total.
+    assert all(count <= 5 for count in per_row.values())
+    assert len(view.children) <= 25
+
+
+def test_the_setup_grid_reports_vs_state():
+    import setup_hub
+    import inspect
+
+    source = inspect.getsource(setup_hub)
+    # Shown with the 💎 marker like the other Premium features, so a free-tier
+    # reader sees it exists rather than wondering where it went.
+    assert "_premium(vs_on)} Alliance Duel (VS)" in source
+
+
+def test_help_has_a_vs_category_using_the_shared_label():
+    import help_content
+    from setup_hub import HUB_BTN_VS
+
+    cat = help_content.HELP_CATEGORIES["alliance_duel"]
+    assert cat["emoji"] == "🏆"
+    assert "💎" in cat["label"]
+    # The route in is the imported constant, not a retyped string.
+    assert any(HUB_BTN_VS in cmd for cmd, _desc in cat["commands"])
+
+
+def test_help_copy_avoids_the_reserved_word_server():
+    import help_content
+
+    cat = help_content.HELP_CATEGORIES["alliance_duel"]
+    text = cat["description"] + " ".join(d for _c, d in cat["commands"])
+    assert "guild" not in text.lower()
+    assert "—" not in text
+
+
+def test_the_wizard_imports_and_exposes_its_entry_point():
+    import alliance_duel_wizard as w
+
+    assert callable(w.run_vs_setup)
+    # Wizard steps get the typing-and-thought timeout tier, not the 120s
+    # confirm tier.
+    assert w.STEP_TIMEOUT == 300

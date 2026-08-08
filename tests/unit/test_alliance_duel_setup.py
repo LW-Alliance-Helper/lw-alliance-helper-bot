@@ -209,3 +209,80 @@ def test_the_vs_button_label_is_imported_not_retyped():
 
     assert ads.HUB_BTN_VS is setup_hub.HUB_BTN_VS
     assert setup_hub.HUB_BTN_VS.startswith("🏆 ")
+
+
+# ── Sheet health (#413 / #414 pattern) ────────────────────────────────────────
+
+
+def test_the_vs_tab_is_registered_as_a_fixable_subject():
+    import config_health
+
+    subject = config_health.get_subject(ads.VS_SHEET_SUBJECT)
+    # The label is what the alliance calls it, not what the code calls it.
+    assert subject.label == "your Alliance Duel (VS) tab"
+    assert "vs_config" not in subject.label
+    # The fix has to name the surface that actually fixes this subject.
+    assert subject.fix_btn == ads.HUB_BTN_VS
+    assert subject.fix_hub == "/setup"
+
+
+def test_a_clean_read_clears_the_subject(monkeypatch):
+    import config_health
+
+    calls = {"cleared": 0}
+    monkeypatch.setattr(ads, "ensure_tab", lambda *a, **k: _FakeWorksheet())
+    monkeypatch.setattr(config_health, "clear", lambda *a, **k: calls.__setitem__("cleared", 1))
+    import config
+
+    monkeypatch.setattr(config, "get_spreadsheet", lambda gid: object())
+
+    rows = ads.load_rows(1234)
+    assert rows == []
+    assert calls["cleared"] == 1
+
+
+def test_an_alliance_owned_failure_is_reported_not_raised(monkeypatch):
+    import config_health
+
+    recorded = {}
+
+    def _boom(*a, **k):
+        raise RuntimeError("tab gone")
+
+    monkeypatch.setattr(ads, "ensure_tab", _boom)
+    monkeypatch.setattr(
+        config_health,
+        "record_sheet_failure",
+        lambda gid, subj, e, **k: recorded.setdefault("subject", subj) or True,
+    )
+    import config
+
+    monkeypatch.setattr(config, "get_spreadsheet", lambda gid: object())
+
+    # None, not [], because "couldn't read" and "empty sheet" are different
+    # states and rendering an empty bracket as fact would be worse.
+    assert ads.load_rows(1234) is None
+    assert recorded["subject"] == ads.VS_SHEET_SUBJECT
+
+
+def test_a_bot_bug_still_raises(monkeypatch):
+    import config_health
+
+    def _boom(*a, **k):
+        raise RuntimeError("not a sheet problem")
+
+    monkeypatch.setattr(ads, "ensure_tab", _boom)
+    # record_sheet_failure returning False means "not the alliance's to fix",
+    # so the caller keeps its existing Sentry behaviour rather than swallowing.
+    monkeypatch.setattr(config_health, "record_sheet_failure", lambda *a, **k: False)
+    import config
+
+    monkeypatch.setattr(config, "get_spreadsheet", lambda gid: object())
+
+    with pytest.raises(RuntimeError):
+        ads.load_rows(1234)
+
+
+class _FakeWorksheet:
+    def get_all_values(self):
+        return [list(ad.SHEET_COLUMNS)]

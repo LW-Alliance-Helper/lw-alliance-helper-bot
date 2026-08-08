@@ -27,9 +27,27 @@ import logging
 import discord
 
 import alliance_duel as ad
+import config_health
 from setup_hub import HUB_BTN_VS
 
 logger = logging.getLogger(__name__)
+
+
+#: The alliance's VS tab, as a thing that can break. Registered at import
+#: time, per the pattern in `train.py` and `transfer_cog.py`: a renamed tab, a
+#: deleted spreadsheet or revoked access is the alliance's to fix, and the
+#: normal state of a sheet they own, so it gets reported as a fixable
+#: condition rather than failing silently or paging Sentry.
+VS_SHEET_SUBJECT = "vs.sheet"
+
+config_health.register(
+    config_health.Subject(
+        key=VS_SHEET_SUBJECT,
+        label="your Alliance Duel (VS) tab",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_VS,
+    )
+)
 
 
 #: Where to send someone whose VS setup needs revisiting. One constant so the
@@ -126,6 +144,41 @@ def ensure_tab(spreadsheet, tab_name: str = "Alliance Duel (VS)"):
         rows=200,
         cols=len(ad.SHEET_COLUMNS) + 4,
     )
+
+
+def load_rows(guild_id: int, tab_name: str = "Alliance Duel (VS)"):
+    """Read and parse the guild's VS tab, or ``None`` if it can't be reached.
+
+    Every VS read goes through here so the sheet-health reporting happens in
+    exactly one place. On a clean read the subject clears with a recovery
+    line; on a failure the alliance is told what broke and which surface fixes
+    it, and nothing is Sentry-captured when the cause is theirs to fix
+    (`config.is_user_config_sheet_error`, #285/#286).
+
+    Returns ``None`` rather than raising or returning ``[]``, because "we
+    couldn't read your sheet" and "your sheet is empty" are different states
+    and a caller that conflates them would render an empty bracket as fact.
+    """
+    import config
+
+    try:
+        spreadsheet = config.get_spreadsheet(guild_id)
+        worksheet = ensure_tab(spreadsheet, tab_name)
+        values = worksheet.get_all_values()
+    except Exception as e:  # noqa: BLE001 - classified by config_health
+        recorded = config_health.record_sheet_failure(guild_id, VS_SHEET_SUBJECT, e, tab=tab_name)
+        logger.warning(
+            "[VS] sheet read failed for guild=%s tab=%s: %s",
+            guild_id,
+            tab_name,
+            config.describe_sheet_error(e, guild_id=guild_id, tab=tab_name),
+        )
+        if not recorded:
+            raise
+        return None
+
+    config_health.clear(guild_id, VS_SHEET_SUBJECT)
+    return ad.parse_rows(values)
 
 
 def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Embed:

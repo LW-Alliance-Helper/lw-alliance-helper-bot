@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.0] — unreleased
+
+### Added
+- **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
+- Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
+- **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
+
 ## [1.8.5] — 2026-08-07
 
 ### Added

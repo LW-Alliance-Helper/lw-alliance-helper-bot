@@ -125,6 +125,13 @@ accident.
 
 ---
 
+**1.9.0** — unreleased
+NO POST: nothing alliance-facing yet. The Alliance Duel (VS) tracker lands
+across several merges and none of it is reachable until the `/vs` hub ships.
+Replace this with a real post on the merge that makes it visible.
+
+---
+
 **1.8.5** — 2026-08-07
 - Add a survey from a template or from scratch, in your own wording
 - A survey's two sheet tabs are created and labelled for you

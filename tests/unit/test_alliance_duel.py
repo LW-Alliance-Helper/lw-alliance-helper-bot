@@ -156,11 +156,23 @@ def test_parse_power_treats_a_full_number_as_raw():
 
 
 def test_parse_score_takes_bare_numbers_literally():
-    # Duel scores span orders of magnitude, so there is no safe implicit
-    # magnitude — 301 is 301, not 301 million.
-    assert ad.parse_score("301") == 301
-    assert ad.parse_score("6,480,000") == 6_480_000
-    assert ad.parse_score("6.4m") == 6_400_000  # explicit suffix still works
+    # An established alliance posts 500m-5b on a day, which makes shorthand
+    # tempting. It is still wrong: an early-game alliance legitimately posts
+    # these, and scaling them would multiply a real score by a million.
+    assert ad.parse_score("0") == 0
+    assert ad.parse_score("1000") == 1_000
+    assert ad.parse_score("230000") == 230_000
+    # A big alliance types the unit or the full number instead.
+    assert ad.parse_score("500m") == 500_000_000
+    assert ad.parse_score("1.2b") == 1_200_000_000
+    assert ad.parse_score("5,000,000,000") == 5_000_000_000
+
+
+def test_power_and_scores_read_a_bare_number_differently():
+    # The one place the two parsers must not converge: power keeps the survey
+    # shorthand convention, scores do not.
+    assert ad.parse_power("500") == 500_000_000
+    assert ad.parse_score("500") == 500
 
 
 @pytest.mark.parametrize("raw", ["W", "w", "win", "Won", "1", "yes"])

@@ -58,8 +58,20 @@ logger = logging.getLogger(__name__)
 #
 # Day themes and the Monday-to-Saturday schedule are fixed always, so they live
 # as a module-level table like the canonical DS/CS zone names, not as guild
-# config. Point values should be spot-checked each season in case an update
-# shifts them.
+# config. Spot-check them each season in case an update shifts them.
+#
+# `points` below is **league points** — the 1/2/2/2/2/4 a day contributes to
+# the week's 13. Those are structural and identical for every player.
+#
+# Do not add a table of per-action *award* points here (what the board pays for
+# a speedup minute, a kill, a trade truck). The in-game board shows each player
+# their own **already-boosted** figures, scaled by a per-player Alliance Duel
+# tech tree — a maxed account reads roughly 3x what an un-teched one reads on
+# the same board on the same day. So there is no base value to hardcode and no
+# universal number to print; a figure copied off one screenshot is wrong for
+# nearly everyone else. `decided_by` is prose for exactly that reason. Day
+# boards also differ per theme. See the design doc's "What the board actually
+# shows".
 
 
 @dataclass(frozen=True)
@@ -289,10 +301,16 @@ def parse_score(value) -> int | None:
     """Day / week raw-score read.
 
     Suffix shorthand works (``6.4m`` → 6,400,000), but unlike :func:`parse_power`
-    a bare number is taken **literally**. Duel scores span orders of magnitude —
-    a day-1 radar total and a day-2 speedup dump aren't in the same range — so
-    there's no safe implicit magnitude to apply, and silently reading ``301`` as
-    301 million would poison the day profiles.
+    a bare number is taken **literally**, and that is deliberate.
+
+    An established alliance posts 500m to 5b on a day, which makes it tempting
+    to read a bare ``500`` as 500 million the way a power field would. Don't:
+    an **early-game** alliance can legitimately post ``0``, ``1000`` or
+    ``230000`` on a day, so there is no floor below which a small number is
+    safely assumed to be shorthand. Scaling it would silently multiply a real
+    score by a million, which is worse than making a big-alliance user type a
+    unit. Anything ambiguous is caught by "Check my sheet" (#399) rather than
+    guessed at here.
     """
     return _parse_magnitude(value, None)
 

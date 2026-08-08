@@ -53,6 +53,12 @@ HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
 HUB_BTN_BUDDY = "🤝 Buddy System"
 HUB_BTN_TRANSFERS = "🔁 Transfers"
 HUB_BTN_MAP_MANAGER = "🗺️ Map Manager"
+# 🏆 mirrors the game's own iconography: Last War renders the Duel League with
+# a trophy (in several styles), so the surface we control reads as continuous
+# with the one we don't. That cohesion is the reason for this emoji, not
+# aesthetics — don't swap it for something that merely looks better here.
+# Where the game already has an icon for a thing, match it.
+HUB_BTN_VS = "🏆 Alliance Duel (VS)"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",

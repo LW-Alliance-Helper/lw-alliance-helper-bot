@@ -23,7 +23,7 @@ def test_unconfigured_guild_reads_all_off_defaults(db):
     cfg = config.get_vs_config(1234)
     assert cfg["enabled"] == 0
     assert cfg["tab_name"] == "Alliance Duel (VS)"
-    assert cfg["own_tag"] == "" and cfg["own_server"] == ""
+    assert cfg["own_tag"] == "" and cfg["own_warzone"] == ""
     assert cfg["score_prompt_enabled"] == 0
     assert cfg["day_theme_enabled"] == 0
     assert cfg["last_score_prompt_fired"] == ""
@@ -42,7 +42,7 @@ def test_save_then_read_round_trips(db):
         1234,
         enabled=1,
         own_tag="ABC",
-        own_server="1234",
+        own_warzone="1234",
         tracking_mode=config.VS_MODE_OWN_ALLIANCE,
         score_prompt_time="09:30",
         score_prompt_channel_id=999,

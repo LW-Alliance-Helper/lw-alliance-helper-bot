@@ -213,6 +213,27 @@ def test_alliance_key_normalises_tag_and_server():
     assert ad.AllianceKey.of("AL01", "") is None
 
 
+def test_the_identity_column_is_warzone_not_server():
+    """Pins the naming decision, because it is invisible until it isn't.
+
+    Players say "server" colloquially, but `server` is reserved product-wide
+    for the *Discord* server (UX.md glossary). Warzone is the game's own word
+    for a world, so it carries no second meaning. Renaming the column back
+    would put one term's opposite sense on every VS surface.
+    """
+    assert ad.COL_WARZONE == "Warzone"
+    assert ad.COL_OPPONENT_WARZONE == "Opponent Warzone"
+    assert "Server" not in ad.SHEET_COLUMNS
+    assert not any("Server" in c for c in ad.SHEET_COLUMNS)
+
+
+def test_server_time_resolution_is_untouched_by_the_warzone_rename():
+    # The two senses of "server" live in one module. This asserts the
+    # date-resolution half still means the game clock.
+    utc = _dt.datetime(2026, 8, 10, 1, 0, tzinfo=_dt.timezone.utc)
+    assert ad.server_today(utc) == _dt.date(2026, 8, 9)
+
+
 def test_league_key_needs_a_season_and_ranks_its_tier():
     assert ad.LeagueKey.of("", "Diamond", "12 - 2") is None
     assert ad.LeagueKey.of("S35", "Diamond", "12 - 2").rank == 2
@@ -237,7 +258,7 @@ def _cell(row, header, value, headers=None):
 
 def test_parse_rows_addresses_columns_by_name_not_position():
     # Reordered, with an extra user column inserted in the middle.
-    headers = [ad.COL_TAG, "My Own Notes", ad.COL_SERVER, ad.COL_WEEK, ad.COL_SEASON, ad.COL_POWER]
+    headers = [ad.COL_TAG, "My Own Notes", ad.COL_WARZONE, ad.COL_WEEK, ad.COL_SEASON, ad.COL_POWER]
     values = [headers, ["AL01", "ignore me", "1234", "2", "S35", "301"]]
     rows = ad.parse_rows(values)
     assert len(rows) == 1
@@ -251,7 +272,7 @@ def _identified(week="1", tag="AL01", season="S35"):
     row = _blank()
     _cell(row, ad.COL_SEASON, season)
     _cell(row, ad.COL_TAG, tag)
-    _cell(row, ad.COL_SERVER, "1234")
+    _cell(row, ad.COL_WARZONE, "1234")
     _cell(row, ad.COL_WEEK, week)
     return row
 
@@ -270,7 +291,7 @@ def test_parse_rows_reads_day_scores_and_outcomes():
     for header, value in (
         (ad.COL_SEASON, "S35"),
         (ad.COL_TAG, "AL01"),
-        (ad.COL_SERVER, "1234"),
+        (ad.COL_WARZONE, "1234"),
         (ad.COL_WEEK, "1"),
         (ad.day_score_col(1), "12,500"),
         (ad.day_outcome_col(1), "W"),
@@ -304,7 +325,7 @@ def test_plan_upsert_touches_only_the_matched_rows_own_cells():
         (ad.COL_GROUP, "12 - 2"),
         (ad.COL_WEEK, "1"),
         (ad.COL_TAG, "AL00"),
-        (ad.COL_SERVER, "1234"),
+        (ad.COL_WARZONE, "1234"),
     ):
         _cell(mine, header, value)
     neighbour = list(mine)

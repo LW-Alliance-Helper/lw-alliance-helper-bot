@@ -193,13 +193,13 @@ COL_WEEK_DATE = "Week Date"
 COL_WEEK = "Week"
 COL_SEED = "Seed"
 COL_TAG = "Tag"
-COL_SERVER = "Server"
+COL_WARZONE = "Warzone"
 COL_NAME = "Name"
 COL_POWER = "Power"
 COL_MEMBERS = "Members"
 COL_GIFT_LEVEL = "Gift Level"
 COL_OPPONENT_TAG = "Opponent Tag"
-COL_OPPONENT_SERVER = "Opponent Server"
+COL_OPPONENT_WARZONE = "Opponent Warzone"
 COL_WEEK_SCORE = "Week Score"
 COL_WEEK_OUTCOME = "Week Outcome"
 COL_KNOWN_1_5 = "Known Days 1-5"
@@ -228,13 +228,13 @@ SHEET_COLUMNS: tuple[str, ...] = (
     COL_WEEK,
     COL_SEED,
     COL_TAG,
-    COL_SERVER,
+    COL_WARZONE,
     COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
     COL_OPPONENT_TAG,
-    COL_OPPONENT_SERVER,
+    COL_OPPONENT_WARZONE,
     *(day_score_col(d) for d in range(1, 7)),
     *(day_outcome_col(d) for d in range(1, 7)),
     COL_WEEK_SCORE,
@@ -385,26 +385,32 @@ def parse_week_date(value, *, today: _dt.date | None = None) -> _dt.date | None:
 
 @dataclass(frozen=True, order=True)
 class AllianceKey:
-    """An alliance's dedup identity: tag plus server.
+    """An alliance's dedup identity: tag plus warzone.
 
-    Both are normalised (trimmed, casefolded, ``#`` stripped from the tag) so
-    ``[ABC] 1234`` and ``abc/1234`` are the same alliance. The display forms
-    live on :class:`AllianceWeek`.
+    **Warzone, not "server".** It is the game's own word for a world
+    (players say "server" colloquially, but ``server`` is reserved in this
+    product for the *Discord* server, and letting the two senses share a word
+    would put one term's opposite meaning on every VS surface). See the
+    glossary in ``UX.md``.
+
+    Both parts are normalised (trimmed, casefolded, ``#`` stripped from the
+    tag) so ``[ABC] 1234`` and ``abc/1234`` are the same alliance. The display
+    forms live on :class:`AllianceWeek`.
     """
 
     tag: str
-    server: str
+    warzone: str
 
     @staticmethod
-    def of(tag, server) -> "AllianceKey | None":
+    def of(tag, warzone) -> "AllianceKey | None":
         t = re.sub(r"[\[\]#\s]", "", str(tag or "")).casefold()
-        s = re.sub(r"[^0-9a-z]", "", str(server or "").casefold())
-        if not t or not s:
+        w = re.sub(r"[^0-9a-z]", "", str(warzone or "").casefold())
+        if not t or not w:
             return None
-        return AllianceKey(t, s)
+        return AllianceKey(t, w)
 
     def __str__(self) -> str:  # pragma: no cover - display only
-        return f"[{self.tag.upper()}] {self.server}"
+        return f"[{self.tag.upper()}] {self.warzone}"
 
 
 @dataclass(frozen=True, order=True)
@@ -468,7 +474,7 @@ class AllianceWeek:
     seed: int | None = None
     name: str = ""
     tag_display: str = ""
-    server_display: str = ""
+    warzone_display: str = ""
 
     power: int | None = None
     members: int | None = None
@@ -676,7 +682,7 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
             return transfer.cell_for(row, hidx, name)
 
         league = LeagueKey.of(cell(COL_SEASON), cell(COL_TIER), cell(COL_GROUP))
-        alliance = AllianceKey.of(cell(COL_TAG), cell(COL_SERVER))
+        alliance = AllianceKey.of(cell(COL_TAG), cell(COL_WARZONE))
         week = parse_int(cell(COL_WEEK))
         if league is None or alliance is None or week is None:
             continue
@@ -700,11 +706,11 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
                 seed=parse_int(cell(COL_SEED)),
                 name=cell(COL_NAME) or "",
                 tag_display=cell(COL_TAG) or "",
-                server_display=cell(COL_SERVER) or "",
+                warzone_display=cell(COL_WARZONE) or "",
                 power=parse_power(cell(COL_POWER)),
                 members=parse_int(cell(COL_MEMBERS)),
                 gift_level=parse_int(cell(COL_GIFT_LEVEL)),
-                opponent=AllianceKey.of(cell(COL_OPPONENT_TAG), cell(COL_OPPONENT_SERVER)),
+                opponent=AllianceKey.of(cell(COL_OPPONENT_TAG), cell(COL_OPPONENT_WARZONE)),
                 day_scores=day_scores,
                 day_outcomes=day_outcomes,
                 week_score=parse_int(cell(COL_WEEK_SCORE)),
@@ -734,7 +740,7 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         COL_GROUP: row.league.group,
         COL_WEEK: str(row.week),
         COL_TAG: row.tag_display or row.alliance.tag.upper(),
-        COL_SERVER: row.server_display or row.alliance.server,
+        COL_WARZONE: row.warzone_display or row.alliance.warzone,
     }
     if row.week_date:
         out[COL_WEEK_DATE] = row.week_date.isoformat()
@@ -750,7 +756,7 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         out[COL_GIFT_LEVEL] = str(row.gift_level)
     if row.opponent is not None:
         out[COL_OPPONENT_TAG] = row.opponent.tag.upper()
-        out[COL_OPPONENT_SERVER] = row.opponent.server
+        out[COL_OPPONENT_WARZONE] = row.opponent.warzone
     for d in range(1, 7):
         if d in row.day_scores:
             out[day_score_col(d)] = str(row.day_scores[d])
@@ -1813,7 +1819,7 @@ def skeleton_rows(
 
     Setup is one sitting: the bracket screen shows all 16 alliances and their
     seeds at league start, so the bot writes the rows and the user fills tag,
-    server and seed straight off that screen.
+    warzone and seed straight off that screen.
 
     **Branches on tracking mode** (#448). Full-bracket mode writes a row per
     alliance given. Own-alliance mode writes only the configured own
@@ -1833,7 +1839,7 @@ def skeleton_rows(
             week_date=week_date,
             seed=seed,
             tag_display=key.tag.upper(),
-            server_display=key.server,
+            warzone_display=key.warzone,
         )
         for key, seed in alliances
     ]

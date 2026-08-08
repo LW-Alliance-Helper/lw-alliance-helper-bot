@@ -970,7 +970,7 @@ def init_db():
                 -- sheet column. Everything else about your alliance is just
                 -- another row; these two say which row is yours.
                 own_tag                   TEXT    DEFAULT '',
-                own_server                TEXT    DEFAULT '',
+                own_warzone                TEXT    DEFAULT '',
                 -- Tracking mode (#448): 'own_alliance' | 'full_bracket'.
                 -- Asked at setup, never inferred — skeleton generation is a
                 -- *write*, so the shape has to be known before there is any
@@ -1130,7 +1130,7 @@ def init_db():
             ("enabled", "INTEGER DEFAULT 0"),
             ("tab_name", "TEXT    DEFAULT 'Alliance Duel (VS)'"),
             ("own_tag", "TEXT    DEFAULT ''"),
-            ("own_server", "TEXT    DEFAULT ''"),
+            ("own_warzone", "TEXT    DEFAULT ''"),
             # Tracking mode (#448) — see CREATE TABLE comment.
             ("tracking_mode", "TEXT    DEFAULT 'full_bracket'"),
             ("score_prompt_enabled", "INTEGER DEFAULT 0"),
@@ -6082,7 +6082,7 @@ _VS_CONFIG_COLUMNS = (
     "enabled",
     "tab_name",
     "own_tag",
-    "own_server",
+    "own_warzone",
     "tracking_mode",
     "score_prompt_enabled",
     "score_prompt_time",
@@ -6120,7 +6120,7 @@ def get_vs_config(guild_id: int) -> dict:
         "enabled": 0,
         "tab_name": "Alliance Duel (VS)",
         "own_tag": "",
-        "own_server": "",
+        "own_warzone": "",
         "tracking_mode": VS_MODE_FULL_BRACKET,
         "score_prompt_enabled": 0,
         "score_prompt_time": "",

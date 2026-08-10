@@ -123,6 +123,41 @@ class TestMergeSheetHeader:
 
         assert merge_sheet_header(["Ts", "A", "", ""], ["Ts", "A"]) == ["Ts", "A"]
 
+    def test_a_desired_column_already_present_under_its_legacy_name_is_not_duplicated(self):
+        """#456: a tab whose header predates a label rename shouldn't grow a
+        second column once the rename ships — the legacy header already
+        covers it."""
+        from config import merge_sheet_header
+
+        merged = merge_sheet_header(
+            ["Ts", "1st Squad"],
+            ["Ts", "1st Squad Power"],
+            legacy_aliases={"1st Squad": "1st Squad Power"},
+        )
+        assert merged == ["Ts", "1st Squad"]
+
+    def test_legacy_alias_does_not_suppress_an_unrelated_new_column(self):
+        from config import merge_sheet_header
+
+        merged = merge_sheet_header(
+            ["Ts", "1st Squad"],
+            ["Ts", "1st Squad Power", "New Question"],
+            legacy_aliases={"1st Squad": "1st Squad Power"},
+        )
+        assert merged == ["Ts", "1st Squad", "New Question"]
+
+    def test_legacy_alias_is_irrelevant_once_the_modern_column_already_exists(self):
+        """A sheet that already hit the bug (both columns present) isn't
+        touched further — reconciling it is a manual, one-time fix."""
+        from config import merge_sheet_header
+
+        merged = merge_sheet_header(
+            ["Ts", "1st Squad", "1st Squad Power"],
+            ["Ts", "1st Squad Power"],
+            legacy_aliases={"1st Squad": "1st Squad Power"},
+        )
+        assert merged == ["Ts", "1st Squad", "1st Squad Power"]
+
 
 class TestRowForHeader:
     def test_values_follow_their_column_name(self):
@@ -210,6 +245,70 @@ class TestSurveyResponsesTab:
         self._run(ws, [q("who", "Username")], {"who": "not-alice"})
 
         assert ws.rows[1][0] == "Alice"
+
+
+class TestLegacySquadPowerLabels:
+    """#456: alliances whose sheet predates the 1st/2nd/3rd Squad → ...Power
+    label rename must keep writing to their existing column instead of
+    growing a duplicate one."""
+
+    def test_update_squad_powers_writes_under_the_legacy_header(self, seeded_db):
+        from survey import update_squad_powers
+
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "1st Squad", "Date Modified"],
+                ["Alice", "111", "40.00", "1/1/2026"],
+            ]
+        )
+        sheet = FakeSheet(ws)
+        survey = {
+            "tab_squad_powers": "Answers",
+            "questions": [{"key": "squad1_power", "label": "1st Squad Power", "type": "numeric"}],
+        }
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            update_squad_powers(
+                "111", "Alice", {"squad1_power": "43.27"}, guild_id=TEST_GUILD_ID, survey=survey
+            )
+
+        # No duplicate "1st Squad Power" column, and the header is untouched.
+        assert ws.rows[0] == ["Username", "Discord ID", "1st Squad", "Date Modified"]
+        assert sheet.column_at("1st Squad") == ["43.27"]
+
+    def test_append_survey_history_writes_under_the_legacy_header(self, seeded_db):
+        from survey import append_survey_history
+
+        ws = FakeWS([["Timestamp", "Discord ID", "Username", "1st Squad"]])
+        sheet = FakeSheet(ws)
+        survey = {
+            "tab_history": "History",
+            "questions": [{"key": "squad1_power", "label": "1st Squad Power", "type": "numeric"}],
+        }
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            append_survey_history(
+                "111", "Alice", {"squad1_power": "43.27"}, guild_id=TEST_GUILD_ID, survey=survey
+            )
+
+        assert ws.rows[0] == ["Timestamp", "Discord ID", "Username", "1st Squad"]
+        assert sheet.column_at("1st Squad") == ["43.27"]
+
+    def test_a_sheet_using_the_current_label_already_is_unaffected(self, seeded_db):
+        """Sanity check: aliasing must not interfere with the common case."""
+        from survey import update_squad_powers
+
+        ws = FakeWS([["Username", "Discord ID", "1st Squad Power", "Date Modified"]])
+        sheet = FakeSheet(ws)
+        survey = {
+            "tab_squad_powers": "Answers",
+            "questions": [{"key": "squad1_power", "label": "1st Squad Power", "type": "numeric"}],
+        }
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            update_squad_powers(
+                "111", "Alice", {"squad1_power": "43.27"}, guild_id=TEST_GUILD_ID, survey=survey
+            )
+
+        assert ws.rows[0] == ["Username", "Discord ID", "1st Squad Power", "Date Modified"]
+        assert sheet.column_at("1st Squad Power") == ["43.27"]
 
 
 class TestSurveyHistoryTab:

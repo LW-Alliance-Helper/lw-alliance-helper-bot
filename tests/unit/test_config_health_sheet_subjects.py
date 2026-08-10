@@ -33,6 +33,7 @@ import config_health  # noqa: E402
 import member_roster  # noqa: E402
 import storm  # noqa: E402
 import train  # noqa: E402
+import train_rotation as tr  # noqa: E402
 from tests.constants import TEST_GUILD_ID  # noqa: E402
 
 
@@ -58,6 +59,11 @@ class TestSharedClassifier:
             config_health.sheet_problem_kind(gspread.exceptions.WorksheetNotFound("x"))
             == config_health.MISSING_TAB
         )
+
+    def test_bare_permission_error_is_no_access(self):
+        """gspread's open_by_key() raises the built-in PermissionError (not
+        its own typed APIError) on a 403 — #457."""
+        assert config_health.sheet_problem_kind(PermissionError()) == config_health.NO_ACCESS
 
     def test_rate_limit_is_not_alertable(self):
         """429 clears itself, so telling the alliance would be a false alarm."""
@@ -247,6 +253,72 @@ class TestRosterAutoSync:
 
     def test_subject_copy_is_registered(self):
         assert config_health.get_subject(ROSTER_SUBJECT).label == "your Member Roster tab"
+
+
+# ── Train Conductor Rotation (#458 — missed by the original #414 sweep) ─────
+
+TRAIN_ROTATION_SUBJECT = "train_rotation.sheet"
+
+
+class TestTrainRotation:
+    def test_get_spreadsheet_failure_is_recorded(self, seeded_db):
+        with patch(
+            "config.get_spreadsheet",
+            MagicMock(side_effect=gspread.exceptions.SpreadsheetNotFound()),
+        ):
+            assert tr.load_history(TEST_GUILD_ID, "Train History") == []
+        assert _problem(TRAIN_ROTATION_SUBJECT).kind == config_health.MISSING_SHEET
+
+    def test_a_clean_open_tab_clears_it(self, seeded_db):
+        config_health.record(
+            TEST_GUILD_ID, TRAIN_ROTATION_SUBJECT, config_health.MISSING_SHEET, "gone"
+        )
+        ws = MagicMock()
+        ws.get_all_values.return_value = [list(tr.HISTORY_HEADER)]
+        with (
+            patch("config.get_spreadsheet", MagicMock(return_value=object())),
+            patch("config.get_or_create_worksheet", MagicMock(return_value=ws)),
+        ):
+            tr.load_history(TEST_GUILD_ID, "Train History")
+        assert _problem(TRAIN_ROTATION_SUBJECT) is None
+
+    def test_a_bare_permission_error_records_no_access(self, seeded_db):
+        """The #457 case: gspread's open_by_key() raises the built-in
+        PermissionError on a 403, not its own typed APIError."""
+        with patch("config.get_spreadsheet", MagicMock(side_effect=PermissionError())):
+            assert tr.load_history(TEST_GUILD_ID, "Train History") == []
+        assert _problem(TRAIN_ROTATION_SUBJECT).kind == config_health.NO_ACCESS
+
+    def test_load_preset_records_before_raising(self, seeded_db):
+        """load_preset still has to raise (callers rely on that to tell a
+        real failure apart from 'no preset'), but a notice must fire too."""
+        with patch("config.get_spreadsheet", MagicMock(side_effect=PermissionError())):
+            with pytest.raises(PermissionError):
+                tr.load_preset(TEST_GUILD_ID, "Train Day Rules", "Standard Week")
+        assert _problem(TRAIN_ROTATION_SUBJECT).kind == config_health.NO_ACCESS
+
+    def test_roster_read_failure_records_against_the_roster_subject(self, seeded_db):
+        """Rotation reads the same Member Roster tab member_roster.py owns —
+        a broken tab must read as one notice, not a second, competing one."""
+        with (
+            patch(
+                "config.get_member_roster_config",
+                MagicMock(return_value={"enabled": 0, "tab_name": "Member Roster", "name_col": 1}),
+            ),
+            patch(
+                "config.get_member_roster_sheet",
+                MagicMock(side_effect=gspread.exceptions.WorksheetNotFound("Member Roster")),
+            ),
+        ):
+            assert tr.load_roster_members(TEST_GUILD_ID) == []
+        assert _problem(ROSTER_SUBJECT) is not None
+        assert _problem(TRAIN_ROTATION_SUBJECT) is None
+
+    def test_subject_copy_is_registered(self):
+        assert (
+            config_health.get_subject(TRAIN_ROTATION_SUBJECT).label
+            == "your Train Conductor Rotation sheet"
+        )
 
 
 # ── Storm DS/CS assignments ──────────────────────────────────────────────────

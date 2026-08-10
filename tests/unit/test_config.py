@@ -1915,6 +1915,15 @@ class TestDescribeSheetError:
         assert "403" in msg
         assert "permission" in msg.lower() or "share" in msg.lower()
 
+    def test_bare_permission_error_says_403(self):
+        """gspread's open_by_key() raises the built-in PermissionError (not
+        its own typed APIError) on a 403 — #457."""
+        import config
+
+        msg = config.describe_sheet_error(PermissionError(), guild_id=7)
+        assert "403" in msg
+        assert "permission" in msg.lower() or "share" in msg.lower()
+
     def test_non_gspread_error_falls_through(self):
         import config
 
@@ -1968,6 +1977,13 @@ class TestIsUserConfigSheetError:
         import config
 
         assert config.is_user_config_sheet_error(RuntimeError("boom")) is False
+
+    def test_bare_permission_error_is_expected(self):
+        """gspread's open_by_key() raises the built-in PermissionError (not
+        its own typed APIError) on a 403 — #457."""
+        import config
+
+        assert config.is_user_config_sheet_error(PermissionError()) is True
 
 
 class TestNormalizeSpreadsheetId:

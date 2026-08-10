@@ -4786,9 +4786,20 @@ async def _run_train_rotation_step(
         "day_rules_tab": day_rules_tab,
     }
     if open_editor:
-        preset = await asyncio.get_event_loop().run_in_executor(
-            None, tr.load_preset, guild_id, day_rules_tab, active_preset
-        )
+        try:
+            preset = await asyncio.get_event_loop().run_in_executor(
+                None, tr.load_preset, guild_id, day_rules_tab, active_preset
+            )
+        except Exception as e:
+            from config import describe_sheet_error
+
+            await channel.send(
+                "⚠️ Couldn't load your saved pattern to open the editor: "
+                f"{describe_sheet_error(e, guild_id=guild_id, tab=day_rules_tab)}\n"
+                "Rotation is still saved and on — fix your Sheet and reopen the editor "
+                "any time from `/train` → 📅 Schedule presets."
+            )
+            preset = None
         result["preset"] = preset or tr.SchedulePreset.default(active_preset)
     else:
         await channel.send(

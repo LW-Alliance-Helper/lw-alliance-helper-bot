@@ -204,7 +204,16 @@ async def _open_week_draft(bot, interaction: discord.Interaction):
     # Default to the week leadership is most likely planning: the current week,
     # but the upcoming week once it's the configured draft day (#304).
     week_start = ui.default_draft_week(today, int(tcfg.get("weekly_draft_day", 6)))
-    draft = await ui.load_week_draft_async(bot, guild_id, week_start)
+    try:
+        draft = await ui.load_week_draft_async(bot, guild_id, week_start)
+    except Exception as e:
+        from config import describe_sheet_error
+
+        await interaction.followup.send(
+            f"⚠️ Couldn't load this week's draft: {describe_sheet_error(e, guild_id=guild_id)}",
+            ephemeral=True,
+        )
+        return
 
     preset_name = tcfg.get("active_schedule_preset") or "Standard Week"
     view = ui.WeeklyDraftView(bot, guild_id, draft, week_start, preset_name)

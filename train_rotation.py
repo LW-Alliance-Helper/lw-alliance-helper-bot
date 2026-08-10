@@ -38,6 +38,8 @@ import random
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
+import config_health
+
 # ── Day-of-week ──────────────────────────────────────────────────────────────
 # Index matches datetime.date.weekday(): 0 = Monday … 6 = Sunday. Stored in the
 # Sheet as the weekday NAME for human readability, parsed back via this list.
@@ -861,6 +863,34 @@ def sort_posted(posted: list[HistoryRow], *, newest_first: bool = True) -> list[
 # get-or-create helper are reused from config so the rotation tabs behave like
 # every other bot-managed tab (auto-created with a header row on first use).
 
+# ── Config-health reporting (#458) ───────────────────────────────────────────
+#
+# Every read/write below used to print-and-swallow (or print-and-raise) a
+# sheet failure with nobody told — the #414 sweep covered train.py,
+# member_roster.py and storm.py but missed this module. One guild's rotation
+# reads failed silently for 24+ hours before this shipped.
+TRAIN_ROTATION_SHEET_SUBJECT = "train_rotation.sheet"
+
+config_health.register(
+    config_health.Subject(
+        key=TRAIN_ROTATION_SHEET_SUBJECT,
+        label="your Train Conductor Rotation sheet",
+        fix_hub="/setup",
+        fix_btn="🚂 Train",
+    )
+)
+
+
+def _note_rotation_sheet_error(guild_id: int, e: Exception, *, tab: str = "") -> None:
+    """Record an alliance-fixable rotation-sheet failure. No-op otherwise."""
+    config_health.record_sheet_failure(guild_id, TRAIN_ROTATION_SHEET_SUBJECT, e, tab=tab)
+
+
+def _note_rotation_sheet_ok(guild_id: int) -> None:
+    """A clean read or write is the recovery signal, from any call path."""
+    if guild_id:
+        config_health.clear(guild_id, TRAIN_ROTATION_SHEET_SUBJECT)
+
 
 def _open_tab(guild_id: int, tab_name: str, header: list[str]):
     """Return the worksheet for `tab_name`, creating it with `header` if absent.
@@ -873,11 +903,12 @@ def _open_tab(guild_id: int, tab_name: str, header: list[str]):
         sh = config.get_spreadsheet(guild_id)
     except Exception as e:
         print(f"[TRAIN ROTATION] get_spreadsheet failed for guild {guild_id}: {e}")
+        _note_rotation_sheet_error(guild_id, e)
         return None
     if sh is None:
         return None
     try:
-        return config.get_or_create_worksheet(
+        ws = config.get_or_create_worksheet(
             sh,
             tab_name,
             header_row=header,
@@ -886,7 +917,10 @@ def _open_tab(guild_id: int, tab_name: str, header: list[str]):
         )
     except Exception as e:
         print(f"[TRAIN ROTATION] open/create tab {tab_name!r} failed for guild {guild_id}: {e}")
+        _note_rotation_sheet_error(guild_id, e, tab=tab_name)
         return None
+    _note_rotation_sheet_ok(guild_id)
+    return ws
 
 
 def _cell(row: list[str], idx: int) -> str:
@@ -931,12 +965,21 @@ def load_roster_members(guild_id: int) -> list[dict]:
     name_col = int(rcfg.get("name_col", 1))
     synced = bool(rcfg.get("enabled"))
 
+    # Same physical tab member_roster.py already reports against — reuse its
+    # subject so a broken roster reads as one notice, not two.
+    import member_roster
+
     try:
         ws = config.get_member_roster_sheet(guild_id, tab_name)
         values = ws.get_all_values()
     except Exception as e:
         print(f"[TRAIN ROTATION] roster read failed for guild {guild_id}: {e}")
+        config_health.record_sheet_failure(
+            guild_id, member_roster.ROSTER_SHEET_SUBJECT, e, tab=tab_name
+        )
         return []
+    if guild_id:
+        config_health.clear(guild_id, member_roster.ROSTER_SHEET_SUBJECT)
 
     out: list[dict] = []
     if synced:
@@ -1227,18 +1270,25 @@ def load_preset(guild_id: int, tab_name: str, name: str) -> SchedulePreset | Non
     transient error (e.g. a rate-limited read during a double-clicked re-draft)
     can't be mistaken for 'no preset' and clobber a real schedule with the
     default. The caller aborts the re-draft and leaves the existing draft intact.
+    Still records the failure to config_health before raising, so a leadership
+    notice fires regardless of which caller hits it (#458).
     """
     import config
 
     if not (tab_name or "").strip():
         return None  # rotation isn't pointed at a Day Rules tab yet
-    sh = config.get_spreadsheet(guild_id)
-    if sh is None:
-        return None
-    ws = config.get_or_create_worksheet(
-        sh, tab_name, header_row=DAY_RULES_HEADER, rows=2000, cols=max(8, len(DAY_RULES_HEADER))
-    )
-    values = ws.get_all_values()
+    try:
+        sh = config.get_spreadsheet(guild_id)
+        if sh is None:
+            return None
+        ws = config.get_or_create_worksheet(
+            sh, tab_name, header_row=DAY_RULES_HEADER, rows=2000, cols=max(8, len(DAY_RULES_HEADER))
+        )
+        values = ws.get_all_values()
+    except Exception as e:
+        _note_rotation_sheet_error(guild_id, e, tab=tab_name)
+        raise
+    _note_rotation_sheet_ok(guild_id)
     days: dict[int, DayRule] = {}
     found = False
     for row in values[1:]:

@@ -125,6 +125,13 @@ accident.
 
 ---
 
+**1.8.6** — 2026-08-10
+- Squad Power survey answers could land in a hidden extra column instead of updating your existing one
+- The bot now tells leadership when it loses access to a Google Sheet instead of staying silent
+- Train Conductor Rotation setup and This week's draft show a clear message instead of crashing when your sheet has a problem
+
+---
+
 **1.8.5** — 2026-08-07
 - Add a survey from a template or from scratch, in your own wording
 - A survey's two sheet tabs are created and labelled for you

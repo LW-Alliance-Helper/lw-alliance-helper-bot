@@ -373,7 +373,12 @@ def test_timeout_hints_name_the_button_not_just_the_command():
 
     source = inspect.getsource(w)
     assert 'command_hint="/setup"' not in source
-    assert source.count("command_hint=ads.VS_SETUP_NAV") == 2
+    # Every view that can expire routes back the same way. Asserted as a rule
+    # rather than a count, so adding a view doesn't fail this for the wrong
+    # reason: what matters is that no view opts out.
+    hints = source.count("command_hint=")
+    assert hints >= 3, "expected a hint on every expiring view"
+    assert source.count("command_hint=ads.VS_SETUP_NAV") == hints
 
 
 def test_recovery_copy_says_start_again_once_the_flow_has_ended():
@@ -429,3 +434,67 @@ def test_cancel_matches_every_other_cancel_in_the_bot():
 
     assert 'label="Cancel"' in inspect.getsource(w)
     assert "↩️ Cancel" not in inspect.getsource(w)
+
+
+# ── Mid-league switch to full bracket (#448) ─────────────────────────────────
+
+
+def _missing():
+    import datetime as _dt
+
+    return {1: (14, _dt.date(2026, 8, 3)), 2: (14, None)}
+
+
+def test_the_offer_is_honest_about_what_the_rows_contain():
+    league = ad.LeagueKey("S35", "Diamond", "12 - 2")
+    text = _all_text(ads.fill_bracket_embed(league, _missing()))
+    # It must not read as though the bot will fill the bracket in for them.
+    assert "blank rows" in text
+    assert "tag, warzone and seed" in text
+    assert "in-game bracket screen" in text
+
+
+def test_the_offer_counts_the_rows_and_names_the_weeks():
+    league = ad.LeagueKey("S35", "Diamond", "12 - 2")
+    text = _all_text(ads.fill_bracket_embed(league, _missing()))
+    assert "28 rows" in text
+    assert "week 1, week 2" in text
+    assert "S35" in text
+
+
+def test_the_offer_says_nothing_is_removed():
+    league = ad.LeagueKey("S35", "Diamond", "12 - 2")
+    text = _all_text(ads.fill_bracket_embed(league, _missing()))
+    assert "Nothing is removed" in text
+    assert "add them later" in text
+
+
+def test_the_offer_has_no_em_dashes_and_no_internals():
+    league = ad.LeagueKey("S35", "Diamond", "12 - 2")
+    text = _all_text(ads.fill_bracket_embed(league, _missing()))
+    assert "—" not in text
+    assert "guild" not in text.lower()
+    for leak in ("tracking_mode", "AllianceWeek", "COL_"):
+        assert leak not in text
+
+
+def test_the_offer_only_fires_when_widening_not_narrowing():
+    # Narrowing needs no rows, and nothing is ever deleted.
+    import inspect
+
+    import alliance_duel_wizard as w
+
+    source = inspect.getsource(w.VSSetupView.finish)
+    assert "was == ad.MODE_OWN_ALLIANCE and tracking_mode == ad.MODE_FULL_BRACKET" in source
+
+
+def test_declining_the_offer_is_a_real_answer():
+    import inspect
+
+    import alliance_duel_wizard as w
+
+    source = inspect.getsource(w.FillBracketView)
+    assert 'label="Not now"' in source
+    # One primary per view: the affirmative. Declining is secondary, not danger.
+    assert source.count("ButtonStyle.primary") == 1
+    assert "ButtonStyle.danger" not in source

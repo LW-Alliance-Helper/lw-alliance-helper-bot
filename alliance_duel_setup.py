@@ -337,6 +337,32 @@ def validation_report_embed(
     return embed
 
 
+def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
+    """Offer the blank rows after a switch to full-bracket tracking (#448).
+
+    States plainly what the rows will and will not contain. They carry the
+    league identity and week, and nothing else: the bot has no way to know who
+    the other alliances are, so tag, warzone and seed still come off the
+    in-game bracket screen. Saying so here stops the offer reading as though
+    the bot is about to fill the bracket in for them.
+    """
+    total = sum(count for count, _stamp in missing.values())
+    weeks = ", ".join(f"week {w}" for w in sorted(missing))
+    embed = discord.Embed(
+        title="Add the rest of your bracket?",
+        description=(
+            f"You're now tracking your whole League bracket, but **{league}** has "
+            f"{total} row{'s' if total != 1 else ''} missing across {weeks}.\n\n"
+            "I can add them as blank rows, already stamped with the season, tier, "
+            "group, week and date. You fill in the tag, warzone and seed for each "
+            "from the in-game bracket screen."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="Nothing is removed either way, and you can add them later.")
+    return embed
+
+
 def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
     """What a bracket-dependent view shows when the bracket isn't there.
 

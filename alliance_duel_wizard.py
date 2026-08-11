@@ -165,6 +165,7 @@ class VSSetupView(discord.ui.View):
     async def finish(self, interaction: discord.Interaction, tracking_mode: str) -> None:
         """Save the mode, create the tab, and show the column guide."""
         await interaction.response.defer(ephemeral=True)
+        was = self.cfg.get("tracking_mode")
         config.save_vs_config(self.guild_id, tracking_mode=tracking_mode, enabled=1)
         self.cfg = config.get_vs_config(self.guild_id)
 
@@ -187,6 +188,135 @@ class VSSetupView(discord.ui.View):
             embed=ads.column_guide_embed(tracking_mode),
             ephemeral=True,
         )
+
+        # Widening mid-league leaves the sheet short of a full bracket. Offer
+        # the rows rather than leaving fifteen per week to be typed by hand
+        # (#448). Only on the widening direction: narrowing needs no rows, and
+        # nothing is ever deleted.
+        if was == ad.MODE_OWN_ALLIANCE and tracking_mode == ad.MODE_FULL_BRACKET:
+            await self._offer_missing_rows(interaction, tab_name)
+
+    async def _offer_missing_rows(self, interaction: discord.Interaction, tab_name: str) -> None:
+        import asyncio
+
+        rows = await asyncio.to_thread(ads.load_rows, self.guild_id, tab_name)
+        if not rows:
+            return  # nothing recorded yet, or the sheet is unreachable and already reported
+        league = ad.latest_league(rows)
+        if league is None:
+            return
+        missing = ad.missing_bracket_rows(rows, league)
+        if not missing:
+            return
+
+        view = FillBracketView(self, league, missing, tab_name)
+        await interaction.followup.send(
+            embed=ads.fill_bracket_embed(league, missing), view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+
+class FillBracketView(discord.ui.View):
+    """Offers the blank rows, and never writes without being asked.
+
+    Declining is a real answer: an alliance may want the fuller views without
+    backfilling a league already half over.
+    """
+
+    def __init__(self, parent: "VSSetupView", league, missing, tab_name: str) -> None:
+        super().__init__(timeout=STEP_TIMEOUT)
+        self._parent = parent
+        self._league = league
+        self._missing = missing
+        self._tab = tab_name
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self._parent.owns(interaction)
+
+    @discord.ui.button(label="Add the rows", style=discord.ButtonStyle.primary)
+    async def btn_add(self, inter: discord.Interaction, _b: discord.ui.Button):
+        await inter.response.defer(ephemeral=True)
+        self.stop()
+        added = await _append_blank_rows(
+            self._parent.guild_id, self._tab, self._league, self._missing
+        )
+        if added is None:
+            await safe_edit_response(
+                inter,
+                content=(
+                    "⚠️ Could not reach your sheet to add the rows. Your tracking "
+                    f"mode is saved. Run `/setup` and click **{HUB_BTN_VS}** to try "
+                    "the rows again."
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+        await safe_edit_response(
+            inter,
+            content=(
+                f"✅ Added {added} blank row{'s' if added != 1 else ''} to your "
+                f"**{self._tab}** tab. Fill in the tag, warzone and seed for each "
+                "from the in-game bracket screen."
+            ),
+            embed=None,
+            view=None,
+        )
+
+    @discord.ui.button(label="Not now", style=discord.ButtonStyle.secondary)
+    async def btn_skip(self, inter: discord.Interaction, _b: discord.ui.Button):
+        self.stop()
+        await safe_edit_response(
+            inter,
+            content=(
+                "Left your sheet as it is. You can add the rows yourself, or run "
+                f"`/setup` and click **{HUB_BTN_VS}** to be offered them again."
+            ),
+            embed=None,
+            view=None,
+        )
+
+
+async def _append_blank_rows(guild_id: int, tab_name: str, league, missing) -> int | None:
+    """Append the placeholder rows. Returns how many, or None if unreachable.
+
+    Appends rather than upserting: a blank row has no Tag or Warzone, so it has
+    no key to upsert on. Once the user fills identity in, later writes locate
+    it normally.
+    """
+    import asyncio
+
+    def _work():
+        import config_health
+
+        spreadsheet = config.get_spreadsheet(guild_id)
+        worksheet = ads.ensure_tab(spreadsheet, tab_name)
+        header = worksheet.row_values(1) or list(ad.SHEET_COLUMNS)
+        lines = []
+        for week, (count, stamp) in sorted(missing.items()):
+            for _ in range(count):
+                lines.append(ad.blank_bracket_values(header, league, week, stamp))
+        if lines:
+            worksheet.append_rows(lines, value_input_option="USER_ENTERED")
+        config_health.clear(guild_id, ads.VS_SHEET_SUBJECT)
+        return len(lines)
+
+    try:
+        return await asyncio.to_thread(_work)
+    except Exception as e:  # noqa: BLE001 - classified by config_health
+        import config_health
+
+        config_health.record_sheet_failure(guild_id, ads.VS_SHEET_SUBJECT, e, tab=tab_name)
+        logger.warning(
+            "[VS] could not append bracket rows for guild=%s: %s",
+            guild_id,
+            config.describe_sheet_error(e, guild_id=guild_id, tab=tab_name),
+        )
+        return None
 
 
 async def _create_tab(guild_id: int, tab_name: str) -> bool:

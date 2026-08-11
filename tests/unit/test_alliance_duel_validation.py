@@ -352,3 +352,78 @@ def test_week_one_pairing_skips_unseeded_alliances():
     entries = [(_key(0), 1), (_key(1), None), (_key(2), 2)]
     pairing = ad.week_one_pairing_from_seeds(entries)
     assert pairing == {_key(0): _key(2), _key(2): _key(0)}
+
+
+# ── Switching own-alliance to full bracket mid-league (#448) ──────────────────
+
+
+def test_missing_bracket_rows_counts_only_weeks_that_exist():
+    # An alliance two weeks into a league is not asking for four weeks of rows.
+    rows = [_row(1, 0), _row(1, 9), _row(2, 0), _row(2, 9)]
+    missing = ad.missing_bracket_rows(rows, LEAGUE)
+    assert sorted(missing) == [1, 2]
+    assert missing[1][0] == ad.BRACKET_SIZE - 2
+    assert missing[2][0] == ad.BRACKET_SIZE - 2
+
+
+def test_missing_bracket_rows_skips_weeks_already_full():
+    rows = [_row(1, i, i + 1) for i in range(ad.BRACKET_SIZE)]
+    rows += [_row(2, 0), _row(2, 9)]
+    missing = ad.missing_bracket_rows(rows, LEAGUE)
+    assert 1 not in missing, "a full week needs nothing"
+    assert missing[2][0] == ad.BRACKET_SIZE - 2
+
+
+def test_missing_bracket_rows_carries_the_week_date_forward():
+    rows = [_row(1, 0, week_date=MONDAY), _row(1, 9)]
+    assert ad.missing_bracket_rows(rows, LEAGUE)[1][1] == MONDAY
+
+
+def test_a_full_bracket_needs_nothing():
+    rows = [_row(1, i, i + 1) for i in range(ad.BRACKET_SIZE)]
+    assert ad.missing_bracket_rows(rows, LEAGUE) == {}
+
+
+def test_latest_league_follows_the_newest_week_date():
+    other = ad.LeagueKey("S36", "Diamond", "12 - 2")
+    rows = [
+        _row(1, 0, week_date=MONDAY),
+        ad.AllianceWeek(
+            league=other, week=1, alliance=_key(0), week_date=MONDAY + _dt.timedelta(days=28)
+        ),
+    ]
+    assert ad.latest_league(rows) == other
+
+
+def test_latest_league_falls_back_when_nothing_is_dated():
+    rows = [_row(1, 0)]
+    assert ad.latest_league(rows) == LEAGUE
+    assert ad.latest_league([]) is None
+
+
+def test_blank_rows_stamp_the_league_but_never_invent_an_alliance():
+    header = list(ad.SHEET_COLUMNS)
+    line = ad.blank_bracket_values(header, LEAGUE, 2, MONDAY)
+    assert line[header.index(ad.COL_SEASON)] == "S35"
+    assert line[header.index(ad.COL_TIER)] == "Diamond"
+    assert line[header.index(ad.COL_WEEK)] == "2"
+    assert line[header.index(ad.COL_WEEK_DATE)] == MONDAY.isoformat()
+    # The bot cannot know who the other fifteen are. Those come off the
+    # in-game bracket screen.
+    assert line[header.index(ad.COL_TAG)] == ""
+    assert line[header.index(ad.COL_WARZONE)] == ""
+    assert line[header.index(ad.COL_SEED)] == ""
+
+
+def test_blank_rows_follow_a_reordered_header():
+    header = [ad.COL_WEEK, "My Own Column", ad.COL_SEASON, ad.COL_TIER, ad.COL_GROUP]
+    line = ad.blank_bracket_values(header, LEAGUE, 3, None)
+    assert line[0] == "3"
+    assert line[2] == "S35"
+    assert line[1] == "", "a user's own column is never written into"
+
+
+def test_blank_rows_omit_a_date_that_is_not_known():
+    header = list(ad.SHEET_COLUMNS)
+    line = ad.blank_bracket_values(header, LEAGUE, 1, None)
+    assert line[header.index(ad.COL_WEEK_DATE)] == ""

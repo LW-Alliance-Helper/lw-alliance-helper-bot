@@ -1845,6 +1845,76 @@ def skeleton_rows(
     ]
 
 
+def latest_league(rows: Iterable[AllianceWeek]) -> LeagueKey | None:
+    """The league the alliance is currently in, by newest recorded Week Date.
+
+    Falls back to the last league seen when no row carries a date, so a
+    part-filled sheet still resolves to something rather than nothing.
+    """
+    rows = list(rows)
+    dated = [r for r in rows if r.week_date]
+    if dated:
+        return max(dated, key=lambda r: r.week_date).league
+    return rows[-1].league if rows else None
+
+
+def missing_bracket_rows(
+    rows: Iterable[AllianceWeek], league: LeagueKey
+) -> dict[int, tuple[int, _dt.date | None]]:
+    """How many rows short of a full bracket each recorded week of `league` is.
+
+    Returns ``{week: (rows_needed, week_date)}``, skipping weeks that are
+    already full. Only weeks that already exist are counted: an alliance that
+    has recorded two weeks is not asking for four.
+
+    This is what makes switching from own-alliance to full-bracket tracking
+    mid-league cheap (#448). The bot cannot know who the other fifteen
+    alliances are, so the rows it offers to add are blank placeholders already
+    stamped with season, tier, group, week and date. What that saves is
+    retyping the league identity fifteen times per week, not the scouting.
+    """
+    rows = list(rows)
+    out: dict[int, tuple[int, _dt.date | None]] = {}
+    weeks = sorted({r.week for r in rows if r.league == league})
+    for week in weeks:
+        in_week = [r for r in rows if r.league == league and r.week == week]
+        have = len({r.alliance for r in in_week})
+        if have >= BRACKET_SIZE:
+            continue
+        stamp = next((r.week_date for r in in_week if r.week_date), None)
+        out[week] = (BRACKET_SIZE - have, stamp)
+    return out
+
+
+def blank_bracket_values(
+    header: Sequence[str],
+    league: LeagueKey,
+    week: int,
+    week_date: _dt.date | None,
+) -> list[str]:
+    """One blank placeholder row, stamped with league identity and week only.
+
+    Deliberately carries no Tag or Warzone: those come off the in-game bracket
+    screen and the bot has no way to know them. Written against the live
+    header so a reordered or extended sheet still lines up.
+    """
+    line = [""] * len(header)
+    hidx = transfer.header_index(list(header))
+    stamped = {
+        COL_SEASON: league.season,
+        COL_TIER: league.tier,
+        COL_GROUP: league.group,
+        COL_WEEK: str(week),
+    }
+    if week_date:
+        stamped[COL_WEEK_DATE] = week_date.isoformat()
+    for name, value in stamped.items():
+        idx = hidx.get(transfer.norm_header(name))
+        if idx is not None and idx < len(line):
+            line[idx] = value
+    return line
+
+
 def week_one_pairing_from_seeds(
     alliances: Sequence[tuple[AllianceKey, int | None]],
 ) -> dict[AllianceKey, AllianceKey]:

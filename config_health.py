@@ -180,6 +180,10 @@ def sheet_problem_kind(e: Exception) -> str | None:
         return MISSING_TAB
     if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
         return MISSING_SHEET
+    # gspread's open_by_key() raises the built-in PermissionError (not its
+    # own typed APIError) on a 403 — see config.describe_sheet_error.
+    if isinstance(e, PermissionError):
+        return NO_ACCESS
     if isinstance(e, gspread.exceptions.APIError):
         status = None
         resp = getattr(e, "response", None)

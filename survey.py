@@ -187,6 +187,19 @@ SURVEY_MODIFIED_COLUMN = "Date Modified"
 SURVEY_RESPONSES_BASE = ["Username", "Discord ID"]
 SURVEY_HISTORY_BASE = ["Timestamp", "Discord ID", "Username"]
 
+# The squad-power template's first-ever headers (April 2026) read "1st/2nd/3rd
+# Squad" — the May 2026 audit renamed the question labels to "...Squad Power"
+# but `merge_sheet_header` never rewrites a header already sitting in a tab.
+# Any alliance whose sheet predates that rename still carries the old text in
+# row 1. Without this, the write path (which matches columns by name) can't
+# find "1st Squad Power" there, so it appends a duplicate column instead of
+# continuing to write the one already in place (#456).
+LEGACY_SQUAD_POWER_LABELS = {
+    "1st Squad": "1st Squad Power",
+    "2nd Squad": "2nd Squad Power",
+    "3rd Squad": "3rd Squad Power",
+}
+
 
 def survey_header_rows(questions: list) -> tuple[list[str], list[str]]:
     """Row 1 for a survey's two tabs: (current answers, submission history).
@@ -217,6 +230,10 @@ def _values_by_column(
     question *label*, which is what the sheet's header holds. The
     bot-owned columns are written last so a question labelled
     "Username" can't overwrite the identity column the upsert matches on.
+
+    Also mirrors each value under its legacy label (if any), so
+    `row_for_header` finds a match whether a tab's header still carries
+    the old text or the current one — see `LEGACY_SQUAD_POWER_LABELS`.
     """
     by_column: dict = {}
     for i, q in enumerate(questions):
@@ -225,6 +242,10 @@ def _values_by_column(
         if isinstance(value, list):
             value = ", ".join(str(v) for v in value)
         by_column[q.get("label", key)] = "" if value is None else value
+
+    for legacy, modern in LEGACY_SQUAD_POWER_LABELS.items():
+        if modern in by_column:
+            by_column[legacy] = by_column[modern]
 
     by_column["Username"] = username
     by_column["Discord ID"] = discord_id
@@ -326,7 +347,12 @@ def update_squad_powers(
 
     desired, _unused = survey_header_rows(questions)
     existing_header = rows[0] if rows else []
-    header = merge_sheet_header(existing_header, desired, pin_last=SURVEY_MODIFIED_COLUMN)
+    header = merge_sheet_header(
+        existing_header,
+        desired,
+        pin_last=SURVEY_MODIFIED_COLUMN,
+        legacy_aliases=LEGACY_SQUAD_POWER_LABELS,
+    )
 
     # This tab holds one row per member, so when the columns move it can
     # afford to be remapped wholesale — which keeps "Date Modified"
@@ -379,7 +405,7 @@ def append_survey_history(
 
     _unused, desired = survey_header_rows(questions)
     existing = [c for c in ws.row_values(1) if c]
-    header = merge_sheet_header(existing, desired)
+    header = merge_sheet_header(existing, desired, legacy_aliases=LEGACY_SQUAD_POWER_LABELS)
 
     if not existing:
         ws.update("A1", [header], value_input_option="USER_ENTERED")

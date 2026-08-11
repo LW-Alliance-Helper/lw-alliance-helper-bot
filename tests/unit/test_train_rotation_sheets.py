@@ -18,6 +18,16 @@ from train_rotation import DayRule, DraftDay, SchedulePreset
 GID = 12345
 
 
+@pytest.fixture(autouse=True)
+def _no_config_health_db(monkeypatch):
+    """This file exercises the pure Sheet I/O, not the #458 config_health
+    wiring (that's tests/unit/test_config_health_sheet_subjects.py) — every
+    test here would otherwise need a real DB just to let a clean read/write
+    call config_health.clear."""
+    monkeypatch.setattr("config_health.record", lambda *a, **kw: None)
+    monkeypatch.setattr("config_health.clear", lambda *a, **kw: None)
+
+
 class FakeWS:
     """In-memory worksheet. Models the batch_clear + update('A2', rows) cycle
     that train_rotation._rewrite performs."""

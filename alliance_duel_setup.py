@@ -69,8 +69,14 @@ TRACKING_MODE_QUESTION = (
     "Do you want to track just your own alliance week to week, or your entire League bracket?"
 )
 
-MODE_BTN_OWN = "📌 Just my alliance"
-MODE_BTN_FULL = "🏆 My whole League bracket"
+# Bare, no emoji. These two are alternatives to each other inside one
+# question, not features or actions. Users navigate by icon, so two glyphs
+# that mean the same kind of thing cost scan time and return nothing, and a
+# repeated glyph is worse than none. Matches the export/import choice
+# cluster (Keep current / Skip / Use exported). Feature and action buttons
+# still take emoji; buttons answering one question do not.
+MODE_BTN_OWN = "Just my alliance"
+MODE_BTN_FULL = "My whole League bracket"
 
 
 def tracking_mode_embed() -> discord.Embed:

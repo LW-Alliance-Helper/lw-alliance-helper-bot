@@ -400,3 +400,32 @@ def test_wizard_button_labels_fit_on_mobile():
     ):
         assert len(label) <= 35, f"{label!r} is {len(label)} chars"
     assert w.STEP_TIMEOUT == 300
+
+
+def test_the_mode_choice_buttons_carry_no_emoji():
+    """They are alternatives to each other inside one question, not features.
+
+    Two glyphs meaning the same kind of thing cost scan time and return
+    nothing, and a repeated glyph is worse than none. Matches the
+    export/import choice cluster. Pinned because "add an emoji, everything
+    else has one" is the obvious wrong fix.
+    """
+    import re
+
+    emoji = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U00002b00-\U00002bff]")
+    assert not emoji.search(ads.MODE_BTN_OWN)
+    assert not emoji.search(ads.MODE_BTN_FULL)
+    assert ads.MODE_BTN_OWN == "Just my alliance"
+    assert ads.MODE_BTN_FULL == "My whole League bracket"
+
+
+def test_cancel_matches_every_other_cancel_in_the_bot():
+    # Bare in bot_admin, buddy_hub, donate, export_import_cog and
+    # mapmanager_hub. The catalog's ↩️ marks cancelled-a-sub-step in message
+    # copy, not the button that does it.
+    import inspect
+
+    import alliance_duel_wizard as w
+
+    assert 'label="Cancel"' in inspect.getsource(w)
+    assert "↩️ Cancel" not in inspect.getsource(w)

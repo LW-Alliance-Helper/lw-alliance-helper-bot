@@ -113,7 +113,7 @@ class TrackingModeView(discord.ui.View):
     async def btn_full(self, inter: discord.Interaction, _b: discord.ui.Button):
         await self._parent.finish(inter, ad.MODE_FULL_BRACKET)
 
-    @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
     async def btn_cancel(self, inter: discord.Interaction, _b: discord.ui.Button):
         # Backpedal, not plain: the alliance identity saved in step 1 survives,
         # and telling them "Cancelled." flat would imply it did not.

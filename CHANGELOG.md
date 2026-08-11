@@ -15,6 +15,14 @@ and PR description.
 - **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
 - Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
 - **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
+## [1.8.6] — 2026-08-10
+
+### Fixed
+- Squad Power survey answers could land in a new, hidden column instead of updating the one leadership was actually looking at, for alliances whose sheet predated an old question-label rename ([#456](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/456)).
+- A Google Sheet access failure (403) wasn't recognized as one, so leadership was never told the bot had lost access to their sheet ([#457](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/457)).
+- Train Conductor Rotation's setup wizard and the Train Hub's "This week's draft" button could crash instead of showing a clear message when the sheet was unreachable, and rotation sheet problems now report to leadership like every other feature ([#458](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/458)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
 
 ## [1.8.5] — 2026-08-07
 

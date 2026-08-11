@@ -1791,7 +1791,13 @@ def get_or_create_worksheet(
         return ws
 
 
-def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str = "") -> list[str]:
+def merge_sheet_header(
+    existing: list[str],
+    desired: list[str],
+    *,
+    pin_last: str = "",
+    legacy_aliases: dict[str, str] | None = None,
+) -> list[str]:
     """Merge a config-driven column list into a tab's existing header.
 
     Sheet writers whose columns come from an editable question list can't
@@ -1810,6 +1816,13 @@ def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str
     shifts it, so a caller using `pin_last` has to remap existing rows
     into the returned layout rather than just rewriting row 1.
 
+    `legacy_aliases` maps an old header string a tab might still carry to
+    the current `desired` label it represents — e.g. a caller whose own
+    question labels changed after some sheets were already seeded under
+    the old ones. A `desired` column already present under its legacy
+    name is treated as already covered rather than appended a second
+    time as a duplicate column (#456).
+
     Returns the merged header. Compare it against `existing` to decide
     whether the sheet needs writing at all.
     """
@@ -1825,11 +1838,15 @@ def merge_sheet_header(existing: list[str], desired: list[str], *, pin_last: str
     if pin_last and merged and merged[-1] == pin_last:
         tail = [merged.pop()]
 
+    legacy_aliases = legacy_aliases or {}
     for col in desired:
         if pin_last and col == pin_last:
             continue
-        if col and col not in merged:
-            merged.append(col)
+        if not col or col in merged:
+            continue
+        if any(legacy in merged for legacy, modern in legacy_aliases.items() if modern == col):
+            continue
+        merged.append(col)
 
     # A tab that predates the pinned column, or has it stranded somewhere
     # other than the right edge, still has to end up with it rightmost.
@@ -1895,6 +1912,12 @@ def describe_sheet_error(e: Exception, *, guild_id=None, tab: str = None) -> str
     if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
         return f"spreadsheet not found — was it deleted, or is the ID wrong in /setup?{suffix}"
 
+    # gspread's own open_by_key() converts a 403 into the built-in
+    # PermissionError rather than raising its typed APIError — same 403
+    # this function already renders below, just under a different type.
+    if isinstance(e, PermissionError):
+        return f"spreadsheet 403 — share it with the bot's service account as Editor{suffix}"
+
     if isinstance(e, gspread.exceptions.APIError):
         status = None
         reason = None
@@ -1935,7 +1958,12 @@ def is_user_config_sheet_error(e: Exception) -> bool:
     import gspread
 
     if isinstance(
-        e, (gspread.exceptions.SpreadsheetNotFound, gspread.exceptions.WorksheetNotFound)
+        e,
+        (
+            gspread.exceptions.SpreadsheetNotFound,
+            gspread.exceptions.WorksheetNotFound,
+            PermissionError,
+        ),
     ):
         return True
     if isinstance(e, gspread.exceptions.APIError):

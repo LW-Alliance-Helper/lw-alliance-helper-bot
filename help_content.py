@@ -25,6 +25,7 @@ from setup_hub import (
     HUB_BTN_SURVEY,
     HUB_BTN_TRAIN,
     HUB_BTN_TRANSFERS,
+    HUB_BTN_VS,
     STORM_SETUP_NAV,
 )
 from survey_hub import (
@@ -325,6 +326,26 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "chosen channel with 📄 Full details, draft-a-message buttons, "
                 "and (if you set up decisions) buttons to mark applicants right "
                 "from Discord.",
+            ),
+        ],
+    },
+    "alliance_duel": {
+        "emoji": "🏆",
+        "label": "Alliance Duel (VS) 💎",
+        "description": (
+            "💎 Premium. Tracks your Alliance Duel league in your own sheet: "
+            "the bracket, each week's day scores and outcomes, and your record "
+            "against the alliances you have faced. Because weekly re-pairing "
+            "follows a fixed rule, the bot can work out your likely path "
+            "through the bracket and name which alliances to scout first."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_VS}",
+                "💎 Set up the tracker: name your alliance, choose whether to "
+                "track your whole 16-alliance League bracket or just your own "
+                "alliance, and get the tab created and explained. You can "
+                "change either choice later.",
             ),
         ],
     },

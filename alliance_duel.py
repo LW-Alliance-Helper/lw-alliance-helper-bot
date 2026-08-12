@@ -193,13 +193,13 @@ COL_WEEK_DATE = "Week Date"
 COL_WEEK = "Week"
 COL_SEED = "Seed"
 COL_TAG = "Tag"
-COL_SERVER = "Server"
+COL_WARZONE = "Warzone"
 COL_NAME = "Name"
 COL_POWER = "Power"
 COL_MEMBERS = "Members"
 COL_GIFT_LEVEL = "Gift Level"
 COL_OPPONENT_TAG = "Opponent Tag"
-COL_OPPONENT_SERVER = "Opponent Server"
+COL_OPPONENT_WARZONE = "Opponent Warzone"
 COL_WEEK_SCORE = "Week Score"
 COL_WEEK_OUTCOME = "Week Outcome"
 COL_KNOWN_1_5 = "Known Days 1-5"
@@ -228,13 +228,13 @@ SHEET_COLUMNS: tuple[str, ...] = (
     COL_WEEK,
     COL_SEED,
     COL_TAG,
-    COL_SERVER,
+    COL_WARZONE,
     COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
     COL_OPPONENT_TAG,
-    COL_OPPONENT_SERVER,
+    COL_OPPONENT_WARZONE,
     *(day_score_col(d) for d in range(1, 7)),
     *(day_outcome_col(d) for d in range(1, 7)),
     COL_WEEK_SCORE,
@@ -385,26 +385,32 @@ def parse_week_date(value, *, today: _dt.date | None = None) -> _dt.date | None:
 
 @dataclass(frozen=True, order=True)
 class AllianceKey:
-    """An alliance's dedup identity: tag plus server.
+    """An alliance's dedup identity: tag plus warzone.
 
-    Both are normalised (trimmed, casefolded, ``#`` stripped from the tag) so
-    ``[ABC] 1234`` and ``abc/1234`` are the same alliance. The display forms
-    live on :class:`AllianceWeek`.
+    **Warzone, not "server".** It is the game's own word for a world
+    (players say "server" colloquially, but ``server`` is reserved in this
+    product for the *Discord* server, and letting the two senses share a word
+    would put one term's opposite meaning on every VS surface). See the
+    glossary in ``UX.md``.
+
+    Both parts are normalised (trimmed, casefolded, ``#`` stripped from the
+    tag) so ``[ABC] 1234`` and ``abc/1234`` are the same alliance. The display
+    forms live on :class:`AllianceWeek`.
     """
 
     tag: str
-    server: str
+    warzone: str
 
     @staticmethod
-    def of(tag, server) -> "AllianceKey | None":
+    def of(tag, warzone) -> "AllianceKey | None":
         t = re.sub(r"[\[\]#\s]", "", str(tag or "")).casefold()
-        s = re.sub(r"[^0-9a-z]", "", str(server or "").casefold())
-        if not t or not s:
+        w = re.sub(r"[^0-9a-z]", "", str(warzone or "").casefold())
+        if not t or not w:
             return None
-        return AllianceKey(t, s)
+        return AllianceKey(t, w)
 
     def __str__(self) -> str:  # pragma: no cover - display only
-        return f"[{self.tag.upper()}] {self.server}"
+        return f"[{self.tag.upper()}] {self.warzone}"
 
 
 @dataclass(frozen=True, order=True)
@@ -468,7 +474,7 @@ class AllianceWeek:
     seed: int | None = None
     name: str = ""
     tag_display: str = ""
-    server_display: str = ""
+    warzone_display: str = ""
 
     power: int | None = None
     members: int | None = None
@@ -676,7 +682,7 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
             return transfer.cell_for(row, hidx, name)
 
         league = LeagueKey.of(cell(COL_SEASON), cell(COL_TIER), cell(COL_GROUP))
-        alliance = AllianceKey.of(cell(COL_TAG), cell(COL_SERVER))
+        alliance = AllianceKey.of(cell(COL_TAG), cell(COL_WARZONE))
         week = parse_int(cell(COL_WEEK))
         if league is None or alliance is None or week is None:
             continue
@@ -700,11 +706,11 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
                 seed=parse_int(cell(COL_SEED)),
                 name=cell(COL_NAME) or "",
                 tag_display=cell(COL_TAG) or "",
-                server_display=cell(COL_SERVER) or "",
+                warzone_display=cell(COL_WARZONE) or "",
                 power=parse_power(cell(COL_POWER)),
                 members=parse_int(cell(COL_MEMBERS)),
                 gift_level=parse_int(cell(COL_GIFT_LEVEL)),
-                opponent=AllianceKey.of(cell(COL_OPPONENT_TAG), cell(COL_OPPONENT_SERVER)),
+                opponent=AllianceKey.of(cell(COL_OPPONENT_TAG), cell(COL_OPPONENT_WARZONE)),
                 day_scores=day_scores,
                 day_outcomes=day_outcomes,
                 week_score=parse_int(cell(COL_WEEK_SCORE)),
@@ -734,7 +740,7 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         COL_GROUP: row.league.group,
         COL_WEEK: str(row.week),
         COL_TAG: row.tag_display or row.alliance.tag.upper(),
-        COL_SERVER: row.server_display or row.alliance.server,
+        COL_WARZONE: row.warzone_display or row.alliance.warzone,
     }
     if row.week_date:
         out[COL_WEEK_DATE] = row.week_date.isoformat()
@@ -750,7 +756,7 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         out[COL_GIFT_LEVEL] = str(row.gift_level)
     if row.opponent is not None:
         out[COL_OPPONENT_TAG] = row.opponent.tag.upper()
-        out[COL_OPPONENT_SERVER] = row.opponent.server
+        out[COL_OPPONENT_WARZONE] = row.opponent.warzone
     for d in range(1, 7):
         if d in row.day_scores:
             out[day_score_col(d)] = str(row.day_scores[d])
@@ -1440,3 +1446,488 @@ class _MatchResolver:
                 return MatchResolution(projected, b if projected == a else a, SOURCE_ESTIMATED)
 
         return None
+
+
+# ── Validation ("Check my sheet") ─────────────────────────────────────────────
+#
+# Manual entry with no external source makes errors inevitable and silent, so
+# validation is a feature rather than a nicety. Every finding names the row and
+# the column, because "something is wrong somewhere in 64 rows" is not
+# actionable.
+#
+# Rules 4, 5 and 6 assume a full 16-alliance bracket and run **only in
+# full-bracket mode** (#448). Fired against an own-alliance sheet they would
+# flag a deliberate choice as an error, which is the opposite of what the
+# validation is for.
+
+#: How much a finding should worry the reader. `error` is a contradiction in
+#: the data; `warning` is a value that looks wrong but might not be.
+SEVERITY_ERROR = "error"
+SEVERITY_WARNING = "warning"
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One validation problem, addressed to a specific cell."""
+
+    rule: int
+    severity: str
+    message: str
+    #: 1-based sheet row, when the finding belongs to one. Cross-row findings
+    #: name the row the reader should look at first.
+    row_number: int | None = None
+    column: str = ""
+    alliance: AllianceKey | None = None
+
+    @property
+    def where(self) -> str:
+        """Human-readable location, for the report embed."""
+        parts = []
+        if self.row_number:
+            parts.append(f"row {self.row_number}")
+        if self.column:
+            parts.append(f"column {self.column}")
+        return ", ".join(parts)
+
+
+def _league_weeks(rows: Sequence[AllianceWeek]) -> dict[tuple, list[AllianceWeek]]:
+    """Group rows by (league, week)."""
+    out: dict[tuple, list[AllianceWeek]] = {}
+    for row in rows:
+        out.setdefault((row.league, row.week), []).append(row)
+    return out
+
+
+def _check_week_score_pairs(group: Sequence[AllianceWeek]) -> list[Finding]:
+    """Rule 1: a matchup's two Week Scores must total 13."""
+    out: list[Finding] = []
+    seen: set = set()
+    by_alliance = {r.alliance: r for r in group}
+    for row in group:
+        if row.opponent is None or row.week_score is None:
+            continue
+        pair = tuple(sorted((row.alliance, row.opponent)))
+        if pair in seen:
+            continue
+        other = by_alliance.get(row.opponent)
+        if other is None or other.week_score is None:
+            continue
+        seen.add(pair)
+        total = row.week_score + other.week_score
+        if total != WEEK_POINTS_TOTAL:
+            out.append(
+                Finding(
+                    rule=1,
+                    severity=SEVERITY_ERROR,
+                    message=(
+                        f"Week Scores for this matchup add up to {total}, not "
+                        f"{WEEK_POINTS_TOTAL} ({row.week_score} + {other.week_score})."
+                    ),
+                    row_number=row.row_number,
+                    column=COL_WEEK_SCORE,
+                    alliance=row.alliance,
+                )
+            )
+    return out
+
+
+def _check_day_outcomes_sum(row: AllianceWeek) -> list[Finding]:
+    """Rule 2: six recorded Day Outcomes must total the Week Score."""
+    if not row.has_all_day_outcomes or row.week_score is None:
+        return []
+    if row.day_points_total == row.week_score:
+        return []
+    return [
+        Finding(
+            rule=2,
+            severity=SEVERITY_ERROR,
+            message=(
+                f"The six Day Outcomes add up to {row.day_points_total} league points, "
+                f"but Week Score says {row.week_score}."
+            ),
+            row_number=row.row_number,
+            column=COL_WEEK_SCORE,
+            alliance=row.alliance,
+        )
+    ]
+
+
+def _check_outcome_agrees(row: AllianceWeek) -> list[Finding]:
+    """Rule 3: Week Outcome must agree with Week Score."""
+    if row.week_outcome is None or row.week_score is None:
+        return []
+    expected = "W" if row.week_score * 2 > WEEK_POINTS_TOTAL else "L"
+    if row.week_outcome == expected:
+        return []
+    return [
+        Finding(
+            rule=3,
+            severity=SEVERITY_ERROR,
+            message=(
+                f"Week Outcome says {row.week_outcome}, but a Week Score of "
+                f"{row.week_score} of {WEEK_POINTS_TOTAL} is a {expected}."
+            ),
+            row_number=row.row_number,
+            column=COL_WEEK_OUTCOME,
+            alliance=row.alliance,
+        )
+    ]
+
+
+def _check_reciprocal_opponents(group: Sequence[AllianceWeek]) -> list[Finding]:
+    """Rule 4 (full bracket only): opponent references must be mutual."""
+    out: list[Finding] = []
+    by_alliance = {r.alliance: r for r in group}
+    for row in group:
+        if row.opponent is None:
+            continue
+        other = by_alliance.get(row.opponent)
+        if other is None:
+            out.append(
+                Finding(
+                    rule=4,
+                    severity=SEVERITY_ERROR,
+                    message="This row's opponent has no row of their own this week.",
+                    row_number=row.row_number,
+                    column=COL_OPPONENT_TAG,
+                    alliance=row.alliance,
+                )
+            )
+        elif other.opponent is not None and other.opponent != row.alliance:
+            out.append(
+                Finding(
+                    rule=4,
+                    severity=SEVERITY_ERROR,
+                    message=(
+                        "Opponents disagree: this row faces that alliance, but their "
+                        "row names someone else."
+                    ),
+                    row_number=row.row_number,
+                    column=COL_OPPONENT_TAG,
+                    alliance=row.alliance,
+                )
+            )
+    return out
+
+
+def _check_seeds(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Finding]:
+    """Rule 5 (full bracket only): seeds in a league are 1-16 and unique."""
+    seeds: dict[AllianceKey, int] = {}
+    first_row: dict[AllianceKey, AllianceWeek] = {}
+    for row in rows:
+        if row.league != league or row.seed is None:
+            continue
+        seeds.setdefault(row.alliance, row.seed)
+        first_row.setdefault(row.alliance, row)
+
+    out: list[Finding] = []
+    counts: dict[int, list[AllianceKey]] = {}
+    for alliance, seed in seeds.items():
+        counts.setdefault(seed, []).append(alliance)
+        if not 1 <= seed <= BRACKET_SIZE:
+            out.append(
+                Finding(
+                    rule=5,
+                    severity=SEVERITY_ERROR,
+                    message=f"Seed {seed} is outside 1-{BRACKET_SIZE}.",
+                    row_number=first_row[alliance].row_number,
+                    column=COL_SEED,
+                    alliance=alliance,
+                )
+            )
+    for seed, holders in counts.items():
+        if len(holders) > 1:
+            for alliance in holders:
+                out.append(
+                    Finding(
+                        rule=5,
+                        severity=SEVERITY_ERROR,
+                        message=(
+                            f"Seed {seed} is used by {len(holders)} alliances in this league."
+                        ),
+                        row_number=first_row[alliance].row_number,
+                        column=COL_SEED,
+                        alliance=alliance,
+                    )
+                )
+    return out
+
+
+def _check_own_alliance_present(
+    rows: Sequence[AllianceWeek], league: LeagueKey, own: AllianceKey
+) -> list[Finding]:
+    """Rule 6 (full bracket only): the configured own alliance appears."""
+    if any(r.league == league and r.alliance == own for r in rows):
+        return []
+    return [
+        Finding(
+            rule=6,
+            severity=SEVERITY_WARNING,
+            message=(
+                f"Your alliance doesn't appear anywhere in league {league}. "
+                "Check the Tag and Server on those rows match your setup."
+            ),
+            column=COL_TAG,
+            alliance=own,
+        )
+    ]
+
+
+def _check_picked_agreement(group: Sequence[AllianceWeek]) -> list[Finding]:
+    """Rule 7: Picked calls on both sides of a matchup must agree."""
+    out: list[Finding] = []
+    seen: set = set()
+    by_alliance = {r.alliance: r for r in group}
+    for row in group:
+        if row.opponent is None or row.picked is None:
+            continue
+        other = by_alliance.get(row.opponent)
+        if other is None or other.picked is None:
+            continue
+        pair = tuple(sorted((row.alliance, row.opponent)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        # Both sides picked to win, or both picked to lose: one is wrong.
+        if row.picked == other.picked:
+            verb = "win" if row.picked == "W" else "lose"
+            out.append(
+                Finding(
+                    rule=7,
+                    severity=SEVERITY_WARNING,
+                    message=(
+                        f"Both sides of this matchup are picked to {verb}. One of them is wrong."
+                    ),
+                    row_number=row.row_number,
+                    column=COL_PICKED,
+                    alliance=row.alliance,
+                )
+            )
+    return out
+
+
+#: How far below an alliance's own typical day score a value has to sit before
+#: rule 8 asks about it. Deliberately loose: the check exists to catch a
+#: missing unit (a `500` that meant `500m`), not to police a bad day.
+SUSPECT_SCORE_RATIO = 1_000
+
+#: Recorded day scores needed before rule 8 will call anything unusual. Below
+#: this there is no baseline, only a guess.
+SUSPECT_SCORE_MIN_SAMPLES = 3
+
+
+def _check_day_score_magnitude(rows: Sequence[AllianceWeek]) -> list[Finding]:
+    """Rule 8: a day score wildly out of line with that alliance's own others.
+
+    Compares each alliance against **its own** recorded scores, never against
+    an absolute floor. Day scores are read literally (see :func:`parse_score`),
+    so the mistake worth catching is an established alliance typing `500` when
+    they meant `500m`. An early-game alliance posting small numbers
+    consistently is telling the truth, and a hardcoded plausibility threshold
+    would nag exactly the alliances least able to tell it was wrong.
+
+    Phrased as a question. It never refuses the value.
+    """
+    out: list[Finding] = []
+    by_alliance: dict[AllianceKey, list[AllianceWeek]] = {}
+    for row in rows:
+        if row.day_scores:
+            by_alliance.setdefault(row.alliance, []).append(row)
+
+    for alliance, own_rows in by_alliance.items():
+        scores = [s for r in own_rows for s in r.day_scores.values() if s > 0]
+        if len(scores) < SUSPECT_SCORE_MIN_SAMPLES:
+            continue
+        typical = sorted(scores)[len(scores) // 2]
+        if typical <= 0:
+            continue
+        for row in own_rows:
+            for day, score in sorted(row.day_scores.items()):
+                if score > 0 and typical // score >= SUSPECT_SCORE_RATIO:
+                    out.append(
+                        Finding(
+                            rule=8,
+                            severity=SEVERITY_WARNING,
+                            message=(
+                                f"Day {day} Score of {score:,} is far below this "
+                                f"alliance's usual (about {typical:,}). "
+                                f"Did you mean {score:,}m?"
+                            ),
+                            row_number=row.row_number,
+                            column=day_score_col(day),
+                            alliance=alliance,
+                        )
+                    )
+    return out
+
+
+def validate(
+    rows: Iterable[AllianceWeek],
+    *,
+    tracking_mode: str = MODE_FULL_BRACKET,
+    own_alliance: AllianceKey | None = None,
+) -> list[Finding]:
+    """Run every applicable check over a parsed sheet.
+
+    `tracking_mode` decides whether the three bracket-shaped rules run. In
+    own-alliance mode (#448) rules 4, 5 and 6 are skipped entirely, because a
+    sheet holding only your own rows is a supported shape rather than a
+    half-finished one, and reporting it as broken would be the tracker arguing
+    with a choice its user made deliberately.
+
+    Findings come back ordered by rule then row, so the report reads in sheet
+    order rather than in whatever order the checks happened to run.
+    """
+    rows = list(rows)
+    full_bracket = tracking_mode != MODE_OWN_ALLIANCE
+    out: list[Finding] = []
+
+    for row in rows:
+        out += _check_day_outcomes_sum(row)
+        out += _check_outcome_agrees(row)
+
+    for _key, group in _league_weeks(rows).items():
+        out += _check_week_score_pairs(group)
+        out += _check_picked_agreement(group)
+        if full_bracket:
+            out += _check_reciprocal_opponents(group)
+
+    if full_bracket:
+        for league in {r.league for r in rows}:
+            out += _check_seeds(rows, league)
+            if own_alliance is not None:
+                out += _check_own_alliance_present(rows, league, own_alliance)
+
+    out += _check_day_score_magnitude(rows)
+
+    return sorted(out, key=lambda f: (f.rule, f.row_number or 0, f.column))
+
+
+# ── Skeleton rows ─────────────────────────────────────────────────────────────
+
+
+def skeleton_rows(
+    league: LeagueKey,
+    week: int,
+    week_date: _dt.date,
+    alliances: Sequence[tuple[AllianceKey, int | None]],
+    *,
+    tracking_mode: str = MODE_FULL_BRACKET,
+    own_alliance: AllianceKey | None = None,
+) -> list[AllianceWeek]:
+    """Empty rows stamped with league identity, week and seed, ready to fill.
+
+    Setup is one sitting: the bracket screen shows all 16 alliances and their
+    seeds at league start, so the bot writes the rows and the user fills tag,
+    warzone and seed straight off that screen.
+
+    **Branches on tracking mode** (#448). Full-bracket mode writes a row per
+    alliance given. Own-alliance mode writes only the configured own
+    alliance's rows, because that alliance chose not to track the other
+    fifteen and generating them anyway would be the bot overriding the choice.
+    """
+    if tracking_mode == MODE_OWN_ALLIANCE:
+        if own_alliance is None:
+            return []
+        alliances = [(key, seed) for key, seed in alliances if key == own_alliance]
+
+    return [
+        AllianceWeek(
+            league=league,
+            week=week,
+            alliance=key,
+            week_date=week_date,
+            seed=seed,
+            tag_display=key.tag.upper(),
+            warzone_display=key.warzone,
+        )
+        for key, seed in alliances
+    ]
+
+
+def latest_league(rows: Iterable[AllianceWeek]) -> LeagueKey | None:
+    """The league the alliance is currently in, by newest recorded Week Date.
+
+    Falls back to the last league seen when no row carries a date, so a
+    part-filled sheet still resolves to something rather than nothing.
+    """
+    rows = list(rows)
+    dated = [r for r in rows if r.week_date]
+    if dated:
+        return max(dated, key=lambda r: r.week_date).league
+    return rows[-1].league if rows else None
+
+
+def missing_bracket_rows(
+    rows: Iterable[AllianceWeek], league: LeagueKey
+) -> dict[int, tuple[int, _dt.date | None]]:
+    """How many rows short of a full bracket each recorded week of `league` is.
+
+    Returns ``{week: (rows_needed, week_date)}``, skipping weeks that are
+    already full. Only weeks that already exist are counted: an alliance that
+    has recorded two weeks is not asking for four.
+
+    This is what makes switching from own-alliance to full-bracket tracking
+    mid-league cheap (#448). The bot cannot know who the other fifteen
+    alliances are, so the rows it offers to add are blank placeholders already
+    stamped with season, tier, group, week and date. What that saves is
+    retyping the league identity fifteen times per week, not the scouting.
+    """
+    rows = list(rows)
+    out: dict[int, tuple[int, _dt.date | None]] = {}
+    weeks = sorted({r.week for r in rows if r.league == league})
+    for week in weeks:
+        in_week = [r for r in rows if r.league == league and r.week == week]
+        have = len({r.alliance for r in in_week})
+        if have >= BRACKET_SIZE:
+            continue
+        stamp = next((r.week_date for r in in_week if r.week_date), None)
+        out[week] = (BRACKET_SIZE - have, stamp)
+    return out
+
+
+def blank_bracket_values(
+    header: Sequence[str],
+    league: LeagueKey,
+    week: int,
+    week_date: _dt.date | None,
+) -> list[str]:
+    """One blank placeholder row, stamped with league identity and week only.
+
+    Deliberately carries no Tag or Warzone: those come off the in-game bracket
+    screen and the bot has no way to know them. Written against the live
+    header so a reordered or extended sheet still lines up.
+    """
+    line = [""] * len(header)
+    hidx = transfer.header_index(list(header))
+    stamped = {
+        COL_SEASON: league.season,
+        COL_TIER: league.tier,
+        COL_GROUP: league.group,
+        COL_WEEK: str(week),
+    }
+    if week_date:
+        stamped[COL_WEEK_DATE] = week_date.isoformat()
+    for name, value in stamped.items():
+        idx = hidx.get(transfer.norm_header(name))
+        if idx is not None and idx < len(line):
+            line[idx] = value
+    return line
+
+
+def week_one_pairing_from_seeds(
+    alliances: Sequence[tuple[AllianceKey, int | None]],
+) -> dict[AllianceKey, AllianceKey]:
+    """Week 1 opponents, straight off the seeds: (1,2)(3,4)…(15,16).
+
+    Week 1 needs no results to pair, so the bot fills Opponent at setup rather
+    than waiting for a result. Returns the mapping both ways. Alliances with no
+    seed are left out rather than guessed at.
+    """
+    seeded = sorted(((k, s) for k, s in alliances if s is not None), key=lambda p: p[1])
+    out: dict[AllianceKey, AllianceKey] = {}
+    for i in range(0, len(seeded) - 1, 2):
+        a, b = seeded[i][0], seeded[i + 1][0]
+        out[a] = b
+        out[b] = a
+    return out

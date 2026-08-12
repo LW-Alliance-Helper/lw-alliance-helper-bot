@@ -958,6 +958,47 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_vs_config — Alliance Duel (VS) tracker (#398/#399), following
+        # the guild_storm_config precedent: enough fields to warrant its own
+        # table rather than more columns on guild_configs.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_vs_config (
+                guild_id                  INTEGER PRIMARY KEY,
+                enabled                   INTEGER DEFAULT 0,
+                tab_name                  TEXT    DEFAULT 'Alliance Duel (VS)',
+                -- Own alliance identity, stored once rather than repeated as a
+                -- sheet column. Everything else about your alliance is just
+                -- another row; these two say which row is yours.
+                own_tag                   TEXT    DEFAULT '',
+                own_warzone                TEXT    DEFAULT '',
+                -- Tracking mode (#448): 'own_alliance' | 'full_bracket'.
+                -- Asked at setup, never inferred — skeleton generation is a
+                -- *write*, so the shape has to be known before there is any
+                -- data to infer it from. An own-alliance sheet is a supported
+                -- shape, not incomplete data: it changes how many skeleton
+                -- rows get written and gates validation rules 4, 5 and 6,
+                -- which all assume a full 16-alliance bracket.
+                tracking_mode             TEXT    DEFAULT 'full_bracket',
+                -- Per-surface opt-in toggles, posting times (HH:MM in the
+                -- guild's configured timezone) and channels. Every automated
+                -- post is opt-in with a user-chosen time and channel; the bot
+                -- never picks a posting time on the alliance's behalf.
+                score_prompt_enabled      INTEGER DEFAULT 0,
+                score_prompt_time         TEXT    DEFAULT '',
+                score_prompt_channel_id   INTEGER DEFAULT 0,
+                day_theme_enabled         INTEGER DEFAULT 0,
+                day_theme_time            TEXT    DEFAULT '',
+                day_theme_channel_id      INTEGER DEFAULT 0,
+                -- DB-backed dedup, never an in-memory set. CLAUDE.md flags
+                -- that exact mistake (#89): Train Conductor Rotation
+                -- reimplemented in-memory dedup after the DB-backed pattern
+                -- had already been fixed following a production incident.
+                last_score_prompt_fired   TEXT    DEFAULT '',
+                last_day_theme_fired      TEXT    DEFAULT ''
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -1077,6 +1118,34 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_storm_config")
+            except Exception:
+                pass
+
+        # ── guild_vs_config (#399) ────────────────────────────────────────────
+        # Same ALTER-in-try/except shape as the storm block above, so a DB
+        # created before a column existed picks it up on next boot. Keep this
+        # list, the CREATE TABLE above, save_vs_config and get_vs_config's
+        # fallback dict in sync.
+        for col, definition in [
+            ("enabled", "INTEGER DEFAULT 0"),
+            ("tab_name", "TEXT    DEFAULT 'Alliance Duel (VS)'"),
+            ("own_tag", "TEXT    DEFAULT ''"),
+            ("own_warzone", "TEXT    DEFAULT ''"),
+            # Tracking mode (#448) — see CREATE TABLE comment.
+            ("tracking_mode", "TEXT    DEFAULT 'full_bracket'"),
+            ("score_prompt_enabled", "INTEGER DEFAULT 0"),
+            ("score_prompt_time", "TEXT    DEFAULT ''"),
+            ("score_prompt_channel_id", "INTEGER DEFAULT 0"),
+            ("day_theme_enabled", "INTEGER DEFAULT 0"),
+            ("day_theme_time", "TEXT    DEFAULT ''"),
+            ("day_theme_channel_id", "INTEGER DEFAULT 0"),
+            ("last_score_prompt_fired", "TEXT    DEFAULT ''"),
+            ("last_day_theme_fired", "TEXT    DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_vs_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_vs_config")
             except Exception:
                 pass
 
@@ -6030,3 +6099,119 @@ def get_last_shiny_refresh_at():
     if not row or not row["last"]:
         return None
     return _dt.fromisoformat(row["last"])
+
+
+# ── Alliance Duel (VS) tracker (#398 / #399) ──────────────────────────────────
+
+#: Every column `save_vs_config` will write. Keep in sync with the
+#: `guild_vs_config` CREATE TABLE and migration list in `init_db`, and with
+#: `get_vs_config`'s fallback dict.
+_VS_CONFIG_COLUMNS = (
+    "enabled",
+    "tab_name",
+    "own_tag",
+    "own_warzone",
+    "tracking_mode",
+    "score_prompt_enabled",
+    "score_prompt_time",
+    "score_prompt_channel_id",
+    "day_theme_enabled",
+    "day_theme_time",
+    "day_theme_channel_id",
+    "last_score_prompt_fired",
+    "last_day_theme_fired",
+)
+
+#: The two tracking modes (#448). Mirrors `alliance_duel.TRACKING_MODES`,
+#: duplicated here so `config` stays importable without the feature module.
+VS_MODE_OWN_ALLIANCE = "own_alliance"
+VS_MODE_FULL_BRACKET = "full_bracket"
+
+
+def get_vs_config(guild_id: int) -> dict:
+    """Alliance Duel (VS) config for a guild, or all-off defaults.
+
+    A never-configured guild reads back `enabled = 0` with `full_bracket`
+    tracking, which is the shape the setup wizard starts from. The mode
+    default is only a placeholder: setup **asks** before writing anything,
+    because skeleton generation is a write and the shape has to be known
+    before there is data to infer it from (#448).
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_vs_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "guild_id": guild_id,
+        "enabled": 0,
+        "tab_name": "Alliance Duel (VS)",
+        "own_tag": "",
+        "own_warzone": "",
+        "tracking_mode": VS_MODE_FULL_BRACKET,
+        "score_prompt_enabled": 0,
+        "score_prompt_time": "",
+        "score_prompt_channel_id": 0,
+        "day_theme_enabled": 0,
+        "day_theme_time": "",
+        "day_theme_channel_id": 0,
+        "last_score_prompt_fired": "",
+        "last_day_theme_fired": "",
+    }
+
+
+def save_vs_config(guild_id: int, **fields) -> bool:
+    """Upsert only the VS config fields actually passed. Returns True on write.
+
+    Deliberately a **partial** update, unlike the older
+    `save_*_config(guild_id, a, b, c, ...)` savers in this module. The VS
+    setup wizard writes one answer per step (mode here, channel there), and a
+    full-field saver would make every step responsible for re-passing the
+    other twelve values or silently clobbering them. That is the same class of
+    bug the Keep-current rework fixed in `2c577dd`, and it is cheaper to avoid
+    than to re-fix.
+
+    Unknown keys are ignored rather than raising, so a caller passing a
+    retired column during a migration doesn't take a wizard down.
+    """
+    writable = {k: v for k, v in fields.items() if k in _VS_CONFIG_COLUMNS}
+    if not writable:
+        return False
+
+    # Booleans arrive from toggles; SQLite wants integers.
+    for key, value in list(writable.items()):
+        if isinstance(value, bool):
+            writable[key] = int(value)
+
+    mode = writable.get("tracking_mode")
+    if mode is not None and mode not in (VS_MODE_OWN_ALLIANCE, VS_MODE_FULL_BRACKET):
+        writable["tracking_mode"] = VS_MODE_FULL_BRACKET
+
+    columns = list(writable)
+    assignments = ", ".join(f"{c} = ?" for c in columns)
+    values = [writable[c] for c in columns]
+
+    with _get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO guild_vs_config (guild_id) VALUES (?)", (guild_id,))
+        conn.execute(
+            f"UPDATE guild_vs_config SET {assignments} WHERE guild_id = ?",
+            (*values, guild_id),
+        )
+        conn.commit()
+    return True
+
+
+def clear_vs_config(guild_id: int) -> None:
+    """Delete a guild's VS config, for the wizard's Clear-my-configuration
+    path. The sheet tab is the alliance's own data and is never touched."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM guild_vs_config WHERE guild_id = ?", (guild_id,))
+        conn.commit()
+
+
+def list_vs_enabled_guild_ids() -> list[int]:
+    """Guild IDs with the VS tracker switched on, for the clock-driven loops."""
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT guild_id FROM guild_vs_config WHERE enabled = 1").fetchall()
+    return [r["guild_id"] for r in rows]

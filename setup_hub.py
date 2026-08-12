@@ -53,6 +53,12 @@ HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
 HUB_BTN_BUDDY = "🤝 Buddy System"
 HUB_BTN_TRANSFERS = "🔁 Transfers"
 HUB_BTN_MAP_MANAGER = "🗺️ Map Manager"
+# 🏆 mirrors the game's own iconography: Last War renders the Duel League with
+# a trophy (in several styles), so the surface we control reads as continuous
+# with the one we don't. That cohesion is the reason for this emoji, not
+# aesthetics — don't swap it for something that merely looks better here.
+# Where the game already has an icon for a thing, match it.
+HUB_BTN_VS = "🏆 Alliance Duel (VS)"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",
@@ -168,6 +174,10 @@ def _build_setup_hub_embed(
         mapmanager_on = bool(config.get_guild_alliance_mapping(guild.id))
     except Exception:
         mapmanager_on = False
+    try:
+        vs_on = bool((config.get_vs_config(guild.id) or {}).get("enabled"))
+    except Exception:
+        vs_on = False
 
     # Premium-gated features show 💎 on free tier instead of ⚪.
     def _free(state: bool) -> str:
@@ -195,6 +205,7 @@ def _build_setup_hub_embed(
         f"{_premium(members_on)} Member Sync",
         f"{_free(buddy_on)} Profession Buddy System",
         f"{_premium(transfers_on)} Transfer Management",
+        f"{_premium(vs_on)} Alliance Duel (VS)",
     ]
     # Map Manager is hidden until MAP_MANAGER_COMMANDS_ENABLED is set (#316/#338).
     from api_server import map_manager_commands_enabled
@@ -284,6 +295,10 @@ class _SetupHubView(discord.ui.View):
             self.btn_growth_breakdown,
             self.btn_transfers,
             self.btn_map_manager,
+            # Alliance Duel (VS) is Premium apart from the member day-theme
+            # reminder, which is a member-facing scheduled post rather than
+            # anything reachable from this wizard.
+            self.btn_vs,
         ):
             button.disabled = True
             if not button.label.startswith("💎"):
@@ -455,6 +470,12 @@ class _SetupHubView(discord.ui.View):
         from setup_cog import _launch_shiny_tasks_setup
 
         await _launch_shiny_tasks_setup(inter, self.bot)
+
+    @discord.ui.button(label=HUB_BTN_VS, style=discord.ButtonStyle.secondary, row=2)
+    async def btn_vs(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from alliance_duel_wizard import run_vs_setup
+
+        await run_vs_setup(inter, self.bot)
 
     # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 

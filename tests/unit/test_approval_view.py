@@ -51,6 +51,19 @@ def _make_cfg():
 def _make_bot(channels: dict):
     """Build a mock bot whose `get_channel(id)` returns the matching mock
     channel for that id (or None if not in the dict)."""
+    for channel in channels.values():
+        # #462 routed these paths through config_health.check_channel, which
+        # asks the channel for `permissions_for(guild.me)`. On a bare AsyncMock
+        # that hands back a coroutine nobody awaits: harmless (an unreadable
+        # shape resolves to "no problem"), but it fills the run with warnings.
+        # Every channel handed to this helper is meant to be a working one, so
+        # answer plainly.
+        perms = MagicMock()
+        perms.view_channel = True
+        perms.send_messages = True
+        channel.guild = MagicMock()
+        channel.permissions_for = MagicMock(return_value=perms)
+
     bot = MagicMock()
     bot.get_channel = MagicMock(side_effect=lambda cid: channels.get(cid))
     bot.wait_for = AsyncMock()
@@ -168,7 +181,7 @@ class TestSendAsIs:
         assert stored_gid == GUILD_ID
 
     @pytest.mark.asyncio
-    async def test_shield_reminder_does_not_schedule_warning(self):
+    async def test_shield_reminder_does_not_schedule_warning(self, temp_db):
         """Friday shield reminders aren't followed by an event, so no
         5-minute warning should ever be queued for them."""
         from scheduler import ApprovalView, pending_warnings
@@ -496,7 +509,7 @@ class TestSentMessageWiring:
     so the eventual on_timeout has something to edit."""
 
     @pytest.mark.asyncio
-    async def test_post_editor_assigns_view_message(self):
+    async def test_post_editor_assigns_view_message(self, temp_db):
         from datetime import date as date_cls
         from scheduler import post_editor
 
@@ -557,3 +570,145 @@ class TestSentMessageWiring:
         approval_view = channel.send.await_args.kwargs["view"]
         assert isinstance(approval_view, ApprovalView)
         assert approval_view.message is sent
+
+
+# ── Channel rot (#462) ────────────────────────────────────────────────────────
+
+
+class TestEventChannelHealth:
+    """The event scheduler was the one clock-driven post loop #379 never
+    reached, so a guild whose draft channel vanished in a reorg silently
+    stopped seeing the daily editor. These pin that both of its channels now
+    record against config_health, and that an approval whose announcement
+    never went out stops reporting itself as a success."""
+
+    @staticmethod
+    def _problem(subject):
+        import config_health
+
+        return next(
+            (p for p in config_health.problems(GUILD_ID) if p.subject == subject),
+            None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_unusable_draft_channel_is_recorded(self, temp_db):
+        from datetime import date as date_cls
+        from scheduler import EVENT_DRAFT_CHANNEL_SUBJECT, post_editor
+
+        # get_channel returns None for everything: the reported failure.
+        bot = _make_bot({})
+
+        posted = await post_editor(
+            bot,
+            event_list=[],
+            event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            cfg=_make_cfg(),
+            draft_channel_id=LEADERSHIP_CHAN_ID,
+            announcement_channel_id=ANNOUNCEMENT_CHAN_ID,
+            five_min_warning=False,
+        )
+
+        assert posted is False
+        assert self._problem(EVENT_DRAFT_CHANNEL_SUBJECT) is not None
+
+    @pytest.mark.asyncio
+    async def test_a_working_draft_channel_clears_it(self, temp_db):
+        from datetime import date as date_cls
+        import config_health
+        from scheduler import EVENT_DRAFT_CHANNEL_SUBJECT, post_editor
+
+        config_health.record(GUILD_ID, EVENT_DRAFT_CHANNEL_SUBJECT, config_health.CHANNEL_GONE, "")
+        channel = AsyncMock()
+        channel.send = AsyncMock(return_value=MagicMock(name="sent"))
+
+        await post_editor(
+            bot=_make_bot({LEADERSHIP_CHAN_ID: channel}),
+            event_list=[],
+            event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            cfg=_make_cfg(),
+            draft_channel_id=LEADERSHIP_CHAN_ID,
+            announcement_channel_id=ANNOUNCEMENT_CHAN_ID,
+            five_min_warning=False,
+        )
+
+        assert self._problem(EVENT_DRAFT_CHANNEL_SUBJECT) is None
+
+    @pytest.mark.asyncio
+    async def test_a_refused_send_records_no_send(self, temp_db):
+        """The resolve above already checks send permission, so a Forbidden
+        here means it changed underneath us. Leadership still needs telling."""
+        import config_health
+        import discord
+        from datetime import date as date_cls
+        from scheduler import EVENT_DRAFT_CHANNEL_SUBJECT, post_editor
+
+        channel = AsyncMock()
+        channel.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no"))
+
+        posted = await post_editor(
+            bot=_make_bot({LEADERSHIP_CHAN_ID: channel}),
+            event_list=[],
+            event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            cfg=_make_cfg(),
+            draft_channel_id=LEADERSHIP_CHAN_ID,
+            announcement_channel_id=ANNOUNCEMENT_CHAN_ID,
+            five_min_warning=False,
+        )
+
+        assert posted is False
+        assert self._problem(EVENT_DRAFT_CHANNEL_SUBJECT).kind == config_health.CHANNEL_NO_SEND
+
+    @pytest.mark.asyncio
+    async def test_unusable_announcement_channel_is_recorded_by_the_warning(self, temp_db):
+        from scheduler import EVENT_ANNOUNCE_CHANNEL_SUBJECT, fire_warning
+
+        await fire_warning(
+            _make_bot({LEADERSHIP_CHAN_ID: AsyncMock()}),
+            event_key="ek",
+            event_list=_make_event_list(),
+            cfg=_make_cfg(),
+        )
+
+        assert self._problem(EVENT_ANNOUNCE_CHANNEL_SUBJECT) is not None
+
+    @pytest.mark.asyncio
+    async def test_approval_says_nothing_was_sent_instead_of_approved(self, temp_db):
+        """The bug: `send_as_is` stamped "Approved by X" whether or not the
+        announcement reached the channel, so leadership read a green tick for
+        something their members never got."""
+        from scheduler import ApprovalView, EVENT_ANNOUNCE_CHANNEL_SUBJECT, pending_warnings
+
+        pending_warnings.clear()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock()
+        # Announcement channel missing, leadership channel fine.
+        bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
+
+        view = ApprovalView(
+            bot=bot,
+            draft_message="Hello @members!",
+            event_key="event-123",
+            event_list=_make_event_list(),
+            is_shield=False,
+            guild_id=GUILD_ID,
+        )
+
+        with patch("config.get_config", return_value=_make_cfg()):
+            await view.send_as_is.callback(_make_interaction(user_display="LeadAlice"))
+
+        assert leadership.send.await_count == 1
+        text = leadership.send.await_args.args[0]
+        assert "Approved by" not in text
+        assert "have not seen this announcement" in text
+        # And it names both routes back, not just that something is wrong:
+        # where to fix the channel, and how to re-open the draft afterwards.
+        assert "/setup" in text
+        assert "/events" in text
+
+        assert self._problem(EVENT_ANNOUNCE_CHANNEL_SUBJECT) is not None
+        # No warning scheduled for an announcement that never happened.
+        assert "event-123" not in pending_warnings

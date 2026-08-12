@@ -27,12 +27,14 @@ import wizard_registry
 import config_health
 from config import get_config
 from messages import NOT_SET_UP
+from setup_hub import HUB_BTN_BIRTHDAYS
 
 # Birthday helpers + member-sheet loader live in train_birthdays.py.
 # Re-export here so existing imports (`from train import load_birthdays`,
 # `check_and_add_birthdays`, etc.) keep working.
 from train_birthdays import (
     BIRTHDAY_LOOKAHEAD,
+    BIRTHDAY_TAB_SUBJECT,
     load_birthdays,
     get_member_tab_name,
     parse_birthday,
@@ -84,6 +86,24 @@ config_health.register(
         label="your Train Schedule tab",
         fix_hub="/setup",
         fix_btn="🚂 Train",
+    )
+)
+
+# #463: the birthday tab's subject is registered here rather than in
+# train_birthdays.py, which stays free of Discord types (config_health imports
+# discord) so both train.py and the cog can import it. The key is defined there
+# next to the code that records against it; this only supplies the copy.
+config_health.register(
+    config_health.Subject(
+        key=BIRTHDAY_TAB_SUBJECT,
+        # Not "your Birthdays tab": the tab is whatever the alliance pointed
+        # the wizard at, and production has them on `Roster` and `Season 6` as
+        # well as `Birthdays`. A heading naming a tab they don't have would
+        # send them looking for the wrong thing. This is the wizard's own
+        # wording ("Which tab in your Google Sheet contains birthday data?").
+        label="your birthday data tab",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_BIRTHDAYS,
     )
 )
 

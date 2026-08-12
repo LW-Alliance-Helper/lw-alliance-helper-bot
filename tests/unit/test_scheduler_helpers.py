@@ -36,7 +36,7 @@ class TestPostEditorPermissions:
         return SimpleNamespace(guild_id=123, leadership_channel_id=999)
 
     @pytest.mark.asyncio
-    async def test_forbidden_returns_false_without_raising(self):
+    async def test_forbidden_returns_false_without_raising(self, temp_db):
         import scheduler
 
         channel = MagicMock()
@@ -53,7 +53,7 @@ class TestPostEditorPermissions:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_missing_channel_returns_false(self):
+    async def test_missing_channel_returns_false(self, temp_db):
         import scheduler
 
         bot = MagicMock()
@@ -65,7 +65,7 @@ class TestPostEditorPermissions:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_successful_post_returns_true(self):
+    async def test_successful_post_returns_true(self, temp_db):
         import scheduler
 
         channel = MagicMock()

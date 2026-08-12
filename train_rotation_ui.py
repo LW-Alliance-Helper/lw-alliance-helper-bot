@@ -615,7 +615,7 @@ class AssignmentLogsView(discord.ui.View):
         sel.callback = self._on_sort
         self.add_item(sel)
 
-    async def _refresh(self, inter: discord.Interaction):
+    async def _rerender(self, inter: discord.Interaction):
         self._sync()
         await inter.response.edit_message(embed=self.render_embed(), view=self)
 
@@ -624,17 +624,17 @@ class AssignmentLogsView(discord.ui.View):
     async def _on_view_all(self, inter):
         self.mode = "member"
         self.page = 0
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_by_member(self, inter):
         self.mode = "member"
         self.page = 0
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_by_date(self, inter):
         self.mode = "date"
         self.page = 0
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_sort(self, inter):
         value = inter.data["values"][0]
@@ -643,20 +643,20 @@ class AssignmentLogsView(discord.ui.View):
         else:
             self.sort_member = value
         self.page = 0
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_prev(self, inter):
         self.page = max(0, self.page - 1)
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_next(self, inter):
         self.page = min(self._total_pages() - 1, self.page + 1)
-        await self._refresh(inter)
+        await self._rerender(inter)
 
     async def _on_back(self, inter):
         self.mode = "summary"
         self.page = 0
-        await self._refresh(inter)
+        await self._rerender(inter)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

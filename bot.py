@@ -958,6 +958,15 @@ async def before_shiny_tasks_refresh_task():
 _SHINY_RETRY_COOLDOWN = timedelta(minutes=5)
 _shiny_last_attempt: dict[int, datetime] = {}
 
+# The retry above is right — a permission fix should take effect the same day
+# rather than tomorrow — but logging every attempt is not. A channel an
+# alliance has stopped maintaining stays broken for days, so at one line per
+# guild per retry a handful of them bury every other log this bot writes.
+# Leadership already hears about it properly (the config-health digest, #379),
+# so the log only owes the operator "this is still true", not a running count.
+_SHINY_UNUSABLE_LOG_COOLDOWN = timedelta(hours=6)
+_shiny_last_unusable_log: dict[int, datetime] = {}
+
 # #379: the configured Shiny Tasks post channel, as a config-health subject.
 # Registered here because this loop is the only thing that reads it, and
 # bot.py's loops deliberately stayed in this module (#372).
@@ -1050,11 +1059,16 @@ async def shiny_tasks_post_task():
                 bot, gid, SHINY_POST_CHANNEL_SUBJECT, scfg.get("channel_id") or 0
             )
             if channel is None:
-                print(
-                    f"[SHINY] Channel {scfg.get('channel_id')} not usable "
-                    f"for guild {gid} — skipping post"
-                )
+                last_log = _shiny_last_unusable_log.get(gid)
+                if last_log is None or (guild_now - last_log) >= _SHINY_UNUSABLE_LOG_COOLDOWN:
+                    _shiny_last_unusable_log[gid] = guild_now
+                    print(
+                        f"[SHINY] Channel {scfg.get('channel_id')} not usable "
+                        f"for guild {gid} — skipping post (further attempts "
+                        f"logged at most every {_SHINY_UNUSABLE_LOG_COOLDOWN})"
+                    )
                 continue
+            _shiny_last_unusable_log.pop(gid, None)
 
             # Resolve the shiny cycle against the Last War in-game (server,
             # UTC-2) date, not the guild's local calendar date. The post can

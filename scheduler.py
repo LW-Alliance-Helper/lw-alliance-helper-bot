@@ -25,14 +25,48 @@ from zoneinfo import ZoneInfo
 
 import discord
 import discord.ext.commands
+import config_health
 from config import get_config
-from messages import LEADERSHIP_INACCESSIBLE
+from events_hub import EVENTS_HUB_BTN_TODAY, EVENTS_HUB_CMD
+from messages import ANNOUNCEMENT_SEND_FAILED, LEADERSHIP_INACCESSIBLE
+from setup_hub import HUB_BTN_EVENTS
 import wizard_registry
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
 ET = ZoneInfo("America/New_York")
 
 from config import get_config
+
+# ── Config-health subjects (#462) ──────────────────────────────────────────────
+# The event scheduler was the one clock-driven post loop #379 never reached, so
+# a guild whose draft channel vanished in a reorg simply stopped seeing the
+# daily editor with nothing said. Two subjects rather than one because they are
+# two different fixes: leadership losing the draft is invisible to members,
+# while a broken announcement channel means the alliance never hears about the
+# event at all.
+#
+# Both are configured in the wizard, not the `/events` hub — only event-list
+# management moved there — so pointing the fix anywhere else sends leadership
+# somewhere that cannot help.
+EVENT_DRAFT_CHANNEL_SUBJECT = "events.draft_channel"
+EVENT_ANNOUNCE_CHANNEL_SUBJECT = "events.announce_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=EVENT_DRAFT_CHANNEL_SUBJECT,
+        label="your event draft channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_EVENTS,
+    )
+)
+config_health.register(
+    config_health.Subject(
+        key=EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+        label="your event announcement channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_EVENTS,
+    )
+)
 
 # ── Per-guild config helpers ───────────────────────────────────────────────────
 
@@ -739,16 +773,45 @@ class ApprovalView(discord.ui.View):
         # strip the buttons and post the re-initiate hint.
         self.message = None
 
-    async def _post_to_announcements(self, message: str):
+    async def _post_to_announcements(self, message: str) -> bool:
+        """Post the approved announcement. ``False`` if it never went out, so
+        the caller doesn't stamp an approval for something members never saw
+        (#462)."""
         from config import get_config
 
         cfg = get_config(self.guild_id)
-        channel = self.bot.get_channel(cfg.announcement_channel_id) if cfg else None
+        channel = (
+            config_health.resolve_configured_channel(
+                self.bot,
+                self.guild_id,
+                EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+                cfg.announcement_channel_id,
+            )
+            if cfg
+            else None
+        )
         if channel is None:
-            print("[SCHEDULER][ERROR] Announcements channel not found")
-            return
+            print(
+                f"[SCHEDULER][ERROR] Announcement channel not usable for "
+                f"guild {self.guild_id} — approved {self.event_key} announcement not sent"
+            )
+            return False
 
-        await channel.send(message)
+        try:
+            await channel.send(message)
+        except discord.HTTPException as e:
+            config_health.record(
+                self.guild_id,
+                EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+                config_health.CHANNEL_NO_SEND,
+                "",
+                discriminator=str(cfg.announcement_channel_id),
+            )
+            print(
+                f"[SCHEDULER][ERROR] Failed to send approved {self.event_key} "
+                f"announcement for guild {self.guild_id}: {e}"
+            )
+            return False
 
         # Schedule 5-minute warning based on first event time
         if not self.is_shield and self.event_list:
@@ -761,6 +824,7 @@ class ApprovalView(discord.ui.View):
                 print(
                     f"[SCHEDULER] 5-min warning scheduled for {warn_dt.strftime('%Y-%m-%d %H:%M %Z')}"
                 )
+        return True
 
     async def _disable_buttons(self, interaction: discord.Interaction):
         for item in self.children:
@@ -771,20 +835,32 @@ class ApprovalView(discord.ui.View):
     async def send_as_is(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable_buttons(interaction)
-        await self._post_to_announcements(self.draft_message)
+        sent = await self._post_to_announcements(self.draft_message)
 
         from config import get_config
 
         cfg = get_config(self.guild_id)
         leadership = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if leadership:
-            _now = datetime.now(tz=ET)
-            _h12 = _now.hour % 12 or 12
-            _ts = f"{_h12}:{_now:%M%p ET}".lower()
-            await leadership.send(
-                f"✅ **Approved by {interaction.user.display_name} at {_ts}**\n"
-                f"```\n{self.draft_message}\n```"
-            )
+            if not sent:
+                # #462: this used to stamp "Approved" either way, so leadership
+                # read a green tick for an announcement their members never
+                # got. Say what actually happened instead.
+                await leadership.send(
+                    ANNOUNCEMENT_SEND_FAILED.format(
+                        fix_btn=HUB_BTN_EVENTS,
+                        hub_cmd=EVENTS_HUB_CMD,
+                        hub_btn=EVENTS_HUB_BTN_TODAY,
+                    )
+                )
+            else:
+                _now = datetime.now(tz=ET)
+                _h12 = _now.hour % 12 or 12
+                _ts = f"{_h12}:{_now:%M%p ET}".lower()
+                await leadership.send(
+                    f"✅ **Approved by {interaction.user.display_name} at {_ts}**\n"
+                    f"```\n{self.draft_message}\n```"
+                )
         self.stop()
 
     @discord.ui.button(label="✏️ Edit & Send", style=discord.ButtonStyle.primary)
@@ -1116,11 +1192,20 @@ async def post_editor(
         return
     # Use per-event channel if set, fall back to guild leadership channel
     channel_id = draft_channel_id or cfg.leadership_channel_id
-    channel = bot.get_channel(channel_id)
+    # #462: unlike every other channel subject, this one isn't single-valued.
+    # The draft channel is resolved per event group, so a guild running several
+    # groups can have more than one broken at once, and they'd take turns
+    # holding the single (guild, subject) row. Each turn re-opens the notify
+    # window, but this fires once per group per day rather than per tick, so it
+    # settles at about one notice per broken channel per day. That's the honest
+    # answer anyway; it isn't the dedup leaking.
+    channel = config_health.resolve_configured_channel(
+        bot, getattr(cfg, "guild_id", 0), EVENT_DRAFT_CHANNEL_SUBJECT, channel_id
+    )
     if channel is None:
         gid = getattr(cfg, "guild_id", "?")
         print(
-            f"[SCHEDULER][ERROR] Draft channel {channel_id} not found for "
+            f"[SCHEDULER][ERROR] Draft channel {channel_id} not usable for "
             f"guild {gid} — event editor for {event_key} skipped"
         )
         return False
@@ -1138,6 +1223,17 @@ async def post_editor(
     except discord.Forbidden:
         # Bot can't post in the draft channel (missing view/send access).
         # The alliance's to fix — log with context, don't page Sentry (#57).
+        # The resolve above already checks send permission, so reaching here
+        # means it changed underneath us or the channel has a shape
+        # permissions_for can't answer for. Record it either way: leadership
+        # needs telling regardless of which check caught it.
+        config_health.record(
+            getattr(cfg, "guild_id", 0),
+            EVENT_DRAFT_CHANNEL_SUBJECT,
+            config_health.CHANNEL_NO_SEND,
+            "",
+            discriminator=str(channel_id),
+        )
         print(
             f"[SCHEDULER][ERROR] Missing permission to post the {event_key} "
             f"event editor to channel {channel_id} for guild {gid} — check "
@@ -1158,12 +1254,17 @@ async def post_editor(
 async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
     if cfg is None:
         return
-    channel = bot.get_channel(cfg.announcement_channel_id)
+    channel = config_health.resolve_configured_channel(
+        bot,
+        getattr(cfg, "guild_id", 0),
+        EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+        cfg.announcement_channel_id,
+    )
     if channel is None:
         gid = getattr(cfg, "guild_id", "?")
         print(
             f"[SCHEDULER][ERROR] Announcement channel {cfg.announcement_channel_id} "
-            f"not found for guild {gid} — 5-min warning for {event_key} skipped"
+            f"not usable for guild {gid} — 5-min warning for {event_key} skipped"
         )
         return
 

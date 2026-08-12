@@ -132,6 +132,18 @@ LEADERSHIP_NO_READ_PERM = (
     "⚠️ Bot does not have permission to read message history in the leadership channel."
 )
 
+# Leadership approved an announcement but the configured announcement channel
+# couldn't take it (#462). Replaces the "✅ Approved" stamp, which used to post
+# regardless and told leadership their members had been announced to when they
+# hadn't. Caller formats in the setup button and the hub button to re-open the
+# draft, both imported from the modules that own those labels.
+ANNOUNCEMENT_SEND_FAILED = (
+    "⚠️ I couldn't post in your event announcement channel, so **your members "
+    "have not seen this announcement**.\n"
+    "Fix it in `/setup` → **{fix_btn}**, then re-open today's event draft from "
+    "`{hub_cmd}` → **{hub_btn}**."
+)
+
 # Setup-wizard channel-pick step found the previously-configured channel
 # no longer exists (deleted, perms changed, etc.). The wizard offers
 # a new pick immediately below. Caller passes a short label (e.g.

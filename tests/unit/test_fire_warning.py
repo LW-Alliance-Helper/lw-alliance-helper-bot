@@ -48,6 +48,18 @@ def _make_cfg():
 
 
 def _make_bot(channels: dict):
+    for channel in channels.values():
+        # #462 routed the announcement channel through config_health, which
+        # asks `permissions_for(guild.me)`. A bare AsyncMock answers with a
+        # coroutine nobody awaits: harmless, since an unreadable shape resolves
+        # to "no problem", but it warns on every run. These are all meant to be
+        # working channels, so answer plainly.
+        perms = MagicMock()
+        perms.view_channel = True
+        perms.send_messages = True
+        channel.guild = MagicMock()
+        channel.permissions_for = MagicMock(return_value=perms)
+
     bot = MagicMock()
     bot.get_channel = MagicMock(side_effect=lambda cid: channels.get(cid))
     return bot

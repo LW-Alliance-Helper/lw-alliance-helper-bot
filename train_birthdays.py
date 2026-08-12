@@ -92,6 +92,14 @@ def _validate_month_day(month: int, day: int) -> bool:
 
 BIRTHDAY_LOOKAHEAD = 14  # default, overridden per-guild by database
 
+# #463: the birthday tab is its own config-health subject, separate from the
+# Train Schedule tab, because they're two different tabs an alliance picks
+# independently and a broken one doesn't imply the other. Only the key lives
+# here: this module is deliberately free of Discord types (see the docstring)
+# and `config_health` pulls in `discord`, so the registration sits in `train.py`
+# alongside the schedule subject, and the failure path below imports inline.
+BIRTHDAY_TAB_SUBJECT = "train.birthday_tab"
+
 
 def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
     """
@@ -127,9 +135,26 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
                         entry["discord_id"] = row[did_col].strip()
                 members.append(entry)
         print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
+        if guild_id:
+            import config_health
+
+            config_health.clear(guild_id, BIRTHDAY_TAB_SUBJECT)
         return members
     except Exception as e:
-        print(f"[BIRTHDAY] Error loading birthdays from '{tab_name}': {e}")
+        # #463: this used to print the bare exception and return [], so a
+        # renamed tab logged as just the tab name (WorksheetNotFound's str is
+        # the tab) and a revoked sheet as `<Response [404]>`, and nobody told
+        # the alliance either way. Classify it, record it if it's theirs to
+        # fix, and say what actually broke. Never Sentry-capture: config rot
+        # is the alliance's, per notes/DESIGN_config_health.md and #285/#286.
+        import config_health
+        from config import describe_sheet_error
+
+        config_health.record_sheet_failure(guild_id or 0, BIRTHDAY_TAB_SUBJECT, e, tab=tab_name)
+        print(
+            f"[BIRTHDAY] Error loading birthdays from '{tab_name}': "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=tab_name)}"
+        )
         return []
 
 

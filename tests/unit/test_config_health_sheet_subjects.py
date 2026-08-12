@@ -175,6 +175,122 @@ class TestTrainSchedule:
         assert config_health.get_subject(TRAIN_SUBJECT).label == "your Train Schedule tab"
 
 
+# ── Birthdays (#463) ─────────────────────────────────────────────────────────
+
+BIRTHDAY_SUBJECT = "train.birthday_tab"
+
+_BDAY_CFG = {"name_col": 0, "birthday_col": 1, "data_start_row": 2}
+
+
+def _birthday_rows(*rows):
+    ws = MagicMock()
+    ws.get_all_values.return_value = [["Name", "Birthday"], *rows]
+    return ws
+
+
+class TestBirthdayTab:
+    """The #414 site #414 missed. `load_birthdays` wrapped the whole read in a
+    blanket `except Exception`, printed the bare exception and returned `[]`,
+    so a renamed tab logged as just the tab name and nobody was told at all.
+
+    It gets its own subject rather than sharing the Train Schedule's: they are
+    two tabs an alliance picks independently, and one breaking says nothing
+    about the other."""
+
+    def test_missing_tab_is_recorded(self, seeded_db):
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(side_effect=gspread.exceptions.WorksheetNotFound("Birthdays")),
+            ),
+        ):
+            assert train.load_birthdays("Birthdays", TEST_GUILD_ID) == []
+        assert _problem(BIRTHDAY_SUBJECT).kind == config_health.MISSING_TAB
+
+    def test_revoked_sheet_is_recorded(self, seeded_db):
+        """The `<Response [404]>` line from the 2026-08-12 log."""
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(side_effect=_api_error(404)),
+            ),
+        ):
+            assert train.load_birthdays("Birthdays", TEST_GUILD_ID) == []
+        assert _problem(BIRTHDAY_SUBJECT).kind == config_health.MISSING_SHEET
+
+    def test_a_clean_load_clears_it(self, seeded_db):
+        config_health.record(TEST_GUILD_ID, BIRTHDAY_SUBJECT, config_health.MISSING_TAB, "gone")
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(return_value=_birthday_rows(["Alice", "March 15"])),
+            ),
+        ):
+            assert train.load_birthdays("Birthdays", TEST_GUILD_ID)
+        assert _problem(BIRTHDAY_SUBJECT) is None
+
+    def test_a_readable_tab_with_no_birthdays_is_not_a_problem(self, seeded_db):
+        """An alliance that simply hasn't filled the column in is not broken,
+        and this is the case the old blanket `[]` return made indistinguishable
+        from a sheet the bot couldn't open."""
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(return_value=_birthday_rows()),
+            ),
+        ):
+            assert train.load_birthdays("Birthdays", TEST_GUILD_ID) == []
+        assert _problem(BIRTHDAY_SUBJECT) is None
+
+    def test_a_rate_limit_does_not_alarm(self, seeded_db):
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner", MagicMock(side_effect=_api_error(429))
+            ),
+        ):
+            assert train.load_birthdays("Birthdays", TEST_GUILD_ID) == []
+        assert _problem(BIRTHDAY_SUBJECT) is None
+
+    def test_no_guild_id_records_nothing(self, seeded_db):
+        """`guild_id` is optional on this function, and a failure with no guild
+        has nothing to attribute the problem to."""
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(side_effect=gspread.exceptions.WorksheetNotFound("Birthdays")),
+            ),
+        ):
+            assert train.load_birthdays("Birthdays") == []
+        assert _problem(BIRTHDAY_SUBJECT) is None
+
+    def test_the_log_line_names_the_problem(self, seeded_db, capsys):
+        """It used to print the raw exception, so a WorksheetNotFound rendered
+        as just `Birthdays` (that's its `str()`) and a 404 as `<Response
+        [404]>`. Neither tells you what to check."""
+        with (
+            patch("config.get_birthday_config", MagicMock(return_value=_BDAY_CFG)),
+            patch(
+                "train_birthdays._get_member_sheet_inner",
+                MagicMock(side_effect=gspread.exceptions.WorksheetNotFound("Birthdays")),
+            ),
+        ):
+            train.load_birthdays("Birthdays", TEST_GUILD_ID)
+        line = capsys.readouterr().out
+        assert "worksheet tab" in line and "not found" in line
+        assert f"guild={TEST_GUILD_ID}" in line
+
+    def test_subject_copy_is_registered(self):
+        subject = config_health.get_subject(BIRTHDAY_SUBJECT)
+        assert subject.label == "your birthday data tab"
+        assert subject.fix_hub and subject.fix_btn
+
+
 # ── Member Roster ────────────────────────────────────────────────────────────
 
 ROSTER_SUBJECT = "roster.sheet"

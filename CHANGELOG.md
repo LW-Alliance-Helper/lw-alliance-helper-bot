@@ -15,6 +15,15 @@ and PR description.
 - **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
 - Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
 - **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
+
+## [1.8.7] — 2026-08-11
+
+### Fixed
+- Clicking a button on the train draft, daily confirmation, preset editor, assignment logs, or Buddy management screens wrote a warning to the bot's logs each time, because those screens reused a method name Discord's library had already claimed ([#460](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/460)).
+- A Shiny Tasks channel the bot can't post in no longer logs a line every five minutes for as long as it stays broken, which was burying every other log entry; leadership still hears about it through the usual setup-problem notice ([#461](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/461)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.8.6] — 2026-08-10
 
 ### Fixed

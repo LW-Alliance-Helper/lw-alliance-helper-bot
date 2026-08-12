@@ -272,7 +272,7 @@ class TrainPresetEditorView(discord.ui.View):
             return False
         return True
 
-    async def _refresh(self, interaction: discord.Interaction, *, content: str | None = None):
+    async def _rerender(self, interaction: discord.Interaction, *, content: str | None = None):
         self._rebuild()
         embed = ui.build_preset_editor_embed(self.preset, dirty=self.dirty)
         try:
@@ -290,7 +290,7 @@ class TrainPresetEditorView(discord.ui.View):
         if not await self._guard(interaction):
             return
         self.editing_day = int(interaction.data["values"][0])
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_rule(self, interaction: discord.Interaction):
         if not await self._guard(interaction):
@@ -303,7 +303,7 @@ class TrainPresetEditorView(discord.ui.View):
         self.preset.days[self.editing_day] = rule
         self.dirty = True
         self.ever_changed = True
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_set_pin(self, interaction: discord.Interaction):
         if not await self._guard(interaction):
@@ -354,7 +354,7 @@ class TrainPresetEditorView(discord.ui.View):
             # Stay open so leadership can keep editing; just clear the dirty
             # flag and confirm. "Done making changes" is how they exit.
             self.dirty = False
-            await self._refresh(
+            await self._rerender(
                 interaction,
                 content=f"✅ Saved **{self.preset.name}**. Keep editing, or hit "
                 "**Done making changes** when you're finished.",

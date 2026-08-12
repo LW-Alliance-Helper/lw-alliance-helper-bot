@@ -313,6 +313,12 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    # Champion Duel admin tools. Only ever visible to CHAMPION_DUEL_ADMIN_IDS,
+    # and the commands guard on it themselves, so loading unconditionally is
+    # safe — an empty env var means every subcommand refuses.
+    if "champion_duel_cog" not in bot.extensions:
+        await bot.load_extension("champion_duel_cog")
+        print("[INFO] Champion Duel admin cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:

@@ -143,7 +143,7 @@ class WeeklyDraftView(discord.ui.View):
         self.week_start = self.week_start + timedelta(days=days)
         self.selected_iso = None
         self.draft = await ui.load_week_draft_async(self.bot, self.guild_id, self.week_start)
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _guard_day(self, interaction: discord.Interaction) -> tr.DraftDay | None:
         if not ui._is_leader(interaction):
@@ -156,7 +156,7 @@ class WeeklyDraftView(discord.ui.View):
             return None
         return self._by_iso(self.selected_iso)
 
-    async def _refresh(self, interaction: discord.Interaction):
+    async def _rerender(self, interaction: discord.Interaction):
         self._rebuild()
         embed = ui.build_weekly_draft_embed(self.draft, self.week_start, self.preset_name)
         try:
@@ -187,7 +187,7 @@ class WeeklyDraftView(discord.ui.View):
             await interaction.response.send_message(ui.DENY_NOT_LEADER, ephemeral=True)
             return
         self.selected_iso = interaction.data["values"][0]
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_next(self, interaction: discord.Interaction):
         dd = await self._guard_day(interaction)
@@ -213,7 +213,7 @@ class WeeklyDraftView(discord.ui.View):
         dd.note = ""
         dd.discord_id = ui._id_for_name(state, member) if member else ""
         await asyncio.to_thread(self._persist_day, dd)
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_assign(self, interaction: discord.Interaction):
         dd = await self._guard_day(interaction)
@@ -278,7 +278,7 @@ class WeeklyDraftView(discord.ui.View):
         dd.note = ""
         dd.discord_id = ""
         await asyncio.to_thread(self._persist_day, dd)
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_regen(self, interaction: discord.Interaction):
         # Re-drafting throws away every current pick (including ones set by

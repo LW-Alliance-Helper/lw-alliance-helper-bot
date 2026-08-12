@@ -111,7 +111,7 @@ class DailyConfirmView(discord.ui.View):
         )
         self.dd.member, self.dd.reason, self.dd.needs_picking = member, reason, needs
         await asyncio.to_thread(self._persist_scheduled)
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     @discord.ui.button(label="✏️ Assign someone", style=discord.ButtonStyle.secondary)
     async def assign(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -160,7 +160,7 @@ class DailyConfirmView(discord.ui.View):
             notes=self.dd.note,
         )
 
-    async def _refresh(self, interaction: discord.Interaction):
+    async def _rerender(self, interaction: discord.Interaction):
         embed = ui.build_daily_confirm_embed(self.dd)
         try:
             if self.message:

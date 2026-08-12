@@ -2689,6 +2689,66 @@ def skeleton_rows(
     ]
 
 
+def next_week_rows(rows: Iterable[AllianceWeek], week: int) -> list[AllianceWeek]:
+    """Rows for the week after `week`, carried forward with predicted opponents.
+
+    Once a week's outcomes are in, the next week's pairing follows from the
+    rules, so the only thing left for a human to type is what actually
+    happened. Season, tier, group, seed, tag and warzone come forward from the
+    week just played; the Opponent column is filled with the **prediction**.
+
+    Writing the prediction rather than leaving it blank is deliberate. If the
+    game paired differently and the officer corrects it, that correction is
+    itself the signal that the pairing algorithm needs a look, which a blank
+    column would never produce.
+
+    Returns ``[]`` when the pairing cannot be computed, which is the normal
+    state before that week's results are recorded.
+    """
+    rows = list(rows)
+    if week >= LEAGUE_WEEKS:
+        return []
+
+    # The prior week has to be *decided*, not merely present. With no outcomes
+    # recorded, the weighted score is zero for everyone and the pairing falls
+    # back to seed order, which would confidently reproduce week 1's matchups
+    # for week 2. Sixteen rows carrying a wrong opponent are worse than none:
+    # the whole reason the prediction is written is that a correction means
+    # something, and it means nothing if the prediction was never informed.
+    played = [r for r in rows if r.week == week]
+    if not played or any(r.week_outcome is None for r in played):
+        return []
+
+    pairing = compute_week_pairing(rows, week + 1)
+    if isinstance(pairing, BracketIncomplete):
+        return []
+
+    opponents: dict[AllianceKey, AllianceKey] = {}
+    for match in pairing.matches:
+        opponents[match.a] = match.b
+        opponents[match.b] = match.a
+
+    source = {r.alliance: r for r in played}
+    previous_date = next((r.week_date for r in source.values() if r.week_date), None)
+    week_date = previous_date + _dt.timedelta(weeks=1) if previous_date else None
+
+    out = []
+    for alliance, row in sorted(source.items(), key=lambda kv: kv[1].seed or BRACKET_SIZE + 1):
+        out.append(
+            AllianceWeek(
+                league=row.league,
+                week=week + 1,
+                alliance=alliance,
+                week_date=week_date,
+                seed=row.seed,
+                tag_display=row.tag_display,
+                warzone_display=row.warzone_display,
+                opponent=opponents.get(alliance),
+            )
+        )
+    return out
+
+
 def latest_league(rows: Iterable[AllianceWeek]) -> LeagueKey | None:
     """The league the alliance is currently in, by newest recorded Week Date.
 

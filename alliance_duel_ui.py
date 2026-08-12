@@ -24,6 +24,7 @@ import discord
 
 import alliance_duel as ad
 import alliance_duel_setup as ad_setup
+import messages
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,10 @@ logger = logging.getLogger(__name__)
 #: more alliances than one select holds.
 MAX_SELECT_OPTIONS = 25
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
+#: A single pick with a little thought behind it, per the DESIGN.md timeout
+#: tiers. Not the hub's 900: this view holds no work worth preserving, and a
+#: stale picker is more confusing than an expired one.
+PICKER_TIMEOUT = 180
 
 
 # ── Scout profile ─────────────────────────────────────────────────────────────
@@ -47,7 +51,7 @@ def scout_embed(state, target: ad.AllianceKey) -> discord.Embed:
     """
     profile = state.profiles.get(target)
     embed = discord.Embed(
-        title=f"🔍 {state.display_name(target)}",
+        title=f"🔍 {state.display_name(target)}"[:256],
         color=discord.Color.blurple(),
     )
 
@@ -188,11 +192,16 @@ class ScoutPickerView(discord.ui.View):
     """Choose an alliance to scout. Renders from the loaded snapshot only."""
 
     def __init__(self, state, owner_id: int):
-        super().__init__(timeout=900)
+        super().__init__(timeout=PICKER_TIMEOUT)
         self.state = state
         self.owner_id = owner_id
 
         options = _scout_options(state)
+        # Acts on change rather than pairing with a confirm button. The
+        # DESIGN.md preference for select-plus-confirm exists because a
+        # mis-tap on a phone is otherwise unrecoverable, and here it is not:
+        # this opens a read-only profile and the picker stays live to pick
+        # again. A confirm step would cost a tap on every single look-up.
         select = discord.ui.Select(
             placeholder="Pick an alliance to scout",
             options=options,
@@ -203,16 +212,25 @@ class ScoutPickerView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 
     async def _picked(self, interaction: discord.Interaction):
+        import alliance_duel_entry as ad_entry
+
         raw = interaction.data["values"][0]
         tag, _, warzone = raw.partition("|")
         target = ad.AllianceKey(tag, warzone)
+        # The profile carries its own write actions, so a read that prompts a
+        # correction does not cost a trip back to the hub.
+        view = (
+            None
+            if target == self.state.own
+            else ad_entry.ScoutActionsView(self.state, target, self.owner_id)
+        )
         await interaction.response.send_message(
-            embed=scout_embed(self.state, target), ephemeral=True
+            embed=scout_embed(self.state, target), view=view, ephemeral=True
         )
 
 

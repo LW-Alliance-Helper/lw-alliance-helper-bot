@@ -350,10 +350,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "/vs",
                 "💎 **Alliance Duel hub** (leadership). Opens this week's matchup "
-                "with its running league-point split, plus buttons for the full "
-                "bracket, every matchup in the week, and a scout profile for any "
-                "alliance showing what you have recorded, your record against "
-                "them, and how the week projects.",
+                "with its running league-point split.\n"
+                "**Read row:** 📇 Bracket (all 16 alliances and what you have "
+                "recorded), 🆚 This week (every matchup with the evidence behind "
+                "it), 🔍 Scout (one alliance: your record against them, and how "
+                "the week projects), 🛣️ My path (your route through the bracket, "
+                "and which alliances to scout first when it cannot be worked "
+                "out yet).\n"
+                "**Write row:** ✏️ Log today's score, ➕ Add or edit alliance, "
+                "and setup with a sheet check.",
             ),
         ],
     },

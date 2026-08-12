@@ -934,6 +934,136 @@ def build_profiles(rows: Iterable[AllianceWeek]) -> dict[AllianceKey, AlliancePr
     return {key: build_profile(rows, key) for key in {r.alliance for r in rows}}
 
 
+# ── Head to head ──────────────────────────────────────────────────────────────
+#
+# The main payoff for the manual entry burden, because it is **real observed
+# history** rather than anything this module estimates. Rows already carry tag,
+# warzone, opponent, season and tier, so every prior meeting is recoverable
+# without a second tab.
+#
+# Tier travels with each meeting rather than being flattened away. Promotion
+# and relegation are real, so a result earned a tier down is weaker evidence
+# about a current matchup than one earned in the present bracket, and the
+# reader should see that distinction instead of having it quietly averaged in.
+
+
+@dataclass(frozen=True)
+class Meeting:
+    """One prior match between two alliances, seen from the guild's side."""
+
+    league: LeagueKey
+    week: int
+    week_date: _dt.date | None
+    #: The guild's own row for that league-week.
+    own: AllianceWeek
+    #: The opponent's row, when it exists. Absent in own-alliance tracking
+    #: mode (#448), where the pairing is recorded only on the guild's side.
+    opponent: AllianceWeek | None = None
+
+    @property
+    def outcome(self) -> str | None:
+        """``W`` / ``L`` from the guild's side, or ``None`` if unrecorded."""
+        return self.own.week_outcome
+
+    @property
+    def score(self) -> tuple[int | None, int | None]:
+        """The week's league-point split, guild's half first.
+
+        The opponent's half is inferred from 13 when their row is absent,
+        which is arithmetic rather than a guess: the two halves of a week
+        always total :data:`WEEK_POINTS_TOTAL`.
+        """
+        mine = self.own.week_score
+        theirs = self.opponent.week_score if self.opponent is not None else None
+        if theirs is None and mine is not None:
+            theirs = WEEK_POINTS_TOTAL - mine
+        return mine, theirs
+
+    @property
+    def tier(self) -> str:
+        return self.league.tier
+
+
+@dataclass(frozen=True)
+class HeadToHead:
+    """Every recorded meeting between the guild and one other alliance."""
+
+    own: AllianceKey
+    opponent: AllianceKey
+    #: Newest first, because the most recent meeting is the most relevant.
+    meetings: tuple[Meeting, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.meetings)
+
+    @property
+    def wins(self) -> int:
+        return sum(1 for m in self.meetings if m.outcome == "W")
+
+    @property
+    def losses(self) -> int:
+        return sum(1 for m in self.meetings if m.outcome == "L")
+
+    @property
+    def unrecorded(self) -> int:
+        """Meetings whose Week Outcome was never filled in. A real state, and
+        never counted as a loss."""
+        return sum(1 for m in self.meetings if m.outcome is None)
+
+    @property
+    def record(self) -> str:
+        return f"{self.wins}-{self.losses}"
+
+    def tier_movement(self, current_tier: str) -> tuple[str, int] | None:
+        """How the opponent's competitive level has moved since you last met.
+
+        Returns ``(previous_tier, delta)`` where a positive delta means they
+        have come *up* since. This is a **game-adjudicated** signal and harder
+        evidence than any proxy this module computes: an alliance you last met
+        in Silver that now shares your Diamond bracket was promoted on real
+        performance.
+
+        ``None`` when there is no prior meeting, or when either tier is not on
+        :data:`TIER_ORDER` — an unrecognised tier is rendered verbatim rather
+        than silently ranked.
+        """
+        if not self.meetings:
+            return None
+        previous = self.meetings[0].tier
+        now, then = tier_rank(current_tier), tier_rank(previous)
+        if now is None or then is None or now == then:
+            return None
+        return previous, now - then
+
+
+def head_to_head(
+    rows: Iterable[AllianceWeek], own: AllianceKey, opponent: AllianceKey
+) -> HeadToHead:
+    """Recover every prior meeting between `own` and `opponent`, newest first.
+
+    A meeting counts when *either* side's row names the other as its Opponent,
+    so a week recorded from one side only still shows up. The guild's own row
+    has to exist, though: it carries the outcome and the day scores, and a
+    meeting rendered from the opponent's row alone would be a match the guild
+    has no record of playing.
+    """
+    by_league_week: dict[tuple, dict[AllianceKey, AllianceWeek]] = {}
+    for row in rows:
+        by_league_week.setdefault((row.league, row.week), {})[row.alliance] = row
+
+    meetings: list[Meeting] = []
+    for (league, week), sides in by_league_week.items():
+        mine, theirs = sides.get(own), sides.get(opponent)
+        if mine is None:
+            continue
+        paired = mine.opponent == opponent or (theirs is not None and theirs.opponent == own)
+        if paired:
+            meetings.append(Meeting(league, week, mine.week_date, mine, theirs))
+
+    meetings.sort(key=lambda m: _row_sort_key(m.own), reverse=True)
+    return HeadToHead(own, opponent, tuple(meetings))
+
+
 # ── Pairing ───────────────────────────────────────────────────────────────────
 
 

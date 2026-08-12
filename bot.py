@@ -301,6 +301,9 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    if "alliance_duel_cog" not in bot.extensions:
+        await bot.load_extension("alliance_duel_cog")
+        print("[INFO] Alliance Duel (VS) cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:

@@ -152,6 +152,13 @@ PREMIUM_FEATURES: set[str] = {
     # day rules — leadership / vs / contest / event days that pick from a Discord
     # role — are Premium, since they need the synced roster's Discord IDs.
     "train_role_days",
+    # Alliance Duel (VS) tracker (#398). Every derived view is Premium: the
+    # alliance types each value by hand, so a free tier that captured the data
+    # but withheld the bracket, projection, My Path and analytics would leave
+    # them with the spreadsheet they already had. The one free surface is the
+    # member day-theme reminder (#406), which reads nothing from the sheet and
+    # is gated separately by not calling this at all.
+    "alliance_duel_vs",
 }
 
 

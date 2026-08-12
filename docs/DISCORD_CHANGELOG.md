@@ -132,6 +132,13 @@ Replace this with a real post on the merge that makes it visible.
 
 ---
 
+**1.8.7** — 2026-08-11
+NO POST: two log-noise fixes. Neither was ever visible to an alliance, and
+the setup problem behind the second one is already reported to leadership
+by the existing notice.
+
+---
+
 **1.8.6** — 2026-08-10
 - Squad Power survey answers could land in a hidden extra column instead of updating your existing one
 - The bot now tells leadership when it loses access to a Google Sheet instead of staying silent

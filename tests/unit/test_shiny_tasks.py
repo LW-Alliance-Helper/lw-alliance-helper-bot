@@ -750,6 +750,106 @@ class TestShinyTasksPostTask:
         assert "2290" not in sent[0]
 
 
+class TestUnusableChannelLogThrottle:
+    """#461: the 5-minute retry is deliberate — a permission fix should take
+    effect the same day — but logging every attempt is not. Four alliances
+    sitting on a broken channel produced ~1,150 log lines a day and buried
+    everything else. Leadership is told properly by the config-health digest
+    (#379), so the operator log only owes 'still true', not a running count."""
+
+    async def _tick(self, now_dt: datetime) -> list[str]:
+        """One loop tick with an unresolvable channel, returning the [SHINY]
+        lines it printed. Unlike `_run_loop_at` this leaves both cooldown
+        dicts alone, because these tests are about state accumulating across
+        consecutive ticks of real forward-moving time."""
+        import bot as bot_module
+
+        fake_bot = MagicMock()
+        fake_bot.get_channel = MagicMock(return_value=None)
+        fake_dt = MagicMock()
+        fake_dt.now = MagicMock(return_value=now_dt)
+
+        printed: list[str] = []
+        with (
+            patch.object(bot_module, "bot", fake_bot),
+            patch("bot.datetime", fake_dt),
+            patch(
+                "builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))
+            ),
+        ):
+            await bot_module.shiny_tasks_post_task.coro()
+        return [line for line in printed if "not usable" in line]
+
+    def _setup(self):
+        import bot as bot_module
+
+        _seed_complete(TEST_GUILD_ID)
+        _seed_servers([(2264, "2026-04-29", "global")])
+        _enable_shiny(
+            TEST_GUILD_ID,
+            post_time="09:00",
+            channel_id=999,
+            server_min=2200,
+            server_max=2300,
+        )
+        bot_module._shiny_last_attempt.clear()
+        bot_module._shiny_last_unusable_log.clear()
+
+    @pytest.mark.asyncio
+    async def test_repeated_retries_log_once(self, temp_db):
+        """Three retries inside the log cooldown, one line."""
+        self._setup()
+
+        first = await self._tick(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        second = await self._tick(datetime(2026, 5, 11, 9, 6, tzinfo=ET))
+        third = await self._tick(datetime(2026, 5, 11, 9, 12, tzinfo=ET))
+
+        assert len(first) == 1
+        assert "999" in first[0] and str(TEST_GUILD_ID) in first[0]
+        assert second == []
+        assert third == []
+
+    @pytest.mark.asyncio
+    async def test_logs_again_once_the_cooldown_elapses(self, temp_db):
+        """Still silently broken hours later is worth one more line, so the
+        log says 'still true' rather than going quiet forever."""
+        self._setup()
+
+        first = await self._tick(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        quiet = await self._tick(datetime(2026, 5, 11, 14, 0, tzinfo=ET))
+        later = await self._tick(datetime(2026, 5, 11, 15, 1, tzinfo=ET))
+
+        assert len(first) == 1
+        assert quiet == []
+        assert len(later) == 1
+
+    @pytest.mark.asyncio
+    async def test_recovery_lets_the_next_failure_log_immediately(self, temp_db):
+        """A channel that comes back and breaks again is a new event, not a
+        continuation, so it must not be swallowed by the old cooldown."""
+        import bot as bot_module
+
+        self._setup()
+
+        from config import mark_shiny_tasks_posted
+
+        first = await self._tick(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        assert len(first) == 1
+
+        # Channel resolves: the loop posts, and clears the throttle on the way.
+        bot_module._shiny_last_attempt.clear()
+        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 6, tzinfo=ET))
+        assert len(sent) == 1
+        assert TEST_GUILD_ID not in bot_module._shiny_last_unusable_log
+
+        # Breaks again, still well inside the 6h window opened by the first
+        # log. Undo the loop's own once-a-day guard so this tick gets that far.
+        mark_shiny_tasks_posted(TEST_GUILD_ID, "")
+        bot_module._shiny_last_attempt.clear()
+        again = await self._tick(datetime(2026, 5, 11, 9, 12, tzinfo=ET))
+        assert len(again) == 1
+
+
 class TestShinyTasksRefreshTask:
     """`tasks.loop` fires the body immediately on `.start()` and the
     interval is in-process only, so without a persistent gate every

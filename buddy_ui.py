@@ -745,7 +745,7 @@ class BuddyManageView(discord.ui.View):
         self._add("🔓 Unpair", discord.ButtonStyle.danger, self._unpair)
         self._add("➕ Pair", discord.ButtonStyle.success, self._pair)
         self._add("🔁 Re-pair", discord.ButtonStyle.primary, self._repair)
-        self._add("🔄 Refresh", discord.ButtonStyle.secondary, self._refresh)
+        self._add("🔄 Refresh", discord.ButtonStyle.secondary, self._rerender)
 
     def _add(self, label, style, cb):
         btn = discord.ui.Button(label=label, style=style)
@@ -937,7 +937,7 @@ class BuddyManageView(discord.ui.View):
             ephemeral=True,
         )
 
-    async def _refresh(self, inter: discord.Interaction):
+    async def _rerender(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True, thinking=True)
         cfg = self._cfg()
         result = await asyncio.to_thread(compute_current, self.guild_id, cfg)

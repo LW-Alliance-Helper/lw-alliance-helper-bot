@@ -157,7 +157,51 @@ def build_app(bot=None) -> web.Application:
     app.router.add_get("/api/guilds/{guild_id}/growth/breakdown", get_growth_breakdown)
     app.router.add_get("/api/guilds/{guild_id}/members/{discord_user_id}/stats", get_member_profile)
     app.router.add_get("/api/guilds/{guild_id}/storm/trends", get_storm_trends)
+
+    _register_champion_duel(app)
     return app
+
+
+def _register_champion_duel(app: web.Application) -> None:
+    """Mount the Champion Duel API under its own prefix.
+
+    Separate from the routes above in every way that matters: browser-facing
+    rather than server-to-server, authenticated by Discord OAuth rather than
+    the shared Map Manager service key, and CORS-enabled — which the
+    `/api/guilds/*` routes deliberately are not, since making a shared-secret
+    contract browser-reachable would widen its exposure for nothing.
+
+    Registered in its own function so a failure to import the Champion Duel
+    modules cannot stop the Map Manager routes from being served.
+    """
+    from api import champion_duel_auth as cd_auth
+    from api.routes import champion_duel as cd
+
+    p = "/champion-duel/v1"
+
+    app.router.add_get(f"{p}/health", cd.health)
+    app.router.add_get(f"{p}/groups", cd.groups)
+    app.router.add_get(f"{p}/roster", cd.roster)
+    app.router.add_get(f"{p}/player/{{name}}", cd.player)
+    app.router.add_post(f"{p}/predict", cd.predict)
+
+    app.router.add_get(f"{p}/auth/login", cd_auth.login)
+    app.router.add_get(f"{p}/auth/callback", cd_auth.callback)
+    app.router.add_post(f"{p}/auth/exchange", cd_auth.exchange)
+    app.router.add_get(f"{p}/auth/me", cd_auth.me)
+    app.router.add_post(f"{p}/auth/logout", cd_auth.logout)
+
+    app.router.add_patch(f"{p}/player/{{name}}/squads", cd.patch_squads)
+    app.router.add_post(f"{p}/player/{{name}}/orders", cd.post_order)
+
+    app.router.add_post(f"{p}/admin/import", cd.admin_import)
+    app.router.add_get(f"{p}/admin/edits", cd.admin_edits)
+    app.router.add_post(f"{p}/admin/edits/{{edit_id}}/revert", cd.admin_revert)
+
+    # One catch-all preflight for the whole prefix. The write routes send an
+    # Authorization header, which makes every one of them a preflighted
+    # cross-origin request.
+    app.router.add_route("OPTIONS", f"{p}/{{tail:.*}}", cd_auth.preflight)
 
 
 async def start_api_server(bot=None) -> web.AppRunner:

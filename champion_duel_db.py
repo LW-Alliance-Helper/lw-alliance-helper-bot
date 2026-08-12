@@ -173,13 +173,18 @@ def init_db() -> None:
                 revoked_at         TEXT
             )
         """)
+        # Carries identity, not a token -- see create_auth_code for why that
+        # is what keeps a live credential off the volume entirely.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS auth_codes (
-                code_hash  TEXT PRIMARY KEY,
-                token_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at    TEXT
+                code_hash       TEXT PRIMARY KEY,
+                discord_user_id TEXT NOT NULL,
+                discord_name    TEXT,
+                can_write       INTEGER NOT NULL DEFAULT 0,
+                writer_guild_id TEXT,
+                created_at      TEXT NOT NULL,
+                expires_at      TEXT NOT NULL,
+                used_at         TEXT
             )
         """)
         for stmt in (
@@ -686,29 +691,49 @@ def purge_expired() -> int:
 # ── OAuth hand-off codes ──────────────────────────────────────────────────────
 
 
-def create_auth_code(session_token: str) -> str:
-    """One-time code exchanged for a session token.
+def create_auth_code(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
+    """One-time code the browser carries back from the OAuth callback.
 
-    The callback redirects the browser back to the app; putting the session
-    token in that URL would leave it in history, the Referer header and any
-    proxy log. The code is single-use, expires in a minute, and buys a token
-    over a POST instead.
+    It holds the *resolved identity*, not a session token. The session is not
+    minted until the code is redeemed, which is what lets `sessions` store only
+    a hash: if the callback minted the token up front, redeeming a code would
+    have to hand back a plaintext token that no longer exists anywhere, and the
+    only way to make that work would be storing the live token on the volume.
+
+    The code exists at all so the token never rides in the redirect URL, where
+    it would land in browser history, the Referer header and any proxy log.
+    Single-use, one minute.
     """
     code = secrets.token_urlsafe(24)
     now = datetime.now(timezone.utc)
     with _get_conn() as conn:
         conn.execute(
-            "INSERT INTO auth_codes (code_hash, token_hash, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?)",
-            (_hash(code), _hash(session_token), now.isoformat(), (now + AUTH_CODE_TTL).isoformat()),
+            """
+            INSERT INTO auth_codes (code_hash, discord_user_id, discord_name,
+                                    can_write, writer_guild_id, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _hash(code),
+                str(discord_user_id),
+                discord_name,
+                1 if can_write else 0,
+                None if writer_guild_id is None else str(writer_guild_id),
+                now.isoformat(),
+                (now + AUTH_CODE_TTL).isoformat(),
+            ),
         )
     return code
 
 
-def consume_auth_code(code: str) -> str | None:
-    """Return the session token hash for a code, once. None if already used,
-    expired or unknown — all three are indistinguishable to the caller on
-    purpose."""
+def consume_auth_code(code: str) -> dict | None:
+    """Redeem a code for the identity behind it, once.
+
+    None if unknown, expired or already used — all three answer the same, so a
+    caller cannot probe which codes ever existed.
+    """
+    if not code:
+        return None
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM auth_codes WHERE code_hash = ?", (_hash(code),)
@@ -718,4 +743,9 @@ def consume_auth_code(code: str) -> str | None:
         conn.execute(
             "UPDATE auth_codes SET used_at = ? WHERE code_hash = ?", (_now(), row["code_hash"])
         )
-    return row["token_hash"]
+    return {
+        "discord_user_id": row["discord_user_id"],
+        "discord_name": row["discord_name"],
+        "can_write": bool(row["can_write"]),
+        "writer_guild_id": row["writer_guild_id"],
+    }

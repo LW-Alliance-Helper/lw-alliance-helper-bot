@@ -8,3 +8,13 @@ python-dotenv>=1.2.2
 tzdata>=2026.3
 sentry-sdk>=2.64.0
 Pillow>=12.3.0,<13
+# Champion Duel match engine. Pinned to a tag so the constants the bot serves
+# are a deliberate version bump, not silent drift -- the engine stays in the
+# simulator repo with the backtest that validates it, because a constant has to
+# live where the thing that proves it wrong can fail.
+#
+# The source repo is private, so pip expands ${CD_ENGINE_TOKEN} from the
+# Railway build environment. The token is NEVER committed: this repo is public.
+# Unset it and the install fails, which is why every route that needs the
+# engine degrades to 503 rather than the bot failing to boot.
+champion-duel-engine @ git+https://${CD_ENGINE_TOKEN}@github.com/kevinkidwell/champion-duel-simulator.git@v1.1

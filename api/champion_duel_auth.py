@@ -209,7 +209,10 @@ async def resolve_writer_context(bot, discord_user_id: str) -> tuple[bool, str |
         if member is None:
             continue
         try:
-            if await premium.is_premium(guild.id, bot=bot):
+            # feature_gate rather than is_premium: it is the canonical gate and
+            # it raises on an unregistered name, so a premium feature cannot
+            # quietly ship ungated.
+            if await premium.feature_gate("champion_duel_write", guild.id, bot=bot):
                 return True, str(guild.id)
         except Exception as exc:  # noqa: BLE001 - a premium lookup must not 500 a login
             print(f"[CHAMPION_DUEL] premium check failed for guild {guild.id}: {exc}")

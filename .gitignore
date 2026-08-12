@@ -39,3 +39,4 @@ notes/
 *.swp
 .DS_Store
 Thumbs.db
+docs/server_json.json

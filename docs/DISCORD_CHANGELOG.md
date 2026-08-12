@@ -125,6 +125,13 @@ accident.
 
 ---
 
+**1.9.0** — unreleased
+NO POST: nothing alliance-facing yet. The Alliance Duel (VS) tracker lands
+across several merges and none of it is reachable until the `/vs` hub ships.
+Replace this with a real post on the merge that makes it visible.
+
+---
+
 **1.8.7** — 2026-08-11
 NO POST: two log-noise fixes. Neither was ever visible to an alliance, and
 the setup problem behind the second one is already reported to leadership

@@ -30,9 +30,11 @@ Env vars:
     with Map Manager on purpose: same app means the same user ids, so ported
     edits already match MM's user rows.
   - ``CHAMPION_DUEL_REDIRECT_URI``  -- must match a registered redirect exactly.
-  - ``CHAMPION_DUEL_APP_ORIGIN``    -- the web app's origin, for CORS and the
-    post-login bounce. Not hardcoded: the Cloudflare Pages domain isn't
-    recorded in the dashboards repo.
+  - ``CHAMPION_DUEL_APP_URL``       -- the predictor *page*, e.g.
+    ``https://host/champion-duel-predictor.html``. The post-login bounce goes
+    here, and the CORS origin is derived from it so the two cannot drift.
+  - ``CHAMPION_DUEL_APP_ORIGIN``    -- optional override for the CORS origin
+    alone, if the page is served from somewhere the bot doesn't redirect to.
   - ``CHAMPION_DUEL_ADMIN_IDS``     -- comma-separated Discord user ids that may
     browse, revert and export the edit history.
   - ``CHAMPION_DUEL_SERVICE_KEY``   -- optional; the on-behalf-of path above.
@@ -45,6 +47,7 @@ import hmac
 import os
 import secrets
 from functools import wraps
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -89,8 +92,37 @@ def admin_ids() -> frozenset[str]:
     return frozenset(p.strip() for p in raw.split(",") if p.strip().isdigit())
 
 
+def app_url() -> str | None:
+    """The predictor page itself, e.g. https://host/champion-duel-predictor.html
+
+    This is where the callback bounces the browser back to, and it must be the
+    *page*, not the site root. The app is published alongside the dashboards,
+    so the root is a landing page that knows nothing about the one-time code --
+    sending users there would strand the code in the URL of a page with no
+    script to redeem it, and read as login silently doing nothing.
+    """
+    return _env("CHAMPION_DUEL_APP_URL")
+
+
 def app_origin() -> str | None:
-    return _env("CHAMPION_DUEL_APP_ORIGIN")
+    """The origin for CORS: scheme://host, no path.
+
+    Derived from CHAMPION_DUEL_APP_URL so the two cannot drift -- a browser
+    sends `Origin` without a path, and comparing it against a full page URL
+    would reject every cross-origin call. CHAMPION_DUEL_APP_ORIGIN still
+    overrides it for the case where the page is served from somewhere the
+    bot doesn't redirect to.
+    """
+    explicit = _env("CHAMPION_DUEL_APP_ORIGIN")
+    if explicit:
+        return explicit.rstrip("/")
+    url = app_url()
+    if not url:
+        return None
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -233,17 +265,19 @@ async def callback(request: web.Request) -> web.StreamResponse:
     state = request.query.get("state")
     expected = request.cookies.get(STATE_COOKIE)
 
-    origin = app_origin() or "/"
+    # Back to the predictor page, not the site root -- only that page carries
+    # the script that redeems the one-time code.
+    back = app_url() or app_origin() or "/"
     if request.query.get("error"):
-        return web.HTTPFound(f"{origin}#error=discord_denied")
+        return web.HTTPFound(f"{back}#error=discord_denied")
     if not code or not state or not expected or not hmac.compare_digest(state, expected):
-        return web.HTTPFound(f"{origin}#error=bad_state")
+        return web.HTTPFound(f"{back}#error=bad_state")
 
     try:
         token_data = await _exchange_code(code)
         profile = await _fetch_profile(token_data["access_token"])
     except web.HTTPException:
-        return web.HTTPFound(f"{origin}#error=discord_failed")
+        return web.HTTPFound(f"{back}#error=discord_failed")
 
     user_id = str(profile["id"])
     name = profile.get("global_name") or profile.get("username") or user_id
@@ -253,7 +287,7 @@ async def callback(request: web.Request) -> web.StreamResponse:
     # identity instead. That is what allows `sessions` to hold only a hash.
     handoff = await asyncio.to_thread(db.create_auth_code, user_id, name, can_write, guild_id)
 
-    resp = web.HTTPFound(f"{origin}#code={handoff}")
+    resp = web.HTTPFound(f"{back}#code={handoff}")
     resp.del_cookie(STATE_COOKIE, path="/")
     return resp
 

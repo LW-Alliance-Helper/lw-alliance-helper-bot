@@ -52,7 +52,8 @@ def cd_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def client(cd_db, monkeypatch):
-    monkeypatch.setenv("CHAMPION_DUEL_APP_ORIGIN", "https://example.test")
+    monkeypatch.delenv("CHAMPION_DUEL_APP_ORIGIN", raising=False)
+    monkeypatch.setenv("CHAMPION_DUEL_APP_URL", "https://example.test/champion-duel-predictor.html")
     monkeypatch.setenv("CHAMPION_DUEL_ADMIN_IDS", "111")
     async with TestClient(TestServer(build_app(None))) as c:
         yield c
@@ -237,6 +238,45 @@ async def test_preflight_advertises_the_write_methods(client):
     )
     assert resp.status == 204
     assert "PATCH" in resp.headers["Access-Control-Allow-Methods"]
+
+
+# ── App URL vs origin ─────────────────────────────────────────────────────────
+
+
+def test_cors_origin_is_derived_from_the_page_url(monkeypatch):
+    """A browser sends Origin with no path.
+
+    Comparing it against the full page URL would reject every cross-origin
+    call, so the origin is derived rather than configured twice.
+    """
+    from api import champion_duel_auth as auth
+
+    monkeypatch.delenv("CHAMPION_DUEL_APP_ORIGIN", raising=False)
+    monkeypatch.setenv("CHAMPION_DUEL_APP_URL", "https://host.test/champion-duel-predictor.html")
+    assert auth.app_origin() == "https://host.test"
+    assert auth.app_url().endswith("/champion-duel-predictor.html")
+
+
+def test_explicit_origin_overrides_and_loses_a_trailing_slash(monkeypatch):
+    from api import champion_duel_auth as auth
+
+    monkeypatch.setenv("CHAMPION_DUEL_APP_URL", "https://host.test/app.html")
+    monkeypatch.setenv("CHAMPION_DUEL_APP_ORIGIN", "https://other.test/")
+    # A trailing slash would never match a browser's Origin header.
+    assert auth.app_origin() == "https://other.test"
+
+
+def test_login_bounce_targets_the_page_not_the_site_root(monkeypatch):
+    """The site root is a landing page with no code-redeeming script.
+
+    Bouncing there would strand the one-time code in the URL and read as
+    login silently doing nothing.
+    """
+    from api import champion_duel_auth as auth
+
+    monkeypatch.delenv("CHAMPION_DUEL_APP_ORIGIN", raising=False)
+    monkeypatch.setenv("CHAMPION_DUEL_APP_URL", "https://host.test/champion-duel-predictor.html")
+    assert auth.app_url() != auth.app_origin()
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────

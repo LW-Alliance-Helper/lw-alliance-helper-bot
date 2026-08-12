@@ -46,7 +46,7 @@ import datetime as _dt
 import logging
 import re
 from dataclasses import dataclass, field, replace
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 import transfer
 from storm_date_helpers import parse_event_date
@@ -1150,6 +1150,11 @@ SOURCE_CONFIRMED = "confirmed"
 SOURCE_PICKED = "picked"
 SOURCE_KNOWN = "known"
 SOURCE_ESTIMATED = "estimated"
+#: Not a path-projection source: the prediction model (#401) uses the same
+#: vocabulary for what a matchup's call rests on, and needs a name for the
+#: state where nothing at all has been recorded. Unassessed is a real state
+#: and renders plainly, never folded into a confident-sounding label.
+SOURCE_UNASSESSED = "unassessed"
 
 
 @dataclass(frozen=True)
@@ -1446,6 +1451,715 @@ class _MatchResolver:
                 return MatchResolution(projected, b if projected == a else a, SOURCE_ESTIMATED)
 
         return None
+
+
+# ── Prediction model (#401) ───────────────────────────────────────────────────
+#
+# Fills the :data:`Estimator` seam above. Three inputs, compared independently,
+# with confidence coming from how much they agree rather than from a blended
+# score. There is no data to calibrate weights against (32 matches per league,
+# only four involving the guild), so any 0.5/0.25/0.25 would be invented, and a
+# weighted sum hides genuine disagreement by averaging it away where voting
+# surfaces it. The components are also printable — "Power +34%, gifts +3
+# levels, members even" is something an R5 can act on where a composite 0.73 is
+# not.
+#
+# **The output is a capacity ceiling, not a prediction, and every surface has to
+# say so.** Two things it structurally cannot see, and neither is a defect to be
+# fixed later:
+#
+# - **Mobilization.** Nearly every high-value action on these boards is a "did
+#   you bother" action rather than an "are you strong" action: hoarded speedups,
+#   radar tasks, stamina, banked shards. Alliances hold these regardless; the
+#   question is whether members spend them.
+# - **Duel tech.** The per-player Alliance Duel tech tree multiplies what an
+#   action awards, so a maxed account reads roughly three times an un-teched one
+#   on the same board on the same day. Two alliances identical on power, members
+#   and gift level can therefore differ about threefold in points per stockpile
+#   spent, and **none of the three Tier 1 inputs can see it.** Purchased points
+#   are excluded from the largest boost, which dilutes gift level specifically —
+#   the same spend buys relatively less as an account matures.
+#
+# Both are unmeasured in *every* matchup, so neither can differentiate one
+# alliance from another: they set how loudly the model is allowed to speak, not
+# which way it leans. Concretely, the tech multiplier is why :data:`OUTLOOK_EASY`
+# demands unanimous agreement across three independent inputs rather than one
+# large power margin. Against an unmeasured threefold multiplier a 30% power
+# edge on its own is not evidence of much, whereas three inputs agreeing at
+# least suggests an alliance that is further along generally.
+#
+# The observed proxies — points per member, power trajectory, both sides' day
+# scores — measure realised output, so the tech multiplier is already inside
+# them without anyone having to know it exists. They belong to the analytics
+# surfaces rather than here, and they are the reason this model is deliberately
+# small.
+#
+# Thresholds and bands ship as module-level constants so tuning them once real
+# results accumulate is a constant change rather than a rewrite. Read them as
+# conservative guesses: saying "easy win" and losing under-mobilizes the
+# alliance, which is worse than saying toss-up and winning comfortably.
+
+METRIC_POWER = "power"
+METRIC_GIFT_LEVEL = "gift_level"
+METRIC_MEMBERS = "members"
+
+#: The three Tier 1 inputs, in the order the components line prints them —
+#: power first because it is the primary input, members last because total power
+#: already contains member count (total = average x count), so members is the
+#: minor of the two independent inputs and average power is derived, never voted.
+PREDICTION_METRICS: tuple[str, ...] = (METRIC_POWER, METRIC_GIFT_LEVEL, METRIC_MEMBERS)
+
+#: What each metric is called in the components line.
+METRIC_LABELS: dict[str, str] = {
+    METRIC_POWER: "power",
+    METRIC_GIFT_LEVEL: "gifts",
+    METRIC_MEMBERS: "members",
+}
+
+#: Ratio thresholds for the two count-like inputs. A lean is measured on the
+#: larger-over-smaller ratio so the classification is direction-symmetric.
+POWER_SLIGHT_RATIO = 1.10
+POWER_STRONG_RATIO = 1.30
+MEMBERS_SLIGHT_RATIO = 1.10
+MEMBERS_STRONG_RATIO = 1.25
+
+#: Gift level is a level, so it compares by difference rather than by ratio.
+GIFT_SLIGHT_LEVELS = 2
+GIFT_STRONG_LEVELS = 5
+
+#: Inputs at least this old stop locking days and cost the top confidence rung.
+#: A league is four weeks, so this is roughly "these numbers predate the league
+#: they are being used to project". A confident call from months-old power is
+#: the core false-confidence failure mode.
+STALE_AFTER_DAYS = 35
+
+#: How far apart one metric puts the two alliances.
+LEAN_EVEN = "even"
+LEAN_SLIGHT = "slight"
+LEAN_STRONG = "strong"
+
+#: How much the three metrics agree. Named from the reader's side, not the
+#: model's: `toss-up` is a real answer, not a failure to produce one.
+CONFIDENCE_CONFIDENT = "confident"
+CONFIDENCE_MODERATE = "moderate"
+CONFIDENCE_TOSSUP = "toss-up"
+
+#: The headline label, symmetric about a toss-up. `easy` / `hard` are the same
+#: call seen from the two sides, and both need a computed margin behind them.
+OUTLOOK_EASY = "easy"
+OUTLOOK_LIKELY = "likely"
+OUTLOOK_TOSSUP = "toss-up"
+OUTLOOK_UNLIKELY = "unlikely"
+OUTLOOK_HARD = "hard"
+#: Not a rung on that ladder. Unassessed is a real state and renders plainly,
+#: never folded into a confident-sounding label.
+OUTLOOK_UNASSESSED = "unassessed"
+
+#: Where a projected grind day sits. A day is only called locked on a strong
+#: lean; a slight one stays contested, per the asymmetric error cost.
+BUCKET_FAVORED_YOU = "favored_you"
+BUCKET_CONTESTED = "contested"
+BUCKET_FAVORED_THEM = "favored_them"
+
+#: Which metric decides each grind day. Days 2-5 are stockpile days and total
+#: alliance power is roughly total accumulated development, which is roughly
+#: total stockpile. Day 1's actions are per-member capped, making it the one
+#: headcount day. Day 4 is the shard day, where gift level's spend propensity is
+#: strongest, so it reads gift level alongside power.
+#:
+#: **Day 6 is absent on purpose.** FSP is not visible in game and hero-kit
+#: counters can flip a modest stat edge into total dominance, so Enemy Buster
+#: gets a human combat read or nothing at all.
+DAY_METRICS: dict[int, tuple[str, ...]] = {
+    1: (METRIC_MEMBERS,),
+    2: (METRIC_POWER,),
+    3: (METRIC_POWER,),
+    4: (METRIC_POWER, METRIC_GIFT_LEVEL),
+    5: (METRIC_POWER,),
+}
+
+#: Days a strong power lean is **not** enough to call on its own.
+#:
+#: Days 2 and 3 need somewhere to spend the speedups, and a fully maxed account
+#: cannot dump construction speedups at all. Those four points therefore favour
+#: actively growing accounts over maxed ones, which makes the power-to-score
+#: relationship sub-linear and possibly non-monotonic exactly where it costs
+#: most — and power is the only input that can see those days at all. So they
+#: are called only when a second metric leans the same way, and the nuance
+#: itself is left to a human Known read, which captures it better than any
+#: formula would. Days 1 and 4 need no corroboration because their input maps
+#: onto the day cleanly: day 1's actions are per-member capped and day 4 is
+#: banked shards, neither of which has a dump-capacity ceiling.
+DAYS_NEEDING_CORROBORATION: frozenset[int] = frozenset({2, 3})
+
+#: Grind points that clinch the week before Enemy Buster, and the mirror below
+#: which the opponent has clinched it. Take 7+ of 9 and day 6 is irrelevant;
+#: take 2 or fewer and it is irrelevant the other way. Everything between is
+#: decided on Saturday, which is where most real weeks land.
+GRIND_CLINCH_POINTS = WEEK_POINTS_MAJORITY  # 7 of 9
+GRIND_CONCEDE_POINTS = GRIND_POINTS_TOTAL - GRIND_CLINCH_POINTS  # 2 of 9
+
+CLINCH_BEFORE_ENEMY_BUSTER = "clinched"
+CLINCH_DAY_SIX_DECIDES = "day_six_decides"
+CLINCH_CONCEDED = "conceded"
+CLINCH_OPEN = "open"
+
+#: Printed under every projection. The one thing a reader must not take away is
+#: that this is a forecast of what will happen.
+CAPACITY_CEILING_NOTE = (
+    "This is a capacity ceiling, not a prediction. It reads stockpiles off "
+    "power, members and gift level. It cannot see whether members actually "
+    "spend them, nor how far either alliance has pushed its Duel tech, which "
+    "on its own can swing points per stockpile spent about threefold."
+)
+
+
+@dataclass(frozen=True)
+class MetricLean:
+    """How far one metric separates the two alliances, and in whose favour."""
+
+    metric: str
+    direction: int  # +1 own, -1 opponent, 0 even
+    strength: str  # LEAN_EVEN / LEAN_SLIGHT / LEAN_STRONG
+    own: int | None = None
+    opponent: int | None = None
+
+    @property
+    def label(self) -> str:
+        """This metric's share of the components line, e.g. ``power +34%``."""
+        name = METRIC_LABELS.get(self.metric, self.metric)
+        if self.strength == LEAN_EVEN or self.own is None or self.opponent is None:
+            return f"{name} even"
+        if self.metric == METRIC_GIFT_LEVEL:
+            # Levels compare by difference, and gift level 0 is a real value —
+            # never a missing one — so this branch tests for None, not falsiness.
+            diff = self.own - self.opponent
+            return f"{name} {diff:+d} level{'' if abs(diff) == 1 else 's'}"
+        if not self.opponent:
+            return f"{name} even"
+        return f"{name} {round((self.own / self.opponent - 1) * 100):+d}%"
+
+
+@dataclass(frozen=True)
+class AgreementVote:
+    """The three metrics' independent verdicts, and how much they agree."""
+
+    leans: tuple[MetricLean, ...]
+    direction: int  # +1 own, -1 opponent, 0 no call
+    confidence: str
+    #: Age of the oldest of the six input values, or ``None`` when no row
+    #: carried a Week Date to stamp them with.
+    age_days: int | None = None
+    stale: bool = False
+
+    @property
+    def components(self) -> str:
+        """The per-metric breakdown, which is the point of voting over blending.
+
+        An R5 can bank research speedups off "power +34%, gifts +3 levels,
+        members even"; a composite score of 0.73 tells them nothing.
+        """
+        text = ", ".join(lean.label for lean in self.leans)
+        return text[:1].upper() + text[1:]
+
+    def lean_for(self, metric: str) -> MetricLean | None:
+        for lean in self.leans:
+            if lean.metric == metric:
+                return lean
+        return None
+
+
+@dataclass(frozen=True)
+class DayProjection:
+    """One grind day, projected against the metric that decides it."""
+
+    day: int
+    points: int
+    bucket: str
+    #: The metrics consulted, so the surface can say why rather than just what.
+    decided_by: tuple[str, ...] = ()
+
+    @property
+    def theme(self) -> str:
+        return DUEL_DAY_BY_NUMBER[self.day].theme
+
+
+@dataclass(frozen=True)
+class WeekProjection:
+    """What can honestly be said about one matchup before it is played.
+
+    Deliberately not a single verdict. Each grind day is projected separately
+    and reported as a range, which answers "can we clinch before Enemy Buster"
+    — the question leadership actually has — where a label like "likely to win"
+    never does. It also makes the no-combat-estimate rule a natural part of the
+    output rather than an awkward caveat bolted on the end.
+    """
+
+    own: AllianceKey
+    opponent: AllianceKey
+    #: Which evidence the call rests on: :data:`SOURCE_PICKED`,
+    #: :data:`SOURCE_KNOWN`, :data:`SOURCE_ESTIMATED` or
+    #: :data:`SOURCE_UNASSESSED`.
+    status: str
+    outlook: str
+    vote: AgreementVote | None = None
+    days: tuple[DayProjection, ...] = ()
+    #: The opponent's standing Known Day 6 read, verbatim. Never computed.
+    combat_read: str = ""
+    #: True when the human read that decided `status` points the other way from
+    #: the computed vote. Surfaced rather than resolved silently.
+    overridden: bool = False
+
+    # ── Grind-point arithmetic ────────────────────────────────────────────
+
+    @property
+    def locked_own(self) -> int:
+        return sum(d.points for d in self.days if d.bucket == BUCKET_FAVORED_YOU)
+
+    @property
+    def locked_them(self) -> int:
+        return sum(d.points for d in self.days if d.bucket == BUCKET_FAVORED_THEM)
+
+    @property
+    def contested(self) -> int:
+        """Grind points not called either way. With nothing projected at all,
+        every grind point is contested, which is the honest starting range."""
+        if not self.days:
+            return GRIND_POINTS_TOTAL
+        return sum(d.points for d in self.days if d.bucket == BUCKET_CONTESTED)
+
+    @property
+    def low(self) -> int:
+        """Grind points if every contested day goes against you."""
+        return self.locked_own
+
+    @property
+    def high(self) -> int:
+        """Grind points if every contested day goes your way."""
+        return self.locked_own + self.contested
+
+    @property
+    def clinch(self) -> str:
+        """Whether Enemy Buster can still decide the week on this projection."""
+        return clinch_outlook(self.low, self.high)
+
+    @property
+    def has_combat_read(self) -> bool:
+        return bool(self.combat_read.strip())
+
+    # ── Rendering ─────────────────────────────────────────────────────────
+
+    @property
+    def grind_line(self) -> str:
+        if not self.days or self.vote is None:
+            return (
+                "Not projected. An estimate needs power, members and gift level "
+                "recorded for both alliances."
+            )
+        return (
+            f"You {self.locked_own} locked, {self.contested} contested, "
+            f"them {self.locked_them} locked. Projected {self.low} to {self.high} "
+            f"of {GRIND_POINTS_TOTAL}. {self.vote.components}."
+        )
+
+    @property
+    def buster_line(self) -> str:
+        if self.has_combat_read:
+            return f"Read on this alliance: {self.combat_read.strip()}."
+        return "No combat read on this alliance yet."
+
+    @property
+    def disagreement_line(self) -> str:
+        """Said out loud when the human read points away from the numbers.
+
+        Not resolved silently. A read that contradicts the recorded stats is
+        usually the most interesting thing on the screen — either the numbers
+        are stale, or somebody has seen something the numbers cannot show, and
+        both are worth a second look before Monday.
+        """
+        if not self.overridden or self.vote is None:
+            return ""
+        favoured = "you" if self.vote.direction > 0 else "them"
+        source = "picked call" if self.status == SOURCE_PICKED else "Known read"
+        return (
+            f"The {source} takes priority here and points the other way: the "
+            f"recorded numbers favour {favoured}. The per-day split is the "
+            "numbers' view, not the read's."
+        )
+
+    @property
+    def verdict_line(self) -> str:
+        state = self.clinch
+        if state == CLINCH_BEFORE_ENEMY_BUSTER:
+            return (
+                f"Projected to clinch before Enemy Buster: {self.low} of "
+                f"{GRIND_POINTS_TOTAL} at worst, and {GRIND_CLINCH_POINTS} takes the week."
+            )
+        if state == CLINCH_CONCEDED:
+            return (
+                f"Projected at most {self.high} of {GRIND_POINTS_TOTAL} on the grind days, "
+                "so Enemy Buster cannot save the week."
+            )
+        need = f"You need {GRIND_CLINCH_POINTS} of {GRIND_POINTS_TOTAL} to clinch before Saturday."
+        if state == CLINCH_DAY_SIX_DECIDES:
+            need = "Enemy Buster decides this week on the projection."
+        return need if self.has_combat_read else f"{need} Get a read."
+
+    @property
+    def caveat_line(self) -> str:
+        """The honesty rules, rendered. Staleness and the unseeable Duel tech
+        multiplier are the two reasons this is a ceiling rather than a call."""
+        note = CAPACITY_CEILING_NOTE
+        if self.vote is not None and self.vote.stale and self.vote.age_days is not None:
+            note += (
+                f" The numbers behind it are up to {self.vote.age_days} days old, "
+                "so the band is widened and no day is called locked."
+            )
+        return note
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """Grind days, Enemy Buster, verdict, caveat — in reading order, with
+        the disagreement note included only when there is one."""
+        return tuple(
+            line
+            for line in (
+                self.grind_line,
+                self.buster_line,
+                self.disagreement_line,
+                self.verdict_line,
+                self.caveat_line,
+            )
+            if line
+        )
+
+
+def _ratio_lean(
+    metric: str, own: int | None, opponent: int | None, slight: float, strong: float
+) -> MetricLean:
+    """Classify a count-like metric on the larger-over-smaller ratio."""
+    if not own or not opponent or own <= 0 or opponent <= 0:
+        return MetricLean(metric, 0, LEAN_EVEN, own, opponent)
+    direction = 1 if own >= opponent else -1
+    magnitude = own / opponent if direction > 0 else opponent / own
+    if magnitude >= strong:
+        return MetricLean(metric, direction, LEAN_STRONG, own, opponent)
+    if magnitude >= slight:
+        return MetricLean(metric, direction, LEAN_SLIGHT, own, opponent)
+    return MetricLean(metric, 0, LEAN_EVEN, own, opponent)
+
+
+def _level_lean(
+    metric: str, own: int | None, opponent: int | None, slight: int, strong: int
+) -> MetricLean:
+    """Classify a level-like metric on the plain difference."""
+    if own is None or opponent is None:
+        return MetricLean(metric, 0, LEAN_EVEN, own, opponent)
+    diff = own - opponent
+    if abs(diff) >= strong:
+        return MetricLean(metric, 1 if diff > 0 else -1, LEAN_STRONG, own, opponent)
+    if abs(diff) >= slight:
+        return MetricLean(metric, 1 if diff > 0 else -1, LEAN_SLIGHT, own, opponent)
+    return MetricLean(metric, 0, LEAN_EVEN, own, opponent)
+
+
+def _tally(leans: Sequence[MetricLean]) -> tuple[str, int]:
+    """Agreement voting: confidence comes from how much the metrics agree.
+
+    All three agreeing with two or more strong is confident; a majority leaning
+    one way with nothing contradicting is moderate; any metric contradicting
+    another, or all near even, is a toss-up.
+    """
+    directions = {lean.direction for lean in leans if lean.direction}
+    if len(directions) != 1:
+        return CONFIDENCE_TOSSUP, 0
+    direction = directions.pop()
+    unanimous = all(lean.direction == direction for lean in leans)
+    strong = sum(1 for lean in leans if lean.strength == LEAN_STRONG)
+    if unanimous and strong >= 2:
+        return CONFIDENCE_CONFIDENT, direction
+    return CONFIDENCE_MODERATE, direction
+
+
+def input_age_days(*profiles: AllianceProfile, today: _dt.date | None = None) -> int | None:
+    """Age of the oldest prediction input across `profiles`, in days.
+
+    ``None`` when nothing carried a Week Date to stamp it with — unknown age is
+    reported as unknown rather than assumed fresh or assumed stale.
+    """
+    today = today or server_today()
+    stamps = [p.as_of[m] for p in profiles for m in PREDICTION_METRICS if m in p.as_of]
+    if not stamps:
+        return None
+    return max(0, (today - min(stamps)).days)
+
+
+def assess(
+    own: AllianceProfile, opponent: AllianceProfile, *, today: _dt.date | None = None
+) -> AgreementVote | None:
+    """Vote the three metrics against each other, from `own`'s side.
+
+    Returns ``None`` when either side is short of Tier 1 — all three of power,
+    members and gift level present. That gate is the whole reason Tier 1 exists,
+    and a missing input is never treated as a zero.
+
+    Staleness costs the top rung: you cannot be *confident* on numbers that
+    predate the league. It does not erase a lean, because a large gap measured
+    months ago is still evidence of a gap; what it stops the model doing is
+    locking days, which :func:`project_grind_days` handles by widening the band.
+    """
+    if not (own.is_tier_1 and opponent.is_tier_1):
+        return None
+
+    leans = (
+        _ratio_lean(
+            METRIC_POWER, own.power, opponent.power, POWER_SLIGHT_RATIO, POWER_STRONG_RATIO
+        ),
+        _level_lean(
+            METRIC_GIFT_LEVEL,
+            own.gift_level,
+            opponent.gift_level,
+            GIFT_SLIGHT_LEVELS,
+            GIFT_STRONG_LEVELS,
+        ),
+        _ratio_lean(
+            METRIC_MEMBERS,
+            own.members,
+            opponent.members,
+            MEMBERS_SLIGHT_RATIO,
+            MEMBERS_STRONG_RATIO,
+        ),
+    )
+    confidence, direction = _tally(leans)
+    age = input_age_days(own, opponent, today=today)
+    stale = age is not None and age >= STALE_AFTER_DAYS
+    if stale and confidence == CONFIDENCE_CONFIDENT:
+        confidence = CONFIDENCE_MODERATE
+    return AgreementVote(leans, direction, confidence, age_days=age, stale=stale)
+
+
+def project_grind_days(vote: AgreementVote) -> tuple[DayProjection, ...]:
+    """Project days 1-5 separately, each against the metric that decides it.
+
+    Days are bucketed **independently**, which is the whole reason for voting
+    rather than blending: when power favours one alliance and headcount the
+    other, the honest output is that they take different days, not an averaged
+    verdict that hides the disagreement. So a matchup whose headline is a
+    toss-up can still show four points leaning one way and one the other, and
+    that split is more actionable than the headline is.
+
+    A day is called only on a *strong* lean. A slight one stays contested, per
+    the asymmetric error cost: saying "easy win" and losing under-mobilizes the
+    alliance, which is worse than saying toss-up and winning comfortably. Stale
+    inputs call nothing at all, which is how data age widens the band rather
+    than quietly going unnoticed. Days 2 and 3 additionally need a second metric
+    agreeing — see :data:`DAYS_NEEDING_CORROBORATION`.
+    """
+    out: list[DayProjection] = []
+    for day in sorted(DAY_METRICS):
+        metrics = DAY_METRICS[day]
+        leans = [lean for lean in (vote.lean_for(m) for m in metrics) if lean is not None]
+        directions = {lean.direction for lean in leans if lean.direction}
+        bucket = BUCKET_CONTESTED
+        if len(directions) == 1 and not vote.stale:
+            direction = directions.pop()
+            called = any(
+                lean.strength == LEAN_STRONG and lean.direction == direction for lean in leans
+            )
+            if called and day in DAYS_NEEDING_CORROBORATION:
+                called = any(
+                    lean.direction == direction and lean.metric not in metrics
+                    for lean in vote.leans
+                )
+            if called:
+                bucket = BUCKET_FAVORED_YOU if direction > 0 else BUCKET_FAVORED_THEM
+        out.append(DayProjection(day, DUEL_DAY_BY_NUMBER[day].points, bucket, metrics))
+    return tuple(out)
+
+
+def clinch_outlook(low: int, high: int) -> str:
+    """Classify a projected grind-point range against the clinch thresholds.
+
+    Scoped to the nine grind points, not the week's thirteen, because that is
+    the question the projection answers: can this be settled before a day no
+    formula can model. Live mid-week status is the same threshold on the other
+    scale and lives on :class:`ClinchState`.
+    """
+    if low >= GRIND_CLINCH_POINTS:
+        return CLINCH_BEFORE_ENEMY_BUSTER
+    if high <= GRIND_CONCEDE_POINTS:
+        return CLINCH_CONCEDED
+    if low > GRIND_CONCEDE_POINTS and high < GRIND_CLINCH_POINTS:
+        return CLINCH_DAY_SIX_DECIDES
+    return CLINCH_OPEN
+
+
+def _outlook(confidence: str, direction: int) -> str:
+    if direction == 0 or confidence == CONFIDENCE_TOSSUP:
+        return OUTLOOK_TOSSUP
+    if confidence == CONFIDENCE_CONFIDENT:
+        return OUTLOOK_EASY if direction > 0 else OUTLOOK_HARD
+    return OUTLOOK_LIKELY if direction > 0 else OUTLOOK_UNLIKELY
+
+
+def project_week(
+    own: AllianceProfile,
+    opponent: AllianceProfile,
+    *,
+    picked: str | None = None,
+    today: _dt.date | None = None,
+) -> WeekProjection:
+    """Everything the tracker can honestly say about one matchup.
+
+    The human reads win on disagreement: an explicit Picked call for this week,
+    then a standing Known read that ranks the two sides differently, then the
+    computed estimate, then nothing. A human read that the computation does not
+    corroborate is **capped at likely / unlikely**, because ``easy`` requires a
+    computed margin and a read on its own supplies direction without one.
+
+    Note the per-day projection is still rendered underneath a human override.
+    The two answer different questions — who wins, versus which days are close
+    enough to be worth banking for — and hiding the second because someone
+    typed "strong" would throw away the more actionable half.
+    """
+    vote = assess(own, opponent, today=today)
+    days = project_grind_days(vote) if vote is not None else ()
+
+    human_direction: int | None = None
+    status: str | None = None
+    if picked in ("W", "L"):
+        human_direction = 1 if picked == "W" else -1
+        status = SOURCE_PICKED
+    else:
+        mine, theirs = known_rank(own.known_1_5), known_rank(opponent.known_1_5)
+        if mine is not None and theirs is not None and mine != theirs:
+            human_direction = 1 if mine > theirs else -1
+            status = SOURCE_KNOWN
+
+    overridden = False
+    if human_direction is not None and status is not None:
+        if vote is not None and vote.direction == human_direction:
+            outlook = _outlook(vote.confidence, vote.direction)
+        else:
+            outlook = OUTLOOK_LIKELY if human_direction > 0 else OUTLOOK_UNLIKELY
+            overridden = vote is not None and vote.direction not in (0, human_direction)
+    elif vote is not None:
+        status = SOURCE_ESTIMATED
+        outlook = _outlook(vote.confidence, vote.direction)
+    else:
+        status = SOURCE_UNASSESSED
+        outlook = OUTLOOK_UNASSESSED
+
+    return WeekProjection(
+        own=own.alliance,
+        opponent=opponent.alliance,
+        status=status,
+        outlook=outlook,
+        vote=vote,
+        days=days,
+        combat_read=opponent.known_6,
+        overridden=overridden,
+    )
+
+
+def make_estimator(
+    source: Iterable[AllianceWeek] | dict[AllianceKey, AllianceProfile],
+    *,
+    today: _dt.date | None = None,
+) -> Estimator:
+    """Build the callback :func:`project_own_path` takes.
+
+    Returns the projected winner, or ``None`` when the model declines to call
+    the match: either side short of Tier 1, or the three metrics failing to
+    agree on a direction. **Declining is the useful behaviour**, not a gap — an
+    uncalled match becomes a named blocker on the path, which is exactly the
+    "these three alliances determine your next two opponents" scouting list.
+    Filling it with a coin flip would trade that list for false precision.
+
+    The week is not consulted: profiles are latest-non-blank across every row,
+    so there is one current reading of an alliance rather than a per-week one.
+    """
+    profiles = source if isinstance(source, dict) else build_profiles(source)
+
+    def estimate(a: AllianceKey, b: AllianceKey, _week: int) -> AllianceKey | None:
+        side_a, side_b = profiles.get(a), profiles.get(b)
+        if side_a is None or side_b is None:
+            return None
+        vote = assess(side_a, side_b, today=today)
+        if vote is None or vote.direction == 0:
+            return None
+        return a if vote.direction > 0 else b
+
+    return estimate
+
+
+@dataclass(frozen=True)
+class ClinchState:
+    """Where a week stands on the outcomes recorded so far.
+
+    The same 7-of-13 threshold the projection uses, applied live instead of in
+    advance. Once a day's outcome lands the bot knows the running split and what
+    remains, which is the single most actionable thing it can say mid-week:
+    "you're 5-3 up with day 5 (2 pts) and Enemy Buster (4 pts) left; winning day
+    5 clinches it."
+    """
+
+    own_points: int
+    opponent_points: int
+    remaining_points: int
+    #: Days with no outcome recorded yet, in order.
+    remaining_days: tuple[int, ...] = ()
+    #: Remaining days that would clinch the week on their own if won.
+    clinching_days: tuple[int, ...] = ()
+
+    @property
+    def points_needed(self) -> int:
+        return max(0, WEEK_POINTS_MAJORITY - self.own_points)
+
+    @property
+    def clinched(self) -> bool:
+        return self.own_points >= WEEK_POINTS_MAJORITY
+
+    @property
+    def lost(self) -> bool:
+        return self.opponent_points >= WEEK_POINTS_MAJORITY
+
+    @property
+    def decided(self) -> bool:
+        """True once no arrangement of the remaining days can change the week."""
+        return self.clinched or self.lost
+
+
+def clinch_state(day_outcomes: Mapping[int, str]) -> ClinchState:
+    """Live clinch arithmetic from one alliance's recorded Day Outcomes.
+
+    `day_outcomes` maps duel day to ``W`` / ``L`` from that alliance's side, as
+    stored on :class:`AllianceWeek`. Unrecorded days are genuinely unrecorded —
+    never counted as a loss.
+    """
+    own = 0
+    opponent = 0
+    remaining: list[int] = []
+    for day in sorted(DUEL_DAY_BY_NUMBER):
+        points = DUEL_DAY_BY_NUMBER[day].points
+        outcome = day_outcomes.get(day)
+        if outcome == "W":
+            own += points
+        elif outcome == "L":
+            opponent += points
+        else:
+            remaining.append(day)
+
+    clinching = tuple(
+        day for day in remaining if own + DUEL_DAY_BY_NUMBER[day].points >= WEEK_POINTS_MAJORITY
+    )
+    return ClinchState(
+        own_points=own,
+        opponent_points=opponent,
+        remaining_points=sum(DUEL_DAY_BY_NUMBER[d].points for d in remaining),
+        remaining_days=tuple(remaining),
+        clinching_days=clinching,
+    )
 
 
 # ── Validation ("Check my sheet") ─────────────────────────────────────────────

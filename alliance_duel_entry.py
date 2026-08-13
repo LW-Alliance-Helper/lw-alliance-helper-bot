@@ -532,6 +532,17 @@ class ScoutActionsView(discord.ui.View):
         known.callback = self._known
         self.add_item(known)
 
+        # Their day pattern (#408), offered only once something has actually
+        # been logged against them. Their day outcomes exist only for weeks you
+        # played them, so on a never-met alliance this button would open an
+        # embed that says nothing.
+        import alliance_duel_analytics as an
+
+        if an.day_profile(state.rows, alliance).weeks_recorded:
+            trends = discord.ui.Button(label=_trends_label(), style=discord.ButtonStyle.secondary)
+            trends.callback = self._trends
+            self.add_item(trends)
+
         # Only offered on the alliance you are actually playing this week: a
         # Picked call is a call on one specific match, not a standing opinion.
         if self.week and state.own_match(self.week) == alliance:
@@ -548,6 +559,13 @@ class ScoutActionsView(discord.ui.View):
 
     async def _known(self, interaction: discord.Interaction):
         await interaction.response.send_modal(KnownModal(self.state, self.alliance, self.week or 1))
+
+    async def _trends(self, interaction: discord.Interaction):
+        import alliance_duel_ui as ad_ui
+
+        await interaction.response.send_message(
+            embed=ad_ui.opponent_trends_embed(self.state, self.alliance), ephemeral=True
+        )
 
     def _picker(self, outcome: str):
         async def _pick(interaction: discord.Interaction):
@@ -724,6 +742,15 @@ def _save_consequence(state, week: int) -> str:
             f"Open **{ad_hub_btn_path()}** to see what is blocking it."
         )
     return "\n".join(lines)
+
+
+def _trends_label() -> str:
+    """The Trends button's label, imported rather than retyped so a rename
+    stays one line. Lazy for the same reason `ad_hub_btn_path` is: the UI
+    module imports this one."""
+    import alliance_duel_ui
+
+    return alliance_duel_ui.VS_BTN_TRENDS
 
 
 def ad_hub_btn_path() -> str:

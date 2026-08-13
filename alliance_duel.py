@@ -216,6 +216,22 @@ _KNOWN_ALIASES: dict[str, str] = {
     "very-strong": "very strong",
 }
 
+#: Shown wherever a value has not been entered. Most cells on this tab are
+#: legitimately blank (nobody re-scouts fifteen alliances weekly), so one glyph
+#: shared by every VS surface makes a half-filled bracket read as a shape
+#: rather than as noise. A zero would be a lie and an empty string would look
+#: like a rendering bug.
+#:
+#: A question mark rather than a dash, for two reasons: it says *unknown* where
+#: a dash could be read as *none*, and an em dash in user-facing copy is
+#: against the house style everywhere else on these surfaces.
+#:
+#: Lives here rather than in `alliance_duel_setup` (#408) so the analytics
+#: layer can render a missing value without importing a module that imports
+#: discord. `alliance_duel_setup.NOT_ENTERED` re-exports it, so every existing
+#: call site is unchanged.
+NOT_ENTERED = "?"
+
 #: Values accepted in the Intent column. Held out of / partitioned in the
 #: backtest — see the design doc's four-case table.
 INTENT_PUSH = "push"

@@ -28,6 +28,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_entry as ad_entry
 import alliance_duel_setup as ad_setup
+import alliance_duel_ui as ad_ui
 import config
 import config_health
 import messages
@@ -543,6 +544,19 @@ class VSHubView(discord.ui.View):
         path.callback = self._path
         self.add_item(path)
 
+        # Trends (#408) reads only the guild's own rows, so unlike its
+        # neighbours it works in own-alliance tracking mode and needs no
+        # league: an alliance that logged two weeks and nothing else still has
+        # patterns worth reading.
+        trends = discord.ui.Button(
+            label=ad_ui.VS_BTN_TRENDS,
+            style=discord.ButtonStyle.secondary,
+            disabled=state.own is None,
+            row=0,
+        )
+        trends.callback = self._trends
+        self.add_item(trends)
+
         # Row 1 is the write row. Reads above, writes below, so a mis-tap on a
         # phone lands on something read-only rather than something that saves.
         log = discord.ui.Button(
@@ -664,6 +678,11 @@ class VSHubView(discord.ui.View):
     async def _add_alliance(self, interaction: discord.Interaction):
         week = self.state.week or 1
         await interaction.response.send_modal(ad_entry.AllianceModal(self.state, week))
+
+    async def _trends(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            embed=ad_ui.trends_embed(self.state), ephemeral=True
+        )
 
     async def _declare(self, interaction: discord.Interaction):
         week = self.state.week

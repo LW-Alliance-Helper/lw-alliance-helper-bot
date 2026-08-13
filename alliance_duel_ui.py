@@ -23,6 +23,7 @@ import logging
 import discord
 
 import alliance_duel as ad
+import alliance_duel_analytics as an
 import alliance_duel_setup as ad_setup
 import messages
 
@@ -297,3 +298,221 @@ async def open_scout_picker(interaction: discord.Interaction, state) -> None:
 
 
 __all__ = ["scout_embed", "ScoutPickerView", "open_scout_picker"]
+
+
+# ── Trends (#408) ─────────────────────────────────────────────────────────────
+
+#: 🔎 is the catalog's "view trends" glyph, and deliberately not 📊, which
+#: already names Growth Breakdown, nor 🔍, which this feature already spends on
+#: Scout. The two magnifiers reading as a pair here is fine: scouting one
+#: alliance and reading your own patterns are the same kind of act on different
+#: subjects.
+VS_BTN_TRENDS = "🔎 Trends"
+
+#: Days below this are reported as a shape rather than a rate. One recorded
+#: week is not a pattern, and rendering "you lose Age of Science 100% of the
+#: time" off a single week is the failure mode this whole module is written
+#: against.
+MIN_DAYS_FOR_PATTERN = 3
+
+
+def trends_embed(state) -> discord.Embed:
+    """The guild's own patterns: which days it wins, how, and how reliably.
+
+    Everything here needs no bracket, which is the point. The most actionable
+    output in the feature ("you lose Age of Science in 8 of 12 weeks") is a
+    resource instruction available to an alliance tracking only itself.
+    """
+    embed = discord.Embed(title=f"{VS_BTN_TRENDS} for your alliance", color=discord.Color.blurple())
+
+    if state.own is None:
+        embed.description = (
+            "You have not told me which alliance is yours yet, so there is nothing "
+            f"to read patterns from. Set it in {ad_setup.VS_SETUP_NAV}."
+        )
+        return embed
+
+    rows = [r for r in state.rows if r.alliance == state.own]
+    profile = an.day_profile(rows, state.own)
+
+    # The day read is the headline but not the gate: an alliance that recorded
+    # week outcomes and picked calls without logging individual days still has
+    # a pick accuracy worth reading, and telling them "nothing recorded" would
+    # hide data they typed in themselves.
+    if profile.weeks_recorded:
+        embed.description = _sample_line(profile)
+        embed.add_field(name="Your days", value=_day_block(profile), inline=False)
+
+    buster = profile.day_six()
+    if buster and buster.played:
+        embed.add_field(name="Enemy Buster", value=_buster_line(buster), inline=False)
+
+    shape = an.margin_shape(state.rows, state.own)
+    if shape.days_compared:
+        embed.add_field(name="How close they are", value=_margin_line(shape), inline=False)
+
+    diverged = an.divergences(state.rows, state.own)
+    if diverged:
+        embed.add_field(name="Worth remembering", value=_divergence_line(diverged), inline=False)
+
+    seasons = an.season_trajectory(state.rows, state.own)
+    if len(seasons) > 1:
+        embed.add_field(name="Season by season", value=_season_line(seasons), inline=False)
+
+    accuracy = an.pick_accuracy(state.rows, state.own)
+    if accuracy.judged:
+        embed.add_field(name="Your picked calls", value=_accuracy_block(accuracy), inline=False)
+
+    if not embed.fields:
+        embed.description = (
+            "Nothing recorded yet. Log a few weeks of day outcomes and this "
+            "fills in on its own: which days you take, which you lose, and "
+            "whether your wins are comfortable or narrow."
+        )
+        return embed
+
+    embed.set_footer(text="Everything here is counted from what you have logged.")
+    return embed
+
+
+def _sample_line(profile) -> str:
+    weeks = an.sample_words(profile.weeks_recorded)
+    return (
+        f"Counted across {weeks} of recorded day outcomes. "
+        "A day nobody logged is left out rather than counted as a loss."
+    )
+
+
+def _day_block(profile) -> str:
+    """Every day, in day order, with the sample beside the rate.
+
+    Day order rather than ranked order on purpose: the reader is deciding what
+    to bank for a specific day of the week, so the list has to be scannable by
+    day rather than sorted into a leaderboard.
+    """
+    lines = []
+    for record in profile.days:
+        if not record.played:
+            lines.append(f"**Day {record.day}** {record.theme}: nothing recorded")
+            continue
+        line = (
+            f"**Day {record.day}** {record.theme}: "
+            f"{record.wins}-{record.losses} ({an.pct(record.win_rate)})"
+        )
+        if record.played < MIN_DAYS_FOR_PATTERN:
+            line += " *(too few to call a pattern)*"
+        lines.append(line)
+    return "\n".join(lines)[:1024]
+
+
+def _buster_line(record) -> str:
+    """The one honest combat read that exists.
+
+    No formula can predict Enemy Buster, and this is not one: it is what has
+    already happened, which is a better basis for the 4-point call than any
+    model would have been.
+    """
+    line = (
+        f"You take it {record.wins} weeks in {record.played} ({an.pct(record.win_rate)}). "
+        "Nothing predicts this day, so your own record against it is the read."
+    )
+    if record.played < MIN_DAYS_FOR_PATTERN:
+        line += " Too few weeks to lean on yet."
+    return line
+
+
+def _margin_line(shape) -> str:
+    parts = [
+        f"Across {an.sample_words(shape.days_compared, 'day')} where both scores are logged, "
+        f"the middle margin is {an.pct(shape.median, signed=True)}."
+    ]
+    if shape.close_days:
+        parts.append(f"{shape.close_days} were inside 10%.")
+    if shape.blowouts:
+        parts.append(f"{shape.blowouts} were 50% or wider.")
+    return " ".join(parts)
+
+
+def _divergence_line(diverged) -> str:
+    """The weeks that get misremembered.
+
+    Losing a week while outscoring the opponent is a distribution problem, not
+    bad luck, and naming it is the difference between fixing it and shrugging.
+    """
+    lines = []
+    for d in diverged[:3]:
+        if d.outscored_and_lost:
+            lines.append(f"**Week {d.week}**: you outscored them overall and still lost the week.")
+        else:
+            lines.append(f"**Week {d.week}**: they outscored you overall and you still took it.")
+    lines.append("Days are won one at a time, so the totals and the result can disagree.")
+    return "\n".join(lines)[:1024]
+
+
+def _season_line(seasons) -> str:
+    return "\n".join(
+        f"**{s.league.season}** {s.league.tier} {s.league.group}: {s.record}" for s in seasons
+    )[:1024]
+
+
+def _accuracy_block(accuracy) -> str:
+    """The rate, and immediately what it does not control for.
+
+    A number this easy to over-read gets its caveat in the same field rather
+    than in a footer: our own declared saves are out of it, but an opponent
+    quietly saving is invisible from this side and always will be.
+    """
+    lines = [f"{accuracy.correct} of {accuracy.judged} called correctly ({an.pct(accuracy.rate)})."]
+    if accuracy.unpicked:
+        lines.append(f"{accuracy.unpicked} weeks in the sample carried no call.")
+    if accuracy.excluded_saves:
+        lines.append(
+            f"{an.sample_words(accuracy.excluded_saves)} left out because you declared a save."
+        )
+    if accuracy.rests_on_assumption:
+        lines.append(
+            f"{an.sample_words(accuracy.rests_on_assumption)} were never declared either way, "
+            "so they are counted as normal effort."
+        )
+    lines.append("This cannot see an opponent saving quietly, so read it as a floor.")
+    return "\n".join(lines)[:1024]
+
+
+def opponent_trends_embed(state, target: ad.AllianceKey) -> discord.Embed:
+    """The same day read for an alliance you have faced.
+
+    Narrower than your own on purpose. Their day outcomes exist only for weeks
+    you played them, so this says less and has to say how much less.
+    """
+    embed = discord.Embed(
+        title=f"{VS_BTN_TRENDS} for {state.display_name(target)}"[:256],
+        color=discord.Color.blurple(),
+    )
+    profile = an.day_profile(state.rows, target)
+    if profile.weeks_recorded == 0:
+        embed.description = (
+            "Nothing recorded for them yet. Their day outcomes only exist for "
+            "weeks you played them and logged both sides."
+        )
+        return embed
+
+    embed.description = (
+        f"From {an.sample_words(profile.weeks_recorded)} you have logged against them."
+    )
+    embed.add_field(name="Their days", value=_day_block(profile), inline=False)
+
+    shape = an.margin_shape(state.rows, state.own, target) if state.own else None
+    if shape and shape.days_compared:
+        embed.add_field(name="How close they are", value=_margin_line(shape), inline=False)
+
+    jump = an.power_jump(state.rows, target)
+    if jump and jump.is_material:
+        embed.add_field(
+            name="Since you last met",
+            value=(
+                f"Their recorded power is {an.pct(jump.change, signed=True)}, "
+                f"{jump.previous:,} to {jump.latest:,}."
+            ),
+            inline=False,
+        )
+    return embed

@@ -239,6 +239,14 @@ class ScoreModal(discord.ui.Modal):
             embed=_score_ack(state, self.week, self.day), ephemeral=True
         )
 
+        # The officer already has their answer, so anything the alliance opted
+        # into is announced afterwards and cannot delay or break the save.
+        import alliance_duel_events as ad_events
+
+        await ad_events.announce_after_write(
+            interaction.client, state, week=self.week, day=self.day
+        )
+
 
 def _score_ack(state, week: int, day: int) -> discord.Embed:
     """Confirm the save and answer the question the score was entered to ask.
@@ -614,7 +622,7 @@ def pending_next_week(state) -> int | None:
     return None
 
 
-async def generate_next_week(state, week: int) -> tuple[bool, str]:
+async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
     """Write next week's rows, carried forward with predicted opponents.
 
     Season, tier, group, seed, tag and warzone come forward, so the only thing
@@ -632,6 +640,15 @@ async def generate_next_week(state, week: int) -> tuple[bool, str]:
     problem = await save_rows(state, rows)
     if problem:
         return False, problem
+
+    # Next week's opponent is now known, which is the event the reveal post
+    # (#409) exists for. Announced from here rather than from the button so the
+    # sheet-first path (an officer typing the rows in themselves) is the only
+    # way it can be missed.
+    import alliance_duel_events as ad_events
+
+    await ad_events.announce_after_write(bot, state, week=week + 1)
+
     return True, (
         f"Added {len(rows)} rows for week {week + 1}, with the pairings I expect. "
         f"Correct any the game paired differently."

@@ -702,7 +702,9 @@ class VSHubView(discord.ui.View):
 
     async def _next_week(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        ok, detail = await ad_entry.generate_next_week(self.state, self.next_week)
+        ok, detail = await ad_entry.generate_next_week(
+            self.state, self.next_week, bot=interaction.client
+        )
         await interaction.followup.send(f"{'✅' if ok else '⚠️'} {detail}", ephemeral=True)
 
     async def _setup(self, interaction: discord.Interaction):

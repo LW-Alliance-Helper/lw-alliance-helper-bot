@@ -313,6 +313,28 @@ _SCHEDULED_COPY = {
             "channel. Only leadership can use the button."
         ),
     },
+    "event_posts": {
+        "title": "📣 Event posts",
+        "on": "**On.** These land in <#{channel}>.",
+        "off_saved": "**Off.** Your channel is still saved: <#{channel}>.",
+        "off_unset": "**Off.** Set {missing} first, then switch on the ones you want.",
+        "what": (
+            "Three posts that fire when the data lands rather than on a clock: "
+            "where the week stands after a day is logged, who you face next "
+            "once the pairing is known, and how the league finished. Each is "
+            "its own switch."
+        ),
+        "when_name": "When they post",
+        "when": (
+            "As you record things, so there is no time to set. Nothing repeats: "
+            "correcting a score you already logged does not post twice."
+        ),
+        "who_name": "Who sees them",
+        "who": (
+            "Everyone who can read the channel you pick. These are written for "
+            "leadership, so a leadership channel fits them best."
+        ),
+    },
     "day_theme": {
         "title": "📣 Day theme reminder",
         "on": "**On.** I post in <#{channel}> at **{time}**.",
@@ -352,13 +374,26 @@ def scheduled_post_embed(cfg: dict, surface_key: str) -> discord.Embed:
     time_saved = cfg.get(f"{surface_key}_time") or ""
     channel_id = cfg.get(f"{surface_key}_channel_id") or 0
 
-    if is_on:
+    # An event-driven surface has no posting time and several switches, so
+    # "on" means any of them is on and the status line never mentions a clock.
+    wants_time = "{time}" in copy["on"]
+    if surface_key == "event_posts":
+        is_on = any(
+            cfg.get(column)
+            for column in (
+                "clinch_status_enabled",
+                "opponent_reveal_enabled",
+                "season_recap_enabled",
+            )
+        )
+
+    if is_on and channel_id:
         status = copy["on"].format(channel=channel_id, time=_clock(time_saved))
-    elif time_saved and channel_id:
+    elif channel_id and (time_saved or not wants_time):
         status = copy["off_saved"].format(channel=channel_id, time=_clock(time_saved))
     else:
         missing = []
-        if not time_saved:
+        if wants_time and not time_saved:
             missing.append("a time")
         if not channel_id:
             missing.append("a channel")

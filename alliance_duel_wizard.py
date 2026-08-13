@@ -155,6 +155,16 @@ VS_BTN_PROMPT_NOTE_CHANGE = "✏️ Change the note from leadership"
 #: rule quoted above.
 VS_BTN_PROMPT_ON = "🔔 Turn it on"
 VS_BTN_PROMPT_OFF = "🔕 Turn it off"
+#: Bare labels with a state glyph, not a bell: these are posts to a channel
+#: rather than notifications, and three switches in one grid need their state
+#: readable at a glance more than they need three different icons.
+VS_BTN_EVENT_POSTS = "📣 Event posts"
+EVENT_TOGGLES = (
+    ("clinch_status_enabled", "Mid-week clinch status"),
+    ("opponent_reveal_enabled", "Next opponent"),
+    ("season_recap_enabled", "Season recap"),
+)
+
 VS_BTN_POST_ON = "Turn it on"
 VS_BTN_POST_OFF = "Turn it off"
 
@@ -181,6 +191,8 @@ class ScheduledSurface:
         on_label: str,
         off_label: str,
         has_note: bool = False,
+        has_time: bool = True,
+        toggles: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.key = key
         self.button = button
@@ -191,6 +203,13 @@ class ScheduledSurface:
         self.on_label = on_label
         self.off_label = off_label
         self.has_note = has_note
+        #: False for the event-driven posts (#409), which fire when data lands
+        #: rather than on a clock. There is no time to ask for, so asking would
+        #: be a control that cannot change anything.
+        self.has_time = has_time
+        #: `(config column, label)` for a surface that is several independent
+        #: opt-ins sharing one channel, instead of a single on/off.
+        self.toggles = toggles
 
     @property
     def enabled_col(self) -> str:
@@ -218,6 +237,19 @@ SCORE_PROMPT_SURFACE = ScheduledSurface(
     time_modal_title="Daily score prompt time",
     on_label=VS_BTN_PROMPT_ON,
     off_label=VS_BTN_PROMPT_OFF,
+)
+
+EVENT_POSTS_SURFACE = ScheduledSurface(
+    "event_posts",
+    button=VS_BTN_EVENT_POSTS,
+    channel_question="Which channel should these land in?",
+    channel_label="event posts",
+    suggested_channel="leadership",
+    time_modal_title="",
+    on_label="Turn it on",
+    off_label="Turn it off",
+    has_time=False,
+    toggles=EVENT_TOGGLES,
 )
 
 DAY_THEME_SURFACE = ScheduledSurface(
@@ -262,17 +294,18 @@ class ScheduledPostSettingsView(discord.ui.View):
     def _render(self) -> None:
         self.clear_items()
         surface = self.surface
-        has_time = bool(self.cfg.get(surface.time_col))
+        has_time = bool(self.cfg.get(surface.time_col)) if surface.has_time else True
         has_channel = bool(self.cfg.get(surface.channel_col))
         is_on = bool(self.cfg.get(surface.enabled_col))
 
-        time_btn = discord.ui.Button(
-            label=VS_BTN_PROMPT_TIME_CHANGE if has_time else VS_BTN_PROMPT_TIME,
-            style=discord.ButtonStyle.secondary,
-            row=0,
-        )
-        time_btn.callback = self._set_time
-        self.add_item(time_btn)
+        if surface.has_time:
+            time_btn = discord.ui.Button(
+                label=VS_BTN_PROMPT_TIME_CHANGE if has_time else VS_BTN_PROMPT_TIME,
+                style=discord.ButtonStyle.secondary,
+                row=0,
+            )
+            time_btn.callback = self._set_time
+            self.add_item(time_btn)
 
         channel_btn = discord.ui.Button(
             label=VS_BTN_PROMPT_CHANNEL_CHANGE if has_channel else VS_BTN_PROMPT_CHANNEL,
@@ -292,13 +325,28 @@ class ScheduledPostSettingsView(discord.ui.View):
             note_btn.callback = self._set_note
             self.add_item(note_btn)
 
-        # Disabled rather than hidden until both halves exist, with the reason
-        # in the embed: switching on a post with no time or no channel would
-        # save a setting that can never fire.
+        # Disabled rather than hidden until the surface could actually fire,
+        # with the reason in the embed: switching on a post with no channel (or
+        # no time, where one is asked for) saves a setting that never runs.
+        ready = has_time and has_channel
+
+        if surface.toggles:
+            for column, label in surface.toggles:
+                on = bool(self.cfg.get(column))
+                button = discord.ui.Button(
+                    label=f"{'✅' if on else '▫️'} {label}"[:80],
+                    style=discord.ButtonStyle.secondary,
+                    disabled=not on and not ready,
+                    row=1,
+                )
+                button.callback = self._make_toggle(column)
+                self.add_item(button)
+            return
+
         toggle = discord.ui.Button(
             label=surface.off_label if is_on else surface.on_label,
             style=discord.ButtonStyle.secondary if is_on else discord.ButtonStyle.primary,
-            disabled=not is_on and not (has_time and has_channel),
+            disabled=not is_on and not ready,
             row=1,
         )
         toggle.callback = self._toggle
@@ -364,6 +412,18 @@ class ScheduledPostSettingsView(discord.ui.View):
         turning_on = not self.cfg.get(self.surface.enabled_col)
         config.save_vs_config(self.guild_id, **{self.surface.enabled_col: 1 if turning_on else 0})
         await self._redraw(interaction)
+
+    def _make_toggle(self, column: str):
+        """One switch among several sharing a channel (#409). Each is its own
+        opt-in: an alliance that wants the mid-week clinch status and nothing
+        else gets exactly that."""
+
+        async def _callback(interaction: discord.Interaction) -> None:
+            turning_on = not self.cfg.get(column)
+            config.save_vs_config(self.guild_id, **{column: 1 if turning_on else 0})
+            await self._redraw(interaction)
+
+        return _callback
 
     async def _redraw_message(self) -> None:
         """Redraw without an interaction to answer, for the channel picker: its
@@ -485,6 +545,12 @@ class VSSetupView(discord.ui.View):
         nothing from the sheet and ships free, so it works for an alliance that
         has not set the tracker up and never will."""
         await self._open_panel(inter, DAY_THEME_SURFACE)
+
+    @discord.ui.button(label=VS_BTN_EVENT_POSTS, style=discord.ButtonStyle.secondary, row=1)
+    async def btn_event_posts(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """The three posts that fire when data lands (#409). Needs the tracker,
+        since all three read the sheet."""
+        await self._open_panel(inter, EVENT_POSTS_SURFACE)
 
     async def _open_panel(self, inter: discord.Interaction, surface: ScheduledSurface) -> None:
         panel = ScheduledPostSettingsView(self.guild_id, self.owner_user_id, surface)
@@ -714,6 +780,7 @@ async def run_vs_setup(interaction: discord.Interaction, bot=None) -> None:
         # Nothing to prompt about until there is a tab and an alliance identity,
         # so the control is shown disabled rather than left live and inert.
         view.btn_score_prompt.disabled = True
+        view.btn_event_posts.disabled = True
 
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     view.message = await interaction.original_response()

@@ -483,8 +483,16 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
     squad_type = discord.ui.TextInput(
         label="Squad type", required=False, max_length=16, placeholder="Tank, Missile or Aircraft"
     )
+    # The label carries the format rule and the placeholder carries where to
+    # read it. Both were only in the *rejection* message before, which meant
+    # the one place they were stated was after someone had already got it
+    # wrong. "Overview Power" is the battle report's own wording, so it can be
+    # searched for on screen rather than interpreted.
     power = discord.ui.TextInput(
-        label="Power", required=False, max_length=16, placeholder="e.g. 41200000"
+        label="Power — in full, not 41.2M",
+        required=False,
+        max_length=16,
+        placeholder="Battle report → Heroes tab → Overview Power. e.g. 41200000",
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:

@@ -201,6 +201,61 @@ async def test_import_never_downgrades_observed_scouting(client, cd_db):
     assert squad["source"] == "observed" and squad["power"] == 9_999
 
 
+async def test_import_seeds_roster_squads_and_orders_in_one_call(client, cd_db):
+    """The three are one operation: a roster with no squads cannot be
+    predicted at all, and orders are meaningless without the registrants they
+    hang off. Splitting them would make a half-applied import the normal
+    outcome of a dropped connection."""
+    token = await _session(user="111")
+    resp = await client.post(
+        f"{P}/admin/import",
+        json={
+            "registrants": [{"name": "AlphaOne", "group": "M", "server": "738", "thp": 100}],
+            "squads": [
+                {
+                    "name": "AlphaOne",
+                    "server": "738",
+                    "slot": slot,
+                    "type": t,
+                    "power": p,
+                    "source": "estimated",
+                }
+                for slot, (t, p) in enumerate(
+                    zip(("Tank", "Missile", "Aircraft"), (40, 30, 20)), start=1
+                )
+            ],
+            "orders": [
+                {"name": "AlphaOne", "server": "738", "slots": ["Tank", "Missile", "Aircraft"]}
+            ],
+        },
+        headers=_auth(token),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["squads"]["applied"] == 3
+    assert body["orders"]["applied"] == 1
+
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+    assert len(player["squads"]) == 3
+    assert len(player["orders"]) == 1
+
+
+async def test_import_rejects_a_payload_with_nothing_in_it(client, cd_db):
+    """An empty body is a client mistake, not a no-op success."""
+    token = await _session(user="111")
+    resp = await client.post(f"{P}/admin/import", json={}, headers=_auth(token))
+    assert resp.status == 400
+
+
+async def test_import_rejects_a_non_list_section(client, cd_db):
+    token = await _session(user="111")
+    resp = await client.post(
+        f"{P}/admin/import", json={"squads": {"name": "AlphaOne"}}, headers=_auth(token)
+    )
+    assert resp.status == 400
+    assert "squads" in (await resp.json())["detail"]
+
+
 # ── Predict ───────────────────────────────────────────────────────────────────
 
 

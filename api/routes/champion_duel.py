@@ -256,8 +256,21 @@ async def post_order(request: web.Request) -> web.Response:
 
 @requires_admin
 async def admin_import(request: web.Request) -> web.Response:
-    """Bulk-load the roster. Never touches scouting — an import must not
-    downgrade an observed squad back to an estimate."""
+    """Bulk-load the roster, and optionally the scouting that goes with it.
+
+    One call rather than three, because the three are one operation: a roster
+    with no squads cannot be predicted at all (97% of registrants have never
+    been seen, so almost every row needs its estimate to be useful), and orders
+    are meaningless without the registrants they hang off. Splitting them would
+    make a half-applied import the normal outcome of a dropped connection.
+
+    Applied in dependency order for the same reason — squads and orders both
+    resolve against registrant rows, so those have to exist first.
+
+    An import must not downgrade an observed squad back to an estimate, and
+    must not double a deployment order's weight when it is re-run. Both rules
+    live in the data layer; see `import_squads` / `import_orders`.
+    """
     if not db.NAMES_AVAILABLE:
         return json_response({"error": "identity_unavailable"}, request, status=503)
     try:
@@ -265,12 +278,25 @@ async def admin_import(request: web.Request) -> web.Response:
     except Exception:  # noqa: BLE001
         return json_response({"error": "bad_request"}, request, status=400)
 
-    rows = body.get("registrants")
-    if not isinstance(rows, list):
+    for field in ("registrants", "squads", "orders"):
+        if field in body and not isinstance(body[field], list):
+            return json_response(
+                {"error": "bad_request", "detail": f"{field} must be a list"}, request, status=400
+            )
+    if "registrants" not in body and "squads" not in body and "orders" not in body:
         return json_response(
-            {"error": "bad_request", "detail": "registrants must be a list"}, request, status=400
+            {"error": "bad_request", "detail": "nothing to import"}, request, status=400
         )
-    return json_response(await asyncio.to_thread(db.import_registrants, rows), request)
+
+    actor = request["cd_actor"]
+    result = {}
+    if body.get("registrants") is not None:
+        result["registrants"] = await asyncio.to_thread(db.import_registrants, body["registrants"])
+    if body.get("squads") is not None:
+        result["squads"] = await asyncio.to_thread(db.import_squads, body["squads"], actor=actor)
+    if body.get("orders") is not None:
+        result["orders"] = await asyncio.to_thread(db.import_orders, body["orders"], actor=actor)
+    return json_response(result, request)
 
 
 @requires_admin

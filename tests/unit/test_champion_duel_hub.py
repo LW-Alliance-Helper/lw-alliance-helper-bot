@@ -12,6 +12,7 @@ import csv
 import io
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 import champion_duel_db as db
@@ -67,6 +68,8 @@ def _interaction(user_id=ADMIN_ID):
     interaction.response.defer = AsyncMock()
     interaction.followup.send = AsyncMock()
     interaction.original_response = AsyncMock(return_value=MagicMock())
+    interaction.edit_original_response = AsyncMock()
+    interaction.channel.send = AsyncMock()
     return interaction
 
 
@@ -179,10 +182,70 @@ async def test_predict_renders_both_sides(cd_db):
     interaction = _interaction()
     await modal.on_submit(interaction)
 
-    embed = interaction.followup.send.call_args.kwargs["embed"]
+    kwargs = interaction.followup.send.call_args.kwargs
+    # The card is the answer; the caption is what survives a screen reader, a
+    # failed image load, and Discord's own search.
+    assert kwargs["file"].filename.endswith(".png")
+    caption = interaction.followup.send.call_args.args[0]
+    assert "AlphaOne" in caption and "BetaTwo" in caption
+    assert "%" in caption and "confidence" in caption
+
+
+async def test_sharing_posts_the_card_to_the_channel(cd_db):
+    """A followup to an ephemeral interaction is itself ephemeral, so the card
+    has to go to the channel directly — the one thing this button exists for."""
+    view = hub.SharePredictionView(png=b"not-really-a-png", caption="🆚 A 60% · B 40%", user_id=7)
+    interaction = _interaction()
+    interaction.channel.send = AsyncMock()
+
+    await view.share.callback(interaction)
+
+    interaction.channel.send.assert_awaited_once()
+    posted = interaction.channel.send.call_args
+    assert "60%" in posted.args[0]
+    assert "<@7>" in posted.args[0], "a busy channel needs to know who shared it"
+    assert posted.kwargs["file"].filename.endswith(".png")
+    # Spent, so it can't be double-posted.
+    assert view.share.disabled is True
+
+
+async def test_sharing_without_channel_permission_says_so(cd_db):
+    """Never fail silently, and name the exit: the member can still save the
+    image and post it themselves."""
+    view = hub.SharePredictionView(png=b"x", caption="🆚 A 60% · B 40%", user_id=7)
+    interaction = _interaction()
+    interaction.channel.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no"))
+
+    await view.share.callback(interaction)
+
+    msg = _sent(interaction)
+    assert "Send Messages" in msg and "Attach Files" in msg
+
+
+async def test_a_failed_render_still_answers_the_question(cd_db, monkeypatch):
+    """A render is fonts, an asset and Pillow. None of them are worth losing a
+    correct prediction over, so it falls back to the embed."""
+    _full_squads(_reg("AlphaOne"), powers=(50_000_000, 40_000_000, 30_000_000))
+    _full_squads(_reg("BetaTwo"), powers=(20_000_000, 15_000_000, 10_000_000))
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("no fonts on this box")
+
+    monkeypatch.setattr(hub.champion_duel_image, "render", boom)
+
+    modal = hub._PredictModal()
+    modal.player_a._value = "AlphaOne"
+    modal.server_a._value = "738"
+    modal.player_b._value = "BetaTwo"
+    modal.server_b._value = "738"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    kwargs = interaction.followup.send.call_args.kwargs
+    assert "file" not in kwargs
+    embed = kwargs["embed"]
     assert "AlphaOne" in embed.title and "BetaTwo" in embed.title
-    # The stronger side leads, and both percentages are rendered.
-    assert "%" in embed.description
     assert any("Confidence" in f.name for f in embed.fields)
 
 

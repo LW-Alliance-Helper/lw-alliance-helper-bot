@@ -29,6 +29,7 @@ import asyncio
 from aiohttp import web
 
 import champion_duel_db as db
+from api import BOT_KEY
 from api.champion_duel_auth import (
     admin_ids,
     app_url,
@@ -64,8 +65,8 @@ async def health(request: web.Request) -> web.Response:
             # Whether login can run, and what is missing if it can't. Checking
             # this should not require starting a redirect to Discord and
             # reading the error on the way back.
-            "oauth": oauth_configured(),
-            "oauth_missing": missing_oauth_env(),
+            "oauth": oauth_configured(request.app.get(BOT_KEY)),
+            "oauth_missing": missing_oauth_env(request.app.get(BOT_KEY)),
             "app_url_set": bool(app_url()),
             "admins_configured": len(admin_ids()),
             "constants": constants() if ENGINE_AVAILABLE else None,

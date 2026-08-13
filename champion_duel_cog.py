@@ -60,15 +60,18 @@ def _parse_day(value: str, *, end_of_day: bool) -> str | None:
 
 def _describe(edit: dict) -> str:
     """One edit as a line. Shows the actor as a mention so an unfamiliar
-    snowflake resolves to a person without a second lookup."""
+    snowflake resolves to a person without a second lookup, and the server
+    alongside the name because two servers can field the same name."""
     who = f"<@{edit['actor_discord_id']}>"
-    when = (edit["created_at"] or "")[:16].replace("T", " ")
-    what = edit["field"] or edit["target"]
-    slot = f" slot {edit['slot']}" if edit["slot"] else ""
-    old, new = edit["old_value"], edit["new_value"]
+    when = (edit.get("created_at") or "")[:16].replace("T", " ")
+    what = edit.get("field") or edit.get("target")
+    slot = f" slot {edit['slot']}" if edit.get("slot") else ""
+    old, new = edit.get("old_value"), edit.get("new_value")
     change = f"{old or '—'} → {new or '—'}"
-    tail = f"  ↩ revert of #{edit['revert_of']}" if edit["revert_of"] else ""
-    return f"`#{edit['id']}` **{edit['player_key']}**{slot} {what}: {change} · {who} · {when}{tail}"
+    tail = f"  ↩ revert of #{edit['revert_of']}" if edit.get("revert_of") else ""
+    name = edit.get("display_name") or "(unknown)"
+    server = f" (#{edit['server']})" if edit.get("server") else ""
+    return f"`#{edit['id']}` **{name}**{server}{slot} {what}: {change} · {who} · {when}{tail}"
 
 
 class ChampionDuelAdmin(commands.Cog):
@@ -209,8 +212,13 @@ class ChampionDuelAdmin(commands.Cog):
             "id",
             "created_at",
             "target",
-            "player_key",
+            "registrant_id",
             "display_name",
+            # Server and group ride along so a spreadsheet can tell two players
+            # with the same name on different servers apart -- the whole reason
+            # identity is (name, server) rather than the name alone.
+            "server",
+            "grp",
             "slot",
             "field",
             "old_value",

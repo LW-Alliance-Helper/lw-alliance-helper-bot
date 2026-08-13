@@ -1,28 +1,29 @@
 """Champion Duel data layer — its own SQLite file on the Railway volume.
 
 Separate from `config.py`'s `guild_configs.db` on purpose. That database is
-per-guild and private; this one is global tournament data shared across every
-alliance that contributes to it. They also have different lifecycles — a
-Champion Duel file can be wiped when qualifiers roll into semifinals without
-touching a single alliance's configuration. Future siblings
-(`warzone_duel.sqlite3`, `alliance_vs_duel.sqlite3`) follow the same shape:
-three separate events whose rows physically cannot join to each other.
+per-guild and private; this one is global tournament data contributed across
+alliances and servers, with its own lifecycle — it can be wiped between
+qualifiers and semifinals without touching a single alliance's configuration.
+
+**Identity is (name, server), never name alone.** Last War names are not unique
+across servers, so keying on the normalized name would merge two different
+players the moment a second server contributed, and silently pool their
+scouting. There is no way to unmerge that afterwards. The `registrants` table
+therefore has a surrogate id with `UNIQUE (player_key, server)`, and squads,
+orders and edits all hang off that id.
 
 Everything here is **synchronous**. `ruff.toml` selects ASYNC, but its own
 comment notes that only catches stdlib-level blocking calls — it does not know
-sqlite3 blocks. Callers in the aiohttp handlers must wrap these in
-`asyncio.to_thread`, or a query stalls the Discord gateway heartbeat for the
-whole process. That is what #366 swept up.
+sqlite3 blocks. Callers must wrap these in `asyncio.to_thread`, or a query
+stalls the Discord gateway heartbeat for the whole process (#366).
 
-Identity is `champion_duel_engine.names.normalize_name`, imported rather than
+Identity normalization is imported from `champion_duel_engine` rather than
 reimplemented: the simulator keys its scouting by the same function, and a
-second implementation that drifted would file corrections under a key the
-simulator never looks up — applying to nobody and raising nothing.
+second copy that drifted would file corrections under a key the simulator never
+looks up — applying to nobody and raising nothing.
 
-Attribution stores the raw Discord snowflake, never a bot-local user id, so
-this ports into Map Manager's Alliance section later without a translation
-layer (`findByDiscordUserId` already resolves exactly that). `actor_guild_id`
-is the join key to MM's `discord_guild_links`.
+Attribution stores the raw Discord snowflake so this ports into Map Manager's
+Alliance section later without a translation layer.
 """
 
 from __future__ import annotations
@@ -33,8 +34,6 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-# Identity comes from the installed engine package. Optional, like the engine
-# itself: a failed install must degrade this feature, never break bot startup.
 try:
     from champion_duel_engine.names import normalize_name
 
@@ -43,31 +42,43 @@ except ImportError:  # pragma: no cover - exercised by the degraded-mode path
     NAMES_AVAILABLE = False
 
     def normalize_name(name):
-        """Fallback that refuses to guess rather than inventing a second rule.
+        """Refuses rather than inventing a second rule.
 
-        A near-miss normalization is worse than none: it would silently file
-        edits under keys the simulator cannot find. Callers check
-        NAMES_AVAILABLE and return 503 instead.
+        A near-miss normalization is worse than none: it files edits under keys
+        the simulator cannot find. Callers check NAMES_AVAILABLE and 503.
         """
         raise RuntimeError("champion_duel_engine is not installed")
 
 
 DB_PATH = os.getenv("CHAMPION_DUEL_DB_PATH", "/app/data/champion_duel.sqlite3")
 
-# Session lifetime. Long enough that a scout is not re-authing mid-event,
-# short enough that a stolen token is not indefinite.
 SESSION_TTL = timedelta(days=30)
-
-# The OAuth hand-off code is single-use and short-lived; it exists only to keep
-# the session token out of the redirect URL, browser history and any log.
 AUTH_CODE_TTL = timedelta(seconds=60)
 
 VALID_SOURCES = ("observed", "estimated", "edited")
+# How a registrant row came to exist. `self_reported` is the community path --
+# someone entered an opponent we had never heard of -- and must stay
+# distinguishable from an official import for exactly the same reason
+# squads.source exists: an assumption must never read like a verified fact.
+VALID_ORIGINS = ("imported", "self_reported", "edited")
 VALID_TYPES = ("Tank", "Missile", "Aircraft")
 
 
+class AmbiguousPlayer(Exception):
+    """That name exists on more than one server.
+
+    Carries the candidates so a caller can ask which, rather than picking one
+    and quietly attaching a sighting to the wrong person.
+    """
+
+    def __init__(self, name, candidates):
+        super().__init__(f"{name!r} matches {len(candidates)} servers")
+        self.name = name
+        self.candidates = candidates
+
+
 def _now() -> str:
-    """UTC ISO-8601. Stored as TEXT so it sorts lexicographically, which is
+    """UTC ISO-8601, stored as TEXT so it sorts lexicographically — which is
     what the admin date-range export filters on."""
     return datetime.now(timezone.utc).isoformat()
 
@@ -78,11 +89,24 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _server(value) -> str | None:
+    """Servers are digits in game but arrive as text from a modal."""
+    if value is None:
+        return None
+    s = str(value).strip().lstrip("#")
+    return s or None
+
+
+def _group(value) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip().upper()
+    return s or None
+
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # WAL lets the admin export read while a scout writes. Single process, but
-    # aiohttp handlers run concurrently in threads.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -91,9 +115,8 @@ def _get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     """Create tables if absent and apply pending migrations.
 
-    Same shape as `config.init_db`: each ALTER in its own try/except so a
-    re-run is harmless, and the CREATE TABLE above it stays in sync for fresh
-    databases.
+    Same shape as `config.init_db`: each ALTER in its own try/except so a re-run
+    is harmless, and the CREATE TABLE above it stays in sync for fresh files.
     """
     directory = os.path.dirname(DB_PATH)
     if directory:
@@ -102,52 +125,59 @@ def init_db() -> None:
     with _get_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS registrants (
-                player_key   TEXT PRIMARY KEY,
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_key   TEXT NOT NULL,
                 display_name TEXT NOT NULL,
-                grp          TEXT,
-                rank         INTEGER,
                 server       TEXT,
+                grp          TEXT,
                 alliance     TEXT,
+                rank         INTEGER,
                 thp          REAL,
                 fsp          REAL,
                 seeded       INTEGER NOT NULL DEFAULT 0,
-                updated_at   TEXT NOT NULL
+                origin       TEXT NOT NULL DEFAULT 'imported',
+                added_by     TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                UNIQUE (player_key, server)
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS squads (
-                player_key  TEXT NOT NULL,
-                slot        INTEGER NOT NULL,
-                squad_type  TEXT,
-                power       REAL,
-                source      TEXT NOT NULL,
-                observed_at TEXT,
-                updated_at  TEXT NOT NULL,
-                updated_by  TEXT,
-                PRIMARY KEY (player_key, slot)
+                registrant_id INTEGER NOT NULL,
+                slot          INTEGER NOT NULL,
+                squad_type    TEXT,
+                power         REAL,
+                source        TEXT NOT NULL,
+                observed_at   TEXT,
+                updated_at    TEXT NOT NULL,
+                updated_by    TEXT,
+                PRIMARY KEY (registrant_id, slot),
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS order_history (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                player_key  TEXT NOT NULL,
-                slot1       TEXT NOT NULL,
-                slot2       TEXT NOT NULL,
-                slot3       TEXT NOT NULL,
-                opponent    TEXT,
-                observed_at TEXT,
-                source      TEXT NOT NULL,
-                created_at  TEXT NOT NULL,
-                created_by  TEXT
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                registrant_id INTEGER NOT NULL,
+                slot1         TEXT NOT NULL,
+                slot2         TEXT NOT NULL,
+                slot3         TEXT NOT NULL,
+                opponent      TEXT,
+                observed_at   TEXT,
+                source        TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                created_by    TEXT,
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
-        # Append-only. A revert never updates or deletes a row here; it writes
-        # a new one carrying revert_of, so the history stays the whole truth.
+        # Append-only. A revert never updates or deletes a row here; it writes a
+        # new one carrying revert_of, so the history stays the whole truth.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS edits (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 target           TEXT NOT NULL,
-                player_key       TEXT NOT NULL,
+                registrant_id    INTEGER NOT NULL,
                 slot             INTEGER,
                 field            TEXT,
                 old_value        TEXT,
@@ -173,8 +203,6 @@ def init_db() -> None:
                 revoked_at         TEXT
             )
         """)
-        # Carries identity, not a token -- see create_auth_code for why that
-        # is what keeps a live credential off the volume entirely.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS auth_codes (
                 code_hash       TEXT PRIMARY KEY,
@@ -189,10 +217,12 @@ def init_db() -> None:
         """)
         for stmt in (
             "CREATE INDEX IF NOT EXISTS ix_reg_group ON registrants(grp)",
+            "CREATE INDEX IF NOT EXISTS ix_reg_key ON registrants(player_key)",
+            "CREATE INDEX IF NOT EXISTS ix_reg_server ON registrants(server)",
             "CREATE INDEX IF NOT EXISTS ix_edits_created ON edits(created_at)",
-            "CREATE INDEX IF NOT EXISTS ix_edits_player ON edits(player_key)",
+            "CREATE INDEX IF NOT EXISTS ix_edits_reg ON edits(registrant_id)",
             "CREATE INDEX IF NOT EXISTS ix_edits_actor ON edits(actor_discord_id)",
-            "CREATE INDEX IF NOT EXISTS ix_orders_player ON order_history(player_key)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_reg ON order_history(registrant_id)",
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
         ):
             try:
@@ -200,70 +230,137 @@ def init_db() -> None:
             except sqlite3.OperationalError as exc:  # pragma: no cover
                 print(f"[CHAMPION_DUEL] index skipped: {exc}")
 
-        # Migration block. Add ALTER TABLE entries here, each in its own
-        # try/except, and update the CREATE TABLE above to match.
-        for table, column, ddl in ():  # none yet
-            try:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-                print(f"[CHAMPION_DUEL] Added {column} to {table}")
-            except sqlite3.OperationalError:
-                pass
-
 
 # ── Registrants ───────────────────────────────────────────────────────────────
 
 
-def import_registrants(rows: list[dict]) -> dict:
-    """Bulk-load the roster. Upsert by player key; never touches scouting.
-
-    Returns counts so the caller can report what actually changed rather than
-    claiming success. A re-import after a roster refresh is expected and safe.
-    """
-    inserted = updated = 0
-    now = _now()
+def find_registrants(name: str, server=None) -> list[dict]:
+    """Every registrant matching a name, optionally narrowed to one server."""
+    key = normalize_name(name)
+    sql = "SELECT * FROM registrants WHERE player_key = ?"
+    params: list = [key]
+    server = _server(server)
+    if server:
+        sql += " AND server = ?"
+        params.append(server)
+    sql += " ORDER BY server IS NULL, server"
     with _get_conn() as conn:
-        for row in rows:
-            name = (row.get("name") or "").strip()
-            if not name:
-                continue
-            key = normalize_name(name)
-            existing = conn.execute(
-                "SELECT 1 FROM registrants WHERE player_key = ?", (key,)
-            ).fetchone()
-            conn.execute(
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def resolve_registrant(name: str, server=None) -> dict:
+    """Exactly one registrant, or an error that says which problem it is.
+
+    Raises LookupError when nobody matches and AmbiguousPlayer when several do.
+    Never picks a winner: attaching a sighting to the wrong player is not
+    recoverable, and the caller is in a position to ask.
+    """
+    matches = find_registrants(name, server)
+    if not matches:
+        raise LookupError(f"no registrant matches {name!r}")
+    if len(matches) > 1:
+        raise AmbiguousPlayer(name, matches)
+    return matches[0]
+
+
+def upsert_registrant(
+    name, *, server=None, grp=None, origin="self_reported", actor=None, **fields
+) -> dict:
+    """Create or update one registrant, keyed on (name, server).
+
+    `origin` records how the row came to exist. A self-reported opponent must
+    stay distinguishable from an official import, for the same reason
+    squads.source exists — otherwise a guess hardens into a fact nobody can
+    trace back.
+
+    An existing row is never downgraded: an imported registrant stays
+    `imported` even when someone later re-enters them by hand.
+    """
+    if origin not in VALID_ORIGINS:
+        raise ValueError(f"origin must be one of {VALID_ORIGINS}")
+    display = str(name).strip()
+    if not display:
+        raise ValueError("name is required")
+
+    key = normalize_name(display)
+    server = _server(server)
+    grp = _group(grp)
+    now = _now()
+    actor_id = (actor or {}).get("discord_user_id")
+
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM registrants WHERE player_key = ? AND server IS ?", (key, server)
+        ).fetchone()
+        if row is None:
+            cur = conn.execute(
                 """
                 INSERT INTO registrants
-                    (player_key, display_name, grp, rank, server, alliance,
-                     thp, fsp, seeded, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(player_key) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    grp          = excluded.grp,
-                    rank         = excluded.rank,
-                    server       = excluded.server,
-                    alliance     = excluded.alliance,
-                    thp          = excluded.thp,
-                    fsp          = excluded.fsp,
-                    seeded       = excluded.seeded,
-                    updated_at   = excluded.updated_at
+                    (player_key, display_name, server, grp, alliance, rank, thp,
+                     fsp, seeded, origin, added_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     key,
-                    name,
-                    row.get("group"),
-                    row.get("rank"),
-                    row.get("server"),
-                    row.get("alliance"),
-                    row.get("thp"),
-                    row.get("fsp"),
-                    1 if row.get("seeded") else 0,
+                    display,
+                    server,
+                    grp,
+                    fields.get("alliance"),
+                    fields.get("rank"),
+                    fields.get("thp"),
+                    fields.get("fsp"),
+                    1 if fields.get("seeded") else 0,
+                    origin,
+                    actor_id,
+                    now,
                     now,
                 ),
             )
-            if existing:
-                updated += 1
-            else:
-                inserted += 1
+            new_id = cur.lastrowid
+        else:
+            new_id = row["id"]
+            # Only fill what the caller actually supplied; a modal that leaves
+            # alliance blank must not erase an imported value.
+            sets, params = ["display_name = ?", "updated_at = ?"], [display, now]
+            if grp:
+                sets.append("grp = ?")
+                params.append(grp)
+            for col in ("alliance", "rank", "thp", "fsp"):
+                if fields.get(col) is not None:
+                    sets.append(f"{col} = ?")
+                    params.append(fields[col])
+            if row["origin"] == "self_reported" and origin == "imported":
+                sets.append("origin = ?")
+                params.append("imported")
+            params.append(new_id)
+            conn.execute(f"UPDATE registrants SET {', '.join(sets)} WHERE id = ?", params)
+
+        return dict(conn.execute("SELECT * FROM registrants WHERE id = ?", (new_id,)).fetchone())
+
+
+def import_registrants(rows: list[dict]) -> dict:
+    """Bulk-load an official roster. Never touches scouting."""
+    inserted = updated = 0
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        if not name:
+            continue
+        before = find_registrants(name, row.get("server"))
+        upsert_registrant(
+            name,
+            server=row.get("server"),
+            grp=row.get("group"),
+            origin="imported",
+            alliance=row.get("alliance"),
+            rank=row.get("rank"),
+            thp=row.get("thp"),
+            fsp=row.get("fsp"),
+            seeded=row.get("seeded"),
+        )
+        if before:
+            updated += 1
+        else:
+            inserted += 1
     return {"inserted": inserted, "updated": updated, "total": inserted + updated}
 
 
@@ -276,72 +373,98 @@ def get_groups() -> list[dict]:
     return [{"group": r["grp"], "registrants": r["n"]} for r in rows]
 
 
-def get_roster(group: str | None = None, include_scouting: bool = False) -> list[dict]:
+def get_roster(group=None, include_scouting: bool = False) -> list[dict]:
     """Registrants, optionally with their squads.
 
-    `include_scouting` is False for anonymous callers. Squad composition and
-    deployment orders are our own scouting, not public LWS data — the roster
-    itself can be read by anyone, what we know about their lineups cannot.
+    `include_scouting` is False for anonymous callers: the registrant list is a
+    public LWS export, but squad composition and deployment orders are our own
+    scouting.
     """
     sql = "SELECT * FROM registrants"
     params: tuple = ()
     if group:
         sql += " WHERE grp = ?"
-        params = (group,)
-    sql += " ORDER BY grp, rank"
+        params = (_group(group),)
+    sql += " ORDER BY grp, rank, display_name"
 
     with _get_conn() as conn:
         players = [dict(r) for r in conn.execute(sql, params).fetchall()]
         if include_scouting and players:
-            keys = {p["player_key"] for p in players}
-            by_key: dict[str, list] = {k: [] for k in keys}
-            for r in conn.execute("SELECT * FROM squads ORDER BY player_key, slot").fetchall():
-                if r["player_key"] in by_key:
-                    by_key[r["player_key"]].append(dict(r))
+            ids = {p["id"] for p in players}
+            by_id: dict[int, list] = {i: [] for i in ids}
+            for r in conn.execute("SELECT * FROM squads ORDER BY registrant_id, slot").fetchall():
+                if r["registrant_id"] in by_id:
+                    by_id[r["registrant_id"]].append(dict(r))
             for p in players:
-                p["squads"] = by_key.get(p["player_key"], [])
+                p["squads"] = by_id.get(p["id"], [])
     return players
 
 
-def get_player(name: str, include_scouting: bool = False) -> dict | None:
-    key = normalize_name(name)
-    with _get_conn() as conn:
-        row = conn.execute("SELECT * FROM registrants WHERE player_key = ?", (key,)).fetchone()
-        if row is None:
-            return None
-        player = dict(row)
-        if include_scouting:
+def get_player(name, server=None, include_scouting: bool = False) -> dict | None:
+    """One player with their scouting, or None. Raises AmbiguousPlayer when the
+    name exists on several servers and none was given."""
+    try:
+        player = resolve_registrant(name, server)
+    except LookupError:
+        return None
+    if include_scouting:
+        with _get_conn() as conn:
             player["squads"] = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT * FROM squads WHERE player_key = ? ORDER BY slot", (key,)
+                    "SELECT * FROM squads WHERE registrant_id = ? ORDER BY slot", (player["id"],)
                 ).fetchall()
             ]
             player["orders"] = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT * FROM order_history WHERE player_key = ? "
+                    "SELECT * FROM order_history WHERE registrant_id = ? "
                     "ORDER BY COALESCE(observed_at, created_at) DESC",
-                    (key,),
+                    (player["id"],),
                 ).fetchall()
             ]
     return player
 
 
+def most_common_order(registrant_id: int) -> dict | None:
+    """The order this player is seen in most often, and how sure that is.
+
+    Repeats are the signal: someone seen five times leading Missile and once
+    leading Tank should read 5:1, which is exactly what `predict_matchup`
+    consumes when sampling observed orders.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT slot1, slot2, slot3, COUNT(*) AS n FROM order_history "
+            "WHERE registrant_id = ? GROUP BY slot1, slot2, slot3 ORDER BY n DESC",
+            (registrant_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    total = sum(r["n"] for r in rows)
+    top = rows[0]
+    return {
+        "order": [top["slot1"], top["slot2"], top["slot3"]],
+        "seen": top["n"],
+        "total": total,
+        "distinct": len(rows),
+    }
+
+
 # ── Writes (each one audited) ─────────────────────────────────────────────────
 
 
-def _record_edit(conn, *, target, player_key, slot, field, old, new, actor, revert_of=None):
+def _record_edit(conn, *, target, registrant_id, slot, field, old, new, actor, revert_of=None):
     cur = conn.execute(
         """
-        INSERT INTO edits (target, player_key, slot, field, old_value, new_value,
+        INSERT INTO edits (target, registrant_id, slot, field, old_value, new_value,
                            actor_discord_id, actor_name, actor_guild_id,
                            created_at, revert_of)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             target,
-            player_key,
+            registrant_id,
             slot,
             field,
             None if old is None else str(old),
@@ -356,13 +479,10 @@ def _record_edit(conn, *, target, player_key, slot, field, old, new, actor, reve
     return cur.lastrowid
 
 
-def set_squad(name, slot, squad_type=None, power=None, *, actor, source="edited"):
-    """Correct one squad slot. Returns the edit ids written.
-
-    Only the fields supplied are touched, and each field change is its own edit
-    row — so an admin reverting "they set the type wrong" does not also revert
-    a correct power entered in the same request.
-    """
+def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source="edited"):
+    """Set one squad slot. Each changed field becomes its own edit row, so
+    reverting a wrong type does not also revert a correct power entered in the
+    same request."""
     if slot not in (1, 2, 3):
         raise ValueError("slot must be 1, 2 or 3")
     if squad_type is not None and squad_type not in VALID_TYPES:
@@ -370,41 +490,39 @@ def set_squad(name, slot, squad_type=None, power=None, *, actor, source="edited"
     if source not in VALID_SOURCES:
         raise ValueError(f"source must be one of {VALID_SOURCES}")
 
-    key = normalize_name(name)
     edit_ids = []
     with _get_conn() as conn:
-        if not conn.execute("SELECT 1 FROM registrants WHERE player_key = ?", (key,)).fetchone():
-            raise LookupError(f"no registrant matches {name!r}")
+        if not conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone():
+            raise LookupError(f"no registrant {registrant_id}")
 
         row = conn.execute(
-            "SELECT * FROM squads WHERE player_key = ? AND slot = ?", (key, slot)
+            "SELECT * FROM squads WHERE registrant_id = ? AND slot = ?", (registrant_id, slot)
         ).fetchone()
         old_type = row["squad_type"] if row else None
         old_power = row["power"] if row else None
-
         new_type = old_type if squad_type is None else squad_type
         new_power = old_power if power is None else float(power)
 
         conn.execute(
             """
-            INSERT INTO squads (player_key, slot, squad_type, power, source,
+            INSERT INTO squads (registrant_id, slot, squad_type, power, source,
                                 updated_at, updated_by)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(player_key, slot) DO UPDATE SET
+            ON CONFLICT(registrant_id, slot) DO UPDATE SET
                 squad_type = excluded.squad_type,
                 power      = excluded.power,
                 source     = excluded.source,
                 updated_at = excluded.updated_at,
                 updated_by = excluded.updated_by
             """,
-            (key, slot, new_type, new_power, source, _now(), actor["discord_user_id"]),
+            (registrant_id, slot, new_type, new_power, source, _now(), actor["discord_user_id"]),
         )
         if squad_type is not None and old_type != new_type:
             edit_ids.append(
                 _record_edit(
                     conn,
                     target="squad",
-                    player_key=key,
+                    registrant_id=registrant_id,
                     slot=slot,
                     field="squad_type",
                     old=old_type,
@@ -417,7 +535,7 @@ def set_squad(name, slot, squad_type=None, power=None, *, actor, source="edited"
                 _record_edit(
                     conn,
                     target="squad",
-                    player_key=key,
+                    registrant_id=registrant_id,
                     slot=slot,
                     field="power",
                     old=old_power,
@@ -425,32 +543,34 @@ def set_squad(name, slot, squad_type=None, power=None, *, actor, source="edited"
                     actor=actor,
                 )
             )
-    return {"player_key": key, "slot": slot, "edit_ids": edit_ids}
+    return {"registrant_id": registrant_id, "slot": slot, "edit_ids": edit_ids}
 
 
-def add_order(name, slots, *, actor, opponent=None, observed_at=None, source="observed"):
-    """Record a deployment order actually seen. Repeats are meaningful.
+def add_order(registrant_id, slots, *, actor, opponent=None, observed_at=None, source="observed"):
+    """Record a deployment order actually seen. Appends; repeats are meaningful.
 
-    A player seen five times in one order and once in another should be
-    sampled 5:1, so this appends rather than replacing — the frequency is the
-    signal `predict_matchup` consumes.
+    Every lineup observed to date runs exactly one Tank, one Missile and one
+    Aircraft, so an order is a permutation of the three. A repeat would mean
+    either a game change or a typo, and both deserve a refusal rather than a
+    silent record.
     """
     if len(slots) != 3 or any(s not in VALID_TYPES for s in slots):
         raise ValueError(f"slots must be three of {VALID_TYPES}")
+    if len(set(slots)) != 3:
+        raise ValueError("a deployment order uses each squad type once")
 
-    key = normalize_name(name)
     with _get_conn() as conn:
-        if not conn.execute("SELECT 1 FROM registrants WHERE player_key = ?", (key,)).fetchone():
-            raise LookupError(f"no registrant matches {name!r}")
+        if not conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone():
+            raise LookupError(f"no registrant {registrant_id}")
         cur = conn.execute(
             """
             INSERT INTO order_history
-                (player_key, slot1, slot2, slot3, opponent, observed_at,
+                (registrant_id, slot1, slot2, slot3, opponent, observed_at,
                  source, created_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                key,
+                registrant_id,
                 slots[0],
                 slots[1],
                 slots[2],
@@ -465,49 +585,54 @@ def add_order(name, slots, *, actor, opponent=None, observed_at=None, source="ob
         edit_id = _record_edit(
             conn,
             target="order",
-            player_key=key,
+            registrant_id=registrant_id,
             slot=None,
             field="order",
             old=None,
             new="/".join(slots),
             actor=actor,
         )
-    return {"player_key": key, "order_id": order_id, "edit_ids": [edit_id]}
+    return {"registrant_id": registrant_id, "order_id": order_id, "edit_ids": [edit_id]}
 
 
 # ── Audit + revert ────────────────────────────────────────────────────────────
 
 
-def list_edits(*, since=None, until=None, player=None, actor=None, limit=50, offset=0):
-    """Newest first. `since`/`until` are ISO-8601; both are inclusive of the
-    day boundary the caller passes, which is why timestamps are stored as
-    sortable text."""
-    sql = "SELECT * FROM edits WHERE 1=1"
+def list_edits(*, since=None, until=None, player=None, server=None, actor=None, limit=50, offset=0):
+    """Newest first. `since`/`until` are ISO-8601 and compare as text."""
+    sql = (
+        "SELECT e.*, r.display_name, r.server FROM edits e "
+        "LEFT JOIN registrants r ON r.id = e.registrant_id WHERE 1=1"
+    )
+    where: list[str] = []
     params: list = []
     if since:
-        sql += " AND created_at >= ?"
+        where.append(" AND e.created_at >= ?")
         params.append(since)
     if until:
-        sql += " AND created_at <= ?"
+        where.append(" AND e.created_at <= ?")
         params.append(until)
     if player:
-        sql += " AND player_key = ?"
-        params.append(normalize_name(player))
+        ids = [p["id"] for p in find_registrants(player, server)]
+        if not ids:
+            return {"edits": [], "total": 0}
+        where.append(f" AND e.registrant_id IN ({','.join('?' * len(ids))})")
+        params.extend(ids)
     if actor:
-        sql += " AND actor_discord_id = ?"
+        where.append(" AND e.actor_discord_id = ?")
         params.append(str(actor))
-    sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
 
+    clause = "".join(where)
     with _get_conn() as conn:
-        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                sql + clause + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        ]
         total = conn.execute(
-            "SELECT COUNT(*) AS n FROM edits WHERE 1=1"
-            + (" AND created_at >= ?" if since else "")
-            + (" AND created_at <= ?" if until else "")
-            + (" AND player_key = ?" if player else "")
-            + (" AND actor_discord_id = ?" if actor else ""),
-            params[:-2],
+            "SELECT COUNT(*) AS n FROM edits e WHERE 1=1" + clause, params
         ).fetchone()["n"]
     return {"edits": rows, "total": total}
 
@@ -515,9 +640,9 @@ def list_edits(*, since=None, until=None, player=None, actor=None, limit=50, off
 class RevertConflict(Exception):
     """The value moved on after the edit being reverted.
 
-    Carries the current value so the caller can show what it found instead of
-    a bare failure — an admin needs to see the newer correction before
-    deciding whether to stamp on it.
+    Carries the current value so the caller can show what it found instead of a
+    bare failure — an admin needs to see the newer correction before deciding
+    whether to stamp on it.
     """
 
     def __init__(self, current, expected):
@@ -529,14 +654,10 @@ class RevertConflict(Exception):
 def revert_edit(edit_id: int, *, actor, force: bool = False) -> dict:
     """Restore the value an edit replaced, as a new append-only edit.
 
-    Optimistically checked: if the field has changed again since, this raises
-    RevertConflict rather than silently clobbering the newer correction. That
-    matters because two scouts can be entering sightings for the same player at
-    once, and the later one is usually the better information.
-
-    Order edits are not revertable this way — an order is an appended
-    observation, not a replaced value, so there is nothing to restore. Deleting
-    a bad sighting is a separate operation and deliberately not folded in here.
+    Optimistically checked: if the field changed again since, this raises
+    RevertConflict rather than clobbering the newer correction. Two scouts
+    entering sightings for one player at once is normal, and the later entry is
+    usually the better information.
     """
     with _get_conn() as conn:
         row = conn.execute("SELECT * FROM edits WHERE id = ?", (edit_id,)).fetchone()
@@ -545,38 +666,35 @@ def revert_edit(edit_id: int, *, actor, force: bool = False) -> dict:
         if row["target"] != "squad":
             raise ValueError("only squad edits can be reverted")
 
-        key, slot, field = row["player_key"], row["slot"], row["field"]
+        reg_id, slot, field = row["registrant_id"], row["slot"], row["field"]
         # `field` reaches an UPDATE by name. It can only ever be one of ours,
-        # but whitelisting means a corrupt or hand-edited audit row can't turn
-        # into arbitrary SQL.
+        # but whitelisting means a corrupt audit row can't become arbitrary SQL.
         if field not in ("squad_type", "power"):
             raise ValueError(f"unrevertable field {field!r}")
+
         current_row = conn.execute(
-            "SELECT * FROM squads WHERE player_key = ? AND slot = ?", (key, slot)
+            "SELECT * FROM squads WHERE registrant_id = ? AND slot = ?", (reg_id, slot)
         ).fetchone()
         current = None if current_row is None else current_row[field]
 
-        # Compare as text: the column is typed but the audit row is not.
         if not force and (current is None) != (row["new_value"] is None):
             raise RevertConflict(current, row["new_value"])
         if not force and current is not None and str(current) != str(row["new_value"]):
             raise RevertConflict(current, row["new_value"])
 
         restored = row["old_value"]
-        if field == "power":
-            restored_typed = None if restored is None else float(restored)
-        else:
-            restored_typed = restored
-
+        restored_typed = (
+            None if restored is None else (float(restored) if field == "power" else restored)
+        )
         conn.execute(
             f"UPDATE squads SET {field} = ?, updated_at = ?, updated_by = ?, "  # noqa: S608
-            "source = 'edited' WHERE player_key = ? AND slot = ?",
-            (restored_typed, _now(), actor["discord_user_id"], key, slot),
+            "source = 'edited' WHERE registrant_id = ? AND slot = ?",
+            (restored_typed, _now(), actor["discord_user_id"], reg_id, slot),
         )
         new_id = _record_edit(
             conn,
             target="squad",
-            player_key=key,
+            registrant_id=reg_id,
             slot=slot,
             field=field,
             old=current,
@@ -590,16 +708,27 @@ def revert_edit(edit_id: int, *, actor, force: bool = False) -> dict:
 def export_edits(start: str, end: str) -> list[dict]:
     """Every edit in a date range, oldest first — the spreadsheet view.
 
-    Browsing a long history in Discord is worse than a spreadsheet, so this is
-    the escape hatch rather than an afterthought. Oldest-first because it reads
-    as a narrative of what happened.
+    Oldest-first because it reads as a narrative of what happened.
     """
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT e.*, r.display_name FROM edits e "
-            "LEFT JOIN registrants r ON r.player_key = e.player_key "
+            "SELECT e.*, r.display_name, r.server, r.grp FROM edits e "
+            "LEFT JOIN registrants r ON r.id = e.registrant_id "
             "WHERE e.created_at >= ? AND e.created_at <= ? ORDER BY e.id ASC",
             (start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def contributor_summary(limit: int = 25) -> list[dict]:
+    """Who has contributed what. The contributor graph IS the user base — no
+    separate table needed to know which servers have people entering data."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT actor_discord_id, actor_name, COUNT(*) AS edits, "
+            "MAX(created_at) AS last_seen FROM edits "
+            "GROUP BY actor_discord_id ORDER BY edits DESC LIMIT ?",
+            (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -608,8 +737,8 @@ def export_edits(start: str, end: str) -> list[dict]:
 
 
 def create_session(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
-    """Mint a session. Returns the plaintext token exactly once — only its
-    hash is stored, so it cannot be recovered from the volume afterwards."""
+    """Mint a session. Returns the plaintext token exactly once — only its hash
+    is stored, so it cannot be recovered from the volume afterwards."""
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     with _get_conn() as conn:
@@ -635,7 +764,6 @@ def create_session(discord_user_id, discord_name=None, can_write=False, writer_g
 
 
 def get_session(token: str) -> dict | None:
-    """Resolve a session token, or None if unknown, expired or revoked."""
     if not token:
         return None
     with _get_conn() as conn:
@@ -654,12 +782,6 @@ def get_session(token: str) -> dict | None:
 
 
 def update_session_premium(token, can_write, writer_guild_id=None):
-    """Refresh the cached premium verdict on a session.
-
-    `premium.is_premium` has its own 5-minute cache, but re-scanning every
-    guild the bot is in on every write would be wasteful; this stamps the
-    answer so the scan runs on a slower cadence.
-    """
     with _get_conn() as conn:
         conn.execute(
             "UPDATE sessions SET can_write = ?, writer_guild_id = ?, "
@@ -681,7 +803,6 @@ def revoke_session(token: str) -> None:
 
 
 def purge_expired() -> int:
-    """Drop dead sessions and spent hand-off codes. Cheap; run on a loop."""
     with _get_conn() as conn:
         n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_now(),)).rowcount
         conn.execute("DELETE FROM auth_codes WHERE expires_at <= ?", (_now(),))
@@ -694,15 +815,8 @@ def purge_expired() -> int:
 def create_auth_code(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
     """One-time code the browser carries back from the OAuth callback.
 
-    It holds the *resolved identity*, not a session token. The session is not
-    minted until the code is redeemed, which is what lets `sessions` store only
-    a hash: if the callback minted the token up front, redeeming a code would
-    have to hand back a plaintext token that no longer exists anywhere, and the
-    only way to make that work would be storing the live token on the volume.
-
-    The code exists at all so the token never rides in the redirect URL, where
-    it would land in browser history, the Referer header and any proxy log.
-    Single-use, one minute.
+    Holds the resolved identity, not a session token: the session is minted at
+    redemption, which is what lets `sessions` store only a hash.
     """
     code = secrets.token_urlsafe(24)
     now = datetime.now(timezone.utc)
@@ -727,11 +841,9 @@ def create_auth_code(discord_user_id, discord_name=None, can_write=False, writer
 
 
 def consume_auth_code(code: str) -> dict | None:
-    """Redeem a code for the identity behind it, once.
-
-    None if unknown, expired or already used — all three answer the same, so a
-    caller cannot probe which codes ever existed.
-    """
+    """Redeem a code for the identity behind it, once. Unknown, expired and
+    already-used all answer the same, so a caller cannot probe which codes
+    existed."""
     if not code:
         return None
     with _get_conn() as conn:

@@ -239,6 +239,14 @@ class ScoreModal(discord.ui.Modal):
             embed=_score_ack(state, self.week, self.day), ephemeral=True
         )
 
+        # The officer already has their answer, so anything the alliance opted
+        # into is announced afterwards and cannot delay or break the save.
+        import alliance_duel_events as ad_events
+
+        await ad_events.announce_after_write(
+            interaction.client, state, week=self.week, day=self.day
+        )
+
 
 def _score_ack(state, week: int, day: int) -> discord.Embed:
     """Confirm the save and answer the question the score was entered to ask.
@@ -532,6 +540,17 @@ class ScoutActionsView(discord.ui.View):
         known.callback = self._known
         self.add_item(known)
 
+        # Their day pattern (#408), offered only once something has actually
+        # been logged against them. Their day outcomes exist only for weeks you
+        # played them, so on a never-met alliance this button would open an
+        # embed that says nothing.
+        import alliance_duel_analytics as an
+
+        if an.day_profile(state.rows, alliance).weeks_recorded:
+            trends = discord.ui.Button(label=_trends_label(), style=discord.ButtonStyle.secondary)
+            trends.callback = self._trends
+            self.add_item(trends)
+
         # Only offered on the alliance you are actually playing this week: a
         # Picked call is a call on one specific match, not a standing opinion.
         if self.week and state.own_match(self.week) == alliance:
@@ -548,6 +567,13 @@ class ScoutActionsView(discord.ui.View):
 
     async def _known(self, interaction: discord.Interaction):
         await interaction.response.send_modal(KnownModal(self.state, self.alliance, self.week or 1))
+
+    async def _trends(self, interaction: discord.Interaction):
+        import alliance_duel_ui as ad_ui
+
+        await interaction.response.send_message(
+            embed=ad_ui.opponent_trends_embed(self.state, self.alliance), ephemeral=True
+        )
 
     def _picker(self, outcome: str):
         async def _pick(interaction: discord.Interaction):
@@ -596,7 +622,7 @@ def pending_next_week(state) -> int | None:
     return None
 
 
-async def generate_next_week(state, week: int) -> tuple[bool, str]:
+async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
     """Write next week's rows, carried forward with predicted opponents.
 
     Season, tier, group, seed, tag and warzone come forward, so the only thing
@@ -614,6 +640,15 @@ async def generate_next_week(state, week: int) -> tuple[bool, str]:
     problem = await save_rows(state, rows)
     if problem:
         return False, problem
+
+    # Next week's opponent is now known, which is the event the reveal post
+    # (#409) exists for. Announced from here rather than from the button so the
+    # sheet-first path (an officer typing the rows in themselves) is the only
+    # way it can be missed.
+    import alliance_duel_events as ad_events
+
+    await ad_events.announce_after_write(bot, state, week=week + 1)
+
     return True, (
         f"Added {len(rows)} rows for week {week + 1}, with the pairings I expect. "
         f"Correct any the game paired differently."
@@ -630,3 +665,272 @@ __all__ = [
     "save_rows",
     "target_day",
 ]
+
+
+# ── Push / Save declaration (#407) ────────────────────────────────────────────
+
+#: Bare, and no `primary` among them. These are alternatives inside one
+#: question, which the DESIGN.md rule says go without glyphs, and the bot has
+#: no opinion about whether an alliance should spend or bank its resources.
+VS_BTN_DECLARE = "✏️ Declare this week"
+VS_BTN_PUSH = "Push to win"
+VS_BTN_SAVE = "Save for a later week"
+VS_BTN_CLEAR_INTENT = "Clear the declaration"
+VS_BTN_ANNOUNCE = "📣 Tell members"
+
+#: How a recorded intent reads back. The sheet stores the code; nothing else
+#: should spell these out, so a rename stays here.
+INTENT_WORDS = {
+    ad.INTENT_PUSH: "pushing to win",
+    ad.INTENT_SAVE: "saving for a later week",
+    ad.INTENT_NONE: "undeclared",
+}
+
+
+def declaration_embed(state, week: int) -> discord.Embed:
+    """What is declared for `week`, and what saving it would actually cost.
+
+    The cost is the point of the surface. Week 1 carries more weight than every
+    later week combined (8 against 4+2+1), so its winners and losers separate
+    into two cohorts that never re-merge: a save in week 1 is not a neutral
+    resource decision, it fixes which half of the league you spend the season
+    in. The lineage walk already computes that, so this answers "who do we end
+    up facing?" outright rather than leaving leadership to infer it from a
+    warning.
+    """
+    embed = discord.Embed(
+        title=f"Week {week}: push or save?",
+        color=discord.Color.blurple(),
+    )
+
+    row = state.row_for(state.own, week) if state.own else None
+    declared = row.intent if row else None
+    if declared and declared != ad.INTENT_NONE:
+        embed.description = f"You have this week recorded as **{INTENT_WORDS[declared]}**."
+    else:
+        embed.description = (
+            "Nothing recorded for this week yet. Declaring it puts the call on "
+            "your sheet, so a week that was lost on purpose still reads that "
+            "way months later."
+        )
+
+    consequence = _save_consequence(state, week)
+    if consequence:
+        embed.add_field(name="If you save this week", value=consequence[:1024], inline=False)
+
+    embed.set_footer(text="Recorded on your own rows. Nothing is announced unless you ask.")
+    return embed
+
+
+def _save_consequence(state, week: int) -> str:
+    """The path that follows from losing `week` on purpose, in plain words.
+
+    Returns an empty string when the bracket cannot be walked, which is the
+    normal state in own-alliance tracking mode: there is no cohort to project
+    without the other fifteen rows, and saying so here would repeat an upsell
+    the mode question already made.
+    """
+    if state.own is None or state.league is None:
+        return ""
+
+    projection = ad.project_own_path(
+        state.own,
+        state.league_rows(),
+        estimate=ad.make_estimator(state.profiles),
+        assume={week: (state.own, "L")},
+    )
+    if isinstance(projection, ad.BracketIncomplete):
+        return ""
+
+    later = [s for s in projection.steps if s.week > week and s.opponent is not None]
+    lines = []
+    if week == 1:
+        lines.append(
+            "Week 1 decides which half of the league you spend the season in. "
+            "Its winners and losers never meet again, so this one does not "
+            "come back."
+        )
+    if later:
+        route = ", ".join(f"week {s.week} {state.display_name(s.opponent)}" for s in later[:3])
+        lines.append(f"You would then face {route}.")
+    else:
+        lines.append(
+            "Who you would face after that is not worked out yet. "
+            f"Open **{ad_hub_btn_path()}** to see what is blocking it."
+        )
+    return "\n".join(lines)
+
+
+def _trends_label() -> str:
+    """The Trends button's label, imported rather than retyped so a rename
+    stays one line. Lazy for the same reason `ad_hub_btn_path` is: the UI
+    module imports this one."""
+    import alliance_duel_ui
+
+    return alliance_duel_ui.VS_BTN_TRENDS
+
+
+def ad_hub_btn_path() -> str:
+    """Imported lazily so the entry module keeps its one-way dependency on the
+    hub: the hub imports this module, not the other way round."""
+    import alliance_duel_hub
+
+    return alliance_duel_hub.VS_BTN_PATH
+
+
+class DeclarationView(discord.ui.View):
+    """Push, save, or clear, plus an optional announcement to members.
+
+    Neither call is styled as the recommended one. Whether to spend or bank a
+    week is a strategy decision belonging entirely to the alliance, and a
+    `primary` button on either would read as the bot having a view about it.
+    """
+
+    def __init__(self, state, week: int, owner_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
+        row = self.state.row_for(self.state.own, self.week) if self.state.own else None
+        declared = (row.intent if row else None) or ad.INTENT_NONE
+
+        for label, intent in (
+            (VS_BTN_PUSH, ad.INTENT_PUSH),
+            (VS_BTN_SAVE, ad.INTENT_SAVE),
+        ):
+            button = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+                disabled=declared == intent,
+                row=0,
+            )
+            button.callback = self._make_declare(intent)
+            self.add_item(button)
+
+        clear = discord.ui.Button(
+            label=VS_BTN_CLEAR_INTENT,
+            style=discord.ButtonStyle.secondary,
+            disabled=declared == ad.INTENT_NONE,
+            row=1,
+        )
+        clear.callback = self._make_declare(ad.INTENT_NONE)
+        self.add_item(clear)
+
+        # Only offered once there is something to announce and somewhere to
+        # announce it. A live button that could not post anywhere would be a
+        # control that cannot change anything.
+        channel_id = self.state.cfg.get("day_theme_channel_id") or 0
+        if declared != ad.INTENT_NONE and channel_id:
+            announce = discord.ui.Button(
+                label=VS_BTN_ANNOUNCE, style=discord.ButtonStyle.secondary, row=1
+            )
+            announce.callback = self._announce
+            self.add_item(announce)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+        return False
+
+    async def on_timeout(self) -> None:
+        import wizard_registry
+
+        await wizard_registry.expire_view_message(self.message, command_hint="/vs")
+
+    def _make_declare(self, intent: str):
+        async def _callback(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            row = _row_for_write(self.state, self.state.own, self.week)
+            row.intent = intent
+            problem = await save_rows(self.state, [row])
+            if problem:
+                await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
+                return
+
+            self._render()
+            if self.message is not None:
+                try:
+                    await self.message.edit(
+                        embed=declaration_embed(self.state, self.week), view=self
+                    )
+                except discord.HTTPException:
+                    pass
+
+            if intent == ad.INTENT_NONE:
+                said = f"✅ Cleared the declaration for week {self.week}."
+            else:
+                said = (
+                    f"✅ Recorded week {self.week} as **{INTENT_WORDS[intent]}**."
+                    " Members are not told unless you ask."
+                )
+            await interaction.followup.send(said, ephemeral=True)
+
+        return _callback
+
+    async def _announce(self, interaction: discord.Interaction):
+        """Post the call where members will see it. Never automatic: a save is
+        exactly the kind of decision leadership may want to make quietly."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        row = self.state.row_for(self.state.own, self.week)
+        intent = (row.intent if row else None) or ad.INTENT_NONE
+        channel_id = self.state.cfg.get("day_theme_channel_id") or 0
+
+        channel = config_health.resolve_configured_channel(
+            interaction.client, self.state.guild_id, ad_setup.VS_POST_CHANNEL_SUBJECT, channel_id
+        )
+        if channel is None:
+            await interaction.followup.send(
+                "⚠️ I could not post to your members' channel. Set it again in "
+                f"{ad_setup.VS_SETUP_NAV}, then open `/vs` and click "
+                f"**{VS_BTN_DECLARE}** to try again.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await channel.send(embed=announcement_embed(self.week, intent))
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"⚠️ I am not allowed to post in <#{channel.id}>. Give me permission "
+                "there, or pick another channel in "
+                f"{ad_setup.VS_SETUP_NAV}.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(f"📣 Told members in <#{channel.id}>.", ephemeral=True)
+
+
+def announcement_embed(week: int, intent: str) -> discord.Embed:
+    """The member-facing half of a declaration.
+
+    Written for someone who has no idea what a cohort is and does not need to:
+    it says what to do with their own resources this week, which is the only
+    part that affects them.
+    """
+    if intent == ad.INTENT_PUSH:
+        embed = discord.Embed(
+            title=f"🏆 We are going for week {week}",
+            description=(
+                "Spend what you have been saving. Every day this week is worth "
+                "taking, so use your speedups and shards as the day themes come up."
+            ),
+            color=discord.Color.green(),
+        )
+    else:
+        embed = discord.Embed(
+            title=f"🏆 We are saving week {week}",
+            description=(
+                f"Week {week} is a deliberate hold. Bank your speedups and shards "
+                "rather than spending them, and keep them for the week we go for."
+            ),
+            color=discord.Color.blurple(),
+        )
+    embed.set_footer(text="A call from your leadership.")
+    return embed

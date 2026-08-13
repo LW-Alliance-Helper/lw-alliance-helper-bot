@@ -653,6 +653,60 @@ async def scan_vs_score_prompt(bot, guild, cfg, window: OutageWindow) -> list[Mi
     ]
 
 
+async def scan_vs_day_theme(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
+    """Member day-theme reminder (#406). Free, and reads nothing, so there is
+    no Premium re-check and no sheet involved.
+
+    Only ever recovers a reminder for the day currently running, which the
+    shared helpers already guarantee rather than this adapter having to check:
+    `_scheduled_today` resolves the slot against the date the bot came back,
+    and `_was_missed` rejects a slot still in the future. So a bot down across
+    Tuesday's 8am slot that returns on Wednesday recovers *Wednesday's*
+    reminder and lets Tuesday's go, which is right. "Today is Base Expansion"
+    posted on Wednesday is not a late reminder, it is a wrong one.
+    """
+    import alliance_duel as ad
+
+    vs_cfg = config.get_vs_config(guild.id)
+    if not vs_cfg.get("day_theme_enabled") or not vs_cfg.get("day_theme_channel_id"):
+        return []
+    parsed = _parse_hhmm(vs_cfg.get("day_theme_time") or "")
+    if parsed is None:
+        return []
+
+    tz = _guild_tz(cfg)
+    scheduled = _scheduled_today(window, tz, *parsed)
+    if not _was_missed(scheduled, window):
+        return []
+
+    day_date = ad.server_today(scheduled)
+    day = ad.duel_day_for_date(day_date)
+    if day is None:
+        return []  # Sunday
+    if vs_cfg.get("last_day_theme_fired") == day_date.isoformat():
+        return []
+
+    channel = bot.get_channel(int(vs_cfg.get("day_theme_channel_id") or 0))
+
+    async def _fire() -> bool:
+        from alliance_duel_cog import post_day_theme
+
+        posted = await post_day_theme(bot, guild, vs_cfg, day)
+        if posted:
+            config.save_vs_config(guild.id, last_day_theme_fired=day_date.isoformat())
+        return posted
+
+    return [
+        MissedItem(
+            surface="vs_day_theme",
+            title=f"Alliance Duel (VS) day theme: {ad.DUEL_DAY_BY_NUMBER[day].theme}",
+            scheduled_local=scheduled,
+            destination=f"sent to #{getattr(channel, 'name', 'the VS channel')}",
+            fire=_fire,
+        )
+    ]
+
+
 async def scan_event_draft(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     """Daily event editor draft (the `EventEditorView` the scheduler posts so
     leadership can approve → announce). Catch-up window: up to the event start
@@ -725,6 +779,7 @@ SURFACE_ADAPTERS: tuple[Callable[..., Awaitable[list[MissedItem]]], ...] = (
     scan_train_reminder,
     scan_storm_signup,
     scan_vs_score_prompt,
+    scan_vs_day_theme,
 )
 
 

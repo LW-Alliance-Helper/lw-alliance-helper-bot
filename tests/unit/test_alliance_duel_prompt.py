@@ -519,57 +519,58 @@ async def test_catch_up_offers_nothing_to_a_guild_that_opted_out():
 # ── Settings panel ────────────────────────────────────────────────────────────
 
 
+def _panel_text(**cfg_over):
+    return _text(ad_setup.scheduled_post_embed(_vs_cfg(**cfg_over), "score_prompt"))
+
+
 def test_the_settings_panel_says_what_is_saved_before_what_it_does():
-    text = _text(ad_setup.prompt_settings_embed(_vs_cfg()))
+    text = _panel_text()
     assert "9:00am" in text
     assert f"<#{CHANNEL_ID}>" in text
 
 
 def test_turning_it_off_says_the_channel_and_time_are_kept():
-    text = _text(ad_setup.prompt_settings_embed(_vs_cfg(score_prompt_enabled=0)))
-    assert "still saved" in text
+    assert "still saved" in _panel_text(score_prompt_enabled=0)
 
 
 def test_an_unconfigured_panel_names_what_is_missing():
-    text = _text(
-        ad_setup.prompt_settings_embed(
-            _vs_cfg(score_prompt_enabled=0, score_prompt_time="", score_prompt_channel_id=0)
-        )
-    )
+    text = _panel_text(score_prompt_enabled=0, score_prompt_time="", score_prompt_channel_id=0)
     assert "a time and a channel" in text
 
 
 def test_the_panel_explains_the_schedule_and_whose_clock_is_whose():
-    text = _text(ad_setup.prompt_settings_embed(_vs_cfg()))
+    text = _panel_text()
     assert "Tuesday through Sunday" in text
     assert "server time" in text
 
 
 def test_the_panel_carries_no_em_dashes():
-    assert "—" not in _text(ad_setup.prompt_settings_embed(_vs_cfg()))
+    assert "\u2014" not in _panel_text()
+
+
+def _panel(monkeypatch, **cfg_over):
+    monkeypatch.setattr("config.get_vs_config", lambda _gid: _vs_cfg(**cfg_over))
+    return ad_wizard.ScheduledPostSettingsView(GUILD_ID, 1, ad_wizard.SCORE_PROMPT_SURFACE)
 
 
 def test_the_toggle_cannot_switch_on_a_post_that_could_never_fire(monkeypatch):
-    monkeypatch.setattr(
-        "config.get_vs_config",
-        lambda _gid: _vs_cfg(
-            score_prompt_enabled=0, score_prompt_time="", score_prompt_channel_id=0
-        ),
+    view = _panel(
+        monkeypatch,
+        score_prompt_enabled=0,
+        score_prompt_time="",
+        score_prompt_channel_id=0,
     )
-    view = ad_wizard.ScorePromptSettingsView(GUILD_ID, 1)
     toggle = next(c for c in view.children if c.label == ad_wizard.VS_BTN_PROMPT_ON)
     assert toggle.disabled is True
 
 
 def test_the_toggle_is_live_once_both_halves_are_set(monkeypatch):
-    monkeypatch.setattr("config.get_vs_config", lambda _gid: _vs_cfg(score_prompt_enabled=0))
-    view = ad_wizard.ScorePromptSettingsView(GUILD_ID, 1)
+    view = _panel(monkeypatch, score_prompt_enabled=0)
     toggle = next(c for c in view.children if c.label == ad_wizard.VS_BTN_PROMPT_ON)
     assert toggle.disabled is False
 
 
 def test_the_panel_has_at_most_one_primary_button(monkeypatch):
-    monkeypatch.setattr("config.get_vs_config", lambda _gid: _vs_cfg())
-    view = ad_wizard.ScorePromptSettingsView(GUILD_ID, 1)
+    view = _panel(monkeypatch)
     primaries = [c for c in view.children if c.style is discord.ButtonStyle.primary]
     assert len(primaries) <= 1

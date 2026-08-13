@@ -349,7 +349,10 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "Also where you switch on the 🔔 Daily score prompt: a post in "
                 "a channel you pick, at a time you pick, asking for the day "
                 "that just finished with a button to record it. Tuesday "
-                "through Sunday, since Sunday is the rest day.",
+                "through Sunday, since Sunday is the rest day.\n"
+                "**Free:** 📣 Day theme reminder posts what today rewards for "
+                "your members, Monday to Saturday, and can carry a standing "
+                "note from you. It needs no tracker setup and no sheet.",
             ),
             (
                 "/vs",

@@ -53,18 +53,24 @@ class AllianceDuelCog(commands.Cog):
     async def check_vs_posts(self):
         """Per-minute tick driving the VS scheduled posts.
 
-        Gated on the tracker being enabled *and* the individual surface being
-        opted into, so a guild that set up the tracker but wants no automated
-        posts is never posted to.
+        Every surface is gated on its own opt-in, so a guild that wants one and
+        not the other gets exactly that.
+
+        **The two surfaces gate differently on the tracker itself.** The score
+        prompt reads the sheet, so it needs the tracker set up and Premium. The
+        member day-theme reminder (#406) reads nothing at all: it renders from
+        the fixed day table, ships free, and is available to an alliance that
+        has never opened the tracker. Requiring `enabled` for it would be
+        gating a free surface behind a Premium one.
         """
         import config
 
         for guild in self.bot.guilds:
             try:
                 cfg = config.get_config(guild.id)
-                vs_cfg = config.get_vs_config(guild.id)
-                if not cfg or not cfg.setup_complete or not vs_cfg.get("enabled"):
+                if not cfg or not cfg.setup_complete:
                     continue
+                vs_cfg = config.get_vs_config(guild.id)
                 try:
                     guild_tz = ZoneInfo(cfg.timezone or _DEFAULT_TZ)
                 except ZoneInfoNotFoundError:
@@ -72,7 +78,9 @@ class AllianceDuelCog(commands.Cog):
                 from datetime import datetime
 
                 guild_now = datetime.now(tz=guild_tz)
-                await self._maybe_post_score_prompt(guild, vs_cfg, guild_now)
+                if vs_cfg.get("enabled"):
+                    await self._maybe_post_score_prompt(guild, vs_cfg, guild_now)
+                await self._maybe_post_day_theme(guild, vs_cfg, guild_now)
             except Exception as e:  # noqa: BLE001 - one guild must not sink the tick
                 logger.exception("[VS POSTS] tick failed for guild %s: %s", guild.id, e)
 
@@ -103,6 +111,34 @@ class AllianceDuelCog(commands.Cog):
         config.save_vs_config(guild.id, last_score_prompt_fired=day_date.isoformat())
 
         await post_score_prompt(self.bot, guild, vs_cfg, day_date, day)
+
+    async def _maybe_post_day_theme(self, guild, vs_cfg, guild_now) -> None:
+        """Tell members what today rewards, once, in the alliance's channel.
+
+        Today's day, not yesterday's: the score prompt asks about numbers that
+        already exist, while this one is a call to action for the day that is
+        running. Monday through Saturday, since Sunday scores nothing.
+        """
+        import config
+
+        if not vs_cfg.get("day_theme_enabled") or not vs_cfg.get("day_theme_channel_id"):
+            return
+        hh, mm = _hm(vs_cfg.get("day_theme_time"), "")
+        if hh is None or guild_now.hour != hh or guild_now.minute != mm:
+            return
+
+        import alliance_duel as ad
+
+        today = ad.server_today(guild_now)
+        day = ad.duel_day_for_date(today)
+        if day is None:
+            return  # Sunday, nothing to spend anything on
+
+        if vs_cfg.get("last_day_theme_fired") == today.isoformat():
+            return
+        config.save_vs_config(guild.id, last_day_theme_fired=today.isoformat())
+
+        await post_day_theme(self.bot, guild, vs_cfg, day)
 
     @check_vs_posts.before_loop
     async def before_check_vs_posts(self):
@@ -197,6 +233,41 @@ async def post_score_prompt(bot, guild, vs_cfg, day_date, day: int, *, force: bo
         guild.id, channel.id, message.id, live.league, live.week, day, day_date.isoformat()
     )
     logger.info("[VS PROMPT] posted day %s prompt for guild %s (%s)", day, guild.id, day_date)
+    return True
+
+
+async def post_day_theme(bot, guild, vs_cfg, day: int) -> bool:
+    """Post one day's member reminder. True when a message actually landed.
+
+    Shared by the loop and by `outage_catchup`, for the same reason the score
+    prompt's post path is: recovery that reimplements posting drifts from it.
+
+    No Premium gate and no sheet read. This surface renders from the fixed day
+    table alone, which is what makes it free, and it is the only VS surface a
+    guild can run without the tracker set up.
+    """
+    import alliance_duel_setup as ad_setup
+    import alliance_duel_views as ad_views
+    import config_health
+
+    channel = config_health.resolve_configured_channel(
+        bot, guild.id, ad_setup.VS_POST_CHANNEL_SUBJECT, vs_cfg.get("day_theme_channel_id")
+    )
+    if channel is None:
+        logger.info(
+            "[VS DAY THEME] channel %s not usable for guild %s, reminder skipped",
+            vs_cfg.get("day_theme_channel_id"),
+            guild.id,
+        )
+        return False
+
+    try:
+        await channel.send(embed=ad_views.day_theme_embed(day, vs_cfg.get("day_theme_note") or ""))
+    except discord.Forbidden:
+        logger.info("[VS DAY THEME] missing perms to post in %s for guild %s", channel.id, guild.id)
+        return False
+
+    logger.info("[VS DAY THEME] posted day %s reminder for guild %s", day, guild.id)
     return True
 
 

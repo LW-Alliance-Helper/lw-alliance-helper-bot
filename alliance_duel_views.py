@@ -267,3 +267,49 @@ def register_persistent_vs_views(bot) -> int:
     if registered:
         logger.info("[VS PROMPT] Re-registered %d score prompt view(s) on startup", registered)
     return registered
+
+
+# ── The member day-theme reminder (#406) ──────────────────────────────────────
+
+
+def day_theme_embed(day: int, note: str = "") -> discord.Embed:
+    """What today's duel day rewards, for members.
+
+    Free tier and member-facing, unlike everything else in this feature, and
+    written for someone with no idea the bot exists: it names the day, says
+    what to spend, and stops. It reads nothing from the sheet, so an alliance
+    that has never touched the tracker can still switch it on.
+
+    **No award values, ever.** The in-game board renders each player their own
+    Tech-boosted figures, so there is no shared number that would be true for
+    two members of the same alliance. Order survives that and is what the copy
+    leans on. `alliance_duel.DAY_ACTIONS` carries the full reasoning.
+    """
+    duel_day = ad.DUEL_DAY_BY_NUMBER[day]
+    points = duel_day.points
+    embed = discord.Embed(
+        title=f"🏆 Today is {duel_day.theme}",
+        description=(
+            f"Day {day} of the Alliance Duel week, worth **{points}** of the "
+            f"week's {ad.WEEK_POINTS_TOTAL} league points."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+    actions = ad.DAY_ACTIONS[day]
+    embed.add_field(
+        name="What scores today",
+        value="\n".join(f"• {action}" for action in actions) + f"\n\n{ad.SCORES_EVERY_DAY}",
+        inline=False,
+    )
+    if day == 6:
+        embed.add_field(name="Worth knowing", value=ad.ENEMY_BUSTER_NOTE, inline=False)
+
+    if note.strip():
+        # Alliance-authored, in whatever language they write in, so it is
+        # carried verbatim and only clamped. Named as leadership's words rather
+        # than presented as the bot's.
+        embed.add_field(name="From your leadership", value=note.strip()[:1024], inline=False)
+
+    embed.set_footer(text="Biggest first. Spend what you have been saving.")
+    return embed

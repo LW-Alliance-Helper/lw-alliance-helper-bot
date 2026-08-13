@@ -15,6 +15,13 @@ and PR description.
 - **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
 - Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
 - **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
+- **Daily score prompt** (💎 Premium): an opt-in post that asks for the duel day that just finished, with one button that opens the same score modal the hub uses. You choose the time and the channel ([#405](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/405)).
+- **Champion Duel** (`/champion_duel`): odds for a match from the same calibrated engine the backtest validates, plus what a registrant fields and the order they have been seen deploying in. The prediction comes back as a card you can share to your channel ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- Every Champion Duel squad value says whether it was observed or estimated, and every prediction says what it was built on — so a guess never reads as a sighting ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- 💎 Premium alliances can correct a Champion Duel squad or record a deployment order they have seen. Every entry is attributed and can be put back ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+
+### Fixed
+- The bot's own storage no longer grows without bound on its hosting volume, which would eventually have taken every alliance's configuration offline at once.
 
 ## [1.8.7] — 2026-08-11
 

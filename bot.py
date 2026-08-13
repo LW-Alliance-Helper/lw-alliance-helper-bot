@@ -316,12 +316,13 @@ async def on_ready():
     if "alliance_duel_cog" not in bot.extensions:
         await bot.load_extension("alliance_duel_cog")
         print("[INFO] Alliance Duel (VS) cog loaded")
-    # Champion Duel admin tools. Only ever visible to CHAMPION_DUEL_ADMIN_IDS,
-    # and the commands guard on it themselves, so loading unconditionally is
-    # safe — an empty env var means every subcommand refuses.
+    # The `/champion_duel` hub. Member-facing (odds and player look-ups), with
+    # contributing behind Premium and the operator tools behind
+    # CHAMPION_DUEL_ADMIN_IDS — the hub resolves both itself, so loading
+    # unconditionally is safe: an empty env var means nobody sees admin buttons.
     if "champion_duel_cog" not in bot.extensions:
         await bot.load_extension("champion_duel_cog")
-        print("[INFO] Champion Duel admin cog loaded")
+        print("[INFO] Champion Duel cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:

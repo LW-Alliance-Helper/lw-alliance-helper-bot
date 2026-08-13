@@ -394,6 +394,27 @@ HELP_CATEGORIES: dict[str, dict] = {
             ),
         ],
     },
+    "champion_duel": {
+        "emoji": "👑",
+        "label": "Champion Duel",
+        "description": (
+            "Odds for a Champion Duel match, from the same calibrated engine the "
+            "backtest validates — not a rule of thumb. Look up what a registrant "
+            "fields and how they've been seen deploying, and 💎 contribute what "
+            "your alliance scouts. Every squad value says whether it was observed "
+            "or estimated, so a guess never reads as a sighting."
+        ),
+        "commands": [
+            (
+                "/champion_duel",
+                "**Champion Duel hub.**\n"
+                "🆚 Predict a match: two names in, each side's chance of winning.\n"
+                "🔍 Look up a player: squads, sources, and their most common order.\n"
+                "💎 ✏️ Correct a squad and ➕ Record an order: what your alliance "
+                "scouts, attributed to you and revertable.",
+            ),
+        ],
+    },
     "data_portability": {
         "emoji": "📦",
         "label": "Data Portability",

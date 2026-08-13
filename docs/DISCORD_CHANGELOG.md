@@ -126,9 +126,11 @@ accident.
 ---
 
 **1.9.0** — unreleased
-NO POST: nothing alliance-facing yet. The Alliance Duel (VS) tracker lands
-across several merges and none of it is reachable until the `/vs` hub ships.
-Replace this with a real post on the merge that makes it visible.
+- `/vs` tracks your Alliance Duel league and projects your path through the bracket
+- Check my sheet names the row and column of every entry mistake it finds
+- An optional daily post asks for the duel day that just finished
+- `/champion_duel` gives the odds for a match, as a card you can share
+- Premium alliances can record the Champion Duel squads and orders they scout
 
 ---
 

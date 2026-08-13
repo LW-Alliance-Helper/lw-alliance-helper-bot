@@ -595,6 +595,188 @@ def add_order(registrant_id, slots, *, actor, opponent=None, observed_at=None, s
     return {"registrant_id": registrant_id, "order_id": order_id, "edit_ids": [edit_id]}
 
 
+# ── Bulk import of scouting ───────────────────────────────────────────────────
+#
+# Imports are the baseline, not an edit, so none of this writes to `edits` --
+# the same position `import_registrants` already takes. A roster load would
+# otherwise put hundreds of rows into the audit trail on every run and bury the
+# corrections a human actually made, which is the one thing that log is for.
+
+
+def _resolve_for_import(name, server):
+    """Registrant id for one import row, or a reason it can't be used.
+
+    Bulk work reports and continues rather than raising. One misspelled name in
+    a 400-row roster must not abandon the other 399, and the caller needs the
+    list of what didn't land -- silently importing 399 of 400 is worse than
+    either extreme.
+    """
+    try:
+        return resolve_registrant(name, server)["id"], None
+    except AmbiguousPlayer as exc:
+        servers = ", ".join(str(c["server"]) for c in exc.candidates)
+        return None, f"{name!r} is on several servers ({servers}) — give one"
+    except LookupError:
+        return None, f"no registrant matches {name!r}"
+
+
+def import_squads(rows: list[dict], *, actor) -> dict:
+    """Seed squad values in bulk.
+
+    **An import never downgrades.** A slot already carrying an `observed`
+    sighting or an `edited` correction keeps it when an `estimated` value
+    arrives for the same slot -- that is the whole reason `squads.source`
+    exists, and re-running an import after a scout has corrected something
+    must not undo their work.
+
+    Estimates are computed by the caller rather than here: the THP ratios are
+    fitted against the sighting corpus, which lives in the simulator, and a
+    second copy of a calibrated constant is exactly what this project keeps
+    getting bitten by.
+    """
+    applied = skipped = protected = 0
+    problems: list[str] = []
+    now = _now()
+    actor_id = (actor or {}).get("discord_user_id")
+
+    with _get_conn() as conn:
+        for row in rows:
+            registrant_id, problem = _resolve_for_import(row.get("name"), row.get("server"))
+            if problem:
+                problems.append(problem)
+                skipped += 1
+                continue
+
+            slot = row.get("slot")
+            squad_type = row.get("type")
+            source = row.get("source") or "estimated"
+            if slot not in (1, 2, 3) or squad_type not in VALID_TYPES:
+                problems.append(f"{row.get('name')!r} slot {slot!r}/{squad_type!r} is not valid")
+                skipped += 1
+                continue
+            if source not in VALID_SOURCES:
+                problems.append(f"{row.get('name')!r} has source {source!r}")
+                skipped += 1
+                continue
+            try:
+                power = float(row.get("power"))
+            except (TypeError, ValueError):
+                problems.append(f"{row.get('name')!r} slot {slot} has no usable power")
+                skipped += 1
+                continue
+
+            existing = conn.execute(
+                "SELECT source FROM squads WHERE registrant_id = ? AND slot = ?",
+                (registrant_id, slot),
+            ).fetchone()
+            if existing and source == "estimated" and existing["source"] in ("observed", "edited"):
+                protected += 1
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO squads (registrant_id, slot, squad_type, power, source,
+                                    observed_at, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(registrant_id, slot) DO UPDATE SET
+                    squad_type  = excluded.squad_type,
+                    power       = excluded.power,
+                    source      = excluded.source,
+                    observed_at = excluded.observed_at,
+                    updated_at  = excluded.updated_at,
+                    updated_by  = excluded.updated_by
+                """,
+                (
+                    registrant_id,
+                    slot,
+                    squad_type,
+                    power,
+                    source,
+                    row.get("observed_at"),
+                    now,
+                    actor_id,
+                ),
+            )
+            applied += 1
+
+    return {
+        "applied": applied,
+        "skipped": skipped,
+        "kept_observed": protected,
+        "problems": problems[:50],
+    }
+
+
+def import_orders(rows: list[dict], *, actor) -> dict:
+    """Load scouted deployment orders, replacing the previous import.
+
+    **Idempotent on purpose, and this is the subtle part.** Repeats in
+    `order_history` are the weight -- a player seen five times in one order and
+    once in another samples 5:1, which *is* the prediction's read on what they
+    will have set when the two meet. Appending on every run would double every
+    weight and skew every prediction downstream, silently and permanently,
+    because nothing about the resulting numbers looks wrong.
+
+    So imported rows carry `source='imported'` and a re-import deletes and
+    replaces them -- but only for the players named in this payload, and only
+    the imported ones. A sighting someone entered through the hub is
+    `source='observed'` and survives untouched; it is not ours to discard.
+    """
+    applied = skipped = 0
+    problems: list[str] = []
+    now = _now()
+    actor_id = (actor or {}).get("discord_user_id")
+
+    prepared: dict[int, list[dict]] = {}
+    for row in rows:
+        registrant_id, problem = _resolve_for_import(row.get("name"), row.get("server"))
+        if problem:
+            problems.append(problem)
+            skipped += 1
+            continue
+        slots = list(row.get("slots") or [])
+        if len(slots) != 3 or any(s not in VALID_TYPES for s in slots) or len(set(slots)) != 3:
+            problems.append(f"{row.get('name')!r} order {slots!r} is not a permutation")
+            skipped += 1
+            continue
+        prepared.setdefault(registrant_id, []).append({**row, "slots": slots})
+
+    with _get_conn() as conn:
+        for registrant_id, orders in prepared.items():
+            conn.execute(
+                "DELETE FROM order_history WHERE registrant_id = ? AND source = 'imported'",
+                (registrant_id,),
+            )
+            for row in orders:
+                slots = row["slots"]
+                conn.execute(
+                    """
+                    INSERT INTO order_history
+                        (registrant_id, slot1, slot2, slot3, opponent, observed_at,
+                         source, created_at, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, 'imported', ?, ?)
+                    """,
+                    (
+                        registrant_id,
+                        slots[0],
+                        slots[1],
+                        slots[2],
+                        row.get("opponent"),
+                        row.get("observed_at"),
+                        now,
+                        actor_id,
+                    ),
+                )
+                applied += 1
+
+    return {
+        "applied": applied,
+        "skipped": skipped,
+        "players": len(prepared),
+        "problems": problems[:50],
+    }
+
+
 # ── Audit + revert ────────────────────────────────────────────────────────────
 
 

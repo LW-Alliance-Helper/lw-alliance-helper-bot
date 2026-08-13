@@ -330,6 +330,20 @@ These are deliberate and tested. Don't refactor away:
   the 1.0.2/1.0.5/1.0.8 transition for `storm_log_thread_id` et al.
   added defensive filters that had to be removed once the DROP
   COLUMN ran.)
+- **Both SQLite files run `journal_mode=WAL`, and it is load-bearing
+  for storage rather than a concurrency tweak.** Don't remove it, and
+  set it on any new database file. The Railway volume is a
+  thin-provisioned ZFS zvol: it allocates blocks on write and does not
+  return them when a file is deleted. The default rollback journal
+  creates and deletes a `-journal` file on *every* write transaction,
+  and the background loops write continuously — so the volume's
+  reported usage climbed ~55 MB/day while the filesystem itself held
+  under 2 MB, reaching 3.7 GB of 5 GB before anyone looked. `fstrim`
+  can't recover it (the container is refused the FITRIM ioctl); only
+  wiping the volume can. WAL keeps one `-wal` file that is reused in
+  place, so the allocation stays flat. Note the failure mode: `df`
+  inside the container and Railway's volume graph disagree by three
+  orders of magnitude, and the graph is the one that hits the ceiling.
 
 ### Background `tasks.loop`
 - Test by calling `task_name.coro(*args)` directly with patched

@@ -347,6 +347,19 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "alliance, and get the tab created and explained. You can "
                 "change either choice later.",
             ),
+            (
+                "/vs",
+                "💎 **Alliance Duel hub** (leadership). Opens this week's matchup "
+                "with its running league-point split.\n"
+                "**Read row:** 📇 Bracket (all 16 alliances and what you have "
+                "recorded), 🆚 This week (every matchup with the evidence behind "
+                "it), 🔍 Scout (one alliance: your record against them, and how "
+                "the week projects), 🛣️ My path (your route through the bracket, "
+                "and which alliances to scout first when it cannot be worked "
+                "out yet).\n"
+                "**Write row:** ✏️ Log today's score, ➕ Add or edit alliance, "
+                "and setup with a sheet check.",
+            ),
         ],
     },
     "map_manager": {

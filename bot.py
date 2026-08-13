@@ -313,6 +313,9 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    if "alliance_duel_cog" not in bot.extensions:
+        await bot.load_extension("alliance_duel_cog")
+        print("[INFO] Alliance Duel (VS) cog loaded")
     # Champion Duel admin tools. Only ever visible to CHAMPION_DUEL_ADMIN_IDS,
     # and the commands guard on it themselves, so loading unconditionally is
     # safe — an empty env var means every subcommand refuses.

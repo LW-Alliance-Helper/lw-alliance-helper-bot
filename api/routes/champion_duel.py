@@ -92,12 +92,38 @@ async def roster(request: web.Request) -> web.Response:
     return json_response({"roster": players, "scouting_included": actor is not None}, request)
 
 
+def _ambiguous(exc, request):
+    """409 listing the candidates. Names repeat across servers, so picking one
+    would attach a sighting to the wrong player -- unrecoverable, and the
+    caller is in a position to ask."""
+    return json_response(
+        {
+            "error": "ambiguous_player",
+            "detail": str(exc),
+            "candidates": [
+                {
+                    "id": c["id"],
+                    "server": c["server"],
+                    "group": c["grp"],
+                    "display_name": c["display_name"],
+                }
+                for c in exc.candidates
+            ],
+        },
+        request,
+        status=409,
+    )
+
+
 @requires_session
 async def player(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     if not db.NAMES_AVAILABLE:
         return json_response({"error": "identity_unavailable"}, request, status=503)
-    found = await asyncio.to_thread(db.get_player, name, True)
+    try:
+        found = await asyncio.to_thread(db.get_player, name, request.query.get("server"), True)
+    except db.AmbiguousPlayer as exc:
+        return _ambiguous(exc, request)
     if found is None:
         return json_response({"error": "not_found"}, request, status=404)
     return json_response(found, request)
@@ -172,15 +198,20 @@ async def patch_squads(request: web.Request) -> web.Response:
         return json_response({"error": "bad_request"}, request, status=400)
 
     try:
+        registrant = await asyncio.to_thread(
+            db.resolve_registrant, request.match_info["name"], body.get("server")
+        )
         result = await asyncio.to_thread(
             db.set_squad,
-            request.match_info["name"],
+            registrant["id"],
             int(body.get("slot", 0)),
             body.get("type"),
             body.get("power"),
             actor=request["cd_actor"],
             source=body.get("source", "edited"),
         )
+    except db.AmbiguousPlayer as exc:
+        return _ambiguous(exc, request)
     except LookupError as exc:
         return json_response({"error": "not_found", "detail": str(exc)}, request, status=404)
     except (ValueError, TypeError) as exc:
@@ -200,14 +231,19 @@ async def post_order(request: web.Request) -> web.Response:
         return json_response({"error": "bad_request"}, request, status=400)
 
     try:
+        registrant = await asyncio.to_thread(
+            db.resolve_registrant, request.match_info["name"], body.get("server")
+        )
         result = await asyncio.to_thread(
             db.add_order,
-            request.match_info["name"],
+            registrant["id"],
             list(body.get("slots") or []),
             actor=request["cd_actor"],
             opponent=body.get("opponent"),
             observed_at=body.get("observed_at"),
         )
+    except db.AmbiguousPlayer as exc:
+        return _ambiguous(exc, request)
     except LookupError as exc:
         return json_response({"error": "not_found", "detail": str(exc)}, request, status=404)
     except (ValueError, TypeError) as exc:

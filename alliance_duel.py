@@ -594,6 +594,27 @@ def duel_day_for_date(d: _dt.date) -> int | None:
     return day.number if day else None
 
 
+def completed_duel_day(now: _dt.datetime | None = None) -> tuple[_dt.date, int] | None:
+    """The (server date, duel day) that has just finished as of ``now``.
+
+    What the daily score prompt (#405) asks about. It is deliberately *not*
+    :func:`alliance_duel_entry.target_day`, which names the day currently
+    running: a prompt asks for numbers that already exist, and the day in
+    progress has none yet.
+
+    Resolving it as "the server day before the current server day" also
+    produces the Tuesday-through-Sunday schedule for free, with no weekday
+    table. Server Monday's previous day is Sunday, which is not a duel day, so
+    Monday returns ``None`` and nothing is asked. That holds whatever clock
+    time the alliance picked, which a guild-local weekday check would not: at
+    9am local the server date has not rolled over and the day being asked about
+    is still running, while at 11pm local it already has.
+    """
+    yesterday = server_today(now) - _dt.timedelta(days=1)
+    day = duel_day_for_date(yesterday)
+    return (yesterday, day) if day is not None else None
+
+
 def week_monday(d: _dt.date) -> _dt.date:
     """The Monday that starts `d`'s duel week.
 

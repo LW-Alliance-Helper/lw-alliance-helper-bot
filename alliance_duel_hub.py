@@ -667,6 +667,19 @@ class VSHubView(discord.ui.View):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+async def read_tab_once(guild_id: int, vs_cfg: dict):
+    """Read the guild's VS tab off the event loop.
+
+    Shared by `/vs` and by the daily score prompt's buttons (#405), which need
+    the same snapshot hours after the prompt was posted and cannot hold one in
+    memory across a restart. Returns None when the tab could not be read, which
+    `load_rows` has already recorded through `config_health`.
+    """
+    return await asyncio.to_thread(
+        ad_setup.load_rows, guild_id, vs_cfg.get("tab_name") or "Alliance Duel (VS)"
+    )
+
+
 async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
     """Top-level handler for `/vs`. Leadership plus Premium gated.
 
@@ -723,9 +736,7 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
 
     # The one sheet read. Everything below renders from this snapshot (#269).
     try:
-        rows = await asyncio.to_thread(
-            ad_setup.load_rows, interaction.guild_id, vs_cfg.get("tab_name") or "Alliance Duel (VS)"
-        )
+        rows = await read_tab_once(interaction.guild_id, vs_cfg)
     except Exception as e:  # noqa: BLE001 - a bot bug, not the alliance's to fix
         logger.exception("[VS] hub load failed for guild %s", interaction.guild_id)
         await interaction.followup.send(

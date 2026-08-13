@@ -471,17 +471,47 @@ def test_the_picker_never_exceeds_discords_select_limit():
 # ── The read-quota rule (#269) ────────────────────────────────────────────────
 
 
+#: Every way a VS surface can reach the sheet. Named here so the guard below
+#: keeps working as readers get extracted: `#405` pulled the read out of
+#: `handle_vs_hub` into `read_tab_once`, which the score prompt's persistent
+#: button also uses, since it cannot hold a snapshot across a restart.
+_SHEET_READERS = ("load_rows", "read_tab_once")
+
+
 def test_no_button_callback_reads_the_sheet():
     """1.5.1 had to fix storm screens blowing the Sheets read limit on quick
     click-through. The hub loads once and passes the snapshot down, so a
-    callback reaching for `load_rows` is the regression to catch."""
+    callback reaching for the sheet is the regression to catch.
+
+    Asserted against the callbacks themselves rather than against a count of
+    the word in the module, which stopped meaning anything once a named reader
+    existed for other surfaces to share.
+    """
     import inspect
 
-    for module in (hub, ad_ui):
-        source = inspect.getsource(module)
-        entry = "async def handle_vs_hub" in source
-        # `load_rows` may appear exactly once, inside the entry point.
-        assert source.count("load_rows") == (1 if entry else 0), module.__name__
+    view_classes = [
+        obj
+        for module in (hub, ad_ui)
+        for _, obj in inspect.getmembers(module, inspect.isclass)
+        if issubclass(obj, discord.ui.View) and obj.__module__ in (hub.__name__, ad_ui.__name__)
+    ]
+    assert view_classes, "no views found to check"
+
+    for cls in view_classes:
+        for name, member in inspect.getmembers(cls, inspect.isfunction):
+            if member.__module__ not in (hub.__name__, ad_ui.__name__):
+                continue  # inherited from discord.py
+            source = inspect.getsource(member)
+            for reader in _SHEET_READERS:
+                assert reader not in source, f"{cls.__name__}.{name} reads the sheet"
+
+
+def test_the_hub_reads_the_tab_in_exactly_one_place():
+    """The other half of the rule: one reader, so "once per invocation" is a
+    property of the code rather than of everyone remembering."""
+    import inspect
+
+    assert inspect.getsource(hub).count("ad_setup.load_rows") == 1
 
 
 def test_the_hub_view_holds_the_snapshot_rather_than_the_guild_id_alone():

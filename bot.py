@@ -441,6 +441,17 @@ async def on_ready():
         print(f"[BUDDY] Failed to re-register buddy views: {e}")
         sentry_sdk.capture_exception(e)
 
+    # Re-register persistent Alliance Duel (VS) score prompt Views (#405) so
+    # yesterday's prompt is still clickable after a redeploy. Fed from
+    # `vs_score_prompt_posts`.
+    try:
+        from alliance_duel_views import register_persistent_vs_views
+
+        register_persistent_vs_views(bot)
+    except Exception as e:
+        print(f"[VS PROMPT] Failed to re-register score prompt views: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Refresh zone emoji IDs from the bot's own Application Emojis
     # (#177). Each environment (dev, prod) ships its own Discord
     # Application with its own emoji set; the bot reads them at boot

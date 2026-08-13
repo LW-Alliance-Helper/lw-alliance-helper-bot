@@ -51,7 +51,13 @@ logger = logging.getLogger(__name__)
 
 # The per-minute loops whose gap reliably bounds an outage window. The
 # scheduler is intentionally absent (variable sleep — see module docstring).
-HEARTBEAT_LOOPS = ("shiny_post", "survey_reminder", "train_reminder", "storm_signup")
+HEARTBEAT_LOOPS = (
+    "shiny_post",
+    "survey_reminder",
+    "train_reminder",
+    "storm_signup",
+    "vs_score_prompt",
+)
 
 # A gap larger than this marks a loop as having been offline. Sized so a
 # normal Railway redeploy (sub-2-minute) never trips it — only real outages do.
@@ -590,6 +596,63 @@ async def scan_storm_signup(bot, guild, cfg, window: OutageWindow) -> list[Misse
     return items
 
 
+async def scan_vs_score_prompt(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
+    """Daily Alliance Duel (VS) score prompt (#405). Premium, re-checked at
+    fire time by the shared post path.
+
+    Catch-up matters more here than for most surfaces: the prompt exists
+    because a day score nobody was asked for is a day score nobody records,
+    and there is no external source to backfill it from. The window is the
+    whole day rather than a few hours, since yesterday's numbers are still
+    yesterday's numbers whenever the officer gets to them.
+
+    The already-recorded check is deliberately left to the fire path, so a
+    prompt that arrives after someone typed the score by hand simply does not
+    post rather than being listed and then quietly doing nothing.
+    """
+    import alliance_duel as ad
+
+    vs_cfg = config.get_vs_config(guild.id)
+    if not vs_cfg.get("enabled") or not vs_cfg.get("score_prompt_enabled"):
+        return []
+    parsed = _parse_hhmm(vs_cfg.get("score_prompt_time") or "")
+    if parsed is None or not vs_cfg.get("score_prompt_channel_id"):
+        return []
+
+    tz = _guild_tz(cfg)
+    scheduled = _scheduled_today(window, tz, *parsed)
+    if not _was_missed(scheduled, window):
+        return []
+
+    target = ad.completed_duel_day(scheduled)
+    if target is None:
+        return []  # the prompt was due on a Monday, which asks nothing
+    day_date, day = target
+    if vs_cfg.get("last_score_prompt_fired") == day_date.isoformat():
+        return []  # it went out before we went down
+
+    channel = bot.get_channel(int(vs_cfg.get("score_prompt_channel_id") or 0))
+    theme = ad.DUEL_DAY_BY_NUMBER[day].theme
+
+    async def _fire() -> bool:
+        from alliance_duel_cog import post_score_prompt
+
+        posted = await post_score_prompt(bot, guild, vs_cfg, day_date, day)
+        if posted:
+            config.save_vs_config(guild.id, last_score_prompt_fired=day_date.isoformat())
+        return posted
+
+    return [
+        MissedItem(
+            surface="vs_score_prompt",
+            title=f"Alliance Duel (VS) score prompt: day {day}, {theme}",
+            scheduled_local=scheduled,
+            destination=f"sent to #{getattr(channel, 'name', 'the VS channel')}",
+            fire=_fire,
+        )
+    ]
+
+
 async def scan_event_draft(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     """Daily event editor draft (the `EventEditorView` the scheduler posts so
     leadership can approve → announce). Catch-up window: up to the event start
@@ -661,6 +724,7 @@ SURFACE_ADAPTERS: tuple[Callable[..., Awaitable[list[MissedItem]]], ...] = (
     scan_birthday,
     scan_train_reminder,
     scan_storm_signup,
+    scan_vs_score_prompt,
 )
 
 

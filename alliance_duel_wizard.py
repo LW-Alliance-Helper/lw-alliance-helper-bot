@@ -129,6 +129,175 @@ class TrackingModeView(discord.ui.View):
         )
 
 
+#: Entry into the score prompt's settings, named from the setup surface and
+#: from the prompt's own copy, so it stays one constant.
+VS_BTN_SCORE_PROMPT = "🔔 Daily score prompt"
+VS_BTN_PROMPT_TIME = "🕒 Set the posting time"
+VS_BTN_PROMPT_TIME_CHANGE = "🕒 Change the posting time"
+VS_BTN_PROMPT_CHANNEL = "📢 Set the channel"
+VS_BTN_PROMPT_CHANNEL_CHANGE = "📢 Change the channel"
+VS_BTN_PROMPT_ON = "🔔 Turn it on"
+VS_BTN_PROMPT_OFF = "🔕 Turn it off"
+
+
+class ScorePromptSettingsView(discord.ui.View):
+    """Time, channel and on/off for the daily score prompt (#405).
+
+    A settings panel rather than a stepped wizard, which is the shape this
+    question actually has: three independent values an officer comes back to
+    change one at a time, months after setup, quite possibly a different
+    officer than the one who set it. A sequence would re-ask all three to
+    change one, and "Keep current" three times over is a worse version of a
+    panel that simply shows what is saved.
+
+    Turning it off preserves the channel and time, matching every other
+    scheduled surface in the bot: switching a post off is not the same as
+    forgetting where it went.
+    """
+
+    def __init__(self, guild_id: int, owner_user_id: int, bot=None) -> None:
+        super().__init__(timeout=STEP_TIMEOUT)
+        self.guild_id = guild_id
+        self.owner_user_id = owner_user_id
+        self.bot = bot
+        self.cfg = config.get_vs_config(guild_id)
+        self.message: discord.Message | None = None
+        self._render()
+
+    # ── Rendering ─────────────────────────────────────────────────────────────
+
+    def _render(self) -> None:
+        self.clear_items()
+        has_time = bool(self.cfg.get("score_prompt_time"))
+        has_channel = bool(self.cfg.get("score_prompt_channel_id"))
+        is_on = bool(self.cfg.get("score_prompt_enabled"))
+
+        time_btn = discord.ui.Button(
+            label=VS_BTN_PROMPT_TIME_CHANGE if has_time else VS_BTN_PROMPT_TIME,
+            style=discord.ButtonStyle.secondary,
+            row=0,
+        )
+        time_btn.callback = self._set_time
+        self.add_item(time_btn)
+
+        channel_btn = discord.ui.Button(
+            label=VS_BTN_PROMPT_CHANNEL_CHANGE if has_channel else VS_BTN_PROMPT_CHANNEL,
+            style=discord.ButtonStyle.secondary,
+            row=0,
+        )
+        channel_btn.callback = self._set_channel
+        self.add_item(channel_btn)
+
+        # Disabled rather than hidden until both halves exist, with the reason
+        # in the embed: switching on a post with no time or no channel would
+        # save a setting that can never fire.
+        toggle = discord.ui.Button(
+            label=VS_BTN_PROMPT_OFF if is_on else VS_BTN_PROMPT_ON,
+            style=discord.ButtonStyle.secondary if is_on else discord.ButtonStyle.primary,
+            disabled=not is_on and not (has_time and has_channel),
+            row=1,
+        )
+        toggle.callback = self._toggle
+        self.add_item(toggle)
+
+    def embed(self) -> discord.Embed:
+        return ads.prompt_settings_embed(self.cfg, self.guild_id)
+
+    async def _redraw(self, interaction: discord.Interaction) -> None:
+        """Re-read config and redraw, so the panel always shows what is saved."""
+        self.cfg = config.get_vs_config(self.guild_id)
+        self._render()
+        await safe_edit_response(interaction, embed=self.embed(), view=self)
+
+    # ── Guards ────────────────────────────────────────────────────────────────
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_user_id:
+            return True
+        from messages import DENY_NOT_OWNER
+
+        await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+        return False
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
+
+    # ── Actions ───────────────────────────────────────────────────────────────
+
+    async def _set_time(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(PromptTimeModal(self))
+
+    async def _set_channel(self, interaction: discord.Interaction) -> None:
+        from setup_cog import ChannelSelectStep
+
+        current = self.cfg.get("score_prompt_channel_id") or 0
+        picker = ChannelSelectStep(
+            "Select the channel for the score prompt...",
+            suggested_name="leadership",
+            allow_create=False,
+            guild=interaction.guild,
+            current_id=current,
+        )
+        content = "Where should the daily score prompt be posted?"
+        if picker.is_current_stale:
+            from messages import PREV_CHANNEL_GONE
+
+            content = f"{PREV_CHANNEL_GONE.format(channel_label='score prompt')}\n\n{content}"
+        await interaction.response.send_message(content=content, view=picker, ephemeral=True)
+
+        await picker.wait()
+        if not picker.confirmed or picker.selected_channel is None:
+            return  # timed out or cancelled; the panel above is still live
+
+        config.save_vs_config(self.guild_id, score_prompt_channel_id=picker.selected_channel.id)
+        self.cfg = config.get_vs_config(self.guild_id)
+        self._render()
+        if self.message is not None:
+            try:
+                await self.message.edit(embed=self.embed(), view=self)
+            except discord.HTTPException:
+                pass
+
+    async def _toggle(self, interaction: discord.Interaction) -> None:
+        turning_on = not self.cfg.get("score_prompt_enabled")
+        config.save_vs_config(self.guild_id, score_prompt_enabled=1 if turning_on else 0)
+        await self._redraw(interaction)
+
+
+class PromptTimeModal(discord.ui.Modal, title="Daily score prompt time"):
+    """When to ask. Read in the guild's own timezone, like every other
+    scheduled post, because that is the clock an officer thinks in even though
+    the duel day itself resolves on server time."""
+
+    def __init__(self, panel: ScorePromptSettingsView) -> None:
+        super().__init__(timeout=STEP_TIMEOUT)
+        self.panel = panel
+        self.time = discord.ui.TextInput(
+            label="Time of day",
+            placeholder="9:00am, 10:15pm, or 22:00",
+            default=panel.cfg.get("score_prompt_time") or "",
+            required=True,
+            max_length=16,
+        )
+        self.add_item(self.time)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from messages import TIME_PARSE_RETRY
+        from scheduler import parse_time_str
+
+        parsed = parse_time_str(self.time.value or "")
+        if parsed is None or not (0 <= parsed[0] <= 23 and 0 <= parsed[1] <= 59):
+            await interaction.response.send_message(
+                TIME_PARSE_RETRY.format(raw=self.time.value), ephemeral=True
+            )
+            return
+
+        config.save_vs_config(
+            self.panel.guild_id, score_prompt_time=f"{parsed[0]:02d}:{parsed[1]:02d}"
+        )
+        await self.panel._redraw(interaction)
+
+
 class VSSetupView(discord.ui.View):
     """Holds the wizard's state across its two steps."""
 
@@ -156,6 +325,15 @@ class VSSetupView(discord.ui.View):
     @discord.ui.button(label="🏆 Set up Alliance Duel (VS)", style=discord.ButtonStyle.primary)
     async def btn_start(self, inter: discord.Interaction, _b: discord.ui.Button):
         await inter.response.send_modal(OwnAllianceModal(self))
+
+    @discord.ui.button(label=VS_BTN_SCORE_PROMPT, style=discord.ButtonStyle.secondary)
+    async def btn_score_prompt(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """The scheduled post's settings. Disabled until the tracker itself is
+        set up, because a prompt has nothing to ask about without a tab and an
+        alliance identity."""
+        panel = ScorePromptSettingsView(self.guild_id, self.owner_user_id)
+        await inter.response.send_message(embed=panel.embed(), view=panel, ephemeral=True)
+        panel.message = await inter.original_response()
 
     async def show_mode_step(self, interaction: discord.Interaction) -> None:
         view = TrackingModeView(self)
@@ -376,9 +554,20 @@ async def run_vs_setup(interaction: discord.Interaction, bot=None) -> None:
     if cfg.get("enabled"):
         view.btn_start.label = "✏️ Change alliance or mode"
         view.btn_start.style = discord.ButtonStyle.secondary
+    else:
+        # Nothing to prompt about until there is a tab and an alliance identity,
+        # so the control is shown disabled rather than left live and inert.
+        view.btn_score_prompt.disabled = True
 
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     view.message = await interaction.original_response()
 
 
-__all__ = ["run_vs_setup", "VSSetupView", "TrackingModeView", "OwnAllianceModal"]
+__all__ = [
+    "run_vs_setup",
+    "VSSetupView",
+    "TrackingModeView",
+    "OwnAllianceModal",
+    "ScorePromptSettingsView",
+    "PromptTimeModal",
+]

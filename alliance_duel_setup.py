@@ -50,6 +50,23 @@ config_health.register(
 )
 
 
+#: The channel the scheduled VS posts go to, as a thing that can break (#405).
+#: Separate from the tab subject above because they fail for different reasons
+#: and have different fixes: a deleted channel is not a renamed tab. Shared by
+#: the score prompt and the day-theme reminder, per #379's rule that one broken
+#: channel is one notice rather than one per surface using it.
+VS_POST_CHANNEL_SUBJECT = "vs.post_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=VS_POST_CHANNEL_SUBJECT,
+        label="your Alliance Duel (VS) posting channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_VS,
+    )
+)
+
+
 #: Where to send someone whose VS setup needs revisiting. One constant so the
 #: route stays identical across timeouts, gates and validation copy.
 VS_SETUP_NAV = f"`/setup` → **{HUB_BTN_VS}**"
@@ -270,6 +287,76 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
         )
     embed.set_footer(text=f"Run /setup → {HUB_BTN_VS} to change any of this.")
     return embed
+
+
+def prompt_settings_embed(cfg: dict) -> discord.Embed:
+    """The daily score prompt's settings panel (#405).
+
+    States what is saved before it explains what the feature does, because an
+    officer returning to change the time should not have to read the pitch
+    again to find the value they came for.
+    """
+    is_on = bool(cfg.get("score_prompt_enabled"))
+    time_saved = cfg.get("score_prompt_time") or ""
+    channel_id = cfg.get("score_prompt_channel_id") or 0
+
+    if is_on:
+        status = f"🔔 **On.** I ask in <#{channel_id}> at **{_clock(time_saved)}**."
+    elif time_saved and channel_id:
+        status = (
+            f"🔕 **Off.** Your channel and time are still saved: <#{channel_id}> "
+            f"at **{_clock(time_saved)}**."
+        )
+    else:
+        missing = []
+        if not time_saved:
+            missing.append("a time")
+        if not channel_id:
+            missing.append("a channel")
+        status = f"🔕 **Off.** Set {' and '.join(missing)} first, then turn it on."
+
+    embed = discord.Embed(
+        title="🔔 Daily score prompt",
+        description=(
+            f"{status}\n\n"
+            "Each morning after a duel day I post yesterday's matchup with a "
+            "button to record both scores, so the day gets logged while "
+            "someone still remembers it."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="When it asks",
+        value=(
+            "Tuesday through Sunday. Monday has nothing to ask about, because "
+            "Sunday is the rest day, and Sunday's prompt covers Saturday's "
+            "Enemy Buster. Your time is read in this server's timezone; the "
+            "duel day itself is decided on server time."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Who sees it",
+        value=(
+            "Everyone who can read the channel you pick, so pick a leadership "
+            "channel. Only leadership can use the button."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Run /setup → {HUB_BTN_VS} to change any of this.")
+    return embed
+
+
+def _clock(hhmm: str) -> str:
+    """`22:00` → `10:00pm`. Falls back to the raw value rather than hiding a
+    time the officer typed."""
+    try:
+        hour, minute = (int(p) for p in hhmm.split(":"))
+    except (ValueError, AttributeError):
+        return hhmm or "no time set"
+    suffix = "am" if hour < 12 else "pm"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{minute:02d}{suffix}"
 
 
 # ── Validation report ─────────────────────────────────────────────────────────

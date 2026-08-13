@@ -152,6 +152,12 @@ PREMIUM_FEATURES: set[str] = {
     # day rules — leadership / vs / contest / event days that pick from a Discord
     # role — are Premium, since they need the synced roster's Discord IDs.
     "train_role_days",
+    # Champion Duel predictor. Reading the registrant list is open and reading
+    # scouting only needs a Discord login; *contributing* squad corrections and
+    # deployment sightings is Premium. The dataset is community-gathered on
+    # purpose — an alliance that pays decides who on its team it trusts to
+    # enter data, and every write is attributed and revertable.
+    "champion_duel_write",
 }
 
 

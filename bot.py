@@ -251,6 +251,18 @@ async def on_ready():
 
     # Initialise the config database (creates tables and applies pending migrations)
     init_db()
+
+    # Champion Duel keeps its own database file on the same volume — global
+    # tournament data rather than per-guild config, with its own lifecycle
+    # (it can be wiped between qualifiers and semifinals). Failure here must
+    # not stop the bot: it is one feature, and everything else still works.
+    try:
+        import champion_duel_db
+
+        champion_duel_db.init_db()
+    except Exception as e:  # noqa: BLE001 - one feature must not block startup
+        print(f"[CHAMPION_DUEL] Database init failed, feature degraded: {e}")
+
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
     # Demo guild reset hook. Runs the seed against the configured demo guild
@@ -301,6 +313,12 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    # Champion Duel admin tools. Only ever visible to CHAMPION_DUEL_ADMIN_IDS,
+    # and the commands guard on it themselves, so loading unconditionally is
+    # safe — an empty env var means every subcommand refuses.
+    if "champion_duel_cog" not in bot.extensions:
+        await bot.load_extension("champion_duel_cog")
+        print("[INFO] Champion Duel admin cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:

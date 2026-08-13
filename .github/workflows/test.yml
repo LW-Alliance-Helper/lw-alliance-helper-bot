@@ -29,7 +29,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      # CD_ENGINE_TOKEN authenticates the private champion-duel-engine pin in
+      # requirements.txt. Without it pip cannot reach that repo and the whole
+      # install fails, which would block every PR in this repo -- not just
+      # Champion Duel work. Add it as a repo secret (fine-grained PAT, read
+      # only, scoped to kevinkidwell/champion-duel-simulator).
       - name: Install dependencies
+        env:
+          CD_ENGINE_TOKEN: ${{ secrets.CD_ENGINE_TOKEN }}
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -70,6 +77,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        env:
+          CD_ENGINE_TOKEN: ${{ secrets.CD_ENGINE_TOKEN }}
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt

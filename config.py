@@ -998,6 +998,14 @@ def init_db():
                 -- that exact mistake (#89): Train Conductor Rotation
                 -- reimplemented in-memory dedup after the DB-backed pattern
                 -- had already been fixed following a production incident.
+                -- Event-driven posts (#409). One channel for all three, and
+                -- no posting time at all: these fire when data lands rather
+                -- than on a clock, and three channels for three occasional
+                -- leadership posts would be configuration for its own sake.
+                event_posts_channel_id    INTEGER DEFAULT 0,
+                clinch_status_enabled     INTEGER DEFAULT 0,
+                opponent_reveal_enabled   INTEGER DEFAULT 0,
+                season_recap_enabled      INTEGER DEFAULT 0,
                 last_score_prompt_fired   TEXT    DEFAULT '',
                 last_day_theme_fired      TEXT    DEFAULT ''
             )
@@ -1032,6 +1040,23 @@ def init_db():
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_vs_prompt_posts_message
             ON vs_score_prompt_posts (message_id)
+        """)
+        conn.commit()
+
+        # vs_event_posts — what has already been announced (#409). The
+        # event-driven posts fire off writes rather than a clock, and a write
+        # can happen twice (an officer correcting a mistyped score re-saves the
+        # same day), so "has this already gone out?" needs a durable answer
+        # rather than an in-memory one. Key is per surface: one clinch post per
+        # day, one reveal per week, one recap per league.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vs_event_posts (
+                guild_id   INTEGER NOT NULL,
+                kind       TEXT    NOT NULL,
+                event_key  TEXT    NOT NULL,
+                posted_at  TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, kind, event_key)
+            )
         """)
         conn.commit()
 
@@ -1176,6 +1201,10 @@ def init_db():
             ("day_theme_time", "TEXT    DEFAULT ''"),
             ("day_theme_channel_id", "INTEGER DEFAULT 0"),
             ("day_theme_note", "TEXT    DEFAULT ''"),
+            ("event_posts_channel_id", "INTEGER DEFAULT 0"),
+            ("clinch_status_enabled", "INTEGER DEFAULT 0"),
+            ("opponent_reveal_enabled", "INTEGER DEFAULT 0"),
+            ("season_recap_enabled", "INTEGER DEFAULT 0"),
             ("last_score_prompt_fired", "TEXT    DEFAULT ''"),
             ("last_day_theme_fired", "TEXT    DEFAULT ''"),
         ]:
@@ -6156,6 +6185,10 @@ _VS_CONFIG_COLUMNS = (
     "day_theme_time",
     "day_theme_channel_id",
     "day_theme_note",
+    "event_posts_channel_id",
+    "clinch_status_enabled",
+    "opponent_reveal_enabled",
+    "season_recap_enabled",
     "last_score_prompt_fired",
     "last_day_theme_fired",
 )
@@ -6195,6 +6228,10 @@ def get_vs_config(guild_id: int) -> dict:
         "day_theme_time": "",
         "day_theme_channel_id": 0,
         "day_theme_note": "",
+        "event_posts_channel_id": 0,
+        "clinch_status_enabled": 0,
+        "opponent_reveal_enabled": 0,
+        "season_recap_enabled": 0,
         "last_score_prompt_fired": "",
         "last_day_theme_fired": "",
     }
@@ -6304,6 +6341,29 @@ def get_vs_score_prompt_post(message_id: int) -> dict | None:
             "SELECT * FROM vs_score_prompt_posts WHERE message_id = ?", (int(message_id),)
         ).fetchone()
     return dict(row) if row else None
+
+
+def vs_event_already_posted(guild_id: int, kind: str, event_key: str) -> bool:
+    """Whether this exact event post has already gone out (#409)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM vs_event_posts WHERE guild_id = ? AND kind = ? AND event_key = ?",
+            (guild_id, kind, event_key),
+        ).fetchone()
+    return row is not None
+
+
+def mark_vs_event_posted(guild_id: int, kind: str, event_key: str) -> None:
+    """Record an event post so a re-save of the same data cannot repeat it."""
+    import datetime as _dt
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vs_event_posts (guild_id, kind, event_key, posted_at) "
+            "VALUES (?, ?, ?, ?)",
+            (guild_id, kind, event_key, _dt.datetime.now(_dt.timezone.utc).isoformat()),
+        )
+        conn.commit()
 
 
 def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:

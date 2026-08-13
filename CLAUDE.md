@@ -38,6 +38,21 @@ reasoning. Verifying their contents is
 
 ## Working agreement
 
+- **Kevin works in UIs, not the terminal. Design for that, always.**
+  A terminal step is the path of least resistance for an agent and the
+  path of most resistance for him — if there is any other way to do a
+  thing, build that way instead. Prefer, in order: a Discord command or
+  hub button, a web UI, a file he can drag into Discord, a dashboard
+  toggle. A CLI script is a last resort, and when one is genuinely
+  unavoidable it needs a one-line invocation, no environment plumbing,
+  and no expectation that he keeps a shell open.
+  This is not a preference to accommodate where convenient — it decides
+  designs. `/admin champion_duel_import` taking a JSON attachment exists
+  because the first version needed a public host, a service key, three
+  environment variables and a shell with a second repo checked out. Same
+  data, same gate, same data-layer functions; the delivery mechanism was
+  the entire difference between usable and not. Ask "what does he
+  actually have to *do*" before calling something finished.
 - **Solo project**, but the bot repo uses a release-branch workflow:
   work is tracked as GitHub issues; a feature branch (descriptive
   kebab-case slug, may bundle multiple related issues) is PR'd into

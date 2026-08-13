@@ -199,6 +199,7 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "changelog",
         "transfer_dump",
         "verify",
+        "champion_duel_import",
     }
     # bot.py's own `_ADMIN_GUILD_IDS` is a `from bot_admin import ...`
     # snapshot taken during its reload above -- it doesn't retroactively
@@ -244,6 +245,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "changelog",
             "transfer_dump",
             "verify",
+            "champion_duel_import",
         }
 
     # Unrelated guild sees nothing.

@@ -563,6 +563,18 @@ class VSHubView(discord.ui.View):
         add.callback = self._add_alliance
         self.add_item(add)
 
+        # Push or save (#407). Needs a live week to declare anything about, so
+        # between leagues it renders disabled rather than opening a view that
+        # has no week to write to.
+        declare = discord.ui.Button(
+            label=ad_entry.VS_BTN_DECLARE,
+            style=discord.ButtonStyle.secondary,
+            disabled=not (state.own and state.week),
+            row=1,
+        )
+        declare.callback = self._declare
+        self.add_item(declare)
+
         # Shown only when pressing it would actually write rows, per the
         # "every control can change something" rule. Between leagues, or
         # mid-week, there is nothing to advance and the button is absent
@@ -652,6 +664,22 @@ class VSHubView(discord.ui.View):
     async def _add_alliance(self, interaction: discord.Interaction):
         week = self.state.week or 1
         await interaction.response.send_modal(ad_entry.AllianceModal(self.state, week))
+
+    async def _declare(self, interaction: discord.Interaction):
+        week = self.state.week
+        if week is None:
+            await interaction.response.send_message(
+                "⚠️ No duel week is running right now, so there is nothing to declare "
+                f"yet. Add this league's Week Dates, or open **{VS_BTN_SETUP}** for the "
+                "column guide.",
+                ephemeral=True,
+            )
+            return
+        view = ad_entry.DeclarationView(self.state, week, interaction.user.id)
+        await interaction.response.send_message(
+            embed=ad_entry.declaration_embed(self.state, week), view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
 
     async def _next_week(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)

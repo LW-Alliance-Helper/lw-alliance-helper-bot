@@ -1385,6 +1385,10 @@ SOURCE_ESTIMATED = "estimated"
 #: state where nothing at all has been recorded. Unassessed is a real state
 #: and renders plainly, never folded into a confident-sounding label.
 SOURCE_UNASSESSED = "unassessed"
+#: Also not evidence: the caller asked "what if this week went this way?" and
+#: the walk answered under that assumption (#407). Kept distinct from every
+#: other source so a hypothetical can never render as a projection.
+SOURCE_ASSUMED = "assumed"
 
 
 @dataclass(frozen=True)
@@ -1447,6 +1451,7 @@ def project_own_path(
     upto_week: int = LEAGUE_WEEKS,
     *,
     estimate: Estimator | None = None,
+    assume: Mapping[int, tuple[AllianceKey, str]] | None = None,
 ) -> PathProjection | BracketIncomplete:
     """Walk the bracket lineage to project `target`'s path through the league.
 
@@ -1463,6 +1468,15 @@ def project_own_path(
     callback (#401) → **blocked**. A blocked match is named rather than
     collapsed into "not enough data", because naming it is what turns the
     projection into a scouting priority list.
+
+    `assume` maps a week to ``(alliance, "W"|"L")`` and forces that outcome
+    ahead of every other source, which is what makes "if we save this week, who
+    do we end up facing?" answerable (#407). Because week 1 carries more weight
+    than every later week combined, a save there is not a neutral resource
+    decision: it moves the alliance into the lower cohort permanently, and the
+    lineage walk is what turns that from a warning into a named list of
+    opponents. Steps resolved this way carry :data:`SOURCE_ASSUMED`, so a
+    hypothetical can never be rendered as a projection.
 
     Returns :class:`BracketIncomplete` when the roster isn't a full seeded
     bracket — in own-alliance tracking mode (#448) that is a choice, not an
@@ -1482,7 +1496,7 @@ def project_own_path(
 
     seed_index = seeded.index(target)
     blocked: list[Match] = []
-    resolver = _MatchResolver(rows, estimate, blocked)
+    resolver = _MatchResolver(rows, estimate, blocked, assume=assume)
     memo: dict[tuple, tuple[AllianceKey | None, str]] = {}
 
     def occupant(week: int, path: tuple[str, ...], pos: int) -> tuple[AllianceKey | None, str]:
@@ -1608,9 +1622,12 @@ class _MatchResolver:
         rows: Sequence[AllianceWeek],
         estimate: Estimator | None,
         blocked: list[Match],
+        *,
+        assume: Mapping[int, tuple[AllianceKey, str]] | None = None,
     ) -> None:
         self._estimate = estimate
         self._blocked = blocked
+        self._assume = dict(assume or {})
         self._cache: dict[tuple, MatchResolution | None] = {}
         self._profiles = build_profiles(rows)
         self._by_week_alliance: dict[tuple[int, AllianceKey], list[AllianceWeek]] = {}
@@ -1634,6 +1651,22 @@ class _MatchResolver:
     def _resolve_uncached(
         self, week: int, a: AllianceKey, b: AllianceKey
     ) -> MatchResolution | None:
+        # 0. An outcome the caller assumed for this week (#407), which is how
+        #    "if we save this week, who do we end up facing?" gets answered. It
+        #    outranks even a confirmed result, because the question is
+        #    explicitly counterfactual: the caller knows what the sheet says.
+        #    Only ever applies to the alliance the assumption names.
+        assumed = self._assume.get(week)
+        if assumed is not None:
+            side, outcome = assumed
+            if side in (a, b):
+                other = b if side == a else a
+                return (
+                    MatchResolution(side, other, SOURCE_ASSUMED)
+                    if outcome == "W"
+                    else MatchResolution(other, side, SOURCE_ASSUMED)
+                )
+
         # 1. Confirmed result. Trust either side's row; a disagreement between
         #    the two is a validation finding (#399), not something to average.
         for side, other in ((a, b), (b, a)):
@@ -2389,6 +2422,90 @@ def clinch_state(day_outcomes: Mapping[int, str]) -> ClinchState:
         remaining_points=sum(DUEL_DAY_BY_NUMBER[d].points for d in remaining),
         remaining_days=tuple(remaining),
         clinching_days=clinching,
+    )
+
+
+# ── Intent partition (#407) ───────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class IntentPartition:
+    """The guild's own weeks, split by what its declaration does to a backtest.
+
+    Intent is a **confounder the accuracy sample partitions on, not a flag that
+    excludes rows wholesale**, and the difference matters: an alliance can
+    declare a push and still lose. Four cases, three destinations.
+
+    - **Push and lost** is the cleanest calibration signal available: full
+      effort on our side and the call was still wrong. It belongs in the
+      sample, weighted no differently.
+    - **Push and won** is ordinary confirmation, also in the sample.
+    - **Undeclared** is assumed to be normal effort. In the sample, but kept
+      separately so a reader can see how much of the sample rests on an
+      assumption rather than a statement.
+    - **Save** comes out of the accuracy number entirely. A deliberate loss is
+      not a failed prediction, and counting it as one would silently poison the
+      only calibration data this feature will ever have.
+
+    ``saved_and_won`` is the case worth surfacing rather than merely dropping:
+    conceding a week and winning it anyway means either the opponent was far
+    weaker than modelled or the save was never actually executed, and both say
+    something. It is a subset of ``excluded``, not a fourth bucket.
+
+    **The sample is never clean, only cleaner.** A declared push can still be
+    contaminated by an opponent quietly saving, which is unobservable from our
+    side until several weeks of both sides' day scores exist. Any surface
+    reporting accuracy off this has to say so rather than presenting a number
+    as though effort were controlled.
+    """
+
+    declared_push: tuple[AllianceWeek, ...] = ()
+    undeclared: tuple[AllianceWeek, ...] = ()
+    excluded: tuple[AllianceWeek, ...] = ()
+    saved_and_won: tuple[AllianceWeek, ...] = ()
+
+    @property
+    def sample(self) -> tuple[AllianceWeek, ...]:
+        """Every week accuracy may be measured against, in week order."""
+        return tuple(sorted(self.declared_push + self.undeclared, key=lambda r: r.week))
+
+    @property
+    def rests_on_assumption(self) -> int:
+        """How much of the sample is undeclared rather than stated. Reported
+        alongside any accuracy figure, because "6 of 8 correct" reads very
+        differently when 7 of the 8 were never declared either way."""
+        return len(self.undeclared)
+
+
+def partition_by_intent(rows: Iterable[AllianceWeek]) -> IntentPartition:
+    """Split `rows` into the buckets :class:`IntentPartition` documents.
+
+    Rows with no recorded outcome are dropped from every bucket: a week that
+    has not happened yet is not evidence for or against anything.
+    """
+    push: list[AllianceWeek] = []
+    none: list[AllianceWeek] = []
+    excluded: list[AllianceWeek] = []
+    saved_won: list[AllianceWeek] = []
+
+    for row in rows:
+        if row.week_outcome is None:
+            continue
+        intent = row.intent or INTENT_NONE
+        if intent == INTENT_SAVE:
+            excluded.append(row)
+            if row.week_outcome == "W":
+                saved_won.append(row)
+        elif intent == INTENT_PUSH:
+            push.append(row)
+        else:
+            none.append(row)
+
+    return IntentPartition(
+        declared_push=tuple(push),
+        undeclared=tuple(none),
+        excluded=tuple(excluded),
+        saved_and_won=tuple(saved_won),
     )
 
 

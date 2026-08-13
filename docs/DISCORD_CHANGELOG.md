@@ -126,9 +126,13 @@ accident.
 ---
 
 **1.9.0** — unreleased
-NO POST: nothing alliance-facing yet. The Alliance Duel (VS) tracker lands
-across several merges and none of it is reachable until the `/vs` hub ships.
-Replace this with a real post on the merge that makes it visible.
+- 🏆 **Alliance Duel (VS) tracker** (💎): keep your VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided
+- Track your whole 16-alliance League bracket or just your own alliance, and change your mind later
+- **Check my sheet** finds the entry mistakes that would quietly produce wrong projections, naming the row and column for each
+- 💎 An optional daily post asks for the duel day that just finished, at the time and in the channel you pick
+- 👑 **Champion Duel** (`/champion_duel`): odds for any match, what a registrant fields, and the order they have been seen deploying in — as a card you can share to your channel
+- Every Champion Duel squad says whether it was observed or estimated, so a guess never reads as a sighting
+- 💎 Premium alliances can correct a squad or record an order they have seen; every entry is attributed and can be put back
 
 ---
 

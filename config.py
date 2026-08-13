@@ -989,6 +989,11 @@ def init_db():
                 day_theme_enabled         INTEGER DEFAULT 0,
                 day_theme_time            TEXT    DEFAULT '',
                 day_theme_channel_id      INTEGER DEFAULT 0,
+                -- A standing line from leadership carried on every day-theme
+                -- post (#406), for coordination the bot cannot know about:
+                -- holding points back to see the opponent's position before
+                -- committing is a real tactic and the reminder supports it.
+                day_theme_note            TEXT    DEFAULT '',
                 -- DB-backed dedup, never an in-memory set. CLAUDE.md flags
                 -- that exact mistake (#89): Train Conductor Rotation
                 -- reimplemented in-memory dedup after the DB-backed pattern
@@ -1170,6 +1175,7 @@ def init_db():
             ("day_theme_enabled", "INTEGER DEFAULT 0"),
             ("day_theme_time", "TEXT    DEFAULT ''"),
             ("day_theme_channel_id", "INTEGER DEFAULT 0"),
+            ("day_theme_note", "TEXT    DEFAULT ''"),
             ("last_score_prompt_fired", "TEXT    DEFAULT ''"),
             ("last_day_theme_fired", "TEXT    DEFAULT ''"),
         ]:
@@ -6149,6 +6155,7 @@ _VS_CONFIG_COLUMNS = (
     "day_theme_enabled",
     "day_theme_time",
     "day_theme_channel_id",
+    "day_theme_note",
     "last_score_prompt_fired",
     "last_day_theme_fired",
 )
@@ -6187,6 +6194,7 @@ def get_vs_config(guild_id: int) -> dict:
         "day_theme_enabled": 0,
         "day_theme_time": "",
         "day_theme_channel_id": 0,
+        "day_theme_note": "",
         "last_score_prompt_fired": "",
         "last_day_theme_fired": "",
     }

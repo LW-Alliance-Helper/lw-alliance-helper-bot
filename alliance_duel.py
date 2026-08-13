@@ -97,6 +97,85 @@ DUEL_DAYS: tuple[DuelDay, ...] = (
 DUEL_DAY_BY_NUMBER: dict[int, DuelDay] = {d.number: d for d in DUEL_DAYS}
 DUEL_DAY_BY_WEEKDAY: dict[int, DuelDay] = {d.weekday: d for d in DUEL_DAYS}
 
+#: What actually scores on each day's board, biggest first (#406).
+#:
+#: **Names only, never award values, and this is a hard rule rather than a
+#: style preference.** The in-game board renders each player their *own*
+#: already-boosted figures, scaled by a per-player Alliance Duel tech tree that
+#: runs to +150% on all non-purchased points plus +50% per category. There is
+#: no base value visible anywhere and no shared number that would be true for
+#: two members of the same alliance, so any figure printed here is wrong for
+#: nearly everyone reading it. See the design doc, "Observed board values".
+#:
+#: What survives that is **order**, because every category caps at the same
+#: boost, so the ratios between actions hold at any level of Tech. The lists
+#: are therefore ordered by observed weight and the copy may lead with the
+#: first entry, which is why "spend your research speedups" is safe to say
+#: where "research speedups are 150 a minute" is not.
+#:
+#: Captured 2026-08-08 off a fully-researched account, one board per day. Each
+#: day shows a **different** action set rather than one list re-priced, so no
+#: day's list may be generalised to another: Radar Tasks score on days 1, 3 and
+#: 5 rather than only on Radar Training, and day 6 carries day 2's two
+#: big-ticket actions on top of combat.
+DAY_ACTIONS: dict[int, tuple[str, ...]] = {
+    1: (
+        "Radar Tasks",
+        "UR hero shards",
+        "Drone Parts",
+        "chip chests with premium chip material",
+        "stamina",
+        "gathering food, iron and coins",
+    ),
+    2: (
+        "UR Trade Trucks",
+        "UR Secret Tasks",
+        "Armament Cores",
+        "survivor recruitment",
+        "construction speedups",
+        "building power",
+    ),
+    3: (
+        "Drone Component Chests, the higher the level the better",
+        "Radar Tasks",
+        "Valor Badges",
+        "research speedups",
+        "tech power",
+    ),
+    4: (
+        "UR hero shards",
+        "exclusive weapon shards",
+        "awakening shards",
+        "SSR hero shards",
+        "hero recruitment",
+        "skill medals",
+    ),
+    5: (
+        "Overlord Bond Badges",
+        "Radar Tasks",
+        "Overlord Promotion Shards",
+        "Overlord Training Certificates and Guidebooks",
+        "construction, research and training speedups",
+        "training units, the higher the level the better",
+    ),
+    6: (
+        "killing rival alliance units, which score most per kill",
+        "UR Trade Trucks",
+        "UR Secret Tasks",
+        "every kind of speedup, including healing",
+    ),
+}
+
+#: True on every board, worth saying once rather than repeating per day. The
+#: one category the Tech boost explicitly excludes ("All Points
+#: (non-purchased)"), so it is also the one thing that does not grow with an
+#: account. No value here either, for the same reason as above.
+SCORES_EVERY_DAY = "Diamond purchases score on every day."
+
+#: Day 6 only, and the one thing on that board members get wrong. Losing units
+#: scores too, so a fight that goes badly is not a wasted fight.
+ENEMY_BUSTER_NOTE = "Units you lose score as well as units you kill."
+
 #: Total league points in a week, and the majority needed to take it.
 WEEK_POINTS_TOTAL = 13
 WEEK_POINTS_MAJORITY = 7

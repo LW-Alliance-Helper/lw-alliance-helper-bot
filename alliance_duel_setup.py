@@ -289,60 +289,99 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
     return embed
 
 
-def prompt_settings_embed(cfg: dict) -> discord.Embed:
-    """The daily score prompt's settings panel (#405).
+#: Copy for each scheduled surface's settings panel, keyed by the config
+#: prefix. Held as data rather than as two near-identical embed builders, so
+#: the shape of the panel (status first, then what it does, then when and who)
+#: stays identical across surfaces that differ only in their words.
+_SCHEDULED_COPY = {
+    "score_prompt": {
+        "title": "🔔 Daily score prompt",
+        "on": "🔔 **On.** I ask in <#{channel}> at **{time}**.",
+        "off_saved": (
+            "🔕 **Off.** Your channel and time are still saved: <#{channel}> at **{time}**."
+        ),
+        "off_unset": "🔕 **Off.** Set {missing} first, then turn it on.",
+        "what": (
+            "Each morning after a duel day I post yesterday's matchup with a "
+            "button to record both scores, so the day gets logged while "
+            "someone still remembers it."
+        ),
+        "when_name": "When it asks",
+        "when": (
+            "Tuesday through Sunday. Monday has nothing to ask about, because "
+            "Sunday is the rest day, and Sunday's prompt covers Saturday's "
+            "Enemy Buster. Your time is read in this server's timezone; the "
+            "duel day itself is decided on server time."
+        ),
+        "who_name": "Who sees it",
+        "who": (
+            "Everyone who can read the channel you pick, so pick a leadership "
+            "channel. Only leadership can use the button."
+        ),
+    },
+    "day_theme": {
+        "title": "📣 Day theme reminder",
+        "on": "**On.** I post in <#{channel}> at **{time}**.",
+        "off_saved": (
+            "**Off.** Your channel and time are still saved: <#{channel}> at **{time}**."
+        ),
+        "off_unset": "**Off.** Set {missing} first, then turn it on.",
+        "what": (
+            "Each day I post what that day rewards, so members know which "
+            "stockpile to spend without having to read the board. It needs no "
+            "setup beyond a channel and a time, and it is free."
+        ),
+        "when_name": "When it posts",
+        "when": (
+            "Monday through Saturday. Sunday scores nothing, so nothing is "
+            "posted. Your time is read in this server's timezone; which duel "
+            "day it is gets decided on server time."
+        ),
+        "who_name": "Who sees it",
+        "who": (
+            "Everyone in the channel you pick, so pick a channel your members "
+            "read. This one is written for them rather than for leadership."
+        ),
+    },
+}
 
-    States what is saved before it explains what the feature does, because an
+
+def scheduled_post_embed(cfg: dict, surface_key: str) -> discord.Embed:
+    """The settings panel for one scheduled VS surface (#405, #406).
+
+    States what is saved before it explains what the surface does, because an
     officer returning to change the time should not have to read the pitch
     again to find the value they came for.
     """
-    is_on = bool(cfg.get("score_prompt_enabled"))
-    time_saved = cfg.get("score_prompt_time") or ""
-    channel_id = cfg.get("score_prompt_channel_id") or 0
+    copy = _SCHEDULED_COPY[surface_key]
+    is_on = bool(cfg.get(f"{surface_key}_enabled"))
+    time_saved = cfg.get(f"{surface_key}_time") or ""
+    channel_id = cfg.get(f"{surface_key}_channel_id") or 0
 
     if is_on:
-        status = f"🔔 **On.** I ask in <#{channel_id}> at **{_clock(time_saved)}**."
+        status = copy["on"].format(channel=channel_id, time=_clock(time_saved))
     elif time_saved and channel_id:
-        status = (
-            f"🔕 **Off.** Your channel and time are still saved: <#{channel_id}> "
-            f"at **{_clock(time_saved)}**."
-        )
+        status = copy["off_saved"].format(channel=channel_id, time=_clock(time_saved))
     else:
         missing = []
         if not time_saved:
             missing.append("a time")
         if not channel_id:
             missing.append("a channel")
-        status = f"🔕 **Off.** Set {' and '.join(missing)} first, then turn it on."
+        status = copy["off_unset"].format(missing=" and ".join(missing))
 
     embed = discord.Embed(
-        title="🔔 Daily score prompt",
-        description=(
-            f"{status}\n\n"
-            "Each morning after a duel day I post yesterday's matchup with a "
-            "button to record both scores, so the day gets logged while "
-            "someone still remembers it."
-        ),
+        title=copy["title"],
+        description=f"{status}\n\n{copy['what']}",
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="When it asks",
-        value=(
-            "Tuesday through Sunday. Monday has nothing to ask about, because "
-            "Sunday is the rest day, and Sunday's prompt covers Saturday's "
-            "Enemy Buster. Your time is read in this server's timezone; the "
-            "duel day itself is decided on server time."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Who sees it",
-        value=(
-            "Everyone who can read the channel you pick, so pick a leadership "
-            "channel. Only leadership can use the button."
-        ),
-        inline=False,
-    )
+    embed.add_field(name=copy["when_name"], value=copy["when"], inline=False)
+    embed.add_field(name=copy["who_name"], value=copy["who"], inline=False)
+
+    note = (cfg.get(f"{surface_key}_note") or "").strip()
+    if note:
+        embed.add_field(name="Your note to members", value=note[:1024], inline=False)
+
     embed.set_footer(text=f"Run /setup → {HUB_BTN_VS} to change any of this.")
     return embed
 

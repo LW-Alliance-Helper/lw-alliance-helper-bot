@@ -27,8 +27,14 @@ def cd_db(tmp_path, monkeypatch):
     path = str(tmp_path / "champion_duel.sqlite3")
     monkeypatch.setattr(db, "DB_PATH", path)
     db.init_db()
-    db.import_registrants([{"name": "AlphaOne", "group": "M", "rank": 1}])
+    db.import_registrants([{"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"}])
     return path
+
+
+def _alpha():
+    """Identity is (name, server) now, so scouting hangs off a registrant row
+    rather than a bare name -- two servers can field the same name."""
+    return db.resolve_registrant("AlphaOne", server="738")["id"]
 
 
 @pytest.fixture
@@ -100,7 +106,7 @@ async def test_unset_env_admits_nobody(cd_db, monkeypatch):
 
 
 async def test_export_produces_readable_csv(cd_db, admin_env):
-    db.set_squad("AlphaOne", 1, squad_type="Tank", power=1_000, actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", power=1_000, actor=KEV)
     cog = ChampionDuelAdmin(MagicMock())
     interaction = _interaction()
 
@@ -110,7 +116,9 @@ async def test_export_produces_readable_csv(cd_db, admin_env):
     payload = kwargs["file"].fp.read().decode("utf-8-sig")
     rows = list(csv.DictReader(io.StringIO(payload)))
     assert rows, "export produced no rows"
-    assert rows[0]["player_key"] == "alphaone"
+    assert rows[0]["display_name"] == "AlphaOne"
+    # The server is what distinguishes two players who share a name.
+    assert rows[0]["server"] == "738"
     assert rows[0]["actor_discord_id"] == str(ADMIN_ID)
     # Excel needs the BOM to render non-Latin player names correctly.
     assert payload != payload.lstrip("﻿") or payload.startswith("id,")
@@ -135,9 +143,9 @@ async def test_export_with_no_matches_says_so(cd_db, admin_env):
 
 
 async def test_revert_conflict_explains_rather_than_clobbers(cd_db, admin_env):
-    db.set_squad("AlphaOne", 1, squad_type="Tank", actor=KEV)
-    stale = db.set_squad("AlphaOne", 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
-    db.set_squad("AlphaOne", 1, squad_type="Aircraft", actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", actor=KEV)
+    stale = db.set_squad(_alpha(), 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
+    db.set_squad(_alpha(), 1, squad_type="Aircraft", actor=KEV)
 
     cog = ChampionDuelAdmin(MagicMock())
     interaction = _interaction()
@@ -146,12 +154,15 @@ async def test_revert_conflict_explains_rather_than_clobbers(cd_db, admin_env):
     msg = interaction.followup.send.call_args.args[0]
     assert "wasn't reverted" in msg and "Aircraft" in msg and "force" in msg
     # The value on disk is untouched.
-    assert db.get_player("AlphaOne", include_scouting=True)["squads"][0]["squad_type"] == "Aircraft"
+    assert (
+        db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]["squad_type"]
+        == "Aircraft"
+    )
 
 
 async def test_revert_succeeds_and_appends(cd_db, admin_env):
-    db.set_squad("AlphaOne", 1, squad_type="Tank", actor=KEV)
-    edit_id = db.set_squad("AlphaOne", 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
+    db.set_squad(_alpha(), 1, squad_type="Tank", actor=KEV)
+    edit_id = db.set_squad(_alpha(), 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
 
     cog = ChampionDuelAdmin(MagicMock())
     interaction = _interaction()
@@ -159,7 +170,10 @@ async def test_revert_succeeds_and_appends(cd_db, admin_env):
     await cog.revert.callback(cog, interaction, edit_id, False)
 
     assert "Reverted" in interaction.followup.send.call_args.args[0]
-    assert db.get_player("AlphaOne", include_scouting=True)["squads"][0]["squad_type"] == "Tank"
+    assert (
+        db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]["squad_type"]
+        == "Tank"
+    )
     assert db.list_edits()["total"] == before + 1, "revert should append, never delete"
 
 
@@ -175,7 +189,7 @@ async def test_revert_unknown_edit(cd_db, admin_env):
 
 async def test_edits_listing_is_capped(cd_db, admin_env):
     for i in range(30):
-        db.set_squad("AlphaOne", 1, power=1000 + i, actor=KEV)
+        db.set_squad(_alpha(), 1, power=1000 + i, actor=KEV)
     cog = ChampionDuelAdmin(MagicMock())
     interaction = _interaction()
     await cog.edits.callback(cog, interaction, None, None, 999)

@@ -59,6 +59,12 @@ async def client(cd_db, monkeypatch):
         yield c
 
 
+def _alpha():
+    """The AlphaOne registrant id. Identity is (name, server) now, so scouting
+    hangs off a row rather than a bare name."""
+    return db.resolve_registrant("AlphaOne", server="738")["id"]
+
+
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -84,14 +90,14 @@ async def test_groups_open(client):
 
 async def test_anonymous_roster_excludes_scouting(client, cd_db):
     """The registrant list is public LWS data; our scouting is not."""
-    db.set_squad("AlphaOne", 1, squad_type="Tank", power=1_000, actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", power=1_000, actor=KEV)
     body = await (await client.get(f"{P}/roster?group=M")).json()
     assert body["scouting_included"] is False
     assert all("squads" not in p for p in body["roster"])
 
 
 async def test_authenticated_roster_includes_scouting(client, cd_db):
-    db.set_squad("AlphaOne", 1, squad_type="Tank", power=1_000, actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", power=1_000, actor=KEV)
     token = await _session()
     body = await (await client.get(f"{P}/roster?group=M", headers=_auth(token))).json()
     assert body["scouting_included"] is True
@@ -159,7 +165,7 @@ async def test_admin_routes_reject_non_admin(client):
 
 
 async def test_admin_can_list_edits(client, cd_db):
-    db.set_squad("AlphaOne", 1, squad_type="Tank", actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", actor=KEV)
     token = await _session(user="111")
     body = await (await client.get(f"{P}/admin/edits", headers=_auth(token))).json()
     assert body["total"] >= 1
@@ -167,9 +173,9 @@ async def test_admin_can_list_edits(client, cd_db):
 
 async def test_stale_revert_returns_409_not_a_clobber(client, cd_db):
     """Two scouts editing one player is normal; the later value usually wins."""
-    db.set_squad("AlphaOne", 1, squad_type="Tank", actor=KEV)
-    first = db.set_squad("AlphaOne", 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
-    db.set_squad("AlphaOne", 1, squad_type="Aircraft", actor=KEV)
+    db.set_squad(_alpha(), 1, squad_type="Tank", actor=KEV)
+    first = db.set_squad(_alpha(), 1, squad_type="Missile", actor=KEV)["edit_ids"][0]
+    db.set_squad(_alpha(), 1, squad_type="Aircraft", actor=KEV)
 
     token = await _session(user="111")
     resp = await client.post(f"{P}/admin/edits/{first}/revert", headers=_auth(token))
@@ -183,7 +189,7 @@ async def test_stale_revert_returns_409_not_a_clobber(client, cd_db):
 
 async def test_import_never_downgrades_observed_scouting(client, cd_db):
     """A roster refresh must not turn a real sighting back into an estimate."""
-    db.set_squad("AlphaOne", 1, squad_type="Tank", power=9_999, actor=KEV, source="observed")
+    db.set_squad(_alpha(), 1, squad_type="Tank", power=9_999, actor=KEV, source="observed")
     token = await _session(user="111")
     resp = await client.post(
         f"{P}/admin/import",
@@ -191,7 +197,7 @@ async def test_import_never_downgrades_observed_scouting(client, cd_db):
         headers=_auth(token),
     )
     assert resp.status == 200
-    squad = db.get_player("AlphaOne", include_scouting=True)["squads"][0]
+    squad = db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]
     assert squad["source"] == "observed" and squad["power"] == 9_999
 
 

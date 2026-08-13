@@ -159,6 +159,12 @@ PREMIUM_FEATURES: set[str] = {
     # member day-theme reminder (#406), which reads nothing from the sheet and
     # is gated separately by not calling this at all.
     "alliance_duel_vs",
+    # Champion Duel predictor. Reading the registrant list is open and reading
+    # scouting only needs a Discord login; *contributing* squad corrections and
+    # deployment sightings is Premium. The dataset is community-gathered on
+    # purpose — an alliance that pays decides who on its team it trusts to
+    # enter data, and every write is attributed and revertable.
+    "champion_duel_write",
 }
 
 

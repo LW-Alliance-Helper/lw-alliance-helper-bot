@@ -70,6 +70,15 @@ class SideInput:
         So: the most-seen order where there are sightings, and the natural
         strongest-first order where there are none — which is exactly what the
         prediction used in each case.
+
+        **A tie resolves to the most recent sighting.** `orders` arrives newest
+        first (`get_player` sorts on observed_at), and `Counter.most_common`
+        breaks ties by first insertion — so a player seen once in each of two
+        orders shows the one they were last seen in. That is the right guess:
+        the question a prediction answers is which order they will have set
+        when the two meet, and the newer observation is the better evidence.
+        Only the display collapses to one order; the prediction itself still
+        averages over every recorded order, tie or not.
         """
         natural = [(self.player[f"sq{s}_power"], self.player[f"sq{s}_type"]) for s in SLOTS]
         if not self.orders:

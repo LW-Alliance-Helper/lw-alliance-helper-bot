@@ -71,6 +71,25 @@ def test_without_sightings_the_natural_order_is_shown(cd_db):
     assert [t for _, t in lineup] == ["Tank", "Missile", "Aircraft"]
 
 
+def test_a_tie_shows_the_most_recent_sighting(cd_db):
+    """Seen once in each of two orders, the card shows the newer one.
+
+    The question a prediction answers is which order they will have set when
+    the two meet, so the later observation is the better evidence. Only the
+    display collapses to one — the prediction still averages over both.
+    """
+    player = _player(
+        "Ravenshade",
+        "738",
+        (34_000_000, 30_000_000, 26_000_000),
+        orders=[("Tank", "Missile", "Aircraft"), ("Aircraft", "Tank", "Missile")],
+    )
+    side = cdp.build_side(player)
+    lineup, _ = side.likely_order()
+    assert [t for _, t in lineup] == ["Aircraft", "Tank", "Missile"]
+    assert len(side.orders) == 2, "both still feed the prediction"
+
+
 def test_the_most_seen_order_wins_not_the_most_recent(cd_db):
     """Repeats are the weight: five sightings in one order and one in another
     reads 5:1, and the card shows the five."""

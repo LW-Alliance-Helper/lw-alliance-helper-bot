@@ -263,6 +263,57 @@ def prediction_caption(result: predict_lib.Prediction) -> str:
     )
 
 
+class SharePredictionView(discord.ui.View):
+    """Lets the person who asked repost the card visibly to this channel.
+
+    Follows `member_stats.SharePowerView`: the same 📤, the same "to this
+    channel" phrasing, the same disable-after-use. Posting is opt-in and
+    user-initiated rather than the bot deciding a prediction is public —
+    the ephemeral default holds until someone chooses otherwise.
+
+    No `interaction_check`: the message this hangs off is ephemeral, so the
+    only person who can press it is already the only person who can see it.
+
+    The rendered bytes are held rather than re-rendered. A second render could
+    disagree with the first if a sighting landed in between, and a card that
+    changes between being read and being shared is worse than the memory.
+    """
+
+    def __init__(self, *, png: bytes, caption: str, user_id: int):
+        super().__init__(timeout=600)
+        self.png = png
+        self.caption = caption
+        self.user_id = user_id
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    @discord.ui.button(
+        label="📤 Share this prediction to this channel", style=discord.ButtonStyle.secondary
+    )
+    async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        button.disabled = True
+        await interaction.edit_original_response(view=self)
+        try:
+            # Posted to the channel directly: a followup to an ephemeral
+            # interaction would itself be ephemeral, which is the one thing
+            # this button exists to avoid.
+            await interaction.channel.send(
+                f"{self.caption}\n-# Shared by <@{self.user_id}>",
+                file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.png"),
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "⚠️ I can't post in this channel — I need **Send Messages** and "
+                "**Attach Files** here. You can still save the image and post it yourself.",
+                ephemeral=True,
+            )
+
+
 async def _send_prediction(interaction: discord.Interaction, result: predict_lib.Prediction):
     """The card, falling back to the embed if rendering fails.
 
@@ -283,11 +334,15 @@ async def _send_prediction(interaction: discord.Interaction, result: predict_lib
         await interaction.followup.send(embed=build_prediction_embed(result), ephemeral=True)
         return
 
+    caption = prediction_caption(result)
+    view = SharePredictionView(png=png, caption=caption, user_id=interaction.user.id)
     await interaction.followup.send(
-        prediction_caption(result),
+        caption,
         file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.png"),
+        view=view,
         ephemeral=True,
     )
+    view.message = await interaction.original_response()
 
 
 class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):

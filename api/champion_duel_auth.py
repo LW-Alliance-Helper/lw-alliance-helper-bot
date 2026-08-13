@@ -68,17 +68,51 @@ def _env(name: str) -> str | None:
     return (os.getenv(name, "") or "").strip() or None
 
 
-def oauth_configured() -> bool:
+def client_id(bot=None) -> str | None:
+    """The OAuth client id, from the env or the bot's own application id.
+
+    Deriving it is deliberate. The client id is the application id, which the
+    gateway client already knows, and it is not a secret. Dev and production
+    are *separate Discord apps*, so a hand-copied id is a live footgun: paste
+    production's into the dev service and OAuth fails in a way that looks like
+    a code bug. Reading it off the running bot means the id always belongs to
+    the app that service is actually logged in as.
+
+    DISCORD_CLIENT_ID still overrides, for a deploy that fronts a different
+    application on purpose.
+    """
+    explicit = _env("DISCORD_CLIENT_ID")
+    if explicit:
+        return explicit
+    app_id = getattr(bot, "application_id", None) or getattr(getattr(bot, "user", None), "id", None)
+    return str(app_id) if app_id else None
+
+
+def missing_oauth_env(bot=None) -> list[str]:
+    """Which pieces of OAuth config are absent.
+
+    Reported by name in the 503, because "oauth_unconfigured" alone sends
+    whoever is deploying to check several variables by hand across two systems.
+    Names are not secrets; the values never appear.
+    """
+    missing = []
+    if not client_id(bot):
+        missing.append("DISCORD_CLIENT_ID")
+    if not _env("DISCORD_CLIENT_SECRET"):
+        missing.append("DISCORD_CLIENT_SECRET")
+    if not _env("CHAMPION_DUEL_REDIRECT_URI"):
+        missing.append("CHAMPION_DUEL_REDIRECT_URI")
+    return missing
+
+
+def oauth_configured(bot=None) -> bool:
     """True when the login flow can actually run.
 
     Checked before advertising login rather than failing mid-redirect, so a
     half-configured deploy says so instead of bouncing a user to Discord and
     dying on the way back.
     """
-    return all(
-        _env(n)
-        for n in ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "CHAMPION_DUEL_REDIRECT_URI")
-    )
+    return not missing_oauth_env(bot)
 
 
 def admin_ids() -> frozenset[str]:
@@ -165,12 +199,21 @@ def json_response(data, request, status=200) -> web.Response:
 
 async def login(request: web.Request) -> web.StreamResponse:
     """302 to Discord's consent screen, with CSRF state in a cookie."""
-    if not oauth_configured():
-        return json_response({"error": "oauth_unconfigured"}, request, status=503)
+    bot = request.app.get(BOT_KEY)
+    if not oauth_configured(bot):
+        return json_response(
+            {
+                "error": "oauth_unconfigured",
+                "missing": missing_oauth_env(bot),
+                "detail": "These environment variables are unset on the bot service.",
+            },
+            request,
+            status=503,
+        )
 
     state = secrets.token_urlsafe(24)
     params = {
-        "client_id": _env("DISCORD_CLIENT_ID"),
+        "client_id": client_id(bot),
         "redirect_uri": _env("CHAMPION_DUEL_REDIRECT_URI"),
         "response_type": "code",
         "scope": OAUTH_SCOPE,
@@ -189,9 +232,9 @@ async def login(request: web.Request) -> web.StreamResponse:
     return resp
 
 
-async def _exchange_code(code: str) -> dict:
+async def _exchange_code(code: str, bot=None) -> dict:
     data = {
-        "client_id": _env("DISCORD_CLIENT_ID"),
+        "client_id": client_id(bot),
         "client_secret": _env("DISCORD_CLIENT_SECRET"),
         "grant_type": "authorization_code",
         "code": code,
@@ -258,8 +301,17 @@ async def callback(request: web.Request) -> web.StreamResponse:
     in a redirect URL lands in browser history, the Referer header and any
     proxy log along the way.
     """
-    if not oauth_configured():
-        return json_response({"error": "oauth_unconfigured"}, request, status=503)
+    bot = request.app.get(BOT_KEY)
+    if not oauth_configured(bot):
+        return json_response(
+            {
+                "error": "oauth_unconfigured",
+                "missing": missing_oauth_env(bot),
+                "detail": "These environment variables are unset on the bot service.",
+            },
+            request,
+            status=503,
+        )
 
     code = request.query.get("code")
     state = request.query.get("state")
@@ -274,7 +326,7 @@ async def callback(request: web.Request) -> web.StreamResponse:
         return web.HTTPFound(f"{back}#error=bad_state")
 
     try:
-        token_data = await _exchange_code(code)
+        token_data = await _exchange_code(code, bot)
         profile = await _fetch_profile(token_data["access_token"])
     except web.HTTPException:
         return web.HTTPFound(f"{back}#error=discord_failed")
@@ -435,7 +487,8 @@ async def me(request: web.Request) -> web.Response:
     actor = await identify(request)
     if actor is None:
         return json_response(
-            {"authenticated": False, "login_available": oauth_configured()}, request
+            {"authenticated": False, "login_available": oauth_configured(request.app.get(BOT_KEY))},
+            request,
         )
     return json_response(
         {

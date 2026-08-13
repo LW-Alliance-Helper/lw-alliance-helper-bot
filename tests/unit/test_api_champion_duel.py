@@ -279,6 +279,70 @@ def test_login_bounce_targets_the_page_not_the_site_root(monkeypatch):
     assert auth.app_url() != auth.app_origin()
 
 
+# ── OAuth config ──────────────────────────────────────────────────────────────
+
+
+def test_client_id_derives_from_the_running_bot(monkeypatch):
+    """Dev and prod are separate Discord apps.
+
+    A hand-copied client id can belong to the wrong one and fails in a way
+    that looks like a code bug; the bot's own application id always belongs to
+    the app that service is logged in as.
+    """
+    from unittest.mock import MagicMock
+
+    from api import champion_duel_auth as auth
+
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    bot = MagicMock()
+    bot.application_id = 123456789
+    assert auth.client_id(bot) == "123456789"
+    assert "DISCORD_CLIENT_ID" not in auth.missing_oauth_env(bot)
+
+
+def test_explicit_client_id_wins(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from api import champion_duel_auth as auth
+
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "999")
+    bot = MagicMock()
+    bot.application_id = 123
+    assert auth.client_id(bot) == "999"
+
+
+def test_missing_oauth_names_what_is_absent(monkeypatch):
+    """A bare oauth_unconfigured makes the deployer check several variables
+    across two systems with no idea which one is missing."""
+    from api import champion_duel_auth as auth
+
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DISCORD_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("CHAMPION_DUEL_REDIRECT_URI", raising=False)
+    missing = auth.missing_oauth_env(None)
+    assert missing == [
+        "DISCORD_CLIENT_ID",
+        "DISCORD_CLIENT_SECRET",
+        "CHAMPION_DUEL_REDIRECT_URI",
+    ]
+    assert auth.oauth_configured(None) is False
+
+
+async def test_login_503_lists_the_missing_names(client, monkeypatch):
+    monkeypatch.delenv("DISCORD_CLIENT_SECRET", raising=False)
+    resp = await client.get(f"{P}/auth/login", allow_redirects=False)
+    assert resp.status == 503
+    body = await resp.json()
+    assert body["error"] == "oauth_unconfigured"
+    assert "DISCORD_CLIENT_SECRET" in body["missing"]
+
+
+async def test_health_reports_oauth_state(client):
+    body = await (await client.get(f"{P}/health")).json()
+    assert "oauth" in body and "oauth_missing" in body
+    assert body["admins_configured"] == 1
+
+
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
 

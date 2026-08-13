@@ -68,6 +68,19 @@ def _env(name: str) -> str | None:
     return (os.getenv(name, "") or "").strip() or None
 
 
+OAUTH_ENV = ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "CHAMPION_DUEL_REDIRECT_URI")
+
+
+def missing_oauth_env() -> list[str]:
+    """Which OAuth variables are unset.
+
+    Reported by name in the 503, because "oauth_unconfigured" alone sends
+    whoever is deploying to check three variables by hand across two systems.
+    Names are not secrets; the values never appear.
+    """
+    return [n for n in OAUTH_ENV if not _env(n)]
+
+
 def oauth_configured() -> bool:
     """True when the login flow can actually run.
 
@@ -75,10 +88,7 @@ def oauth_configured() -> bool:
     half-configured deploy says so instead of bouncing a user to Discord and
     dying on the way back.
     """
-    return all(
-        _env(n)
-        for n in ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "CHAMPION_DUEL_REDIRECT_URI")
-    )
+    return not missing_oauth_env()
 
 
 def admin_ids() -> frozenset[str]:
@@ -166,7 +176,15 @@ def json_response(data, request, status=200) -> web.Response:
 async def login(request: web.Request) -> web.StreamResponse:
     """302 to Discord's consent screen, with CSRF state in a cookie."""
     if not oauth_configured():
-        return json_response({"error": "oauth_unconfigured"}, request, status=503)
+        return json_response(
+            {
+                "error": "oauth_unconfigured",
+                "missing": missing_oauth_env(),
+                "detail": "These environment variables are unset on the bot service.",
+            },
+            request,
+            status=503,
+        )
 
     state = secrets.token_urlsafe(24)
     params = {
@@ -259,7 +277,15 @@ async def callback(request: web.Request) -> web.StreamResponse:
     proxy log along the way.
     """
     if not oauth_configured():
-        return json_response({"error": "oauth_unconfigured"}, request, status=503)
+        return json_response(
+            {
+                "error": "oauth_unconfigured",
+                "missing": missing_oauth_env(),
+                "detail": "These environment variables are unset on the bot service.",
+            },
+            request,
+            status=503,
+        )
 
     code = request.query.get("code")
     state = request.query.get("state")

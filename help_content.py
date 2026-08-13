@@ -345,7 +345,11 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "💎 Set up the tracker: name your alliance, choose whether to "
                 "track your whole 16-alliance League bracket or just your own "
                 "alliance, and get the tab created and explained. You can "
-                "change either choice later.",
+                "change either choice later.\n"
+                "Also where you switch on the 🔔 Daily score prompt: a post in "
+                "a channel you pick, at a time you pick, asking for the day "
+                "that just finished with a button to record it. Tuesday "
+                "through Sunday, since Sunday is the rest day.",
             ),
             (
                 "/vs",

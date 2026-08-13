@@ -999,6 +999,37 @@ def init_db():
         """)
         conn.commit()
 
+        # vs_score_prompt_posts — table-of-record for "this message is a daily
+        # score prompt" (#405), the same job `storm_registration_posts` does
+        # for sign-ups. Read at startup to re-register the persistent View so
+        # the buttons still work after a Railway redeploy, and read on click to
+        # recover which league-week the prompt was asking about. The league is
+        # stored rather than re-derived: a prompt clicked after the next league
+        # has started would otherwise write the day score onto the wrong
+        # league's row.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vs_score_prompt_posts (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id       INTEGER NOT NULL,
+                channel_id     INTEGER NOT NULL,
+                message_id     INTEGER NOT NULL,
+                league_season  TEXT    DEFAULT '',
+                league_tier    TEXT    DEFAULT '',
+                league_group   TEXT    DEFAULT '',
+                week           INTEGER NOT NULL,
+                duel_day       INTEGER NOT NULL,
+                -- Server date of the day being asked about, which is also the
+                -- dedup key: one prompt per guild per duel day.
+                server_date    TEXT    NOT NULL,
+                posted_at      TEXT    NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_vs_prompt_posts_message
+            ON vs_score_prompt_posts (message_id)
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -6215,3 +6246,72 @@ def list_vs_enabled_guild_ids() -> list[int]:
     with _get_conn() as conn:
         rows = conn.execute("SELECT guild_id FROM guild_vs_config WHERE enabled = 1").fetchall()
     return [r["guild_id"] for r in rows]
+
+
+# ── Daily score prompt posts (#405) ───────────────────────────────────────────
+
+
+def record_vs_score_prompt_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    league,
+    week: int,
+    duel_day: int,
+    server_date: str,
+) -> None:
+    """Remember a posted score prompt, so its buttons survive a restart.
+
+    `league` is an `alliance_duel.LeagueKey` or None, taken apart here rather
+    than imported, so `config` stays importable without the feature module.
+    """
+    import datetime as _dt
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vs_score_prompt_posts "
+            "(guild_id, channel_id, message_id, league_season, league_tier, league_group, "
+            " week, duel_day, server_date, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                guild_id,
+                channel_id,
+                message_id,
+                getattr(league, "season", "") or "",
+                getattr(league, "tier", "") or "",
+                getattr(league, "group", "") or "",
+                week,
+                duel_day,
+                server_date,
+                _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+
+def get_vs_score_prompt_post(message_id: int) -> dict | None:
+    """The prompt a clicked message belongs to, or None once it has aged out."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM vs_score_prompt_posts WHERE message_id = ?", (int(message_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:
+    """Prompts recent enough to still be worth re-registering on startup.
+
+    Fourteen days covers a fortnight of a four-week league, which is well past
+    the point where an unanswered prompt is worth chasing. Bounded against UTC
+    today for the same reason the storm equivalent is: the host's local clock
+    must not drift the cutoff.
+    """
+    import datetime as _dt
+
+    today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+    cutoff = (today_utc - _dt.timedelta(days=within_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vs_score_prompt_posts WHERE server_date >= ?", (cutoff,)
+        ).fetchall()
+    return [dict(r) for r in rows]

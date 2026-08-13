@@ -87,6 +87,26 @@ class GuildConfig:
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # WAL is load-bearing for storage, not just for concurrency.
+    #
+    # The default rollback journal CREATES and DELETES `guild_configs.db-journal`
+    # on every write transaction. The Railway volume is a thin-provisioned ZFS
+    # zvol, which allocates blocks on write and does not hand them back when a
+    # file is deleted -- the guest filesystem frees the bytes, the host keeps the
+    # blocks. The background loops upsert `loop_heartbeat` continuously, so that
+    # create/delete cycle ran all day and the volume's *reported* usage climbed
+    # ~55 MB/day on a filesystem holding under 2 MB. It reached 3.7 GB of a 5 GB
+    # volume before anyone looked, and `fstrim` cannot reclaim it: the container
+    # is refused the FITRIM ioctl.
+    #
+    # WAL keeps ONE `-wal` file, appended and checkpointed back in place, so
+    # blocks get reused instead of freshly allocated.
+    #
+    # The mode is stored in the database header, not on the connection, so this
+    # applies once and sticks -- including for `growth.py`'s own
+    # `sqlite3.connect(DB_PATH)`, which does not come through this helper.
+    # Re-issuing it per connection is a cheap no-op once it has taken.
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 

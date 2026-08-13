@@ -1063,6 +1063,112 @@ async def admin_changelog_slash(
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+@admin_group.command(
+    name="champion_duel_import",
+    description="(Bot owner only) Load the Champion Duel roster and scouting from an attached JSON.",
+)
+@app_commands.describe(
+    file="payload.json from the simulator's `push_to_bot.py --out payload.json`.",
+)
+async def admin_champion_duel_import_slash(
+    interaction: discord.Interaction, file: discord.Attachment
+):
+    """Import the roster from an attachment rather than over HTTP.
+
+    The same payload `POST /admin/import` takes, applied by the same data-layer
+    functions, arriving a different way — and the difference is the whole point.
+    The HTTP path needs a public host, a service key, and a shell with the
+    simulator checked out. This needs a file and the surface the operator is
+    already in, and `_require_bot_owner` is a stronger gate than the service key
+    it replaces.
+
+    The route stays: Map Manager will want it later, and it is what the web app
+    would use. This is a second door to one room, not a second room.
+
+    Nothing about the data is parsed here. Reading the workbooks, fitting the
+    THP ratios and resolving renames all stay in the simulator, where the corpus
+    that validates them lives — the bot receives a finished payload and applies
+    it. That is the same reason the engine is a pinned package rather than a
+    port.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import champion_duel_db as cd_db  # noqa: PLC0415
+
+    try:
+        raw = await file.read()
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        await interaction.followup.send(
+            f"⚠️ `{file.filename}` isn't UTF-8 text — attach the JSON from `push_to_bot.py --out`.",
+            ephemeral=True,
+        )
+        return
+    except ValueError as e:
+        await interaction.followup.send(
+            f"⚠️ Couldn't parse `{file.filename}` as JSON: {e}", ephemeral=True
+        )
+        return
+
+    if not isinstance(payload, dict) or not any(
+        isinstance(payload.get(k), list) for k in ("registrants", "squads", "orders")
+    ):
+        await interaction.followup.send(
+            "⚠️ That JSON has none of `registrants`, `squads` or `orders`. "
+            "Generate it with `push_to_bot.py --out payload.json`.",
+            ephemeral=True,
+        )
+        return
+
+    actor = {
+        "discord_user_id": str(interaction.user.id),
+        "discord_name": interaction.user.display_name,
+        "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
+    }
+
+    # Dependency order: squads and orders both resolve against registrant rows.
+    lines, problems = [], []
+    if isinstance(payload.get("registrants"), list):
+        result = await asyncio.to_thread(cd_db.import_registrants, payload["registrants"])
+        lines.append(f"**{result['total']}** registrants ({result['inserted']} new)")
+    if isinstance(payload.get("squads"), list):
+        result = await asyncio.to_thread(cd_db.import_squads, payload["squads"], actor=actor)
+        lines.append(
+            f"**{result['applied']}** squad rows"
+            + (f", {result['kept_observed']} observations kept" if result["kept_observed"] else "")
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+    if isinstance(payload.get("orders"), list):
+        result = await asyncio.to_thread(cd_db.import_orders, payload["orders"], actor=actor)
+        lines.append(
+            f"**{result['applied']}** deployment orders across {result['players']} players"
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+
+    groups = await asyncio.to_thread(cd_db.get_groups)
+    summary = "✅ Imported from `{}`:\n{}\n\n{} group(s), {} registrants now loaded.".format(
+        file.filename,
+        "\n".join(f"• {line}" for line in lines),
+        len(groups),
+        sum(g["registrants"] for g in groups),
+    )
+    if problems:
+        # Attached rather than inlined: a roster refresh can produce hundreds,
+        # and truncating them into an embed hides the ones nobody has seen yet.
+        fp = io.BytesIO("\n".join(problems).encode("utf-8"))
+        await interaction.followup.send(
+            f"{summary}\n\n⚠️ **{len(problems)}** row(s) didn't land — see attached.",
+            file=discord.File(fp, filename="champion_duel_import_problems.txt"),
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(summary, ephemeral=True)
+
+
 # Register the /admin Group on the tree once every subcommand has been
 # attached above. The Group-level guilds= kwarg propagates to all its
 # subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the

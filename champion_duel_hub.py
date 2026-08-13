@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 import discord
 
 import champion_duel_db as db
+import champion_duel_image
 import champion_duel_predict as predict_lib
 import premium
 from api.champion_duel_auth import admin_ids
@@ -184,18 +185,23 @@ def _bar(p: float, width: int = 20) -> str:
 
 
 def _lineup(side: predict_lib.SideInput) -> str:
-    """One side's line-up, marking how each squad value was arrived at, so an
-    estimate never reads as a sighting."""
-    lines = []
-    for slot in predict_lib.SLOTS:
-        power = side.player[f"sq{slot}_power"]
-        squad_type = side.player[f"sq{slot}_type"]
-        lines.append(f"{slot}. {squad_type} · {power:,.0f}")
-    tail = f"{side.observed_squads}/3 observed"
-    if side.sightings:
-        tail += f" · {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
-    else:
-        tail += " · no sightings, assuming strongest first"
+    """One side's line-up, in the order the prediction assumed.
+
+    Not the natural slot order when the two differ: deployment order decides
+    which squad meets which, and the counter triangle means it can outweigh
+    power. Rendering one order beside a probability computed from another is
+    how a reader talks themselves out of a correct prediction.
+    """
+    lineup, from_sightings = side.likely_order()
+    lines = [
+        f"{i}. {squad_type} · {power:,.0f}" for i, (power, squad_type) in enumerate(lineup, start=1)
+    ]
+    tail = f"{side.observed_squads}/3 observed · "
+    tail += (
+        f"their order in {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
+        if from_sightings
+        else "never seen deploying, assuming strongest first"
+    )
     return "\n".join(lines) + f"\n*{tail}*"
 
 
@@ -241,6 +247,47 @@ def build_prediction_embed(result: predict_lib.Prediction) -> discord.Embed:
         )
     )
     return embed
+
+
+def prediction_caption(result: predict_lib.Prediction) -> str:
+    """The prediction in one line of text.
+
+    The card carries it visually, but the line is what survives a screen
+    reader, a failed image load, and Discord's own search — none of which can
+    read a PNG.
+    """
+    a, b = result.a, result.b
+    return (
+        f"🆚 **{a.name}** {result.p_a:.0%} · **{b.name}** {result.p_b:.0%} "
+        f"— confidence: {result.confidence()}"
+    )
+
+
+async def _send_prediction(interaction: discord.Interaction, result: predict_lib.Prediction):
+    """The card, falling back to the embed if rendering fails.
+
+    A render is more moving parts than an embed -- fonts, a logo asset, Pillow
+    -- and none of them are worth losing a correct prediction over. The
+    fallback is silent to the user because the numbers are identical either
+    way; the exception still reaches Sentry.
+    """
+    try:
+        png = await asyncio.to_thread(champion_duel_image.render, result)
+    except Exception as exc:  # noqa: BLE001 - a failed render must not eat the answer
+        try:
+            import sentry_sdk
+
+            sentry_sdk.capture_exception(exc)
+        except ImportError:  # pragma: no cover - sentry optional in some envs
+            pass
+        await interaction.followup.send(embed=build_prediction_embed(result), ephemeral=True)
+        return
+
+    await interaction.followup.send(
+        prediction_caption(result),
+        file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.png"),
+        ephemeral=True,
+    )
 
 
 class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
@@ -290,7 +337,7 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
             )
             return
 
-        await interaction.followup.send(embed=build_prediction_embed(result), ephemeral=True)
+        await _send_prediction(interaction, result)
 
 
 # ── Look up ───────────────────────────────────────────────────────────────────

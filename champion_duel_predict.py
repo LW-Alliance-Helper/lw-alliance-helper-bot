@@ -17,6 +17,7 @@ renders them identically is telling the reader something untrue.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 try:
@@ -54,6 +55,28 @@ class SideInput:
     observed_squads: int
     sightings: int
     estimated_squads: int = 0
+
+    def likely_order(self) -> tuple[list[tuple[float, str]], bool]:
+        """The line-up to *show*, and whether it came from sightings.
+
+        Every surface that renders a prediction has to answer this, and getting
+        it wrong is not cosmetic. The prediction averages over each side's
+        recorded orders, but a card can only draw one — and drawing the natural
+        slot order next to a probability computed from a different order
+        invites the reader to work out why the number looks wrong and reach a
+        conclusion that is also wrong. Deployment order decides which squad
+        meets which, and the counter triangle means order can outweigh power.
+
+        So: the most-seen order where there are sightings, and the natural
+        strongest-first order where there are none — which is exactly what the
+        prediction used in each case.
+        """
+        natural = [(self.player[f"sq{s}_power"], self.player[f"sq{s}_type"]) for s in SLOTS]
+        if not self.orders:
+            return natural, False
+        counts = Counter(tuple(squad_type for _, squad_type in order) for order in self.orders)
+        powers = {squad_type: power for power, squad_type in natural}
+        return [(powers[t], t) for t in counts.most_common(1)[0][0]], True
 
 
 @dataclass

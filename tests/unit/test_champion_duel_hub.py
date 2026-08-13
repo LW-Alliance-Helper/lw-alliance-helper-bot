@@ -179,10 +179,39 @@ async def test_predict_renders_both_sides(cd_db):
     interaction = _interaction()
     await modal.on_submit(interaction)
 
-    embed = interaction.followup.send.call_args.kwargs["embed"]
+    kwargs = interaction.followup.send.call_args.kwargs
+    # The card is the answer; the caption is what survives a screen reader, a
+    # failed image load, and Discord's own search.
+    assert kwargs["file"].filename.endswith(".png")
+    caption = interaction.followup.send.call_args.args[0]
+    assert "AlphaOne" in caption and "BetaTwo" in caption
+    assert "%" in caption and "confidence" in caption
+
+
+async def test_a_failed_render_still_answers_the_question(cd_db, monkeypatch):
+    """A render is fonts, an asset and Pillow. None of them are worth losing a
+    correct prediction over, so it falls back to the embed."""
+    _full_squads(_reg("AlphaOne"), powers=(50_000_000, 40_000_000, 30_000_000))
+    _full_squads(_reg("BetaTwo"), powers=(20_000_000, 15_000_000, 10_000_000))
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("no fonts on this box")
+
+    monkeypatch.setattr(hub.champion_duel_image, "render", boom)
+
+    modal = hub._PredictModal()
+    modal.player_a._value = "AlphaOne"
+    modal.server_a._value = "738"
+    modal.player_b._value = "BetaTwo"
+    modal.server_b._value = "738"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    kwargs = interaction.followup.send.call_args.kwargs
+    assert "file" not in kwargs
+    embed = kwargs["embed"]
     assert "AlphaOne" in embed.title and "BetaTwo" in embed.title
-    # The stronger side leads, and both percentages are rendered.
-    assert "%" in embed.description
     assert any("Confidence" in f.name for f in embed.fields)
 
 

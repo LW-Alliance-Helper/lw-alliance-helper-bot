@@ -43,6 +43,7 @@ import discord
 import champion_duel_db as db
 import champion_duel_image
 import champion_duel_predict as predict_lib
+import champion_duel_wording as words
 import premium
 from api.champion_duel_auth import admin_ids
 
@@ -254,24 +255,11 @@ def _lineup(side: predict_lib.SideInput) -> str:
     power. Rendering one order beside a probability computed from another is
     how a reader talks themselves out of a correct prediction.
     """
-    lineup, from_sightings = side.likely_order()
+    lineup, _from_sightings = side.likely_order()
     lines = [
         f"{i}. {squad_type} · {power:,.0f}" for i, (power, squad_type) in enumerate(lineup, start=1)
     ]
-    tail = f"{side.observed_squads}/3 observed · "
-    tail += (
-        f"their order in {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
-        if from_sightings
-        else "never seen deploying, assuming strongest first"
-    )
-    return "\n".join(lines) + f"\n*{tail}*"
-
-
-_CONFIDENCE_COPY = {
-    "high": "Built on observed squads and recorded sightings.",
-    "medium": "Part of this is estimated from total hero power.",
-    "low": "Both line-ups are estimates and neither player has been seen deploying.",
-}
+    return "\n".join(lines) + f"\n*{words.lineup_summary(side)}*"
 
 
 def build_prediction_embed(result: predict_lib.Prediction) -> discord.Embed:
@@ -289,17 +277,16 @@ def build_prediction_embed(result: predict_lib.Prediction) -> discord.Embed:
     embed = discord.Embed(
         title=f"🆚 {a_label} vs {b_label}"[:256],
         description=(
-            f"**{a.name}** {result.p_a:.0%}\n`{_bar(result.p_a)}`\n"
-            f"**{b.name}** {result.p_b:.0%}\n`{_bar(result.p_b)}`"
+            f"**{a.name}** {words.probability(result.p_a)}\n`{_bar(result.p_a)}`\n"
+            f"**{b.name}** {words.probability(result.p_b)}\n`{_bar(result.p_b)}`"
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name=a.name[:256], value=_lineup(a)[:1024], inline=True)
     embed.add_field(name=b.name[:256], value=_lineup(b)[:1024], inline=True)
-    confidence = result.confidence()
     embed.add_field(
-        name=f"Confidence: {confidence}",
-        value=_CONFIDENCE_COPY[confidence],
+        name=f"{words.CONFIDENCE_LABEL}: {result.confidence().capitalize()}",
+        value=words.EVIDENCE_COPY[words.evidence(a, b)],
         inline=False,
     )
     embed.set_footer(
@@ -320,8 +307,9 @@ def prediction_caption(result: predict_lib.Prediction) -> str:
     """
     a, b = result.a, result.b
     return (
-        f"🆚 **{a.name}** {result.p_a:.0%} · **{b.name}** {result.p_b:.0%} "
-        f"— confidence: {result.confidence()}"
+        f"🆚 **{a.name}** {words.probability(result.p_a)} · "
+        f"**{b.name}** {words.probability(result.p_b)} "
+        f"— {words.CONFIDENCE_LABEL}: {result.confidence().capitalize()}"
     )
 
 
@@ -366,7 +354,7 @@ class SharePredictionView(discord.ui.View):
             # this button exists to avoid.
             await interaction.channel.send(
                 f"{self.caption}\n-# Shared by <@{self.user_id}>",
-                file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.png"),
+                file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.webp"),
             )
         except discord.Forbidden:
             await interaction.followup.send(
@@ -400,7 +388,7 @@ async def _send_prediction(interaction: discord.Interaction, result: predict_lib
     view = SharePredictionView(png=png, caption=caption, user_id=interaction.user.id)
     await interaction.followup.send(
         caption,
-        file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.png"),
+        file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.webp"),
         view=view,
         ephemeral=True,
     )

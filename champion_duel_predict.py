@@ -55,6 +55,14 @@ class SideInput:
     observed_squads: int
     sightings: int
     estimated_squads: int = 0
+    #: Squads whose power is a real figure rather than derived from total hero
+    #: power — `observed` from the sighting corpus plus `edited`, which is what
+    #: the hub writes when someone types a squad in. Both mean "we hold a
+    #: number for this"; only `estimated` does not, and that is the distinction
+    #: a prediction's worth turns on. Counting `edited` as neither, as this
+    #: used to, made every squad the community entered count against the
+    #: confidence of the prediction it improved.
+    recorded_squads: int = 0
 
     def likely_order(self) -> tuple[list[tuple[float, str]], bool]:
         """The line-up to *show*, and whether it came from sightings.
@@ -111,11 +119,11 @@ class Prediction:
         the misreading it exists to prevent — it is not calibrated against
         anything, unlike `p_a`, which the backtest validates at 48/49.
         """
-        observed = self.a.observed_squads + self.b.observed_squads
+        recorded = self.a.recorded_squads + self.b.recorded_squads
         sightings = self.a.sightings + self.b.sightings
-        if observed >= 6 and sightings >= 2:
+        if recorded >= 6 and sightings >= 2:
             return "high"
-        if observed >= 3 or sightings >= 1:
+        if recorded >= 3 or sightings >= 1:
             return "medium"
         return "low"
 
@@ -171,6 +179,7 @@ def build_side(player: dict) -> SideInput:
 
     observed = sum(1 for slot in SLOTS if squads[slot].get("source") == "observed")
     estimated = sum(1 for slot in SLOTS if squads[slot].get("source") == "estimated")
+    recorded = sum(1 for slot in SLOTS if squads[slot].get("source") in ("observed", "edited"))
     return SideInput(
         name=player.get("display_name") or "",
         server=player.get("server"),
@@ -178,6 +187,7 @@ def build_side(player: dict) -> SideInput:
         orders=orders,
         observed_squads=observed,
         estimated_squads=estimated,
+        recorded_squads=recorded,
         sightings=len(orders),
     )
 

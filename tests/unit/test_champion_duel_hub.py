@@ -264,7 +264,10 @@ async def test_a_missing_player_points_at_adding_them(cd_db):
     modal.server._value = ""
     interaction = _interaction()
     await modal.on_submit(interaction)
-    assert hub.CD_BTN_ADD in _sent(interaction)
+    # By its words: ➕ is near-black against a Discord message background, so
+    # naming the button in prose drops the icon and lets bold do the work.
+    assert hub._btn_words(hub.CD_BTN_ADD) in _sent(interaction)
+    assert "➕" not in _sent(interaction)
 
 
 async def test_the_write_modals_do_not_ask_who_again(cd_db):
@@ -405,40 +408,67 @@ async def test_only_the_opener_can_press_the_buttons():
 
 
 def test_hub_embed_names_the_gate_it_applied(cd_db):
-    embed = hub.build_hub_embed(
-        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=False
-    )
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=False)
     names = [f.name for f in embed.fields]
     assert any("Premium" in n for n in names)
     assert "2" in embed.description  # both registrants counted
 
 
-def test_hub_embed_names_the_servers_and_how_scouted_they_are(cd_db):
-    """Groups say which bracket a member is in; servers say whether this is
-    about anyone they know. The scouted count is the one that turns into a
-    reason to contribute."""
-    db.set_squad(_reg("AlphaOne"), 1, squad_type="Tank", power=1, actor=KEV, source="observed")
-    embed = hub.build_hub_embed(
-        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=True
-    )
-    field = next(f for f in embed.fields if f.name.startswith("Servers"))
-    assert "738" in field.value
-    assert "**1**" in field.value, "one of the two players has been seen"
-    # Named as it appears, and on the hub -- the squad and order buttons moved
-    # onto the player card, so this field can only point at a hub button.
-    assert hub.CD_BTN_ADD in field.value
-    assert hub.CD_BTN_ORDER not in field.value
+def test_hub_embed_lists_the_servers_bare_and_in_numeric_order(cd_db):
+    """Bare numbers, one list, no per-server counts. A member is scanning for
+    their own server; a count beside each one turns that into decoding."""
+    db.upsert_registrant("StrangerFrom99", server="99", origin="self_reported", actor=KEV)
+    db.upsert_registrant("StrangerFrom800", server="800", origin="self_reported", actor=KEV)
+
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+
+    assert "99, 738, 800" in embed.description, "numeric, not lexicographic or by size"
+    assert "(1)" not in embed.description and "(2)" not in embed.description
 
 
-def test_hub_embed_does_not_present_the_server_list_as_a_closed_set(cd_db):
-    """The listed servers are the ones we hold, not the ones we accept. A
-    member facing someone from an unimported server has to read the field as an
-    invitation, not a rejection -- `upsert_registrant` takes any server."""
-    embed = hub.build_hub_embed(
-        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=True
-    )
-    field = next(f for f in embed.fields if f.name.startswith("Servers"))
-    assert "any server" in field.value.lower()
+def test_hub_embed_counts_players_without_a_group(cd_db):
+    """The total comes from servers, not groups. A self-reported player's group
+    is optional, so counting groups would omit exactly the people the hub is
+    asking members to add."""
+    db.upsert_registrant("NoGroupHere", server="738", origin="self_reported", actor=KEV)
+
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+
+    grouped = sum(g["registrants"] for g in db.get_groups())
+    assert grouped == 2, "the added player has no group, so get_groups cannot see them"
+    assert "**3**" in embed.description, "but the hub counts all three"
+
+
+def test_hub_embed_invites_a_player_from_a_server_we_do_not_have(cd_db):
+    """The listed servers are the ones we hold, not the ones we accept, and a
+    member facing someone from an unimported server has to read the line as an
+    invitation rather than a rejection."""
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+
+    assert "don't have data from your server" in embed.description
+    # Named by its words: the button's leading emoji is a near-black glyph that
+    # disappears against the embed background.
+    assert "**Add a player**" in embed.description
+    assert "➕" not in embed.description
+
+
+def test_hub_embed_carries_no_source_legend(cd_db):
+    """The 👁/≈/✏️ marks annotate squad powers, which only appear on a player's
+    card. A legend on the hub is a key to a map the reader is not holding."""
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+
+    assert embed.footer.text is None
+    assert "observed" not in (embed.description or "")
+
+
+def test_a_non_numeric_server_does_not_break_the_listing(cd_db):
+    """Server is free text on the self-reported path, so the sort has to place
+    something unparseable rather than raise while rendering the hub."""
+    db.upsert_registrant("Mystery", server="abc", origin="self_reported", actor=KEV)
+
+    embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+
+    assert "738, abc" in embed.description, "digits first, the rest after"
 
 
 def test_server_counts_separate_roster_from_scouting(cd_db):

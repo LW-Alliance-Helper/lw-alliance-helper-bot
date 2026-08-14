@@ -68,9 +68,11 @@ CD_BTN_FILTER = "🔍 Filter these"
 # browse list well inside both, since the export exists for volume.
 BROWSE_MAX = 20
 
-# Servers named individually before the list stops being scannable. Sixteen
-# fits today; a future stage with more should not turn the hub into a wall.
-_SERVERS_SHOWN = 12
+# Servers named individually before the list stops being scannable. These are
+# bare numbers now, so far more fit on a line than when each carried a count;
+# the cap is here so a future stage with hundreds cannot turn the hub into a
+# wall, not because sixteen is close to the limit.
+_SERVERS_SHOWN = 30
 
 # The six deployment orders. Every line-up observed to date runs exactly one
 # Tank, one Missile and one Aircraft, so an order is a permutation of the three
@@ -98,6 +100,33 @@ _SOURCE_MARK = {"observed": "👁", "estimated": "≈", "edited": "✏️"}
 
 def _is_admin(user_id: int) -> bool:
     return str(user_id) in admin_ids()
+
+
+def _btn_words(label: str) -> str:
+    """A button's label without its leading icon, for naming it in prose.
+
+    An emoji that reads fine on a button's grey surface does not always survive
+    an embed's dark background: `➕` is U+2795 HEAVY PLUS SIGN, which Discord
+    renders near-black and which therefore vanishes mid-sentence, leaving a gap
+    where the icon should be. Prose names the button by its words and lets bold
+    carry the emphasis.
+
+    Derived from the constant rather than retyped, so the module's rule that a
+    button rename stays one line still holds.
+    """
+    head, _, rest = label.partition(" ")
+    return rest if rest and not head[:1].isascii() else label
+
+
+def _server_sort(row: dict):
+    """Numeric order, with anything unparseable last and alphabetical.
+
+    A registrant's server is free text on the self-reported path, so this
+    cannot assume digits: sorting has to place `abc` somewhere rather than
+    raise on it in the middle of rendering the hub.
+    """
+    server = str(row.get("server") or "")
+    return (0, int(server), "") if server.isdigit() else (1, 0, server)
 
 
 def _actor(interaction: discord.Interaction) -> dict:
@@ -589,7 +618,7 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
             # likely a real player we simply have not met.
             await interaction.followup.send(
                 f"{found}\n\nIf they're real and we're missing them, "
-                f"**{CD_BTN_ADD}** on `{CHAMPION_DUEL_HUB_CMD}`.",
+                f"**{_btn_words(CD_BTN_ADD)}** on `{CHAMPION_DUEL_HUB_CMD}`.",
                 ephemeral=True,
             )
             return
@@ -1218,48 +1247,37 @@ class _ExportModal(discord.ui.Modal, title="Export Champion Duel edits"):
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
-def build_hub_embed(
-    *, groups: list[dict], servers: list[dict], is_admin: bool, can_write: bool
-) -> discord.Embed:
-    """The hub's own state: what data is loaded, and what this caller can do."""
+def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
+    """The hub's own state: what data is loaded, and what this caller can do.
+
+    Takes no `is_admin`: the admin row is hidden rather than announced, so the
+    embed has nothing to say that differs for an operator.
+    """
     embed = discord.Embed(title=CHAMPION_DUEL_HUB_TITLE, color=discord.Color.blurple())
-    total = sum(g["registrants"] for g in groups)
+    # Counted from servers rather than groups. `get_groups` drops anyone whose
+    # `grp` is empty, and a self-reported player's group is optional -- so a
+    # group-based total silently omits exactly the players this hub now invites
+    # people to add. Server is required by both write paths, so it counts
+    # everyone.
+    total = sum(s["registrants"] for s in servers)
     if total:
-        letters = ", ".join(g["group"] for g in groups if g.get("group"))
+        # Numeric order, no per-server counts. Counts answered a question
+        # nobody asked here and made the line something to decode rather than
+        # scan; a member is looking for their own number in it.
+        #
+        # Sorted defensively: server is free text on a self-reported player, so
+        # a non-numeric one has to sort somewhere rather than raise.
+        listed = ", ".join(s["server"] for s in sorted(servers, key=_server_sort)[:_SERVERS_SHOWN])
+        more = len(servers) - _SERVERS_SHOWN
+        if more > 0:
+            listed += f", and {more} more"
         embed.description = (
-            f"**{total}** registrants loaded across {len(groups)} group(s): {letters}.\n\n"
-            "Ask for a matchup's odds, or look up what a player fields and how "
-            "they've been seen deploying."
-        )
-        if servers:
-            # Groups say which bracket; servers say whether this is about anyone
-            # you know. Scouted counts sit beside registrant counts because they
-            # answer different questions -- a server can be fully rostered and
-            # still have nobody we have watched deploy.
-            #
-            # The list is the servers we happen to hold, not the servers we
-            # accept. Naming sixteen of them reads as a closed set, so the ask
-            # says otherwise outright: `upsert_registrant` takes any server
-            # string, and an opponent from outside the import is exactly the
-            # case add-player exists for.
-            listed = ", ".join(
-                f"**{s['server']}** ({s['registrants']})" for s in servers[:_SERVERS_SHOWN]
-            )
-            more = len(servers) - _SERVERS_SHOWN
-            if more > 0:
-                listed += f", and {more} more"
-            scouted = sum(1 for s in servers if s["scouted"])
-            embed.add_field(
-                name=f"Servers ({len(servers)})",
-                value=(
-                    f"{listed}\n\n"
-                    f"We've seen a real line-up on **{scouted}** of them. If we don't "
-                    f"have data from your server, or you can't find the player you're "
-                    f"looking for, **{CD_BTN_ADD}** — any server, whether it's listed "
-                    f"here or not."
-                )[:1024],
-                inline=False,
-            )
+            f"**{total}** players loaded across **{len(servers)}** servers: {listed}.\n\n"
+            f"You can predict a match or look up a player's information to see their "
+            f"squads and power (if we have it). If we don't have data from your "
+            f"server, or you can't find the player you're looking for, "
+            f"**{_btn_words(CD_BTN_ADD)}**!"
+        )[:4096]
     else:
         embed.description = (
             "No roster is loaded for this stage yet.\n\n"
@@ -1286,10 +1304,10 @@ def build_hub_embed(
             ),
             inline=False,
         )
-    if is_admin:
-        embed.set_footer(text="👁 observed · ≈ estimated · ✏️ corrected · you have admin tools")
-    else:
-        embed.set_footer(text="👁 observed · ≈ estimated from total hero power · ✏️ corrected")
+    # No source legend here. 👁/≈/✏️ mark individual squad powers, which only
+    # appear on a player's card -- `build_player_embed` carries the legend, next
+    # to the marks it explains. On the hub it was a key to a map nobody was
+    # holding.
     return embed
 
 
@@ -1404,7 +1422,6 @@ async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> Non
             "champion_duel_write", interaction.guild_id, interaction=interaction, bot=bot
         )
     )
-    groups = await asyncio.to_thread(db.get_groups)
     servers = await asyncio.to_thread(db.get_servers)
     is_admin = _is_admin(interaction.user.id)
     engine_ok = predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE
@@ -1416,9 +1433,7 @@ async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> Non
         engine_ok=engine_ok,
     )
     await interaction.followup.send(
-        embed=build_hub_embed(
-            groups=groups, servers=servers, is_admin=is_admin, can_write=can_write
-        ),
+        embed=build_hub_embed(servers=servers, can_write=can_write),
         view=view,
         ephemeral=True,
     )

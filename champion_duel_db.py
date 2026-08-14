@@ -601,7 +601,7 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
     semifinal draw leaves every qualifier group intact.
     """
     stage = _stage(stage) if stage else None
-    inserted = updated = 0
+    inserted = updated = placed = 0
     for row in rows:
         name = (row.get("name") or "").strip()
         if not name:
@@ -619,14 +619,20 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
             fsp=row.get("fsp"),
             seeded=row.get("seeded"),
         )
-        if stage:
+        # No group for this round means not in it. A semifinal payload carries
+        # the whole roster so scouting still resolves against every player, but
+        # only the 128 advancers have a semifinal group, and writing the other
+        # 1472 an empty semifinal row would say they all qualified.
+        if stage and row.get("group"):
             set_stage(player["id"], stage, grp=row.get("group"), rank=row.get("rank"))
+            placed += 1
         if before:
             updated += 1
         else:
             inserted += 1
     return {
         "stage": stage,
+        "placed": placed,
         "inserted": inserted,
         "updated": updated,
         "total": inserted + updated,

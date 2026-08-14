@@ -238,3 +238,22 @@ def test_a_roster_with_no_round_adds_players_and_claims_nothing(tmp_path, monkey
     assert player["stages"] == {}
     assert player["grp"] is None, "and we do not claim a group we cannot place"
     assert db.current_stage() is None
+
+
+def test_a_roster_row_with_no_group_is_not_placed_in_the_round(cd_db):
+    """A semifinal payload carries the whole roster so scouting still resolves
+    against every player, but only the advancers have a semifinal group.
+    Writing the rest an empty semifinal row would say they all qualified."""
+    result = db.import_registrants(
+        [
+            {"name": "AlphaOne", "group": "D", "server": "738"},
+            {"name": "BetaTwo", "server": "738"},
+        ],
+        stage="semifinals",
+    )
+
+    assert result["placed"] == 1, "only the one carrying a group"
+    assert db.get_stages(_rid("AlphaOne"))["semifinals"]["grp"] == "D"
+    assert "semifinals" not in db.get_stages(_rid("BetaTwo"))
+    # And the one left out keeps the qualifier round they did play.
+    assert db.get_stages(_rid("BetaTwo"))["qualifiers"]["grp"] == "M"

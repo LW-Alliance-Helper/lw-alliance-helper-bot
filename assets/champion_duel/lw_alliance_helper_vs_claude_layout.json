@@ -1,0 +1,214 @@
+{
+  "canvas": {
+    "width": 1619,
+    "height": 971
+  },
+  "static_template": "lw_alliance_helper_vs_template_final.webp",
+  "dynamic_progress_track": {
+    "x": 110,
+    "y": 770,
+    "w": 1391,
+    "h": 39,
+    "radius": 19,
+    "note": "Static image contains only the empty track. Bot renders fills and divider at runtime."
+  },
+  "header": {
+    "event_title": {
+      "x": 62,
+      "y": 42,
+      "w": 625,
+      "h": 55,
+      "align": "center"
+    },
+    "round_metadata": {
+      "x": 817,
+      "y": 42,
+      "w": 589,
+      "h": 55,
+      "align": "center"
+    },
+    "logo_badge": {
+      "x": 1470,
+      "y": 24,
+      "w": 101,
+      "h": 86,
+      "align": "center"
+    }
+  },
+  "left": {
+    "name": {
+      "x": 113,
+      "y": 170,
+      "w": 426,
+      "h": 47,
+      "align": "center"
+    },
+    "win_probability": {
+      "x": 108,
+      "y": 232,
+      "w": 446,
+      "h": 174,
+      "align": "center"
+    },
+    "to_win": {
+      "x": 215,
+      "y": 420,
+      "w": 220,
+      "h": 28,
+      "align": "center"
+    },
+    "squad_group": {
+      "x": 109,
+      "y": 455,
+      "w": 441,
+      "h": 191
+    },
+    "squad_rows": [
+      {
+        "icon": {
+          "x": 128,
+          "y": 470,
+          "w": 49,
+          "h": 45
+        },
+        "text": {
+          "x": 192,
+          "y": 470,
+          "w": 338,
+          "h": 45
+        }
+      },
+      {
+        "icon": {
+          "x": 128,
+          "y": 526,
+          "w": 49,
+          "h": 45
+        },
+        "text": {
+          "x": 192,
+          "y": 526,
+          "w": 338,
+          "h": 45
+        }
+      },
+      {
+        "icon": {
+          "x": 128,
+          "y": 584,
+          "w": 49,
+          "h": 45
+        },
+        "text": {
+          "x": 192,
+          "y": 584,
+          "w": 338,
+          "h": 45
+        }
+      }
+    ],
+    "status": {
+      "x": 110,
+      "y": 670,
+      "w": 440,
+      "h": 39,
+      "align": "center"
+    }
+  },
+  "right": {
+    "name": {
+      "x": 1052,
+      "y": 170,
+      "w": 426,
+      "h": 47,
+      "align": "center"
+    },
+    "win_probability": {
+      "x": 1040,
+      "y": 232,
+      "w": 448,
+      "h": 174,
+      "align": "center"
+    },
+    "to_win": {
+      "x": 1155,
+      "y": 420,
+      "w": 220,
+      "h": 28,
+      "align": "center"
+    },
+    "squad_group": {
+      "x": 1041,
+      "y": 455,
+      "w": 441,
+      "h": 191
+    },
+    "squad_rows": [
+      {
+        "icon": {
+          "x": 1058,
+          "y": 470,
+          "w": 50,
+          "h": 45
+        },
+        "text": {
+          "x": 1124,
+          "y": 470,
+          "w": 340,
+          "h": 45
+        }
+      },
+      {
+        "icon": {
+          "x": 1058,
+          "y": 526,
+          "w": 50,
+          "h": 45
+        },
+        "text": {
+          "x": 1124,
+          "y": 526,
+          "w": 340,
+          "h": 45
+        }
+      },
+      {
+        "icon": {
+          "x": 1058,
+          "y": 584,
+          "w": 50,
+          "h": 45
+        },
+        "text": {
+          "x": 1124,
+          "y": 584,
+          "w": 340,
+          "h": 45
+        }
+      }
+    ],
+    "status": {
+      "x": 1041,
+      "y": 670,
+      "w": 441,
+      "h": 39,
+      "align": "center"
+    }
+  },
+  "footer": {
+    "confidence_summary": {
+      "x": 111,
+      "y": 863,
+      "w": 1374,
+      "h": 49,
+      "align": "center"
+    }
+  },
+  "vs_exclusion_zone": {
+    "x": 660,
+    "y": 285,
+    "w": 300,
+    "h": 290,
+    "note": "Do not draw variable text here."
+  }
+}

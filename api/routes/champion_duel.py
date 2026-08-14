@@ -188,6 +188,59 @@ def _squads(raw):
 
 
 @requires_writer
+async def post_player(request: web.Request) -> web.Response:
+    """Add a player the roster doesn't have.
+
+    The imported roster is who signed up, not everyone anyone will meet: names
+    change mid-event and an opponent can sit outside whatever was last
+    imported. Without this the write routes are limited to correcting numbers
+    on players we already knew, which is a much smaller thing than the access
+    model was designed around — writes are Premium precisely because the
+    dataset is only worth anything if more people contribute.
+
+    `origin='self_reported'` is what keeps that safe. A community-added row
+    stays distinguishable from an official import everywhere it is shown, and a
+    later import upgrades it rather than duplicating it.
+
+    Idempotent on (name, server): re-posting someone returns their existing row
+    rather than erroring, because two people entering the same opponent is the
+    normal case, not a conflict.
+    """
+    if not db.NAMES_AVAILABLE:
+        return json_response({"error": "identity_unavailable"}, request, status=503)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return json_response({"error": "bad_request"}, request, status=400)
+
+    name = (body.get("name") or "").strip()
+    server = str(body.get("server") or "").strip()
+    if not name or not server:
+        return json_response(
+            {
+                "error": "bad_request",
+                "detail": "name and server are both required — identity is the pair",
+            },
+            request,
+            status=400,
+        )
+
+    try:
+        player = await asyncio.to_thread(
+            db.upsert_registrant,
+            name,
+            server=server,
+            grp=body.get("group"),
+            alliance=body.get("alliance"),
+            origin="self_reported",
+            actor=request["cd_actor"],
+        )
+    except (ValueError, TypeError) as exc:
+        return json_response({"error": "bad_request", "detail": str(exc)}, request, status=400)
+    return json_response(player, request)
+
+
+@requires_writer
 async def patch_squads(request: web.Request) -> web.Response:
     """Correct one squad slot. Each changed field becomes its own edit row."""
     if not db.NAMES_AVAILABLE:

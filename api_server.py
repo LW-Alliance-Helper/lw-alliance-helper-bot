@@ -191,6 +191,8 @@ def _register_champion_duel(app: web.Application) -> None:
     app.router.add_get(f"{p}/auth/me", cd_auth.me)
     app.router.add_post(f"{p}/auth/logout", cd_auth.logout)
 
+    # Collection POST creates; the two below act on one that already exists.
+    app.router.add_post(f"{p}/players", cd.post_player)
     app.router.add_patch(f"{p}/player/{{name}}/squads", cd.patch_squads)
     app.router.add_post(f"{p}/player/{{name}}/orders", cd.post_order)
 

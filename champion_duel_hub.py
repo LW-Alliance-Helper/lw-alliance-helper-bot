@@ -53,7 +53,8 @@ CHAMPION_DUEL_HUB_CMD = "/champion_duel"
 # modules name these buttons in prose, so a rename has to stay one line.
 HUB_BTN_CHAMPION_DUEL = "👑 Champion Duel"
 CD_BTN_PREDICT = "🆚 Predict a match"
-CD_BTN_LOOKUP = "🔍 Look up a player"
+CD_BTN_FIND = "🔍 Find a player"
+CD_BTN_ADD = "➕ Add a player"
 CD_BTN_SQUAD = "✏️ Correct a squad"
 CD_BTN_ORDER = "➕ Record an order"
 CD_BTN_GUIDE = "📖 Where to find these numbers"
@@ -65,6 +66,10 @@ CD_BTN_FILTER = "🔍 Filter these"
 # Discord's message limit is 2000 and an embed description is 4096. Keep the
 # browse list well inside both, since the export exists for volume.
 BROWSE_MAX = 20
+
+# Servers named individually before the list stops being scannable. Sixteen
+# fits today; a future stage with more should not turn the hub into a wall.
+_SERVERS_SHOWN = 12
 
 # The six deployment orders. Every line-up observed to date runs exactly one
 # Tank, one Missile and one Aircraft, so an order is a permutation of the three
@@ -194,6 +199,25 @@ def _ambiguous_msg(exc: db.AmbiguousPlayer) -> str:
     )
 
 
+async def _suggestion_line(name: str, server: str | None) -> str:
+    """ "Did you mean…", or nothing if we have no near match.
+
+    Suggesting is not resolving. `normalize_name` refuses to fuzzy-match
+    because guessing which of two similar names a sighting belongs to is
+    unrecoverable — but the person typing can tell instantly, and "no registrant
+    matches" tells them nothing about whether they mistyped or we are missing
+    the player entirely.
+    """
+    candidates = await asyncio.to_thread(db.suggest_registrants, name, server)
+    if not candidates:
+        return ""
+    named = ", ".join(
+        f"**{c['display_name']}** on {c['server']}" if c["server"] else f"**{c['display_name']}**"
+        for c in candidates
+    )
+    return f"\nDid you mean {named}?"
+
+
 async def _resolve(name: str, server: str | None) -> dict | str:
     """One player with their scouting, or an error string ready to send."""
     if not db.NAMES_AVAILABLE:
@@ -206,7 +230,8 @@ async def _resolve(name: str, server: str | None) -> dict | str:
         return (
             f"⚠️ No registrant matches **{name}**"
             + (f" on server {server}" if server else "")
-            + ".\nCheck the spelling, or the roster for this stage may not be imported yet."
+            + "."
+            + await _suggestion_line(name, server)
         )
     return found
 
@@ -424,7 +449,8 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
             await interaction.followup.send(
                 f"⚠️ I don't have a full line-up for **{exc.name}** — slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to predict with.\n"
-                f"Use **{CD_BTN_SQUAD}** on `{CHAMPION_DUEL_HUB_CMD}` to fill them in.",
+                f"Use **{CD_BTN_FIND}** on `{CHAMPION_DUEL_HUB_CMD}` to open them — "
+                f"**{CD_BTN_SQUAD}** is on their card.",
                 ephemeral=True,
             )
             return
@@ -488,7 +514,80 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
     return embed
 
 
-class _LookupModal(discord.ui.Modal, title="Look up a Champion Duel player"):
+class PlayerActionsView(discord.ui.View):
+    """The write actions, attached to a player already on screen.
+
+    Each flow used to open with "who?" — so contributing three squad values
+    and an order meant typing one name four times, and four chances to get an
+    ambiguous match or a typo. Finding the player once and acting on them is
+    the same work with the identity question asked once.
+
+    Locked controls render disabled rather than vanishing, per the Premium rule
+    in `notes/DESIGN.md`: someone on the free tier should see what contributing
+    would look like.
+    """
+
+    def __init__(self, *, player: dict, user_id: int, can_write: bool):
+        super().__init__(timeout=600)
+        self.player = player
+        self.user_id = user_id
+        self.message: discord.Message | None = None
+
+        for label, callback in (
+            (CD_BTN_SQUAD, self._on_squad),
+            (CD_BTN_ORDER, self._on_order),
+        ):
+            button = discord.ui.Button(
+                label=(label if can_write else f"🔒 {label}")[:80],
+                style=discord.ButtonStyle.secondary,
+                disabled=not can_write,
+            )
+            button.callback = callback
+            self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_squad(self, inter: discord.Interaction):
+        await inter.response.send_modal(_SquadModal(self.player))
+
+    async def _on_order(self, inter: discord.Interaction):
+        await inter.response.send_modal(_OrderModal(self.player))
+
+
+async def send_player_card(
+    interaction: discord.Interaction, player: dict, *, can_write: bool, note: str | None = None
+):
+    """One player, with what can be done to them underneath.
+
+    Shared by finding a player and adding one, so a player you just created
+    lands you in the same place as one that was already there — the next thing
+    you want is to record what you saw, either way.
+    """
+    top = await asyncio.to_thread(db.most_common_order, player["id"])
+    view = PlayerActionsView(player=player, user_id=interaction.user.id, can_write=can_write)
+    await interaction.followup.send(
+        content=note,
+        embed=build_player_embed(player, top),
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
+
+
+class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
+    def __init__(self, can_write: bool):
+        super().__init__()
+        self.can_write = can_write
+
     name = discord.ui.TextInput(label="Player name", max_length=64)
     server = discord.ui.TextInput(
         label="Server", required=False, max_length=10, placeholder="e.g. 738"
@@ -498,24 +597,104 @@ class _LookupModal(discord.ui.Modal, title="Look up a Champion Duel player"):
         await interaction.response.defer(ephemeral=True, thinking=True)
         found = await _resolve(self.name.value, self.server.value or None)
         if isinstance(found, str):
-            await interaction.followup.send(found, ephemeral=True)
+            # A miss is not a dead end any more: the name they typed is very
+            # likely a real player we simply have not met.
+            await interaction.followup.send(
+                f"{found}\n\nIf they're real and we're missing them, "
+                f"**{CD_BTN_ADD}** on `{CHAMPION_DUEL_HUB_CMD}`.",
+                ephemeral=True,
+            )
             return
-        top = await asyncio.to_thread(db.most_common_order, found["id"])
-        await interaction.followup.send(embed=build_player_embed(found, top), ephemeral=True)
+        await send_player_card(interaction, found, can_write=self.can_write)
+
+
+class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
+    """Create a registrant from a sighting.
+
+    The roster is an official import of who signed up. It is not everyone
+    anyone will ever face — names change, and an opponent can be outside
+    whatever we last imported. Without this, meeting someone we don't have is
+    a dead end, and the argument for opening writes to Premium alliances
+    (more contributors, better data) only holds for players we already knew.
+
+    Rows created here carry `origin='self_reported'` and say so wherever they
+    are shown. That flag is what keeps a community guess from ever reading as
+    an official record, and an import later upgrades the row rather than
+    duplicating it.
+    """
+
+    def __init__(self, can_write: bool):
+        super().__init__()
+        self.can_write = can_write
+
+    name = discord.ui.TextInput(label="Player name", max_length=64)
+    server = discord.ui.TextInput(label="Server", max_length=10, placeholder="e.g. 738")
+    group = discord.ui.TextInput(
+        label="Group", required=False, max_length=2, placeholder="A single letter, if you know it"
+    )
+    alliance = discord.ui.TextInput(
+        label="Alliance tag", required=False, max_length=16, placeholder="Optional"
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not db.NAMES_AVAILABLE:
+            await interaction.followup.send(_ENGINE_MISSING, ephemeral=True)
+            return
+
+        name = (self.name.value or "").strip()
+        server = (self.server.value or "").strip()
+        if not name or not server:
+            await interaction.followup.send(
+                "⚠️ A player needs both a name and a server — identity here is the "
+                "two together, because two servers can field the same name.",
+                ephemeral=True,
+            )
+            return
+
+        existing = await asyncio.to_thread(db.find_registrants, name, server)
+        try:
+            player = await asyncio.to_thread(
+                db.upsert_registrant,
+                name,
+                server=server,
+                grp=(self.group.value or "").strip() or None,
+                alliance=(self.alliance.value or "").strip() or None,
+                origin="self_reported",
+                actor=_actor(interaction),
+            )
+        except ValueError as exc:
+            await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
+            return
+
+        note = (
+            f"ℹ️ **{_label(player)}** was already here — opening them instead of adding a duplicate."
+            if existing
+            else f"✅ Added **{_label(player)}**. Record what you saw below."
+        )
+        await send_player_card(interaction, player, can_write=self.can_write, note=note)
 
 
 # ── Correct a squad (Premium) ─────────────────────────────────────────────────
 
 
 class _SquadModal(discord.ui.Modal, title="Correct a squad"):
-    """One slot per submission. Correcting three slots is three trips, which is
-    the right trade: a five-field modal that half-fills is how a typo in slot 3
-    silently overwrites a good slot 1."""
+    """One slot per submission, for a player already on screen.
 
-    name = discord.ui.TextInput(label="Player name", max_length=64)
-    server = discord.ui.TextInput(
-        label="Server", required=False, max_length=10, placeholder="e.g. 738"
-    )
+    Three fields rather than five: the name and server came from the card this
+    opened from, so there is no second chance to mistype them and no ambiguous
+    match to resolve mid-flow.
+
+    Still one slot at a time. A five-field modal that half-fills is how a typo
+    in slot 3 silently overwrites a good slot 1.
+    """
+
+    def __init__(self, player: dict):
+        super().__init__()
+        self.player = player
+        self.title = f"Correct a squad — {player['display_name']}"[:45]
+
     slot = discord.ui.TextInput(label="Slot (1, 2 or 3)", max_length=1)
     squad_type = discord.ui.TextInput(
         label="Squad type", required=False, max_length=16, placeholder="Tank, Missile or Aircraft"
@@ -562,11 +741,7 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
             await interaction.followup.send("⚠️ Slot has to be 1, 2 or 3.", ephemeral=True)
             return
 
-        found = await _resolve(self.name.value, self.server.value or None)
-        if isinstance(found, str):
-            await interaction.followup.send(found, ephemeral=True)
-            return
-
+        found = self.player
         result = await asyncio.to_thread(
             db.set_squad,
             found["id"],
@@ -682,24 +857,25 @@ class _OrderSelectView(discord.ui.View):
 
 
 class _OrderModal(discord.ui.Modal, title="Record a deployment order"):
-    """Who was seen, and against whom. The order itself is picked from a select
-    afterwards — a modal takes text inputs only, and free-typing a permutation
-    is how "Tank, Tank, Missile" gets entered."""
+    """Only who they faced — the player came from the card this opened from.
 
-    name = discord.ui.TextInput(label="Player name", max_length=64)
-    server = discord.ui.TextInput(
-        label="Server", required=False, max_length=10, placeholder="e.g. 738"
-    )
+    The order itself is picked from a select afterwards. A modal takes text
+    inputs only, and free-typing a permutation is how "Tank, Tank, Missile"
+    gets entered.
+    """
+
+    def __init__(self, player: dict):
+        super().__init__()
+        self.player = player
+        self.title = f"Record an order — {player['display_name']}"[:45]
+
     opponent = discord.ui.TextInput(
         label="Who they faced", required=False, max_length=64, placeholder="Optional"
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        found = await _resolve(self.name.value, self.server.value or None)
-        if isinstance(found, str):
-            await interaction.followup.send(found, ephemeral=True)
-            return
+        found = self.player
         view = _OrderSelectView(
             player=found,
             opponent=(self.opponent.value or "").strip() or None,
@@ -1054,7 +1230,9 @@ class _ExportModal(discord.ui.Modal, title="Export Champion Duel edits"):
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
-def build_hub_embed(*, groups: list[dict], is_admin: bool, can_write: bool) -> discord.Embed:
+def build_hub_embed(
+    *, groups: list[dict], servers: list[dict], is_admin: bool, can_write: bool
+) -> discord.Embed:
     """The hub's own state: what data is loaded, and what this caller can do."""
     embed = discord.Embed(title=CHAMPION_DUEL_HUB_TITLE, color=discord.Color.blurple())
     total = sum(g["registrants"] for g in groups)
@@ -1065,6 +1243,35 @@ def build_hub_embed(*, groups: list[dict], is_admin: bool, can_write: bool) -> d
             "Ask for a matchup's odds, or look up what a player fields and how "
             "they've been seen deploying."
         )
+        if servers:
+            # Groups say which bracket; servers say whether this is about anyone
+            # you know. Scouted counts sit beside registrant counts because they
+            # answer different questions -- a server can be fully rostered and
+            # still have nobody we have watched deploy.
+            #
+            # The list is the servers we happen to hold, not the servers we
+            # accept. Naming sixteen of them reads as a closed set, so the ask
+            # says otherwise outright: `upsert_registrant` takes any server
+            # string, and an opponent from outside the import is exactly the
+            # case add-player exists for.
+            listed = ", ".join(
+                f"**{s['server']}** ({s['registrants']})" for s in servers[:_SERVERS_SHOWN]
+            )
+            more = len(servers) - _SERVERS_SHOWN
+            if more > 0:
+                listed += f", and {more} more"
+            scouted = sum(1 for s in servers if s["scouted"])
+            embed.add_field(
+                name=f"Servers ({len(servers)})",
+                value=(
+                    f"{listed}\n\n"
+                    f"We've seen a real line-up on **{scouted}** of them. If we don't "
+                    f"have data from your server, or you can't find the player you're "
+                    f"looking for, **{CD_BTN_ADD}** — any server, whether it's listed "
+                    f"here or not."
+                )[:1024],
+                inline=False,
+            )
     else:
         embed.description = (
             "No roster is loaded for this stage yet.\n\n"
@@ -1127,7 +1334,9 @@ class ChampionDuelHubView(discord.ui.View):
         self.add_item(button)
 
     def _build_buttons(self):
-        # Row 0 — anyone in the guild.
+        # Row 0 — the three ways in. Two of them lead to a player, and the
+        # write actions live on that player's card rather than here: asking
+        # "who?" once beats asking it again in every flow.
         self._add(
             CD_BTN_PREDICT,
             discord.ButtonStyle.primary,
@@ -1136,34 +1345,26 @@ class ChampionDuelHubView(discord.ui.View):
             disabled=not self.engine_ok,
         )
         self._add(
-            CD_BTN_LOOKUP,
+            CD_BTN_FIND,
             discord.ButtonStyle.secondary,
             0,
-            self._on_lookup,
+            self._on_find,
             disabled=not self.engine_ok,
         )
+        # Adding is Premium because it is a write, but it is deliberately on
+        # the front row: meeting someone we do not have is the most common way
+        # a contributor is currently turned away.
+        self._add(
+            f"🔒 {CD_BTN_ADD}" if not self.can_write else CD_BTN_ADD,
+            discord.ButtonStyle.secondary,
+            0,
+            self._on_add,
+            disabled=not self.can_write or not self.engine_ok,
+        )
 
-        # Row 1 — contributors. Locked renders disabled, not hidden: the free
-        # tier should see the shape of the paid product.
-        write_locked = not self.can_write or not self.engine_ok
-        self._add(
-            f"🔒 {CD_BTN_SQUAD}" if not self.can_write else CD_BTN_SQUAD,
-            discord.ButtonStyle.secondary,
-            1,
-            self._on_squad,
-            disabled=write_locked,
-        )
-        self._add(
-            f"🔒 {CD_BTN_ORDER}" if not self.can_write else CD_BTN_ORDER,
-            discord.ButtonStyle.secondary,
-            1,
-            self._on_order,
-            disabled=write_locked,
-        )
-        # Never locked, even when the two buttons beside it are. Someone
-        # deciding whether the feature is worth paying for should be able to
-        # see what contributing actually involves, and it is documentation —
-        # withholding it protects nothing.
+        # Row 1 — never locked. Someone deciding whether the feature is worth
+        # paying for should be able to see what contributing involves, and it
+        # is documentation: withholding it protects nothing.
         self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
 
         # Row 2 — operator only, and absent entirely for everyone else.
@@ -1177,14 +1378,11 @@ class ChampionDuelHubView(discord.ui.View):
     async def _on_predict(self, inter: discord.Interaction):
         await inter.response.send_modal(_PredictModal())
 
-    async def _on_lookup(self, inter: discord.Interaction):
-        await inter.response.send_modal(_LookupModal())
+    async def _on_find(self, inter: discord.Interaction):
+        await inter.response.send_modal(_FindPlayerModal(self.can_write))
 
-    async def _on_squad(self, inter: discord.Interaction):
-        await inter.response.send_modal(_SquadModal())
-
-    async def _on_order(self, inter: discord.Interaction):
-        await inter.response.send_modal(_OrderModal())
+    async def _on_add(self, inter: discord.Interaction):
+        await inter.response.send_modal(_AddPlayerModal(self.can_write))
 
     async def _on_guide(self, inter: discord.Interaction):
         """Its own button rather than part of the write flows.
@@ -1219,6 +1417,7 @@ async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> Non
         )
     )
     groups = await asyncio.to_thread(db.get_groups)
+    servers = await asyncio.to_thread(db.get_servers)
     is_admin = _is_admin(interaction.user.id)
     engine_ok = predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE
 
@@ -1229,7 +1428,9 @@ async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> Non
         engine_ok=engine_ok,
     )
     await interaction.followup.send(
-        embed=build_hub_embed(groups=groups, is_admin=is_admin, can_write=can_write),
+        embed=build_hub_embed(
+            groups=groups, servers=servers, is_admin=is_admin, can_write=can_write
+        ),
         view=view,
         ephemeral=True,
     )

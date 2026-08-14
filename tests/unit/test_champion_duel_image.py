@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 import champion_duel_db as db
 import champion_duel_image as img
@@ -223,6 +223,57 @@ def test_every_field_is_on_the_canvas():
     for name, box in _all_text_boxes():
         assert 0 <= box["x"] and box["x"] + box["w"] <= img.W, f"{name} runs off the side"
         assert 0 <= box["y"] and box["y"] + box["h"] <= img.H, f"{name} runs off the top or bottom"
+
+
+def test_the_badge_box_is_centred_on_the_frame_drawn_in_the_artwork():
+    """The badge is a lit frame in the template, and the box has to sit on it.
+
+    As delivered the box was 11px left of the frame it names, which put the
+    logo against one wall of it. Asserting the logo is centred *in its own box*
+    would not have caught that -- the renderer centres it there by
+    construction. The frame is in the artwork, so the check has to be too:
+    find its two strokes either side of the box and compare midpoints.
+    """
+    box = img.LAYOUT["header"]["logo_badge"]
+    px = Image.open(img._TEMPLATE_PATH).convert("RGB").load()
+
+    def stroke_midpoint(along_x: bool) -> float:
+        """Midpoint of the frame's two strokes, scanning across the badge."""
+        cx = box["x"] + box["w"] // 2
+        cy = box["y"] + box["h"] // 2
+        lo = (box["x"] if along_x else box["y"]) - 10
+        hi = lo + 20 + (box["w"] if along_x else box["h"])
+        lit = [i for i in range(lo, hi) if max(px[(i, cy) if along_x else (cx, i)]) > 150]
+        assert lit, "found no frame around the badge at all"
+        return (lit[0] + lit[-1]) / 2
+
+    assert abs(stroke_midpoint(True) - (box["x"] + box["w"] / 2)) <= 2, "badge is off-centre across"
+    assert abs(stroke_midpoint(False) - (box["y"] + box["h"] / 2)) <= 2, "badge is off-centre down"
+
+
+def test_the_logo_fills_its_badge_without_escaping_it(cd_db, monkeypatch):
+    """Comparing a render against the same render with the logo suppressed
+    isolates the pixels the logo drew, which is the only way to assert on
+    placement without recognising the mark itself."""
+    a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000))
+    b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000))
+    result = cdp.predict(a, b)
+
+    with_logo = Image.open(io.BytesIO(img.render(result))).convert("RGB")
+    monkeypatch.setattr(img, "_LOGO_PATH", "/nonexistent/logo.png")
+    without = Image.open(io.BytesIO(img.render(result))).convert("RGB")
+
+    # Thresholded, because the card is lossy WebP: changing one corner shifts
+    # the encoding everywhere by a little, and only the logo shifts it by a lot.
+    delta = ImageChops.difference(with_logo, without).convert("L")
+    drawn = delta.point(lambda v: 255 if v > 40 else 0).getbbox()
+    assert drawn, "the logo drew nothing at all"
+
+    box = img.LAYOUT["header"]["logo_badge"]
+    assert box["x"] <= drawn[0] and drawn[2] <= box["x"] + box["w"], "logo escapes its badge"
+    assert box["y"] <= drawn[1] and drawn[3] <= box["y"] + box["h"], "logo escapes its badge"
+    # Running the frame's full height rather than floating in the middle of it.
+    assert drawn[3] - drawn[1] >= box["h"] - 2
 
 
 def test_the_odds_bar_is_drawn_and_splits_where_the_odds_split(cd_db):

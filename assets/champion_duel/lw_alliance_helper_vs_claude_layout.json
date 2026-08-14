@@ -28,10 +28,11 @@
       "align": "center"
     },
     "logo_badge": {
-      "x": 1470,
+      "x": 1480,
       "y": 24,
-      "w": 101,
-      "h": 86,
+      "w": 103,
+      "h": 88,
+      "radius": 14,
       "align": "center"
     }
   },

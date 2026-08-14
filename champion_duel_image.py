@@ -37,7 +37,7 @@ import io
 import json
 import os
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 import champion_duel_predict as predict_lib
 from storm_renderer import _font_for_text
@@ -388,6 +388,17 @@ def _footer(draw, confidence: str) -> None:
 def _logo(canvas, box: dict) -> None:
     """Attribution in the header badge, matching the storm render's convention.
 
+    **Fitted to the frame, not filled.** The badge is slightly wider than it is
+    tall (103×88) and the logo is square, so filling it edge to edge means
+    either stretching the mark or cropping 7% off the top and bottom — which
+    takes the antenna off the robot and cuts "HELPER" in half. It runs the full
+    height of the frame instead, centred, leaving a little of the frame's own
+    dark either side.
+
+    Corners are rounded to the frame's radius so it reads as seated in the
+    badge rather than laid over it, and rounded at 4x like the odds bar —
+    Pillow leaves them stepped at this size otherwise.
+
     A missing or unreadable asset is skipped rather than raised: the render
     must not fail over branding.
     """
@@ -397,13 +408,24 @@ def _logo(canvas, box: dict) -> None:
         logo = Image.open(_LOGO_PATH).convert("RGBA")
     except Exception:  # noqa: BLE001 - a missing logo must not fail the render
         return
+
     scale = min(box["w"] / logo.width, box["h"] / logo.height)
-    logo = logo.resize(
-        (max(round(logo.width * scale), 1), max(round(logo.height * scale), 1)), Image.LANCZOS
+    w = max(round(logo.width * scale), 1)
+    h = max(round(logo.height * scale), 1)
+    s = _BAR_SCALE
+    big = logo.resize((w * s, h * s), Image.LANCZOS)
+
+    mask = Image.new("L", big.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, big.width - 1, big.height - 1], radius=box.get("radius", 0) * s, fill=255
     )
+    # Multiplied into the logo's own alpha rather than replacing it, so a
+    # future logo with transparency keeps it.
+    big.putalpha(ImageChops.multiply(big.getchannel("A"), mask))
+
     canvas.alpha_composite(
-        logo,
-        (box["x"] + (box["w"] - logo.width) // 2, box["y"] + (box["h"] - logo.height) // 2),
+        big.resize((w, h), Image.LANCZOS),
+        (box["x"] + (box["w"] - w) // 2, box["y"] + (box["h"] - h) // 2),
     )
 
 

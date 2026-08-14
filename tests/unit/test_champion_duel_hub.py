@@ -124,6 +124,99 @@ def test_write_buttons_lock_rather_than_vanish_on_the_free_tier():
     assert locked[0].label.startswith("🔒")
 
 
+def test_the_capture_guide_is_never_locked():
+    """Documentation, not a paid surface. Someone deciding whether to pay
+    should be able to see what contributing involves, and withholding a picture
+    of a game screen protects nothing."""
+    view = hub.ChampionDuelHubView(
+        user_id=OUTSIDER_ID, is_admin=False, can_write=False, engine_ok=False
+    )
+    guide = [b for b in view.children if b.label == hub.CD_BTN_GUIDE]
+    assert guide, "the guide button should be on the grid"
+    assert guide[0].disabled is False
+
+
+def test_the_guide_ships_both_annotated_screens():
+    """A missing asset degrades to the words alone rather than failing the
+    button — but on a complete deployment both should be there."""
+    names = {f.filename for f in hub.guide_files()}
+    assert names == set(hub.GUIDE_IMAGES)
+
+
+def test_every_guide_image_carries_alt_text():
+    """WCAG 2.2 AA 1.1.1. These images are entirely instructional, so without a
+    description a screen-reader user gets nothing at all from the button."""
+    for file in hub.guide_files():
+        assert file.description, f"{file.filename} has no alt text"
+        # Long enough to actually describe the markers, not "screenshot".
+        assert len(file.description) > 120
+        # Discord rejects an attachment description over 1024.
+        assert len(file.description) <= 1024
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("84600000", 84_600_000),
+        ("84,600,000", 84_600_000),
+        ("84.6M", 84_600_000),
+        ("84.6m", 84_600_000),
+        ("84.6 M", 84_600_000),
+        ("300K", 300_000),
+        ("1.2B", 1_200_000_000),
+    ],
+)
+def test_power_is_read_however_it_was_written(typed, expected):
+    """The game shows 84.6M; a spreadsheet shows 84,600,000. Same number, and
+    neither is the reader's mistake to correct."""
+    assert hub.parse_power(typed) == expected
+
+
+@pytest.mark.parametrize("typed", ["", "   ", "lots", "84.6X", "-5", "0", "8.4.6M", None])
+def test_unreadable_power_returns_none_rather_than_a_guess(typed):
+    """A squad power silently wrong by 1000x produces a confident prediction
+    for a line-up nobody can field."""
+    assert hub.parse_power(typed) is None
+
+
+def test_each_step_pairs_its_words_with_its_own_image():
+    """A numbered list is useless if the thing it numbers is two screens away,
+    and Discord stacks attachments after all the text — so one embed per step,
+    each carrying its own picture."""
+    embeds, files = hub.build_guide()
+    assert len(embeds) == len(hub.GUIDE_SECTIONS)
+    for embed, section in zip(embeds, hub.GUIDE_SECTIONS):
+        assert embed.title == section["title"]
+        assert embed.image.url == f"attachment://{section['image']}"
+    assert {f.filename for f in files} == set(hub.GUIDE_IMAGES)
+    # Consent is stated on the surface, not just in the commit that added it.
+    assert "permission" in embeds[-1].footer.text
+
+
+def test_the_instructions_survive_missing_images(monkeypatch):
+    """The words are the guide; the pictures make it fast. A partial deployment
+    loses the picture and keeps the instructions."""
+    monkeypatch.setattr(hub, "_GUIDE_DIR", "/nonexistent/assets")
+    embeds, files = hub.build_guide()
+    assert files == []
+    assert all(embed.image.url is None for embed in embeds)
+    assert "The squad in Slot 1." in embeds[0].description
+
+
+def test_the_guide_carries_no_words_in_the_images():
+    """Text baked into a screenshot cannot be selected, translated, resized or
+    read aloud. Every instruction lives in the embed instead, so each section
+    has to actually have a body."""
+    for section in hub.GUIDE_SECTIONS:
+        assert section["body"].strip()
+        assert "1." in section["body"]
+
+
+async def test_the_guide_survives_missing_assets(monkeypatch):
+    monkeypatch.setattr(hub, "_GUIDE_DIR", "/nonexistent/assets")
+    assert hub.guide_files() == []
+
+
 def test_predicting_is_disabled_without_the_engine():
     """A control that cannot change anything is worse than no control."""
     view = hub.ChampionDuelHubView(user_id=ADMIN_ID, is_admin=True, can_write=True, engine_ok=False)

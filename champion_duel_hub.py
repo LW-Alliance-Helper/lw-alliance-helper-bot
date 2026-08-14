@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
 from datetime import datetime, timezone
 
 import discord
@@ -55,6 +56,7 @@ CD_BTN_PREDICT = "🆚 Predict a match"
 CD_BTN_LOOKUP = "🔍 Look up a player"
 CD_BTN_SQUAD = "✏️ Correct a squad"
 CD_BTN_ORDER = "➕ Record an order"
+CD_BTN_GUIDE = "📖 Where to find these numbers"
 CD_BTN_EDITS = "📜 Recent edits"
 CD_BTN_REVERT = "⏪ Revert an edit"
 CD_BTN_EXPORT = "📤 Export edits"
@@ -138,6 +140,41 @@ def _describe(edit: dict) -> str:
     name = edit.get("display_name") or "(unknown)"
     server = f" (#{edit['server']})" if edit.get("server") else ""
     return f"`#{edit['id']}` **{name}**{server}{slot} {what}: {change} · {who} · {when}{tail}"
+
+
+_POWER_SUFFIXES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+
+def parse_power(text: str) -> float | None:
+    """A squad power in whatever form the game showed it, or None.
+
+    The game writes `84.6M`. A spreadsheet writes `84,600,000`. Both are the
+    same number and neither is the user's mistake to fix — refusing one of them
+    only moves arithmetic from the machine to the person reading a screen.
+
+    Deliberately narrow about what it accepts: digits, one optional decimal
+    point, separators, and a single k/m/b. Anything else returns None rather
+    than a guess, because a squad power that is silently wrong by 1000x
+    produces a confident prediction for a line-up nobody can field.
+    """
+    if text is None:
+        return None
+    cleaned = str(text).strip().lower().replace(",", "").replace(" ", "")
+    if not cleaned:
+        return None
+
+    multiplier = 1
+    if cleaned[-1] in _POWER_SUFFIXES:
+        multiplier = _POWER_SUFFIXES[cleaned[-1]]
+        cleaned = cleaned[:-1]
+
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value * multiplier
 
 
 def _label(player: dict) -> str:
@@ -483,23 +520,22 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
     squad_type = discord.ui.TextInput(
         label="Squad type", required=False, max_length=16, placeholder="Tank, Missile or Aircraft"
     )
-    # The label carries the format rule and the placeholder carries where to
-    # read it. Both were only in the *rejection* message before, which meant
-    # the one place they were stated was after someone had already got it
-    # wrong. "Overview Power" is the battle report's own wording, so it can be
-    # searched for on screen rather than interpreted.
+    # Takes the number in whatever form the game showed it. Demanding a
+    # normalised figure pushed a conversion onto the person reading "84.6M" off
+    # a screen, to produce a value the bot then renders back as "84.6M" — work
+    # invented at the point of entry and undone at the point of display.
     power = discord.ui.TextInput(
-        label="Power — in full, not 41.2M",
+        label="Power",
         required=False,
-        max_length=16,
-        placeholder="Battle report → Heroes tab → Overview Power. e.g. 41200000",
+        max_length=24,
+        placeholder="84.6M, 84,600,000 or 84600000 — all fine",
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         squad_type = (self.squad_type.value or "").strip().title() or None
-        raw_power = (self.power.value or "").strip().replace(",", "")
+        raw_power = (self.power.value or "").strip()
         if not squad_type and not raw_power:
             await interaction.followup.send(
                 "⚠️ Nothing to change — fill in a squad type, a power, or both.", ephemeral=True
@@ -510,11 +546,12 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
                 f"⚠️ Squad type has to be one of {', '.join(db.VALID_TYPES)}.", ephemeral=True
             )
             return
-        try:
-            power = float(raw_power) if raw_power else None
-        except ValueError:
+        power = parse_power(raw_power) if raw_power else None
+        if raw_power and power is None:
             await interaction.followup.send(
-                "⚠️ Power has to be a number, in full — `41200000`, not `41.2M`.", ephemeral=True
+                f"⚠️ I couldn't read **{raw_power}** as a power. `84.6M`, "
+                f"`84,600,000` and `84600000` all work.",
+                ephemeral=True,
             )
             return
         try:
@@ -672,6 +709,101 @@ class _OrderModal(discord.ui.Modal, title="Record a deployment order"):
             f"Which order did **{_label(found)}** deploy in?", view=view, ephemeral=True
         )
         view.message = await interaction.original_response()
+
+
+# ── The capture guide ─────────────────────────────────────────────────────────
+
+_GUIDE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "champion_duel")
+
+# Alt text rides on the attachment (WCAG 2.2 AA 1.1.1). These images are
+# entirely instructional — the whole content is text and arrows over a
+# screenshot — so "annotated screenshot" would convey nothing. Each description
+# states what the markers point at and what the numbers are, well enough to
+# follow without seeing them. Kept beside the filenames so adding an image
+# without a description is visibly incomplete rather than quietly inaccessible.
+GUIDE_IMAGES = {
+    "guide_order.png": (
+        "Battle report screenshot, scrolled to Round 1. Three panels are "
+        "outlined and numbered 1, 2 and 3 down the screen; each shows one squad "
+        "of five heroes facing the opponent's."
+    ),
+    "guide_squad.png": (
+        "Battle report screenshot for a single squad, with three outlined "
+        "areas numbered down the screen. 1 is the header carrying both player "
+        "names. 2 is the row beside the word Overview showing each side's "
+        "power, 84.6M and 81.3M. 3 is a row of five vehicle icons in the "
+        "Lineup section."
+    ),
+}
+
+# The instructions are Discord text, not pixels. Text is selectable,
+# translatable, resizes with the reader's settings and is read aloud natively;
+# words burned into a screenshot are none of those things, and an image full of
+# annotations reads like a developer marking up a ticket rather than a guide.
+# Each image only has to say *where*, and its numbers key it to these lines.
+GUIDE_SECTIONS = (
+    {
+        "image": "guide_order.png",
+        "title": "Deployment Order",
+        "body": ("1. The squad in Slot 1.\n2. The squad in Slot 2.\n3. The squad in Slot 3."),
+    },
+    {
+        "image": "guide_squad.png",
+        "title": "Recording Player Squad Information",
+        "body": (
+            "Enter this information for all 3 squads in the lineup.\n\n"
+            "1. This shows who is on each side of the battle. Enter their names "
+            "(best to copy from in-game).\n"
+            "2. Enter the Power listed for each squad.\n"
+            "3. Remember the troop type for each squad. If mixed, log as the "
+            "type that has the most heroes present."
+        ),
+    },
+)
+
+GUIDE_FOOTER = "Screens shown with permission from the players in them."
+
+
+def guide_files() -> list[discord.File]:
+    """The annotated screenshots, or an empty list if they aren't deployed.
+
+    Missing assets degrade to the words alone rather than failing the button —
+    the text carries the answer and the pictures make it fast, which is the
+    right way round for something that must not break.
+    """
+    files = []
+    for name, description in GUIDE_IMAGES.items():
+        path = os.path.join(_GUIDE_DIR, name)
+        if os.path.isfile(path):
+            files.append(discord.File(path, filename=name, description=description))
+    return files
+
+
+def build_guide() -> tuple[list[discord.Embed], list[discord.File]]:
+    """One embed per step, each with its own image directly beneath its words.
+
+    Two embeds rather than one message with both pictures at the bottom: a
+    numbered list is useless if the thing it numbers is two screens away, and
+    Discord stacks attachments after all the text.
+
+    An embed whose image is missing still renders its instructions, so a
+    partial deployment loses the picture and keeps the guide.
+    """
+    files = guide_files()
+    present = {file.filename for file in files}
+
+    embeds = []
+    for section in GUIDE_SECTIONS:
+        embed = discord.Embed(
+            title=section["title"],
+            description=section["body"],
+            colour=discord.Colour.blurple(),
+        )
+        if section["image"] in present:
+            embed.set_image(url=f"attachment://{section['image']}")
+        embeds.append(embed)
+    embeds[-1].set_footer(text=GUIDE_FOOTER)
+    return embeds, files
 
 
 # ── Admin: browse, revert, export ─────────────────────────────────────────────
@@ -1028,6 +1160,11 @@ class ChampionDuelHubView(discord.ui.View):
             self._on_order,
             disabled=write_locked,
         )
+        # Never locked, even when the two buttons beside it are. Someone
+        # deciding whether the feature is worth paying for should be able to
+        # see what contributing actually involves, and it is documentation —
+        # withholding it protects nothing.
+        self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
 
         # Row 2 — operator only, and absent entirely for everyone else.
         if self.is_admin:
@@ -1048,6 +1185,17 @@ class ChampionDuelHubView(discord.ui.View):
 
     async def _on_order(self, inter: discord.Interaction):
         await inter.response.send_modal(_OrderModal())
+
+    async def _on_guide(self, inter: discord.Interaction):
+        """Its own button rather than part of the write flows.
+
+        A modal cannot carry an image, and putting the guide in front of the
+        modal would charge everyone who already knows an extra click on every
+        entry. Beside the two buttons it explains is where someone looks when
+        the question occurs to them.
+        """
+        embeds, files = build_guide()
+        await inter.response.send_message(embeds=embeds, files=files, ephemeral=True)
 
     async def _on_edits(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True, thinking=True)

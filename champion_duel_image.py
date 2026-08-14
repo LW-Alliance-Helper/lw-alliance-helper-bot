@@ -1,23 +1,30 @@
-"""The Champion Duel prediction, rendered as a shareable card.
+"""The Champion Duel prediction, rendered on the designed VS card.
 
 The embed carries the same numbers. This exists because an embed is not what
 gets forwarded into an alliance chat, and sharing is how a prediction earns the
 sightings that sharpen the next one — the dataset is only worth anything if
 more people contribute, so the output has to be worth passing on.
 
-**The layout borrows the game's own matchup screen** (`notes/DESIGN.md`, emoji
-rule 5, applied to a whole surface rather than one glyph): two cards angled in
-toward a gold VS, blue on the left and red on the right, name plates as pills,
-stats stacked beneath. Players arrive having already learned that screen, so
-reading ours costs them nothing.
+**This module composites; it does not draw a card.** The artwork —  frames, the
+VS burst, the squad containers, the header and footer framing — is a finished
+asset in `assets/champion_duel/`, and every box the bot writes into is a
+coordinate in `lw_alliance_helper_vs_claude_layout.json`. Boxes are read from
+that file rather than hard-coded so a design revision is a file swap, which is
+how these arrive. `lw_alliance_helper_vs_claude_handoff.md` beside it is the
+authority on sizes, colours and the render order below.
+
+**The template contains an empty progress track only.** The fill and the
+divider are drawn here, from the actual probability. Nothing about the result
+is baked into the artwork.
 
 **Blue and red are positional, not judgemental.** In the game they mark you and
 your opponent; here they mark the first and second name typed, because the bot
 does not know which of the two the reader is rooting for. That distinction is
 why the winning side is never rendered in green — `notes/DESIGN.md` is explicit
 that green means good *for the alliance reading it*, and a scouting tool
-predicting two strangers' match has no such side. What separates the two cards
-is the probability itself, at a size nothing else on the card competes with.
+predicting two strangers' match has no such side. The template bakes
+blue-left/red-right, which says the same thing. What separates the two sides is
+the probability itself, at a size nothing else on the card competes with.
 
 Fonts and the script-fallback rules come from `storm_renderer`, imported rather
 than reimplemented: Champion Duel names routinely carry non-Latin scripts, and
@@ -27,85 +34,161 @@ that module already knows which file renders them.
 from __future__ import annotations
 
 import io
+import json
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 import champion_duel_predict as predict_lib
 from storm_renderer import _font_for_text
 
-# Rendered at 2x and downsampled, which is how `storm_renderer` gets clean
-# edges out of Pillow's non-antialiased primitives.
-SCALE = 2
-W, H = 1200, 700
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_ASSETS = os.path.join(_HERE, "assets", "champion_duel")
+_LAYOUT_PATH = os.path.join(_ASSETS, "lw_alliance_helper_vs_claude_layout.json")
 _LOGO_PATH = os.path.join(_HERE, "assets", "branding", "lw-alliance-helper-logo.png")
 
-# Pulled from the game's own matchup screen so the card reads as continuous
-# with it. The background is the deep navy behind the VS; the two card colours
-# are its blue and red panels.
-INK = (18, 26, 48)
-INK_LIGHT = (30, 42, 74)
-BLUE = (58, 124, 214)
-BLUE_DEEP = (32, 78, 148)
-RED = (214, 76, 66)
-RED_DEEP = (148, 42, 38)
-GOLD = (255, 198, 62)
-WHITE = (255, 255, 255)
-MUTED = (168, 182, 212)
-PLATE = (12, 18, 36)
+with open(_LAYOUT_PATH, encoding="utf-8") as _fh:
+    LAYOUT = json.load(_fh)
+
+# The layout names its own background, so swapping the artwork is still one
+# file edit even when the new one is a different format.
+_TEMPLATE_PATH = os.path.join(_ASSETS, LAYOUT["static_template"])
+
+# The template's own pixels. Text is drawn at this size and never on a scaled
+# copy: shrinking the artwork first would put every coordinate in the layout
+# half a pixel out and soften the type for nothing.
+W = LAYOUT["canvas"]["width"]
+H = LAYOUT["canvas"]["height"]
+
+# From the handoff's colour rules. Near-white for almost everything, gold kept
+# back for the one thing worth emphasising (the divider), and the two accents
+# used only where a row belongs to a side.
+TEXT = (247, 248, 255)
+MUTED = (201, 201, 218)
+LEFT_ACCENT = (97, 196, 255)
+RIGHT_ACCENT = (255, 119, 123)
+SHADOW = (4, 5, 14)
+
+# Progress-bar gradients, also from the handoff.
+BLUE_OUTER = (21, 159, 246)
+BLUE_INNER = (33, 106, 234)
+RED_INNER = (215, 38, 54)
+RED_OUTER = (239, 52, 42)
+GOLD_LIGHT = (255, 217, 106)
+GOLD_DARK = (226, 154, 24)
+
+# The bar is the one place Pillow's own primitives show: rounded caps and a
+# thin divider both alias badly at native size. Drawing the track at 4x and
+# downsampling once is the same trick `storm_renderer` uses on whole canvases,
+# applied to the only region that needs it.
+_BAR_SCALE = 4
+
+_CONFIDENCE_COPY = {
+    "high": "Built on observed squads and recorded sightings",
+    "medium": "Part of this line-up is estimated from total hero power",
+    "low": "Both line-ups are estimates — neither player has been seen deploying",
+}
+
+_template_cache: Image.Image | None = None
 
 
-def _s(v: float) -> int:
-    return int(round(v * SCALE))
+def _template() -> Image.Image:
+    """The background, loaded once and copied per render.
 
-
-def _fit(draw, text: str, size: int, max_w: int, *, bold: bool = False):
-    """Largest font at or below `size` that fits `text` into `max_w`.
-
-    Player names are user-supplied and some are very long. Shrinking beats
-    truncating here: the name is the one thing on the card a reader uses to
-    confirm the prediction is about who they think it is.
+    A missing template is not survivable here and is not meant to be: it is a
+    committed asset, and a card drawn without it would be a different card
+    rather than a degraded one. `champion_duel_hub._send_prediction` catches
+    the failure and sends the embed, which carries the same numbers.
     """
-    for candidate in range(size, 11, -2):
-        font = _font_for_text(text, _s(candidate), bold=bold)
-        if draw.textlength(text, font=font) <= _s(max_w):
+    global _template_cache
+    if _template_cache is None:
+        _template_cache = Image.open(_TEMPLATE_PATH).convert("RGBA")
+    return _template_cache.copy()
+
+
+# ── Text ──────────────────────────────────────────────────────────────────────
+
+
+def _fit(draw, text: str, max_w: int, *, start: int, minimum: int, bold: bool = False):
+    """Largest font from `start` down that fits `text` into `max_w`.
+
+    Shrinking beats truncating wherever it can: names are user-supplied and the
+    name is the one thing on the card a reader uses to confirm the prediction
+    is about who they think it is.
+    """
+    for size in range(start, minimum - 1, -1):
+        font = _font_for_text(text, size, bold=bold)
+        if draw.textlength(text, font=font) <= max_w:
             return font
-    return _font_for_text(text, _s(12), bold=bold)
+    return _font_for_text(text, minimum, bold=bold)
 
 
-def _centered(draw, cx: int, y: int, text: str, font, fill):
-    draw.text((cx - draw.textlength(text, font=font) / 2, y), text, font=font, fill=fill)
+def _place(draw, box: dict, text: str, font, *, align: str = "center", metric: str = "line"):
+    """Where to start drawing so `text` sits inside `box`.
 
-
-def _card(canvas, x: int, y: int, w: int, h: int, top, bottom, *, lean: int):
-    """One side's panel, leaning toward the centre like the game's do.
-
-    Drawn as its own RGBA layer so the parallelogram can be alpha-composited
-    with a soft edge rather than left with Pillow's hard polygon border.
+    Vertical placement measures a fixed reference string rather than the text
+    itself, so a row reading "Tank" and one reading "Missile 31.5M" share a
+    baseline instead of each centring on its own ink. `metric="ink"` opts out,
+    for the big percentage where the glyphs *are* the block.
     """
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    x0, y0, x1, y1 = _s(x), _s(y), _s(x + w), _s(y + h)
-    skew = _s(lean)
-    d.polygon([(x0 + skew, y0), (x1 + skew, y0), (x1, y1), (x0, y1)], fill=top)
-    # A band across the lower third, which is what gives the game's cards their
-    # sense of depth without needing a real gradient.
-    band = y0 + int((y1 - y0) * 0.62)
-    ratio = (band - y0) / (y1 - y0)
-    inset = int(skew * (1 - ratio))
-    d.polygon([(x0 + inset, band), (x1 + inset, band), (x1, y1), (x0, y1)], fill=bottom)
-    canvas.alpha_composite(layer)
+    ink = draw.textbbox((0, 0), text, font=font)
+    ref = ink if metric == "ink" else draw.textbbox((0, 0), "Hg", font=font)
+    if align == "left":
+        x = box["x"] - ink[0]
+    elif align == "right":
+        x = box["x"] + box["w"] - ink[2]
+    else:
+        x = box["x"] + (box["w"] - (ink[2] - ink[0])) / 2 - ink[0]
+    y = box["y"] + (box["h"] - (ref[3] - ref[1])) / 2 - ref[1]
+    return round(x), round(y)
 
 
-def _plate(draw, cx: int, y: int, w: int, h: int, text: str, font):
-    """The game's name plate: a dark pill with a gold hairline."""
-    x0, x1 = _s(cx - w // 2), _s(cx + w // 2)
-    draw.rounded_rectangle(
-        [x0, _s(y), x1, _s(y + h)], radius=_s(h // 2), fill=PLATE, outline=GOLD, width=_s(1.5)
-    )
-    _centered(draw, _s(cx), _s(y + h * 0.22), text, font, WHITE)
+def _inset(box: dict, pad: int) -> dict:
+    """`box` pulled in on both sides.
+
+    Left- and right-aligned text would otherwise start on the container's own
+    border, which the template draws as a lit stroke — the glyphs end up
+    touching it.
+    """
+    return {"x": box["x"] + pad, "y": box["y"], "w": box["w"] - 2 * pad, "h": box["h"]}
+
+
+def _text(draw, box: dict, text: str, font, fill, *, align="center", metric="line", stroke=0):
+    """One string, placed in its box over a dark shadow.
+
+    The background is busy neon; a 2px offset is enough to hold small text off
+    it. Heavier strokes are reserved for the percentage, which is large enough
+    to carry one without the letterforms thickening into each other.
+    """
+    if not text:
+        return
+    x, y = _place(draw, box, text, font, align=align, metric=metric)
+    draw.text((x + 2, y + 2), text, font=font, fill=SHADOW, stroke_width=stroke, stroke_fill=SHADOW)
+    draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke, stroke_fill=SHADOW)
+
+
+def _ellipsized(draw, head: str, tail: str, font, max_w: int) -> str:
+    """`head` trimmed until `head + tail` fits, with `tail` kept whole.
+
+    Only ever reached by a name that is still too wide at the minimum size.
+    The server suffix survives the trim because it is what disambiguates two
+    players who chose the same name.
+    """
+    if draw.textlength(head + tail, font=font) <= max_w:
+        return head + tail
+    for cut in range(len(head) - 1, 0, -1):
+        candidate = head[:cut].rstrip() + "…" + tail
+        if draw.textlength(candidate, font=font) <= max_w:
+            return candidate
+    return "…" + tail
+
+
+def _name(draw, box: dict, side) -> None:
+    """The competitor's name, with their server."""
+    head = side.name or "(unknown)"
+    tail = f" #{side.server}" if side.server else ""
+    font = _fit(draw, head + tail, box["w"] - 24, start=28, minimum=18, bold=True)
+    _text(draw, box, _ellipsized(draw, head, tail, font, box["w"] - 24), font, TEXT)
 
 
 def _pct(prob: float) -> str:
@@ -123,157 +206,235 @@ def _pct(prob: float) -> str:
     return f"{prob:.0%}"
 
 
-def _side(canvas, draw, side, prob: float, *, left: bool):
-    """One competitor: plate, probability, line-up, and what it's built on."""
-    cx = 300 if left else 900
-    name = side.name or "(unknown)"
-    label = f"{name}  #{side.server}" if side.server else name
+def _shared_pct_font(draw, left: str, right: str, boxes):
+    """One size for both percentages.
 
-    plate_font = _fit(draw, label, 29, 320, bold=True)
-    _plate(draw, cx, 162, 380, 52, label, plate_font)
+    They are read against each other, so a "9%" set larger than a ">99%" purely
+    because it has fewer digits would misstate the gap before the reader has
+    got to the numbers.
+    """
+    for size in range(116, 60, -2):
+        if all(
+            draw.textlength(text, font=_font_for_text(text, size, bold=True)) <= box["w"] - 24
+            for text, box in zip((left, right), boxes)
+        ):
+            return size
+    return 60
 
-    # The probability is the card's subject, so nothing else competes with it.
+
+# ── The card ──────────────────────────────────────────────────────────────────
+
+
+def _status(side) -> str:
+    """What the line-up beside it is built on.
+
+    Says which of the two orders is on screen, so the reader never has to guess
+    whether they are looking at a sighting or a default.
+    """
+    text = f"{side.observed_squads}/3 seen · "
+    return text + (
+        f"their order in {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
+        if side.likely_order()[1]
+        else "never seen deploying — assuming strongest first"
+    )
+
+
+def _shared_status_font(draw, left: str, right: str, boxes):
+    """One size for both status lines.
+
+    They sit level with each other across the card, so a short one set larger
+    than a long one reads as a difference in importance rather than in length.
+    """
+    for size in range(18, 13, -1):
+        if all(
+            draw.textlength(text, font=_font_for_text(text, size)) <= box["w"] - 16
+            for text, box in zip((left, right), boxes)
+        ):
+            return size
+    return 14
+
+
+def _side(draw, boxes: dict, side, prob: float, pct_size: int, status_size: int, *, accent) -> None:
+    """One competitor: name, probability, line-up, and what it is built on."""
+    _name(draw, boxes["name"], side)
+
     pct = _pct(prob)
-    _centered(draw, _s(cx), _s(232), pct, _font_for_text(pct, _s(88), bold=True), WHITE)
-    _centered(draw, _s(cx), _s(338), "to win", _font_for_text("x", _s(22)), MUTED)
+    _text(
+        draw,
+        boxes["win_probability"],
+        pct,
+        _font_for_text(pct, pct_size, bold=True),
+        TEXT,
+        metric="ink",
+        stroke=2,
+    )
+    _text(draw, boxes["to_win"], "to win", _font_for_text("to win", 19, bold=True), MUTED)
 
     # The line-up in the order the prediction assumed they will deploy in --
     # NOT the natural slot order, when the two differ. Order decides which
     # squad meets which, and the counter triangle means it can outweigh power,
     # so showing one order beside a number computed from another is how a
     # reader talks themselves into distrusting a correct prediction.
-    lineup, from_sightings = side.likely_order()
-    row_font = _font_for_text("x", _s(26), bold=True)
-    mark_font = _font_for_text("x", _s(17))
-    for i, (power, squad_type) in enumerate(lineup):
-        y = 396 + i * 46
-        draw.text((_s(cx - 150), _s(y)), f"{i + 1}", font=mark_font, fill=MUTED)
-        draw.text((_s(cx - 128), _s(y - 4)), squad_type, font=row_font, fill=WHITE)
+    lineup, _from_sightings = side.likely_order()
+    index_font = _font_for_text("1", 21, bold=True)
+    for i, ((power, squad_type), row) in enumerate(zip(lineup, boxes["squad_rows"]), start=1):
+        _text(draw, row["icon"], str(i), index_font, accent)
+        # Type left, power right in the same cell, so the powers scan as a
+        # column and the two sides' line-ups can be compared down the card.
+        cell = _inset(row["text"], 16)
+        _text(
+            draw,
+            cell,
+            squad_type,
+            _fit(draw, squad_type, cell["w"] // 2, start=23, minimum=16, bold=True),
+            TEXT,
+            align="left",
+        )
         power_text = f"{power / 1_000_000:.1f}M"
-        draw.text(
-            (_s(cx + 150) - draw.textlength(power_text, font=row_font), _s(y - 4)),
-            power_text,
-            font=row_font,
-            fill=WHITE,
+        _text(
+            draw, cell, power_text, _font_for_text(power_text, 23, bold=True), TEXT, align="right"
         )
 
-    # Say which of the two orders is on screen, so the reader never has to
-    # guess whether they are looking at a sighting or a default.
-    tail = f"{side.observed_squads}/3 seen · "
-    tail += (
-        f"their order in {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
-        if from_sightings
-        else "never seen deploying — assuming strongest first"
-    )
-    _centered(draw, _s(cx), _s(548), tail, _fit(draw, tail, 19, 420), MUTED)
+    box = boxes["status"]
+    status = _status(side)
+    font = _font_for_text(status, status_size)
+    _text(draw, box, _ellipsized(draw, status, "", font, box["w"] - 16), font, MUTED)
 
 
-def _vs(canvas, draw):
-    """The gold VS. Straight from the game — it is the single strongest cue
-    that this card is about a Champion Duel match and not a leaderboard."""
-    text = "VS"
-    font = _font_for_text(text, _s(76), bold=True)
-    cx, y = _s(600), _s(268)
-    width = draw.textlength(text, font=font)
-    # A cheap outline: the glyph in deep ink, offset in eight directions, with
-    # the gold laid over it. Pillow's stroke_width does the same job but bloats
-    # the letterform at this size.
-    for dx in (-3, 0, 3):
-        for dy in (-3, 0, 3):
-            if dx or dy:
-                draw.text((cx - width / 2 + dx, y + dy), text, font=font, fill=INK)
-    draw.text((cx - width / 2, y), text, font=font, fill=GOLD)
-
-
-def _odds_bar(draw, p_a: float):
+def _odds_bar(canvas, p_a: float) -> None:
     """One bar, split where the odds split.
 
-    The two cards each state a percentage; this is what makes the *gap* legible
+    The two sides each state a percentage; this is what makes the *gap* legible
     at a glance, which is the thing a reader actually wants and the thing two
     separate numbers are worst at conveying.
+
+    The template supplies an empty track and nothing else — the whole fill is
+    computed here. The divider is clamped a radius in from each end so a
+    lopsided prediction still reads as a bar with rounded caps rather than as
+    a shape with one corner cut off.
     """
-    x0, x1, y, h = 120, 1080, 604, 24
-    split = x0 + int((x1 - x0) * max(0.0, min(1.0, p_a)))
-    draw.rounded_rectangle([_s(x0), _s(y), _s(x1), _s(y + h)], radius=_s(h / 2), fill=RED_DEEP)
-    if split > x0:
-        draw.rounded_rectangle([_s(x0), _s(y), _s(split), _s(y + h)], radius=_s(h / 2), fill=BLUE)
-    draw.line([(_s(split), _s(y - 4)), (_s(split), _s(y + h + 4))], fill=WHITE, width=_s(2))
+    track = LAYOUT["dynamic_progress_track"]
+    x, y, w, h, radius = (track[k] for k in ("x", "y", "w", "h", "radius"))
+    s = _BAR_SCALE
+    bw, bh = w * s, h * s
 
+    split = round(w * max(0.0, min(1.0, p_a)))
+    split = min(max(split, radius), w - radius) * s
 
-def _header(canvas, draw, subtitle: str | None):
-    """Title bar. The logo sits at the right end and the subtitle stops short
-    of it -- the stage string is caller-supplied and long enough to collide."""
-    draw.rectangle([0, 0, _s(W), _s(88)], fill=INK_LIGHT)
-    draw.text(
-        (_s(48), _s(26)), "CHAMPION DUEL", font=_font_for_text("C", _s(34), bold=True), fill=WHITE
+    row = bytearray()
+    for px in range(bw):
+        if px < split:
+            a, b, t = BLUE_OUTER, BLUE_INNER, px / max(split, 1)
+        else:
+            a, b, t = RED_INNER, RED_OUTER, (px - split) / max(bw - split, 1)
+        row.extend(round(c0 + (c1 - c0) * t) for c0, c1 in zip(a, b))
+    layer = Image.frombytes("RGB", (bw, 1), bytes(row)).resize((bw, bh)).convert("RGBA")
+
+    # A little bloom under the divider, so the seam reads as lit rather than as
+    # a scratch across the fill. Kept to the divider: blooming the fills too
+    # would wash the gradient out.
+    half = max(5 * s // 2, 1)
+    glow = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).rectangle(
+        [split - half * 3, 0, split + half * 3, bh], fill=GOLD_LIGHT + (120,)
     )
-    logo_w = _logo(canvas)
+    layer = Image.alpha_composite(layer, glow.filter(ImageFilter.GaussianBlur(radius=4 * s)))
+
+    gold = bytearray()
+    for py in range(bh):
+        t = py / max(bh - 1, 1)
+        gold.extend(round(c0 + (c1 - c0) * t) for c0, c1 in zip(GOLD_LIGHT, GOLD_DARK))
+    divider = Image.frombytes("RGB", (1, bh), bytes(gold)).resize((half * 2, bh))
+    layer.paste(divider, (split - half, 0))
+
+    # Clip everything to the rounded track in one go. The fill covers the whole
+    # rectangle, so the mask *is* the track's shape.
+    mask = Image.new("L", (bw, bh), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, bw - 1, bh - 1], radius=radius * s, fill=255)
+    layer.putalpha(mask)
+
+    canvas.alpha_composite(layer.resize((w, h), Image.LANCZOS), (x, y))
+
+
+def _header(canvas, draw, subtitle: str | None) -> None:
+    """Event title, round metadata, and the badge.
+
+    `subtitle` is whatever the caller knows about the fixture. Left blank when
+    it knows nothing: an invented round is worse than an empty box, and the
+    stage is not something the bot can derive (#488).
+    """
+    header = LAYOUT["header"]
+    title = "CHAMPION DUEL"
+    _text(draw, header["event_title"], title, _font_for_text(title, 34, bold=True), TEXT)
     if subtitle:
-        right = _s(W - 40) - logo_w
-        font = _fit(draw, subtitle, 24, (right / SCALE) - 380)
-        draw.text(
-            (right - draw.textlength(subtitle, font=font), _s(34)), subtitle, font=font, fill=MUTED
-        )
-    draw.line([(0, _s(88)), (_s(W), _s(88))], fill=GOLD, width=_s(2))
+        box = header["round_metadata"]
+        font = _fit(draw, subtitle, box["w"] - 24, start=24, minimum=16, bold=True)
+        _text(draw, box, _ellipsized(draw, subtitle, "", font, box["w"] - 24), font, MUTED)
+    _logo(canvas, header["logo_badge"])
 
 
-def _footer(canvas, draw, confidence: str):
+def _footer(draw, confidence: str) -> None:
     """What the number is worth, in the reader's words rather than a score.
 
-    It sits under the bar rather than beside a percentage because it qualifies
-    the whole card, not one side of it.
+    It spans the full width under the bar because it qualifies the whole card,
+    not one side of it.
     """
-    note = {
-        "high": "Built on observed squads and recorded sightings",
-        "medium": "Part of this line-up is estimated from total hero power",
-        "low": "Both line-ups are estimates — neither player has been seen deploying",
-    }[confidence]
-    text = f"Confidence: {confidence} · {note}"
-    _centered(draw, _s(600), _s(652), text, _font_for_text(text, _s(19)), MUTED)
+    box = LAYOUT["footer"]["confidence_summary"]
+    text = f"Confidence: {confidence} · {_CONFIDENCE_COPY[confidence]}"
+    font = _fit(draw, text, box["w"] - 32, start=21, minimum=15)
+    _text(draw, box, _ellipsized(draw, text, "", font, box["w"] - 32), font, MUTED)
 
 
-def _logo(canvas) -> int:
-    """Attribution in the header, matching the storm render's convention.
+def _logo(canvas, box: dict) -> None:
+    """Attribution in the header badge, matching the storm render's convention.
 
-    Returns the width it occupied so the subtitle can stop short of it, or 0
-    when the asset is missing — the render must not fail over branding.
+    A missing or unreadable asset is skipped rather than raised: the render
+    must not fail over branding.
     """
     if not os.path.isfile(_LOGO_PATH):
-        return 0
+        return
     try:
         logo = Image.open(_LOGO_PATH).convert("RGBA")
     except Exception:  # noqa: BLE001 - a missing logo must not fail the render
-        return 0
-    target_h = _s(44)
-    logo = logo.resize((int(logo.width * target_h / logo.height), target_h), Image.LANCZOS)
-    canvas.alpha_composite(logo, (_s(W) - logo.width - _s(28), _s(22)))
-    return logo.width + _s(28)
+        return
+    scale = min(box["w"] / logo.width, box["h"] / logo.height)
+    logo = logo.resize(
+        (max(round(logo.width * scale), 1), max(round(logo.height * scale), 1)), Image.LANCZOS
+    )
+    canvas.alpha_composite(
+        logo,
+        (box["x"] + (box["w"] - logo.width) // 2, box["y"] + (box["h"] - logo.height) // 2),
+    )
 
 
 def render(result: predict_lib.Prediction, *, subtitle: str | None = None) -> bytes:
-    """The prediction as a PNG.
+    """The prediction as a PNG, composited over the template.
 
-    `subtitle` is for the stage — "Group M · Qualifier Day 4/4" — which the
-    game puts at the top of its own screen. Left optional because the bot does
-    not know the schedule; a caller that does can pass it.
+    `subtitle` is the round metadata — "Group M · Semifinal" — which the game
+    puts at the top of its own screen. Optional because the bot does not know
+    the schedule; a caller that does can pass it.
     """
-    canvas = Image.new("RGBA", (_s(W), _s(H)), INK)
+    canvas = _template()
     draw = ImageDraw.Draw(canvas)
+    left, right = LAYOUT["left"], LAYOUT["right"]
 
     _header(canvas, draw, subtitle)
-    # Lean the cards toward each other, as the game's do, with a wide enough
-    # centre channel for the VS to sit in rather than on top of them.
-    _card(canvas, 56, 116, 484, 464, BLUE, BLUE_DEEP, lean=34)
-    _card(canvas, 660, 116, 484, 464, RED, RED_DEEP, lean=-34)
+    # Both sides' percentages and both status lines are sized together, so
+    # neither pair differs in size for a reason the reader would misread.
+    pct_size = _shared_pct_font(
+        draw,
+        _pct(result.p_a),
+        _pct(result.p_b),
+        (left["win_probability"], right["win_probability"]),
+    )
+    status_size = _shared_status_font(
+        draw, _status(result.a), _status(result.b), (left["status"], right["status"])
+    )
+    _side(draw, left, result.a, result.p_a, pct_size, status_size, accent=LEFT_ACCENT)
+    _side(draw, right, result.b, result.p_b, pct_size, status_size, accent=RIGHT_ACCENT)
+    _odds_bar(canvas, result.p_a)
+    _footer(draw, result.confidence())
 
-    draw = ImageDraw.Draw(canvas)
-    _side(canvas, draw, result.a, result.p_a, left=True)
-    _side(canvas, draw, result.b, result.p_b, left=False)
-    _vs(canvas, draw)
-    _odds_bar(draw, result.p_a)
-    _footer(canvas, draw, result.confidence())
-
-    canvas = canvas.convert("RGB").resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
-    canvas.save(buf, format="PNG", optimize=True)
+    canvas.convert("RGB").save(buf, format="PNG", optimize=True)
     return buf.getvalue()

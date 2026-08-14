@@ -3,8 +3,10 @@
 A render is hard to assert on pixel by pixel and not worth it. What these
 cover is the part that can be *wrong* rather than ugly: that the card shows the
 line-up the prediction was actually computed from, that it never rounds a
-probability up into a certainty, and that a name in a non-Latin script or a
-missing asset doesn't take the render down.
+probability up into a certainty, that a name in a non-Latin script or a missing
+asset doesn't take the render down, and — since the card became a compositor
+over a designed template — that the layout it is placed against still describes
+the artwork it is placed on.
 """
 
 from __future__ import annotations
@@ -162,7 +164,87 @@ def test_a_missing_logo_does_not_fail_the_render(cd_db, monkeypatch):
 
 
 def test_subtitle_is_optional(cd_db):
-    """The bot doesn't know the schedule; a caller that does can pass it."""
+    """The bot doesn't know the schedule; a caller that does can pass it.
+
+    There is no stage field to fall back on (#488), and an invented round is
+    worse than an empty box, so the header simply goes without.
+    """
     a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000))
     b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000))
     assert _render(a, b)
+
+
+# ── The layout still describes the artwork ────────────────────────────────────
+#
+# The card is a compositor now: every field is a box in the layout JSON, drawn
+# over a template neither this module nor the tests can see into. What can go
+# wrong is no longer "the drawing code is wrong" but "the coordinates and the
+# picture have drifted apart" -- which is silent, and which is exactly what
+# happens when a design revision lands as a file swap.
+
+
+def test_the_template_matches_the_canvas_the_layout_declares():
+    """A template of a different size would put every coordinate out."""
+    template = Image.open(img._TEMPLATE_PATH)
+    assert template.size == (img.W, img.H)
+
+
+def _all_text_boxes():
+    for side in (img.LAYOUT["left"], img.LAYOUT["right"]):
+        for field in ("name", "win_probability", "to_win", "status"):
+            yield field, side[field]
+        for i, row in enumerate(side["squad_rows"], start=1):
+            yield f"row{i}.icon", row["icon"]
+            yield f"row{i}.text", row["text"]
+    yield "event_title", img.LAYOUT["header"]["event_title"]
+    yield "round_metadata", img.LAYOUT["header"]["round_metadata"]
+    yield "confidence", img.LAYOUT["footer"]["confidence_summary"]
+
+
+def test_no_field_is_drawn_over_the_vs_burst():
+    """The spec reserves the centre for the VS artwork, and it is the one part
+    of the template a caption cannot be moved off after the fact."""
+    zone = img.LAYOUT["vs_exclusion_zone"]
+    for name, box in _all_text_boxes():
+        overlaps_x = box["x"] < zone["x"] + zone["w"] and zone["x"] < box["x"] + box["w"]
+        overlaps_y = box["y"] < zone["y"] + zone["h"] and zone["y"] < box["y"] + box["h"]
+        assert not (overlaps_x and overlaps_y), f"{name} overlaps the VS burst"
+
+
+def test_every_field_is_on_the_canvas():
+    for name, box in _all_text_boxes():
+        assert 0 <= box["x"] and box["x"] + box["w"] <= img.W, f"{name} runs off the side"
+        assert 0 <= box["y"] and box["y"] + box["h"] <= img.H, f"{name} runs off the top or bottom"
+
+
+def test_the_odds_bar_is_drawn_and_splits_where_the_odds_split(cd_db):
+    """The template ships an empty track; the fill is entirely the bot's.
+
+    Sampling the rendered track is the only way to catch a bar that stopped
+    being drawn, or one drawn at the wrong split -- both of which leave a card
+    that still looks finished while misstating the prediction it illustrates.
+    """
+    track = img.LAYOUT["dynamic_progress_track"]
+    mid_y = track["y"] + track["h"] // 2
+
+    a = _player("Goliath", "101", (52_000_000, 49_000_000, 47_000_000))
+    b = _player("Pebble", "101", (14_000_000, 12_000_000, 11_000_000))
+    result = cdp.predict(a, b)
+    card = Image.open(io.BytesIO(img.render(result))).convert("RGB")
+
+    # Far left is A's colour and far right is B's, whichever way the odds fell.
+    left = card.getpixel((track["x"] + track["radius"], mid_y))
+    right = card.getpixel((track["x"] + track["w"] - track["radius"], mid_y))
+    assert left[2] > left[0], "the left end of the bar is not blue"
+    assert right[0] > right[2], "the right end of the bar is not red"
+
+    # A near-certain A puts the divider hard right, but never off the end --
+    # the track keeps its rounded cap rather than losing a corner.
+    assert result.p_a > 0.99
+    blue = [
+        x
+        for x in range(track["x"], track["x"] + track["w"])
+        if card.getpixel((x, mid_y))[2] > card.getpixel((x, mid_y))[0]
+    ]
+    assert max(blue) < track["x"] + track["w"] - 1, "the fill ran to the very end of the track"
+    assert max(blue) > track["x"] + track["w"] * 0.9, "a >99% prediction did not fill the bar"

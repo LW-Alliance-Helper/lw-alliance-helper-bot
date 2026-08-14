@@ -256,30 +256,68 @@ def test_nothing_close_suggests_nothing(cd_db):
     assert db.suggest_registrants("qqqqqqzzzz") == []
 
 
-async def test_a_missing_player_points_at_adding_them(cd_db):
+async def test_a_missing_player_carries_the_add_button_not_a_route_back(cd_db):
     """A name we don't have is usually a real player we haven't met, so the
-    miss carries its own exit."""
+    miss carries its own exit. The exit is a button on this message: naming a
+    button the user then has to go and find is only half of "every dead end
+    carries its exit"."""
     modal = hub._FindPlayerModal(can_write=True)
     modal.name._value = "NobodyAtAll"
-    modal.server._value = ""
+    modal.server._value = "738"
     interaction = _interaction()
     await modal.on_submit(interaction)
-    # By its words: ➕ is near-black against a Discord message background, so
-    # naming the button in prose drops the icon and lets bold do the work.
-    assert hub._btn_words(hub.CD_BTN_ADD) in _sent(interaction)
-    assert "➕" not in _sent(interaction)
+
+    view = interaction.followup.send.await_args.kwargs["view"]
+    assert [b.label for b in view.children] == [hub.CD_BTN_ADD]
+    assert not view.children[0].disabled
 
 
-async def test_the_write_modals_do_not_ask_who_again(cd_db):
-    """The player came from the card, so the squad modal is three fields and
-    the order modal is one — and neither can fail on an ambiguous name."""
+async def test_the_miss_carries_what_they_typed_into_the_add_modal(cd_db):
+    """Someone who spelled it right and simply met a player we never imported
+    should not type the name a second time."""
+    view = hub._MissView(can_write=True, user_id=ADMIN_ID, name="NobodyAtAll", server="999")
+    inter = _interaction()
+    await view._on_add(inter)
+
+    sent = inter.response.send_modal.await_args.args[0]
+    assert sent.name.default == "NobodyAtAll"
+    assert sent.server.default == "999"
+
+
+async def test_a_locked_miss_still_shows_the_add_button(cd_db):
+    """Premium controls render disabled rather than vanishing (DESIGN.md), so
+    the free tier sees the shape of what contributing would give them."""
+    view = hub._MissView(can_write=False, user_id=ADMIN_ID, name="Nobody", server=None)
+    assert view.children[0].disabled
+    assert "🔒" in view.children[0].label
+
+
+async def test_the_squad_modal_does_not_ask_who_again(cd_db):
+    """The player came from the card, so the modal is three fields and cannot
+    fail on an ambiguous name."""
     player = db.get_player("AlphaOne", server="738")
     squad_fields = {i.label for i in hub._SquadModal(player).children}
     assert "Player name" not in squad_fields
     assert squad_fields == {"Slot (1, 2 or 3)", "Squad type", "Power"}
 
-    order_fields = {i.label for i in hub._OrderModal(player).children}
-    assert order_fields == {"Who they faced"}
+
+async def test_recording_an_order_opens_the_picker_with_no_modal(cd_db):
+    """The order flow asks one question. The modal that used to precede it
+    collected who the player faced, which is not an input to anything: a
+    prediction samples the order, not the opponent."""
+    assert not hasattr(hub, "_OrderModal")
+
+    player = db.get_player("AlphaOne", server="738")
+    view = hub.PlayerActionsView(player=player, user_id=ADMIN_ID, can_write=True)
+    inter = _interaction(user_id=ADMIN_ID)
+    await view._on_order(inter)
+
+    inter.response.send_modal.assert_not_awaited()
+    sent = inter.followup.send.await_args
+    assert isinstance(sent.kwargs["view"], hub._OrderSelectView)
+    # Says what the data is for. Someone pressing this has no reason to know
+    # why deployment order is the thing worth their time.
+    assert "sharpens" in sent.args[0]
 
 
 async def test_a_squad_correction_applies_to_the_card_player(cd_db):
@@ -343,6 +381,29 @@ def test_power_is_read_however_it_was_written(typed, expected):
     """The game shows 84.6M; a spreadsheet shows 84,600,000. Same number, and
     neither is the reader's mistake to correct."""
     assert hub.parse_power(typed) == expected
+
+
+@pytest.mark.parametrize(
+    "typed,expected",
+    [
+        ("81.9", 81_900_000),
+        ("84.6", 84_600_000),
+        ("100.4", 100_400_000),
+        ("82", 82_000_000),
+    ],
+)
+def test_a_bare_number_off_the_game_screen_means_millions(typed, expected):
+    """The game prints `84.6M` and people drop the M copying it. Read
+    literally it stored 81.9 and rendered "82", which looks like the bot
+    ignored what they typed."""
+    assert hub.parse_power(typed) == expected
+
+
+@pytest.mark.parametrize("typed", ["84600000", "84,600,000", "1500000"])
+def test_a_full_figure_is_left_alone(typed):
+    """The inference only covers what the game displays. Anything already at
+    squad-power scale is taken at face value."""
+    assert hub.parse_power(typed) >= 1_000_000
 
 
 @pytest.mark.parametrize("typed", ["", "   ", "lots", "84.6X", "-5", "0", "8.4.6M", None])
@@ -627,15 +688,46 @@ async def test_lookup_of_an_unknown_name_says_what_to_check(cd_db):
     assert "No registrant matches" in _sent(interaction)
 
 
-def test_player_embed_marks_estimates_apart_from_sightings(cd_db):
+def test_player_embed_states_the_basis_instead_of_glyphing_each_value(cd_db):
+    """One sentence for the whole card, following the prediction card's footer,
+    rather than a per-value key the reader has to learn and apply three times.
+    DESIGN.md retired 👁️ in 2026-08-10 for reading clinical."""
     rid = _reg("AlphaOne")
     db.set_squad(rid, 1, squad_type="Tank", power=1_000, actor=KEV, source="estimated")
     db.set_squad(rid, 2, squad_type="Missile", power=900, actor=KEV, source="observed")
     player = db.get_player("AlphaOne", server="738", include_scouting=True)
+
     embed = hub.build_player_embed(player, None)
+
     squads = next(f.value for f in embed.fields if f.name == "Squads")
-    assert hub._SOURCE_MARK["estimated"] in squads
-    assert hub._SOURCE_MARK["observed"] in squads
+    assert "👁" not in squads and "≈" not in squads and "✏️" not in squads
+    assert "Some squad powers are estimated" in embed.footer.text
+
+
+def test_the_basis_leads_with_the_weakest_input(cd_db):
+    """A card carrying one estimate is qualified by that estimate, the same way
+    `medium` confidence qualifies a prediction."""
+    rid = _reg("AlphaOne")
+    for slot, source in ((1, "observed"), (2, "observed"), (3, "estimated")):
+        db.set_squad(rid, slot, squad_type="Tank", power=1_000, actor=KEV, source=source)
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+
+    assert "estimated" in hub.build_player_embed(player, None).footer.text
+
+
+def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
+    """Squads and the order are what a member came for. Group and rank are
+    qualifier history, so they sit under the answer rather than above it."""
+    db.upsert_registrant("AlphaOne", server="738", alliance="DxL", actor=KEV)
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+
+    embed = hub.build_player_embed(player, None)
+
+    assert embed.title.startswith("[DxL] ")
+    assert "738" in embed.title
+    names = [f.name for f in embed.fields]
+    assert names.index("Squads") < names.index("Qualifiers")
+    assert "Group" in next(f.value for f in embed.fields if f.name == "Qualifiers")
 
 
 # ── Record an order ───────────────────────────────────────────────────────────

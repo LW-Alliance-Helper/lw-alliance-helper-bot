@@ -63,6 +63,7 @@ CD_BTN_EDITS = "📜 Recent edits"
 CD_BTN_REVERT = "⏪ Revert an edit"
 CD_BTN_EXPORT = "📤 Export edits"
 CD_BTN_FILTER = "🔍 Filter these"
+CD_BTN_SHARE = "📤 Share this prediction to current channel"
 
 # Discord's message limit is 2000 and an embed description is 4096. Keep the
 # browse list well inside both, since the export exists for volume.
@@ -95,7 +96,6 @@ _ENGINE_MISSING = (
     "player look-ups are unavailable. If you're the bot operator, check that "
     "`CD_ENGINE_TOKEN` is set and the last deploy installed `champion-duel-engine`."
 )
-_SOURCE_MARK = {"observed": "👁", "estimated": "≈", "edited": "✏️"}
 
 
 def _is_admin(user_id: int) -> bool:
@@ -170,7 +170,7 @@ def _describe(edit: dict) -> str:
     what = edit.get("field") or edit.get("target")
     slot = f" slot {edit['slot']}" if edit.get("slot") else ""
     old, new = edit.get("old_value"), edit.get("new_value")
-    change = f"{old or '—'} → {new or '—'}"
+    change = f"{old or '(none)'} → {new or '(none)'}"
     tail = f"  ↩ revert of #{edit['revert_of']}" if edit.get("revert_of") else ""
     name = edit.get("display_name") or "(unknown)"
     server = f" (#{edit['server']})" if edit.get("server") else ""
@@ -178,6 +178,9 @@ def _describe(edit: dict) -> str:
 
 
 _POWER_SUFFIXES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+# Below this, a suffix-less power was meant as millions. See `parse_power`.
+_POWER_BARE_IS_MILLIONS = 1_000
 
 
 def parse_power(text: str) -> float | None:
@@ -209,6 +212,19 @@ def parse_power(text: str) -> float | None:
         return None
     if value <= 0:
         return None
+
+    # A bare number small enough to be a squad power only if it were millions
+    # is one: the game prints `84.6M`, and someone copying that off a screen
+    # drops the M more often than not. Taken literally it stored 81.9 and
+    # rendered "82", which reads as the bot ignoring what they typed.
+    #
+    # The boundary is 1,000 rather than 1,000,000 so the guess only covers
+    # what the game actually displays. Nothing between 1,000 and 1,000,000 is
+    # a plausible squad power in either reading, so it is left alone rather
+    # than multiplied into something absurd.
+    if multiplier == 1 and value < _POWER_BARE_IS_MILLIONS:
+        multiplier = _POWER_SUFFIXES["m"]
+
     return value * multiplier
 
 
@@ -320,7 +336,7 @@ def build_prediction_embed(result: predict_lib.Prediction) -> discord.Embed:
     )
     embed.set_footer(
         text=(
-            "Exact odds over both players' recorded orders — no sampling. "
+            "Exact odds over both players' recorded orders, no sampling. "
             "Record a sighting to sharpen it."
         )
     )
@@ -370,9 +386,7 @@ class SharePredictionView(discord.ui.View):
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
-    @discord.ui.button(
-        label="📤 Share this prediction to this channel", style=discord.ButtonStyle.secondary
-    )
+    @discord.ui.button(label=CD_BTN_SHARE, style=discord.ButtonStyle.secondary)
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         button.disabled = True
@@ -387,7 +401,7 @@ class SharePredictionView(discord.ui.View):
             )
         except discord.Forbidden:
             await interaction.followup.send(
-                "⚠️ I can't post in this channel — I need **Send Messages** and "
+                "⚠️ I can't post in this channel. I need **Send Messages** and "
                 "**Attach Files** here. You can still save the image and post it yourself.",
                 ephemeral=True,
             )
@@ -464,10 +478,10 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
         except predict_lib.NotEnoughData as exc:
             slots = ", ".join(str(s) for s in exc.missing)
             await interaction.followup.send(
-                f"⚠️ I don't have a full line-up for **{exc.name}** — slot(s) {slots} "
+                f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to predict with.\n"
-                f"Use **{CD_BTN_FIND}** on `{CHAMPION_DUEL_HUB_CMD}` to open them — "
-                f"**{CD_BTN_SQUAD}** is on their card.",
+                f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
+                f"**{CD_BTN_SQUAD}** to fill them in.",
                 ephemeral=True,
             )
             return
@@ -478,35 +492,51 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
 # ── Look up ───────────────────────────────────────────────────────────────────
 
 
+def _squad_basis(squads: list[dict]) -> str:
+    """Where these numbers came from, as a sentence.
+
+    Replaces the `👁 ≈ ✏️` legend. Per-value glyphs made the reader learn a key
+    and apply it three times to answer one question ("can I trust this?"), and
+    `DESIGN.md` retired 👁️ in 2026-08-10 for reading clinical. This follows the
+    prediction card's footer instead (`champion_duel_image._footer`), which
+    states the basis for the whole card in the reader's own words.
+
+    Estimated is called out ahead of observed when both are present: the
+    weakest input is what qualifies the card, exactly as `medium` confidence
+    does on the prediction.
+    """
+    sources = {s.get("source") for s in squads}
+    corrected = " Corrected values came from a member." if "edited" in sources else ""
+    if "estimated" in sources:
+        if sources & {"observed", "edited"}:
+            return "Some squad powers are estimated from total hero power." + corrected
+        return "Squad powers are estimated from total hero power, not seen in game."
+    return "Squad powers are what someone saw in game." + corrected
+
+
 def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
     """One registrant: who they are, what they field, and what they've been
-    seen doing. Every squad value carries its source, so an estimate cannot
-    quietly harden into a fact."""
+    seen doing.
+
+    Ordered by what a member came for. The squads and the order are the answer;
+    the group and rank are qualifier history, which is context rather than the
+    point, so they sit below rather than in the lead.
+    """
+    alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
     embed = discord.Embed(
-        title=f"🔍 {_label(player)}"[:256],
+        title=f"{alliance}{_label(player)}"[:256],
         color=discord.Color.blurple(),
     )
-    bits = []
-    if player.get("grp"):
-        bits.append(f"Group **{player['grp']}**")
-    if player.get("rank"):
-        bits.append(f"rank {player['rank']}")
-    if player.get("alliance"):
-        bits.append(f"[{player['alliance']}]")
-    if player.get("thp"):
-        bits.append(f"THP {player['thp']:,.0f}")
-    if player.get("origin") == "self_reported":
-        # Never let a community-entered opponent read like an official import.
-        bits.append("*added from a sighting, not the official roster*")
-    embed.description = " · ".join(bits) or "No roster details recorded."
+    embed.description = (
+        f"THP: {player['thp']:,.0f}" if player.get("thp") else "No total hero power recorded."
+    )
 
     squads = sorted(player.get("squads") or [], key=lambda s: s["slot"])
     if squads:
         embed.add_field(
             name="Squads",
             value="\n".join(
-                f"{s['slot']}. {s.get('squad_type') or '—'} · "
-                f"{(s.get('power') or 0):,.0f} {_SOURCE_MARK.get(s.get('source'), '')}"
+                f"{s['slot']}. {s.get('squad_type') or '(none)'} · {(s.get('power') or 0):,.0f}"
                 for s in squads
             )[:1024],
             inline=False,
@@ -524,10 +554,26 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
     else:
         embed.add_field(
             name="Most common order",
-            value="Never seen deploying. A prediction will assume strongest first.",
+            value="No deploy orders recorded. A prediction will assume strongest first.",
             inline=False,
         )
-    embed.set_footer(text="👁 observed · ≈ estimated from total hero power · ✏️ corrected")
+
+    # Hardcoded stage name, and it stops being true the day semifinals land.
+    # Issue #488 makes stage a dimension; until then this is honestly what the
+    # group and rank are, and "Group M · Rank 1" with no stage was worse.
+    qualifiers = " · ".join(
+        bit
+        for bit in (
+            f"Group **{player['grp']}**" if player.get("grp") else None,
+            f"Rank **{player['rank']}**" if player.get("rank") else None,
+        )
+        if bit
+    )
+    if qualifiers:
+        embed.add_field(name="Qualifiers", value=qualifiers, inline=False)
+
+    if squads:
+        embed.set_footer(text=_squad_basis(squads))
     return embed
 
 
@@ -577,7 +623,20 @@ class PlayerActionsView(discord.ui.View):
         await inter.response.send_modal(_SquadModal(self.player))
 
     async def _on_order(self, inter: discord.Interaction):
-        await inter.response.send_modal(_OrderModal(self.player))
+        # Straight to the picker. The modal that used to sit in front of this
+        # asked only who the player faced, and that is not an input to
+        # anything: a prediction samples the order, not the opponent. Asking
+        # for it made the flow look like it wanted a battle report.
+        await inter.response.defer(ephemeral=True, thinking=True)
+        view = _OrderSelectView(player=self.player, opponent=None, user_id=inter.user.id)
+        await inter.followup.send(
+            f"Which order did **{_label(self.player)}** deploy in?\n"
+            f"Deployment order decides which squad meets which, so a recorded "
+            f"order is what sharpens every prediction for them.",
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await inter.original_response()
 
 
 async def send_player_card(
@@ -600,6 +659,47 @@ async def send_player_card(
     view.message = await interaction.original_response()
 
 
+class _MissView(discord.ui.View):
+    """The exit from a name we do not have, on the message that reported it.
+
+    The name and server they just typed are carried into the modal as
+    defaults, so someone who spelled it right and simply met a player we have
+    never imported does not type it a second time.
+    """
+
+    def __init__(self, *, can_write: bool, user_id: int, name: str, server: str | None):
+        super().__init__(timeout=600)
+        self.can_write = can_write
+        self.user_id = user_id
+        self.name = name
+        self.server = server
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(
+            label=(CD_BTN_ADD if can_write else f"🔒 {CD_BTN_ADD}")[:80],
+            style=discord.ButtonStyle.primary if can_write else discord.ButtonStyle.secondary,
+            disabled=not can_write,
+        )
+        button.callback = self._on_add
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_add(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _AddPlayerModal(self.can_write, name=self.name, server=self.server)
+        )
+
+
 class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
     def __init__(self, can_write: bool):
         super().__init__()
@@ -615,12 +715,22 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
         found = await _resolve(self.name.value, self.server.value or None)
         if isinstance(found, str):
             # A miss is not a dead end any more: the name they typed is very
-            # likely a real player we simply have not met.
+            # likely a real player we simply have not met. The exit is a button
+            # on this message rather than a route back to the hub, because the
+            # user is already mid-task and naming a button they have to go find
+            # is only half of "every dead end carries its exit".
+            view = _MissView(
+                can_write=self.can_write,
+                user_id=interaction.user.id,
+                name=self.name.value,
+                server=self.server.value or None,
+            )
             await interaction.followup.send(
-                f"{found}\n\nIf they're real and we're missing them, "
-                f"**{_btn_words(CD_BTN_ADD)}** on `{CHAMPION_DUEL_HUB_CMD}`.",
+                f"{found}\n\nIf we don't have them listed, add them below.",
+                view=view,
                 ephemeral=True,
             )
+            view.message = await interaction.original_response()
             return
         await send_player_card(interaction, found, can_write=self.can_write)
 
@@ -640,9 +750,16 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     duplicating it.
     """
 
-    def __init__(self, can_write: bool):
+    def __init__(self, can_write: bool, *, name: str | None = None, server: str | None = None):
         super().__init__()
         self.can_write = can_write
+        # Safe to set on self: `Modal._init_children` deepcopies each declared
+        # item onto the instance, so a default here cannot leak to the next
+        # person who opens this modal.
+        if name:
+            self.name.default = name[:64]
+        if server:
+            self.server.default = server[:10]
 
     name = discord.ui.TextInput(label="Player name", max_length=64)
     server = discord.ui.TextInput(label="Server", max_length=10, placeholder="e.g. 738")
@@ -664,7 +781,7 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         server = (self.server.value or "").strip()
         if not name or not server:
             await interaction.followup.send(
-                "⚠️ A player needs both a name and a server — identity here is the "
+                "⚠️ A player needs both a name and a server. Identity here is the "
                 "two together, because two servers can field the same name.",
                 ephemeral=True,
             )
@@ -686,9 +803,9 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             return
 
         note = (
-            f"ℹ️ **{_label(player)}** was already here — opening them instead of adding a duplicate."
+            f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
             if existing
-            else f"✅ Added **{_label(player)}**. Record what you saw below."
+            else f"✅ Added **{_label(player)}**."
         )
         await send_player_card(interaction, player, can_write=self.can_write, note=note)
 
@@ -710,7 +827,7 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
     def __init__(self, player: dict):
         super().__init__()
         self.player = player
-        self.title = f"Correct a squad — {player['display_name']}"[:45]
+        self.title = f"Correct a squad: {player['display_name']}"[:45]
 
     slot = discord.ui.TextInput(label="Slot (1, 2 or 3)", max_length=1)
     squad_type = discord.ui.TextInput(
@@ -718,13 +835,13 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
     )
     # Takes the number in whatever form the game showed it. Demanding a
     # normalised figure pushed a conversion onto the person reading "84.6M" off
-    # a screen, to produce a value the bot then renders back as "84.6M" — work
+    # a screen, to produce a value the bot then renders back as "84.6M" -- work
     # invented at the point of entry and undone at the point of display.
     power = discord.ui.TextInput(
         label="Power",
         required=False,
         max_length=24,
-        placeholder="84.6M, 84,600,000 or 84600000 — all fine",
+        placeholder="84.6M, 84,600,000 or 84600000",
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -734,7 +851,7 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
         raw_power = (self.power.value or "").strip()
         if not squad_type and not raw_power:
             await interaction.followup.send(
-                "⚠️ Nothing to change — fill in a squad type, a power, or both.", ephemeral=True
+                "⚠️ Nothing to change. Fill in a squad type, a power, or both.", ephemeral=True
             )
             return
         if squad_type and squad_type not in db.VALID_TYPES:
@@ -770,7 +887,7 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
         )
         if not result["edit_ids"]:
             await interaction.followup.send(
-                f"ℹ️ Slot {slot} for **{_label(found)}** already said that — nothing changed.",
+                f"ℹ️ Slot {slot} for **{_label(found)}** already said that. Nothing changed.",
                 ephemeral=True,
             )
             return
@@ -778,8 +895,7 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
             bit for bit in (squad_type, f"{power:,.0f}" if power is not None else None) if bit
         )
         await interaction.followup.send(
-            f"✅ Slot {slot} for **{_label(found)}** is now **{changed}**.\n"
-            f"Logged as edit `#{result['edit_ids'][0]}` and attributed to you.",
+            f"✅ Slot {slot} for **{_label(found)}** is now **{changed}**.",
             ephemeral=True,
         )
 
@@ -871,37 +987,6 @@ class _OrderSelectView(discord.ui.View):
             ephemeral=True,
         )
         self.stop()
-
-
-class _OrderModal(discord.ui.Modal, title="Record a deployment order"):
-    """Only who they faced — the player came from the card this opened from.
-
-    The order itself is picked from a select afterwards. A modal takes text
-    inputs only, and free-typing a permutation is how "Tank, Tank, Missile"
-    gets entered.
-    """
-
-    def __init__(self, player: dict):
-        super().__init__()
-        self.player = player
-        self.title = f"Record an order — {player['display_name']}"[:45]
-
-    opponent = discord.ui.TextInput(
-        label="Who they faced", required=False, max_length=64, placeholder="Optional"
-    )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        found = self.player
-        view = _OrderSelectView(
-            player=found,
-            opponent=(self.opponent.value or "").strip() or None,
-            user_id=interaction.user.id,
-        )
-        await interaction.followup.send(
-            f"Which order did **{_label(found)}** deploy in?", view=view, ephemeral=True
-        )
-        view.message = await interaction.original_response()
 
 
 # ── The capture guide ─────────────────────────────────────────────────────────
@@ -1004,7 +1089,7 @@ def build_guide() -> tuple[list[discord.Embed], list[discord.File]]:
 
 def build_edits_embed(result: dict, shown: int) -> discord.Embed:
     embed = discord.Embed(
-        title="📜 Champion Duel — recent edits",
+        title="📜 Champion Duel: recent edits",
         description="\n".join(_describe(e) for e in result["edits"])[:4096],
         color=discord.Color.blurple(),
     )
@@ -1134,7 +1219,7 @@ async def _do_revert(interaction: discord.Interaction, edit_id: int, *, force: b
         # normal, and the later entry is usually the better information. Show
         # what's there now and let the admin decide.
         await interaction.followup.send(
-            f"⚠️ Edit `#{edit_id}` wasn't reverted — that value has changed since.\n"
+            f"⚠️ Edit `#{edit_id}` wasn't reverted. That value has changed since.\n"
             f"It's now **{exc.current}**, but the edit expected **{exc.expected}**.\n"
             f"Someone may have corrected it more recently.",
             view=_RevertAnyway(
@@ -1151,7 +1236,7 @@ async def _do_revert(interaction: discord.Interaction, edit_id: int, *, force: b
         return
 
     await interaction.followup.send(
-        f"✅ Reverted `#{edit_id}` — restored to **{result['restored_to'] or '—'}**.\n"
+        f"✅ Reverted `#{edit_id}`. Restored to **{result['restored_to'] or '(none)'}**.\n"
         f"Logged as edit `#{result['edit_id']}`; nothing was deleted.",
         ephemeral=True,
     )
@@ -1219,7 +1304,7 @@ class _ExportModal(discord.ui.Modal, title="Export Champion Duel edits"):
         end_iso = _parse_day(self.end.value, end_of_day=True)
         if not start_iso or not end_iso:
             await interaction.followup.send(
-                "⚠️ Dates need to be `YYYY-MM-DD` — for example `2026-08-12`.", ephemeral=True
+                "⚠️ Dates need to be `YYYY-MM-DD`, for example `2026-08-12`.", ephemeral=True
             )
             return
         if start_iso > end_iso:
@@ -1281,7 +1366,7 @@ def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
     else:
         embed.description = (
             "No roster is loaded for this stage yet.\n\n"
-            "Predictions and look-ups need registrants — an admin imports them "
+            "Predictions and look-ups need registrants. An admin imports them "
             "through the Champion Duel API."
         )
 
@@ -1299,7 +1384,7 @@ def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
             name="🔒 Contributing is Premium",
             value=(
                 f"Correcting squads and recording sightings are part of "
-                f"{premium.PREMIUM_BRAND}. Run `/upgrade` to unlock it — the more "
+                f"{premium.PREMIUM_BRAND}. Run `/upgrade` to unlock it. The more "
                 "people entering sightings, the sharper every prediction gets."
             ),
             inline=False,

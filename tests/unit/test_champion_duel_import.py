@@ -152,6 +152,27 @@ def test_an_estimate_never_overwrites_a_correction(cd_db):
     assert _slot("AlphaOne", 1)["source"] == "edited"
 
 
+def test_an_imported_sighting_never_overwrites_a_correction(cd_db):
+    """The case that shipped broken: the guard only checked for an incoming
+    `estimated`, so an imported `observed` row silently reverted a member's
+    correction on the next re-import and the summary reported nothing kept.
+
+    A person read the game and typed what they saw. Undoing that is what the
+    edit log and `⏪ Revert an edit` are for, deliberately and attributed, not
+    a side effect of loading a file.
+    """
+    rid = db.resolve_registrant("AlphaOne", server="738")["id"]
+    db.set_squad(rid, 2, squad_type="Tank", power=81_900_000, actor=ACTOR, source="edited")
+
+    result = db.import_squads(_squad_rows("AlphaOne", source="observed"), actor=ACTOR)
+
+    kept = _slot("AlphaOne", 2)
+    assert kept["source"] == "edited"
+    assert kept["squad_type"] == "Tank"
+    assert kept["power"] == 81_900_000
+    assert result["kept_observed"] == 1, "and the import says so rather than staying silent"
+
+
 def test_an_observation_does_overwrite_an_estimate(cd_db):
     """The protection runs one way only — new sightings are the point."""
     db.import_squads(_squad_rows("AlphaOne", source="estimated"), actor=ACTOR)

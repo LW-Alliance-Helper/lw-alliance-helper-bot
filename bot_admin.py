@@ -1137,7 +1137,11 @@ async def admin_champion_duel_import_slash(
         result = await asyncio.to_thread(cd_db.import_squads, payload["squads"], actor=actor)
         lines.append(
             f"**{result['applied']}** squad rows"
-            + (f", {result['kept_observed']} observations kept" if result["kept_observed"] else "")
+            + (
+                f", {result['kept_observed']} existing values kept"
+                if result["kept_observed"]
+                else ""
+            )
             + (f", {result['skipped']} skipped" if result["skipped"] else "")
         )
         problems += result["problems"]

@@ -118,10 +118,180 @@ def test_write_buttons_lock_rather_than_vanish_on_the_free_tier():
     view = hub.ChampionDuelHubView(
         user_id=OUTSIDER_ID, is_admin=False, can_write=False, engine_ok=True
     )
-    locked = [b for b in view.children if hub.CD_BTN_SQUAD in (b.label or "")]
-    assert locked, "the squad button should still be on the grid"
+    locked = [b for b in view.children if hub.CD_BTN_ADD in (b.label or "")]
+    assert locked, "the add button should still be on the grid"
     assert locked[0].disabled
     assert locked[0].label.startswith("🔒")
+
+
+def test_the_write_actions_hang_off_a_player_not_the_hub():
+    """Every flow used to open with "who?", so contributing three squad values
+    and an order meant typing one name four times — and four chances at an
+    ambiguous match. The hub now leads to a player; the writes act on them."""
+    labels = [
+        b.label
+        for b in hub.ChampionDuelHubView(
+            user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True
+        ).children
+    ]
+    assert hub.CD_BTN_SQUAD not in labels
+    assert hub.CD_BTN_ORDER not in labels
+    assert {hub.CD_BTN_FIND, hub.CD_BTN_ADD} <= set(labels)
+
+    on_card = [
+        b.label
+        for b in hub.PlayerActionsView(
+            player={"id": 1, "display_name": "AlphaOne", "server": "738"},
+            user_id=ADMIN_ID,
+            can_write=True,
+        ).children
+    ]
+    assert on_card == [hub.CD_BTN_SQUAD, hub.CD_BTN_ORDER]
+
+
+def test_the_player_card_locks_its_actions_on_the_free_tier():
+    view = hub.PlayerActionsView(
+        player={"id": 1, "display_name": "AlphaOne", "server": "738"},
+        user_id=OUTSIDER_ID,
+        can_write=False,
+    )
+    assert all(b.disabled for b in view.children)
+    assert all(b.label.startswith("🔒") for b in view.children)
+
+
+async def test_adding_a_player_marks_them_self_reported(cd_db):
+    """The roster is who signed up, not everyone anyone will face. A row added
+    from a sighting has to stay visibly distinguishable from an official
+    import, exactly as squads.source does for estimates."""
+    modal = hub._AddPlayerModal(can_write=True)
+    modal.name._value = "Newcomer"
+    modal.server._value = "1042"
+    modal.group._value = "N"
+    modal.alliance._value = "OGV"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    player = db.get_player("Newcomer", server="1042")
+    assert player["origin"] == "self_reported"
+    assert player["grp"] == "N" and player["alliance"] == "OGV"
+    assert player["added_by"] == str(ADMIN_ID)
+    # Lands on the card with the write actions, not a bare confirmation.
+    assert isinstance(interaction.followup.send.call_args.kwargs["view"], hub.PlayerActionsView)
+    assert "Added" in _sent(interaction)
+
+
+async def test_adding_someone_we_already_have_opens_them(cd_db):
+    """Not an error and not a duplicate — identity is (name, server), so this
+    is the same person. Saying so beats a refusal the contributor has to
+    interpret."""
+    modal = hub._AddPlayerModal(can_write=True)
+    modal.name._value = "AlphaOne"
+    modal.server._value = "738"
+    modal.group._value = ""
+    modal.alliance._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "already here" in _sent(interaction)
+    # And the import origin survives being re-entered by hand.
+    assert db.get_player("AlphaOne", server="738")["origin"] == "imported"
+
+
+async def test_adding_without_a_server_is_refused(cd_db):
+    """A self-reported player with no server is a row nobody can match against
+    later, because identity is the two together."""
+    modal = hub._AddPlayerModal(can_write=True)
+    modal.name._value = "Nameless"
+    modal.server._value = ""
+    modal.group._value = ""
+    modal.alliance._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "name and a server" in _sent(interaction)
+    assert db.find_registrants("Nameless") == []
+
+
+async def test_a_typo_gets_a_did_you_mean(cd_db):
+    """Suggesting is not resolving. normalize_name refuses to fuzzy-match
+    because guessing which of two similar names a sighting belongs to is
+    unrecoverable — but the person typing can tell instantly, and "no
+    registrant matches" tells them nothing about which mistake they made."""
+    modal = hub._FindPlayerModal(can_write=True)
+    modal.name._value = "AlphaOn"  # truncated
+    modal.server._value = "738"
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    msg = _sent(interaction)
+    assert "Did you mean" in msg and "AlphaOne" in msg and "738" in msg
+
+
+def test_suggestions_catch_both_shapes_of_miss(cd_db):
+    """A truncation is a prefix of the real name; a partial is a substring,
+    often not at the start. Sequence similarity alone ranks the second badly,
+    so both are scored explicitly."""
+    db.import_registrants([{"name": "Ultra Zaddy", "group": "M", "rank": 9, "server": "677"}])
+
+    truncated = [c["display_name"] for c in db.suggest_registrants("AlphaOn")]
+    assert "AlphaOne" in truncated
+
+    partial = [c["display_name"] for c in db.suggest_registrants("zaddy")]
+    assert "Ultra Zaddy" in partial
+
+
+def test_a_wrong_server_still_finds_the_player(cd_db):
+    """Getting the server wrong is at least as likely as getting the name
+    wrong, so a miss falls back to every server rather than hiding them."""
+    hits = db.suggest_registrants("AlphaOne", server="999")
+    assert [c["display_name"] for c in hits] == ["AlphaOne"]
+
+
+def test_nothing_close_suggests_nothing(cd_db):
+    """No near match has to stay empty. A list of unrelated names reads as the
+    bot having found something, which is worse than saying it hasn't."""
+    assert db.suggest_registrants("qqqqqqzzzz") == []
+
+
+async def test_a_missing_player_points_at_adding_them(cd_db):
+    """A name we don't have is usually a real player we haven't met, so the
+    miss carries its own exit."""
+    modal = hub._FindPlayerModal(can_write=True)
+    modal.name._value = "NobodyAtAll"
+    modal.server._value = ""
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    assert hub.CD_BTN_ADD in _sent(interaction)
+
+
+async def test_the_write_modals_do_not_ask_who_again(cd_db):
+    """The player came from the card, so the squad modal is three fields and
+    the order modal is one — and neither can fail on an ambiguous name."""
+    player = db.get_player("AlphaOne", server="738")
+    squad_fields = {i.label for i in hub._SquadModal(player).children}
+    assert "Player name" not in squad_fields
+    assert squad_fields == {"Slot (1, 2 or 3)", "Squad type", "Power"}
+
+    order_fields = {i.label for i in hub._OrderModal(player).children}
+    assert order_fields == {"Who they faced"}
+
+
+async def test_a_squad_correction_applies_to_the_card_player(cd_db):
+    player = db.get_player("AlphaOne", server="738")
+    modal = hub._SquadModal(player)
+    modal.slot._value = "1"
+    modal.squad_type._value = "Tank"
+    modal.power._value = "84.6M"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    squad = db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]
+    assert squad["squad_type"] == "Tank" and squad["power"] == 84_600_000
+    assert "84,600,000" in _sent(interaction)
 
 
 def test_the_capture_guide_is_never_locked():
@@ -235,11 +405,62 @@ async def test_only_the_opener_can_press_the_buttons():
 
 
 def test_hub_embed_names_the_gate_it_applied(cd_db):
-    groups = db.get_groups()
-    embed = hub.build_hub_embed(groups=groups, is_admin=False, can_write=False)
+    embed = hub.build_hub_embed(
+        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=False
+    )
     names = [f.name for f in embed.fields]
     assert any("Premium" in n for n in names)
     assert "2" in embed.description  # both registrants counted
+
+
+def test_hub_embed_names_the_servers_and_how_scouted_they_are(cd_db):
+    """Groups say which bracket a member is in; servers say whether this is
+    about anyone they know. The scouted count is the one that turns into a
+    reason to contribute."""
+    db.set_squad(_reg("AlphaOne"), 1, squad_type="Tank", power=1, actor=KEV, source="observed")
+    embed = hub.build_hub_embed(
+        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=True
+    )
+    field = next(f for f in embed.fields if f.name.startswith("Servers"))
+    assert "738" in field.value
+    assert "**1**" in field.value, "one of the two players has been seen"
+    # Named as it appears, and on the hub -- the squad and order buttons moved
+    # onto the player card, so this field can only point at a hub button.
+    assert hub.CD_BTN_ADD in field.value
+    assert hub.CD_BTN_ORDER not in field.value
+
+
+def test_hub_embed_does_not_present_the_server_list_as_a_closed_set(cd_db):
+    """The listed servers are the ones we hold, not the ones we accept. A
+    member facing someone from an unimported server has to read the field as an
+    invitation, not a rejection -- `upsert_registrant` takes any server."""
+    embed = hub.build_hub_embed(
+        groups=db.get_groups(), servers=db.get_servers(), is_admin=False, can_write=True
+    )
+    field = next(f for f in embed.fields if f.name.startswith("Servers"))
+    assert "any server" in field.value.lower()
+
+
+def test_server_counts_separate_roster_from_scouting(cd_db):
+    """Every server is in the roster; only some have anyone seen deploying.
+    Reporting one number for both would hide the gap worth filling."""
+    db.set_squad(_reg("AlphaOne"), 1, squad_type="Tank", power=1, actor=KEV, source="observed")
+    rows = {r["server"]: r for r in db.get_servers()}
+    assert rows["738"]["registrants"] == 2
+    assert rows["738"]["scouted"] == 1
+
+
+def test_a_self_reported_player_can_introduce_an_unimported_server(cd_db):
+    """The roster is what was imported, not the set of servers we serve. Someone
+    facing an opponent from a server nobody imported has to be able to enter
+    them, so `get_servers` reports it afterwards rather than rejecting it."""
+    assert "999" not in {r["server"] for r in db.get_servers()}
+
+    db.upsert_registrant("StrangerFrom999", server="999", origin="self_reported", actor=KEV)
+
+    rows = {r["server"]: r for r in db.get_servers()}
+    assert rows["999"]["registrants"] == 1
+    assert rows["999"]["scouted"] == 0, "added, not yet scouted -- the gap the hub asks about"
 
 
 # ── Predict ───────────────────────────────────────────────────────────────────
@@ -261,6 +482,9 @@ async def test_predict_refuses_a_player_with_no_line_up(cd_db):
     msg = _sent(interaction)
     assert "BetaTwo" in msg and "no squad recorded" in msg
     assert hub.CD_BTN_SQUAD in msg, "a dead end has to name its exit"
+    # And the exit has to be reachable: correcting a squad starts from the
+    # player's card now, so the hint routes through finding them first.
+    assert hub.CD_BTN_FIND in msg
 
 
 async def test_predict_renders_both_sides(cd_db):
@@ -346,7 +570,7 @@ async def test_ambiguous_name_asks_which_server(cd_db):
     """Two servers can field the same name. Picking one would attach data to
     the wrong player, and that is not recoverable."""
     db.import_registrants([{"name": "AlphaOne", "group": "N", "rank": 4, "server": "1042"}])
-    modal = hub._LookupModal()
+    modal = hub._FindPlayerModal(can_write=True)
     modal.name._value = "AlphaOne"
     modal.server._value = ""
 
@@ -359,7 +583,7 @@ async def test_ambiguous_name_asks_which_server(cd_db):
 
 
 async def test_lookup_of_an_unknown_name_says_what_to_check(cd_db):
-    modal = hub._LookupModal()
+    modal = hub._FindPlayerModal(can_write=True)
     modal.name._value = "NobodyAtAll"
     modal.server._value = ""
     interaction = _interaction()

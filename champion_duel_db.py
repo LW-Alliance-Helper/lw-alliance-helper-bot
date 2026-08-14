@@ -28,6 +28,7 @@ Alliance section later without a translation layer.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import os
 import secrets
@@ -294,6 +295,66 @@ def find_registrants(name: str, server=None) -> list[dict]:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def suggest_registrants(name: str, server=None, limit: int = 5) -> list[dict]:
+    """Registrants whose name is close to `name`, best first.
+
+    **Never used to resolve anything.** `normalize_name` refuses to fuzzy-match
+    on purpose — two names differing by one character can be two real players,
+    and attaching a sighting to the wrong one is unrecoverable. That rule is
+    about resolving silently. Offering candidates for a human to pick from is
+    the opposite: it makes the ambiguity visible, which is what
+    `AmbiguousPlayer` already does when a name is on several servers.
+
+    Scored rather than filtered, because the two common misses are different
+    shapes. A truncation ("pinkcatbo") is a prefix of the real name; a partial
+    ("zaddy") is a substring of it, often not at the start. Sequence similarity
+    alone ranks the first well and the second badly, so both are scored
+    explicitly and similarity only breaks ties.
+
+    `server` narrows when given, but a miss falls back to every server: getting
+    the server wrong is at least as likely as getting the name wrong, and a
+    suggestion list that hides the right player is worse than a long one.
+    """
+    query = normalize_name(name)
+    if not query:
+        return []
+
+    sql = "SELECT id, player_key, display_name, server, grp FROM registrants"
+    params: list = []
+    server = _server(server)
+    if server:
+        sql += " WHERE server = ?"
+        params.append(server)
+
+    with _get_conn() as conn:
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        if server and not rows:
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, player_key, display_name, server, grp FROM registrants"
+                ).fetchall()
+            ]
+
+    scored = []
+    for row in rows:
+        key = row["player_key"] or ""
+        if key.startswith(query) or query.startswith(key):
+            score = 3.0
+        elif query in key or key in query:
+            score = 2.0
+        else:
+            score = difflib.SequenceMatcher(None, query, key).ratio()
+            if score < 0.6:
+                continue
+        # Similarity breaks ties inside a band, so a closer prefix outranks a
+        # longer one rather than the order being arbitrary.
+        scored.append((score, difflib.SequenceMatcher(None, query, key).ratio(), row))
+
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]["display_name"]))
+    return [row for _, _, row in scored[:limit]]
+
+
 def resolve_registrant(name: str, server=None) -> dict:
     """Exactly one registrant, or an error that says which problem it is.
 
@@ -417,6 +478,35 @@ def get_groups() -> list[dict]:
             "WHERE grp IS NOT NULL AND grp != '' GROUP BY grp ORDER BY grp"
         ).fetchall()
     return [{"group": r["grp"], "registrants": r["n"]} for r in rows]
+
+
+def get_servers() -> list[dict]:
+    """Registrant and scouting counts per server, busiest first.
+
+    Groups tell a member which bracket they are in; servers tell them whether
+    this is about anyone they know. Both counts, because they answer different
+    questions: a server can be fully rostered and still have nobody we have
+    watched deploy, and only the second gap is worth contributing to.
+
+    This is a report of the servers we hold, not a list of the ones we accept.
+    `upsert_registrant` takes any server string, so a self-reported opponent
+    can introduce a server that was never imported -- and will then appear here
+    with one registrant. Callers must not treat the result as a whitelist.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.server AS server,
+                   COUNT(DISTINCT r.id) AS registrants,
+                   COUNT(DISTINCT CASE WHEN s.source = 'observed' THEN r.id END) AS scouted
+            FROM registrants r
+            LEFT JOIN squads s ON s.registrant_id = r.id
+            WHERE r.server IS NOT NULL AND r.server != ''
+            GROUP BY r.server
+            ORDER BY registrants DESC, server
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_roster(group=None, include_scouting: bool = False) -> list[dict]:

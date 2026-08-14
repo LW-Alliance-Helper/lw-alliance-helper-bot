@@ -140,6 +140,49 @@ async def test_premium_write_is_attributed(client, cd_db):
     assert all(e["actor_discord_id"] == "111" for e in edits)
 
 
+async def test_a_writer_can_add_a_player_we_dont_have(client, cd_db):
+    """The imported roster is who signed up, not everyone anyone will meet."""
+    token = await _session(can_write=True)
+    resp = await client.post(
+        f"{P}/players",
+        json={"name": "Newcomer", "server": "1042", "group": "N", "alliance": "OGV"},
+        headers=_auth(token),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    # The flag is the whole point: a community guess must never read as an
+    # official record.
+    assert body["origin"] == "self_reported"
+    assert body["server"] == "1042"
+
+
+async def test_adding_a_player_needs_a_server(client, cd_db):
+    """Identity is (name, server). A row without one can't be matched later."""
+    token = await _session(can_write=True)
+    resp = await client.post(f"{P}/players", json={"name": "Nameless"}, headers=_auth(token))
+    assert resp.status == 400
+
+
+async def test_adding_a_player_is_idempotent(client, cd_db):
+    """Two people entering the same opponent is normal, not a conflict."""
+    token = await _session(can_write=True)
+    for _ in range(2):
+        resp = await client.post(
+            f"{P}/players", json={"name": "Newcomer", "server": "1042"}, headers=_auth(token)
+        )
+        assert resp.status == 200
+    assert len(db.find_registrants("Newcomer", "1042")) == 1
+
+
+async def test_adding_a_player_requires_premium(client, cd_db):
+    """Same gate as every other write — logged in isn't enough."""
+    token = await _session(can_write=False)
+    resp = await client.post(
+        f"{P}/players", json={"name": "Newcomer", "server": "1042"}, headers=_auth(token)
+    )
+    assert resp.status == 403
+
+
 async def test_unknown_player_is_refused(client):
     token = await _session(can_write=True)
     resp = await client.patch(

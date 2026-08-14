@@ -45,7 +45,8 @@ def cd_db(tmp_path, monkeypatch):
                 "fsp": 80.0,
             },
             {"name": "Beta Two", "group": "M", "rank": 2, "server": "738", "alliance": "TST"},
-        ]
+        ],
+        stage="qualifiers",
     )
     return path
 

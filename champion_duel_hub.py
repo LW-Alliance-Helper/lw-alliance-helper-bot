@@ -864,10 +864,9 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         # stage row would claim this player is in the round when all we know is
         # that somebody met them.
         group = (self.group.value or "").strip()
-        if group:
-            await asyncio.to_thread(
-                db.set_stage, player["id"], db.current_stage() or "qualifiers", grp=group
-            )
+        stage = await asyncio.to_thread(db.current_stage)
+        if group and stage:
+            await asyncio.to_thread(db.set_stage, player["id"], stage, grp=group)
             player = await asyncio.to_thread(db.get_player, name, server)
 
         note = (

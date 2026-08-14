@@ -1141,22 +1141,22 @@ async def admin_champion_duel_import_slash(
         "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
     }
 
-    # Which round this draw is for, most explicit first: the picker on the
-    # command, then the payload's own declaration, then qualifiers. Guessing is
-    # only safe because every payload generated before rounds existed is
-    # qualifier data, and the confirmation below names the round it used so a
-    # wrong one is visible immediately rather than after it has overwritten
-    # something.
-    stage = (round.value if round else None) or payload.get("stage") or "qualifiers"
-    try:
-        stage = cd_db._stage(stage)
-    except ValueError:
-        await interaction.followup.send(
-            f"⚠️ `{stage}` isn't a round I know. Pick one on the command, or fix "
-            f"the payload's `stage`.",
-            ephemeral=True,
-        )
-        return
+    # Which round this draw is for: the picker on the command, then the
+    # payload's own declaration, then none. Deliberately no fallback to
+    # qualifiers -- guessing qualifiers on a semifinal draw overwrites the
+    # qualifier groups, which is the failure rounds exist to prevent. Importing
+    # without a round just adds the players, which is always recoverable.
+    stage = (round.value if round else None) or payload.get("stage") or None
+    if stage:
+        try:
+            stage = cd_db._stage(stage)
+        except ValueError:
+            await interaction.followup.send(
+                f"⚠️ `{stage}` isn't a round I know. Pick one on the command, or fix "
+                f"the payload's `stage`.",
+                ephemeral=True,
+            )
+            return
 
     # Dependency order: squads and orders both resolve against registrant rows.
     lines, problems = [], []
@@ -1186,12 +1186,23 @@ async def admin_champion_duel_import_slash(
         problems += result["problems"]
 
     groups = await asyncio.to_thread(cd_db.get_groups)
-    summary = "✅ Imported **{}** from `{}`:\n{}\n\n{} group(s), {} registrants now loaded.".format(
-        cd_db.STAGE_LABELS.get(stage, stage),
+    # Names the round it used, so a wrong pick is visible now rather than after
+    # the next import compounds it. "no round" is stated rather than left
+    # blank: it is a real outcome, not a missing word.
+    where = f"**{cd_db.STAGE_LABELS[stage]}** " if stage else ""
+    tail = (
+        ""
+        if stage
+        else "\n\nNo round recorded, so this only added players. "
+        "Re-run with a round to place them in one."
+    )
+    summary = "✅ Imported {}from `{}`:\n{}\n\n{} group(s), {} registrants now loaded.{}".format(
+        where,
         file.filename,
         "\n".join(f"• {line}" for line in lines),
         len(groups),
         sum(g["registrants"] for g in groups),
+        tail,
     )
     if problems:
         # Attached rather than inlined: a roster refresh can produce hundreds,

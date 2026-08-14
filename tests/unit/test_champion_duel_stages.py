@@ -25,7 +25,8 @@ def cd_db(tmp_path, monkeypatch):
         [
             {"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"},
             {"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"},
-        ]
+        ],
+        stage="qualifiers",
     )
     return None
 
@@ -216,3 +217,24 @@ def test_the_round_name_follows_the_event(cd_db):
         db.set_stage(_rid(name), "semifinals", grp="D", rank=1)
 
     assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semifinals"
+
+
+# ── Importing without a round ─────────────────────────────────────────────────
+
+
+def test_a_roster_with_no_round_adds_players_and_claims_nothing(tmp_path, monkeypatch):
+    """Deliberately not a default of qualifiers. Guess qualifiers on a
+    semifinal draw and it overwrites the qualifier groups, which is the failure
+    rounds exist to prevent. No round is recoverable; the wrong round is not."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
+    db.init_db()
+
+    result = db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}])
+
+    assert result["total"] == 1
+    assert result["stage"] is None
+    player = db.get_player("AlphaOne", server="738")
+    assert player is not None, "the player is added either way"
+    assert player["stages"] == {}
+    assert player["grp"] is None, "and we do not claim a group we cannot place"
+    assert db.current_stage() is None

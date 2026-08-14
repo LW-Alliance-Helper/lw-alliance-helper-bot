@@ -583,20 +583,24 @@ def upsert_registrant(
         return dict(conn.execute("SELECT * FROM registrants WHERE id = ?", (new_id,)).fetchone())
 
 
-def import_registrants(rows: list[dict], *, stage: str = "qualifiers") -> dict:
-    """Bulk-load one round's draw. Never touches scouting.
+def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
+    """Bulk-load a roster, optionally placing it in a round. Never touches
+    scouting.
 
-    `stage` says which round this draw is for, and defaults to qualifiers
-    because that is the only round that existed before rounds were a dimension
-    — an old caller keeps working and lands its data where it always went.
+    `stage` says which round this draw is for. **Without one, no round is
+    written at all** and this is just players being added: names, servers,
+    alliances and THP, with no claim about where they are in the tournament.
 
-    A row's group and rank are written to that round only. Loading the
-    semifinal draw therefore leaves every qualifier group intact, which is the
-    entire reason this parameter exists (#495): the columns on `registrants`
-    are shared across rounds and overwriting them destroyed how a player got
-    here, with nothing in the edit log to recover from.
+    That is deliberately not a default of qualifiers. A payload whose round we
+    cannot establish is exactly the case where guessing is expensive — guess
+    qualifiers on a semifinal draw and it overwrites the qualifier groups,
+    which is the failure this whole table exists to prevent (#495). No round is
+    always recoverable; the wrong round is not.
+
+    A row's group and rank are written to that round only, so loading the
+    semifinal draw leaves every qualifier group intact.
     """
-    stage = _stage(stage)
+    stage = _stage(stage) if stage else None
     inserted = updated = 0
     for row in rows:
         name = (row.get("name") or "").strip()
@@ -615,7 +619,8 @@ def import_registrants(rows: list[dict], *, stage: str = "qualifiers") -> dict:
             fsp=row.get("fsp"),
             seeded=row.get("seeded"),
         )
-        set_stage(player["id"], stage, grp=row.get("group"), rank=row.get("rank"))
+        if stage:
+            set_stage(player["id"], stage, grp=row.get("group"), rank=row.get("rank"))
         if before:
             updated += 1
         else:

@@ -33,7 +33,8 @@ def cd_db(tmp_path, monkeypatch):
         [
             {"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"},
             {"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"},
-        ]
+        ],
+        stage="qualifiers",
     )
     return path
 
@@ -234,7 +235,9 @@ def test_suggestions_catch_both_shapes_of_miss(cd_db):
     """A truncation is a prefix of the real name; a partial is a substring,
     often not at the start. Sequence similarity alone ranks the second badly,
     so both are scored explicitly."""
-    db.import_registrants([{"name": "Ultra Zaddy", "group": "M", "rank": 9, "server": "677"}])
+    db.import_registrants(
+        [{"name": "Ultra Zaddy", "group": "M", "rank": 9, "server": "677"}], stage="qualifiers"
+    )
 
     truncated = [c["display_name"] for c in db.suggest_registrants("AlphaOn")]
     assert "AlphaOne" in truncated
@@ -666,7 +669,9 @@ async def test_a_failed_render_still_answers_the_question(cd_db, monkeypatch):
 async def test_ambiguous_name_asks_which_server(cd_db):
     """Two servers can field the same name. Picking one would attach data to
     the wrong player, and that is not recoverable."""
-    db.import_registrants([{"name": "AlphaOne", "group": "N", "rank": 4, "server": "1042"}])
+    db.import_registrants(
+        [{"name": "AlphaOne", "group": "N", "rank": 4, "server": "1042"}], stage="qualifiers"
+    )
     modal = hub._FindPlayerModal(can_write=True)
     modal.name._value = "AlphaOne"
     modal.server._value = ""

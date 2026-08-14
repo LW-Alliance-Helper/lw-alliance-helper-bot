@@ -137,13 +137,21 @@ def _render(a, b, **kwargs):
     return img.render(cdp.predict(a, b), **kwargs)
 
 
-def test_render_produces_a_png_of_the_declared_size(cd_db):
+def test_render_produces_a_webp_of_the_declared_size(cd_db):
+    """WebP at the template's native size, not a downsampled PNG.
+
+    The card is mostly a photographic background, so the format is what makes
+    it small -- a fifth the bytes of the PNG, where downsampling would have
+    saved a quarter and cost the resolution.
+    """
     a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000))
     b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000))
-    png = _render(a, b, subtitle="Group M · Semifinal")
-    image = Image.open(io.BytesIO(png))
-    assert image.format == "PNG"
+    card = _render(a, b, subtitle="Group M · Semifinal")
+    image = Image.open(io.BytesIO(card))
+    assert image.format == "WEBP"
     assert image.size == (img.W, img.H)
+    # Discord's free-tier ceiling is 10 MB and this should not be near it.
+    assert len(card) < 1_000_000, "the card got large enough to be worth re-checking"
 
 
 def test_non_latin_and_overlong_names_render(cd_db):

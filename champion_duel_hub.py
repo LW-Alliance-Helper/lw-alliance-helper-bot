@@ -341,7 +341,7 @@ class SharePredictionView(discord.ui.View):
             # this button exists to avoid.
             await interaction.channel.send(
                 f"{self.caption}\n-# Shared by <@{self.user_id}>",
-                file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.png"),
+                file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.webp"),
             )
         except discord.Forbidden:
             await interaction.followup.send(
@@ -375,7 +375,7 @@ async def _send_prediction(interaction: discord.Interaction, result: predict_lib
     view = SharePredictionView(png=png, caption=caption, user_id=interaction.user.id)
     await interaction.followup.send(
         caption,
-        file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.png"),
+        file=discord.File(io.BytesIO(png), filename="champion_duel_prediction.webp"),
         view=view,
         ephemeral=True,
     )

@@ -103,11 +103,11 @@ def main() -> None:
 
     for name, build in CASES.items():
         a, b, subtitle = build()
-        png = img.render(cdp.predict(a, b), subtitle=subtitle)
-        path = os.path.join(outdir, f"{name}.png")
+        card = img.render(cdp.predict(a, b), subtitle=subtitle)
+        path = os.path.join(outdir, f"{name}.webp")
         with open(path, "wb") as fh:
-            fh.write(png)
-        print(f"{path}  {len(png) / 1024:.0f} KB")
+            fh.write(card)
+        print(f"{path}  {len(card) / 1024:.0f} KB")
 
 
 if __name__ == "__main__":

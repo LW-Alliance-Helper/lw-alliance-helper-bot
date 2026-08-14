@@ -278,7 +278,7 @@ async def test_predict_renders_both_sides(cd_db):
     kwargs = interaction.followup.send.call_args.kwargs
     # The card is the answer; the caption is what survives a screen reader, a
     # failed image load, and Discord's own search.
-    assert kwargs["file"].filename.endswith(".png")
+    assert kwargs["file"].filename.endswith(".webp")
     caption = interaction.followup.send.call_args.args[0]
     assert "AlphaOne" in caption and "BetaTwo" in caption
     assert "%" in caption and "confidence" in caption
@@ -287,7 +287,9 @@ async def test_predict_renders_both_sides(cd_db):
 async def test_sharing_posts_the_card_to_the_channel(cd_db):
     """A followup to an ephemeral interaction is itself ephemeral, so the card
     has to go to the channel directly — the one thing this button exists for."""
-    view = hub.SharePredictionView(png=b"not-really-a-png", caption="🆚 A 60% · B 40%", user_id=7)
+    view = hub.SharePredictionView(
+        png=b"not-really-an-image", caption="🆚 A 60% · B 40%", user_id=7
+    )
     interaction = _interaction()
     interaction.channel.send = AsyncMock()
 
@@ -297,7 +299,7 @@ async def test_sharing_posts_the_card_to_the_channel(cd_db):
     posted = interaction.channel.send.call_args
     assert "60%" in posted.args[0]
     assert "<@7>" in posted.args[0], "a busy channel needs to know who shared it"
-    assert posted.kwargs["file"].filename.endswith(".png")
+    assert posted.kwargs["file"].filename.endswith(".webp")
     # Spent, so it can't be double-posted.
     assert view.share.disabled is True
 

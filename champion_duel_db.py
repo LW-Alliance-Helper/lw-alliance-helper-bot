@@ -756,14 +756,38 @@ def _resolve_for_import(name, server):
         return None, f"no registrant matches {name!r}"
 
 
+def _import_would_downgrade(existing: str, incoming: str) -> bool:
+    """Whether an imported value must give way to what is already stored.
+
+    Two separate rules, and conflating them is what let a re-import quietly
+    revert a hand correction:
+
+    - **`edited` outranks everything an import carries.** A person looked at
+      the game and typed what they saw. An import knows nothing that beats
+      that, so even a fresh `observed` capture leaves it alone. Reverting a
+      correction is what the edit log and `⏪ Revert an edit` are for, on
+      purpose and attributed, rather than a side effect of loading a file.
+    - **`observed` gives way only to another sighting.** An estimate is
+      derived from total hero power; a sighting is someone reading the
+      screen. A newer sighting may legitimately replace an older one.
+
+    The bug this replaces guarded on `incoming == "estimated"` alone, so an
+    imported `observed` row overwrote a correction and the import reported
+    nothing kept.
+    """
+    if existing == "edited":
+        return True
+    return existing == "observed" and incoming == "estimated"
+
+
 def import_squads(rows: list[dict], *, actor) -> dict:
     """Seed squad values in bulk.
 
-    **An import never downgrades.** A slot already carrying an `observed`
-    sighting or an `edited` correction keeps it when an `estimated` value
-    arrives for the same slot -- that is the whole reason `squads.source`
+    **An import never downgrades.** A slot carrying an `edited` correction
+    keeps it whatever arrives; a slot carrying an `observed` sighting keeps it
+    against an `estimated` value. That is the whole reason `squads.source`
     exists, and re-running an import after a scout has corrected something
-    must not undo their work.
+    must not undo their work. See `_import_would_downgrade`.
 
     Estimates are computed by the caller rather than here: the THP ratios are
     fitted against the sighting corpus, which lives in the simulator, and a
@@ -805,7 +829,7 @@ def import_squads(rows: list[dict], *, actor) -> dict:
                 "SELECT source FROM squads WHERE registrant_id = ? AND slot = ?",
                 (registrant_id, slot),
             ).fetchone()
-            if existing and source == "estimated" and existing["source"] in ("observed", "edited"):
+            if existing and _import_would_downgrade(existing["source"], source):
                 protected += 1
                 continue
 

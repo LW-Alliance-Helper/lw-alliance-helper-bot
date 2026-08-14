@@ -83,10 +83,21 @@ GOLD_DARK = (226, 154, 24)
 # applied to the only region that needs it.
 _BAR_SCALE = 4
 
-_CONFIDENCE_COPY = {
-    "high": "Built on observed squads and recorded sightings",
-    "medium": "Part of this line-up is estimated from total hero power",
-    "low": "Both line-ups are estimates — neither player has been seen deploying",
+# What the prediction was built from, chosen from what the card actually has
+# rather than from the confidence level. The level is decided on both players'
+# counts added together, so "medium" alone cannot tell you whether one player
+# is fully recorded and the other is guesswork, or whether both are half known
+# — and those are different things to be told.
+#
+# "Recorded" covers a squad power the bot holds a real figure for, whether that
+# came from the sighting corpus or from someone typing it into the hub. What it
+# is being distinguished from is a figure derived from the player's total hero
+# power, which is the only case where the number is inferred rather than known.
+_EVIDENCE_COPY = {
+    "both": "built from recorded squad power for both players",
+    "one": "squad power recorded for one player, estimated from Total Hero Power for the other",
+    "some": "squad power partly recorded, partly estimated from Total Hero Power",
+    "neither": "no squad power recorded, both estimated from Total Hero Power",
 }
 
 _template_cache: Image.Image | None = None
@@ -233,17 +244,35 @@ def _shared_pct_font(draw, left: str, right: str, boxes):
 
 
 def _status(side) -> str:
-    """What the line-up beside it is built on.
+    """Where the line-up above it came from.
 
-    Says which of the two orders is on screen, so the reader never has to guess
-    whether they are looking at a sighting or a default.
+    Says whether the reader is looking at an order this player was actually
+    seen using or at the default, which is the difference between a line-up
+    that is evidence and one that is an assumption.
+
+    Deliberately not "3/3 seen · their order in 1 sighting". Squads seen,
+    sightings and deployment orders are how the data is kept, not how anyone
+    thinks about the game — a reader wants to know whether this is what the
+    player usually does. What the squad numbers are built on is a property of
+    the whole prediction rather than of one line-up, so it is said once in the
+    footer instead of twice here.
     """
-    text = f"{side.observed_squads}/3 seen · "
-    return text + (
-        f"their order in {side.sightings} sighting{'s' if side.sightings != 1 else ''}"
-        if side.likely_order()[1]
-        else "never seen deploying — assuming strongest first"
-    )
+    if not side.likely_order()[1]:
+        return "Lineup not recorded — assuming strongest first"
+    return f"Typical lineup in {side.sightings} observed battle{'' if side.sightings == 1 else 's'}"
+
+
+def _evidence(a, b) -> str:
+    """Which `_EVIDENCE_COPY` line describes this pair."""
+    full = [side.recorded_squads == len(predict_lib.SLOTS) for side in (a, b)]
+    none = [side.recorded_squads == 0 for side in (a, b)]
+    if all(full):
+        return "both"
+    if all(none):
+        return "neither"
+    if any(full) and any(none):
+        return "one"
+    return "some"
 
 
 def _shared_status_font(draw, left: str, right: str, boxes):
@@ -380,14 +409,20 @@ def _header(canvas, draw, subtitle: str | None) -> None:
     _logo(canvas, header["logo_badge"])
 
 
-def _footer(draw, confidence: str) -> None:
+def _footer(draw, result) -> None:
     """What the number is worth, in the reader's words rather than a score.
 
     It spans the full width under the bar because it qualifies the whole card,
-    not one side of it.
+    not one side of it. Named as a prediction confidence rather than bare
+    "Confidence:", which on a card carrying two probabilities could be read as
+    a confidence in one of the players.
     """
     box = LAYOUT["footer"]["confidence_summary"]
-    text = f"Confidence: {confidence} · {_CONFIDENCE_COPY[confidence]}"
+    level = result.confidence()
+    text = (
+        f"Outcome Prediction Confidence: {level.capitalize()} — "
+        f"{_EVIDENCE_COPY[_evidence(result.a, result.b)]}"
+    )
     font = _fit(draw, text, box["w"] - 32, start=21, minimum=15)
     _text(draw, box, _ellipsized(draw, text, "", font, box["w"] - 32), font, MUTED)
 
@@ -507,7 +542,7 @@ def render(result: predict_lib.Prediction, *, subtitle: str | None = None) -> by
     _side(draw, left, result.a, result.p_a, pct_size, status_size, accent=LEFT_ACCENT)
     _side(draw, right, result.b, result.p_b, pct_size, status_size, accent=RIGHT_ACCENT)
     _odds_bar(canvas, result.p_a)
-    _footer(draw, result.confidence())
+    _footer(draw, result)
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="WEBP", quality=95, method=6)

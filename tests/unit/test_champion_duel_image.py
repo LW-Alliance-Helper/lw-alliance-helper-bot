@@ -14,7 +14,8 @@ from __future__ import annotations
 import io
 
 import pytest
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
+from storm_renderer import _font_for_text
 
 import champion_duel_db as db
 import champion_duel_image as img
@@ -128,6 +129,80 @@ def test_extremes_never_render_as_a_certainty(prob, expected):
     engine is decisive enough that a lopsided pairing hits this routinely, and
     a card that said 100% before an upset is one nobody trusts afterwards."""
     assert img._pct(prob) == expected
+
+
+# ── Saying what the card is built on, in the reader's words ───────────────────
+
+
+class _Side:
+    def __init__(self, recorded, sightings):
+        self.recorded_squads, self.sightings = recorded, sightings
+
+    def likely_order(self):
+        return [], self.sightings > 0
+
+
+@pytest.mark.parametrize(
+    ("sightings", "expected"),
+    [
+        (0, "Lineup not recorded — assuming strongest first"),
+        (1, "Typical lineup in 1 observed battle"),
+        (4, "Typical lineup in 4 observed battles"),
+    ],
+)
+def test_the_status_line_says_where_the_lineup_came_from(sightings, expected):
+    """Not "3/3 seen · their order in 1 sighting". Squads seen and sightings
+    are how the data is stored, not a thing a player thinks about; what they
+    want to know is whether this is what the opponent usually does."""
+    assert img._status(_Side(3, sightings)) == expected
+
+
+def test_the_status_line_fits_without_shrinking_the_other_side():
+    """Both status lines take one size, so an overlong string on one side sets
+    the type size for both. Every variant has to fit at full size or a card
+    with one unseen player quietly shrinks the line about the seen one."""
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    budget = min(img.LAYOUT[s]["status"]["w"] for s in ("left", "right")) - 16
+    for sightings in (0, 1, 12):
+        text = img._status(_Side(3, sightings))
+        width = draw.textlength(text, font=_font_for_text(text, 18))
+        assert width <= budget, f"{text!r} is {width:.0f}px, over the {budget}px budget"
+
+
+@pytest.mark.parametrize(
+    ("a_recorded", "b_recorded", "expected"),
+    [
+        (3, 3, "both"),
+        (0, 0, "neither"),
+        (3, 0, "one"),
+        (0, 3, "one"),
+        (2, 1, "some"),
+        (3, 2, "some"),
+    ],
+)
+def test_the_footer_describes_what_this_card_actually_has(a_recorded, b_recorded, expected):
+    """The confidence level is decided on both players' counts added together,
+    so it cannot tell you whether one player is fully recorded and the other is
+    guesswork or whether both are half known. The sentence beside it is chosen
+    from the real per-side counts, so it can never claim more than the card has.
+    """
+    assert img._evidence(_Side(a_recorded, 0), _Side(b_recorded, 0)) == expected
+
+
+def test_a_squad_someone_typed_in_counts_as_recorded(cd_db):
+    """`edited` is the community's data-entry path, not an admin correction:
+    everything entered through the hub lands with that source. Counting it as
+    neither observed nor estimated made every squad a player contributed count
+    against the confidence of the prediction it had just improved.
+    """
+    a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000), source="edited")
+    b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000), source="edited")
+    side = cdp.build_side(a)
+
+    assert side.recorded_squads == 3
+    assert side.observed_squads == 0, "still not an observation; just a number we hold"
+    assert img._evidence(cdp.build_side(a), cdp.build_side(b)) == "both"
+    assert cdp.predict(a, b).confidence() == "medium", "no sightings yet, so not high"
 
 
 # ── The render survives real-world input ──────────────────────────────────────

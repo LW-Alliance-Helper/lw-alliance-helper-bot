@@ -715,6 +715,35 @@ def test_the_basis_leads_with_the_weakest_input(cd_db):
     assert "estimated" in hub.build_player_embed(player, None).footer.text
 
 
+@pytest.mark.parametrize(
+    ("seen", "total", "expected"),
+    [
+        (1, 1, "Their only recorded order"),
+        (8, 8, "All 8 of their recorded orders"),
+        (4, 8, "4 of their 8 recorded orders"),
+        (2, 3, "2 of their 3 recorded orders"),
+    ],
+)
+def test_the_order_share_reads_as_a_sentence_at_every_count(seen, total, expected):
+    """ "Seen 1 of 1 sightings" was ungrammatical and circular: two counts that
+    were the same number, answering a question nobody asked. The reader wants
+    to know whether this is what the player always does."""
+    assert hub._order_share(seen, total) == expected
+
+
+def test_a_single_recorded_order_never_renders_as_one_of_one(cd_db):
+    """The case that shipped wrong, end to end through the card."""
+    rid = _reg("AlphaOne")
+    db.add_order(rid, ("Tank", "Missile", "Aircraft"), actor=KEV)
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+
+    embed = hub.build_player_embed(player, db.most_common_order(rid))
+
+    order_field = next(f.value for f in embed.fields if f.name == "Most common order")
+    assert "1 of 1" not in order_field
+    assert "Their only recorded order" in order_field
+
+
 def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
     """Squads and the order are what a member came for. Group and rank are
     qualifier history, so they sit under the answer rather than above it."""

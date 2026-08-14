@@ -492,6 +492,25 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
 # ── Look up ───────────────────────────────────────────────────────────────────
 
 
+def _order_share(seen: int, total: int) -> str:
+    """The order on screen as a share of what we hold for this player.
+
+    "Seen 1 of 1 sightings" was ungrammatical and circular: it answered a
+    question nobody asked with two counts that were the same number. The reader
+    wants one thing, which is whether this is what the player always does or
+    just the most common of several, so the three cases are phrased rather than
+    computed from a template.
+
+    Says "recorded orders" rather than "sightings" to match the rest of the
+    surface. One thing, one name.
+    """
+    if total <= 1:
+        return "Their only recorded order"
+    if seen == total:
+        return f"All {total} of their recorded orders"
+    return f"{seen} of their {total} recorded orders"
+
+
 def _squad_basis(squads: list[dict]) -> str:
     """Where these numbers came from, as a sentence.
 
@@ -548,7 +567,7 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
         order = " → ".join(top_order["order"])
         embed.add_field(
             name="Most common order",
-            value=f"**{order}**\nSeen {top_order['seen']} of {top_order['total']} sightings",
+            value=f"**{order}**\n{_order_share(top_order['seen'], top_order['total'])}",
             inline=False,
         )
     else:
@@ -979,8 +998,8 @@ class _OrderSelectView(discord.ui.View):
         tail = ""
         if top:
             tail = (
-                f"\n**{_label(self.player)}** is now {top['seen']} of {top['total']} sightings in "
-                f"**{' → '.join(top['order'])}**."
+                f"\nMost recorded for them: **{' → '.join(top['order'])}**, "
+                f"{_order_share(top['seen'], top['total']).lower()}."
             )
         await inter.followup.send(
             f"✅ Recorded **{' → '.join(self.choice)}** for **{_label(self.player)}**.{tail}",

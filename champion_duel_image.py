@@ -126,13 +126,20 @@ def _fit(draw, text: str, max_w: int, *, start: int, minimum: int, bold: bool = 
 def _place(draw, box: dict, text: str, font, *, align: str = "center", metric: str = "line"):
     """Where to start drawing so `text` sits inside `box`.
 
-    Vertical placement measures a fixed reference string rather than the text
+    Vertical placement measures a fixed reference glyph rather than the text
     itself, so a row reading "Tank" and one reading "Missile 31.5M" share a
     baseline instead of each centring on its own ink. `metric="ink"` opts out,
     for the big percentage where the glyphs *are* the block.
+
+    **The reference is cap height, not cap-to-descender.** Reserving descender
+    space under every string centres the ones that have a descender and leaves
+    the ones that don't sitting 2-3px high — which is most of the card, since
+    names, squad types and the title rarely have one. Centring the cap band
+    instead puts the baseline in the same place either way and lets the
+    occasional descender hang, which is what reads as level.
     """
     ink = draw.textbbox((0, 0), text, font=font)
-    ref = ink if metric == "ink" else draw.textbbox((0, 0), "Hg", font=font)
+    ref = ink if metric == "ink" else draw.textbbox((0, 0), "H", font=font)
     if align == "left":
         x = box["x"] - ink[0]
     elif align == "right":

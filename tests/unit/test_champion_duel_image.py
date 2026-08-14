@@ -33,7 +33,9 @@ def cd_db(tmp_path, monkeypatch):
 
 
 def _player(name, server, powers, source="observed", orders=()):
-    db.import_registrants([{"name": name, "group": "M", "rank": 1, "server": server}])
+    db.import_registrants(
+        [{"name": name, "group": "M", "rank": 1, "server": server}], stage="qualifiers"
+    )
     rid = db.resolve_registrant(name, server=server)["id"]
     for slot, (squad_type, power) in enumerate(
         zip(("Tank", "Missile", "Aircraft"), powers), start=1

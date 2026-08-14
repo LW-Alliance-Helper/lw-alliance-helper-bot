@@ -237,6 +237,15 @@ async def post_player(request: web.Request) -> web.Response:
         )
     except (ValueError, TypeError) as exc:
         return json_response({"error": "bad_request", "detail": str(exc)}, request, status=400)
+
+    # A group belongs to the round being played, not to the player. Only
+    # written when one was supplied, so a caller who omits it does not assert
+    # that this player is in the current round.
+    group = (body.get("group") or "").strip()
+    stage = await asyncio.to_thread(db.current_stage)
+    if group and stage:
+        await asyncio.to_thread(db.set_stage, player["id"], stage, grp=group)
+        player = await asyncio.to_thread(db.get_player, name, server)
     return json_response(player, request)
 
 

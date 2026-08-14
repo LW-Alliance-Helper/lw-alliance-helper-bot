@@ -19,7 +19,9 @@ KEV = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
 def cd_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
     db.init_db()
-    db.import_registrants([{"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"}])
+    db.import_registrants(
+        [{"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"}], stage="qualifiers"
+    )
     return db.resolve_registrant("AlphaOne", server="738")["id"]
 
 
@@ -99,7 +101,9 @@ def test_confidence_separates_a_scouted_number_from_a_guessed_one(cd_db):
     """A 61% from six estimates is not the same claim as a 61% from six
     observations, and a surface that renders them identically is lying."""
     _squads(cd_db, source="estimated")
-    db.import_registrants([{"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"}])
+    db.import_registrants(
+        [{"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"}], stage="qualifiers"
+    )
     other = db.resolve_registrant("BetaTwo", server="738")["id"]
     _squads(other, source="estimated")
 
@@ -123,7 +127,9 @@ def test_prediction_is_symmetric(cd_db):
     """P(A beats B) and P(B beats A) have to sum to 1, or one of the two
     renderings of the same match is wrong."""
     _squads(cd_db)
-    db.import_registrants([{"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"}])
+    db.import_registrants(
+        [{"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"}], stage="qualifiers"
+    )
     other = db.resolve_registrant("BetaTwo", server="738")["id"]
     for slot, (squad_type, power) in enumerate(
         zip(("Missile", "Aircraft", "Tank"), (35_000_000, 25_000_000, 15_000_000)), start=1

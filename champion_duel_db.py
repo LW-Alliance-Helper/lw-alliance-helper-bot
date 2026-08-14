@@ -64,6 +64,18 @@ VALID_SOURCES = ("observed", "estimated", "edited")
 VALID_ORIGINS = ("imported", "self_reported", "edited")
 VALID_TYPES = ("Tank", "Missile", "Aircraft")
 
+# The rounds, in the order they are played. Order is load-bearing: the round
+# currently running is the furthest one we hold any draw for, and the card's
+# stage text depends on knowing which that is. See #495.
+STAGES = ("qualifiers", "semifinals", "knockouts")
+
+# What each round is called on a surface a member reads.
+STAGE_LABELS = {
+    "qualifiers": "Qualifiers",
+    "semifinals": "Semifinals",
+    "knockouts": "Knockouts",
+}
+
 
 class AmbiguousPlayer(Exception):
     """That name exists on more than one server.
@@ -189,6 +201,28 @@ def init_db() -> None:
                 UNIQUE (player_key, server)
             )
         """)
+        # A registrant's group and rank are per round, not per player. The
+        # qualifier group a player came from is the answer to "how did they get
+        # here", and writing a semifinal draw into one shared column destroys
+        # it with nothing in the edit log to recover from, because imports do
+        # not write edits. See #495.
+        #
+        # `registrants.grp` and `registrants.rank` stay on the table but are
+        # legacy: `init_db` copies them into the qualifiers row once and nothing
+        # reads them afterwards. Dropping columns in SQLite rewrites the table,
+        # which is not worth doing to a live volume for two dead fields.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS registrant_stages (
+                registrant_id INTEGER NOT NULL,
+                stage         TEXT    NOT NULL,
+                grp           TEXT,
+                rank          INTEGER,
+                created_at    TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL,
+                PRIMARY KEY (registrant_id, stage),
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS squads (
                 registrant_id INTEGER NOT NULL,
@@ -271,11 +305,115 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_edits_actor ON edits(actor_discord_id)",
             "CREATE INDEX IF NOT EXISTS ix_orders_reg ON order_history(registrant_id)",
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_stages_stage ON registrant_stages(stage, grp)",
         ):
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError as exc:  # pragma: no cover
                 print(f"[CHAMPION_DUEL] index skipped: {exc}")
+
+        # One-time backfill: whatever `registrants` holds today is qualifier
+        # data, because qualifiers are the only round that has ever been
+        # imported. Guarded on the qualifiers rows being absent rather than on
+        # the table being empty, so a later round already loaded does not stop
+        # it, and re-running never overwrites a corrected group.
+        conn.execute(
+            """
+            INSERT INTO registrant_stages
+                (registrant_id, stage, grp, rank, created_at, updated_at)
+            SELECT r.id, 'qualifiers', r.grp, r.rank, r.created_at, r.updated_at
+            FROM registrants r
+            WHERE (r.grp IS NOT NULL AND r.grp != '') OR r.rank IS NOT NULL
+            ON CONFLICT(registrant_id, stage) DO NOTHING
+            """
+        )
+
+
+# ── Rounds ────────────────────────────────────────────────────────────────────
+
+
+def _stage(value) -> str:
+    """A round name, normalised, or a ValueError naming the valid ones."""
+    stage = str(value or "").strip().lower()
+    if stage not in STAGES:
+        raise ValueError(f"stage must be one of {STAGES}")
+    return stage
+
+
+def set_stage(registrant_id: int, stage: str, *, grp=None, rank=None) -> dict:
+    """Place one registrant in one round.
+
+    Separate from `upsert_registrant` on purpose. A player's name, server and
+    alliance are facts about the person; their group and rank are facts about a
+    round, and the bug this table exists to prevent was exactly the two being
+    written through one code path.
+    """
+    stage = _stage(stage)
+    grp = _group(grp)
+    now = _now()
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO registrant_stages
+                (registrant_id, stage, grp, rank, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(registrant_id, stage) DO UPDATE SET
+                grp        = excluded.grp,
+                rank       = excluded.rank,
+                updated_at = excluded.updated_at
+            """,
+            (registrant_id, stage, grp, rank, now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM registrant_stages WHERE registrant_id = ? AND stage = ?",
+            (registrant_id, stage),
+        ).fetchone()
+    return dict(row)
+
+
+def get_stages(registrant_id: int) -> dict[str, dict]:
+    """Every round this registrant is in, keyed by round, in playing order."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM registrant_stages WHERE registrant_id = ?", (registrant_id,)
+        ).fetchall()
+    by_stage = {r["stage"]: dict(r) for r in rows}
+    return {stage: by_stage[stage] for stage in STAGES if stage in by_stage}
+
+
+def current_stage() -> str | None:
+    """The round currently running, or None when no draw is loaded at all.
+
+    Derived from the data rather than set by an operator. The furthest round we
+    hold any draw for is the one being played: a semifinal draw does not exist
+    until the qualifiers that produce it are over, so loading it *is* the
+    signal. That keeps this off the admin surface entirely, which matters
+    because an operator toggle would be one more thing to forget at exactly the
+    moment the event moves on.
+    """
+    with _get_conn() as conn:
+        held = {
+            r["stage"]
+            for r in conn.execute("SELECT DISTINCT stage FROM registrant_stages").fetchall()
+        }
+    for stage in reversed(STAGES):
+        if stage in held:
+            return stage
+    return None
+
+
+def stage_for_display(registrant_id: int) -> dict | None:
+    """The round to name on this player's card, or None to fall back.
+
+    The rule (Kevin, #495): show the round currently running, but only if this
+    player is actually in it. Someone knocked out in the qualifiers is not part
+    of the semifinal story, and captioning their card with the live round would
+    say they are still in it.
+    """
+    stage = current_stage()
+    if stage is None:
+        return None
+    return get_stages(registrant_id).get(stage)
 
 
 # ── Registrants ───────────────────────────────────────────────────────────────
@@ -445,37 +583,71 @@ def upsert_registrant(
         return dict(conn.execute("SELECT * FROM registrants WHERE id = ?", (new_id,)).fetchone())
 
 
-def import_registrants(rows: list[dict]) -> dict:
-    """Bulk-load an official roster. Never touches scouting."""
+def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
+    """Bulk-load a roster, optionally placing it in a round. Never touches
+    scouting.
+
+    `stage` says which round this draw is for. **Without one, no round is
+    written at all** and this is just players being added: names, servers,
+    alliances and THP, with no claim about where they are in the tournament.
+
+    That is deliberately not a default of qualifiers. A payload whose round we
+    cannot establish is exactly the case where guessing is expensive — guess
+    qualifiers on a semifinal draw and it overwrites the qualifier groups,
+    which is the failure this whole table exists to prevent (#495). No round is
+    always recoverable; the wrong round is not.
+
+    A row's group and rank are written to that round only, so loading the
+    semifinal draw leaves every qualifier group intact.
+    """
+    stage = _stage(stage) if stage else None
     inserted = updated = 0
     for row in rows:
         name = (row.get("name") or "").strip()
         if not name:
             continue
         before = find_registrants(name, row.get("server"))
-        upsert_registrant(
+        # The player's own facts. `grp` and `rank` are deliberately absent:
+        # they belong to the round, and passing them here is what the stage
+        # table exists to stop.
+        player = upsert_registrant(
             name,
             server=row.get("server"),
-            grp=row.get("group"),
             origin="imported",
             alliance=row.get("alliance"),
-            rank=row.get("rank"),
             thp=row.get("thp"),
             fsp=row.get("fsp"),
             seeded=row.get("seeded"),
         )
+        if stage:
+            set_stage(player["id"], stage, grp=row.get("group"), rank=row.get("rank"))
         if before:
             updated += 1
         else:
             inserted += 1
-    return {"inserted": inserted, "updated": updated, "total": inserted + updated}
+    return {
+        "stage": stage,
+        "inserted": inserted,
+        "updated": updated,
+        "total": inserted + updated,
+    }
 
 
-def get_groups() -> list[dict]:
+def get_groups(stage: str | None = None) -> list[dict]:
+    """Registrant counts per group, for one round.
+
+    Defaults to the round currently running, which is what "which groups are
+    there" means to someone asking during the event.
+    """
+    stage = _stage(stage) if stage else current_stage()
+    if stage is None:
+        return []
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT grp, COUNT(*) AS n FROM registrants "
-            "WHERE grp IS NOT NULL AND grp != '' GROUP BY grp ORDER BY grp"
+            "SELECT grp, COUNT(*) AS n FROM registrant_stages "
+            "WHERE stage = ? AND grp IS NOT NULL AND grp != '' "
+            "GROUP BY grp ORDER BY grp",
+            (stage,),
         ).fetchall()
     return [{"group": r["grp"], "registrants": r["n"]} for r in rows]
 
@@ -509,22 +681,34 @@ def get_servers() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_roster(group=None, include_scouting: bool = False) -> list[dict]:
+def get_roster(group=None, include_scouting: bool = False, stage: str | None = None) -> list[dict]:
     """Registrants, optionally with their squads.
 
     `include_scouting` is False for anonymous callers: the registrant list is a
     public LWS export, but squad composition and deployment orders are our own
     scouting.
+
+    `group` filters within one round, defaulting to the round currently
+    running. Group letters are only meaningful inside a round: "group D" in the
+    semifinals is a different set of people from "group D" in the qualifiers.
     """
-    sql = "SELECT * FROM registrants"
+    stage = _stage(stage) if stage else current_stage()
+    sql = "SELECT r.* FROM registrants r"
     params: tuple = ()
     if group:
-        sql += " WHERE grp = ?"
-        params = (_group(group),)
-    sql += " ORDER BY grp, rank, display_name"
+        # Joined rather than filtered on `registrants.grp`, which is legacy and
+        # no longer written. See #495.
+        sql += " JOIN registrant_stages s ON s.registrant_id = r.id WHERE s.stage = ? AND s.grp = ?"
+        params = (stage or "qualifiers", _group(group))
+    sql += " ORDER BY r.display_name"
 
     with _get_conn() as conn:
         players = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    for player in players:
+        attach_stages(player)
+    players.sort(key=lambda p: (p.get("grp") or "", p.get("rank") or 0, p["display_name"]))
+
+    with _get_conn() as conn:
         if include_scouting and players:
             ids = {p["id"] for p in players}
             by_id: dict[int, list] = {i: [] for i in ids}
@@ -536,6 +720,33 @@ def get_roster(group=None, include_scouting: bool = False) -> list[dict]:
     return players
 
 
+def attach_stages(player: dict) -> dict:
+    """Fill a registrant's round data, in place.
+
+    Adds `stages` (every round, in playing order) and points `grp` / `rank` at
+    the furthest round the player is actually in. Those two keys are the ones
+    every existing caller already reads, so filling them here keeps the embed,
+    the API and the roster export working off round data without each of them
+    having to know the table exists.
+
+    The furthest round rather than the running one: a player knocked out in the
+    qualifiers should still show the group they went out of, not a blank where
+    the semifinal they are not in would go.
+    """
+    stages = get_stages(player["id"])
+    player["stages"] = stages
+    if stages:
+        stage = list(stages)[-1]
+        player["stage"] = stage
+        player["grp"] = stages[stage]["grp"]
+        player["rank"] = stages[stage]["rank"]
+    else:
+        player["stage"] = None
+        player["grp"] = None
+        player["rank"] = None
+    return player
+
+
 def get_player(name, server=None, include_scouting: bool = False) -> dict | None:
     """One player with their scouting, or None. Raises AmbiguousPlayer when the
     name exists on several servers and none was given."""
@@ -543,6 +754,7 @@ def get_player(name, server=None, include_scouting: bool = False) -> dict | None
         player = resolve_registrant(name, server)
     except LookupError:
         return None
+    attach_stages(player)
     if include_scouting:
         with _get_conn() as conn:
             player["squads"] = [

@@ -23,7 +23,8 @@ def cd_db(tmp_path, monkeypatch):
         [
             {"name": "AlphaOne", "group": "M", "rank": 1, "server": "738"},
             {"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"},
-        ]
+        ],
+        stage="qualifiers",
     )
     return None
 
@@ -72,11 +73,15 @@ def test_a_pre_identity_database_is_rebuilt(tmp_path, monkeypatch):
     old.close()
 
     with pytest.raises(sqlite3.OperationalError, match="origin"):
-        db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}])
+        db.import_registrants(
+            [{"name": "AlphaOne", "group": "M", "server": "738"}], stage="qualifiers"
+        )
 
     db.init_db()
 
-    result = db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}])
+    result = db.import_registrants(
+        [{"name": "AlphaOne", "group": "M", "server": "738"}], stage="qualifiers"
+    )
     assert result["inserted"] == 1
     with db._get_conn() as conn:
         columns = {r[1] for r in conn.execute("PRAGMA table_info(registrants)")}
@@ -279,7 +284,9 @@ def test_one_bad_row_does_not_abandon_the_rest(cd_db):
 def test_an_ambiguous_name_is_refused_with_the_servers(cd_db):
     """Attaching a sighting to the wrong player is unrecoverable, so a bulk
     load refuses the row and names the choice rather than picking."""
-    db.import_registrants([{"name": "AlphaOne", "group": "N", "rank": 9, "server": "1042"}])
+    db.import_registrants(
+        [{"name": "AlphaOne", "group": "N", "rank": 9, "server": "1042"}], stage="qualifiers"
+    )
     result = db.import_squads(
         [{"name": "AlphaOne", "slot": 1, "type": "Tank", "power": 1_000, "source": "observed"}],
         actor=ACTOR,

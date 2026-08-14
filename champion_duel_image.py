@@ -40,6 +40,7 @@ import os
 from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter
 
 import champion_duel_predict as predict_lib
+import champion_duel_wording as words
 from storm_renderer import _font_for_text
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,22 +84,6 @@ GOLD_DARK = (226, 154, 24)
 # applied to the only region that needs it.
 _BAR_SCALE = 4
 
-# What the prediction was built from, chosen from what the card actually has
-# rather than from the confidence level. The level is decided on both players'
-# counts added together, so "medium" alone cannot tell you whether one player
-# is fully recorded and the other is guesswork, or whether both are half known
-# — and those are different things to be told.
-#
-# "Recorded" covers a squad power the bot holds a real figure for, whether that
-# came from the sighting corpus or from someone typing it into the hub. What it
-# is being distinguished from is a figure derived from the player's total hero
-# power, which is the only case where the number is inferred rather than known.
-_EVIDENCE_COPY = {
-    "both": "built from recorded squad power for both players",
-    "one": "squad power recorded for one player, estimated from Total Hero Power for the other",
-    "some": "squad power partly recorded, partly estimated from Total Hero Power",
-    "neither": "no squad power recorded, both estimated from Total Hero Power",
-}
 
 _template_cache: Image.Image | None = None
 
@@ -209,21 +194,6 @@ def _name(draw, box: dict, side) -> None:
     _text(draw, box, _ellipsized(draw, head, tail, font, box["w"] - 24), font, TEXT)
 
 
-def _pct(prob: float) -> str:
-    """A probability as text, refusing to round certainty into existence.
-
-    `f"{0.9999:.0%}"` is "100%", which claims the match cannot be lost. The
-    engine is decisive — a 35% power edge puts it past 0.999 — so this is the
-    common case for a lopsided pairing, not an edge case. Upsets happen, and a
-    card that says 100% before one is a card nobody trusts afterwards.
-    """
-    if prob >= 0.995:
-        return ">99%"
-    if prob <= 0.005:
-        return "<1%"
-    return f"{prob:.0%}"
-
-
 def _shared_pct_font(draw, left: str, right: str, boxes):
     """One size for both percentages.
 
@@ -241,38 +211,6 @@ def _shared_pct_font(draw, left: str, right: str, boxes):
 
 
 # ── The card ──────────────────────────────────────────────────────────────────
-
-
-def _status(side) -> str:
-    """Where the line-up above it came from.
-
-    Says whether the reader is looking at an order this player was actually
-    seen using or at the default, which is the difference between a line-up
-    that is evidence and one that is an assumption.
-
-    Deliberately not "3/3 seen · their order in 1 sighting". Squads seen,
-    sightings and deployment orders are how the data is kept, not how anyone
-    thinks about the game — a reader wants to know whether this is what the
-    player usually does. What the squad numbers are built on is a property of
-    the whole prediction rather than of one line-up, so it is said once in the
-    footer instead of twice here.
-    """
-    if not side.likely_order()[1]:
-        return "Lineup not recorded — assuming strongest first"
-    return f"Typical lineup in {side.sightings} observed battle{'' if side.sightings == 1 else 's'}"
-
-
-def _evidence(a, b) -> str:
-    """Which `_EVIDENCE_COPY` line describes this pair."""
-    full = [side.recorded_squads == len(predict_lib.SLOTS) for side in (a, b)]
-    none = [side.recorded_squads == 0 for side in (a, b)]
-    if all(full):
-        return "both"
-    if all(none):
-        return "neither"
-    if any(full) and any(none):
-        return "one"
-    return "some"
 
 
 def _shared_status_font(draw, left: str, right: str, boxes):
@@ -294,7 +232,7 @@ def _side(draw, boxes: dict, side, prob: float, pct_size: int, status_size: int,
     """One competitor: name, probability, line-up, and what it is built on."""
     _name(draw, boxes["name"], side)
 
-    pct = _pct(prob)
+    pct = words.probability(prob)
     _text(
         draw,
         boxes["win_probability"],
@@ -332,7 +270,7 @@ def _side(draw, boxes: dict, side, prob: float, pct_size: int, status_size: int,
         )
 
     box = boxes["status"]
-    status = _status(side)
+    status = words.lineup_summary(side)
     font = _font_for_text(status, status_size)
     _text(draw, box, _ellipsized(draw, status, "", font, box["w"] - 16), font, MUTED)
 
@@ -418,11 +356,7 @@ def _footer(draw, result) -> None:
     a confidence in one of the players.
     """
     box = LAYOUT["footer"]["confidence_summary"]
-    level = result.confidence()
-    text = (
-        f"Outcome Prediction Confidence: {level.capitalize()} — "
-        f"{_EVIDENCE_COPY[_evidence(result.a, result.b)]}"
-    )
+    text = words.confidence_line(result)
     font = _fit(draw, text, box["w"] - 32, start=21, minimum=15)
     _text(draw, box, _ellipsized(draw, text, "", font, box["w"] - 32), font, MUTED)
 
@@ -532,12 +466,15 @@ def render(result: predict_lib.Prediction, *, subtitle: str | None = None) -> by
     # neither pair differs in size for a reason the reader would misread.
     pct_size = _shared_pct_font(
         draw,
-        _pct(result.p_a),
-        _pct(result.p_b),
+        words.probability(result.p_a),
+        words.probability(result.p_b),
         (left["win_probability"], right["win_probability"]),
     )
     status_size = _shared_status_font(
-        draw, _status(result.a), _status(result.b), (left["status"], right["status"])
+        draw,
+        words.lineup_summary(result.a),
+        words.lineup_summary(result.b),
+        (left["status"], right["status"]),
     )
     _side(draw, left, result.a, result.p_a, pct_size, status_size, accent=LEFT_ACCENT)
     _side(draw, right, result.b, result.p_b, pct_size, status_size, accent=RIGHT_ACCENT)

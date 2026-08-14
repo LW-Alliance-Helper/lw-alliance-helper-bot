@@ -281,7 +281,11 @@ async def test_predict_renders_both_sides(cd_db):
     assert kwargs["file"].filename.endswith(".webp")
     caption = interaction.followup.send.call_args.args[0]
     assert "AlphaOne" in caption and "BetaTwo" in caption
-    assert "%" in caption and "confidence" in caption
+    assert "%" in caption and hub.words.CONFIDENCE_LABEL in caption
+    # The caption states the same numbers the card does, through the same
+    # formatter. It used to build its own with `:.0%`, so a lopsided pairing
+    # read "100%" in the text directly above a card saying ">99%".
+    assert "100%" not in caption and "0%" not in caption
 
 
 async def test_sharing_posts_the_card_to_the_channel(cd_db):

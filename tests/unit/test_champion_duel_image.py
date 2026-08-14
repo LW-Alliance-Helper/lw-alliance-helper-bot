@@ -20,6 +20,7 @@ from storm_renderer import _font_for_text
 import champion_duel_db as db
 import champion_duel_image as img
 import champion_duel_predict as cdp
+import champion_duel_wording as words
 
 ACTOR = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
 
@@ -128,7 +129,7 @@ def test_extremes_never_render_as_a_certainty(prob, expected):
     """`f"{0.9999:.0%}"` is "100%", which claims the match cannot be lost. The
     engine is decisive enough that a lopsided pairing hits this routinely, and
     a card that said 100% before an upset is one nobody trusts afterwards."""
-    assert img._pct(prob) == expected
+    assert words.probability(prob) == expected
 
 
 # ── Saying what the card is built on, in the reader's words ───────────────────
@@ -154,7 +155,7 @@ def test_the_status_line_says_where_the_lineup_came_from(sightings, expected):
     """Not "3/3 seen · their order in 1 sighting". Squads seen and sightings
     are how the data is stored, not a thing a player thinks about; what they
     want to know is whether this is what the opponent usually does."""
-    assert img._status(_Side(3, sightings)) == expected
+    assert words.lineup_summary(_Side(3, sightings)) == expected
 
 
 def test_the_status_line_fits_without_shrinking_the_other_side():
@@ -164,7 +165,7 @@ def test_the_status_line_fits_without_shrinking_the_other_side():
     draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
     budget = min(img.LAYOUT[s]["status"]["w"] for s in ("left", "right")) - 16
     for sightings in (0, 1, 12):
-        text = img._status(_Side(3, sightings))
+        text = words.lineup_summary(_Side(3, sightings))
         width = draw.textlength(text, font=_font_for_text(text, 18))
         assert width <= budget, f"{text!r} is {width:.0f}px, over the {budget}px budget"
 
@@ -174,8 +175,8 @@ def test_the_status_line_fits_without_shrinking_the_other_side():
     [
         (3, 3, "both"),
         (0, 0, "neither"),
-        (3, 0, "one"),
-        (0, 3, "one"),
+        (3, 0, "some"),
+        (0, 3, "some"),
         (2, 1, "some"),
         (3, 2, "some"),
     ],
@@ -186,7 +187,7 @@ def test_the_footer_describes_what_this_card_actually_has(a_recorded, b_recorded
     guesswork or whether both are half known. The sentence beside it is chosen
     from the real per-side counts, so it can never claim more than the card has.
     """
-    assert img._evidence(_Side(a_recorded, 0), _Side(b_recorded, 0)) == expected
+    assert words.evidence(_Side(a_recorded, 0), _Side(b_recorded, 0)) == expected
 
 
 def test_a_squad_someone_typed_in_counts_as_recorded(cd_db):
@@ -201,7 +202,7 @@ def test_a_squad_someone_typed_in_counts_as_recorded(cd_db):
 
     assert side.recorded_squads == 3
     assert side.observed_squads == 0, "still not an observation; just a number we hold"
-    assert img._evidence(cdp.build_side(a), cdp.build_side(b)) == "both"
+    assert words.evidence(cdp.build_side(a), cdp.build_side(b)) == "both"
     assert cdp.predict(a, b).confidence() == "medium", "no sightings yet, so not high"
 
 

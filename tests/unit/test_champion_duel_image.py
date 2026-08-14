@@ -225,36 +225,62 @@ def test_every_field_is_on_the_canvas():
         assert 0 <= box["y"] and box["y"] + box["h"] <= img.H, f"{name} runs off the top or bottom"
 
 
-def test_the_badge_box_is_centred_on_the_frame_drawn_in_the_artwork():
-    """The badge is a lit frame in the template, and the box has to sit on it.
-
-    As delivered the box was 11px left of the frame it names, which put the
-    logo against one wall of it. Asserting the logo is centred *in its own box*
-    would not have caught that -- the renderer centres it there by
-    construction. The frame is in the artwork, so the check has to be too:
-    find its two strokes either side of the box and compare midpoints.
+def test_the_logo_lines_up_with_the_artwork_around_it():
+    """The logo stands on the background with no frame to sit in, so what holds
+    it in place is agreement with its neighbours: the header bar's height on
+    one axis, the red card's right edge on the other. Both are in the artwork,
+    so the check has to be too -- asserting the logo is centred in its own box
+    would pass on any coordinates at all, which is how the previous version of
+    this test missed a box 11px off its frame.
     """
     box = img.LAYOUT["header"]["logo_badge"]
     px = Image.open(img._TEMPLATE_PATH).convert("RGB").load()
 
-    def stroke_midpoint(along_x: bool) -> float:
-        """Midpoint of the frame's two strokes, scanning across the badge."""
-        cx = box["x"] + box["w"] // 2
-        cy = box["y"] + box["h"] // 2
-        lo = (box["x"] if along_x else box["y"]) - 10
-        hi = lo + 20 + (box["w"] if along_x else box["h"])
-        lit = [i for i in range(lo, hi) if max(px[(i, cy) if along_x else (cx, i)]) > 150]
-        assert lit, "found no frame around the badge at all"
-        return (lit[0] + lit[-1]) / 2
+    def lit_span(coords):
+        lit = [i for i, x, y in coords if max(px[x, y]) > 110]
+        assert lit, "found none of the artwork this is measured against"
+        return lit[0], lit[-1]
 
-    assert abs(stroke_midpoint(True) - (box["x"] + box["w"] / 2)) <= 2, "badge is off-centre across"
-    assert abs(stroke_midpoint(False) - (box["y"] + box["h"] / 2)) <= 2, "badge is off-centre down"
+    # The header bar, scanned in the gap between its two inner boxes so only
+    # its own frame is in the way.
+    bar_top, bar_bottom = lit_span([(y, 780, y) for y in range(0, 130)])
+    assert abs(box["y"] - bar_top) <= 2, "logo does not start where the header bar does"
+    assert abs((box["y"] + box["h"]) - bar_bottom) <= 2, "logo is not the header bar's height"
+
+    # The red card's right border, below the header and clear of its corner.
+    _, card_right = lit_span([(x, x, 400) for x in range(1500, img.W)])
+    assert abs((box["x"] + box["w"]) - card_right) <= 2, "logo is not flush with the red card"
+
+    assert box["w"] == box["h"], "the logo is square; a non-square box would letterbox it"
+
+
+def test_the_templates_badge_frame_is_painted_out(cd_db):
+    """The frame is 103x88 and the logo is square, so the logo replaces it
+    rather than sitting in it. Anything left of the logo in that corner should
+    be background -- a surviving stroke would read as a second, empty badge."""
+    a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000))
+    b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000))
+    card = Image.open(io.BytesIO(img.render(cdp.predict(a, b)))).convert("RGB")
+
+    box = img.LAYOUT["header"]["logo_badge"]
+    clear = box["clear"]
+    # The strip between the header bar and the logo, where the old frame's left
+    # side and both of its corners used to be.
+    strip = card.crop((clear["x"] + clear["feather"], box["y"], box["x"], box["y"] + box["h"]))
+    assert max(strip.getextrema()[0][1], strip.getextrema()[2][1]) < 40, (
+        "the badge frame is still visible beside the logo"
+    )
 
 
 def test_the_logo_fills_its_badge_without_escaping_it(cd_db, monkeypatch):
     """Comparing a render against the same render with the logo suppressed
     isolates the pixels the logo drew, which is the only way to assert on
-    placement without recognising the mark itself."""
+    placement without recognising the mark itself.
+
+    The frame removal is switched off for this, so the difference is the logo
+    alone rather than the logo plus the rectangle it was painted onto.
+    """
+    monkeypatch.setitem(img.LAYOUT["header"]["logo_badge"], "clear", None)
     a = _player("Ravenshade", "738", (34_000_000, 30_000_000, 26_000_000))
     b = _player("NightOwl", "738", (33_000_000, 31_000_000, 25_000_000))
     result = cdp.predict(a, b)

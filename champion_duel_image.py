@@ -37,7 +37,7 @@ import io
 import json
 import os
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter
 
 import champion_duel_predict as predict_lib
 from storm_renderer import _font_for_text
@@ -385,22 +385,55 @@ def _footer(draw, confidence: str) -> None:
     _text(draw, box, _ellipsized(draw, text, "", font, box["w"] - 32), font, MUTED)
 
 
+def _clear(canvas, clear: dict) -> None:
+    """Paint a region of the template back to background.
+
+    The artwork draws a badge frame in the top-right corner, and it is the one
+    container on the card the logo cannot sit in: it is 103×88 and the logo is
+    square, so the mark could only go in cropped (which takes the antenna off
+    the robot and cuts "HELPER" in half) or letterboxed against the frame's
+    walls. Removing the frame and standing the logo on the background costs
+    nothing — the rounded corners keep the badge read.
+
+    The left and bottom edges are feathered because those are the two that meet
+    other artwork: the header bar's glow and the red card's, both of which
+    bleed into this rectangle and neither of which should end in a straight
+    line. The top and right edges are the canvas, where there is nothing to
+    blend into.
+    """
+    w, h = clear["w"], clear["h"]
+    patch = Image.new("RGBA", (w, h), ImageColor.getrgb(clear["fill"]) + (255,))
+
+    feather = clear.get("feather", 0)
+    if feather:
+        mask = Image.new("L", (w, h), 255)
+        px = mask.load()
+        for i in range(feather):
+            alpha = round(255 * (i + 1) / (feather + 1))
+            for y in range(h):
+                px[i, y] = min(px[i, y], alpha)
+            for x in range(w):
+                px[x, h - 1 - i] = min(px[x, h - 1 - i], alpha)
+        patch.putalpha(mask)
+
+    canvas.alpha_composite(patch, (clear["x"], clear["y"]))
+
+
 def _logo(canvas, box: dict) -> None:
-    """Attribution in the header badge, matching the storm render's convention.
+    """Attribution in the top-right corner, matching the storm render's
+    convention.
 
-    **Fitted to the frame, not filled.** The badge is slightly wider than it is
-    tall (103×88) and the logo is square, so filling it edge to edge means
-    either stretching the mark or cropping 7% off the top and bottom — which
-    takes the antenna off the robot and cuts "HELPER" in half. It runs the full
-    height of the frame instead, centred, leaving a little of the frame's own
-    dark either side.
+    Square, standing on the background rather than inside a frame — see
+    `_clear`, which removes the one the template draws. Sized to the header
+    bar's height and aligned right with the red card, so the corner reads as
+    part of the same row rather than an ornament floating beside it.
 
-    Corners are rounded to the frame's radius so it reads as seated in the
-    badge rather than laid over it, and rounded at 4x like the odds bar —
-    Pillow leaves them stepped at this size otherwise.
+    Corners are rounded at 4x like the odds bar; Pillow leaves them stepped at
+    this size otherwise.
 
     A missing or unreadable asset is skipped rather than raised: the render
-    must not fail over branding.
+    must not fail over branding, and the template's own frame is left in place
+    when that happens rather than clearing a hole where the logo would go.
     """
     if not os.path.isfile(_LOGO_PATH):
         return
@@ -408,6 +441,9 @@ def _logo(canvas, box: dict) -> None:
         logo = Image.open(_LOGO_PATH).convert("RGBA")
     except Exception:  # noqa: BLE001 - a missing logo must not fail the render
         return
+
+    if box.get("clear"):
+        _clear(canvas, box["clear"])
 
     scale = min(box["w"] / logo.width, box["h"] / logo.height)
     w = max(round(logo.width * scale), 1)

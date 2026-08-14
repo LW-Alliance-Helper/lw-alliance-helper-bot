@@ -28,12 +28,22 @@
       "align": "center"
     },
     "logo_badge": {
-      "x": 1480,
-      "y": 24,
-      "w": 103,
-      "h": 88,
-      "radius": 14,
-      "align": "center"
+      "x": 1503,
+      "y": 20,
+      "w": 97,
+      "h": 97,
+      "radius": 16,
+      "align": "center",
+      "note": "Square, the header bar's height (y20-117), right edge on the red card's (x1600).",
+      "clear": {
+        "x": 1462,
+        "y": 0,
+        "w": 157,
+        "h": 130,
+        "feather": 14,
+        "fill": "#010007",
+        "note": "Paints the template's badge frame out to background before the logo is drawn. The frame is 103x88 and the logo is square, so it could only sit in the frame by being cropped or letterboxed. Feathered on the left and bottom edges, which are the two that meet artwork: the header bar's glow and the red card's."
+      }
     }
   },
   "left": {

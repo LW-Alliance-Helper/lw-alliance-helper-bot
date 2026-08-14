@@ -407,7 +407,44 @@ class SharePredictionView(discord.ui.View):
             )
 
 
-async def _send_prediction(interaction: discord.Interaction, result: predict_lib.Prediction):
+CARD_DEFAULT_SUBTITLE = "Matchup prediction"
+
+
+def card_subtitle(a: dict | None, b: dict | None) -> str:
+    """What the card calls this fixture.
+
+    Names the round only when the card really is about that round: both players
+    in it, and in the same group within it. Anything else is a matchup someone
+    asked about rather than a fixture that exists, and says so.
+
+    The two ways it falls back are worth stating, because both look like they
+    ought to work:
+
+    - **Different rounds.** One player still in, one knocked out. Captioning
+      that with the live round would say they are both still in it.
+    - **Same round, different groups.** They will never actually meet, so a
+      "Group M" caption over two people who are not both in group M is wrong
+      about the one thing the caption asserts.
+
+    A round with no draw loaded, or a player we hold no round data for, is the
+    same fallback.
+    """
+    stages = [db.stage_for_display(p["id"]) if p and p.get("id") else None for p in (a, b)]
+    if not all(stages):
+        return CARD_DEFAULT_SUBTITLE
+    groups = {s["grp"] for s in stages}
+    if len(groups) != 1 or None in groups:
+        return CARD_DEFAULT_SUBTITLE
+    label = db.STAGE_LABELS.get(stages[0]["stage"], stages[0]["stage"].title())
+    return f"Group {stages[0]['grp']} · {label}"
+
+
+async def _send_prediction(
+    interaction: discord.Interaction,
+    result: predict_lib.Prediction,
+    *,
+    subtitle: str | None = None,
+):
     """The card, falling back to the embed if rendering fails.
 
     A render is more moving parts than an embed -- fonts, a logo asset, Pillow
@@ -416,7 +453,7 @@ async def _send_prediction(interaction: discord.Interaction, result: predict_lib
     way; the exception still reaches Sentry.
     """
     try:
-        png = await asyncio.to_thread(champion_duel_image.render, result)
+        png = await asyncio.to_thread(champion_duel_image.render, result, subtitle=subtitle)
     except Exception as exc:  # noqa: BLE001 - a failed render must not eat the answer
         try:
             import sentry_sdk
@@ -486,7 +523,8 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
             )
             return
 
-        await _send_prediction(interaction, result)
+        subtitle = await asyncio.to_thread(card_subtitle, sides[0], sides[1])
+        await _send_prediction(interaction, result, subtitle=subtitle)
 
 
 # ── Look up ───────────────────────────────────────────────────────────────────

@@ -160,3 +160,59 @@ def test_deleting_a_registrant_takes_their_rounds_with_them(cd_db):
         ).fetchone()["n"]
 
     assert remaining == 0
+
+
+# ── What the card calls the fixture ───────────────────────────────────────────
+
+
+def _player(name, server="738"):
+    return db.get_player(name, server=server)
+
+
+def test_the_card_names_the_round_when_both_are_in_it_together(cd_db):
+    """Both in the running round and in the same group: this is a fixture that
+    exists, so the card says which one."""
+    import champion_duel_hub as hub
+
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group M · Qualifiers"
+
+
+def test_two_players_in_different_rounds_get_the_default(cd_db):
+    """One still in, one knocked out. Naming the live round would say they are
+    both still in it."""
+    import champion_duel_hub as hub
+
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == hub.CARD_DEFAULT_SUBTITLE
+
+
+def test_same_round_different_groups_gets_the_default(cd_db):
+    """They will never actually meet, so a "Group M" caption over two people
+    who are not both in group M is wrong about the one thing it asserts."""
+    import champion_duel_hub as hub
+
+    db.set_stage(_rid("BetaTwo"), "qualifiers", grp="N", rank=1)
+
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == hub.CARD_DEFAULT_SUBTITLE
+
+
+def test_a_player_we_hold_no_round_for_gets_the_default(cd_db):
+    import champion_duel_hub as hub
+
+    db.upsert_registrant("Stranger", server="999", origin="self_reported", actor=ACTOR)
+
+    assert (
+        hub.card_subtitle(_player("AlphaOne"), _player("Stranger", server="999"))
+        == hub.CARD_DEFAULT_SUBTITLE
+    )
+
+
+def test_the_round_name_follows_the_event(cd_db):
+    """Once the semifinal draw lands, a semifinal fixture is captioned as one."""
+    import champion_duel_hub as hub
+
+    for name in ("AlphaOne", "BetaTwo"):
+        db.set_stage(_rid(name), "semifinals", grp="D", rank=1)
+
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semifinals"

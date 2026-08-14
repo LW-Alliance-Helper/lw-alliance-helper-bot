@@ -188,3 +188,11 @@ async def test_a_non_owner_gets_nothing(cd_db, admin_module, monkeypatch):
 
     interaction.followup.send.assert_not_awaited()
     assert db.get_player("AlphaOne", server="738") is None
+
+
+def test_the_round_picker_matches_the_data_layer(admin_module):
+    """The choices are spelled out on the decorator because it runs at import
+    time and `champion_duel_db` is imported inside the callback. That
+    duplication is only safe while this holds."""
+    choices = admin_module.admin_champion_duel_import_slash._params["round"].choices
+    assert {c.value: c.name for c in choices} == db.STAGE_LABELS

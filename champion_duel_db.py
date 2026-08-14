@@ -112,6 +112,48 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _drop_pre_identity_tables(conn) -> bool:
+    """Clear tables built before identity moved to (name, server).
+
+    The first shape keyed `registrants` on `player_key` alone, and hung squads,
+    orders and edits off that key. The current one has a surrogate `id` with
+    UNIQUE (player_key, server), because two servers can field the same name and
+    keying on the name alone silently merges them.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so
+    a database created under the old shape stayed on it and every insert failed
+    with "table registrants has no column named origin". That is what happened
+    on dev: the volume was wiped while the pre-identity code was deployed, so
+    the tables were rebuilt old and the schema commit that followed could not
+    touch them.
+
+    ALTER TABLE cannot fix it — the primary key changes and three tables change
+    what they reference — so the old tables are dropped and recreated empty.
+
+    **Safe only because nothing has ever successfully imported.** No import has
+    completed against the old shape (it cannot), and this feature has never been
+    on production. Guarded on the marker rather than on any failure, so it can
+    only fire against that one obsolete layout: the day real rows exist they are
+    in the new shape, and this stops matching.
+
+    `sessions` and `auth_codes` are untouched. They reference no player.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "registrants" not in tables:
+        return False
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(registrants)")}
+    if "id" in columns:
+        return False
+
+    for name in ("edits", "order_history", "squads", "registrants"):
+        conn.execute(f"DROP TABLE IF EXISTS {name}")
+    print(
+        "[CHAMPION_DUEL] dropped pre-identity tables (registrants keyed on name "
+        "alone); they are recreated empty and the roster needs re-importing"
+    )
+    return True
+
+
 def init_db() -> None:
     """Create tables if absent and apply pending migrations.
 
@@ -123,6 +165,10 @@ def init_db() -> None:
         os.makedirs(directory, exist_ok=True)
 
     with _get_conn() as conn:
+        # Before any CREATE: the statements below are all IF NOT EXISTS and so
+        # cannot correct a table that exists in the wrong shape.
+        _drop_pre_identity_tables(conn)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS registrants (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,

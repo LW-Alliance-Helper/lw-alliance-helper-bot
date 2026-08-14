@@ -28,6 +28,70 @@ def cd_db(tmp_path, monkeypatch):
     return None
 
 
+# The exact registrants shape shipped before identity moved to (name, server).
+# Dev's volume rebuilt itself as this while the pre-identity code was deployed,
+# and every CREATE TABLE IF NOT EXISTS after that was a no-op against it.
+PRE_IDENTITY_SCHEMA = """
+CREATE TABLE registrants (
+    player_key   TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    grp          TEXT,
+    rank         INTEGER,
+    server       TEXT,
+    alliance     TEXT,
+    thp          REAL,
+    fsp          REAL,
+    seeded       INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);
+CREATE TABLE squads (player_key TEXT NOT NULL, slot INTEGER NOT NULL, squad_type TEXT);
+CREATE TABLE order_history (id INTEGER PRIMARY KEY, player_key TEXT NOT NULL);
+CREATE TABLE edits (id INTEGER PRIMARY KEY, player_key TEXT);
+"""
+
+
+def test_a_pre_identity_database_is_rebuilt(tmp_path, monkeypatch):
+    """The failure this reproduces is "table registrants has no column named
+    origin", which is what dev hit on every import.
+
+    ALTER TABLE cannot fix it: the primary key changes and three tables change
+    what they reference. So the obsolete tables are dropped and recreated, which
+    is safe only because no import has ever completed against that shape.
+    """
+    import sqlite3
+
+    path = str(tmp_path / "champion_duel.sqlite3")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    old = sqlite3.connect(path)
+    old.executescript(PRE_IDENTITY_SCHEMA)
+    old.execute(
+        "INSERT INTO registrants (player_key, display_name, updated_at) VALUES (?,?,?)",
+        ("alphaone", "AlphaOne", "2026-08-12T00:00:00+00:00"),
+    )
+    old.commit()
+    old.close()
+
+    with pytest.raises(sqlite3.OperationalError, match="origin"):
+        db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}])
+
+    db.init_db()
+
+    result = db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}])
+    assert result["inserted"] == 1
+    with db._get_conn() as conn:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(registrants)")}
+    assert {"id", "origin", "added_by"} <= columns
+
+
+def test_init_db_leaves_a_current_database_alone(cd_db):
+    """The rebuild is keyed on the obsolete marker, not on any failure — so it
+    stops matching the moment real rows exist in the current shape."""
+    db.import_squads(_squad_rows("AlphaOne"), actor=ACTOR)
+    db.init_db()
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+    assert player is not None and len(player["squads"]) == 3
+
+
 def _squad_rows(name, server="738", source="estimated", powers=(40, 30, 20)):
     return [
         {"name": name, "server": server, "slot": slot, "type": t, "power": p, "source": source}

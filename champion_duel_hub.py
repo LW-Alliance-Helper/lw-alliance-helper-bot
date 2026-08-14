@@ -821,6 +821,17 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
             return
 
+        # A group is round data, so it lands on the round being played rather
+        # than on the player. Only written when they actually gave one: a blank
+        # stage row would claim this player is in the round when all we know is
+        # that somebody met them.
+        group = (self.group.value or "").strip()
+        if group:
+            await asyncio.to_thread(
+                db.set_stage, player["id"], db.current_stage() or "qualifiers", grp=group
+            )
+            player = await asyncio.to_thread(db.get_player, name, server)
+
         note = (
             f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
             if existing

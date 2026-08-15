@@ -1,8 +1,8 @@
-"""Champion Duel data layer — its own SQLite file on the Railway volume.
+"""Champion Duel data layer â€” its own SQLite file on the Railway volume.
 
 Separate from `config.py`'s `guild_configs.db` on purpose. That database is
 per-guild and private; this one is global tournament data contributed across
-alliances and servers, with its own lifecycle — it can be wiped between
+alliances and servers, with its own lifecycle â€” it can be wiped between
 qualifiers and semifinals without touching a single alliance's configuration.
 
 **Identity is (name, server), never name alone.** Last War names are not unique
@@ -13,14 +13,14 @@ therefore has a surrogate id with `UNIQUE (player_key, server)`, and squads,
 orders and edits all hang off that id.
 
 Everything here is **synchronous**. `ruff.toml` selects ASYNC, but its own
-comment notes that only catches stdlib-level blocking calls — it does not know
+comment notes that only catches stdlib-level blocking calls â€” it does not know
 sqlite3 blocks. Callers must wrap these in `asyncio.to_thread`, or a query
 stalls the Discord gateway heartbeat for the whole process (#366).
 
 Identity normalization is imported from `champion_duel_engine` rather than
 reimplemented: the simulator keys its scouting by the same function, and a
 second copy that drifted would file corrections under a key the simulator never
-looks up — applying to nobody and raising nothing.
+looks up â€” applying to nobody and raising nothing.
 
 Attribution stores the raw Discord snowflake so this ports into Map Manager's
 Alliance section later without a translation layer.
@@ -64,9 +64,8 @@ VALID_SOURCES = ("observed", "estimated", "edited")
 VALID_ORIGINS = ("imported", "self_reported", "edited")
 VALID_TYPES = ("Tank", "Missile", "Aircraft")
 
-# The rounds, in the order they are played. Order is load-bearing: the round
-# currently running is the furthest one we hold any draw for, and the card's
-# stage text depends on knowing which that is. See #495.
+# The rounds that carry groups, in the order they are played. Order is
+# load-bearing: a player's furthest round is the last of these they appear in.
 STAGES = ("qualifiers", "semifinals", "knockouts")
 
 # What each round is called on a surface a member reads.
@@ -75,6 +74,59 @@ STAGE_LABELS = {
     "semifinals": "Semifinals",
     "knockouts": "Knockouts",
 }
+
+# The event's whole timeline, as day offsets from the grouping's start date:
+# (key, first day, day it ends). Read off the in-game Match Overview box, which
+# is also where a member reads the start date we ask them for.
+#
+# Only three of the eight carry groups. The rest still matter -- `qualifier_
+# detail` is the window in which the semifinal draw becomes visible in game, so
+# it is when there is something new to ask for -- and a phase nobody can act on
+# is still the honest answer to "what is happening right now".
+#
+# **This shape is n=1.** It comes from one grouping's screenshot (8/4 to 8/31).
+# Every grouping observed since has matched, or this comment is out of date;
+# check before trusting it for a grouping whose timeline looks wrong.
+PHASES = (
+    ("signup", 0, 5),
+    ("signup_detail", 5, 6),
+    ("qualifiers", 6, 10),
+    ("qualifier_detail", 10, 13),
+    ("semifinals", 13, 17),
+    ("semifinal_detail", 17, 20),
+    ("knockouts", 20, 25),
+    ("results", 25, 27),
+)
+
+PHASE_LABELS = {
+    "signup": "Sign-up stage",
+    "signup_detail": "Sign-up Detail",
+    "qualifiers": "Qualifiers",
+    "qualifier_detail": "Qualifier Detail",
+    "semifinals": "Semi-finals",
+    "semifinal_detail": "Semi-final Detail",
+    "knockouts": "Knockout Stage",
+    "results": "Results",
+}
+
+# How long a whole Champion Duel runs, from the first day of sign-up.
+EVENT_DAYS = PHASES[-1][2]
+
+# A grouping is exactly this many warzones. The game shows them as one line
+# ("Participating Warzone: #773, #800, ...") and the set is the grouping's
+# identity -- the order the game lists them in is arbitrary.
+GROUPING_SIZE = 16
+
+# How big a group is when complete, per round. Not a column: it is a property of
+# the event's format, and storing it would let a typo claim a group of 8 is
+# full at 6. Knockouts are one field of 32 rather than lettered groups.
+GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
+
+# Which entry a recording writes. A group is recorded twice over its life --
+# once at the draw, once at the standings -- and they are different numbers for
+# the same player and round, so they are different columns. Writing one must
+# never destroy the other; that is the same failure `groups` exists to stop.
+RECORDINGS = ("draw", "final")
 
 
 class AmbiguousPlayer(Exception):
@@ -91,7 +143,7 @@ class AmbiguousPlayer(Exception):
 
 
 def _now() -> str:
-    """UTC ISO-8601, stored as TEXT so it sorts lexicographically — which is
+    """UTC ISO-8601, stored as TEXT so it sorts lexicographically â€” which is
     what the admin date-range export filters on."""
     return datetime.now(timezone.utc).isoformat()
 
@@ -114,6 +166,18 @@ def _group(value) -> str | None:
     if value is None:
         return None
     s = str(value).strip().upper()
+    return s or None
+
+
+def _text(value) -> str | None:
+    """A Discord snowflake as TEXT, matching how `edits` already stores them.
+
+    Guild and user ids arrive as int from discord.py and as str from the API, and
+    a column holding both compares equal to neither reliably.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
     return s or None
 
 
@@ -140,8 +204,8 @@ def _drop_pre_identity_tables(conn) -> bool:
     the tables were rebuilt old and the schema commit that followed could not
     touch them.
 
-    ALTER TABLE cannot fix it — the primary key changes and three tables change
-    what they reference — so the old tables are dropped and recreated empty.
+    ALTER TABLE cannot fix it â€” the primary key changes and three tables change
+    what they reference â€” so the old tables are dropped and recreated empty.
 
     **Safe only because nothing has ever successfully imported.** No import has
     completed against the old shape (it cannot), and this feature has never been
@@ -201,16 +265,120 @@ def init_db() -> None:
                 UNIQUE (player_key, server)
             )
         """)
-        # A registrant's group and rank are per round, not per player. The
-        # qualifier group a player came from is the answer to "how did they get
-        # here", and writing a semifinal draw into one shared column destroys
-        # it with nothing in the edit log to recover from, because imports do
-        # not write edits. See #495.
+        # A Champion Duel grouping: the 16 warzones drawn together. Timing and
+        # structure are per grouping, not global -- the numbering blocks in the
+        # game UI are 128 wide and a block splits into 8 groupings, so nothing
+        # about one warzone number tells you which fifteen others it is paired
+        # with. About 50 alliances use this bot and the imported grouping covers
+        # roughly two of them.
         #
-        # `registrants.grp` and `registrants.rank` stay on the table but are
-        # legacy: `init_db` copies them into the qualifiers row once and nothing
-        # reads them afterwards. Dropping columns in SQLite rewrites the table,
-        # which is not worth doing to a live volume for two dead fields.
+        # `started_on` is the first day of sign-up, read off the in-game Match
+        # Overview. Everything about when a round runs derives from it (PHASES),
+        # which is what lets a grouping with no draw loaded still answer "what
+        # is happening now" -- the state every grouping but one is in.
+        #
+        # Nullable, because an import can establish that a grouping exists
+        # without anyone having read its dates yet. A grouping with no start
+        # date simply cannot answer timeline questions, and every timeline
+        # helper returns None for it, which is the truth rather than a guess.
+        #
+        # `created_by_discord_id` is audit only and is never read to resolve
+        # anything. A person changes alliance and migrates warzone; a guild's
+        # warzone is the durable fact. Same split as `edits.actor_discord_id`.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS groupings (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_on            TEXT,
+                origin                TEXT    NOT NULL DEFAULT 'member',
+                created_by_guild_id   TEXT,
+                created_by_discord_id TEXT,
+                created_at            TEXT    NOT NULL,
+                updated_at            TEXT    NOT NULL
+            )
+        """)
+        # The set is the grouping's identity. TEXT to join `registrants.server`,
+        # which is TEXT because a server arrives from a modal.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS grouping_warzones (
+                grouping_id INTEGER NOT NULL,
+                warzone     TEXT    NOT NULL,
+                source      TEXT    NOT NULL DEFAULT 'claim',
+                PRIMARY KEY (grouping_id, warzone),
+                FOREIGN KEY (grouping_id) REFERENCES groupings(id) ON DELETE CASCADE
+            )
+        """)
+        # A lettered set inside one round of one grouping. `id` is the identity,
+        # not the letter: two groupings both have a Group D and they are not the
+        # same eight people. Before this, a group letter was a bare TEXT meaning
+        # the same thing everywhere, so an officer in warzone 1500 recording an
+        # opponent as "Group D" landed them in the imported grouping's Group D.
+        #
+        # `label` is NULL for knockouts, which are one field of 32 rather than
+        # lettered groups.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS groups (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                grouping_id         INTEGER NOT NULL,
+                stage               TEXT    NOT NULL,
+                label               TEXT,
+                created_by_guild_id TEXT,
+                created_at          TEXT    NOT NULL,
+                updated_at          TEXT    NOT NULL,
+                UNIQUE (grouping_id, stage, label),
+                FOREIGN KEY (grouping_id) REFERENCES groupings(id) ON DELETE CASCADE
+            )
+        """)
+        # Stage hangs off the group, not off the member: carrying both is how a
+        # semifinal write could reach a qualifier row.
+        #
+        # `seed_rank` and `rank` are separate because they are different numbers
+        # for the same player and round. Every player has a rank from the moment
+        # a group is drawn (the seed position) and a different one after it is
+        # played. For knockouts `seed_rank` is the bracket position 1..32, which
+        # is given rather than derived -- the game reorders when it places them
+        # and the rule is not known -- and `rank` is the final placement, which
+        # in a rigid 32-bracket is also the exit round.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_id      INTEGER NOT NULL,
+                registrant_id INTEGER NOT NULL,
+                seed_rank     INTEGER,
+                rank          INTEGER,
+                score         INTEGER,
+                created_at    TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL,
+                PRIMARY KEY (group_id, registrant_id),
+                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
+        # A guild's warzone, not its grouping. A warzone is durable; a grouping
+        # changes every Champion Duel. Resolving grouping-by-warzone on each read
+        # means next season's grouping starts working for every guild in it the
+        # moment one person enters it, with no re-pinning and no expiry prompt.
+        #
+        # `confirmed_grouping_id` closes the silent case: an alliance that moves
+        # warzone still resolves, because the old number still exists and still
+        # gets drawn into somebody's grouping. Confirm once per Champion Duel
+        # rather than trusting it forever.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_warzone (
+                guild_id              TEXT PRIMARY KEY,
+                warzone               TEXT NOT NULL,
+                set_by_discord_id     TEXT,
+                confirmed_grouping_id INTEGER,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL
+            )
+        """)
+        # Superseded by `groups` / `group_members`, which add the grouping
+        # dimension this table had no room for. Kept unread for one release so
+        # the copy below can be checked against real data before the table goes;
+        # dropping it in the same release that copies it leaves no way back.
+        #
+        # `registrants.grp` and `registrants.rank` stay too, and stay dead.
+        # Dropping columns in SQLite rewrites the table, which is not worth
+        # doing to a live volume for two fields nothing reads.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS registrant_stages (
                 registrant_id INTEGER NOT NULL,
@@ -306,6 +474,9 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_orders_reg ON order_history(registrant_id)",
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
             "CREATE INDEX IF NOT EXISTS ix_stages_stage ON registrant_stages(stage, grp)",
+            "CREATE INDEX IF NOT EXISTS ix_gw_warzone ON grouping_warzones(warzone)",
+            "CREATE INDEX IF NOT EXISTS ix_groups_lookup ON groups(grouping_id, stage, label)",
+            "CREATE INDEX IF NOT EXISTS ix_gm_registrant ON group_members(registrant_id)",
         ):
             try:
                 conn.execute(stmt)
@@ -328,8 +499,448 @@ def init_db() -> None:
             """
         )
 
+        _migrate_stages_to_groupings(conn)
 
-# ── Rounds ────────────────────────────────────────────────────────────────────
+
+# The imported grouping's sign-up date, from its in-game Match Overview. There
+# is nowhere to derive this from -- the roster payload carries no dates -- and
+# it is only ever applied to the one grouping that predates groupings existing.
+_IMPORTED_STARTED_ON = "2026-08-04"
+
+
+def _migrate_stages_to_groupings(conn) -> None:
+    """Move the pre-grouping draw into a real grouping. Runs once.
+
+    Everything imported so far belongs to one grouping, because a grouping is
+    what the importer had no concept of. So this creates that grouping, seeds it
+    from the warzones its own registrants are on, and copies each
+    `registrant_stages` row into a group under it.
+
+    Two things it deliberately does not do:
+
+    **The warzones come from imported registrants only.** Self-reported rows
+    already carry foreign warzones -- someone in another grouping recording an
+    opponent -- and seeding from every registrant would pull other alliances'
+    numbers into this grouping and make them resolve to it forever.
+
+    **Placements on self-reported players are dropped, not migrated.** A group
+    letter typed by an officer in another grouping is the exact collision this
+    schema exists to stop; it names a group in a grouping we do not have. The
+    registrant is kept, the placement is not. The count is printed rather than
+    swallowed, because more than a handful means something else happened.
+    """
+    already = conn.execute("SELECT 1 FROM groupings WHERE origin = 'imported'").fetchone()
+    if already:
+        return
+    warzones = [
+        r["server"]
+        for r in conn.execute(
+            "SELECT DISTINCT server FROM registrants "
+            "WHERE origin = 'imported' AND server IS NOT NULL AND server != '' "
+            "ORDER BY server"
+        ).fetchall()
+    ]
+    if not warzones:
+        return
+
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO groupings (started_on, origin, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (_IMPORTED_STARTED_ON, "imported", now, now),
+    )
+    grouping_id = cur.lastrowid
+    conn.executemany(
+        "INSERT OR IGNORE INTO grouping_warzones (grouping_id, warzone, source) VALUES (?, ?, ?)",
+        [(grouping_id, w, "import") for w in warzones],
+    )
+    if len(warzones) != GROUPING_SIZE:
+        # Not fatal: the roster may be partially loaded. But a grouping is
+        # sixteen warzones, so anything else is worth seeing in the logs rather
+        # than discovering when a lookup misses.
+        print(
+            f"[CHAMPION_DUEL] migrated grouping has {len(warzones)} warzones, "
+            f"expected {GROUPING_SIZE}: {', '.join(warzones)}"
+        )
+
+    rows = conn.execute(
+        """
+        SELECT s.stage, s.grp, s.rank, s.registrant_id, s.created_at, s.updated_at
+        FROM registrant_stages s
+        JOIN registrants r ON r.id = s.registrant_id
+        WHERE r.origin = 'imported' AND s.grp IS NOT NULL AND s.grp != ''
+        """
+    ).fetchall()
+    groups: dict[tuple[str, str], int] = {}
+    for row in rows:
+        key = (row["stage"], row["grp"])
+        if key not in groups:
+            cur = conn.execute(
+                "INSERT INTO groups (grouping_id, stage, label, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (grouping_id, row["stage"], row["grp"], now, now),
+            )
+            groups[key] = cur.lastrowid
+        # The old `rank` is a finishing position, not a seed: it came from a
+        # standings export. So it lands in `rank` and `seed_rank` stays empty
+        # rather than being invented.
+        conn.execute(
+            "INSERT OR IGNORE INTO group_members "
+            "(group_id, registrant_id, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (groups[key], row["registrant_id"], row["rank"], row["created_at"], row["updated_at"]),
+        )
+
+    orphans = conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM registrant_stages s
+        JOIN registrants r ON r.id = s.registrant_id
+        WHERE r.origin != 'imported' AND s.grp IS NOT NULL AND s.grp != ''
+        """
+    ).fetchone()["n"]
+    print(
+        f"[CHAMPION_DUEL] grouping {grouping_id}: {len(warzones)} warzones, "
+        f"{len(groups)} groups, {len(rows)} placements migrated"
+        + (f"; {orphans} self-reported placement(s) left behind" if orphans else "")
+    )
+
+
+# â”€â”€ Groupings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def parse_warzones(text) -> list[str]:
+    """The Participating Warzone line, as a sorted set of warzone numbers.
+
+    The game renders it `#773 , #800 , #744 , ...` and the order it lists them
+    in is arbitrary, so this returns them sorted: the *set* is the grouping's
+    identity, and two people typing the same sixteen in different orders must
+    produce the same grouping.
+
+    Deliberately lenient about separators. Someone is copying sixteen numbers
+    off a phone screen, and rejecting their line because they used spaces
+    instead of commas would be a validation failure with nothing wrong behind
+    it. Anything non-numeric simply is not a warzone.
+    """
+    out: list[str] = []
+    for chunk in str(text or "").replace("#", " ").replace(",", " ").split():
+        digits = chunk.strip()
+        if digits.isdigit():
+            out.append(str(int(digits)))
+    return sorted(set(out), key=int)
+
+
+def create_grouping(
+    warzones,
+    started_on: str | None = None,
+    *,
+    origin: str = "member",
+    guild_id=None,
+    discord_id=None,
+) -> dict:
+    """A new Champion Duel grouping: its 16 warzones and when it started.
+
+    Callers validate the count and that the caller's own warzone is in the set;
+    this stores whatever it is handed, because the admin path legitimately loads
+    a grouping the operator is not in.
+    """
+    zones = (
+        parse_warzones(warzones)
+        if isinstance(warzones, str)
+        else [_server(w) for w in warzones if _server(w)]
+    )
+    zones = sorted(set(z for z in zones if z), key=int)
+    if not zones:
+        raise ValueError("a grouping needs at least one warzone")
+    now = _now()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO groupings "
+            "(started_on, origin, created_by_guild_id, created_by_discord_id, "
+            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (started_on, origin, _text(guild_id), _text(discord_id), now, now),
+        )
+        grouping_id = cur.lastrowid
+        conn.executemany(
+            "INSERT OR IGNORE INTO grouping_warzones (grouping_id, warzone, source) "
+            "VALUES (?, ?, ?)",
+            [(grouping_id, z, "import" if origin == "imported" else "claim") for z in zones],
+        )
+    return get_grouping(grouping_id)
+
+
+def get_grouping(grouping_id) -> dict | None:
+    """One grouping with its warzones, or None."""
+    if grouping_id is None:
+        return None
+    with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM groupings WHERE id = ?", (grouping_id,)).fetchone()
+        if row is None:
+            return None
+        zones = [
+            r["warzone"]
+            for r in conn.execute(
+                "SELECT warzone FROM grouping_warzones WHERE grouping_id = ?", (grouping_id,)
+            ).fetchall()
+        ]
+    grouping = dict(row)
+    grouping["warzones"] = sorted(zones, key=int)
+    return grouping
+
+
+def list_groupings() -> list[dict]:
+    """Every grouping, newest start first."""
+    with _get_conn() as conn:
+        ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM groupings ORDER BY started_on DESC, id DESC"
+            ).fetchall()
+        ]
+    return [g for g in (get_grouping(i) for i in ids) if g]
+
+
+def find_grouping_by_warzone(warzone) -> dict | None:
+    """The grouping containing this warzone, or None.
+
+    A warzone is in at most one grouping per Champion Duel, which is what makes
+    a single number enough to resolve someone. Where several match -- two
+    member-made groupings over the same draw, which only a wrong claim produces
+    -- the most recently started wins, because the older one is a finished
+    event and this is the live question.
+    """
+    zone = _server(warzone)
+    if not zone:
+        return None
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT g.id FROM groupings g "
+            "JOIN grouping_warzones w ON w.grouping_id = g.id "
+            "WHERE w.warzone = ? ORDER BY g.started_on DESC, g.id DESC LIMIT 1",
+            (zone,),
+        ).fetchone()
+    return get_grouping(row["id"]) if row else None
+
+
+def default_grouping_id() -> int | None:
+    """The only grouping, when there is exactly one.
+
+    **Transitional.** Before groupings existed there was one draw and every
+    caller assumed it; this keeps those callers correct while that stays true,
+    and returns None the moment a second grouping is added rather than guessing
+    which one someone meant. Every caller that can know its guild should resolve
+    properly instead -- see `resolve_grouping_for_guild`.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT id FROM groupings LIMIT 2").fetchall()
+    return rows[0]["id"] if len(rows) == 1 else None
+
+
+def set_guild_warzone(guild_id, warzone, *, discord_id=None, confirmed_grouping_id=None) -> dict:
+    """Remember which warzone a guild plays on.
+
+    The guild's warzone rather than its grouping: a warzone is durable and a
+    grouping changes every Champion Duel, so storing the warzone means next
+    season resolves itself as soon as somebody enters the new sixteen.
+    """
+    zone = _server(warzone)
+    if not zone:
+        raise ValueError("a warzone is required")
+    now = _now()
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO guild_warzone
+                (guild_id, warzone, set_by_discord_id, confirmed_grouping_id,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                warzone               = excluded.warzone,
+                set_by_discord_id     = excluded.set_by_discord_id,
+                confirmed_grouping_id = excluded.confirmed_grouping_id,
+                updated_at            = excluded.updated_at
+            """,
+            (_text(guild_id), zone, _text(discord_id), confirmed_grouping_id, now, now),
+        )
+    return get_guild_warzone(guild_id)
+
+
+def get_guild_warzone(guild_id) -> dict | None:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_warzone WHERE guild_id = ?", (_text(guild_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def resolve_grouping_for_guild(guild_id, *, fallback_warzone=None) -> dict | None:
+    """Which grouping this guild is in, or None to ask them.
+
+    Order: the guild's own answer, then whatever the caller could infer, then
+    nothing. An officer's answer beats an inference always.
+
+    `fallback_warzone` is passed in rather than read here so this module stays
+    off `config.py`'s database -- the Map Manager link lives in `guild_configs
+    .db`, and reaching across would tie global tournament data to per-guild
+    config in exactly the way keeping them in separate files avoids. The hub
+    passes `config.get_guild_alliance_mapping(...)["server"]`, which is an
+    INTEGER there and TEXT here; `_server` reconciles that.
+
+    Returns None rather than guessing when the warzone is in no grouping we
+    hold. That is the normal state for a new alliance: their grouping does not
+    exist until somebody enters it.
+    """
+    pinned = get_guild_warzone(guild_id)
+    warzone = (pinned or {}).get("warzone") or _server(fallback_warzone)
+    if not warzone:
+        return None
+    return find_grouping_by_warzone(warzone)
+
+
+def needs_warzone_confirmation(guild_id, grouping_id) -> bool:
+    """Has this guild confirmed its warzone against this Champion Duel yet?
+
+    An alliance that moves warzone still resolves, silently and wrongly: the old
+    number keeps existing and keeps getting drawn into somebody's grouping. So
+    the answer is re-confirmed once per grouping rather than trusted forever.
+    Once per Champion Duel, never on a repeat visit.
+    """
+    pinned = get_guild_warzone(guild_id)
+    if not pinned or grouping_id is None:
+        return False
+    return pinned.get("confirmed_grouping_id") != grouping_id
+
+
+# â”€â”€ Timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _server_today():
+    """Today's in-game date. Imported from `config` rather than restated.
+
+    Local import: `config` is a large module and this one is deliberately
+    independent of it, but duplicating a timezone constant is how two copies of
+    a number drift apart.
+    """
+    from config import server_date_for
+
+    return server_date_for(datetime.now(timezone.utc))
+
+
+def _started(grouping):
+    """The grouping's start date, or None when nobody has entered one."""
+    from datetime import date as _date
+
+    started = (grouping or {}).get("started_on")
+    if not started:
+        return None
+    try:
+        return _date.fromisoformat(str(started)[:10])
+    except ValueError:  # pragma: no cover - a hand-edited row
+        return None
+
+
+def current_phase(grouping_id=None) -> str | None:
+    """Which of the eight phases this grouping is in, by the calendar.
+
+    Derived rather than set by an operator, for the reason the round always was:
+    a toggle is one more thing to forget at exactly the moment the event moves
+    on. What changed is the source. It used to be "the furthest round we hold a
+    draw for", which cannot answer anything for a grouping with nothing loaded
+    -- and that is every grouping but the one that was imported.
+
+    Returns None before the start date or after the event has finished.
+    """
+    grouping = get_grouping(grouping_id if grouping_id is not None else default_grouping_id())
+    started = _started(grouping)
+    if started is None:
+        return None
+    day = (_server_today() - started).days
+    if day < 0:
+        return None
+    for key, first, end in PHASES:
+        if first <= day < end:
+            return key
+    return None
+
+
+def current_stage(grouping_id=None) -> str | None:
+    """The round this grouping is playing, or the one it just played.
+
+    A Detail window is not a round, but it is the window in which the round
+    before it is what everyone is still talking about and the next draw becomes
+    visible. So it reports the round just finished rather than nothing.
+
+    Where the grouping has **no dates at all**, falls back to the furthest round
+    we hold a draw for -- the rule this used before there was a timeline. That
+    is only for a grouping nobody has entered a start date for; a grouping whose
+    calendar says "sign-up, nothing has been played" gets that answer, not a
+    guess from stale data.
+    """
+    grouping = get_grouping(grouping_id if grouping_id is not None else default_grouping_id())
+    if _started(grouping) is None:
+        return furthest_stage_held(grouping["id"] if grouping else None)
+    phase = current_phase(grouping_id)
+    if phase is None:
+        return None
+    mapping = {
+        "signup": None,
+        "signup_detail": None,
+        "qualifiers": "qualifiers",
+        "qualifier_detail": "qualifiers",
+        "semifinals": "semifinals",
+        "semifinal_detail": "semifinals",
+        "knockouts": "knockouts",
+        "results": "knockouts",
+    }
+    return mapping.get(phase)
+
+
+def furthest_stage_held(grouping_id=None) -> str | None:
+    """The last round this grouping holds any group for.
+
+    The rule `current_stage` used before the timeline existed, kept as its
+    fallback rather than deleted. A grouping whose dates nobody has entered can
+    still say something true about itself, and "the furthest round we have a
+    draw for" is true â€” it just cannot see a round that has started and has no
+    draw loaded, which is why it stopped being the primary answer.
+    """
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    if grouping_id is None:
+        return None
+    with _get_conn() as conn:
+        held = {
+            r["stage"]
+            for r in conn.execute(
+                "SELECT DISTINCT stage FROM groups WHERE grouping_id = ?", (grouping_id,)
+            ).fetchall()
+        }
+    for stage in reversed(STAGES):
+        if stage in held:
+            return stage
+    return None
+
+
+def is_finished(grouping_id=None) -> bool:
+    """Past the last day. The hub shows results and offers the next grouping."""
+    grouping = get_grouping(grouping_id if grouping_id is not None else default_grouping_id())
+    started = _started(grouping)
+    if started is None:
+        return False
+    return (_server_today() - started).days >= EVENT_DAYS
+
+
+def phase_window(grouping_id, phase: str) -> tuple:
+    """(first day, day it ends) for one phase of one grouping, as dates."""
+    from datetime import timedelta as _td
+
+    grouping = get_grouping(grouping_id if grouping_id is not None else default_grouping_id())
+    started = _started(grouping)
+    if started is None:
+        return (None, None)
+    for key, first, end in PHASES:
+        if key == phase:
+            return (started + _td(days=first), started + _td(days=end))
+    return (None, None)
+
+
+# â”€â”€ Rounds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _stage(value) -> str:
@@ -340,69 +951,141 @@ def _stage(value) -> str:
     return stage
 
 
-def set_stage(registrant_id: int, stage: str, *, grp=None, rank=None) -> dict:
-    """Place one registrant in one round.
+def get_or_create_group(grouping_id, stage: str, label=None, *, guild_id=None) -> dict:
+    """The group for one round of one grouping, creating it if new.
 
-    Separate from `upsert_registrant` on purpose. A player's name, server and
-    alliance are facts about the person; their group and rank are facts about a
-    round, and the bug this table exists to prevent was exactly the two being
-    written through one code path.
+    `label` is the letter the game shows, or None for knockouts, which are a
+    single field of 32 rather than lettered groups. The letter is not the
+    identity -- `groups.id` is -- so two groupings' Group D never meet.
     """
     stage = _stage(stage)
-    grp = _group(grp)
+    label = _group(label)
+    if grouping_id is None:
+        raise ValueError("a group belongs to a grouping")
     now = _now()
     with _get_conn() as conn:
         conn.execute(
-            """
-            INSERT INTO registrant_stages
-                (registrant_id, stage, grp, rank, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(registrant_id, stage) DO UPDATE SET
-                grp        = excluded.grp,
-                rank       = excluded.rank,
-                updated_at = excluded.updated_at
-            """,
-            (registrant_id, stage, grp, rank, now, now),
+            "INSERT OR IGNORE INTO groups "
+            "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (grouping_id, stage, label, _text(guild_id), now, now),
         )
         row = conn.execute(
-            "SELECT * FROM registrant_stages WHERE registrant_id = ? AND stage = ?",
-            (registrant_id, stage),
+            "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ?",
+            (grouping_id, stage, label),
         ).fetchone()
     return dict(row)
 
 
-def get_stages(registrant_id: int) -> dict[str, dict]:
-    """Every round this registrant is in, keyed by round, in playing order."""
+def set_placement(
+    group_id: int,
+    registrant_id: int,
+    *,
+    seed_rank=None,
+    rank=None,
+    score=None,
+    recording: str | None = None,
+) -> dict:
+    """Put one player in one group, or update where they finished.
+
+    `recording` says which entry this is: `draw` writes `seed_rank`, `final`
+    writes `rank`. They are different numbers for the same player and round --
+    the seed position and where they actually finished -- so writing one must
+    never blank the other. Passing neither leaves both alone and just records
+    membership, which is what adding a player to a group you are tracking does.
+
+    Omitted values are left as they are rather than overwritten with NULL: a
+    second entry that only knows the standings must not erase the draw.
+    """
+    if recording == "draw":
+        seed_rank, rank = (seed_rank if seed_rank is not None else rank), None
+    elif recording == "final":
+        rank = rank if rank is not None else None
+    now = _now()
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO group_members
+                (group_id, registrant_id, seed_rank, rank, score, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(group_id, registrant_id) DO UPDATE SET
+                seed_rank  = COALESCE(excluded.seed_rank, group_members.seed_rank),
+                rank       = COALESCE(excluded.rank,      group_members.rank),
+                score      = COALESCE(excluded.score,     group_members.score),
+                updated_at = excluded.updated_at
+            """,
+            (group_id, registrant_id, seed_rank, rank, score, now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM group_members WHERE group_id = ? AND registrant_id = ?",
+            (group_id, registrant_id),
+        ).fetchone()
+    return dict(row)
+
+
+def get_group_members(group_id: int) -> list[dict]:
+    """Everyone in one group, in finishing order where it is known."""
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM registrant_stages WHERE registrant_id = ?", (registrant_id,)
+            """
+            SELECT m.*, r.display_name, r.server, r.alliance
+            FROM group_members m JOIN registrants r ON r.id = m.registrant_id
+            WHERE m.group_id = ?
+            ORDER BY COALESCE(m.rank, m.seed_rank, 9999), r.display_name
+            """,
+            (group_id,),
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_stage(registrant_id: int, stage: str, *, grp=None, rank=None, grouping_id=None) -> dict:
+    """Place one registrant in one round of one grouping.
+
+    Separate from `upsert_registrant` on purpose. A player's name, server and
+    alliance are facts about the person; their group and rank are facts about a
+    round of a grouping, and the bug this exists to prevent was exactly the two
+    being written through one code path.
+
+    `grouping_id` defaults to the only grouping there is, which keeps the
+    callers written before groupings existed correct while that stays true. Once
+    a second grouping exists an unresolved caller writes nothing rather than
+    guessing, because guessing puts a player in a stranger's Group D.
+    """
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    if grouping_id is None:
+        raise ValueError("no grouping resolved; a group letter needs one to belong to")
+    group = get_or_create_group(grouping_id, stage, grp)
+    return set_placement(group["id"], registrant_id, rank=rank)
+
+
+def get_stages(registrant_id: int, grouping_id=None) -> dict[str, dict]:
+    """Every round this registrant is in, keyed by round, in playing order.
+
+    Shape is unchanged from when rounds lived on their own table: each value
+    carries `grp` and `rank`, which is what the card, the API and the roster
+    export already read. They do not need to know a group is now a row.
+
+    Scoped to one grouping when given. Without one it returns every round the
+    player appears in anywhere, which is right for a player card -- a registrant
+    only ever plays in one grouping per Champion Duel.
+    """
+    sql = """
+        SELECT g.stage, g.label AS grp, g.grouping_id, g.id AS group_id,
+               m.seed_rank, m.rank, m.score, m.created_at, m.updated_at
+        FROM group_members m JOIN groups g ON g.id = m.group_id
+        WHERE m.registrant_id = ?
+    """
+    params: tuple = (registrant_id,)
+    if grouping_id is not None:
+        sql += " AND g.grouping_id = ?"
+        params += (grouping_id,)
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
     by_stage = {r["stage"]: dict(r) for r in rows}
     return {stage: by_stage[stage] for stage in STAGES if stage in by_stage}
 
 
-def current_stage() -> str | None:
-    """The round currently running, or None when no draw is loaded at all.
-
-    Derived from the data rather than set by an operator. The furthest round we
-    hold any draw for is the one being played: a semifinal draw does not exist
-    until the qualifiers that produce it are over, so loading it *is* the
-    signal. That keeps this off the admin surface entirely, which matters
-    because an operator toggle would be one more thing to forget at exactly the
-    moment the event moves on.
-    """
-    with _get_conn() as conn:
-        held = {
-            r["stage"]
-            for r in conn.execute("SELECT DISTINCT stage FROM registrant_stages").fetchall()
-        }
-    for stage in reversed(STAGES):
-        if stage in held:
-            return stage
-    return None
-
-
-def stage_for_display(registrant_id: int) -> dict | None:
+def stage_for_display(registrant_id: int, grouping_id=None) -> dict | None:
     """The round to name on this player's card, or None to fall back.
 
     The rule (Kevin, #495): show the round currently running, but only if this
@@ -410,13 +1093,20 @@ def stage_for_display(registrant_id: int) -> dict | None:
     of the semifinal story, and captioning their card with the live round would
     say they are still in it.
     """
-    stage = current_stage()
+    stages = get_stages(registrant_id, grouping_id)
+    if not stages:
+        return None
+    # The player's own grouping decides which round is running. Two groupings
+    # run on their own calendars, so "the semifinals" is a date for one of them
+    # and not the other.
+    owner = grouping_id if grouping_id is not None else next(iter(stages.values()))["grouping_id"]
+    stage = current_stage(owner)
     if stage is None:
         return None
-    return get_stages(registrant_id).get(stage)
+    return stages.get(stage)
 
 
-# ── Registrants ───────────────────────────────────────────────────────────────
+# â”€â”€ Registrants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def find_registrants(name: str, server=None) -> list[dict]:
@@ -437,7 +1127,7 @@ def suggest_registrants(name: str, server=None, limit: int = 5) -> list[dict]:
     """Registrants whose name is close to `name`, best first.
 
     **Never used to resolve anything.** `normalize_name` refuses to fuzzy-match
-    on purpose — two names differing by one character can be two real players,
+    on purpose â€” two names differing by one character can be two real players,
     and attaching a sighting to the wrong one is unrecoverable. That rule is
     about resolving silently. Offering candidates for a human to pick from is
     the opposite: it makes the ambiguity visible, which is what
@@ -515,7 +1205,7 @@ def upsert_registrant(
 
     `origin` records how the row came to exist. A self-reported opponent must
     stay distinguishable from an official import, for the same reason
-    squads.source exists — otherwise a guess hardens into a fact nobody can
+    squads.source exists â€” otherwise a guess hardens into a fact nobody can
     trace back.
 
     An existing row is never downgraded: an imported registrant stays
@@ -583,7 +1273,40 @@ def upsert_registrant(
         return dict(conn.execute("SELECT * FROM registrants WHERE id = ?", (new_id,)).fetchone())
 
 
-def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
+def _grouping_for_payload(rows: list[dict], *, started_on=None) -> int:
+    """Which grouping a roster payload belongs to, creating it if it is new.
+
+    A payload names its own warzones: every registrant in it carries one, and a
+    warzone belongs to at most one grouping. So the payload identifies its
+    grouping without anyone declaring it, which is how the first import into an
+    empty database gets somewhere to put a group letter.
+
+    Matching on *any* warzone rather than the exact set on purpose. A semifinal
+    payload carries the same sixteen warzones as its qualifier draw but only
+    128 of the players, and a partial re-import carries fewer still; requiring
+    the sets to match would fork a second grouping over the same event every
+    time. A warzone that already belongs to a grouping settles it.
+    """
+    zones = sorted({z for z in (_server(r.get("server")) for r in rows) if z}, key=int)
+    for zone in zones:
+        found = find_grouping_by_warzone(zone)
+        if found:
+            return found["id"]
+    if not zones:
+        # Nothing to identify it by. The only remaining honest answer is the
+        # grouping there is, if there is exactly one.
+        only = default_grouping_id()
+        if only is None:
+            raise ValueError(
+                "a round needs a grouping, and this payload carries no warzone to find one by"
+            )
+        return only
+    return create_grouping(zones, started_on, origin="imported")["id"]
+
+
+def import_registrants(
+    rows: list[dict], *, stage: str | None = None, grouping_id=None, started_on=None
+) -> dict:
     """Bulk-load a roster, optionally placing it in a round. Never touches
     scouting.
 
@@ -592,15 +1315,22 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
     alliances and THP, with no claim about where they are in the tournament.
 
     That is deliberately not a default of qualifiers. A payload whose round we
-    cannot establish is exactly the case where guessing is expensive — guess
+    cannot establish is exactly the case where guessing is expensive â€” guess
     qualifiers on a semifinal draw and it overwrites the qualifier groups,
     which is the failure this whole table exists to prevent (#495). No round is
     always recoverable; the wrong round is not.
 
-    A row's group and rank are written to that round only, so loading the
-    semifinal draw leaves every qualifier group intact.
+    `grouping_id` says which Champion Duel it belongs to, and the same argument
+    applies one level up: a group letter means nothing without one, and the
+    wrong one files 1600 players into another alliance's tournament. Defaults to
+    the only grouping there is, and refuses once that stops being unambiguous.
+
+    A row's group and rank are written to that round of that grouping only, so
+    loading the semifinal draw leaves every qualifier group intact.
     """
     stage = _stage(stage) if stage else None
+    if stage and grouping_id is None:
+        grouping_id = _grouping_for_payload(rows, started_on=started_on)
     inserted = updated = placed = 0
     for row in rows:
         name = (row.get("name") or "").strip()
@@ -624,7 +1354,13 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
         # only the 128 advancers have a semifinal group, and writing the other
         # 1472 an empty semifinal row would say they all qualified.
         if stage and row.get("group"):
-            set_stage(player["id"], stage, grp=row.get("group"), rank=row.get("rank"))
+            set_stage(
+                player["id"],
+                stage,
+                grp=row.get("group"),
+                rank=row.get("rank"),
+                grouping_id=grouping_id,
+            )
             placed += 1
         if before:
             updated += 1
@@ -632,6 +1368,7 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
             inserted += 1
     return {
         "stage": stage,
+        "grouping_id": grouping_id,
         "placed": placed,
         "inserted": inserted,
         "updated": updated,
@@ -639,21 +1376,29 @@ def import_registrants(rows: list[dict], *, stage: str | None = None) -> dict:
     }
 
 
-def get_groups(stage: str | None = None) -> list[dict]:
-    """Registrant counts per group, for one round.
+def get_groups(stage: str | None = None, grouping_id=None) -> list[dict]:
+    """Member counts per group, for one round of one grouping.
 
     Defaults to the round currently running, which is what "which groups are
-    there" means to someone asking during the event.
+    there" means to someone asking during the event, and to the only grouping
+    there is. Scoped rather than global: a count spanning every grouping
+    describes several tournaments at once and belongs to none of them.
     """
-    stage = _stage(stage) if stage else current_stage()
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    if grouping_id is None:
+        return []
+    stage = _stage(stage) if stage else current_stage(grouping_id)
     if stage is None:
         return []
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT grp, COUNT(*) AS n FROM registrant_stages "
-            "WHERE stage = ? AND grp IS NOT NULL AND grp != '' "
-            "GROUP BY grp ORDER BY grp",
-            (stage,),
+            """
+            SELECT g.label AS grp, COUNT(m.registrant_id) AS n
+            FROM groups g LEFT JOIN group_members m ON m.group_id = g.id
+            WHERE g.grouping_id = ? AND g.stage = ? AND g.label IS NOT NULL AND g.label != ''
+            GROUP BY g.label ORDER BY g.label
+            """,
+            (grouping_id, stage),
         ).fetchall()
     return [{"group": r["grp"], "registrants": r["n"]} for r in rows]
 
@@ -687,31 +1432,39 @@ def get_servers() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_roster(group=None, include_scouting: bool = False, stage: str | None = None) -> list[dict]:
+def get_roster(
+    group=None, include_scouting: bool = False, stage: str | None = None, grouping_id=None
+) -> list[dict]:
     """Registrants, optionally with their squads.
 
     `include_scouting` is False for anonymous callers: the registrant list is a
     public LWS export, but squad composition and deployment orders are our own
     scouting.
 
-    `group` filters within one round, defaulting to the round currently
-    running. Group letters are only meaningful inside a round: "group D" in the
-    semifinals is a different set of people from "group D" in the qualifiers.
+    `group` filters within one round of one grouping, defaulting to the round
+    currently running. A group letter is only meaningful inside both: "group D"
+    in the semifinals is a different set of people from "group D" in the
+    qualifiers, and a different set again in somebody else's grouping.
     """
-    stage = _stage(stage) if stage else current_stage()
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    stage = _stage(stage) if stage else current_stage(grouping_id)
     sql = "SELECT r.* FROM registrants r"
     params: tuple = ()
     if group:
-        # Joined rather than filtered on `registrants.grp`, which is legacy and
-        # no longer written. See #495.
-        sql += " JOIN registrant_stages s ON s.registrant_id = r.id WHERE s.stage = ? AND s.grp = ?"
-        params = (stage or "qualifiers", _group(group))
+        # Joined through `groups` rather than filtered on `registrants.grp`,
+        # which is legacy and no longer written. See #495.
+        sql += (
+            " JOIN group_members m ON m.registrant_id = r.id"
+            " JOIN groups g ON g.id = m.group_id"
+            " WHERE g.grouping_id = ? AND g.stage = ? AND g.label = ?"
+        )
+        params = (grouping_id, stage or "qualifiers", _group(group))
     sql += " ORDER BY r.display_name"
 
     with _get_conn() as conn:
         players = [dict(r) for r in conn.execute(sql, params).fetchall()]
     for player in players:
-        attach_stages(player)
+        attach_stages(player, grouping_id)
     players.sort(key=lambda p: (p.get("grp") or "", p.get("rank") or 0, p["display_name"]))
 
     with _get_conn() as conn:
@@ -726,30 +1479,35 @@ def get_roster(group=None, include_scouting: bool = False, stage: str | None = N
     return players
 
 
-def attach_stages(player: dict) -> dict:
+def attach_stages(player: dict, grouping_id=None) -> dict:
     """Fill a registrant's round data, in place.
 
     Adds `stages` (every round, in playing order) and points `grp` / `rank` at
     the furthest round the player is actually in. Those two keys are the ones
     every existing caller already reads, so filling them here keeps the embed,
     the API and the roster export working off round data without each of them
-    having to know the table exists.
+    having to know where a group lives.
 
     The furthest round rather than the running one: a player knocked out in the
     qualifiers should still show the group they went out of, not a blank where
     the semifinal they are not in would go.
+
+    Also sets `grouping_id`, so a surface showing a player from outside the
+    caller's own grouping can say which one a bare group letter belongs to.
     """
-    stages = get_stages(player["id"])
+    stages = get_stages(player["id"], grouping_id)
     player["stages"] = stages
     if stages:
         stage = list(stages)[-1]
         player["stage"] = stage
         player["grp"] = stages[stage]["grp"]
         player["rank"] = stages[stage]["rank"]
+        player["grouping_id"] = stages[stage]["grouping_id"]
     else:
         player["stage"] = None
         player["grp"] = None
         player["rank"] = None
+        player["grouping_id"] = None
     return player
 
 
@@ -805,7 +1563,7 @@ def most_common_order(registrant_id: int) -> dict | None:
     }
 
 
-# ── Writes (each one audited) ─────────────────────────────────────────────────
+# â”€â”€ Writes (each one audited) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _record_edit(conn, *, target, registrant_id, slot, field, old, new, actor, revert_of=None):
@@ -949,7 +1707,7 @@ def add_order(registrant_id, slots, *, actor, opponent=None, observed_at=None, s
     return {"registrant_id": registrant_id, "order_id": order_id, "edit_ids": [edit_id]}
 
 
-# ── Bulk import of scouting ───────────────────────────────────────────────────
+# â”€â”€ Bulk import of scouting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # Imports are the baseline, not an edit, so none of this writes to `edits` --
 # the same position `import_registrants` already takes. A roster load would
@@ -969,7 +1727,7 @@ def _resolve_for_import(name, server):
         return resolve_registrant(name, server)["id"], None
     except AmbiguousPlayer as exc:
         servers = ", ".join(str(c["server"]) for c in exc.candidates)
-        return None, f"{name!r} is on several servers ({servers}) — give one"
+        return None, f"{name!r} is on several servers ({servers}) â€” give one"
     except LookupError:
         return None, f"no registrant matches {name!r}"
 
@@ -983,7 +1741,7 @@ def _import_would_downgrade(existing: str, incoming: str) -> bool:
     - **`edited` outranks everything an import carries.** A person looked at
       the game and typed what they saw. An import knows nothing that beats
       that, so even a fresh `observed` capture leaves it alone. Reverting a
-      correction is what the edit log and `⏪ Revert an edit` are for, on
+      correction is what the edit log and `âª Revert an edit` are for, on
       purpose and attributed, rather than a side effect of loading a file.
     - **`observed` gives way only to another sighting.** An estimate is
       derived from total hero power; a sighting is someone reading the
@@ -1155,7 +1913,7 @@ def import_orders(rows: list[dict], *, actor) -> dict:
     }
 
 
-# ── Audit + revert ────────────────────────────────────────────────────────────
+# â”€â”€ Audit + revert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def list_edits(*, since=None, until=None, player=None, server=None, actor=None, limit=50, offset=0):
@@ -1201,7 +1959,7 @@ class RevertConflict(Exception):
     """The value moved on after the edit being reverted.
 
     Carries the current value so the caller can show what it found instead of a
-    bare failure — an admin needs to see the newer correction before deciding
+    bare failure â€” an admin needs to see the newer correction before deciding
     whether to stamp on it.
     """
 
@@ -1266,7 +2024,7 @@ def revert_edit(edit_id: int, *, actor, force: bool = False) -> dict:
 
 
 def export_edits(start: str, end: str) -> list[dict]:
-    """Every edit in a date range, oldest first — the spreadsheet view.
+    """Every edit in a date range, oldest first â€” the spreadsheet view.
 
     Oldest-first because it reads as a narrative of what happened.
     """
@@ -1281,7 +2039,7 @@ def export_edits(start: str, end: str) -> list[dict]:
 
 
 def contributor_summary(limit: int = 25) -> list[dict]:
-    """Who has contributed what. The contributor graph IS the user base — no
+    """Who has contributed what. The contributor graph IS the user base â€” no
     separate table needed to know which servers have people entering data."""
     with _get_conn() as conn:
         rows = conn.execute(
@@ -1293,11 +2051,11 @@ def contributor_summary(limit: int = 25) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# ── Sessions ──────────────────────────────────────────────────────────────────
+# â”€â”€ Sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def create_session(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
-    """Mint a session. Returns the plaintext token exactly once — only its hash
+    """Mint a session. Returns the plaintext token exactly once â€” only its hash
     is stored, so it cannot be recovered from the volume afterwards."""
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
@@ -1369,7 +2127,7 @@ def purge_expired() -> int:
     return n
 
 
-# ── OAuth hand-off codes ──────────────────────────────────────────────────────
+# â”€â”€ OAuth hand-off codes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def create_auth_code(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):

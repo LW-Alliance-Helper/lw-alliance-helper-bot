@@ -17,6 +17,19 @@ import champion_duel_db as db
 ACTOR = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
 
 
+def started_so_today_is(phase: str) -> str:
+    """A start date that puts today in `phase`.
+
+    The round a grouping is playing comes from its calendar now, so a fixture
+    has to give it one. Computed backwards from today rather than hardcoded, or
+    every test in this module would start failing on a date nobody chose.
+    """
+    from datetime import timedelta
+
+    first_day = {key: first for key, first, _ in db.PHASES}[phase]
+    return (db._server_today() - timedelta(days=first_day)).isoformat()
+
+
 @pytest.fixture
 def cd_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
@@ -27,8 +40,15 @@ def cd_db(tmp_path, monkeypatch):
             {"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"},
         ],
         stage="qualifiers",
+        started_on=started_so_today_is("qualifiers"),
     )
     return None
+
+
+def _restart(phase: str) -> None:
+    """Move the grouping's start date so today lands in `phase`."""
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = ?", (started_so_today_is(phase),))
 
 
 def _rid(name, server="738"):
@@ -81,19 +101,62 @@ def test_an_unknown_round_is_refused(cd_db, bad):
 # ── Which round is running ────────────────────────────────────────────────────
 
 
-def test_the_running_round_is_the_furthest_draw_we_hold(cd_db):
-    """Derived rather than set by an operator: a semifinal draw does not exist
-    until the qualifiers producing it are over, so loading it is the signal."""
+def test_the_running_round_comes_from_the_calendar(cd_db):
+    """Still derived rather than set by an operator, but from the grouping's own
+    dates rather than from what we happen to hold.
+
+    The old rule was "the furthest round any draw exists for", which cannot
+    answer anything for a grouping with nothing loaded -- and that is every
+    grouping except the one that was imported."""
     assert db.current_stage() == "qualifiers"
 
-    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
     assert db.current_stage() == "semifinals"
 
-    db.set_stage(_rid("AlphaOne"), "knockouts", grp="A", rank=1)
+    _restart("knockouts")
     assert db.current_stage() == "knockouts"
 
 
-def test_no_draw_at_all_has_no_running_round(tmp_path, monkeypatch):
+def test_a_detail_window_reports_the_round_just_played(cd_db):
+    """A Detail window is not a round, but it is when the round before it is
+    still what everyone is talking about and the next draw becomes visible."""
+    _restart("qualifier_detail")
+    assert db.current_phase() == "qualifier_detail"
+    assert db.current_stage() == "qualifiers"
+
+
+def test_the_round_is_known_before_any_draw_is_loaded(tmp_path, monkeypatch):
+    """The state every grouping but one is in, and the reason the derivation
+    moved to the calendar: an alliance that has entered nothing but their
+    sixteen warzones can still be told the semifinals start on Monday."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "fresh.sqlite3"))
+    db.init_db()
+    grouping = db.create_grouping(["1500", "1501"], started_so_today_is("semifinals"))
+
+    assert db.get_roster(grouping_id=grouping["id"]) == []
+    assert db.current_stage(grouping["id"]) == "semifinals"
+
+
+def test_sign_up_is_not_a_round(cd_db):
+    """Nobody has played anything yet, so naming a round would be wrong."""
+    _restart("signup")
+    assert db.current_phase() == "signup"
+    assert db.current_stage() is None
+
+
+def test_a_grouping_with_no_dates_answers_nothing_rather_than_guessing(tmp_path, monkeypatch):
+    """An import can establish a grouping exists before anyone reads its
+    timeline off the Match Overview."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "undated.sqlite3"))
+    db.init_db()
+    grouping = db.create_grouping(["2000"], None)
+
+    assert db.current_phase(grouping["id"]) is None
+    assert db.current_stage(grouping["id"]) is None
+    assert db.is_finished(grouping["id"]) is False
+
+
+def test_no_grouping_at_all_has_no_running_round(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "empty.sqlite3"))
     db.init_db()
     assert db.current_stage() is None
@@ -105,6 +168,9 @@ def test_a_player_out_of_the_running_round_has_no_stage_to_display(cd_db):
     still in it."""
     survivor, eliminated = _rid("AlphaOne"), _rid("BetaTwo")
     db.set_stage(survivor, "semifinals", grp="D", rank=1)
+    # Placing someone in a round is no longer what makes that round current.
+    # The calendar is, so the clock has to move too.
+    _restart("semifinals")
 
     assert db.stage_for_display(survivor)["stage"] == "semifinals"
     assert db.stage_for_display(eliminated) is None
@@ -184,6 +250,7 @@ def test_two_players_in_different_rounds_get_the_default(cd_db):
     import champion_duel_hub as hub
 
     db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
 
     assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == hub.CARD_DEFAULT_SUBTITLE
 
@@ -210,11 +277,13 @@ def test_a_player_we_hold_no_round_for_gets_the_default(cd_db):
 
 
 def test_the_round_name_follows_the_event(cd_db):
-    """Once the semifinal draw lands, a semifinal fixture is captioned as one."""
+    """Once the semifinals are running, a semifinal fixture is captioned as
+    one."""
     import champion_duel_hub as hub
 
     for name in ("AlphaOne", "BetaTwo"):
         db.set_stage(_rid(name), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
 
     assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semifinals"
 
@@ -287,7 +356,8 @@ def test_the_hub_says_which_round_is_running(cd_db):
         in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
     )
 
-    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D")
+    # The event moving on is what changes this, not a draw being loaded.
+    _restart("semifinals")
 
     assert (
         "**Semifinals** are running"

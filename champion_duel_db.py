@@ -606,7 +606,7 @@ def _migrate_stages_to_groupings(conn) -> None:
 # â”€â”€ Groupings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def parse_warzones(text) -> list[str]:
+def parse_warzones(text, *, unique: bool = True) -> list[str]:
     """The Participating Warzone line, as a sorted set of warzone numbers.
 
     The game renders it `#773 , #800 , #744 , ...` and the order it lists them
@@ -618,12 +618,18 @@ def parse_warzones(text) -> list[str]:
     off a phone screen, and rejecting their line because they used spaces
     instead of commas would be a validation failure with nothing wrong behind
     it. Anything non-numeric simply is not a warzone.
+
+    `unique=False` keeps repeats, in the order they were typed. Only validation
+    wants that: sixteen numbers with one typed twice dedupe to sixteen and would
+    otherwise be accepted as a complete grouping that is short one warzone.
     """
     out: list[str] = []
     for chunk in str(text or "").replace("#", " ").replace(",", " ").split():
         digits = chunk.strip()
         if digits.isdigit():
             out.append(str(int(digits)))
+    if not unique:
+        return out
     return sorted(set(out), key=int)
 
 
@@ -717,6 +723,40 @@ def find_grouping_by_warzone(warzone) -> dict | None:
             (zone,),
         ).fetchone()
     return get_grouping(row["id"]) if row else None
+
+
+def overlapping_groupings(warzones, started_on=None) -> list[tuple[dict, str]]:
+    """Groupings running at the same time that already hold one of these
+    warzones, each paired with the lowest warzone they share.
+
+    A warzone cannot be in two groupings of one Champion Duel, so an overlap
+    that is not the whole set is a contradiction: one of the two entries is
+    wrong and the surface has to stop rather than fork a second grouping over
+    the same draw. An *exact* set match is not a contradiction at all, and the
+    caller joins it instead -- that is two people entering the same sixteen.
+
+    Groupings more than a whole event apart are different Champion Duels and
+    share warzones by design, so they are not conflicts. Where either side has
+    no start date, the overlap stands: we cannot show the two are separate
+    events, and a false stop costs one message where a false pass costs a
+    grouping nobody can untangle.
+    """
+    zones = set(
+        parse_warzones(warzones)
+        if isinstance(warzones, str)
+        else [z for z in (_server(w) for w in warzones) if z]
+    )
+    start = _started({"started_on": started_on})
+    out: list[tuple[dict, str]] = []
+    for grouping in list_groupings():
+        shared = sorted(zones & set(grouping["warzones"]), key=int)
+        if not shared:
+            continue
+        other = _started(grouping)
+        if start and other and abs((start - other).days) >= EVENT_DAYS:
+            continue
+        out.append((grouping, shared[0]))
+    return out
 
 
 def default_grouping_id() -> int | None:

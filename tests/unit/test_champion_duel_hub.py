@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -944,3 +945,369 @@ def test_unset_env_admits_nobody(monkeypatch):
 def test_admin_env_admits_only_the_listed_ids(admin_env):
     assert hub._is_admin(ADMIN_ID) is True
     assert hub._is_admin(OUTSIDER_ID) is False
+
+
+# ── Which grouping is this ────────────────────────────────────────────────────
+#
+# Champion Duel structure is per grouping, and everything merged before this
+# assumed there was exactly one. The failure is silent rather than loud: an
+# officer in warzone 1500 recording an opponent as "Group D" landed that player
+# in the imported grouping's Group D, and nothing anywhere said so.
+#
+# These cover the hub learning which grouping it is talking about. The `cd_db`
+# fixture imports two players on warzone 738, which creates one grouping holding
+# that warzone and nothing else.
+
+# A grouping's worth of warzones, none of them 738, so a test can build a
+# second grouping that does not touch the fixture's.
+SIXTEEN = [str(700 + i) for i in range(db.GROUPING_SIZE)]
+
+
+@pytest.fixture
+def no_mm_link(monkeypatch):
+    """No Map Manager link, which is the state of most alliances."""
+    monkeypatch.setattr(hub, "_mm_warzone", lambda guild_id: None)
+
+
+def _view(interaction):
+    return interaction.followup.send.call_args.kwargs.get("view")
+
+
+def _embed(interaction):
+    return interaction.followup.send.call_args.kwargs.get("embed")
+
+
+def _button(view, label):
+    return next(b for b in view.children if b.label == label)
+
+
+async def test_an_alliance_we_cannot_place_is_asked_for_one_number(cd_db, no_mm_link):
+    """The third hub state. A global count describing somebody else's tournament
+    is what the other two would become without this."""
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    assert isinstance(view, hub.ChampionDuelOnboardingView)
+    assert hub.CD_BTN_SET_WARZONE in _labels(view)
+    assert "Which warzone" in _embed(interaction).description
+    # Disabled rather than absent: it is the second half of one job, and a
+    # surface with a single button on it reads as a dead end.
+    assert _button(view, hub.CD_BTN_ADD_GROUPING).disabled
+
+
+async def test_a_warzone_in_no_grouping_asks_for_the_grouping_not_the_number_again(
+    cd_db, no_mm_link
+):
+    """They already answered. Asking again would be the surface failing to say
+    what is actually missing."""
+    db.set_guild_warzone("999", "1500")
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    assert isinstance(view, hub.ChampionDuelOnboardingView)
+    assert "**1500**" in _embed(interaction).description
+    assert not _button(view, hub.CD_BTN_ADD_GROUPING).disabled
+
+
+async def test_a_map_manager_linked_alliance_is_never_asked(cd_db, monkeypatch):
+    """`guild_alliance_mappings.server` is an INTEGER there and TEXT here, and
+    that boundary is the kind of thing that silently matches nothing."""
+    import config
+
+    monkeypatch.setattr(
+        config, "get_guild_alliance_mapping", lambda gid, include_revoked=False: {"server": 738}
+    )
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    assert isinstance(_view(interaction), hub.ChampionDuelHubView)
+    assert db.get_guild_warzone("999") is None, "an inference is not a pin"
+
+
+async def test_the_hub_outside_a_server_stays_global(cd_db, no_mm_link):
+    """There is nowhere to remember a warzone for a DM and nothing to scope, so
+    asking would be a question with no use for the answer."""
+    interaction = _interaction()
+    interaction.guild_id = None
+
+    await hub._open_hub(interaction, can_write=False)
+
+    assert isinstance(_view(interaction), hub.ChampionDuelHubView)
+
+
+# ── Setting the warzone ───────────────────────────────────────────────────────
+
+
+async def test_a_warzone_that_is_not_a_number_is_refused(cd_db, no_mm_link):
+    modal = hub._WarzoneModal(can_write=True)
+    modal.warzone._value = "our server"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "not a warzone number" in _sent(interaction)
+    assert db.get_guild_warzone("999") is None
+
+
+async def test_setting_a_warzone_lands_on_the_hub_it_unlocked(cd_db, no_mm_link):
+    """Not an acknowledgement the user then has to leave."""
+    modal = hub._WarzoneModal(can_write=True)
+    modal.warzone._value = "#738"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    pinned = db.get_guild_warzone("999")
+    assert pinned["warzone"] == "738"
+    assert pinned["set_by_discord_id"] == str(ADMIN_ID), "audit only, never used to resolve"
+    assert pinned["confirmed_grouping_id"] == db.default_grouping_id()
+    assert isinstance(_view(interaction), hub.ChampionDuelHubView)
+    assert "warzone **738**" in _sent(interaction)
+
+
+async def test_changing_a_warzone_names_both_numbers_first(cd_db, no_mm_link):
+    """One wrong change repoints every member of the server."""
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=db.default_grouping_id())
+    modal = hub._WarzoneModal(can_write=True, current="738")
+    modal.warzone._value = "1500"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    msg = _sent(interaction)
+    assert "**738**" in msg and "**1500**" in msg
+    assert db.get_guild_warzone("999")["warzone"] == "738", "not changed until confirmed"
+
+    view = _view(interaction)
+    assert isinstance(view, hub._ChangeWarzoneView)
+    await view._on_yes(_interaction())
+    assert db.get_guild_warzone("999")["warzone"] == "1500"
+
+
+async def test_backing_out_of_a_change_says_what_survived(cd_db, no_mm_link):
+    """A backpedal, not a cancelled flow: getting that backwards makes people
+    think they lost the setting."""
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=db.default_grouping_id())
+    view = hub._ChangeWarzoneView(user_id=ADMIN_ID, can_write=True, current="738", proposed="1500")
+
+    interaction = _interaction()
+    await view._on_no(interaction)
+
+    said = interaction.response.edit_message.call_args.kwargs["content"]
+    assert said.startswith("↩️") and "still on warzone **738**" in said
+    assert db.get_guild_warzone("999")["warzone"] == "738"
+
+
+def test_the_resolved_hub_carries_a_way_to_fix_a_wrong_warzone(cd_db):
+    """Nothing else on the hub can fix it, and everything on it depends on it."""
+    scoped = hub.ChampionDuelHubView(
+        user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True, warzone="738"
+    )
+    assert hub.CD_BTN_CHANGE_WARZONE in _labels(scoped)
+
+    # Nothing resolved from, nothing to change.
+    unscoped = hub.ChampionDuelHubView(
+        user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True
+    )
+    assert hub.CD_BTN_CHANGE_WARZONE not in _labels(unscoped)
+
+
+# ── Confirming it against a new Champion Duel ─────────────────────────────────
+
+
+async def test_a_new_champion_duel_reconfirms_the_warzone_once(cd_db, no_mm_link):
+    """An alliance that moved warzone still resolves, silently and wrongly: the
+    old number keeps being drawn into somebody's grouping."""
+    db.set_guild_warzone("999", "738")
+
+    first = _interaction()
+    await hub._open_hub(first, can_write=True)
+    view = _view(first)
+    assert isinstance(view, hub._ConfirmWarzoneView)
+    assert "**738**" in _embed(first).description
+
+    yes = _interaction()
+    await view._on_yes(yes)
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == db.default_grouping_id()
+    assert isinstance(_view(yes), hub.ChampionDuelHubView)
+
+    again = _interaction()
+    await hub._open_hub(again, can_write=True)
+    assert isinstance(_view(again), hub.ChampionDuelHubView), "never on a repeat visit"
+
+
+# ── Adding a grouping ─────────────────────────────────────────────────────────
+
+
+def test_a_start_date_goes_in_however_it_is_written():
+    """The same permissive parser every other date surface uses. Nobody should
+    have to learn a second date format for one modal."""
+    today = date(2026, 8, 15)
+    for written in ("2026-08-04", "2026/08/04", "2026.08.04", "8/4/2026", "Aug 4 2026"):
+        assert hub.parse_start_date(written, today=today) == "2026-08-04", written
+
+
+def test_a_date_with_no_year_takes_the_nearest_one():
+    """`parse_event_date` infers a forward year, which is right for a storm being
+    scheduled and wrong here: the Sign-up stage has already run by the time its
+    date can be read off the Match Overview box."""
+    today = date(2026, 8, 15)
+    assert hub.parse_start_date("8/4", today=today) == "2026-08-04", "not next August"
+    assert hub.parse_start_date("Aug 4", today=today) == "2026-08-04"
+    # A year the user actually typed is never second-guessed.
+    assert hub.parse_start_date("2027-08-04", today=today) == "2027-08-04"
+
+
+def test_a_date_nobody_can_read_is_not_guessed_at():
+    assert hub.parse_start_date("sometime last week") is None
+    assert hub.parse_start_date("") is None
+
+
+async def _add_grouping(warzones, *, warzone="700", started="2026-08-04"):
+    modal = hub._AddGroupingModal(can_write=True, warzone=warzone)
+    modal.warzones._value = warzones
+    modal.started_on._value = started
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    return interaction
+
+
+async def test_an_unreadable_date_is_refused_before_anything_is_saved(cd_db, no_mm_link):
+    interaction = await _add_grouping(" ".join(SIXTEEN), started="sometime last week")
+
+    assert "not a date I can read" in _sent(interaction)
+    assert len(db.list_groupings()) == 1
+
+
+async def test_a_refusal_hands_back_the_sixteen_numbers(cd_db, no_mm_link):
+    """A validation failure costs one step, not the whole flow. Without this,
+    "try again" means retyping sixteen numbers to fix one of them."""
+    typed = " ".join(SIXTEEN[:15])
+    interaction = await _add_grouping(typed)
+
+    view = _view(interaction)
+    assert isinstance(view, hub._RetryGroupingView)
+
+    reopened = _interaction()
+    await view._on_retry(reopened)
+    modal = reopened.response.send_modal.call_args.args[0]
+    assert modal.warzones.default == typed
+    assert modal.started_on.default == "2026-08-04"
+
+
+async def test_fifteen_warzones_is_refused_naming_the_count(cd_db, no_mm_link):
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15]))
+
+    assert "**15** warzones" in _sent(interaction)
+    assert len(db.list_groupings()) == 1
+
+
+async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no_mm_link):
+    """Sixteen numbers with one typed twice dedupe to sixteen, and would
+    otherwise be accepted as a complete grouping that is short one warzone."""
+    interaction = await _add_grouping(", ".join(SIXTEEN[:15] + [SIXTEEN[0]]))
+
+    assert "**700** is in that list twice" in _sent(interaction)
+    assert len(db.list_groupings()) == 1
+
+
+async def test_a_grouping_without_your_own_warzone_is_refused(cd_db, no_mm_link):
+    """One of the two answers is off and there is no way to tell which from
+    here. Neither half of that is stated as the user's mistake."""
+    interaction = await _add_grouping(" ".join(SIXTEEN), warzone="1500")
+
+    said = _sent(interaction)
+    assert "**1500**, is not in that list" in said
+    assert "wrong" not in said, "an incorrect stored value is not a user error"
+    assert len(db.list_groupings()) == 1
+
+
+async def test_the_game_formatting_goes_in_as_it_is_read(cd_db, no_mm_link):
+    """Copied off a phone screen. Rejecting it over a separator would be a
+    validation failure with nothing wrong behind it."""
+    interaction = await _add_grouping(" , ".join(f"#{z}" for z in SIXTEEN))
+
+    made = db.find_grouping_by_warzone("700")
+    assert made["warzones"] == SIXTEEN
+    assert made["origin"] == "member"
+    assert isinstance(_view(interaction), hub.ChampionDuelHubView)
+
+
+async def test_the_confirmation_reads_back_every_warzone(cd_db, no_mm_link):
+    """Sixteen numbers typed off a phone screen. Saying "16 warzones" back
+    confirms the count and nothing about whether they are the right sixteen."""
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+
+    said = _sent(interaction)
+    assert "Added your warzone grouping" in said and "**8/4**" in said
+    for zone in SIXTEEN:
+        assert zone in said
+
+
+async def test_creating_a_grouping_pins_the_guild(cd_db, no_mm_link):
+    """They just told us their sixteen. Asking which one they play on is asking
+    for something we already have."""
+    await _add_grouping(" ".join(SIXTEEN))
+
+    pinned = db.get_guild_warzone("999")
+    assert pinned["warzone"] == "700"
+    assert pinned["confirmed_grouping_id"] == db.find_grouping_by_warzone("700")["id"]
+
+
+async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
+    """Two people entering the same sixteen is not a conflict, and the order the
+    game lists them in is arbitrary."""
+    existing = db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+
+    interaction = await _add_grouping(" ".join(reversed(SIXTEEN)))
+
+    assert len(db.list_groupings()) == 2, "the fixture's and this one, not three"
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == existing["id"]
+    said = _sent(interaction)
+    assert "already been entered" in said
+    for zone in SIXTEEN:
+        assert zone in said, "they did not enter this one, so they need to see it"
+
+
+async def test_a_conflict_shows_both_lists_so_the_reader_can_tell_which_is_off(cd_db, no_mm_link):
+    """Naming the shared warzone says one of the two lists has a mistake without
+    showing the other one, which leaves the reader no way to work out which."""
+    db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+    mine = ["800"] + SIXTEEN[:15]
+
+    interaction = await _add_grouping(", ".join(mine), warzone="800")
+
+    embed = _embed(interaction)
+    assert "700" in embed.title
+    assert hub._warzone_list(sorted(mine, key=int)) in embed.description
+    assert hub._warzone_list(SIXTEEN) in embed.description
+    assert len(db.list_groupings()) == 2, "nothing was saved"
+
+
+async def test_a_conflict_carries_both_ways_out(cd_db, no_mm_link):
+    """Only the reader can tell which list is wrong. Theirs is one button away;
+    the other belongs to somebody else, so that half is a route to us."""
+    db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+
+    interaction = await _add_grouping(", ".join(["800"] + SIXTEEN[:15]), warzone="800")
+
+    view = _view(interaction)
+    assert isinstance(view, hub._RetryGroupingView)
+    fields = " ".join(f.value for f in _embed(interaction).fields)
+    assert "Edit and try again" in fields
+    assert hub.COMMUNITY_SERVER_NAME in fields
+    # One tap, not a URL to read and copy. This is a phone surface.
+    assert hub.COMMUNITY_SERVER_URL in [b.url for b in view.children if b.url]
+
+
+async def test_a_refusal_the_caller_can_fix_does_not_send_them_to_us(cd_db, no_mm_link):
+    """A miscounted list is entirely theirs to fix. A control leading somewhere
+    with nothing to do there is the same waste as one that changes nothing."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15]))
+
+    view = _view(interaction)
+    assert _labels(view) == [hub.CD_BTN_RETRY_GROUPING]

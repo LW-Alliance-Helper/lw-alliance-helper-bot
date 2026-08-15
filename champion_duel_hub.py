@@ -46,6 +46,7 @@ import champion_duel_predict as predict_lib
 import champion_duel_wording as words
 import premium
 from api.champion_duel_auth import admin_ids
+from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL
 
 CHAMPION_DUEL_HUB_TITLE = "👑 Champion Duel"
 CHAMPION_DUEL_HUB_CMD = "/champion_duel"
@@ -64,6 +65,20 @@ CD_BTN_REVERT = "⏪ Revert an edit"
 CD_BTN_EXPORT = "📤 Export edits"
 CD_BTN_FILTER = "🔍 Filter these"
 CD_BTN_SHARE = "📤 Share this prediction to current channel"
+CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
+CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
+CD_BTN_ADD_GROUPING = "➕ Add your warzone grouping"
+CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
+# 💬 borrowed from the website's own link to the same place, per `notes/DESIGN
+# .md` emoji rule 5: somebody who has seen one should recognise the other.
+CD_BTN_COMMUNITY = f"💬 {COMMUNITY_SERVER_NAME}"
+
+# Confirm pairs go bare (`notes/DESIGN.md`, emoji rule 7): the two halves differ
+# by answer, not by kind, so any glyph would be the same one twice.
+CD_BTN_WARZONE_YES = "Yes, that's us"
+CD_BTN_WARZONE_NO = "No, change it"
+CD_BTN_CHANGE_YES = "Yes, change it"
+CD_BTN_CANCEL = "Cancel"
 
 # Discord's message limit is 2000 and an embed description is 4096. Keep the
 # browse list well inside both, since the export exists for volume.
@@ -1403,6 +1418,711 @@ class _ExportModal(discord.ui.Modal, title="Export Champion Duel edits"):
         )
 
 
+# ── Warzone and grouping onboarding ───────────────────────────────────────────
+#
+# Champion Duel structure is per grouping: the 16 warzones drawn together, shown
+# in game as one line at the bottom of the Match Overview box. Everything this
+# hub says about rounds, groups and dates belongs to one of them, so the hub has
+# to know which before it can say any of it.
+#
+# One number gets there. A warzone is in at most one grouping per Champion Duel,
+# so the ask is a warzone rather than sixteen -- and a warzone is durable where a
+# grouping is not, which is why the answer keeps working next season.
+
+
+def _mm_warzone(guild_id) -> str | None:
+    """The warzone from this alliance's Map Manager link, if it has one.
+
+    Read here rather than in `champion_duel_db`, which is deliberately
+    independent of `config`: the link lives in `guild_configs.db`, and reaching
+    across from the tournament database would tie global tournament data to
+    per-guild config in exactly the way keeping them in separate files avoids.
+
+    The column is INTEGER there and TEXT here, which is the kind of boundary
+    that silently matches nothing; `parse_warzones` reconciles it.
+    """
+    import config
+
+    mapping = config.get_guild_alliance_mapping(int(guild_id)) or {}
+    zones = db.parse_warzones(str(mapping.get("server") or ""))
+    return zones[0] if zones else None
+
+
+async def _grouping_state(interaction: discord.Interaction) -> tuple[dict | None, str | None]:
+    """(the caller's grouping, the warzone it resolved from), either may be None.
+
+    Both, because the two unresolved states are different surfaces. An alliance
+    that has told us nothing has to be asked. One whose warzone is in no grouping
+    we hold has already answered, and needs somebody to enter that grouping
+    instead -- asking them again for a number they already gave would be the
+    surface failing to say what is actually missing.
+    """
+    guild_id = interaction.guild_id
+    if not guild_id:
+        return (None, None)
+    pinned = await asyncio.to_thread(db.get_guild_warzone, str(guild_id))
+    warzone = (pinned or {}).get("warzone") or await asyncio.to_thread(_mm_warzone, guild_id)
+    if not warzone:
+        return (None, None)
+    grouping = await asyncio.to_thread(
+        db.resolve_grouping_for_guild, str(guild_id), fallback_warzone=warzone
+    )
+    return (grouping, str(warzone))
+
+
+def parse_start_date(text, *, today=None) -> str | None:
+    """The Sign-up stage's start date as an ISO string, or None if unreadable.
+
+    Runs the same permissive parser every other date surface in the bot uses, so
+    `8/4`, `Aug 4`, `4 August`, `2026-08-04` and `2026.08.04` all land here the
+    way they land in a storm date. Nobody should have to learn a second date
+    format for one modal.
+
+    One correction on top of it. `parse_event_date` infers a **forward** year for
+    a date typed without one, which is right for a storm being scheduled and
+    wrong here: a Champion Duel's Sign-up stage has already run by the time the
+    Match Overview box can be read, so `8/4` typed on 8/15 would otherwise become
+    next August. A year-less date takes the nearest occurrence instead. A year
+    the user actually typed is never second-guessed.
+    """
+    import re
+
+    from storm_date_helpers import parse_event_date
+
+    raw = str(text or "").strip()
+    today = today or _server_today()
+    parsed = parse_event_date(raw, today=today)
+    if parsed is None:
+        return None
+    if not re.search(r"\d{4}", raw):
+        try:
+            earlier = parsed.replace(year=parsed.year - 1)
+        except ValueError:  # 29 February, and the year before is not a leap year
+            earlier = None
+        if earlier and abs((earlier - today).days) < abs((parsed - today).days):
+            parsed = earlier
+    return parsed.isoformat()
+
+
+def _server_today():
+    """Today's in-game date. Every date on these surfaces is a game date, and
+    `UX.md` is explicit that game time is not local time."""
+    from config import server_date_for
+
+    return server_date_for(datetime.now(timezone.utc))
+
+
+def _warzone_list(zones) -> str:
+    """A grouping's warzones as one line, in the numeric order they are stored.
+
+    Sixteen bare numbers fit on a phone line and the reader is scanning for
+    their own, which is the same reason the hub lists servers bare.
+    """
+    return ", ".join(str(z) for z in zones)
+
+
+def _short_date(value) -> str:
+    """A date the way the game prints it: `8/4`, no leading zeros and no year.
+
+    The year is dropped because every date on these surfaces is inside one
+    27-day event, and the number a member is comparing against is the one on
+    the Match Overview box, which has no year on it either.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value[:10]).date()
+        except ValueError:  # pragma: no cover - a hand-edited row
+            return value
+    return f"{value.month}/{value.day}"
+
+
+def _typed(value: str, limit: int = 32) -> str:
+    """A user's own input, echoed back into an error, clamped.
+
+    Errors name what was typed so the user can see which of the two fields was
+    the wrong one, and a paste of sixteen warzones is well past what an embed
+    should repeat back.
+    """
+    text = " ".join(str(value or "").split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def build_onboarding_embed(*, servers: list[dict], warzone: str | None) -> discord.Embed:
+    """The third hub state: we do not know which grouping this alliance is in.
+
+    The global "what we hold" line stays, because before we know who they are it
+    is the only honest thing to say -- and it is the thing that shows the ask is
+    worth answering rather than a form for its own sake.
+    """
+    embed = discord.Embed(title=CHAMPION_DUEL_HUB_TITLE, color=discord.Color.blurple())
+    total = sum(s["registrants"] for s in servers)
+    held = (
+        f"We currently have **{total}** players across **{len(servers)}** warzones.\n\n"
+        if total
+        else ""
+    )
+    if warzone:
+        embed.description = (
+            f"{held}"
+            f"Your alliance is on warzone **{warzone}**. We do not currently know what "
+            f"warzones you are matched with for this Champion Duel. Please add your "
+            f"warzone grouping. You can find it listed at the bottom of the Match "
+            f"Overview box in game."
+        )[:4096]
+    else:
+        embed.description = (
+            f"{held}"
+            f"Which warzone is your alliance on? Champion Duel matches "
+            f"{db.GROUPING_SIZE} warzones and all of the data will be unique to your "
+            f"grouping. Add your warzone and we will either automatically add you to "
+            f"your grouping or ask you to add the other warzones you are matched with."
+        )[:4096]
+    return embed
+
+
+class ChampionDuelOnboardingView(discord.ui.View):
+    """Set a warzone, or enter the grouping it belongs to.
+
+    **Add a grouping renders disabled until the warzone is known**, rather than
+    absent. It is the second half of one job and the embed says what unlocks it,
+    so hiding it would leave the surface looking like a dead end with one button
+    on it. Live and failing validation would be worse: `notes/DESIGN.md` says a
+    control that cannot change anything under current conditions is disabled with
+    the reason, not left inert.
+    """
+
+    def __init__(self, *, user_id: int, can_write: bool, warzone: str | None):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.warzone = warzone
+        self.message: discord.Message | None = None
+
+        known = bool(warzone)
+        self._add(
+            CD_BTN_CHANGE_WARZONE if known else CD_BTN_SET_WARZONE,
+            discord.ButtonStyle.secondary if known else discord.ButtonStyle.primary,
+            self._on_warzone,
+        )
+        self._add(
+            CD_BTN_ADD_GROUPING,
+            discord.ButtonStyle.primary if known else discord.ButtonStyle.secondary,
+            self._on_add_grouping,
+            disabled=not known,
+        )
+
+    def _add(self, label, style, cb, *, disabled=False):
+        button = discord.ui.Button(label=label[:80], style=style, row=0, disabled=disabled)
+        button.callback = cb
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_warzone(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _WarzoneModal(can_write=self.can_write, current=self.warzone)
+        )
+
+    async def _on_add_grouping(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _AddGroupingModal(can_write=self.can_write, warzone=self.warzone)
+        )
+
+
+class _WarzoneModal(discord.ui.Modal, title="Your alliance's warzone"):
+    """One number, which is all it takes to find the grouping.
+
+    A warzone rather than a grouping, because a warzone is durable and a
+    grouping is not: the sixteen change every Champion Duel and the number does
+    not, so this answer keeps resolving next season with nobody re-pinning
+    anything.
+    """
+
+    def __init__(self, *, can_write: bool, current: str | None = None):
+        super().__init__()
+        self.can_write = can_write
+        self.current = current
+        # Safe to set on self: `Modal._init_children` deepcopies each declared
+        # item onto the instance, so a default cannot leak to the next opener.
+        if current:
+            self.warzone.default = current[:10]
+
+    warzone = discord.ui.TextInput(label="Warzone number", max_length=10, placeholder="e.g. 738")
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.guild_id:
+            await interaction.followup.send(_WARZONE_NEEDS_A_SERVER, ephemeral=True)
+            return
+
+        zones = db.parse_warzones(self.warzone.value)
+        if len(zones) != 1:
+            await interaction.followup.send(
+                f"⚠️ **{_typed(self.warzone.value, 16)}** is not a warzone number. A "
+                f"warzone is the number your alliance plays on, like 738. Try again.",
+                ephemeral=True,
+            )
+            return
+
+        zone = zones[0]
+        # Changing an existing answer repoints every member of this server at a
+        # different grouping, so it is confirmed and the confirmation names both
+        # numbers. Setting one for the first time changes nothing that was there.
+        if self.current and zone != self.current:
+            view = _ChangeWarzoneView(
+                user_id=interaction.user.id,
+                can_write=self.can_write,
+                current=self.current,
+                proposed=zone,
+            )
+            await interaction.followup.send(
+                f"⚠️ Your alliance is set to warzone **{self.current}**. Changing it to "
+                f"**{zone}** points everyone on this server at a different grouping.",
+                view=view,
+                ephemeral=True,
+            )
+            view.message = await interaction.original_response()
+            return
+
+        await _pin_warzone(interaction, zone, can_write=self.can_write)
+
+
+_WARZONE_NEEDS_A_SERVER = (
+    "⚠️ A warzone is remembered for a whole Discord server, so this only works "
+    "inside one. Run `/champion_duel` in your alliance's server."
+)
+
+
+class _ChangeWarzoneView(discord.ui.View):
+    """The confirm half of changing a warzone that was already answered."""
+
+    def __init__(self, *, user_id: int, can_write: bool, current: str, proposed: str):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.current = current
+        self.proposed = proposed
+        self.message: discord.Message | None = None
+
+        for label, style, cb in (
+            (CD_BTN_CHANGE_YES, discord.ButtonStyle.success, self._on_yes),
+            (CD_BTN_CANCEL, discord.ButtonStyle.secondary, self._on_no),
+        ):
+            button = discord.ui.Button(label=label[:80], style=style, row=0)
+            button.callback = cb
+            self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_yes(self, inter: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        await _pin_warzone(inter, self.proposed, can_write=self.can_write)
+        self.stop()
+
+    async def _on_no(self, inter: discord.Interaction):
+        # A backpedal, not a cancelled flow: the warzone they had is untouched,
+        # and the detail sentence is what says so (`messages.CANCEL_BACKPEDAL`).
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content=f"↩️ Cancelled. Your alliance is still on warzone **{self.current}**.",
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+
+class _ConfirmWarzoneView(discord.ui.View):
+    """Once per Champion Duel, check the warzone we resolved from is still right.
+
+    An alliance that moves warzone still resolves, silently and to the wrong
+    grouping: the old number keeps existing and keeps getting drawn into
+    somebody's draw. Nothing in the data can tell the two apart, so the answer is
+    re-confirmed when the grouping changes rather than trusted forever.
+    """
+
+    def __init__(self, *, user_id: int, can_write: bool, warzone: str, grouping: dict):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.warzone = warzone
+        self.grouping = grouping
+        self.message: discord.Message | None = None
+
+        for label, style, cb in (
+            (CD_BTN_WARZONE_YES, discord.ButtonStyle.success, self._on_yes),
+            (CD_BTN_WARZONE_NO, discord.ButtonStyle.secondary, self._on_no),
+        ):
+            button = discord.ui.Button(label=label[:80], style=style, row=0)
+            button.callback = cb
+            self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_yes(self, inter: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        await asyncio.to_thread(
+            db.set_guild_warzone,
+            str(inter.guild_id),
+            self.warzone,
+            discord_id=str(inter.user.id),
+            confirmed_grouping_id=self.grouping["id"],
+        )
+        await _open_hub(inter, can_write=self.can_write)
+        self.stop()
+
+    async def _on_no(self, inter: discord.Interaction):
+        # Straight into the modal, which cannot follow an edit_message on the
+        # same interaction. The stale buttons behind it are answered by whatever
+        # the modal produces, and a cancelled modal leaves the question standing,
+        # which is the honest state: it has not been answered yet.
+        await inter.response.send_modal(
+            _WarzoneModal(can_write=self.can_write, current=self.warzone)
+        )
+
+
+def build_confirm_warzone_embed(*, warzone: str, grouping: dict) -> discord.Embed:
+    started = _short_date(grouping.get("started_on"))
+    # A grouping can exist before anyone has read its dates, so the second
+    # sentence has a version that claims nothing about when it began.
+    began = (
+        f"Your grouping is already set and began on **{started}**."
+        if started
+        else "Your grouping is already set."
+    )
+    return discord.Embed(
+        title=CHAMPION_DUEL_HUB_TITLE,
+        description=(
+            f"A new Champion Duel has begun. We currently have your alliance set as "
+            f"warzone **{warzone}**. {began}\n\n"
+            f"Are you still in warzone **{warzone}**?"
+        )[:4096],
+        color=discord.Color.blurple(),
+    )
+
+
+async def _pin_warzone(interaction: discord.Interaction, zone: str, *, can_write: bool) -> None:
+    """Store the guild's warzone, then show whichever state it resolved to.
+
+    Pinned before resolving succeeds, not after. An alliance whose grouping
+    nobody has entered has still given us a true answer, and losing it would
+    mean asking again on the way to the surface that fixes it.
+    """
+    grouping = await asyncio.to_thread(db.find_grouping_by_warzone, zone)
+    await asyncio.to_thread(
+        db.set_guild_warzone,
+        str(interaction.guild_id),
+        zone,
+        discord_id=str(interaction.user.id),
+        confirmed_grouping_id=grouping["id"] if grouping else None,
+    )
+    await _open_hub(
+        interaction,
+        can_write=can_write,
+        note=f"✅ Set your alliance to warzone **{zone}**.",
+    )
+
+
+class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone grouping"):
+    """The 16 warzones and the day it started, which is the whole grouping.
+
+    Two fields because that is everything the game shows: the Participating
+    Warzone line and the Sign-up stage's start date. From those two the hub
+    derives every round, every window and every date it will ever state, so
+    nobody has to come back and tell it the event moved on.
+
+    Both fields take defaults so a refusal can hand back what was typed. Sixteen
+    numbers copied off a phone screen is not something anyone should retype
+    because one of them was a digit out.
+    """
+
+    def __init__(
+        self,
+        *,
+        can_write: bool,
+        warzone: str | None,
+        warzones_default: str | None = None,
+        started_default: str | None = None,
+    ):
+        super().__init__()
+        self.can_write = can_write
+        self.warzone = warzone
+        # Safe to set on self: `Modal._init_children` deepcopies each declared
+        # item onto the instance, so a default cannot leak to the next opener.
+        if warzones_default:
+            self.warzones.default = warzones_default[:200]
+        if started_default:
+            self.started_on.default = started_default[:20]
+
+    warzones = discord.ui.TextInput(
+        label="The participating warzones, all 16",
+        style=discord.TextStyle.paragraph,
+        max_length=200,
+        placeholder="#773, #800, #744, ...",
+    )
+    started_on = discord.ui.TextInput(
+        label="Sign-up stage start date",
+        max_length=20,
+        placeholder="e.g. 8/4, Aug 4, or 2026-08-04",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.guild_id:
+            await interaction.followup.send(_WARZONE_NEEDS_A_SERVER, ephemeral=True)
+            return
+
+        started = parse_start_date(self.started_on.value)
+        if started is None:
+            await self._refuse(
+                interaction,
+                f"⚠️ **{_typed(self.started_on.value, 16)}** is not a date I can read. "
+                f"The Sign-up stage's start date is at the top of the Match Overview "
+                f"box in game. Most ways of writing it work: 8/4, Aug 4, or 2026-08-04. "
+                f"Try again.",
+            )
+            return
+
+        typed = db.parse_warzones(self.warzones.value, unique=False)
+        zones = sorted(set(typed), key=int)
+        repeated = next((z for z in zones if typed.count(z) > 1), None)
+        if repeated is not None:
+            await self._refuse(
+                interaction,
+                f"⚠️ Warzone **{repeated}** is in that list twice. A grouping is "
+                f"{db.GROUPING_SIZE} different warzones. Try again.",
+            )
+            return
+        if len(zones) != db.GROUPING_SIZE:
+            await self._refuse(
+                interaction,
+                f"⚠️ That is **{len(zones)}** warzones. A Champion Duel grouping is "
+                f"exactly **{db.GROUPING_SIZE}**, listed together at the bottom of the "
+                f"Match Overview box in game. Try again.",
+            )
+            return
+
+        # The caller's own warzone has to be in the set. If it is not, one of the
+        # two answers is off and there is no way to tell which from here -- and
+        # pinning a guild to a grouping it is not in is the exact silent failure
+        # the grouping separation exists to stop.
+        if self.warzone and self.warzone not in zones:
+            await self._refuse(
+                interaction,
+                f"⚠️ Your alliance's warzone, **{self.warzone}**, is not in that list. "
+                f"Either a warzone is missing from it or the warzone we have for your "
+                f"alliance is incorrect. Check both, then try again.",
+            )
+            return
+
+        overlaps = await asyncio.to_thread(db.overlapping_groupings, zones, started)
+        exact = next((g for g, _ in overlaps if set(g["warzones"]) == set(zones)), None)
+        if exact is None and overlaps:
+            await self._report_conflict(interaction, overlaps[0], zones, started)
+            return
+
+        if exact is not None:
+            grouping = exact
+            note = (
+                f"ℹ️ That grouping has already been entered.\n"
+                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(exact['warzones'])}."
+            )
+        else:
+            grouping = await asyncio.to_thread(
+                db.create_grouping,
+                zones,
+                started,
+                origin="member",
+                guild_id=str(interaction.guild_id),
+                discord_id=str(interaction.user.id),
+            )
+            note = (
+                f"✅ Added your warzone grouping, starting **{_short_date(started)}**.\n"
+                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
+            )
+
+        # Creating pins the guild as a side effect. They just told us their
+        # sixteen; asking for the one they play on again would be asking for
+        # something we already have.
+        pin = self.warzone if self.warzone in zones else None
+        if pin:
+            await asyncio.to_thread(
+                db.set_guild_warzone,
+                str(interaction.guild_id),
+                pin,
+                discord_id=str(interaction.user.id),
+                confirmed_grouping_id=grouping["id"],
+            )
+        await _open_hub(interaction, can_write=self.can_write, note=note)
+
+    async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
+        """Say what is wrong, and hand back what was typed.
+
+        A validation failure costs one step, not the whole flow (`UX.md`), and
+        without the retry button "try again" means retyping sixteen numbers off a
+        phone screen to fix one of them.
+        """
+        view = _RetryGroupingView(
+            user_id=interaction.user.id,
+            can_write=self.can_write,
+            warzone=self.warzone,
+            warzones_default=self.warzones.value,
+            started_default=self.started_on.value,
+        )
+        await interaction.followup.send(message, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
+
+    async def _report_conflict(
+        self,
+        interaction: discord.Interaction,
+        overlap: tuple[dict, str],
+        zones: list[str],
+        started: str,
+    ) -> None:
+        """Both lists, side by side, and the two ways out.
+
+        Naming the shared warzone is not enough on its own: it says one of the
+        two lists has a mistake in it without showing the other one, so the
+        reader has no way to work out which. Printing both is what makes the
+        answer visible, and it is usually obvious at a glance.
+
+        The exit depends on which list is wrong, and only the reader can tell.
+        Theirs is one button away. The other belongs to somebody else, and
+        overwriting another alliance's grouping on one person's say-so is an
+        opinion the bot does not have (`UX.md` principle 6), so that half is a
+        route to the operator rather than a control.
+        """
+        other, shared = overlap
+        embed = discord.Embed(
+            title=f"⚠️ Warzone {shared} in two groupings",
+            description=(
+                f"A warzone is only ever matched into one grouping, so one of these "
+                f"two lists has a mistake in it. Nothing was saved.\n\n"
+                f"**You entered**, starting {_short_date(started)}:\n"
+                f"{_warzone_list(zones)}\n\n"
+                f"**Already here**, starting {_short_date(other.get('started_on')) or 'an unknown date'}:\n"
+                f"{_warzone_list(other['warzones'])}"
+            )[:4096],
+            color=discord.Color.orange(),
+        )
+        embed.add_field(
+            name="If your list is the one to fix",
+            value=f"Press **{_btn_words(CD_BTN_RETRY_GROUPING)}**. What you typed is kept.",
+            inline=False,
+        )
+        embed.add_field(
+            name="If the list already here is wrong",
+            value=(
+                f"Another alliance entered it, so it is not yours to change. Tell us on "
+                f"the {COMMUNITY_SERVER_NAME} and we will correct it."
+            ),
+            inline=False,
+        )
+        view = _RetryGroupingView(
+            user_id=interaction.user.id,
+            can_write=self.can_write,
+            warzone=self.warzone,
+            warzones_default=self.warzones.value,
+            started_default=self.started_on.value,
+            offer_community=True,
+        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
+
+
+class _RetryGroupingView(discord.ui.View):
+    """Reopen the grouping modal with what was typed still in it.
+
+    `offer_community` adds the second exit, and only the conflict has one: a
+    miscounted list is entirely the caller's to fix, and a control that leads
+    somewhere with nothing to do there is the same waste as one that cannot
+    change anything.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        can_write: bool,
+        warzone: str | None,
+        warzones_default: str | None,
+        started_default: str | None,
+        offer_community: bool = False,
+    ):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.warzone = warzone
+        self.warzones_default = warzones_default
+        self.started_default = started_default
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(
+            label=CD_BTN_RETRY_GROUPING[:80], style=discord.ButtonStyle.primary
+        )
+        button.callback = self._on_retry
+        self.add_item(button)
+        if offer_community:
+            # A link button rather than the URL in the field text: an invite is
+            # one tap here and a thing to read and copy there, and this is a
+            # phone surface.
+            self.add_item(discord.ui.Button(label=CD_BTN_COMMUNITY[:80], url=COMMUNITY_SERVER_URL))
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_retry(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _AddGroupingModal(
+                can_write=self.can_write,
+                warzone=self.warzone,
+                warzones_default=self.warzones_default,
+                started_default=self.started_default,
+            )
+        )
+
+
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
@@ -1479,12 +2199,21 @@ def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
 class ChampionDuelHubView(discord.ui.View):
     """The button grid. Rows group by kind: everyone, contributors, operator."""
 
-    def __init__(self, *, user_id: int, is_admin: bool, can_write: bool, engine_ok: bool):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        is_admin: bool,
+        can_write: bool,
+        engine_ok: bool,
+        warzone: str | None = None,
+    ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.is_admin = is_admin
         self.can_write = can_write
         self.engine_ok = engine_ok
+        self.warzone = warzone
         self.message: discord.Message | None = None
         self._build_buttons()
 
@@ -1537,6 +2266,11 @@ class ChampionDuelHubView(discord.ui.View):
         # paying for should be able to see what contributing involves, and it
         # is documentation: withholding it protects nothing.
         self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
+        # A wrong warzone points the whole server at somebody else's tournament,
+        # and nothing else on this hub can fix it. Present whenever we resolved
+        # from one, which is the only time there is something to change.
+        if self.warzone:
+            self._add(CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 1, self._on_warzone)
 
         # Row 2 — operator only, and absent entirely for everyone else.
         if self.is_admin:
@@ -1554,6 +2288,11 @@ class ChampionDuelHubView(discord.ui.View):
 
     async def _on_add(self, inter: discord.Interaction):
         await inter.response.send_modal(_AddPlayerModal(self.can_write))
+
+    async def _on_warzone(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _WarzoneModal(can_write=self.can_write, current=self.warzone)
+        )
 
     async def _on_guide(self, inter: discord.Interaction):
         """Its own button rather than part of the write flows.
@@ -1577,6 +2316,74 @@ class ChampionDuelHubView(discord.ui.View):
         await inter.response.send_modal(_ExportModal())
 
 
+async def _open_hub(
+    interaction: discord.Interaction, *, can_write: bool, note: str | None = None
+) -> None:
+    """Whichever of the hub's three states this alliance is in.
+
+    One entry point for all of them, so every flow that answers the grouping
+    question lands back on the surface its answer unlocked rather than on an
+    acknowledgement the user then has to leave. The caller has already responded
+    or deferred.
+
+    A caller with no server (a DM) skips straight to the global hub. There is
+    nowhere to remember a warzone for them and nothing to scope, so asking would
+    be a question with no use for the answer.
+    """
+    grouping, warzone = await _grouping_state(interaction)
+    servers = await asyncio.to_thread(db.get_servers)
+
+    if interaction.guild_id and grouping is None:
+        view = ChampionDuelOnboardingView(
+            user_id=interaction.user.id, can_write=can_write, warzone=warzone
+        )
+        await interaction.followup.send(
+            content=note,
+            embed=build_onboarding_embed(servers=servers, warzone=warzone),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+        return
+
+    if (
+        grouping
+        and warzone
+        and await asyncio.to_thread(
+            db.needs_warzone_confirmation, str(interaction.guild_id), grouping["id"]
+        )
+    ):
+        view = _ConfirmWarzoneView(
+            user_id=interaction.user.id,
+            can_write=can_write,
+            warzone=warzone,
+            grouping=grouping,
+        )
+        await interaction.followup.send(
+            content=note,
+            embed=build_confirm_warzone_embed(warzone=warzone, grouping=grouping),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+        return
+
+    view = ChampionDuelHubView(
+        user_id=interaction.user.id,
+        is_admin=_is_admin(interaction.user.id),
+        can_write=can_write,
+        engine_ok=predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE,
+        warzone=warzone,
+    )
+    await interaction.followup.send(
+        content=note,
+        embed=build_hub_embed(servers=servers, can_write=can_write),
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
+
+
 async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> None:
     """Top-level handler for `/champion_duel`. Opens the hub."""
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -1587,19 +2394,4 @@ async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> Non
             "champion_duel_write", interaction.guild_id, interaction=interaction, bot=bot
         )
     )
-    servers = await asyncio.to_thread(db.get_servers)
-    is_admin = _is_admin(interaction.user.id)
-    engine_ok = predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE
-
-    view = ChampionDuelHubView(
-        user_id=interaction.user.id,
-        is_admin=is_admin,
-        can_write=can_write,
-        engine_ok=engine_ok,
-    )
-    await interaction.followup.send(
-        embed=build_hub_embed(servers=servers, can_write=can_write),
-        view=view,
-        ephemeral=True,
-    )
-    view.message = await interaction.original_response()
+    await _open_hub(interaction, can_write=can_write)

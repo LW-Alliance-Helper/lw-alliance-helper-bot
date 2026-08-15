@@ -200,6 +200,21 @@ DATE_PARSE_RETRY = "⚠️ `{raw}` isn't a date I can parse. Try {examples}. Let
 DATE_PARSE_GIVE_UP = "⚠️ Could not read that date after a few tries. Run {recovery} to start again."
 
 
+# ── Support ──────────────────────────────────────────────────────────────────
+
+# Where a crash report goes. Asks for a GitHub account and a written-up
+# reproduction, which is the right trade for a stack trace and the wrong one
+# for a volunteer officer on a phone -- see COMMUNITY_SERVER_URL below.
+ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues"
+
+# Where a user is sent when the thing that is wrong is not theirs to fix.
+# Named "Community Server" to match the website's own link, so somebody who
+# has seen one recognises the other. "Server" is correct here in the glossary's
+# sense: this is the Discord place, not a warzone.
+COMMUNITY_SERVER_URL = "https://discord.gg/J3PMVJ4y4d"
+COMMUNITY_SERVER_NAME = "Community Server"
+
+
 # ── Footers ──────────────────────────────────────────────────────────────────
 
 # Free vs Premium comparison footer for tier-gated features. Caller

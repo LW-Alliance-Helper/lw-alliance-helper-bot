@@ -64,6 +64,41 @@ def test_a_warzone_resolves_to_its_grouping(cd_db):
     assert db.find_grouping_by_warzone("1500") is None
 
 
+def test_repeats_survive_when_validation_asks_for_them(cd_db):
+    """Sixteen numbers with one typed twice dedupe to sixteen, and the count
+    check would then pass on a grouping that is short one warzone."""
+    assert db.parse_warzones("773 800 773") == ["773", "800"]
+    assert db.parse_warzones("773 800 773", unique=False) == ["773", "800", "773"]
+
+
+def test_a_warzone_in_two_concurrent_groupings_is_a_contradiction(cd_db):
+    """A warzone is drawn into exactly one grouping per Champion Duel, so an
+    overlap that is not the whole set means one of the two entries is wrong."""
+    mine = db.create_grouping("773, 800, 744", started_so_today_is("qualifiers"))
+
+    overlaps = db.overlapping_groupings(["800", "1500"], started_so_today_is("qualifiers"))
+
+    assert [(g["id"], z) for g, z in overlaps] == [(mine["id"], "800")]
+
+
+def test_the_same_sixteen_next_season_is_not_a_conflict(cd_db):
+    """Groupings a whole event apart are different Champion Duels. They share
+    warzones by design, and refusing that would block every new season."""
+    db.create_grouping("773, 800", "2026-01-01")
+
+    assert db.overlapping_groupings(["773", "800"], "2026-08-04") == []
+
+
+def test_an_overlap_stands_when_either_side_has_no_dates(cd_db):
+    """We cannot show the two are separate events, and a false stop costs one
+    message where a false pass costs a grouping nobody can untangle."""
+    db.create_grouping("773, 800")  # imported before anyone read its dates
+
+    overlaps = db.overlapping_groupings(["773", "1500"], "2026-08-04")
+
+    assert [z for _, z in overlaps] == ["773"]
+
+
 # ── The collision this exists to stop ─────────────────────────────────────────
 
 

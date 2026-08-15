@@ -29,7 +29,7 @@ from config import (
 )
 import support_join_watch
 import wizard_registry
-from messages import BOT_NOT_IN_GUILD, NOT_SET_UP
+from messages import BOT_NOT_IN_GUILD, ISSUE_TRACKER_URL, NOT_SET_UP
 
 load_dotenv()
 
@@ -722,7 +722,8 @@ async def _verification_line(member: discord.Member, *, eligible: bool) -> str |
 # from CommandInvokeError before reporting so Sentry groups errors by
 # the actual cause, not by the wrapper.
 
-ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues"
+# Re-exported: `ISSUE_TRACKER_URL` is imported from here by name in places, and
+# the string itself lives in `messages.py` with the rest of the shared copy.
 
 
 def _format_command_error(error: BaseException, event_id: str | None) -> str:

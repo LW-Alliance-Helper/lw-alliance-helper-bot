@@ -450,10 +450,13 @@ def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
     assert "then **Knockout Stage**" in line
 
 
-def test_the_phase_line_prints_dates_the_way_the_game_does(cd_db):
-    """`8/10~8/14`, tilde and all. The member reading this has the Match
-    Overview box open, and the two matching is what makes the hub's answer
-    checkable rather than a second thing to reconcile."""
+def test_the_phase_line_lays_out_dates_the_way_the_game_does(cd_db):
+    """Name then range, so each half is one row of the Match Overview box.
+
+    The layout is borrowed; the punctuation is not. The game writes `8/10~8/14`
+    because its UI uses a CJK-origin tilde throughout, and a tilde is not how a
+    range is written in the English copy around it.
+    """
     import champion_duel_hub as hub
 
     started = date.fromisoformat(started_so_today_is("qualifiers"))
@@ -465,8 +468,9 @@ def test_the_phase_line_prints_dates_the_way_the_game_does(cd_db):
     qualifiers = started + timedelta(days=6)
     detail = started + timedelta(days=10)
     ends = started + timedelta(days=13)
-    assert f"**Qualifiers** {qualifiers.month}/{qualifiers.day}~{detail.month}/{detail.day}" in line
-    assert f"**Qualifier Detail** {detail.month}/{detail.day}~{ends.month}/{ends.day}" in line
+    assert f"**Qualifiers** {qualifiers.month}/{qualifiers.day}-{detail.month}/{detail.day}" in line
+    assert f"**Qualifier Detail** {detail.month}/{detail.day}-{ends.month}/{ends.day}" in line
+    assert "~" not in line
     # No year: every date here is inside one 27-day event, and the box the
     # member is comparing against has no year on it either.
     assert str(started.year) not in line

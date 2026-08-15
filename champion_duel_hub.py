@@ -46,7 +46,13 @@ import champion_duel_predict as predict_lib
 import champion_duel_wording as words
 import premium
 from api.champion_duel_auth import admin_ids
-from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL, DATE_PARSE_REJECT
+from messages import (
+    CANCEL_BACKPEDAL,
+    CANCEL_PLAIN,
+    COMMUNITY_SERVER_NAME,
+    COMMUNITY_SERVER_URL,
+    DATE_PARSE_REJECT,
+)
 
 CHAMPION_DUEL_HUB_TITLE = "👑 Champion Duel"
 CHAMPION_DUEL_HUB_CMD = "/champion_duel"
@@ -1844,7 +1850,9 @@ class _ChangeWarzoneView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await inter.response.edit_message(
-            content=f"↩️ Cancelled. Your alliance is still on warzone **{self.current}**.",
+            content=CANCEL_BACKPEDAL.format(
+                detail=f"Your alliance is still on warzone **{self.current}**."
+            ),
             embed=None,
             view=self,
         )
@@ -2312,13 +2320,13 @@ def _line_row(row: dict, *, stage: str | None = None, recording: str | None = No
     if row["state"] == "matched":
         return f"`{rank:>3}` ✅ **{name}**{warzone}{score}"
     if row["state"] == "ambiguous":
-        return f"`{rank:>3}` ❓ **{name}** — on {len(row['candidates'])} warzones, pick one"
+        return f"`{rank:>3}` ❓ **{name}**: on {len(row['candidates'])} warzones, pick one"
     if row["state"] == "new":
-        return f"`{rank:>3}` ➕ **{name}**{warzone} — new, will be added"
+        return f"`{rank:>3}` ➕ **{name}**{warzone}: new, will be added"
     if row["state"] == "skipped":
-        return f"`{rank:>3}` ⏭️ ~~{name}~~ — skipped"
+        return f"`{rank:>3}` ⏭️ ~~{name}~~ (skipped)"
     why = _LINE_PROBLEMS.get(row.get("problem"), "can't be read")
-    return f"  – ⚠️ `{_typed(row.get('raw'), 40)}` — {why}"
+    return f"`  ?` ⚠️ `{_typed(row.get('raw'), 40)}`: {why}"
 
 
 def build_reconcile_embed(*, rows: list[dict], stage: str, label, recording: str):
@@ -2329,11 +2337,12 @@ def build_reconcile_embed(*, rows: list[dict], stage: str, label, recording: str
     applied to a paste rather than a new mechanism.
     """
     where = f"Group {label}" if label else db.STAGE_LABELS.get(stage, stage)
+    lines = "\n".join(_line_row(row, stage=stage, recording=recording) for row in rows)
     embed = discord.Embed(
-        title=f"👑 {where} — check this before saving",
-        description="\n".join(_line_row(row, stage=stage, recording=recording) for row in rows)[
-            :4096
-        ],
+        # A noun phrase, per `notes/DESIGN.md`. The instruction is the first
+        # line of the description, which is where a sentence belongs.
+        title=f"👑 {where}",
+        description=f"Check this before saving.\n\n{lines}"[:4096],
         color=discord.Color.blurple(),
     )
     embed.add_field(name="", value=_line_summary(rows), inline=False)
@@ -2625,11 +2634,12 @@ class _ReconcileView(discord.ui.View):
         await self._rerender(inter)
 
     async def _on_cancel(self, inter: discord.Interaction):
+        # `CANCEL_PLAIN`, not a backpedal: recording a group is a whole flow and
+        # cancelling loses the paste. There is no parent step still holding it,
+        # and saying "no changes made" would imply otherwise.
         for item in self.children:
             item.disabled = True
-        await inter.response.edit_message(
-            content="↩️ Cancelled. Nothing was saved.", embed=None, view=self
-        )
+        await inter.response.edit_message(content=CANCEL_PLAIN, embed=None, view=self)
         self.stop()
 
     async def _on_save(self, inter: discord.Interaction):
@@ -2714,15 +2724,17 @@ class _NewPlayerWarzoneModal(discord.ui.Modal, title="Which warzone is this play
 
 
 def _phase_window_text(grouping_id, phase: str) -> str:
-    """One phase's dates the way the Match Overview box prints them: `8/10~8/14`.
+    """One phase's dates as a range: `8/10-8/14`.
 
-    The tilde and the range are the game's, not ours. A member reading this line
-    has that box open, or has just closed it, and the two matching character for
-    character is what makes the hub's answer checkable rather than something
-    else to reconcile.
+    The game prints a tilde (`8/10~8/14`), which is a CJK-origin convention its
+    UI carries throughout. We take the *layout* from it -- name, then range, so
+    each half is one row of the Match Overview box -- and not the punctuation. A
+    tilde is not how a range is written in the English copy around it, and
+    `DESIGN.md`'s borrow-from-the-game rule is about icons and structure rather
+    than typography. A hyphen reads correctly and still matches at a glance.
     """
     starts, ends = db.phase_window(grouping_id, phase)
-    return f"{_short_date(starts)}~{_short_date(ends)}"
+    return f"{_short_date(starts)}-{_short_date(ends)}"
 
 
 def phase_line(grouping: dict | None) -> str:
@@ -2854,20 +2866,15 @@ def build_finished_embed(*, grouping: dict, servers: list[dict], warzone: str | 
     means "if you can" is a control that cannot be used, so this states the
     condition rather than the instruction.
     """
-    total = sum(s["registrants"] for s in servers)
-    held = (
-        f"We hold **{total}** players for it, and they stay here.\n\n"
-        if total
-        else "We hold no players for it.\n\n"
-    )
+    whose = f"**{warzone}** is participating in" if warzone else "your alliance is in"
     return discord.Embed(
         title=CHAMPION_DUEL_HUB_TITLE,
         description=(
-            f"This Champion Duel has finished. {held}"
-            f"When the next one is drawn, the Match Overview box will list a new set "
-            f"of {db.GROUPING_SIZE} warzones. Add them here and everything scopes to "
-            f"the new grouping. Your warzone{f' (**{warzone}**)' if warzone else ''} "
-            f"stays as it is."
+            f"The Champion Duel {whose} has finished.\n\n"
+            f"When the next Champion Duel happens, you can enter your own warzone and "
+            f"other participating warzones to create a new grouping. You can also "
+            f"record past Champion Duel results if you want to keep a historical "
+            f"record and help better improve future predictions."
         )[:4096],
         color=discord.Color.blurple(),
     )

@@ -1663,9 +1663,13 @@ async def test_a_finished_champion_duel_keeps_its_results_and_offers_the_next(cd
     assert isinstance(view, hub.ChampionDuelFinishedView)
     said = _embed(interaction).description
     assert "has finished" in said
-    assert "**2** players" in said, "what they hold stays readable"
-    # The offer has to survive the gap before the next draw is visible in game.
-    assert "When the next one is drawn" in said
+    assert "**738**" in said, "whose Champion Duel this was"
+    # The offer has to survive the gap before the next draw is visible in game,
+    # so it states the condition rather than an instruction nobody can act on.
+    assert "When the next Champion Duel happens" in said
+    # Recording past results is the other half: the data is still worth having
+    # once the event is over, and that is not obvious without being told.
+    assert "record past Champion Duel results" in said
     assert hub.CD_BTN_ADD_GROUPING in _labels(view)
     # Predict and Find are global and useful between events.
     assert hub.CD_BTN_PREDICT in _labels(view)

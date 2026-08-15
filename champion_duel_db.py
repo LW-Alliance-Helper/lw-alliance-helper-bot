@@ -160,8 +160,10 @@ def knockout_result(placement) -> str | None:
 # Bo3), it just does not get its own window on the Match Overview box.
 #
 # Nothing in this module cares. A placement is a placement whether it took
-# three games or five, so `KNOCKOUT_RESULTS` is unaffected. The distinction
-# matters to the simulator, where a series length changes a probability.
+# three games or five, so `KNOCKOUT_RESULTS` is unaffected. Series lengths
+# matter to the simulator, where they change a probability -- semifinal and
+# knockout meetings are Bo3, the final is Bo5, and a qualifier meeting is a
+# single match. `champion-duel-simulator/CONTEXT.md` is the authority.
 #
 # Verified end to end against the Match Overview box, both halves, 2026-08-15:
 #

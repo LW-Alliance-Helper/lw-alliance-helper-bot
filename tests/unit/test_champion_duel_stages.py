@@ -257,3 +257,39 @@ def test_a_roster_row_with_no_group_is_not_placed_in_the_round(cd_db):
     assert "semifinals" not in db.get_stages(_rid("BetaTwo"))
     # And the one left out keeps the qualifier round they did play.
     assert db.get_stages(_rid("BetaTwo"))["qualifiers"]["grp"] == "M"
+
+
+# ── Showing the pathway ───────────────────────────────────────────────────────
+
+
+def test_the_card_shows_every_round_a_player_has_reached(cd_db):
+    """ "Where are they in the duel pathway" is the question. One field
+    hardcoded to Qualifiers stopped being true the day a draw landed."""
+    import champion_duel_hub as hub
+
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D")
+
+    embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
+
+    rounds = next(f.value for f in embed.fields if f.name == "Rounds")
+    assert "**Qualifiers** · Group M · Rank 1" in rounds
+    # A draw is not a result, so a round nobody has played carries no rank.
+    assert "**Semifinals** · Group D" in rounds
+    assert "Semifinals** · Group D · Rank" not in rounds
+    assert rounds.index("Qualifiers") < rounds.index("Semifinals"), "oldest first"
+
+
+def test_the_hub_says_which_round_is_running(cd_db):
+    import champion_duel_hub as hub
+
+    assert (
+        "**Qualifiers** are running"
+        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
+    )
+
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D")
+
+    assert (
+        "**Semifinals** are running"
+        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
+    )

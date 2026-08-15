@@ -760,8 +760,8 @@ def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
     assert embed.title.startswith("[DxL] ")
     assert "738" in embed.title
     names = [f.name for f in embed.fields]
-    assert names.index("Squads") < names.index("Qualifiers")
-    assert "Group" in next(f.value for f in embed.fields if f.name == "Qualifiers")
+    assert names.index("Squads") < names.index("Rounds")
+    assert "Group" in next(f.value for f in embed.fields if f.name == "Rounds")
 
 
 # ── Record an order ───────────────────────────────────────────────────────────

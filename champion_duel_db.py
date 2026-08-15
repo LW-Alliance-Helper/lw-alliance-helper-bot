@@ -155,8 +155,13 @@ def knockout_result(placement) -> str | None:
 # shape is structural.
 #
 # The Knockout Stage is one phase and the game does not break the final out of
-# it, so there is no ninth row and no grand-final structure to model. The final
-# is simply the last meeting inside phase 7.
+# it, so there is no ninth row here. That is a statement about the *timeline*
+# only: the final is a longer series than the meetings before it (Bo5 against
+# Bo3), it just does not get its own window on the Match Overview box.
+#
+# Nothing in this module cares. A placement is a placement whether it took
+# three games or five, so `KNOCKOUT_RESULTS` is unaffected. The distinction
+# matters to the simulator, where a series length changes a probability.
 #
 # Verified end to end against the Match Overview box, both halves, 2026-08-15:
 #

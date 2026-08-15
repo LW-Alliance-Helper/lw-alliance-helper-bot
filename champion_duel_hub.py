@@ -2252,7 +2252,10 @@ class _RetryGroupingView(discord.ui.View):
 # late.
 
 
-_RECORDING_LABELS = {"draw": "The draw", "final": "Final standings"}
+# What the two entries are called wherever a user sees them: the picker, the
+# reconcile footer, and the acknowledgement. One table so the ack can echo the
+# choice in the words it was offered in rather than paraphrasing it.
+_RECORDING_LABELS = {"draw": "Initial Seed", "final": "Final Standings"}
 
 # What a line resolved to. `problem` is a parse failure, `skipped` is the user
 # deciding this one is not worth chasing; both are excluded from the write and
@@ -2391,19 +2394,21 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
             options=[discord.SelectOption(label=db.STAGE_LABELS[k], value=k) for k in db.STAGES]
         ),
     )
+    # No help text on these two. The question is the label and the options are
+    # the answer, so a description line would only restate what the picker
+    # already shows. Options come from `_RECORDING_LABELS` so the picker, the
+    # reconcile footer and the save acknowledgement all say the same words.
     recording = discord.ui.Label(
-        text="Recording",
-        description="The draw is the starting order. Final standings is how it ended.",
+        text="What are you recording?",
         component=discord.ui.Select(
             options=[
-                discord.SelectOption(label="Final standings", value="final", default=True),
-                discord.SelectOption(label="The draw", value="draw"),
+                discord.SelectOption(label=_RECORDING_LABELS["final"], value="final", default=True),
+                discord.SelectOption(label=_RECORDING_LABELS["draw"], value="draw"),
             ]
         ),
     )
     group = discord.ui.Label(
-        text="Group",
-        description="Knockouts are one field of 32 and have no letter, so leave it blank.",
+        text="What group is this for? (Leave blank for Knockout)",
         component=discord.ui.Select(
             min_values=0,
             max_values=1,
@@ -2413,8 +2418,8 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         ),
     )
     players = discord.ui.Label(
-        text="Players, one per line",
-        description="name, warzone, rank, score. Only the name is required.",
+        text="Add one player per line",
+        description="Format: Name, Warzone, Rank, Score. Name is required.",
         component=discord.ui.TextInput(
             style=discord.TextStyle.paragraph,
             max_length=4000,
@@ -2648,10 +2653,13 @@ class _ReconcileView(discord.ui.View):
         await inter.response.edit_message(view=self)
         written = await asyncio.to_thread(self._write, _actor(inter))
         self.stop()
+        # Echoes the picker's own words rather than lowercasing them into
+        # prose: the user chose "Final Standings" and that is what they should
+        # see back, so the ack and the control cannot drift apart.
         await inter.followup.send(
             f"✅ Saved **{written}** {'player' if written == 1 else 'players'} to "
-            f"{f'Group {self.label}' if self.label else db.STAGE_LABELS[self.stage]}, "
-            f"as {_RECORDING_LABELS[self.recording].lower()}.",
+            f"{f'Group {self.label}' if self.label else db.STAGE_LABELS[self.stage]} "
+            f"as **{_RECORDING_LABELS[self.recording]}**.",
             ephemeral=True,
         )
 

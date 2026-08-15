@@ -348,18 +348,42 @@ def test_the_card_shows_every_round_a_player_has_reached(cd_db):
     assert rounds.index("Qualifiers") < rounds.index("Semifinals"), "oldest first"
 
 
-def test_the_hub_says_which_round_is_running(cd_db):
+def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
+    """The phase rather than the round, because a Detail window is not a round
+    and is still the honest answer to "what is happening right now". Both halves
+    on one line: the second is what a member actually opens this to find out."""
     import champion_duel_hub as hub
 
-    assert (
-        "**Qualifiers** are running"
-        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
-    )
+    grouping = db.list_groupings()[0]
+
+    line = hub.phase_line(grouping)
+    assert line.startswith("**Qualifiers** until ")
+    assert "then **Qualifier Detail**" in line
 
     # The event moving on is what changes this, not a draw being loaded.
-    _restart("semifinals")
+    _restart("semifinal_detail")
+    grouping = db.list_groupings()[0]
 
-    assert (
-        "**Semifinals** are running"
-        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
-    )
+    line = hub.phase_line(grouping)
+    assert line.startswith("**Semi-final Detail** until ")
+    assert "then **Knockout Stage**" in line
+
+
+def test_the_last_phase_has_nothing_after_it(cd_db):
+    import champion_duel_hub as hub
+
+    _restart("results")
+
+    assert hub.phase_line(db.list_groupings()[0]).startswith("**Results** until ")
+    assert "then" not in hub.phase_line(db.list_groupings()[0])
+
+
+def test_a_grouping_with_no_dates_says_nothing_about_the_calendar(cd_db):
+    """A line derived from a date we do not have would be a guess presented as
+    a schedule."""
+    import champion_duel_hub as hub
+
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = NULL")
+
+    assert hub.phase_line(db.list_groupings()[0]) == ""

@@ -1443,33 +1443,52 @@ def get_groups(stage: str | None = None, grouping_id=None) -> list[dict]:
     return [{"group": r["grp"], "registrants": r["n"]} for r in rows]
 
 
-def get_servers() -> list[dict]:
-    """Registrant and scouting counts per server, busiest first.
+def get_servers(grouping_id=None) -> list[dict]:
+    """Registrant and scouting counts per warzone, busiest first.
 
-    Groups tell a member which bracket they are in; servers tell them whether
+    Groups tell a member which bracket they are in; warzones tell them whether
     this is about anyone they know. Both counts, because they answer different
-    questions: a server can be fully rostered and still have nobody we have
+    questions: a warzone can be fully rostered and still have nobody we have
     watched deploy, and only the second gap is worth contributing to.
 
-    This is a report of the servers we hold, not a list of the ones we accept.
-    `upsert_registrant` takes any server string, so a self-reported opponent
-    can introduce a server that was never imported -- and will then appear here
-    with one registrant. Callers must not treat the result as a whitelist.
+    `grouping_id` narrows to that grouping's warzones, which is what every
+    member-facing count wants: a total spanning every grouping describes several
+    tournaments at once and belongs to none of them. **It reports every one of
+    the grouping's sixteen**, including those we hold nobody from, because "we
+    have nothing for your warzone" is the answer that invites a contribution and
+    an omitted row is one the reader has to notice is missing.
+
+    Global with no `grouping_id`, which is the honest answer before we know who
+    is asking, and the only thing the hub can say to an alliance it cannot place.
+
+    This is a report of the warzones we hold, not a list of the ones we accept.
+    `upsert_registrant` takes any warzone string, so a self-reported opponent can
+    introduce one that was never imported -- and will then appear here with one
+    registrant. Callers must not treat the result as a whitelist.
     """
+    counts = """
+        SELECT r.server AS server,
+               COUNT(DISTINCT r.id) AS registrants,
+               COUNT(DISTINCT CASE WHEN s.source = 'observed' THEN r.id END) AS scouted
+        FROM registrants r
+        LEFT JOIN squads s ON s.registrant_id = r.id
+        WHERE r.server IS NOT NULL AND r.server != ''
+        GROUP BY r.server
+        ORDER BY registrants DESC, server
+    """
+    if grouping_id is None:
+        with _get_conn() as conn:
+            return [dict(r) for r in conn.execute(counts).fetchall()]
+
+    grouping = get_grouping(grouping_id)
+    if grouping is None:
+        return []
     with _get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT r.server AS server,
-                   COUNT(DISTINCT r.id) AS registrants,
-                   COUNT(DISTINCT CASE WHEN s.source = 'observed' THEN r.id END) AS scouted
-            FROM registrants r
-            LEFT JOIN squads s ON s.registrant_id = r.id
-            WHERE r.server IS NOT NULL AND r.server != ''
-            GROUP BY r.server
-            ORDER BY registrants DESC, server
-            """
-        ).fetchall()
-    return [dict(r) for r in rows]
+        held = {r["server"]: dict(r) for r in conn.execute(counts).fetchall()}
+    return [
+        held.get(zone, {"server": zone, "registrants": 0, "scouted": 0})
+        for zone in grouping["warzones"]
+    ]
 
 
 def get_roster(

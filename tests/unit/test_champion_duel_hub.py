@@ -510,7 +510,7 @@ def test_hub_embed_invites_a_player_from_a_server_we_do_not_have(cd_db):
     invitation rather than a rejection."""
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
 
-    assert "don't have data from your server" in embed.description
+    assert "don't have data from your warzone" in embed.description
     # Named by its words: the button's leading emoji is a near-black glyph that
     # disappears against the embed background.
     assert "**Add a player**" in embed.description
@@ -1278,6 +1278,91 @@ async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
     assert "already been entered" in said
     for zone in SIXTEEN:
         assert zone in said, "they did not enter this one, so they need to see it"
+
+
+# ── Scoped to their grouping ──────────────────────────────────────────────────
+
+
+def test_counts_do_not_span_groupings(cd_db):
+    """A figure covering every grouping describes several tournaments at once,
+    and to the alliance reading it, most of it is somebody else's."""
+    theirs = db.create_grouping(["1500", "1501"], "2026-08-04", origin="member")
+    db.import_registrants(
+        [{"name": "Stranger", "server": "1500"}, {"name": "Other", "server": "1501"}],
+        grouping_id=theirs["id"],
+    )
+    mine = db.find_grouping_by_warzone("738")
+
+    scoped = db.get_servers(mine["id"])
+    assert {s["server"] for s in scoped} == {"738"}
+    assert sum(s["registrants"] for s in scoped) == 2, "not the other grouping's two"
+
+    assert sum(s["registrants"] for s in db.get_servers()) == 4, "global is still global"
+
+
+def test_a_grouping_reports_warzones_it_holds_nobody_from(cd_db):
+    """ "We have nothing for your warzone" is the answer that invites a
+    contribution. An omitted row is one the reader has to notice is missing."""
+    mine = db.find_grouping_by_warzone("738")
+    with db._get_conn() as conn:
+        conn.execute(
+            "INSERT INTO grouping_warzones (grouping_id, warzone, source) VALUES (?, ?, ?)",
+            (mine["id"], "999", "claim"),
+        )
+
+    rows = {s["server"]: s for s in db.get_servers(mine["id"])}
+    assert rows["999"]["registrants"] == 0
+    assert rows["738"]["registrants"] == 2
+
+
+def test_the_scoped_hub_says_whose_players_these_are(cd_db):
+    mine = db.find_grouping_by_warzone("738")
+
+    embed = hub.build_hub_embed(
+        servers=db.get_servers(mine["id"]), can_write=True, grouping=mine, warzone="738"
+    )
+
+    assert "**2** players in your grouping" in embed.description
+    assert "warzones" in embed.description and "servers" not in embed.description
+
+
+def test_a_grouping_we_hold_nothing_for_says_so_rather_than_nothing(cd_db):
+    """The state of every grouping but the imported one. The calendar still
+    works, and the gap is exactly what a contribution fills."""
+    theirs = db.create_grouping(["1500", "1501"], "2026-08-04", origin="member")
+
+    embed = hub.build_hub_embed(
+        servers=db.get_servers(theirs["id"]), can_write=True, grouping=theirs, warzone="1500"
+    )
+
+    assert "do not have any players for your grouping" in embed.description
+    assert "warzone **1500**" in embed.description
+
+
+# ── Finished ──────────────────────────────────────────────────────────────────
+
+
+async def test_a_finished_champion_duel_keeps_its_results_and_offers_the_next(cd_db, no_mm_link):
+    from datetime import timedelta
+
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=db.default_grouping_id())
+    over = (db._server_today() - timedelta(days=db.EVENT_DAYS + 1)).isoformat()
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = ?", (over,))
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    assert isinstance(view, hub.ChampionDuelFinishedView)
+    said = _embed(interaction).description
+    assert "has finished" in said
+    assert "**2** players" in said, "what they hold stays readable"
+    # The offer has to survive the gap before the next draw is visible in game.
+    assert "When the next one is drawn" in said
+    assert hub.CD_BTN_ADD_GROUPING in _labels(view)
+    # Predict and Find are global and useful between events.
+    assert hub.CD_BTN_PREDICT in _labels(view)
 
 
 async def test_a_conflict_shows_both_lists_so_the_reader_can_tell_which_is_off(cd_db, no_mm_link):

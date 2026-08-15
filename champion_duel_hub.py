@@ -2142,47 +2142,95 @@ class _RetryGroupingView(discord.ui.View):
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
-def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
+def phase_line(grouping: dict | None) -> str:
+    """Where this grouping is on the calendar, and what comes next.
+
+    Derived from the start date on every read, so it cannot go stale and nobody
+    has to remember to advance it when the event moves on. That was already the
+    argument for deriving the round; what changed is that the calendar can
+    answer for a grouping with no draw loaded, which is every grouping but one.
+
+    One line, both halves, no verb: the phases are a mix of plural ("Qualifiers",
+    "Semi-finals") and singular ("Qualifier Detail", "Knockout Stage"), and
+    "Qualifier Detail start 8/17" is the kind of thing a template produces and a
+    person never writes.
+    """
+    if not grouping or not grouping.get("started_on"):
+        return ""
+    phase = db.current_phase(grouping["id"])
+    if phase is None:
+        return ""
+    keys = [key for key, _, _ in db.PHASES]
+    _, ends = db.phase_window(grouping["id"], phase)
+    line = f"**{db.PHASE_LABELS[phase]}** until {_short_date(ends)}"
+    following = keys.index(phase) + 1
+    if following < len(keys):
+        line += f", then **{db.PHASE_LABELS[keys[following]]}**"
+    return line + "."
+
+
+def build_hub_embed(
+    *,
+    servers: list[dict],
+    can_write: bool,
+    grouping: dict | None = None,
+    warzone: str | None = None,
+) -> discord.Embed:
     """The hub's own state: what data is loaded, and what this caller can do.
+
+    Every count is scoped to the caller's grouping when we know it. A figure
+    spanning every grouping describes several tournaments at once and belongs to
+    none of them, and to the alliance reading it, it is mostly somebody else's.
 
     Takes no `is_admin`: the admin row is hidden rather than announced, so the
     embed has nothing to say that differs for an operator.
     """
     embed = discord.Embed(title=CHAMPION_DUEL_HUB_TITLE, color=discord.Color.blurple())
-    # Counted from servers rather than groups. `get_groups` drops anyone whose
+    # Counted from warzones rather than groups. `get_groups` drops anyone whose
     # `grp` is empty, and a self-reported player's group is optional -- so a
-    # group-based total silently omits exactly the players this hub now invites
-    # people to add. Server is required by both write paths, so it counts
+    # group-based total silently omits exactly the players this hub invites
+    # people to add. A warzone is required by both write paths, so it counts
     # everyone.
     total = sum(s["registrants"] for s in servers)
-    if total:
-        # Numeric order, no per-server counts. Counts answered a question
+    mine = f" on warzone **{warzone}**" if warzone else ""
+    calendar = phase_line(grouping)
+    opener = f"{calendar}\n\n" if calendar else ""
+
+    if grouping and not total:
+        # Scoped, and holding nothing. Worth saying plainly rather than falling
+        # through to the global "no roster loaded": their grouping is known, the
+        # calendar still works, and the gap is exactly what a contribution fills.
+        embed.description = (
+            f"{opener}"
+            f"We do not have any players for your grouping yet.\n\n"
+            f"Predictions and look-ups need players. Anyone{mine} can add the ones "
+            f"they meet, and every one entered sharpens the next prediction."
+        )[:4096]
+    elif total:
+        # Numeric order, no per-warzone counts. Counts answered a question
         # nobody asked here and made the line something to decode rather than
         # scan; a member is looking for their own number in it.
         #
-        # Sorted defensively: server is free text on a self-reported player, so
-        # a non-numeric one has to sort somewhere rather than raise.
+        # Sorted defensively: a warzone is free text on a self-reported player,
+        # so a non-numeric one has to sort somewhere rather than raise.
         listed = ", ".join(s["server"] for s in sorted(servers, key=_server_sort)[:_SERVERS_SHOWN])
         more = len(servers) - _SERVERS_SHOWN
         if more > 0:
             listed += f", and {more} more"
-        # Which round is running, when we hold a draw for one. It answers the
-        # question a member opens this with during the event, and it is what
-        # decides whose card names a round rather than "Matchup prediction".
-        running = db.STAGE_LABELS.get(stage) if (stage := db.current_stage()) else None
-        opener = f"**{running}** are running. " if running else ""
+        scope = "in your grouping" if grouping else "loaded"
         embed.description = (
-            f"{opener}**{total}** players loaded across **{len(servers)}** servers: "
+            f"{opener}"
+            f"**{total}** players {scope} across **{len(servers)}** warzones: "
             f"{listed}.\n\n"
             f"You can predict a match or look up a player's information to see their "
             f"squads and power (if we have it). If we don't have data from your "
-            f"server, or you can't find the player you're looking for, "
-            f"**{_btn_words(CD_BTN_ADD)}**!"
+            f"warzone, or you can't find the player you're looking for, "
+            f"**{_btn_words(CD_BTN_ADD)}**."
         )[:4096]
     else:
         embed.description = (
-            "No roster is loaded for this stage yet.\n\n"
-            "Predictions and look-ups need registrants. An admin imports them "
+            "No roster is loaded yet.\n\n"
+            "Predictions and look-ups need players. An admin imports them "
             "through the Champion Duel API."
         )
 
@@ -2210,6 +2258,88 @@ def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
     # to the marks it explains. On the hub it was a key to a map nobody was
     # holding.
     return embed
+
+
+def build_finished_embed(*, grouping: dict, servers: list[dict], warzone: str | None):
+    """Past the last day. What they hold stays readable, and the next one is
+    offered.
+
+    The offer has to survive the gap. A Champion Duel ends before the next
+    draw is visible in game, so for some days after this appears there is
+    nothing anyone could type into it. Copy that says "add the next one" and
+    means "if you can" is a control that cannot be used, so this states the
+    condition rather than the instruction.
+    """
+    total = sum(s["registrants"] for s in servers)
+    held = (
+        f"We hold **{total}** players for it, and they stay here.\n\n"
+        if total
+        else "We hold no players for it.\n\n"
+    )
+    return discord.Embed(
+        title=CHAMPION_DUEL_HUB_TITLE,
+        description=(
+            f"This Champion Duel has finished. {held}"
+            f"When the next one is drawn, the Match Overview box will list a new set "
+            f"of {db.GROUPING_SIZE} warzones. Add them here and everything scopes to "
+            f"the new grouping. Your warzone{f' (**{warzone}**)' if warzone else ''} "
+            f"stays as it is."
+        )[:4096],
+        color=discord.Color.blurple(),
+    )
+
+
+class ChampionDuelFinishedView(discord.ui.View):
+    """The finished hub: what they still hold, plus the way into the next one.
+
+    Predict and Find stay live. They are global and useful between events, and
+    the plan is explicit that scoping them would take something away.
+    """
+
+    def __init__(self, *, user_id: int, can_write: bool, engine_ok: bool, warzone: str | None):
+        super().__init__(timeout=900)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.engine_ok = engine_ok
+        self.warzone = warzone
+        self.message: discord.Message | None = None
+
+        for label, style, row, cb, off in (
+            (CD_BTN_ADD_GROUPING, discord.ButtonStyle.primary, 0, self._on_add_grouping, False),
+            (CD_BTN_PREDICT, discord.ButtonStyle.secondary, 0, self._on_predict, not engine_ok),
+            (CD_BTN_FIND, discord.ButtonStyle.secondary, 0, self._on_find, not engine_ok),
+            (CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 1, self._on_warzone, False),
+        ):
+            button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=off)
+            button.callback = cb
+            self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_add_grouping(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _AddGroupingModal(can_write=self.can_write, warzone=self.warzone)
+        )
+
+    async def _on_predict(self, inter: discord.Interaction):
+        await inter.response.send_modal(_PredictModal())
+
+    async def _on_find(self, inter: discord.Interaction):
+        await inter.response.send_modal(_FindPlayerModal(self.can_write))
+
+    async def _on_warzone(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _WarzoneModal(can_write=self.can_write, current=self.warzone)
+        )
 
 
 class ChampionDuelHubView(discord.ui.View):
@@ -2335,7 +2465,7 @@ class ChampionDuelHubView(discord.ui.View):
 async def _open_hub(
     interaction: discord.Interaction, *, can_write: bool, note: str | None = None
 ) -> None:
-    """Whichever of the hub's three states this alliance is in.
+    """Whichever of the hub's states this alliance is in.
 
     One entry point for all of them, so every flow that answers the grouping
     question lands back on the surface its answer unlocked rather than on an
@@ -2347,7 +2477,9 @@ async def _open_hub(
     be a question with no use for the answer.
     """
     grouping, warzone = await _grouping_state(interaction)
-    servers = await asyncio.to_thread(db.get_servers)
+    # Scoped the moment we know who is asking. Global is what the hub can
+    # honestly say to an alliance it cannot place, and nothing more.
+    servers = await asyncio.to_thread(db.get_servers, grouping["id"] if grouping else None)
 
     if interaction.guild_id and grouping is None:
         view = ChampionDuelOnboardingView(
@@ -2384,16 +2516,36 @@ async def _open_hub(
         view.message = await interaction.original_response()
         return
 
+    engine_ok = predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE
+
+    if grouping and await asyncio.to_thread(db.is_finished, grouping["id"]):
+        view = ChampionDuelFinishedView(
+            user_id=interaction.user.id,
+            can_write=can_write,
+            engine_ok=engine_ok,
+            warzone=warzone,
+        )
+        await interaction.followup.send(
+            content=note,
+            embed=build_finished_embed(grouping=grouping, servers=servers, warzone=warzone),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+        return
+
     view = ChampionDuelHubView(
         user_id=interaction.user.id,
         is_admin=_is_admin(interaction.user.id),
         can_write=can_write,
-        engine_ok=predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE,
+        engine_ok=engine_ok,
         warzone=warzone,
     )
     await interaction.followup.send(
         content=note,
-        embed=build_hub_embed(servers=servers, can_write=can_write),
+        embed=build_hub_embed(
+            servers=servers, can_write=can_write, grouping=grouping, warzone=warzone
+        ),
         view=view,
         ephemeral=True,
     )

@@ -9,6 +9,7 @@ imports do not write edits, so there is nothing to revert.
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, timedelta
 
 import pytest
 
@@ -285,7 +286,30 @@ def test_the_round_name_follows_the_event(cd_db):
         db.set_stage(_rid(name), "semifinals", grp="D", rank=1)
     _restart("semifinals")
 
-    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semifinals"
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semi-finals"
+
+
+def test_a_round_is_named_in_exactly_one_place():
+    """`STAGE_LABELS` is derived from `PHASE_LABELS`, not restated beside it.
+
+    Two tables meant two places to update and one place to forget, and that is
+    exactly what happened: the hub's phase line said "Semi-finals" while a
+    player card said "Semifinals", on the same screen.
+    """
+    for stage in db.STAGES:
+        assert db.STAGE_LABELS[stage] is db.PHASE_LABELS[stage], stage
+    assert set(db.STAGE_LABELS) == set(db.STAGES)
+
+
+def test_the_labels_are_the_games_own_spelling(cd_db):
+    """Verified against the Match Overview box, 2026-08-15. The hyphen in
+    "Semi-finals" and the word "Stage" in "Knockout Stage" are the game's."""
+    assert db.PHASE_LABELS["semifinals"] == "Semi-finals"
+    assert db.PHASE_LABELS["knockouts"] == "Knockout Stage"
+    assert db.PHASE_LABELS["signup"] == "Sign-up stage"
+    assert db.PHASE_LABELS["qualifier_detail"] == "Qualifier Detail"
+    # Every phase in the timeline has a name, and nothing else does.
+    assert set(db.PHASE_LABELS) == {key for key, _, _ in db.PHASES}
 
 
 # ── Importing without a round ─────────────────────────────────────────────────
@@ -343,9 +367,9 @@ def test_the_card_shows_every_round_a_player_has_reached(cd_db):
     rounds = next(f.value for f in embed.fields if f.name == "Rounds")
     assert "**Qualifiers** · Group M · Rank 1" in rounds
     # A draw is not a result, so a round nobody has played carries no rank.
-    assert "**Semifinals** · Group D" in rounds
-    assert "Semifinals** · Group D · Rank" not in rounds
-    assert rounds.index("Qualifiers") < rounds.index("Semifinals"), "oldest first"
+    assert "**Semi-finals** · Group D" in rounds
+    assert "Semi-finals** · Group D · Rank" not in rounds
+    assert rounds.index("Qualifiers") < rounds.index("Semi-finals"), "oldest first"
 
 
 def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
@@ -354,10 +378,11 @@ def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
     on one line: the second is what a member actually opens this to find out."""
     import champion_duel_hub as hub
 
+    _restart("qualifiers")
     grouping = db.list_groupings()[0]
 
     line = hub.phase_line(grouping)
-    assert line.startswith("**Qualifiers** until ")
+    assert line.startswith("**Qualifiers** ")
     assert "then **Qualifier Detail**" in line
 
     # The event moving on is what changes this, not a draw being loaded.
@@ -365,8 +390,30 @@ def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
     grouping = db.list_groupings()[0]
 
     line = hub.phase_line(grouping)
-    assert line.startswith("**Semi-final Detail** until ")
+    assert line.startswith("**Semi-final Detail** ")
     assert "then **Knockout Stage**" in line
+
+
+def test_the_phase_line_prints_dates_the_way_the_game_does(cd_db):
+    """`8/10~8/14`, tilde and all. The member reading this has the Match
+    Overview box open, and the two matching is what makes the hub's answer
+    checkable rather than a second thing to reconcile."""
+    import champion_duel_hub as hub
+
+    started = date.fromisoformat(started_so_today_is("qualifiers"))
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = ?", (started.isoformat(),))
+
+    line = hub.phase_line(db.list_groupings()[0])
+
+    qualifiers = started + timedelta(days=6)
+    detail = started + timedelta(days=10)
+    ends = started + timedelta(days=13)
+    assert f"**Qualifiers** {qualifiers.month}/{qualifiers.day}~{detail.month}/{detail.day}" in line
+    assert f"**Qualifier Detail** {detail.month}/{detail.day}~{ends.month}/{ends.day}" in line
+    # No year: every date here is inside one 27-day event, and the box the
+    # member is comparing against has no year on it either.
+    assert str(started.year) not in line
 
 
 def test_the_last_phase_has_nothing_after_it(cd_db):
@@ -374,7 +421,7 @@ def test_the_last_phase_has_nothing_after_it(cd_db):
 
     _restart("results")
 
-    assert hub.phase_line(db.list_groupings()[0]).startswith("**Results** until ")
+    assert hub.phase_line(db.list_groupings()[0]).startswith("**Results** ")
     assert "then" not in hub.phase_line(db.list_groupings()[0])
 
 

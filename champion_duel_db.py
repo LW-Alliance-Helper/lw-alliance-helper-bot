@@ -68,12 +68,30 @@ VALID_TYPES = ("Tank", "Missile", "Aircraft")
 # load-bearing: a player's furthest round is the last of these they appear in.
 STAGES = ("qualifiers", "semifinals", "knockouts")
 
-# What each round is called on a surface a member reads.
-STAGE_LABELS = {
+# What the game calls each of the eight phases, on the Match Overview box a
+# member reads the start date off. Verified against a screenshot 2026-08-15,
+# spelling and hyphenation included: the game writes "Semi-finals", not
+# "Semifinals", and "Knockout Stage", not "Knockouts".
+#
+# **This is the only place a round or phase is named.** `STAGE_LABELS` below is
+# derived from it, so a name changes in one spot rather than in two tables that
+# then disagree on one surface.
+PHASE_LABELS = {
+    "signup": "Sign-up stage",
+    "signup_detail": "Sign-up Detail",
     "qualifiers": "Qualifiers",
-    "semifinals": "Semifinals",
-    "knockouts": "Knockouts",
+    "qualifier_detail": "Qualifier Detail",
+    "semifinals": "Semi-finals",
+    "semifinal_detail": "Semi-final Detail",
+    "knockouts": "Knockout Stage",
+    "results": "Results",
 }
+
+# The three phases that carry groups, under the same names. Derived rather than
+# restated: the rounds *are* phases, so two tables would be two places to update
+# and one place to forget -- which is how the hub came to show "Semi-finals" on
+# its phase line and "Semifinals" on a player card at the same time.
+STAGE_LABELS = {stage: PHASE_LABELS[stage] for stage in STAGES}
 
 # What a knockout placement means, as the match the player went out in.
 #
@@ -128,6 +146,11 @@ def knockout_result(placement) -> str | None:
 # **This shape is n=1.** It comes from one grouping's screenshot (8/4 to 8/31).
 # Every grouping observed since has matched, or this comment is out of date;
 # check before trusting it for a grouping whose timeline looks wrong.
+#
+# Re-verified against the Match Overview box 2026-08-15: phases 1 to 5 and their
+# dates match exactly (8/4~8/9, 8/9~8/10, 8/10~8/14, 8/14~8/17, 8/17~8/21), as
+# do the names in `PHASE_LABELS`. Still one grouping, so still n=1 -- what the
+# screenshot settles is that we transcribed it right, not that it generalises.
 PHASES = (
     ("signup", 0, 5),
     ("signup_detail", 5, 6),
@@ -138,17 +161,6 @@ PHASES = (
     ("knockouts", 20, 25),
     ("results", 25, 27),
 )
-
-PHASE_LABELS = {
-    "signup": "Sign-up stage",
-    "signup_detail": "Sign-up Detail",
-    "qualifiers": "Qualifiers",
-    "qualifier_detail": "Qualifier Detail",
-    "semifinals": "Semi-finals",
-    "semifinal_detail": "Semi-final Detail",
-    "knockouts": "Knockout Stage",
-    "results": "Results",
-}
 
 # How long a whole Champion Duel runs, from the first day of sign-up.
 EVENT_DAYS = PHASES[-1][2]
@@ -167,10 +179,9 @@ GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
 # 1,600 players into groups of 100, and the semifinals split the 128 advancers
 # into groups of 8. Knockouts are one field of 32 and carry no letter at all.
 #
-# **A to P is inferred, not observed.** The count follows from the format; that
-# the game letters them from A is an assumption, and the only letters seen so
-# far are D and M. A group letter outside this set is still storable -- `_group`
-# takes any letter -- so this bounds the picker, not the data.
+# **A to P, confirmed by Kevin 2026-08-15**, for both the qualifiers and the
+# semifinals. A letter outside this set is still storable -- `_group` takes any
+# letter -- so an import is never blocked by the picker's bounds.
 GROUP_LABELS = tuple(chr(ord("A") + i) for i in range(16))
 
 # Which entry a recording writes. A group is recorded twice over its life --

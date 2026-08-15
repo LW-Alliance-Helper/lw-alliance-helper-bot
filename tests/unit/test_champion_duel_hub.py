@@ -1571,7 +1571,7 @@ def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
     embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
 
     rounds = next(f.value for f in embed.fields if f.name == "Rounds")
-    assert "**Knockouts** · Rank 11 · lost in the round of 16" in rounds
+    assert "**Knockout Stage** · Rank 11 · lost in the round of 16" in rounds
 
 
 async def test_a_partial_group_does_not_read_as_something_missing(cd_db, no_mm_link):

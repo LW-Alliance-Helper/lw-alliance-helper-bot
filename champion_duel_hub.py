@@ -2713,6 +2713,18 @@ class _NewPlayerWarzoneModal(discord.ui.Modal, title="Which warzone is this play
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
+def _phase_window_text(grouping_id, phase: str) -> str:
+    """One phase's dates the way the Match Overview box prints them: `8/10~8/14`.
+
+    The tilde and the range are the game's, not ours. A member reading this line
+    has that box open, or has just closed it, and the two matching character for
+    character is what makes the hub's answer checkable rather than something
+    else to reconcile.
+    """
+    starts, ends = db.phase_window(grouping_id, phase)
+    return f"{_short_date(starts)}~{_short_date(ends)}"
+
+
 def phase_line(grouping: dict | None) -> str:
     """Where this grouping is on the calendar, and what comes next.
 
@@ -2721,10 +2733,11 @@ def phase_line(grouping: dict | None) -> str:
     argument for deriving the round; what changed is that the calendar can
     answer for a grouping with no draw loaded, which is every grouping but one.
 
-    One line, both halves, no verb: the phases are a mix of plural ("Qualifiers",
-    "Semi-finals") and singular ("Qualifier Detail", "Knockout Stage"), and
-    "Qualifier Detail start 8/17" is the kind of thing a template produces and a
-    person never writes.
+    Laid out as the game lays it out -- name then date range -- so each half is
+    one row of the Match Overview box. That also settles a grammar problem an
+    earlier draft had: the phases mix plural ("Qualifiers", "Semi-finals") with
+    singular ("Qualifier Detail", "Knockout Stage"), so any sentence with a verb
+    in it reads as "Qualifier Detail start 8/17" for half the event.
     """
     if not grouping or not grouping.get("started_on"):
         return ""
@@ -2732,11 +2745,11 @@ def phase_line(grouping: dict | None) -> str:
     if phase is None:
         return ""
     keys = [key for key, _, _ in db.PHASES]
-    _, ends = db.phase_window(grouping["id"], phase)
-    line = f"**{db.PHASE_LABELS[phase]}** until {_short_date(ends)}"
+    line = f"**{db.PHASE_LABELS[phase]}** {_phase_window_text(grouping['id'], phase)}"
     following = keys.index(phase) + 1
     if following < len(keys):
-        line += f", then **{db.PHASE_LABELS[keys[following]]}**"
+        nxt = keys[following]
+        line += f", then **{db.PHASE_LABELS[nxt]}** {_phase_window_text(grouping['id'], nxt)}"
     return line + "."
 
 

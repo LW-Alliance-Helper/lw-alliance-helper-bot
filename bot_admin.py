@@ -1073,12 +1073,13 @@ async def admin_changelog_slash(
 )
 # Spelled out rather than built from `cd_db.STAGE_LABELS`: this decorator runs
 # at import time and `champion_duel_db` is imported inside the callback. A test
-# asserts the two stay identical, so the duplication cannot drift silently.
+# asserts the two stay identical, so the duplication cannot drift silently --
+# which is what caught these when the labels moved to the game's spelling.
 @app_commands.choices(
     round=[
         app_commands.Choice(name="Qualifiers", value="qualifiers"),
-        app_commands.Choice(name="Semifinals", value="semifinals"),
-        app_commands.Choice(name="Knockouts", value="knockouts"),
+        app_commands.Choice(name="Semi-finals", value="semifinals"),
+        app_commands.Choice(name="Knockout Stage", value="knockouts"),
     ]
 )
 async def admin_champion_duel_import_slash(

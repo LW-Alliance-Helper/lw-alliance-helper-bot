@@ -144,15 +144,19 @@ def knockout_result(placement) -> str | None:
 # is still the honest answer to "what is happening right now".
 #
 # **The durations are fixed; only the start date moves.** Confirmed by Kevin
-# 2026-08-15: each phase is the same length in every Champion Duel, and so is
-# the interval between them. That is what makes this table an offset table
-# rather than a record of one event -- a start date is the only thing anyone
-# ever has to enter, and every window for every grouping follows from it.
+# 2026-08-15, and not from one sighting: this timeline has held for several
+# seasons, through season 6. That is what makes this an offset table rather
+# than a record of one event -- a start date is the only thing anyone ever has
+# to enter, and every window for every grouping follows from it.
 #
 # The whole feature rests on that. `current_phase`, `phase_window` and
 # `is_finished` answer for a grouping with nothing loaded, which is every
 # grouping but the one that was imported, and they can only do that because the
 # shape is structural.
+#
+# The Knockout Stage is one phase and the game does not break the final out of
+# it, so there is no ninth row and no grand-final structure to model. The final
+# is simply the last meeting inside phase 7.
 #
 # Verified end to end against the Match Overview box, both halves, 2026-08-15:
 #

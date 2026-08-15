@@ -75,6 +75,47 @@ STAGE_LABELS = {
     "knockouts": "Knockouts",
 }
 
+# What a knockout placement means, as the match the player went out in.
+#
+# A 32-player single-elimination bracket is rigid, so the finishing position
+# *is* the exit round and nothing extra has to be stored: 17th to 32nd lost
+# their first match, 9th to 16th the round of 16, 5th to 8th the quarter-final.
+# The top four reached the semi-finals, and the third-place match is what
+# separates 3rd from 4th -- it needs no column of its own.
+#
+# Knockout rounds deliberately never become `stage` values. Nothing in the
+# schema has to hold both a Semi-finals phase and a semifinal match, and these
+# names exist only as display copy derived from a number.
+KNOCKOUT_RESULTS = (
+    (1, 1, "won the final"),
+    (2, 2, "lost the final"),
+    (3, 3, "won the third-place match"),
+    (4, 4, "lost the third-place match"),
+    (5, 8, "lost in the quarter-finals"),
+    (9, 16, "lost in the round of 16"),
+    (17, 32, "lost in the first round"),
+)
+
+
+def knockout_result(placement) -> str | None:
+    """How a knockout placement reads, or None if it is not one of the 32.
+
+    None rather than a guess: a placement outside the bracket is a typo or a
+    format we have not seen, and inventing a round for it would state a fact
+    about a match nobody played.
+    """
+    if placement is None:
+        return None
+    try:
+        place = int(placement)
+    except (TypeError, ValueError):
+        return None
+    for first, last, result in KNOCKOUT_RESULTS:
+        if first <= place <= last:
+            return result
+    return None
+
+
 # The event's whole timeline, as day offsets from the grouping's start date:
 # (key, first day, day it ends). Read off the in-game Match Overview box, which
 # is also where a member reads the start date we ask them for.

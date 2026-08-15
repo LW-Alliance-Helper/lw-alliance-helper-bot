@@ -1426,6 +1426,72 @@ async def test_a_lettered_round_without_a_letter_is_refused(cd_db, no_mm_link):
     assert "needs a group" in _sent(interaction)
 
 
+def test_a_knockout_placement_is_the_round_they_went_out_in():
+    """A 32-bracket is rigid, so the finishing position carries the exit round
+    and nothing extra has to be stored."""
+    assert db.knockout_result(11) == "lost in the round of 16"
+    assert db.knockout_result(1) == "won the final"
+    assert db.knockout_result(2) == "lost the final"
+    # The third-place match is what separates these two, and needs no column.
+    assert db.knockout_result(3) == "won the third-place match"
+    assert db.knockout_result(4) == "lost the third-place match"
+    assert db.knockout_result(8) == "lost in the quarter-finals"
+    assert db.knockout_result(32) == "lost in the first round"
+
+
+def test_a_placement_outside_the_bracket_invents_no_round():
+    """A typo, or a format we have not seen. Naming a round for it would state
+    a fact about a match nobody played."""
+    assert db.knockout_result(33) is None
+    assert db.knockout_result(0) is None
+    assert db.knockout_result(None) is None
+    assert db.knockout_result("first") is None
+
+
+async def test_the_thirty_two_seeds_round_trip_in_the_order_given(cd_db, no_mm_link):
+    """The game reorders the 32 when it places them and the rule is unknown, so
+    a person reads the bracket top to bottom and the order they type is the
+    order stored. Deriving it would be inventing one."""
+    names = [f"Seed{i}" for i in range(1, 33)]
+    paste = "\n".join(f"{name}, 738, {i}" for i, name in enumerate(names, start=1))
+    modal = _record_modal(cd_db, stage="knockouts", recording="draw", group=None, players=paste)
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    await _view(interaction)._on_save(_interaction())
+
+    mine = db.find_grouping_by_warzone("738")
+    group = db.get_or_create_group(mine["id"], "knockouts", None)
+    members = db.get_group_members(group["id"])
+    assert len(members) == 32
+    by_seed = {m["seed_rank"]: m["display_name"] for m in members}
+    assert [by_seed[i] for i in range(1, 33)] == names
+    assert all(m["rank"] is None for m in members), "a draw is not a result"
+
+
+async def test_the_knockout_reconcile_shows_the_exit_round(cd_db, no_mm_link):
+    """What a reader can actually check against what they watched. A bare 11
+    is not."""
+    modal = _record_modal(
+        cd_db, stage="knockouts", recording="final", group=None, players="AlphaOne, 738, 11"
+    )
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "lost in the round of 16" in _embed(interaction).description
+
+
+def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
+    mine = db.find_grouping_by_warzone("738")
+    db.set_stage(_reg("AlphaOne"), "knockouts", rank=11, grouping_id=mine["id"])
+
+    embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
+
+    rounds = next(f.value for f in embed.fields if f.name == "Rounds")
+    assert "**Knockouts** · Rank 11 · lost in the round of 16" in rounds
+
+
 async def test_a_partial_group_does_not_read_as_something_missing(cd_db, no_mm_link):
     """Eight names against a hundred-player qualifier group is the normal case,
     not a truncation."""

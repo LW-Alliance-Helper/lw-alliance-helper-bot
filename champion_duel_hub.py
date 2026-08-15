@@ -644,6 +644,10 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
     #
     # A round with no rank shows the group alone: a draw is not a result, and
     # nobody has a position in a round until they play it.
+    #
+    # The knockouts carry no group letter and their rank says more than a
+    # number does: a 32-bracket is rigid, so a placement is the match the
+    # player went out in and that is the thing worth reading.
     rounds = "\n".join(
         f"**{db.STAGE_LABELS.get(stage, stage.title())}** · "
         + " · ".join(
@@ -651,6 +655,7 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
             for bit in (
                 f"Group {row['grp']}" if row.get("grp") else None,
                 f"Rank {row['rank']}" if row.get("rank") else None,
+                db.knockout_result(row.get("rank")) if stage == "knockouts" else None,
             )
             if bit
         ).rstrip(" ·")
@@ -2216,12 +2221,18 @@ def _line_summary(rows: list[dict]) -> str:
     return " · ".join(parts)
 
 
-def _line_row(row: dict) -> str:
+def _line_row(row: dict, *, stage: str | None = None, recording: str | None = None) -> str:
     """One line of the reconcile list, as it will be saved."""
     rank = str(row["rank"]) if row.get("rank") is not None else "–"
     name = row.get("name") or row.get("raw") or ""
     warzone = f"  #{row['server']}" if row.get("server") else ""
     score = f"  ·  {row['score']:,}" if row.get("score") is not None else ""
+    # A knockout placement is the match they went out in, and that is what a
+    # reader can actually check against what they watched. The seed order is
+    # just a position, so the draw gets no such gloss.
+    if stage == "knockouts" and recording == "final":
+        exit_round = db.knockout_result(row.get("rank"))
+        score = f"  ·  {exit_round}" if exit_round else score
     if row["state"] == "matched":
         return f"`{rank:>3}` ✅ **{name}**{warzone}{score}"
     if row["state"] == "ambiguous":
@@ -2244,7 +2255,9 @@ def build_reconcile_embed(*, rows: list[dict], stage: str, label, recording: str
     where = f"Group {label}" if label else db.STAGE_LABELS.get(stage, stage)
     embed = discord.Embed(
         title=f"👑 {where} — check this before saving",
-        description="\n".join(_line_row(row) for row in rows)[:4096],
+        description="\n".join(_line_row(row, stage=stage, recording=recording) for row in rows)[
+            :4096
+        ],
         color=discord.Color.blurple(),
     )
     embed.add_field(name="", value=_line_summary(rows), inline=False)

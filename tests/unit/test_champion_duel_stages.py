@@ -301,6 +301,62 @@ def test_a_round_is_named_in_exactly_one_place():
     assert set(db.STAGE_LABELS) == set(db.STAGES)
 
 
+# The Match Overview box for the 8/4 grouping, both halves, transcribed from
+# screenshots on 2026-08-15. The dates move with the start date; the durations
+# and the gaps between them do not, which is what makes one entered date enough
+# to derive every window for every grouping.
+OBSERVED_TIMELINE = (
+    ("signup", "Sign-up stage", "8/4", "8/9"),
+    ("signup_detail", "Sign-up Detail", "8/9", "8/10"),
+    ("qualifiers", "Qualifiers", "8/10", "8/14"),
+    ("qualifier_detail", "Qualifier Detail", "8/14", "8/17"),
+    ("semifinals", "Semi-finals", "8/17", "8/21"),
+    ("semifinal_detail", "Semi-final Detail", "8/21", "8/24"),
+    ("knockouts", "Knockout Stage", "8/24", "8/29"),
+    ("results", "Results", "8/29", "8/31"),
+)
+
+
+def test_the_whole_timeline_matches_the_game(cd_db):
+    """All eight phases, against the box they were read off.
+
+    Everything this feature states about dates comes out of one offset table
+    and one entered start date, so a slip anywhere in the table is wrong on
+    every surface at once and wrong for every grouping. Pinning it against the
+    real thing is cheap; finding it from a member's complaint is not.
+    """
+    import champion_duel_hub as hub
+
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = '2026-08-04'")
+    grouping_id = db.list_groupings()[0]["id"]
+
+    def short(value):
+        return f"{value.month}/{value.day}"
+
+    for key, label, first, last in OBSERVED_TIMELINE:
+        starts, ends = db.phase_window(grouping_id, key)
+        assert (short(starts), short(ends)) == (first, last), key
+        assert db.PHASE_LABELS[key] == label, key
+
+    # 8/4 plus the whole event lands on the last day the box shows.
+    assert db.EVENT_DAYS == 27
+    assert short(db.phase_window(grouping_id, "results")[1]) == "8/31"
+
+    # And the phase line reads back in the game's own format.
+    _restart("knockouts")
+    assert hub.phase_line(db.list_groupings()[0]).startswith("**Knockout Stage** ")
+
+
+def test_the_phases_run_end_to_end_with_no_gaps(cd_db):
+    """ "The time between each is always the same" is zero: each phase begins the
+    day the one before it ends. A gap would mean a day the hub could not name."""
+    days = [(first, end) for _, first, end in db.PHASES]
+    assert days[0][0] == 0
+    for (_, ends), (next_first, _) in zip(days, days[1:]):
+        assert ends == next_first
+
+
 def test_the_labels_are_the_games_own_spelling(cd_db):
     """Verified against the Match Overview box, 2026-08-15. The hyphen in
     "Semi-finals" and the word "Stage" in "Knockout Stage" are the game's."""

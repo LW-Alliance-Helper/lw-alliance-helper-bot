@@ -143,14 +143,26 @@ def knockout_result(placement) -> str | None:
 # it is when there is something new to ask for -- and a phase nobody can act on
 # is still the honest answer to "what is happening right now".
 #
-# **This shape is n=1.** It comes from one grouping's screenshot (8/4 to 8/31).
-# Every grouping observed since has matched, or this comment is out of date;
-# check before trusting it for a grouping whose timeline looks wrong.
+# **The durations are fixed; only the start date moves.** Confirmed by Kevin
+# 2026-08-15: each phase is the same length in every Champion Duel, and so is
+# the interval between them. That is what makes this table an offset table
+# rather than a record of one event -- a start date is the only thing anyone
+# ever has to enter, and every window for every grouping follows from it.
 #
-# Re-verified against the Match Overview box 2026-08-15: phases 1 to 5 and their
-# dates match exactly (8/4~8/9, 8/9~8/10, 8/10~8/14, 8/14~8/17, 8/17~8/21), as
-# do the names in `PHASE_LABELS`. Still one grouping, so still n=1 -- what the
-# screenshot settles is that we transcribed it right, not that it generalises.
+# The whole feature rests on that. `current_phase`, `phase_window` and
+# `is_finished` answer for a grouping with nothing loaded, which is every
+# grouping but the one that was imported, and they can only do that because the
+# shape is structural.
+#
+# Verified end to end against the Match Overview box, both halves, 2026-08-15:
+#
+#   1 Sign-up stage     8/4~8/9      5 Semi-finals        8/17~8/21
+#   2 Sign-up Detail    8/9~8/10     6 Semi-final Detail  8/21~8/24
+#   3 Qualifiers        8/10~8/14    7 Knockout Stage     8/24~8/29
+#   4 Qualifier Detail  8/14~8/17    8 Results            8/29~8/31
+#
+# `test_the_whole_timeline_matches_the_game` pins that against this table, so a
+# transcription slip cannot survive a test run.
 PHASES = (
     ("signup", 0, 5),
     ("signup_detail", 5, 6),

@@ -615,19 +615,26 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
             inline=False,
         )
 
-    # Hardcoded stage name, and it stops being true the day semifinals land.
-    # Issue #488 makes stage a dimension; until then this is honestly what the
-    # group and rank are, and "Group M · Rank 1" with no stage was worse.
-    qualifiers = " · ".join(
-        bit
-        for bit in (
-            f"Group **{player['grp']}**" if player.get("grp") else None,
-            f"Rank **{player['rank']}**" if player.get("rank") else None,
-        )
-        if bit
+    # Every round they are in, oldest first, which is how far they have got.
+    # This used to be one field hardcoded to "Qualifiers", which stopped being
+    # true the day a semifinal draw landed.
+    #
+    # A round with no rank shows the group alone: a draw is not a result, and
+    # nobody has a position in a round until they play it.
+    rounds = "\n".join(
+        f"**{db.STAGE_LABELS.get(stage, stage.title())}** · "
+        + " · ".join(
+            bit
+            for bit in (
+                f"Group {row['grp']}" if row.get("grp") else None,
+                f"Rank {row['rank']}" if row.get("rank") else None,
+            )
+            if bit
+        ).rstrip(" ·")
+        for stage, row in (player.get("stages") or {}).items()
     )
-    if qualifiers:
-        embed.add_field(name="Qualifiers", value=qualifiers, inline=False)
+    if rounds:
+        embed.add_field(name="Rounds", value=rounds[:1024], inline=False)
 
     if squads:
         embed.set_footer(text=_squad_basis(squads))
@@ -1423,8 +1430,14 @@ def build_hub_embed(*, servers: list[dict], can_write: bool) -> discord.Embed:
         more = len(servers) - _SERVERS_SHOWN
         if more > 0:
             listed += f", and {more} more"
+        # Which round is running, when we hold a draw for one. It answers the
+        # question a member opens this with during the event, and it is what
+        # decides whose card names a round rather than "Matchup prediction".
+        running = db.STAGE_LABELS.get(stage) if (stage := db.current_stage()) else None
+        opener = f"**{running}** are running. " if running else ""
         embed.description = (
-            f"**{total}** players loaded across **{len(servers)}** servers: {listed}.\n\n"
+            f"{opener}**{total}** players loaded across **{len(servers)}** servers: "
+            f"{listed}.\n\n"
             f"You can predict a match or look up a player's information to see their "
             f"squads and power (if we have it). If we don't have data from your "
             f"server, or you can't find the player you're looking for, "

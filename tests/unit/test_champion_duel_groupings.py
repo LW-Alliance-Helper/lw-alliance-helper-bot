@@ -99,6 +99,65 @@ def test_an_overlap_stands_when_either_side_has_no_dates(cd_db):
     assert [z for _, z in overlaps] == ["773"]
 
 
+# ── Reading a pasted group listing ────────────────────────────────────────────
+
+
+def test_a_score_keeps_its_thousands_separators(cd_db):
+    """The whole reason for splitting on three commas. People type `33,500,000`
+    because that is what the card shows, and a naive split makes it 33."""
+    row = db.parse_placement_line("Kestrel, 738, 1, 33,500,000")
+
+    assert row["name"] == "Kestrel"
+    assert row["server"] == "738"
+    assert row["rank"] == 1
+    assert row["score"] == 33_500_000
+    assert row["problem"] is None
+
+
+def test_a_line_can_stop_early(cd_db):
+    """Only the name is required. An alliance recording just its own members'
+    placements knows the rank and often not the score."""
+    assert db.parse_placement_line("Wren")["name"] == "Wren"
+    assert db.parse_placement_line("Wren")["server"] is None
+
+    partial = db.parse_placement_line("Wren, 744, 25")
+    assert (partial["server"], partial["rank"], partial["score"]) == ("744", 25, None)
+
+
+def test_the_alliance_tag_is_kept_rather_than_discarded(cd_db):
+    """`normalize_name` already ignores it for matching, so this is only about
+    not throwing away the one field we would otherwise have to ask for."""
+    row = db.parse_placement_line("[OGV]Kestrel, 738, 1")
+
+    assert row["name"] == "Kestrel"
+    assert row["alliance"] == "OGV"
+
+
+def test_the_game_formatting_is_tolerated(cd_db):
+    row = db.parse_placement_line("Kestrel, #738, 1")
+    assert row["server"] == "738"
+
+
+def test_a_name_with_a_comma_is_flagged_not_mangled(cd_db):
+    """Its second half lands in the warzone slot. That is not recoverable here,
+    so it goes to the reconcile view for a human rather than being guessed at."""
+    row = db.parse_placement_line("Smith, Jr, 738, 1")
+
+    assert row["problem"] == "bad_server"
+    assert row["server"] is None
+
+
+def test_non_numeric_ranks_and_scores_are_flagged(cd_db):
+    assert db.parse_placement_line("Wren, 744, first")["problem"] == "bad_rank"
+    assert db.parse_placement_line("Wren, 744, 1, lots")["problem"] == "bad_score"
+
+
+def test_a_paste_drops_blank_lines_and_keeps_the_rest(cd_db):
+    rows = db.parse_placement_lines("Kestrel, 738, 1\n\n  \nWren, 744, 25\n")
+
+    assert [r["name"] for r in rows] == ["Kestrel", "Wren"]
+
+
 # ── The collision this exists to stop ─────────────────────────────────────────
 
 

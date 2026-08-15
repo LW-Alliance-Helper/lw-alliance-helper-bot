@@ -69,6 +69,14 @@ CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your warzone grouping"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
+# 📥 is the catalog's "data coming into the bot", which is what a pasted group
+# listing is. Not ➕: `CD_BTN_ADD` already carries that on this grid, and two of
+# one glyph side by side give the eye nothing to navigate by.
+CD_BTN_RECORD = "📥 Record a group"
+CD_BTN_SAVE_GROUP = "✅ Save group"
+CD_BTN_LINE_NEW = "➕ Add as a new player"
+CD_BTN_LINE_SKIP = "⏭️ Skip this line"
+CD_BTN_LINE_BACK = "Back"
 # 💬 borrowed from the website's own link to the same place, per `notes/DESIGN
 # .md` emoji rule 5: somebody who has seen one should recognise the other.
 CD_BTN_COMMUNITY = f"💬 {COMMUNITY_SERVER_NAME}"
@@ -2139,6 +2147,480 @@ class _RetryGroupingView(discord.ui.View):
         )
 
 
+# ── Recording a group ─────────────────────────────────────────────────────────
+#
+# One surface covers the qualifier standings and the semifinal group, because
+# they are the same work: pick a round and a group, paste players, reconcile.
+#
+# It is not "enter eight". Rank is typed rather than derived from order, so an
+# alliance can record just its own members' placements -- ranks 22, 25, 51, 87 --
+# which is the question "which of my alliance's players placed where".
+#
+# A group is recorded twice over its life: once at the draw into `seed_rank`,
+# once at the standings into `rank`. Which of the two an entry writes is
+# explicit on the surface, the same argument that made the round explicit.
+# Inferring it from "is the score zero" would silently misfile a draw entered
+# late.
+
+
+_RECORDING_LABELS = {"draw": "The draw", "final": "Final standings"}
+
+# What a line resolved to. `problem` is a parse failure, `skipped` is the user
+# deciding this one is not worth chasing; both are excluded from the write and
+# neither blocks it.
+_UNRESOLVED = ("ambiguous", "problem")
+
+_LINE_PROBLEMS = {
+    "no_name": "no name on this line",
+    "bad_server": "the warzone slot is not a number",
+    "bad_rank": "the rank is not a number",
+    "bad_score": "the score is not a number",
+}
+
+
+def _resolve_line(row: dict) -> dict:
+    """Attach a registrant to one parsed line, or say why it could not be.
+
+    Never matches silently across warzones. Identity is name plus warzone, so a
+    line naming a warzone we have no such player on is a new player rather than
+    the same name somewhere else -- that is two people, and merging them is
+    unrecoverable.
+    """
+    if row.get("problem"):
+        row["state"] = "problem"
+        return row
+    matches = db.find_registrants(row["name"], row.get("server"))
+    if len(matches) == 1:
+        row["state"], row["registrant_id"] = "matched", matches[0]["id"]
+    elif matches:
+        row["state"], row["candidates"] = "ambiguous", matches
+    else:
+        row["state"] = "new"
+    return row
+
+
+def _line_summary(rows: list[dict]) -> str:
+    counts = {}
+    for row in rows:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    parts = []
+    for state, word in (
+        ("matched", "matched"),
+        ("ambiguous", "needs a decision"),
+        ("problem", "can't be read"),
+        ("new", "new"),
+        ("skipped", "skipped"),
+    ):
+        if counts.get(state):
+            parts.append(f"{counts[state]} {word}")
+    return " · ".join(parts)
+
+
+def _line_row(row: dict) -> str:
+    """One line of the reconcile list, as it will be saved."""
+    rank = str(row["rank"]) if row.get("rank") is not None else "–"
+    name = row.get("name") or row.get("raw") or ""
+    warzone = f"  #{row['server']}" if row.get("server") else ""
+    score = f"  ·  {row['score']:,}" if row.get("score") is not None else ""
+    if row["state"] == "matched":
+        return f"`{rank:>3}` ✅ **{name}**{warzone}{score}"
+    if row["state"] == "ambiguous":
+        return f"`{rank:>3}` ❓ **{name}** — on {len(row['candidates'])} warzones, pick one"
+    if row["state"] == "new":
+        return f"`{rank:>3}` ➕ **{name}**{warzone} — new, will be added"
+    if row["state"] == "skipped":
+        return f"`{rank:>3}` ⏭️ ~~{name}~~ — skipped"
+    why = _LINE_PROBLEMS.get(row.get("problem"), "can't be read")
+    return f"  – ⚠️ `{_typed(row.get('raw'), 40)}` — {why}"
+
+
+def build_reconcile_embed(*, rows: list[dict], stage: str, label, recording: str):
+    """Every line and what it will do, before anything is written.
+
+    Never a silent match. `AmbiguousPlayer` already carries its candidates so a
+    caller can ask which rather than picking one, and this is that precedent
+    applied to a paste rather than a new mechanism.
+    """
+    where = f"Group {label}" if label else db.STAGE_LABELS.get(stage, stage)
+    embed = discord.Embed(
+        title=f"👑 {where} — check this before saving",
+        description="\n".join(_line_row(row) for row in rows)[:4096],
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="", value=_line_summary(rows), inline=False)
+    # Eight names against a hundred-player qualifier group is deliberately
+    # partial, so the count must not read as though something went missing.
+    expected = db.GROUP_SIZE.get(stage)
+    keeping = [r for r in rows if r["state"] not in _UNRESOLVED and r["state"] != "skipped"]
+    if expected and len(keeping) < expected:
+        embed.set_footer(
+            text=(
+                f"{_RECORDING_LABELS[recording]}. Recording {len(keeping)} of a "
+                f"{expected}-player group, which is fine: add the rest whenever."
+            )
+        )
+    return embed
+
+
+class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
+    """Round, which entry this is, the group, and the players, in one surface.
+
+    Three selects and a paragraph. This is the first modal in the tree to hold a
+    select (`notes/DESIGN.md`, Selects inside modals), which is what collapses
+    what would otherwise be a picker view in front of a typing modal.
+    """
+
+    def __init__(self, *, can_write: bool, grouping: dict, stage: str | None = None):
+        super().__init__()
+        self.can_write = can_write
+        self.grouping = grouping
+
+        # `stage` is passed in rather than read here: a modal constructor cannot
+        # be async, and every DB call from a handler goes through
+        # `asyncio.to_thread`. The caller already has the grouping in hand.
+        #
+        # Defaulted to the running round, which is what somebody recording
+        # during the event almost always wants -- but still explicit, so a
+        # backfill during the semifinals files against the qualifiers correctly.
+        self.round_.component.options = [
+            discord.SelectOption(label=db.STAGE_LABELS[key], value=key, default=(key == stage))
+            for key in db.STAGES
+        ]
+
+    round_ = discord.ui.Label(
+        text="Round",
+        component=discord.ui.Select(
+            options=[discord.SelectOption(label=db.STAGE_LABELS[k], value=k) for k in db.STAGES]
+        ),
+    )
+    recording = discord.ui.Label(
+        text="Recording",
+        description="The draw is the starting order. Final standings is how it ended.",
+        component=discord.ui.Select(
+            options=[
+                discord.SelectOption(label="Final standings", value="final", default=True),
+                discord.SelectOption(label="The draw", value="draw"),
+            ]
+        ),
+    )
+    group = discord.ui.Label(
+        text="Group",
+        description="Knockouts are one field of 32 and have no letter, so leave it blank.",
+        component=discord.ui.Select(
+            min_values=0,
+            max_values=1,
+            options=[
+                discord.SelectOption(label=letter, value=letter) for letter in db.GROUP_LABELS
+            ],
+        ),
+    )
+    players = discord.ui.Label(
+        text="Players, one per line",
+        description="name, warzone, rank, score. Only the name is required.",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+            placeholder="[OGV]Kestrel, 738, 1, 33,500,000\nWren, 744, 25",
+        ),
+    )
+
+    @staticmethod
+    def _picked(label, default=None):
+        values = label.component.values
+        return values[0] if values else default
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        stage = self._picked(self.round_, "qualifiers")
+        recording = self._picked(self.recording, "final")
+        label = self._picked(self.group)
+
+        if stage == "knockouts":
+            # One field of 32 rather than lettered groups, so a letter here
+            # would be a claim about a structure the round does not have.
+            label = None
+        elif not label:
+            await interaction.followup.send(
+                f"⚠️ **{db.STAGE_LABELS[stage]}** are played in lettered groups, so this "
+                f"needs a group. Pick one and submit again.",
+                ephemeral=True,
+            )
+            return
+
+        rows = db.parse_placement_lines(self.players.component.value)
+        if not rows:
+            await interaction.followup.send(
+                "⚠️ No players were entered. Paste them one per line, as "
+                "`name, warzone, rank, score`.",
+                ephemeral=True,
+            )
+            return
+
+        rows = [await asyncio.to_thread(_resolve_line, row) for row in rows]
+        view = _ReconcileView(
+            user_id=interaction.user.id,
+            can_write=self.can_write,
+            grouping=self.grouping,
+            stage=stage,
+            label=label,
+            recording=recording,
+            rows=rows,
+        )
+        await interaction.followup.send(
+            embed=build_reconcile_embed(rows=rows, stage=stage, label=label, recording=recording),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+
+class _ReconcileView(discord.ui.View):
+    """The paste, line by line, with Save held back until nothing is unresolved.
+
+    A select carries **only the unresolved lines**. One select per line would
+    blow the five-row budget at six players, and the resolved ones need no
+    control: they are already right.
+    """
+
+    def __init__(self, *, user_id, can_write, grouping, stage, label, recording, rows, index=None):
+        super().__init__(timeout=900)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.grouping = grouping
+        self.stage = stage
+        self.label = label
+        self.recording = recording
+        self.rows = rows
+        self.index = index
+        self.message: discord.Message | None = None
+        self._build()
+
+    # ── rendering ─────────────────────────────────────────────────────────────
+
+    def _unresolved(self) -> list[int]:
+        return [i for i, row in enumerate(self.rows) if row["state"] in _UNRESOLVED]
+
+    def _build(self):
+        self.clear_items()
+        if self.index is not None:
+            self._build_one_line()
+            return
+
+        pending = self._unresolved()
+        if pending:
+            select = discord.ui.Select(
+                placeholder=f"Fix a name ({len(pending)})",
+                options=[
+                    discord.SelectOption(
+                        label=(self.rows[i].get("name") or self.rows[i]["raw"])[:100],
+                        value=str(i),
+                        description=_LINE_PROBLEMS.get(self.rows[i].get("problem"))
+                        or "on more than one warzone",
+                    )
+                    for i in pending[:25]
+                ],
+                row=0,
+            )
+            select.callback = self._on_pick_line
+            self.add_item(select)
+
+        # Disabled rather than absent while anything is unresolved: a control
+        # that would half-write a group should not look live (`notes/DESIGN.md`).
+        save = discord.ui.Button(
+            label=CD_BTN_SAVE_GROUP[:80],
+            style=discord.ButtonStyle.success,
+            row=1,
+            disabled=bool(pending),
+        )
+        save.callback = self._on_save
+        self.add_item(save)
+        cancel = discord.ui.Button(label=CD_BTN_CANCEL, style=discord.ButtonStyle.secondary, row=1)
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+
+    def _build_one_line(self):
+        row = self.rows[self.index]
+        for candidate in (row.get("candidates") or [])[:20]:
+            button = discord.ui.Button(
+                label=f"{candidate['display_name']} · #{candidate['server']}"[:80],
+                style=discord.ButtonStyle.secondary,
+                row=0,
+            )
+            button.callback = self._pick_candidate(candidate["id"])
+            self.add_item(button)
+
+        add = discord.ui.Button(
+            label=CD_BTN_LINE_NEW[:80], style=discord.ButtonStyle.primary, row=1
+        )
+        add.callback = self._on_add_new
+        self.add_item(add)
+        skip = discord.ui.Button(
+            label=CD_BTN_LINE_SKIP[:80], style=discord.ButtonStyle.secondary, row=1
+        )
+        skip.callback = self._on_skip
+        self.add_item(skip)
+        back = discord.ui.Button(label=CD_BTN_LINE_BACK, style=discord.ButtonStyle.secondary, row=1)
+        back.callback = self._on_back
+        self.add_item(back)
+
+    def _embed(self):
+        if self.index is None:
+            return build_reconcile_embed(
+                rows=self.rows, stage=self.stage, label=self.label, recording=self.recording
+            )
+        row = self.rows[self.index]
+        why = _LINE_PROBLEMS.get(row.get("problem"))
+        detail = (
+            f"That line reads `{_typed(row.get('raw'), 60)}`, and {why}."
+            if why
+            else f"**{row.get('name')}** is on more than one warzone. Which of them is this?"
+        )
+        return discord.Embed(
+            title="👑 One line to settle",
+            description=f"{detail}\n\nSkipping leaves this line out and saves the rest.",
+            color=discord.Color.orange(),
+        )
+
+    async def _rerender(self, inter: discord.Interaction):
+        self._build()
+        await inter.response.edit_message(embed=self._embed(), view=self)
+
+    # ── plumbing ──────────────────────────────────────────────────────────────
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    # ── callbacks ─────────────────────────────────────────────────────────────
+
+    async def _on_pick_line(self, inter: discord.Interaction):
+        self.index = int(inter.data["values"][0])
+        await self._rerender(inter)
+
+    def _pick_candidate(self, registrant_id: int):
+        async def callback(inter: discord.Interaction):
+            self.rows[self.index]["state"] = "matched"
+            self.rows[self.index]["registrant_id"] = registrant_id
+            self.index = None
+            await self._rerender(inter)
+
+        return callback
+
+    async def _on_add_new(self, inter: discord.Interaction):
+        row = self.rows[self.index]
+        if not row.get("server"):
+            # Identity is name plus warzone, so this is the one case that has to
+            # ask for something the paste did not carry. Putting warzone in the
+            # line format is what keeps it rare.
+            await inter.response.send_modal(_NewPlayerWarzoneModal(view=self, index=self.index))
+            return
+        row["state"] = "new"
+        self.index = None
+        await self._rerender(inter)
+
+    async def _on_skip(self, inter: discord.Interaction):
+        self.rows[self.index]["state"] = "skipped"
+        self.index = None
+        await self._rerender(inter)
+
+    async def _on_back(self, inter: discord.Interaction):
+        self.index = None
+        await self._rerender(inter)
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content="↩️ Cancelled. Nothing was saved.", embed=None, view=self
+        )
+        self.stop()
+
+    async def _on_save(self, inter: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        written = await asyncio.to_thread(self._write, _actor(inter))
+        self.stop()
+        await inter.followup.send(
+            f"✅ Saved **{written}** {'player' if written == 1 else 'players'} to "
+            f"{f'Group {self.label}' if self.label else db.STAGE_LABELS[self.stage]}, "
+            f"as {_RECORDING_LABELS[self.recording].lower()}.",
+            ephemeral=True,
+        )
+
+    def _write(self, actor: dict) -> int:
+        """Create the group if new, then place everyone who resolved.
+
+        Runs in a thread: every DB call from a handler does. Skipped and
+        unreadable lines are left out rather than half-written.
+        """
+        group = db.get_or_create_group(
+            self.grouping["id"], self.stage, self.label, guild_id=actor.get("guild_id")
+        )
+        written = 0
+        for row in self.rows:
+            if row["state"] not in ("matched", "new"):
+                continue
+            registrant_id = row.get("registrant_id")
+            if registrant_id is None:
+                player = db.upsert_registrant(
+                    row["name"],
+                    server=row["server"],
+                    alliance=row.get("alliance"),
+                    origin="self_reported",
+                    actor=actor,
+                )
+                registrant_id = player["id"]
+            db.set_placement(
+                group["id"],
+                registrant_id,
+                rank=row.get("rank"),
+                score=row.get("score"),
+                recording=self.recording,
+            )
+            written += 1
+        return written
+
+
+class _NewPlayerWarzoneModal(discord.ui.Modal, title="Which warzone is this player on?"):
+    """The one thing a paste can leave out that we cannot do without.
+
+    Identity is name plus warzone. Adding a player without one makes a row
+    nobody can match against later, which is the same refusal `_AddPlayerModal`
+    already makes.
+    """
+
+    warzone = discord.ui.TextInput(label="Warzone number", max_length=10, placeholder="e.g. 738")
+
+    def __init__(self, *, view: "_ReconcileView", index: int):
+        super().__init__()
+        self.parent = view
+        self.index = index
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        zones = db.parse_warzones(self.warzone.value)
+        row = self.parent.rows[self.index]
+        if len(zones) != 1:
+            await interaction.response.send_message(
+                f"⚠️ **{_typed(self.warzone.value, 16)}** is not a warzone number. "
+                f"**{row.get('name')}** was left unresolved, so nothing is lost.",
+                ephemeral=True,
+            )
+            return
+        row["server"], row["state"], row["registrant_id"] = zones[0], "new", None
+        self.parent.index = None
+        self.parent._build()
+        await interaction.response.edit_message(embed=self.parent._embed(), view=self.parent)
+
+
 # ── Hub ───────────────────────────────────────────────────────────────────────
 
 
@@ -2296,12 +2778,21 @@ class ChampionDuelFinishedView(discord.ui.View):
     the plan is explicit that scoping them would take something away.
     """
 
-    def __init__(self, *, user_id: int, can_write: bool, engine_ok: bool, warzone: str | None):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        can_write: bool,
+        engine_ok: bool,
+        warzone: str | None,
+        grouping: dict | None = None,
+    ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.can_write = can_write
         self.engine_ok = engine_ok
         self.warzone = warzone
+        self.grouping = grouping
         self.message: discord.Message | None = None
 
         for label, style, row, cb, off in (
@@ -2313,6 +2804,19 @@ class ChampionDuelFinishedView(discord.ui.View):
             button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=off)
             button.callback = cb
             self.add_item(button)
+
+        # Recording stays live after the event. Filling a group in from
+        # screenshots once the Duel is over is the normal way this data arrives,
+        # and the round is chosen explicitly, so a late entry still files right.
+        if grouping:
+            record = discord.ui.Button(
+                label=(CD_BTN_RECORD if can_write else f"🔒 {CD_BTN_RECORD}")[:80],
+                style=discord.ButtonStyle.secondary,
+                row=1,
+                disabled=not can_write,
+            )
+            record.callback = self._on_record
+            self.add_item(record)
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -2341,6 +2845,12 @@ class ChampionDuelFinishedView(discord.ui.View):
             _WarzoneModal(can_write=self.can_write, current=self.warzone)
         )
 
+    async def _on_record(self, inter: discord.Interaction):
+        stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+        await inter.response.send_modal(
+            _RecordGroupModal(can_write=self.can_write, grouping=self.grouping, stage=stage)
+        )
+
 
 class ChampionDuelHubView(discord.ui.View):
     """The button grid. Rows group by kind: everyone, contributors, operator."""
@@ -2353,6 +2863,7 @@ class ChampionDuelHubView(discord.ui.View):
         can_write: bool,
         engine_ok: bool,
         warzone: str | None = None,
+        grouping: dict | None = None,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
@@ -2360,6 +2871,7 @@ class ChampionDuelHubView(discord.ui.View):
         self.can_write = can_write
         self.engine_ok = engine_ok
         self.warzone = warzone
+        self.grouping = grouping
         self.message: discord.Message | None = None
         self._build_buttons()
 
@@ -2412,6 +2924,17 @@ class ChampionDuelHubView(discord.ui.View):
         # paying for should be able to see what contributing involves, and it
         # is documentation: withholding it protects nothing.
         self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
+        # Recording needs a grouping to file the group against, so it is absent
+        # rather than disabled when there is none: on that surface the caller is
+        # being asked for their warzone and has nothing to record yet.
+        if self.grouping:
+            self._add(
+                f"🔒 {CD_BTN_RECORD}" if not self.can_write else CD_BTN_RECORD,
+                discord.ButtonStyle.secondary,
+                1,
+                self._on_record,
+                disabled=not self.can_write,
+            )
         # A wrong warzone points the whole server at somebody else's tournament,
         # and nothing else on this hub can fix it. Present whenever we resolved
         # from one, which is the only time there is something to change.
@@ -2438,6 +2961,15 @@ class ChampionDuelHubView(discord.ui.View):
     async def _on_warzone(self, inter: discord.Interaction):
         await inter.response.send_modal(
             _WarzoneModal(can_write=self.can_write, current=self.warzone)
+        )
+
+    async def _on_record(self, inter: discord.Interaction):
+        # Read before responding, not after: a modal has to be the first
+        # response to an interaction, so this cannot defer first. One indexed
+        # SQLite read is well inside the three seconds.
+        stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+        await inter.response.send_modal(
+            _RecordGroupModal(can_write=self.can_write, grouping=self.grouping, stage=stage)
         )
 
     async def _on_guide(self, inter: discord.Interaction):
@@ -2524,6 +3056,7 @@ async def _open_hub(
             can_write=can_write,
             engine_ok=engine_ok,
             warzone=warzone,
+            grouping=grouping,
         )
         await interaction.followup.send(
             content=note,
@@ -2540,6 +3073,7 @@ async def _open_hub(
         can_write=can_write,
         engine_ok=engine_ok,
         warzone=warzone,
+        grouping=grouping,
     )
     await interaction.followup.send(
         content=note,

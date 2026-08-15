@@ -122,6 +122,16 @@ GROUPING_SIZE = 16
 # full at 6. Knockouts are one field of 32 rather than lettered groups.
 GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
 
+# The lettered groups inside a round. Sixteen either way: the qualifiers split
+# 1,600 players into groups of 100, and the semifinals split the 128 advancers
+# into groups of 8. Knockouts are one field of 32 and carry no letter at all.
+#
+# **A to P is inferred, not observed.** The count follows from the format; that
+# the game letters them from A is an assumption, and the only letters seen so
+# far are D and M. A group letter outside this set is still storable -- `_group`
+# takes any letter -- so this bounds the picker, not the data.
+GROUP_LABELS = tuple(chr(ord("A") + i) for i in range(16))
+
 # Which entry a recording writes. A group is recorded twice over its life --
 # once at the draw, once at the standings -- and they are different numbers for
 # the same player and round, so they are different columns. Writing one must
@@ -631,6 +641,93 @@ def parse_warzones(text, *, unique: bool = True) -> list[str]:
     if not unique:
         return out
     return sorted(set(out), key=int)
+
+
+def parse_placement_line(line: str) -> dict:
+    """One pasted line of a group listing: `name, warzone, rank, score`.
+
+    Left to right as the in-game Duel card reads, so somebody copying it out is
+    transcribing rather than translating. Only the name is required; a line that
+    stops early simply carries less.
+
+    Returns a dict with `name`, `alliance`, `server`, `rank`, `score` and
+    `problem`. **`problem` is a flag, not an exception**: a line that cannot be
+    read has to reach the reconcile view and be shown, because silently
+    mangling one row of a paste of eight is the failure mode that gets noticed
+    a week later.
+
+    Split on the first three commas only. Scores run to tens of millions and
+    people type `33,500,000`; taking only three separators leaves the rest to
+    the score field, which then has its commas stripped. Asking the user to
+    omit them would be asking them to reformat what they are copying.
+    """
+    raw = (line or "").strip()
+    if not raw:
+        return {"raw": raw, "problem": "blank"}
+
+    parts = [p.strip() for p in raw.split(",", 3)]
+    name = parts[0]
+    server = parts[1] if len(parts) > 1 else ""
+    rank = parts[2] if len(parts) > 2 else ""
+    score = parts[3] if len(parts) > 3 else ""
+
+    out = {
+        "raw": raw,
+        "name": name,
+        "alliance": None,
+        "server": None,
+        "rank": None,
+        "score": None,
+        "problem": None,
+    }
+    if not name:
+        out["problem"] = "no_name"
+        return out
+
+    # The tag arrives prefixed to the name, the way the card prints it.
+    # `normalize_name` already ignores it for matching, so this is only about
+    # keeping it rather than throwing it away: it is the one field on the line
+    # we would otherwise have to ask for separately.
+    if name.startswith("[") and "]" in name:
+        tag, _, rest = name[1:].partition("]")
+        if rest.strip():
+            out["alliance"], out["name"] = tag.strip() or None, rest.strip()
+
+    # A name containing a comma lands its second half in the warzone slot. That
+    # is not a warzone and it is not recoverable here, so it is flagged for a
+    # human rather than guessed at.
+    if server:
+        zones = parse_warzones(server)
+        if len(zones) != 1 or parse_warzones(server, unique=False) != zones:
+            out["problem"] = "bad_server"
+            return out
+        out["server"] = zones[0]
+
+    if rank:
+        digits = rank.replace("#", "").strip()
+        if not digits.isdigit():
+            out["problem"] = "bad_rank"
+            return out
+        out["rank"] = int(digits)
+
+    if score:
+        digits = score.replace(",", "").replace(" ", "").strip()
+        if not digits.isdigit():
+            out["problem"] = "bad_score"
+            return out
+        out["score"] = int(digits)
+
+    return out
+
+
+def parse_placement_lines(text: str) -> list[dict]:
+    """Every non-blank line of a paste, parsed. Blank lines are dropped rather
+    than flagged: a trailing newline is not a mistake anyone made."""
+    return [
+        parsed
+        for parsed in (parse_placement_line(line) for line in str(text or "").splitlines())
+        if parsed.get("problem") != "blank"
+    ]
 
 
 def create_grouping(

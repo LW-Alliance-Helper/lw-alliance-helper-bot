@@ -1280,6 +1280,164 @@ async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
         assert zone in said, "they did not enter this one, so they need to see it"
 
 
+# ── Recording a group ─────────────────────────────────────────────────────────
+
+
+def _save_button(view):
+    """The reconcile view holds a Select as well as buttons, and a Select has no
+    `label`, so this cannot filter on the attribute directly."""
+    return next(b for b in view.children if getattr(b, "label", None) == hub.CD_BTN_SAVE_GROUP)
+
+
+def _record_modal(cd_db, *, stage="semifinals", recording="final", group="D", players=""):
+    """The modal as Discord hands it back.
+
+    A select's `values` reads through `BaseSelect._values`, so a submitted
+    choice is set there. That the picker defaulted to something is a different
+    thing from the user having chosen it, which is why the defaults set in the
+    constructor are not enough to drive these.
+    """
+    grouping = db.find_grouping_by_warzone("738")
+    modal = hub._RecordGroupModal(can_write=True, grouping=grouping, stage=stage)
+    modal.round_.component._values = [stage] if stage else []
+    modal.recording.component._values = [recording] if recording else []
+    modal.group.component._values = [group] if group else []
+    modal.players.component._value = players
+    return modal
+
+
+async def test_a_pasted_group_lands_on_a_reconcile_rather_than_a_write(cd_db, no_mm_link):
+    """Never a silent match. `AmbiguousPlayer` already carries its candidates so
+    a caller can ask which; this is that precedent applied to a paste."""
+    modal = _record_modal(cd_db, players="AlphaOne, 738, 3, 33,500,000\nWren, 744, 25")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    view = _view(interaction)
+    assert isinstance(view, hub._ReconcileView)
+    assert db.get_groups(stage="semifinals") == [], "nothing written yet"
+
+    said = _embed(interaction).description
+    assert "✅ **AlphaOne**" in said, "already on 738"
+    assert "➕ **Wren**" in said and "new, will be added" in said
+
+
+async def test_saving_writes_the_standings_and_adds_the_new_player(cd_db, no_mm_link):
+    modal = _record_modal(cd_db, players="AlphaOne, 738, 3, 33,500,000\nWren, 744, 25")
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    view = _view(interaction)
+
+    await view._on_save(_interaction())
+
+    mine = db.find_grouping_by_warzone("738")
+    group = db.get_or_create_group(mine["id"], "semifinals", "D")
+    rows = {r["display_name"]: r for r in db.get_group_members(group["id"])}
+    assert rows["AlphaOne"]["rank"] == 3
+    assert rows["AlphaOne"]["score"] == 33_500_000
+    assert rows["Wren"]["rank"] == 25
+    assert db.get_player("Wren", server="744")["origin"] == "self_reported"
+
+
+async def test_the_draw_and_the_standings_do_not_overwrite_each_other(cd_db, no_mm_link):
+    """Two columns exist for exactly this. A group is recorded twice over its
+    life and the second entry must not destroy the first."""
+    draw = _record_modal(cd_db, recording="draw", players="AlphaOne, 738, 5")
+    first = _interaction()
+    await draw.on_submit(first)
+    await _view(first)._on_save(_interaction())
+
+    final = _record_modal(cd_db, recording="final", players="AlphaOne, 738, 2, 40,000,000")
+    second = _interaction()
+    await final.on_submit(second)
+    await _view(second)._on_save(_interaction())
+
+    mine = db.find_grouping_by_warzone("738")
+    row = db.get_group_members(db.get_or_create_group(mine["id"], "semifinals", "D")["id"])[0]
+    assert row["seed_rank"] == 5, "the draw survived"
+    assert row["rank"] == 2
+
+
+async def test_save_stays_disabled_while_a_line_is_unresolved(cd_db, no_mm_link):
+    """A control that would half-write a group should not look live."""
+    db.import_registrants([{"name": "AlphaOne", "server": "800"}])
+    modal = _record_modal(cd_db, players="AlphaOne, , 3")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    view = _view(interaction)
+
+    assert _save_button(view).disabled, "AlphaOne is on 738 and 800"
+
+    # Settling it turns the control on rather than leaving it inert.
+    view.index = 0
+    await view._pick_candidate(_reg("AlphaOne", "800"))(_interaction())
+    assert not _save_button(view).disabled
+
+
+async def test_a_line_nobody_can_read_is_shown_not_dropped(cd_db, no_mm_link):
+    """Silently mangling one row of a paste of eight is the failure that gets
+    noticed a week later."""
+    modal = _record_modal(cd_db, players="Smith, Jr, 738, 1\nAlphaOne, 738, 2")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "not a number" in _embed(interaction).description
+    view = _view(interaction)
+    assert _save_button(view).disabled
+
+    # Skipping it saves the rest rather than losing the paste.
+    view.index = 0
+    await view._on_skip(_interaction())
+    assert not _save_button(view).disabled
+    await view._on_save(_interaction())
+
+    mine = db.find_grouping_by_warzone("738")
+    members = db.get_group_members(db.get_or_create_group(mine["id"], "semifinals", "D")["id"])
+    assert [m["display_name"] for m in members] == ["AlphaOne"]
+
+
+async def test_knockouts_take_no_group_letter(cd_db, no_mm_link):
+    """One field of 32 rather than lettered groups, so a letter would be a claim
+    about a structure the round does not have."""
+    modal = _record_modal(cd_db, stage="knockouts", group="D", players="AlphaOne, 738, 1")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    await _view(interaction)._on_save(_interaction())
+
+    mine = db.find_grouping_by_warzone("738")
+    with db._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT label FROM groups WHERE grouping_id = ? AND stage = 'knockouts'",
+            (mine["id"],),
+        ).fetchall()
+    assert [r["label"] for r in rows] == [None]
+
+
+async def test_a_lettered_round_without_a_letter_is_refused(cd_db, no_mm_link):
+    modal = _record_modal(cd_db, stage="semifinals", group=None, players="AlphaOne, 738, 1")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "needs a group" in _sent(interaction)
+
+
+async def test_a_partial_group_does_not_read_as_something_missing(cd_db, no_mm_link):
+    """Eight names against a hundred-player qualifier group is the normal case,
+    not a truncation."""
+    modal = _record_modal(cd_db, stage="qualifiers", group="M", players="AlphaOne, 738, 22")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    footer = _embed(interaction).footer.text
+    assert "1 of a 100-player group" in footer and "which is fine" in footer
+
+
 # ── Scoped to their grouping ──────────────────────────────────────────────────
 
 

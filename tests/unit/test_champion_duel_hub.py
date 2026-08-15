@@ -168,7 +168,7 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "Newcomer"
     modal.server._value = "1042"
-    modal.group._value = "N"
+    modal.group._value = ""
     modal.alliance._value = "OGV"
 
     interaction = _interaction()
@@ -176,11 +176,93 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
 
     player = db.get_player("Newcomer", server="1042")
     assert player["origin"] == "self_reported"
-    assert player["grp"] == "N" and player["alliance"] == "OGV"
+    assert player["alliance"] == "OGV"
     assert player["added_by"] == str(ADMIN_ID)
     # Lands on the card with the write actions, not a bare confirmation.
     assert isinstance(interaction.followup.send.call_args.kwargs["view"], hub.PlayerActionsView)
     assert "Added" in _sent(interaction)
+
+
+async def test_a_group_letter_from_outside_your_grouping_is_not_recorded(cd_db):
+    """The bug the whole grouping separation exists to stop. An officer in one
+    warzone recording an opponent as "Group D" landed that player in the
+    imported grouping's Group D, because a letter meant the same thing
+    everywhere. Refusing is honest; refusing silently is not."""
+    mine = db.find_grouping_by_warzone("738")
+    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
+    modal.name._value = "Stranger"
+    modal.server._value = "1500"
+    modal.group._value = "D"
+    modal.alliance._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    said = _sent(interaction)
+    assert "not recorded" in said and "**1500**" in said
+    assert db.get_player("Stranger", server="1500")["grp"] is None
+
+
+async def test_a_group_letter_from_inside_your_grouping_is_recorded(cd_db):
+    mine = db.find_grouping_by_warzone("738")
+    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
+    modal.name._value = "Newcomer"
+    modal.server._value = "738"
+    modal.group._value = "N"
+    modal.alliance._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    player = db.get_player("Newcomer", server="738")
+    assert player["grp"] == "N"
+    assert player["grouping_id"] == mine["id"], "theirs, not the globally-running one"
+    assert "not recorded" not in _sent(interaction)
+
+
+async def test_a_group_letter_with_no_grouping_resolved_is_not_guessed_at(cd_db):
+    """A letter belonging to no grouping is not a fact about anything."""
+    modal = hub._AddPlayerModal(can_write=True, grouping=None)
+    modal.name._value = "Newcomer"
+    modal.server._value = "738"
+    modal.group._value = "N"
+    modal.alliance._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "do not know which grouping" in _sent(interaction)
+    assert db.get_player("Newcomer", server="738")["grp"] is None
+
+
+def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
+    """A letter is meaningful inside a grouping and nowhere else, so a bare
+    "Group D" on a player from another draw reads as a claim it is not."""
+    theirs = db.create_grouping(["1500", "1501"], "2026-08-04", origin="member")
+    db.import_registrants([{"name": "Stranger", "server": "1500"}], grouping_id=theirs["id"])
+    db.set_stage(
+        db.resolve_registrant("Stranger", "1500")["id"],
+        "semifinals",
+        grp="D",
+        grouping_id=theirs["id"],
+    )
+    mine = db.find_grouping_by_warzone("738")
+    player = db.get_player("Stranger", server="1500")
+
+    rounds = next(
+        f.value
+        for f in hub.build_player_embed(player, None, grouping=mine).fields
+        if f.name == "Rounds"
+    )
+    assert "Group D (another grouping)" in rounds
+
+    # Inside the caller's own grouping it stays bare, because there it is exact.
+    theirs_view = next(
+        f.value
+        for f in hub.build_player_embed(player, None, grouping=theirs).fields
+        if f.name == "Rounds"
+    )
+    assert "Group D" in theirs_view and "another grouping" not in theirs_view
 
 
 async def test_adding_someone_we_already_have_opens_them(cd_db):

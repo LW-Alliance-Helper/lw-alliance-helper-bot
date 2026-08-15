@@ -1158,11 +1158,46 @@ async def admin_champion_duel_import_slash(
             )
             return
 
+    # Which grouping this draw belongs to. The payload's Participating Warzone
+    # line settles it outright; without one the importer falls back to matching
+    # a registrant's warzone against the groupings we hold, which is what every
+    # payload written before groupings existed relies on.
+    #
+    # A grouping block also *completes* a row: it fills in a start date nobody
+    # had read yet and any of the sixteen that fielded no players, neither of
+    # which the registrant list can supply.
+    grouping = payload.get("grouping") if isinstance(payload.get("grouping"), dict) else None
+    grouping_id = None
+    if grouping:
+        try:
+            resolved = await asyncio.to_thread(
+                cd_db.ensure_grouping,
+                grouping.get("warzones") or [],
+                grouping.get("started_on"),
+            )
+        except ValueError as e:
+            await interaction.followup.send(
+                f"⚠️ The payload's `grouping` block has no usable warzones: {e}", ephemeral=True
+            )
+            return
+        grouping_id = resolved["id"]
+        lines_prefix = f"Grouping `#{grouping_id}`, **{len(resolved['warzones'])}** warzones" + (
+            f", started {resolved['started_on']}" if resolved.get("started_on") else ""
+        )
+    else:
+        lines_prefix = None
+
     # Dependency order: squads and orders both resolve against registrant rows.
     lines, problems = [], []
+    if lines_prefix:
+        lines.append(lines_prefix)
     if isinstance(payload.get("registrants"), list):
         result = await asyncio.to_thread(
-            cd_db.import_registrants, payload["registrants"], stage=stage
+            cd_db.import_registrants,
+            payload["registrants"],
+            stage=stage,
+            grouping_id=grouping_id,
+            started_on=(grouping or {}).get("started_on"),
         )
         lines.append(f"**{result['total']}** registrants ({result['inserted']} new)")
     if isinstance(payload.get("squads"), list):

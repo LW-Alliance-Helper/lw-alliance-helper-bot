@@ -75,8 +75,40 @@ async def health(request: web.Request) -> web.Response:
     )
 
 
+def _grouping_id(request: web.Request):
+    """The `grouping` query parameter, or None for every grouping.
+
+    None rather than a default: this API has anonymous readers and no guild to
+    resolve from, so there is nobody whose grouping it could mean. A caller that
+    wants one scopes explicitly.
+    """
+    raw = request.query.get("grouping")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def groupings(request: web.Request) -> web.Response:
+    """Every grouping and its warzones.
+
+    The index a caller needs before it can scope anything else: a warzone is
+    the only handle most consumers have, and this is what turns one into an id.
+    """
+    return json_response({"groupings": await asyncio.to_thread(db.list_groupings)}, request)
+
+
 async def groups(request: web.Request) -> web.Response:
-    return json_response({"groups": await asyncio.to_thread(db.get_groups)}, request)
+    return json_response(
+        {
+            "groups": await asyncio.to_thread(
+                db.get_groups, request.query.get("stage"), _grouping_id(request)
+            )
+        },
+        request,
+    )
 
 
 async def roster(request: web.Request) -> web.Response:
@@ -85,10 +117,19 @@ async def roster(request: web.Request) -> web.Response:
     The registrant list is an LWS export anyone can pull. Squad composition and
     deployment orders are our own scouting and the Predict & Win edge, so they
     require a login even though the roster around them does not.
+
+    `grouping` and `stage` scope the read. A group letter is only meaningful
+    inside both -- "group D" in the semifinals is a different set of people from
+    "group D" in the qualifiers, and a different set again in another grouping.
     """
     actor = await identify(request)
-    group = request.query.get("group")
-    players = await asyncio.to_thread(db.get_roster, group, actor is not None)
+    players = await asyncio.to_thread(
+        db.get_roster,
+        request.query.get("group"),
+        actor is not None,
+        request.query.get("stage"),
+        _grouping_id(request),
+    )
     return json_response({"roster": players, "scouting_included": actor is not None}, request)
 
 
@@ -238,14 +279,38 @@ async def post_player(request: web.Request) -> web.Response:
     except (ValueError, TypeError) as exc:
         return json_response({"error": "bad_request", "detail": str(exc)}, request, status=400)
 
-    # A group belongs to the round being played, not to the player. Only
+    # A group belongs to the round of a grouping, not to the player. Only
     # written when one was supplied, so a caller who omits it does not assert
     # that this player is in the current round.
+    #
+    # The grouping comes from the payload or from the player's own warzone. A
+    # bare letter with neither has nothing to belong to, and writing it against
+    # whatever round happens to be running is what put one alliance's opponent
+    # in another alliance's Group D.
     group = (body.get("group") or "").strip()
-    stage = await asyncio.to_thread(db.current_stage)
-    if group and stage:
-        await asyncio.to_thread(db.set_stage, player["id"], stage, grp=group)
-        player = await asyncio.to_thread(db.get_player, name, server)
+    group_note = None
+    if group:
+        grouping_id = _grouping_id(request) or body.get("grouping")
+        if grouping_id is None:
+            found = await asyncio.to_thread(db.find_grouping_by_warzone, server)
+            grouping_id = found["id"] if found else None
+        stage = await asyncio.to_thread(db.current_stage, grouping_id) if grouping_id else None
+        if stage is None:
+            # Not a 4xx. The player is a real fact and is already written, so
+            # failing the whole call would leave a row behind and report an
+            # error -- the caller would have no way to tell what landed. The
+            # letter is the only part we cannot place, and the response says so.
+            group_note = (
+                "no grouping resolved for this warzone, so the group letter was not "
+                "recorded; pass `grouping` to place it"
+            )
+        else:
+            await asyncio.to_thread(
+                db.set_stage, player["id"], stage, grp=group, grouping_id=grouping_id
+            )
+            player = await asyncio.to_thread(db.get_player, name, server)
+    if group_note:
+        player = {**player, "group_recorded": False, "group_note": group_note}
     return json_response(player, request)
 
 
@@ -353,7 +418,21 @@ async def admin_import(request: web.Request) -> web.Response:
     actor = request["cd_actor"]
     result = {}
     if body.get("registrants") is not None:
-        result["registrants"] = await asyncio.to_thread(db.import_registrants, body["registrants"])
+        grouping = body.get("grouping") if isinstance(body.get("grouping"), dict) else None
+        grouping_id = None
+        if grouping and grouping.get("warzones"):
+            grouping_id = (
+                await asyncio.to_thread(
+                    db.ensure_grouping, grouping["warzones"], grouping.get("started_on")
+                )
+            )["id"]
+        result["registrants"] = await asyncio.to_thread(
+            db.import_registrants,
+            body["registrants"],
+            stage=body.get("stage"),
+            grouping_id=grouping_id,
+            started_on=(grouping or {}).get("started_on"),
+        )
     if body.get("squads") is not None:
         result["squads"] = await asyncio.to_thread(db.import_squads, body["squads"], actor=actor)
     if body.get("orders") is not None:

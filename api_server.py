@@ -180,6 +180,9 @@ def _register_champion_duel(app: web.Application) -> None:
     p = "/champion-duel/v1"
 
     app.router.add_get(f"{p}/health", cd.health)
+    # The index a caller needs before it can scope anything else: a warzone is
+    # the only handle most consumers have, and this turns one into a grouping.
+    app.router.add_get(f"{p}/groupings", cd.groupings)
     app.router.add_get(f"{p}/groups", cd.groups)
     app.router.add_get(f"{p}/roster", cd.roster)
     app.router.add_get(f"{p}/player/{{name}}", cd.player)

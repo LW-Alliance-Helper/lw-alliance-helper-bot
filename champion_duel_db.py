@@ -810,6 +810,55 @@ def create_grouping(
     return get_grouping(grouping_id)
 
 
+def ensure_grouping(
+    warzones, started_on=None, *, origin="imported", guild_id=None, discord_id=None
+) -> dict:
+    """The grouping these warzones belong to, creating or completing it.
+
+    Matches on **any** shared warzone, the same rule `_grouping_for_payload`
+    uses: a semifinal payload carries the same sixteen as its qualifier draw,
+    and requiring an exact set match would fork a second grouping over one
+    event every time.
+
+    Completes a row rather than duplicating it. An import can establish a
+    grouping exists before anyone has read its dates, and the migration seeds
+    warzones from the registrants it can see -- which is fewer than sixteen if
+    a warzone fielded nobody. A later payload carrying the Participating
+    Warzone line fills both gaps in. Neither is destructive: an existing start
+    date is left alone, and warzones are added rather than replaced.
+    """
+    zones = (
+        parse_warzones(warzones)
+        if isinstance(warzones, str)
+        else [z for z in (_server(w) for w in warzones) if z]
+    )
+    if not zones:
+        raise ValueError("a grouping needs at least one warzone")
+
+    found = next((g for g in (find_grouping_by_warzone(z) for z in zones) if g), None)
+    if found is None:
+        return create_grouping(
+            zones, started_on, origin=origin, guild_id=guild_id, discord_id=discord_id
+        )
+
+    missing = sorted(set(zones) - set(found["warzones"]), key=int)
+    fills_date = bool(started_on) and not found.get("started_on")
+    if missing or fills_date:
+        with _get_conn() as conn:
+            if fills_date:
+                conn.execute(
+                    "UPDATE groupings SET started_on = ?, updated_at = ? WHERE id = ?",
+                    (started_on, _now(), found["id"]),
+                )
+            conn.executemany(
+                "INSERT OR IGNORE INTO grouping_warzones (grouping_id, warzone, source) "
+                "VALUES (?, ?, ?)",
+                [(found["id"], z, "import") for z in missing],
+            )
+        found = get_grouping(found["id"])
+    return found
+
+
 def get_grouping(grouping_id) -> dict | None:
     """One grouping with its warzones, or None."""
     if grouping_id is None:

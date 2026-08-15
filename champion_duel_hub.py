@@ -594,13 +594,20 @@ def _squad_basis(squads: list[dict]) -> str:
     return "Squad powers are what someone saw in game." + corrected
 
 
-def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
+def build_player_embed(
+    player: dict, top_order: dict | None, *, grouping: dict | None = None
+) -> discord.Embed:
     """One registrant: who they are, what they field, and what they've been
     seen doing.
 
     Ordered by what a member came for. The squads and the order are the answer;
     the group and rank are qualifier history, which is context rather than the
     point, so they sit below rather than in the lead.
+
+    `grouping` is the *caller's*, and it is only used to decide whether a group
+    letter needs qualifying. A letter is meaningful inside a grouping and
+    nowhere else, so "Group M" on a player from another draw reads as a claim
+    the reader will act on and it is not one.
     """
     alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
     embed = discord.Embed(
@@ -648,12 +655,18 @@ def build_player_embed(player: dict, top_order: dict | None) -> discord.Embed:
     # The knockouts carry no group letter and their rank says more than a
     # number does: a 32-bracket is rigid, so a placement is the match the
     # player went out in and that is the thing worth reading.
+    def _group_bit(row: dict) -> str | None:
+        if not row.get("grp"):
+            return None
+        elsewhere = grouping and row.get("grouping_id") != grouping.get("id")
+        return f"Group {row['grp']}" + (" (another grouping)" if elsewhere else "")
+
     rounds = "\n".join(
         f"**{db.STAGE_LABELS.get(stage, stage.title())}** · "
         + " · ".join(
             bit
             for bit in (
-                f"Group {row['grp']}" if row.get("grp") else None,
+                _group_bit(row),
                 f"Rank {row['rank']}" if row.get("rank") else None,
                 db.knockout_result(row.get("rank")) if stage == "knockouts" else None,
             )
@@ -732,19 +745,29 @@ class PlayerActionsView(discord.ui.View):
 
 
 async def send_player_card(
-    interaction: discord.Interaction, player: dict, *, can_write: bool, note: str | None = None
+    interaction: discord.Interaction,
+    player: dict,
+    *,
+    can_write: bool,
+    note: str | None = None,
+    grouping: dict | None = None,
 ):
     """One player, with what can be done to them underneath.
 
     Shared by finding a player and adding one, so a player you just created
     lands you in the same place as one that was already there — the next thing
     you want is to record what you saw, either way.
+
+    `grouping` is the caller's, and only decides whether a group letter on this
+    card needs qualifying. Find stays global on purpose: prediction is useful
+    against players on other warzones before any draw, and scoping the look-up
+    would take that away.
     """
     top = await asyncio.to_thread(db.most_common_order, player["id"])
     view = PlayerActionsView(player=player, user_id=interaction.user.id, can_write=can_write)
     await interaction.followup.send(
         content=note,
-        embed=build_player_embed(player, top),
+        embed=build_player_embed(player, top, grouping=grouping),
         view=view,
         ephemeral=True,
     )
@@ -759,12 +782,21 @@ class _MissView(discord.ui.View):
     never imported does not type it a second time.
     """
 
-    def __init__(self, *, can_write: bool, user_id: int, name: str, server: str | None):
+    def __init__(
+        self,
+        *,
+        can_write: bool,
+        user_id: int,
+        name: str,
+        server: str | None,
+        grouping: dict | None = None,
+    ):
         super().__init__(timeout=600)
         self.can_write = can_write
         self.user_id = user_id
         self.name = name
         self.server = server
+        self.grouping = grouping
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(
@@ -788,14 +820,17 @@ class _MissView(discord.ui.View):
 
     async def _on_add(self, inter: discord.Interaction):
         await inter.response.send_modal(
-            _AddPlayerModal(self.can_write, name=self.name, server=self.server)
+            _AddPlayerModal(
+                self.can_write, name=self.name, server=self.server, grouping=self.grouping
+            )
         )
 
 
 class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
-    def __init__(self, can_write: bool):
+    def __init__(self, can_write: bool, *, grouping: dict | None = None):
         super().__init__()
         self.can_write = can_write
+        self.grouping = grouping
 
     name = discord.ui.TextInput(label="Player name", max_length=64)
     server = discord.ui.TextInput(
@@ -816,6 +851,7 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
                 user_id=interaction.user.id,
                 name=self.name.value,
                 server=self.server.value or None,
+                grouping=self.grouping,
             )
             await interaction.followup.send(
                 f"{found}\n\nIf we don't have them listed, add them below.",
@@ -824,7 +860,7 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
             )
             view.message = await interaction.original_response()
             return
-        await send_player_card(interaction, found, can_write=self.can_write)
+        await send_player_card(interaction, found, can_write=self.can_write, grouping=self.grouping)
 
 
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
@@ -842,9 +878,17 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     duplicating it.
     """
 
-    def __init__(self, can_write: bool, *, name: str | None = None, server: str | None = None):
+    def __init__(
+        self,
+        can_write: bool,
+        *,
+        name: str | None = None,
+        server: str | None = None,
+        grouping: dict | None = None,
+    ):
         super().__init__()
         self.can_write = can_write
+        self.grouping = grouping
         # Safe to set on self: `Modal._init_children` deepcopies each declared
         # item onto the instance, so a default here cannot leak to the next
         # person who opens this modal.
@@ -898,18 +942,50 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         # than on the player. Only written when they actually gave one: a blank
         # stage row would claim this player is in the round when all we know is
         # that somebody met them.
+        #
+        # And only when the letter can be placed. A group letter is meaningless
+        # outside a grouping, so writing one against the globally-running round
+        # is what put an officer in warzone 1500's opponent into the imported
+        # grouping's Group D. Refusing to record it is the honest outcome, and
+        # it is said out loud rather than dropped.
         group = (self.group.value or "").strip()
-        stage = await asyncio.to_thread(db.current_stage)
-        if group and stage:
-            await asyncio.to_thread(db.set_stage, player["id"], stage, grp=group)
-            player = await asyncio.to_thread(db.get_player, name, server)
+        aside = ""
+        if group:
+            if not self.grouping:
+                aside = (
+                    "\nℹ️ The group letter was not recorded: we do not know which "
+                    "grouping your alliance is in yet."
+                )
+            elif server not in self.grouping["warzones"]:
+                aside = (
+                    f"\nℹ️ The group letter was not recorded. Warzone **{server}** is not "
+                    f"in your grouping, so **Group {group}** there is a different group "
+                    f"from yours."
+                )
+            else:
+                stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+                if stage:
+                    await asyncio.to_thread(
+                        db.set_stage,
+                        player["id"],
+                        stage,
+                        grp=group,
+                        grouping_id=self.grouping["id"],
+                    )
+                    player = await asyncio.to_thread(db.get_player, name, server)
 
         note = (
             f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
             if existing
             else f"✅ Added **{_label(player)}**."
         )
-        await send_player_card(interaction, player, can_write=self.can_write, note=note)
+        await send_player_card(
+            interaction,
+            player,
+            can_write=self.can_write,
+            note=note + aside,
+            grouping=self.grouping,
+        )
 
 
 # ── Correct a squad (Premium) ─────────────────────────────────────────────────
@@ -2966,10 +3042,10 @@ class ChampionDuelHubView(discord.ui.View):
         await inter.response.send_modal(_PredictModal())
 
     async def _on_find(self, inter: discord.Interaction):
-        await inter.response.send_modal(_FindPlayerModal(self.can_write))
+        await inter.response.send_modal(_FindPlayerModal(self.can_write, grouping=self.grouping))
 
     async def _on_add(self, inter: discord.Interaction):
-        await inter.response.send_modal(_AddPlayerModal(self.can_write))
+        await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
 
     async def _on_warzone(self, inter: discord.Interaction):
         await inter.response.send_modal(

@@ -46,7 +46,7 @@ import champion_duel_predict as predict_lib
 import champion_duel_wording as words
 import premium
 from api.champion_duel_auth import admin_ids
-from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL
+from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL, DATE_PARSE_REJECT
 
 CHAMPION_DUEL_HUB_TITLE = "👑 Champion Duel"
 CHAMPION_DUEL_HUB_CMD = "/champion_duel"
@@ -1470,6 +1470,14 @@ async def _grouping_state(interaction: discord.Interaction) -> tuple[dict | None
     return (grouping, str(warzone))
 
 
+# Past-leaning, per `messages.DATE_PARSE_REJECT`'s note that the example list is
+# the caller's to tailor: the Sign-up stage has already run by the time its date
+# can be read off the Match Overview box. `today` and `yesterday` parse but are
+# left out of the hint for the same reason -- the date wanted here is up to a
+# whole event ago.
+_START_DATE_EXAMPLES = "`Aug 4`, `8/4`, or `2026-08-04`"
+
+
 def parse_start_date(text, *, today=None) -> str | None:
     """The Sign-up stage's start date as an ISO string, or None if unreadable.
 
@@ -1907,12 +1915,20 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
 
         started = parse_start_date(self.started_on.value)
         if started is None:
+            # The shared rejection, plus the one sentence that is this feature's
+            # rather than every date surface's. `events_hub` appends its route
+            # back the same way.
             await self._refuse(
                 interaction,
-                f"⚠️ **{_typed(self.started_on.value, 16)}** is not a date I can read. "
-                f"The Sign-up stage's start date is at the top of the Match Overview "
-                f"box in game. Most ways of writing it work: 8/4, Aug 4, or 2026-08-04. "
-                f"Try again.",
+                DATE_PARSE_REJECT.format(
+                    # The field's own cap, so a date is never echoed back
+                    # truncated. Clamped at all only because nothing guarantees
+                    # Discord enforced `max_length` before this ran.
+                    raw=_typed(self.started_on.value, 20),
+                    examples=_START_DATE_EXAMPLES,
+                )
+                + " The Sign-up stage's start date is at the top of the Match Overview"
+                " box in game.",
             )
             return
 

@@ -1177,9 +1177,16 @@ async def _add_grouping(warzones, *, warzone="700", started="2026-08-04"):
 
 
 async def test_an_unreadable_date_is_refused_before_anything_is_saved(cd_db, no_mm_link):
+    """The shared rejection every date surface uses, so one failure does not
+    read three different ways across the bot. The examples lean past, because
+    the Sign-up stage has already run by the time its date can be read."""
     interaction = await _add_grouping(" ".join(SIXTEEN), started="sometime last week")
 
-    assert "not a date I can read" in _sent(interaction)
+    said = _sent(interaction)
+    assert said.startswith(
+        hub.DATE_PARSE_REJECT.format(raw="sometime last week", examples=hub._START_DATE_EXAMPLES)
+    )
+    assert "Match Overview" in said, "plus the sentence that is this feature's own"
     assert len(db.list_groupings()) == 1
 
 

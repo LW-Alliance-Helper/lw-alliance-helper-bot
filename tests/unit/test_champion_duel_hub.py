@@ -231,7 +231,8 @@ async def test_a_group_letter_with_no_grouping_resolved_is_not_guessed_at(cd_db)
     interaction = _interaction()
     await modal.on_submit(interaction)
 
-    assert "do not know which Champion Duel grouping" in _sent(interaction)
+    assert "do not know which Champion Duel" in _sent(interaction)
+    assert "rouping" not in _sent(interaction)
     assert db.get_player("Newcomer", server="738")["grp"] is None
 
 
@@ -254,7 +255,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
         for f in hub.build_player_embed(player, None, grouping=mine).fields
         if f.name == "Rounds"
     )
-    assert "Group D (in a different Champion Duel grouping that started 8/4)" in rounds
+    assert "Group D (not your Champion Duel)" in rounds
 
     # Inside the caller's own grouping it stays bare, because there it is exact.
     theirs_view = next(
@@ -1332,7 +1333,7 @@ async def test_the_confirmation_reads_back_every_warzone(cd_db, no_mm_link):
     interaction = await _add_grouping(" ".join(SIXTEEN))
 
     said = _sent(interaction)
-    assert "Added your warzone grouping" in said and "**8/4**" in said
+    assert "Added your Participating Warzones" in said and "**8/4**" in said
     for zone in SIXTEEN:
         assert zone in said
 
@@ -1721,7 +1722,7 @@ def test_the_scoped_hub_says_whose_players_these_are(cd_db):
         servers=db.get_servers(mine["id"]), can_write=True, grouping=mine, warzone="738"
     )
 
-    assert "**2** players in your grouping" in embed.description
+    assert "**2** players in your Champion Duel" in embed.description
     assert "**1 warzone**" in embed.description, "agrees with its count"
     assert "server" not in embed.description, "the game says warzone"
 
@@ -1735,7 +1736,7 @@ def test_a_grouping_we_hold_nothing_for_says_so_rather_than_nothing(cd_db):
         servers=db.get_servers(theirs["id"]), can_write=True, grouping=theirs, warzone="1500"
     )
 
-    assert "do not have any players for your grouping" in embed.description
+    assert "do not have any players for your Champion Duel" in embed.description
     assert "warzone **1500**" in embed.description
 
 

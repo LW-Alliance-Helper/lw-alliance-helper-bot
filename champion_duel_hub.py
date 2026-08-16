@@ -73,7 +73,7 @@ CD_BTN_FILTER = "🔍 Filter these"
 CD_BTN_SHARE = "📤 Share this prediction to current channel"
 CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
-CD_BTN_ADD_GROUPING = "➕ Add your warzone grouping"
+CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
 # 📥 is the catalog's "data coming into the bot", which is what a pasted group
 # listing is. Not ➕: `CD_BTN_ADD` already carries that on this grid, and two of
@@ -682,18 +682,20 @@ def build_player_embed(
         """The group letter, qualified when it belongs to a different draw.
 
         "Group D" is only exact inside one grouping. On a player from another
-        one it reads as a claim the reader will act on, so it names which
-        Champion Duel it came from by the date that one started.
+        one it reads as a claim the reader will act on, so it says plainly that
+        this is not the reader's.
+
+        It deliberately does NOT name the other one by its start date. Every
+        draw in a season starts on the same day, so the date would print the
+        reader's own Champion Duel's name while asserting it is a different
+        one, which is worse than saying nothing. Naming it would need the thing
+        that actually separates the two, which is the other set of
+        Participating Warzones, and that is a list rather than a label.
         """
         if not row.get("grp"):
             return None
         if grouping and row.get("grouping_id") != grouping.get("id"):
-            # `grouping_started_on` rides along on the stage row rather than
-            # being looked up here: this runs on the event loop, and one more
-            # synchronous query per rendered card is the #366 class of bug.
-            started = _short_date(row.get("grouping_started_on"))
-            when = f" that started {started}" if started else ""
-            return f"Group {row['grp']} (in a different Champion Duel grouping{when})"
+            return f"Group {row['grp']} (not your Champion Duel)"
         return f"Group {row['grp']}"
 
     def _rank_bit(stage: str, row: dict) -> str | None:
@@ -993,7 +995,7 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             if not self.grouping:
                 aside = (
                     "\nℹ️ The group letter was not recorded: we do not know which "
-                    "Champion Duel grouping your alliance is in yet."
+                    "Champion Duel your alliance is in yet."
                 )
             elif server not in self.grouping["warzones"]:
                 # Names the grouping by its start date. A member may be in a
@@ -1751,16 +1753,16 @@ def build_onboarding_embed(*, servers: list[dict], warzone: str | None) -> disco
             f"{held}"
             f"Your alliance is on warzone **{warzone}**. We do not currently know what "
             f"warzones you are matched with for this Champion Duel. Please add your "
-            f"warzone grouping. You can find it listed at the bottom of the Match "
-            f"Overview box in game."
+            f"**Participating Warzones**. The game lists them at the bottom of the "
+            f"Match Overview box."
         )[:4096]
     else:
         embed.description = (
             f"{held}"
             f"Which warzone is your alliance on? Champion Duel matches "
-            f"{db.GROUPING_SIZE} warzones and all of the data will be unique to your "
-            f"grouping. Add your warzone and we will either automatically add you to "
-            f"your grouping or ask you to add the other warzones you are matched with."
+            f"{db.GROUPING_SIZE} warzones together, and all of the data will be unique "
+            f"to yours. Add your warzone and we will either match you to a Champion "
+            f"Duel we already hold or ask you for the other warzones you are drawn with."
         )[:4096]
     return embed
 
@@ -1871,7 +1873,7 @@ class _WarzoneModal(discord.ui.Modal, title="Your alliance's warzone"):
             )
             await interaction.followup.send(
                 f"⚠️ Your alliance is set to warzone **{self.current}**. Changing it to "
-                f"**{zone}** points everyone on this server at a different grouping.",
+                f"**{zone}** points everyone on this server at a different Champion Duel.",
                 view=view,
                 ephemeral=True,
             )
@@ -2004,9 +2006,9 @@ def build_confirm_warzone_embed(*, warzone: str, grouping: dict) -> discord.Embe
     # A grouping can exist before anyone has read its dates, so the second
     # sentence has a version that claims nothing about when it began.
     began = (
-        f"Your grouping is already set and began on **{started}**."
+        f"Your Champion Duel is already set and began on **{started}**."
         if started
-        else "Your grouping is already set."
+        else "Your Champion Duel is already set."
     )
     return discord.Embed(
         title=CHAMPION_DUEL_HUB_TITLE,
@@ -2041,7 +2043,7 @@ async def _pin_warzone(interaction: discord.Interaction, zone: str, *, can_write
     )
 
 
-class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone grouping"):
+class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones"):
     """The 16 warzones and the day it started, which is the whole grouping.
 
     Two fields because that is everything the game shows: the Participating
@@ -2115,14 +2117,14 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         if repeated is not None:
             await self._refuse(
                 interaction,
-                f"⚠️ Warzone **{repeated}** is in that list twice. A grouping is "
+                f"⚠️ Warzone **{repeated}** is in that list twice. Your Participating Warzones are "
                 f"{db.GROUPING_SIZE} different warzones. Try again.",
             )
             return
         if len(zones) != db.GROUPING_SIZE:
             await self._refuse(
                 interaction,
-                f"⚠️ That is **{_plural(len(zones), 'warzone')}**. A Champion Duel grouping is "
+                f"⚠️ That is **{_plural(len(zones), 'warzone')}**. Participating Warzones are "
                 f"exactly **{db.GROUPING_SIZE}**, listed together at the bottom of the "
                 f"Match Overview box in game. Try again.",
             )
@@ -2150,7 +2152,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         if exact is not None:
             grouping = exact
             note = (
-                f"ℹ️ That grouping has already been entered.\n"
+                f"ℹ️ Those Participating Warzones have already been entered.\n"
                 f"The {db.GROUPING_SIZE} warzones: {_warzone_list(exact['warzones'])}."
             )
         else:
@@ -2163,7 +2165,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
                 discord_id=str(interaction.user.id),
             )
             note = (
-                f"✅ Added your warzone grouping, starting **{_short_date(started)}**.\n"
+                f"✅ Added your Participating Warzones, starting **{_short_date(started)}**.\n"
                 f"The {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
             )
 
@@ -2220,10 +2222,10 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         """
         other, shared = overlap
         embed = discord.Embed(
-            title=f"⚠️ Warzone {shared} in two groupings",
+            title=f"⚠️ Warzone {shared} is in two different lists",
             description=(
-                f"A warzone is only ever matched into one grouping, so one of these "
-                f"two lists has a mistake in it. Nothing was saved.\n\n"
+                f"A warzone is only ever drawn into one set of Participating Warzones, "
+                f"so one of these two lists has a mistake in it. Nothing was saved.\n\n"
                 f"**You entered**, starting {_short_date(started)}:\n"
                 f"{_warzone_list(zones)}\n\n"
                 f"**Already here**, starting {_short_date(other.get('started_on')) or 'an unknown date'}:\n"
@@ -3083,7 +3085,7 @@ def build_hub_embed(
         # calendar still works, and the gap is exactly what a contribution fills.
         embed.description = (
             f"{opener}"
-            f"We do not have any players for your grouping yet.\n\n"
+            f"We do not have any players for your Champion Duel yet.\n\n"
             f"Predictions and look-ups need players. Anyone{mine} can add the ones "
             f"they meet, and every one entered sharpens the next prediction."
         )[:4096]
@@ -3098,7 +3100,7 @@ def build_hub_embed(
         more = len(servers) - _SERVERS_SHOWN
         if more > 0:
             listed += f", and {more} more"
-        scope = "in your grouping" if grouping else "loaded"
+        scope = "in your Champion Duel" if grouping else "loaded"
         embed.description = (
             f"{opener}"
             f"**{total}** players {scope} across **{_plural(len(servers), 'warzone')}**: "
@@ -3157,7 +3159,7 @@ def build_finished_embed(*, grouping: dict, servers: list[dict], warzone: str | 
         description=(
             f"The Champion Duel {whose} has finished.\n\n"
             f"When the next Champion Duel happens, you can enter your own warzone and "
-            f"other participating warzones to create a new grouping. You can also "
+            f"other Participating Warzones to start a new one. You can also "
             f"record past Champion Duel results if you want to keep a historical "
             f"record and help better improve future predictions."
         )[:4096],

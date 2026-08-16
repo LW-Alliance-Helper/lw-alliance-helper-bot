@@ -1644,6 +1644,17 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {singular if count == 1 else (plural or singular + 's')}"
 
 
+def _grouping_option_label(grouping: dict) -> str:
+    """One grouping in a picker: the date it started, which is its only handle.
+
+    Nothing gives a Champion Duel a name, so the start date is what a member
+    recognises theirs by -- it is the one on their own Match Overview box. The
+    id would be exact and mean nothing to anybody.
+    """
+    started = _short_date(grouping.get("started_on"))
+    return f"Started {started}" if started else f"Grouping {grouping['id']} (no date recorded)"
+
+
 def _grouping_name(grouping: dict | None, *, whose: str = "your") -> str:
     """A grouping named so a member can tell which one is meant.
 
@@ -2420,10 +2431,39 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
     what would otherwise be a picker view in front of a typing modal.
     """
 
-    def __init__(self, *, can_write: bool, grouping: dict, stage: str | None = None):
+    def __init__(
+        self,
+        *,
+        can_write: bool,
+        grouping: dict,
+        stage: str | None = None,
+        groupings: list[dict] | None = None,
+    ):
         super().__init__()
         self.can_write = can_write
         self.grouping = grouping
+        self.groupings = groupings or [grouping]
+
+        # Which Champion Duel this is for. A warzone is drawn into a new
+        # grouping every season, so "the one running now" is only the right
+        # answer while there is one -- and the finished hub invites people to
+        # record past results, which is exactly when it is not.
+        #
+        # Removed rather than hidden when there is only one, so the common case
+        # is not asked a question with a single answer. Declared first and
+        # dropped in place, which keeps it above Round when it is there;
+        # `add_item` would append it after the paragraph.
+        if len(self.groupings) > 1:
+            self.champion_duel.component.options = [
+                discord.SelectOption(
+                    label=_grouping_option_label(g),
+                    value=str(g["id"]),
+                    default=(g["id"] == grouping["id"]),
+                )
+                for g in self.groupings[:25]
+            ]
+        else:
+            self.remove_item(self.champion_duel)
 
         # `stage` is passed in rather than read here: a modal constructor cannot
         # be async, and every DB call from a handler goes through
@@ -2437,6 +2477,10 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
             for key in db.STAGES
         ]
 
+    champion_duel = discord.ui.Label(
+        text="Which Champion Duel?",
+        component=discord.ui.Select(options=[discord.SelectOption(label="_", value="_")]),
+    )
     round_ = discord.ui.Label(
         text="Round",
         component=discord.ui.Select(
@@ -2488,6 +2532,12 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         recording = self._picked(self.recording, "final")
         label = self._picked(self.group)
 
+        # Whichever Champion Duel they named, or the only one there was. The
+        # picker is absent in the single-grouping case, so `_picked` returns
+        # the default and this resolves to what the hub already had.
+        chosen = self._picked(self.champion_duel)
+        grouping = next((g for g in self.groupings if str(g["id"]) == chosen), self.grouping)
+
         if stage == "knockouts":
             # One field of 32 rather than lettered groups, so a letter here
             # would be a claim about a structure the round does not have.
@@ -2513,7 +2563,7 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         view = _ReconcileView(
             user_id=interaction.user.id,
             can_write=self.can_write,
-            grouping=self.grouping,
+            grouping=grouping,
             stage=stage,
             label=label,
             recording=recording,
@@ -2592,15 +2642,37 @@ class _ReconcileView(discord.ui.View):
         self.add_item(cancel)
 
     def _build_one_line(self):
+        """The candidates as a select, not a button each.
+
+        A button per candidate ate four of the five rows and still capped at
+        20. One select is one row and holds 25, and its description line
+        carries the warzone -- which is the only thing telling two identical
+        names apart, so it is the part that has to be readable.
+
+        Past 25 the exit already exists: `notes/DESIGN.md` wants paging or a
+        filter decided before the wall is hit, and here the filter is the
+        warzone modal behind "Add as a new player". Reaching it needs one name
+        registered on 26 warzones out of the grouping's 16, so the cap is
+        recorded rather than engineered around.
+        """
         row = self.rows[self.index]
-        for candidate in (row.get("candidates") or [])[:20]:
-            button = discord.ui.Button(
-                label=f"{candidate['display_name']} · #{candidate['server']}"[:80],
-                style=discord.ButtonStyle.secondary,
+        candidates = (row.get("candidates") or [])[:25]
+        if candidates:
+            picker = discord.ui.Select(
+                placeholder="Which one is this?",
+                options=[
+                    discord.SelectOption(
+                        label=candidate["display_name"][:100],
+                        value=str(candidate["id"]),
+                        description=f"Warzone {candidate['server']}"
+                        + (f" · [{candidate['alliance']}]" if candidate.get("alliance") else ""),
+                    )
+                    for candidate in candidates
+                ],
                 row=0,
             )
-            button.callback = self._pick_candidate(candidate["id"])
-            self.add_item(button)
+            picker.callback = self._on_pick_candidate
+            self.add_item(picker)
 
         add = discord.ui.Button(
             label=CD_BTN_LINE_NEW[:80], style=discord.ButtonStyle.primary, row=1
@@ -2670,14 +2742,11 @@ class _ReconcileView(discord.ui.View):
         self.index = int(inter.data["values"][0])
         await self._rerender(inter)
 
-    def _pick_candidate(self, registrant_id: int):
-        async def callback(inter: discord.Interaction):
-            self.rows[self.index]["state"] = "matched"
-            self.rows[self.index]["registrant_id"] = registrant_id
-            self.index = None
-            await self._rerender(inter)
-
-        return callback
+    async def _on_pick_candidate(self, inter: discord.Interaction):
+        self.rows[self.index]["state"] = "matched"
+        self.rows[self.index]["registrant_id"] = int(inter.data["values"][0])
+        self.index = None
+        await self._rerender(inter)
 
     async def _on_add_new(self, inter: discord.Interaction):
         row = self.rows[self.index]
@@ -3025,9 +3094,17 @@ class ChampionDuelFinishedView(discord.ui.View):
         )
 
     async def _on_record(self, inter: discord.Interaction):
-        stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+        stage, groupings = await asyncio.gather(
+            asyncio.to_thread(db.current_stage, self.grouping["id"]),
+            asyncio.to_thread(db.groupings_for_warzone, self.warzone),
+        )
         await inter.response.send_modal(
-            _RecordGroupModal(can_write=self.can_write, grouping=self.grouping, stage=stage)
+            _RecordGroupModal(
+                can_write=self.can_write,
+                grouping=self.grouping,
+                stage=stage,
+                groupings=groupings,
+            )
         )
 
 
@@ -3146,9 +3223,17 @@ class ChampionDuelHubView(discord.ui.View):
         # Read before responding, not after: a modal has to be the first
         # response to an interaction, so this cannot defer first. One indexed
         # SQLite read is well inside the three seconds.
-        stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+        stage, groupings = await asyncio.gather(
+            asyncio.to_thread(db.current_stage, self.grouping["id"]),
+            asyncio.to_thread(db.groupings_for_warzone, self.warzone),
+        )
         await inter.response.send_modal(
-            _RecordGroupModal(can_write=self.can_write, grouping=self.grouping, stage=stage)
+            _RecordGroupModal(
+                can_write=self.can_write,
+                grouping=self.grouping,
+                stage=stage,
+                groupings=groupings,
+            )
         )
 
     async def _on_guide(self, inter: discord.Interaction):

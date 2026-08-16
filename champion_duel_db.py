@@ -112,7 +112,10 @@ KNOCKOUT_RESULTS = (
     (1, 1, "1st"),
     (2, 2, "2nd"),
     (3, 3, "3rd"),
-    (4, 4, "Made it to top 4"),
+    # Sentence case, except that the stage names keep their capital: "made it
+    # to top 16" can be read as finishing 16th, where "Top 16" is plainly the
+    # name of a round. The capital is doing work, not decoration.
+    (4, 4, "Made it to Top 4"),
     (5, 8, "Made it to Quarter-finals"),
     (9, 16, "Made it to Top 16"),
     (17, 32, "Made it to Top 32"),
@@ -982,6 +985,34 @@ def overlapping_groupings(warzones, started_on=None) -> list[tuple[dict, str]]:
             continue
         out.append((grouping, shared[0]))
     return out
+
+
+def groupings_for_warzone(warzone) -> list[dict]:
+    """Every grouping this warzone has ever been drawn into, newest start first.
+
+    `find_grouping_by_warzone` answers "which one now" and is right for
+    resolving a guild. This answers "which ones were there", which is what a
+    surface recording results needs: a Champion Duel runs once a season, the
+    same warzone is drawn into a new grouping each time, and somebody entering
+    a result has to be able to say which one it belongs to.
+
+    Empty for a warzone we hold nothing for, which is the normal state before
+    anyone has entered a grouping.
+    """
+    zone = _server(warzone)
+    if not zone:
+        return []
+    with _get_conn() as conn:
+        ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT g.id FROM groupings g "
+                "JOIN grouping_warzones w ON w.grouping_id = g.id "
+                "WHERE w.warzone = ? ORDER BY g.started_on DESC, g.id DESC",
+                (zone,),
+            ).fetchall()
+        ]
+    return [g for g in (get_grouping(i) for i in ids) if g]
 
 
 def default_grouping_id() -> int | None:

@@ -1454,7 +1454,9 @@ async def test_save_stays_disabled_while_a_line_is_unresolved(cd_db, no_mm_link)
 
     # Settling it turns the control on rather than leaving it inert.
     view.index = 0
-    await view._pick_candidate(_reg("AlphaOne", "800"))(_interaction())
+    picked = _interaction()
+    picked.data = {"values": [str(_reg("AlphaOne", "800"))]}
+    await view._on_pick_candidate(picked)
     assert not _save_button(view).disabled
 
 
@@ -1508,6 +1510,86 @@ async def test_a_lettered_round_without_a_letter_is_refused(cd_db, no_mm_link):
     assert "needs a group" in _sent(interaction)
 
 
+async def test_recording_asks_which_champion_duel_only_when_there_is_a_choice(cd_db, no_mm_link):
+    """A warzone is drawn into a new grouping every season, so "the one running
+    now" is only the right answer while there is one. The finished hub invites
+    people to record past results, which is exactly when it is not."""
+    mine = db.find_grouping_by_warzone("738")
+
+    only = hub._RecordGroupModal(can_write=True, grouping=mine, groupings=[mine])
+    assert "Which Champion Duel?" not in [c["label"] for c in only.to_components()]
+
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = '2026-08-04' WHERE id = ?", (mine["id"],))
+    mine = db.get_grouping(mine["id"])
+    db.create_grouping(["738", "900"], "2026-06-02", origin="member")
+
+    both = db.groupings_for_warzone("738")
+    picker = hub._RecordGroupModal(can_write=True, grouping=mine, groupings=both)
+    labels = [c["label"] for c in picker.to_components()]
+    assert labels[0] == "Which Champion Duel?", "above Round, not appended after the paste"
+    assert len(labels) == 5, "exactly the five-component cap"
+
+    # Newest first, and the one the hub resolved to is what it opens on.
+    options = picker.to_components()[0]["component"]["options"]
+    assert [o["label"] for o in options] == ["Started 8/4", "Started 6/2"]
+    assert options[0]["value"] == str(mine["id"])
+    assert options[0]["default"] is True
+
+
+def test_a_grouping_with_no_start_date_still_has_a_label(cd_db):
+    """An import can establish a grouping before anyone reads its dates off the
+    Match Overview box, and an option with a blank where the date goes is worse
+    than one that says the date is missing."""
+    undated = db.find_grouping_by_warzone("738")
+
+    assert undated["started_on"] is None
+    assert hub._grouping_option_label(undated) == f"Grouping {undated['id']} (no date recorded)"
+
+
+async def test_a_result_files_against_the_champion_duel_that_was_picked(cd_db, no_mm_link):
+    """The whole point of the picker. Without it a historical result lands in
+    whichever grouping started most recently, which is a different event."""
+    now = db.find_grouping_by_warzone("738")
+    last_season = db.create_grouping(["738", "900"], "2026-06-02", origin="member")
+
+    modal = hub._RecordGroupModal(
+        can_write=True, grouping=now, groupings=db.groupings_for_warzone("738")
+    )
+    modal.champion_duel.component._values = [str(last_season["id"])]
+    modal.round_.component._values = ["semifinals"]
+    modal.recording.component._values = ["final"]
+    modal.group.component._values = ["D"]
+    modal.players.component._value = "AlphaOne, 738, 3"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    await _view(interaction)._on_save(_interaction())
+
+    old_group = db.get_or_create_group(last_season["id"], "semifinals", "D")
+    assert [m["display_name"] for m in db.get_group_members(old_group["id"])] == ["AlphaOne"]
+    assert db.get_group_members(db.get_or_create_group(now["id"], "semifinals", "D")["id"]) == []
+
+
+async def test_the_candidates_are_one_select_rather_than_a_button_each(cd_db, no_mm_link):
+    """A button per candidate ate four of the five rows and still capped at 20.
+    The warzone is the only thing telling two identical names apart, so it has
+    to be readable, which is what the description line is for."""
+    db.import_registrants([{"name": "AlphaOne", "server": "800"}])
+    modal = _record_modal(cd_db, players="AlphaOne, , 3")
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    view = _view(interaction)
+    view.index = 0
+    view._build()
+
+    selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
+    assert len(selects) == 1
+    assert {o.description for o in selects[0].options} == {"Warzone 738", "Warzone 800"}
+    assert not [c for c in view.children if getattr(c, "label", None) == "AlphaOne"]
+
+
 def test_a_knockout_placement_is_the_round_they_went_out_in():
     """A 32-bracket is rigid, so the finishing position carries the exit round
     and nothing extra has to be stored."""
@@ -1516,7 +1598,7 @@ def test_a_knockout_placement_is_the_round_they_went_out_in():
     assert db.knockout_result(2) == "2nd"
     # The third-place match is what separates these two, and needs no column.
     assert db.knockout_result(3) == "3rd"
-    assert db.knockout_result(4) == "Made it to top 4"
+    assert db.knockout_result(4) == "Made it to Top 4"
     assert db.knockout_result(8) == "Made it to Quarter-finals"
     assert db.knockout_result(32) == "Made it to Top 32"
 

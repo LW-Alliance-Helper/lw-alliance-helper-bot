@@ -999,6 +999,226 @@ def overlapping_groupings(warzones, started_on=None) -> list[tuple[dict, str]]:
     return out
 
 
+def find_grouping_conflicts() -> list[dict]:
+    """Every pair of groupings that claim a warzone they cannot both have.
+
+    `overlapping_groupings` answers the question one member's entry asks: does
+    what I just typed collide with anything. This answers the operator's: what
+    is broken right now. Same rule, swept over what is already stored rather
+    than over a candidate.
+
+    A conflict is two groupings inside one event window sharing at least one
+    warzone but not the whole set. An exact match is two people entering the
+    same sixteen, which is agreement rather than a contradiction, and the
+    entry path already joins them instead.
+
+    Each pair carries the counts, because the operator's whole decision is
+    which one to keep and that turns on which holds real data. A grouping with
+    a roster and results is almost never the one to fold away.
+    """
+    groupings = list_groupings()
+    out: list[dict] = []
+    for i, first in enumerate(groupings):
+        for second in groupings[i + 1 :]:
+            zones_a, zones_b = set(first["warzones"]), set(second["warzones"])
+            shared = sorted(zones_a & zones_b, key=int)
+            if not shared or zones_a == zones_b:
+                continue
+            start_a, start_b = _started(first), _started(second)
+            if start_a and start_b and abs((start_a - start_b).days) >= EVENT_DAYS:
+                continue
+            out.append(
+                {
+                    "a": first,
+                    "b": second,
+                    "shared": shared,
+                    "a_counts": grouping_counts(first["id"]),
+                    "b_counts": grouping_counts(second["id"]),
+                }
+            )
+    return out
+
+
+def grouping_counts(grouping_id: int) -> dict:
+    """How much this grouping actually holds, for deciding whether to keep it.
+
+    Players rather than rows: a registrant in three rounds is one person, and
+    an operator weighing two groupings against each other is counting people.
+    """
+    with _get_conn() as conn:
+        groups = conn.execute(
+            "SELECT COUNT(*) AS n FROM groups WHERE grouping_id = ?", (grouping_id,)
+        ).fetchone()["n"]
+        players = conn.execute(
+            "SELECT COUNT(DISTINCT m.registrant_id) AS n FROM group_members m "
+            "JOIN groups g ON g.id = m.group_id WHERE g.grouping_id = ?",
+            (grouping_id,),
+        ).fetchone()["n"]
+        results = conn.execute(
+            "SELECT COUNT(*) AS n FROM group_members m JOIN groups g ON g.id = m.group_id "
+            "WHERE g.grouping_id = ? AND m.rank IS NOT NULL",
+            (grouping_id,),
+        ).fetchone()["n"]
+        guilds = conn.execute(
+            "SELECT COUNT(*) AS n FROM guild_warzone WHERE confirmed_grouping_id = ?",
+            (grouping_id,),
+        ).fetchone()["n"]
+    return {"groups": groups, "players": players, "results": results, "guilds": guilds}
+
+
+class MergeRefused(Exception):
+    """The merge was not attempted, because the two are not a conflict."""
+
+
+def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
+    """Fold `source` into `target` and delete it. Not revertable.
+
+    The bot never does this on its own. Two member-made groupings claiming one
+    warzone only arises from a wrong claim, an alliance cannot undo it, and
+    deciding which community's entry was the mistake is the kind of opinion
+    `UX.md` principle 6 says the bot does not have. So this exists and only
+    `/admin` reaches it.
+
+    **The kept grouping's warzone list is the truth and is not touched.** An
+    earlier version unioned the two sets, which was wrong twice over: a
+    Champion Duel is exactly `GROUPING_SIZE` warzones, so the union produced a
+    31-warzone grouping that no member surface can render and the entry path
+    would reject; and it glued the mistaken claim's warzones permanently onto
+    the survivor, so the alliance actually drawn into them would conflict all
+    over again the moment they entered their real set. The whole premise of a
+    conflict is that one of the two lists is wrong. Folding it in keeps the
+    wrong answer.
+
+    **The target wins any value it already holds, and the source fills its
+    gaps.** Where both hold a placement for one player in one round, each field
+    is taken from the target when it has one and from the source otherwise --
+    the same COALESCE rule `set_placement` uses, and for the same reason. Doing
+    it row-at-a-time instead loses real data: a target holding only the draw and
+    a source holding the standings would have thrown the standings away, and
+    this cannot be undone.
+
+    Returns what actually moved, because "merged" on its own is not something
+    an operator can check.
+    """
+    if source_id == target_id:
+        raise MergeRefused("a grouping cannot be merged into itself")
+    source, target = get_grouping(source_id), get_grouping(target_id)
+    if source is None or target is None:
+        raise MergeRefused("one of those groupings no longer exists")
+
+    now = _now()
+    moved = {
+        "groups": 0,
+        "players": 0,
+        "filled": 0,
+        "unchanged": 0,
+        "guilds": 0,
+        "unpinned": 0,
+        "dropped_warzones": sorted(set(source["warzones"]) - set(target["warzones"]), key=int),
+    }
+    with _get_conn() as conn:
+        groups = conn.execute("SELECT * FROM groups WHERE grouping_id = ?", (source_id,)).fetchall()
+        for group in groups:
+            dest_row = conn.execute(
+                "SELECT id FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                "ORDER BY id LIMIT 1",
+                (target_id, group["stage"], group["label"]),
+            ).fetchone()
+            if dest_row is None:
+                conn.execute(
+                    "INSERT INTO groups "
+                    "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        target_id,
+                        group["stage"],
+                        group["label"],
+                        group["created_by_guild_id"],
+                        now,
+                        now,
+                    ),
+                )
+                dest_row = conn.execute(
+                    "SELECT id FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                    "ORDER BY id LIMIT 1",
+                    (target_id, group["stage"], group["label"]),
+                ).fetchone()
+            dest = dest_row["id"]
+            moved["groups"] += 1
+            for member in conn.execute(
+                "SELECT * FROM group_members WHERE group_id = ?", (group["id"],)
+            ).fetchall():
+                existing = conn.execute(
+                    "SELECT * FROM group_members WHERE group_id = ? AND registrant_id = ?",
+                    (dest, member["registrant_id"]),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        "INSERT INTO group_members "
+                        "(group_id, registrant_id, seed_rank, rank, score, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            dest,
+                            member["registrant_id"],
+                            member["seed_rank"],
+                            member["rank"],
+                            member["score"],
+                            now,
+                            now,
+                        ),
+                    )
+                    moved["players"] += 1
+                    continue
+                gaps = {
+                    field: member[field]
+                    for field in ("seed_rank", "rank", "score")
+                    if existing[field] is None and member[field] is not None
+                }
+                if not gaps:
+                    moved["unchanged"] += 1
+                    continue
+                sets = ", ".join(f"{field} = ?" for field in gaps)
+                conn.execute(
+                    f"UPDATE group_members SET {sets}, updated_at = ? "
+                    "WHERE group_id = ? AND registrant_id = ?",
+                    (*gaps.values(), now, dest, member["registrant_id"]),
+                )
+                moved["filled"] += 1
+
+        # A guild pinned to the grouping that is about to vanish would resolve
+        # to nothing. Repoint the ones the survivor actually contains; for the
+        # rest, clear the pin rather than point them at a Champion Duel their
+        # warzone is not in. An unpinned guild re-resolves by warzone on the
+        # next read, which is the self-healing path this column exists beside.
+        kept_zones = set(target["warzones"])
+        for row in conn.execute(
+            "SELECT guild_id, warzone FROM guild_warzone WHERE confirmed_grouping_id = ?",
+            (source_id,),
+        ).fetchall():
+            if row["warzone"] in kept_zones:
+                conn.execute(
+                    "UPDATE guild_warzone SET confirmed_grouping_id = ?, updated_at = ? "
+                    "WHERE guild_id = ?",
+                    (target_id, now, row["guild_id"]),
+                )
+                moved["guilds"] += 1
+            else:
+                conn.execute(
+                    "UPDATE guild_warzone SET confirmed_grouping_id = NULL, updated_at = ? "
+                    "WHERE guild_id = ?",
+                    (now, row["guild_id"]),
+                )
+                moved["unpinned"] += 1
+
+        # CASCADE takes this grouping's own warzones, groups and members with
+        # it. Everything worth keeping has already been copied across.
+        conn.execute("DELETE FROM groupings WHERE id = ?", (source_id,))
+        conn.execute("UPDATE groupings SET updated_at = ? WHERE id = ?", (now, target_id))
+
+    print(f"[CHAMPION_DUEL] merged grouping {source_id} into {target_id} by {actor}: {moved}")
+    return moved
+
+
 def groupings_for_warzone(warzone) -> list[dict]:
     """Every grouping this warzone has ever been drawn into, newest start first.
 
@@ -1290,6 +1510,15 @@ def get_or_create_group(grouping_id, stage: str, label=None, *, guild_id=None) -
     `label` is the letter the game shows, or None for knockouts, which are a
     single field of 32 rather than lettered groups. The letter is not the
     identity -- `groups.id` is -- so two groupings' Group D never meet.
+
+    **Selects before inserting rather than relying on `INSERT OR IGNORE`.**
+    The UNIQUE index over (grouping_id, stage, label) does not constrain the
+    knockouts at all, because their label is NULL and SQLite treats every NULL
+    as distinct in a unique index. So the insert never collided there and every
+    call created another knockout row, with an unordered read afterwards
+    deciding which of them a placement landed in. Lettered rounds were always
+    fine, which is why nothing noticed: the knockouts are the one round with no
+    letter.
     """
     stage = _stage(stage)
     label = _group(label)
@@ -1297,16 +1526,23 @@ def get_or_create_group(grouping_id, stage: str, label=None, *, guild_id=None) -
         raise ValueError("a group belongs to a grouping")
     now = _now()
     with _get_conn() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO groups "
-            "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (grouping_id, stage, label, _text(guild_id), now, now),
-        )
         row = conn.execute(
-            "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ?",
+            "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+            "ORDER BY id LIMIT 1",
             (grouping_id, stage, label),
         ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO groups "
+                "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (grouping_id, stage, label, _text(guild_id), now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                "ORDER BY id LIMIT 1",
+                (grouping_id, stage, label),
+            ).fetchone()
     return dict(row)
 
 

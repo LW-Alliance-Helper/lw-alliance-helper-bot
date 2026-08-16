@@ -1253,6 +1253,208 @@ async def admin_champion_duel_import_slash(
     await interaction.followup.send(summary, ephemeral=True)
 
 
+# ── Champion Duel: resolving grouping conflicts ───────────────────────────────
+#
+# Two groupings inside one event window claiming the same warzone is a
+# contradiction: a warzone is drawn into exactly one set of Participating
+# Warzones per Champion Duel. The member-facing half of this shipped first --
+# `champion_duel_hub._report_conflict` shows both lists, offers to fix the
+# caller's own, and for the other one tells them to reach us on the Community
+# Server. That exit had nothing behind it until this.
+#
+# The bot does not merge on its own, and that is deliberate rather than
+# unfinished. A conflict only arises from a wrong claim, an alliance cannot
+# undo one, and deciding which community's entry was the mistake is the kind of
+# opinion `UX.md` principle 6 says the bot does not have. Detect it, keep it
+# off member surfaces, give the operator a merge.
+
+
+def _conflict_summary(cd_db, pair: dict) -> str:
+    """One conflict as a block an operator can decide from.
+
+    Both warzone lists in full, because naming the shared number says one of
+    them is wrong without showing which. Counts alongside, because the whole
+    decision is which to keep and that turns on which holds real data.
+    """
+    lines = []
+    for side, grouping in (("A", pair["a"]), ("B", pair["b"])):
+        counts = pair[f"{side.lower()}_counts"]
+        started = grouping.get("started_on") or "no date recorded"
+        lines.append(
+            f"**{side} · #{grouping['id']}** started {started}, origin `{grouping['origin']}`\n"
+            f"  {counts['players']} players · {counts['groups']} groups · "
+            f"{counts['results']} results · {counts['guilds']} guilds pinned\n"
+            f"  {', '.join(grouping['warzones'])}"
+        )
+    return f"shared: **{', '.join(pair['shared'])}**\n" + "\n".join(lines)
+
+
+class _MergeGroupingsView(discord.ui.View):
+    """Pick a conflict, then pick which side survives.
+
+    Two steps because the second is irreversible. The direction buttons only
+    appear once a pair is selected and are labelled with the id that survives,
+    so nobody can press one before seeing what it would fold away -- the same
+    reason `champion_duel_hub._RevertAnyway` is a button on the conflict rather
+    than a `force` parameter set in advance.
+    """
+
+    def __init__(self, *, user_id: int, pairs: list[dict], cd_db):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+        self.pairs = pairs
+        self.cd_db = cd_db
+        self.chosen: dict | None = None
+        self.message: discord.Message | None = None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        select = discord.ui.Select(
+            placeholder="Which conflict?",
+            options=[
+                discord.SelectOption(
+                    label=f"#{p['a']['id']} vs #{p['b']['id']}",
+                    value=str(i),
+                    description=f"shares {', '.join(p['shared'])[:80]}",
+                    default=self.chosen is p,
+                )
+                for i, p in enumerate(self.pairs[:25])
+            ],
+            row=0,
+        )
+        select.callback = self._on_pick
+        self.add_item(select)
+
+        if self.chosen:
+            for side, other in (("a", "b"), ("b", "a")):
+                keep = self.chosen[side]
+                drop = self.chosen[other]
+                button = discord.ui.Button(
+                    label=f"Keep #{keep['id']}, fold in #{drop['id']}",
+                    style=discord.ButtonStyle.danger,
+                    row=1,
+                )
+                button.callback = self._merge_into(keep["id"], drop["id"])
+                self.add_item(button)
+
+    def _merge_into(self, keep_id: int, drop_id: int):
+        async def callback(inter: discord.Interaction):
+            await inter.response.defer(ephemeral=True, thinking=True)
+            try:
+                moved = await asyncio.to_thread(
+                    self.cd_db.merge_groupings,
+                    drop_id,
+                    keep_id,
+                    actor=str(inter.user.id),
+                )
+            except self.cd_db.MergeRefused as exc:
+                await self._retire(inter, f"Not merged: {exc}")
+                return
+            except Exception as exc:  # noqa: BLE001
+                # Two operators on one conflict list is what produces this: the
+                # existence check runs before the write, so a merge that landed
+                # in between surfaces as an integrity error rather than a
+                # refusal. Either way the operator needs a reply, because a
+                # deferred interaction with no follow-up is a spinner forever.
+                print(f"[CHAMPION_DUEL] merge {drop_id} into {keep_id} failed: {exc!r}")
+                await self._retire(
+                    inter, f"Merge failed and nothing was changed: `{type(exc).__name__}: {exc}`"
+                )
+                return
+            await self._retire(
+                inter,
+                f"Merged #{drop_id} into #{keep_id}. "
+                f"{moved['players']} players moved, {moved['filled']} filled in gaps, "
+                f"{moved['unchanged']} already complete in #{keep_id}, "
+                f"{moved['groups']} groups touched, {moved['guilds']} guilds repointed"
+                + (f", {moved['unpinned']} unpinned" if moved["unpinned"] else "")
+                + f". #{drop_id} is gone, and its warzones went with it"
+                + (
+                    f" ({', '.join(moved['dropped_warzones'])})"
+                    if moved["dropped_warzones"]
+                    else ""
+                )
+                + ". Run the command again for what is left.",
+            )
+
+        return callback
+
+    async def _retire(self, inter: discord.Interaction, text: str):
+        """Report, and stop the buttons looking live.
+
+        The pairs this view holds are stale the moment a merge lands, and a
+        danger button that still renders is one that fails with Discord's bare
+        "This interaction failed" when pressed.
+        """
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        await inter.followup.send(text[:2000], ephemeral=True)
+        self.stop()
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message("That isn't yours to press.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_pick(self, inter: discord.Interaction):
+        self.chosen = self.pairs[int(inter.data["values"][0])]
+        self._build()
+        await inter.response.edit_message(
+            content=(
+                "**Champion Duel grouping conflicts**\n\n"
+                + _conflict_summary(self.cd_db, self.chosen)
+                + "\n\nMerging is not revertable. The one you keep wins every "
+                "placement they both hold; the other only fills gaps."
+            )[:2000],
+            view=self,
+        )
+
+
+@admin_group.command(
+    name="champion_duel_conflicts",
+    description="(Bot owner only) Groupings claiming the same warzone, and a merge.",
+)
+async def admin_champion_duel_conflicts_slash(interaction: discord.Interaction):
+    """What is broken right now, and the only surface that can fix it.
+
+    `overlapping_groupings` answers the question one member's entry asks, at
+    the moment they ask it. This sweeps what is already stored, which is the
+    operator's question and nobody else's: a conflict reported last Tuesday is
+    still there and nothing else lists it.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import champion_duel_db as cd_db  # noqa: PLC0415
+
+    pairs = await asyncio.to_thread(cd_db.find_grouping_conflicts)
+    if not pairs:
+        await interaction.followup.send(
+            "No grouping conflicts. Every warzone is in one set of "
+            "Participating Warzones per Champion Duel.",
+            ephemeral=True,
+        )
+        return
+
+    view = _MergeGroupingsView(user_id=interaction.user.id, pairs=pairs, cd_db=cd_db)
+    body = "\n\n".join(_conflict_summary(cd_db, p) for p in pairs[:5])
+    more = f"\n\n{len(pairs) - 5} more not shown." if len(pairs) > 5 else ""
+    await interaction.followup.send(
+        f"**{len(pairs)} grouping conflict(s)**\n\n{body}{more}"[:2000],
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
+
+
 # Register the /admin Group on the tree once every subcommand has been
 # attached above. The Group-level guilds= kwarg propagates to all its
 # subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the

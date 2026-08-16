@@ -112,8 +112,14 @@ def test_a_complete_group_does_not_nag_about_completeness(cd_db):
 
 def test_the_group_is_named_the_way_the_game_names_it(cd_db):
     """The game writes `Semi-final Grouping: Group H`, so "Group H" is the
-    phrase a member arrives already holding."""
-    assert hub._group_title("semifinals", "H") == "Group H"
+    phrase a member arrives already holding.
+
+    The round leads, because a group letter means nothing without it: Group H
+    in the semi-finals is a different eight people from Group H in the
+    qualifiers. Carrying both in the title lets the description open on the one
+    thing neither can say, which is which Champion Duel this is.
+    """
+    assert hub._group_title("semifinals", "H") == "Semi-finals - Group H"
 
 
 def test_the_knockouts_have_no_letter_and_are_not_given_one(cd_db):
@@ -160,3 +166,83 @@ def test_an_empty_group_says_so_and_names_the_way_in(cd_db):
 
     assert "do not have anyone recorded" in embed.description
     assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
+
+
+def test_the_description_opens_on_which_champion_duel_this_is(cd_db):
+    """The title carries the round and the letter, so the description leads on
+    the one fact neither of them can: which Champion Duel."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+    members = db.get_group_members(group["id"])
+
+    embed = hub.build_group_embed(members=members, stage="semifinals", label="H", grouping=grouping)
+
+    assert embed.description.startswith("This Champion Duel started ")
+    assert embed.title == "Semi-finals - Group H"
+
+
+def test_an_undated_champion_duel_says_nothing_rather_than_leaving_a_blank(cd_db):
+    """An import can establish one before anyone has read its dates, and a
+    sentence with a hole where the date goes is worse than no sentence."""
+    grouping = db.create_grouping(["738"], None, origin="imported")
+    group = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    reg = db.upsert_registrant("Alpha", server="738")
+    db.set_placement(group["id"], reg["id"], seed_rank=1)
+
+    embed = hub.build_group_embed(
+        members=db.get_group_members(group["id"]),
+        stage="semifinals",
+        label="H",
+        grouping=grouping,
+    )
+
+    assert "This Champion Duel started" not in embed.description
+    assert embed.description.startswith("These are seed positions")
+
+
+def test_a_finished_champion_duel_still_offers_every_round_it_played(cd_db):
+    """`current_stage` answers which round is running, which is the wrong
+    question once there is no running round. Someone knocked out is looking
+    backwards and every round they played is worth reaching."""
+    grouping = db.create_grouping(["738"], started_so_today_is("knockouts"), origin="member")
+    for stage in ("qualifiers", "semifinals", "knockouts"):
+        db.get_or_create_group(grouping["id"], stage, "H" if stage != "knockouts" else None)
+
+    assert db.recorded_stages(grouping["id"]) == ["qualifiers", "semifinals", "knockouts"]
+
+
+def test_the_rounds_are_offered_in_playing_order_not_alphabetical(cd_db):
+    """Alphabetical would put the knockouts before the qualifiers, which is
+    backwards for a history."""
+    grouping = db.create_grouping(["738"], started_so_today_is("knockouts"), origin="member")
+    for stage in ("knockouts", "qualifiers", "semifinals"):
+        db.get_or_create_group(grouping["id"], stage, "A")
+
+    assert db.recorded_stages(grouping["id"]) == list(db.STAGES)
+
+
+def test_a_round_we_hold_nothing_for_is_not_offered(cd_db):
+    """The picker lists what exists, not what the calendar says should."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    db.get_or_create_group(grouping["id"], "semifinals", "H")
+
+    assert db.recorded_stages(grouping["id"]) == ["semifinals"]
+
+
+def test_the_odds_say_which_players_they_could_not_include(cd_db):
+    """Six of eight is not this group. Naming who is missing is the difference
+    between a number the reader can weigh and one they cannot."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None), ("Beta", 2, None)])
+    scouted = db.get_group_scouting(group["id"])
+
+    embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
+
+    assert "fewer than two" in embed.description
+    assert hub._btn_words(hub.CD_BTN_SQUAD) in embed.description
+
+
+def test_the_meeting_length_is_read_from_the_round(cd_db):
+    """A qualifier meeting is one match and a semifinal meeting is a Bo3. The
+    surface must not pick a length of its own."""
+    assert db.MEETING_LENGTH["qualifiers"] == 1
+    assert db.MEETING_LENGTH["semifinals"] == 3
+    assert db.MEETING_LENGTH["knockouts"] == 3

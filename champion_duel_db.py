@@ -205,6 +205,18 @@ GROUPING_SIZE = 16
 # full at 6. Knockouts are one field of 32 rather than lettered groups.
 GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
 
+# How long one meeting is, per round (Kevin, 2026-08-15/16). A qualifier
+# meeting is a single match; semifinal and knockout meetings are a best-of-3.
+# Both finals are a Bo5, which is not here because a final is a match inside
+# the knockout bracket rather than a round of its own -- the bracket simulation
+# knows which two meetings those are, and nothing keyed by stage could.
+#
+# **A meeting is not a match**, and confusing the two is a bug that does not
+# raise: a Bo3 favours the stronger player, so scoring one as a single match
+# understates strong players and overstates weak ones by a plausible-looking
+# amount. It sat in the published workbooks for ten days on exactly that.
+MEETING_LENGTH = {"qualifiers": 1, "semifinals": 3, "knockouts": 3}
+
 # The lettered groups inside a round. Sixteen either way: the qualifiers split
 # 1,600 players into groups of 100, and the semifinals split the 128 advancers
 # into groups of 8. Knockouts are one field of 32 and carry no letter at all.
@@ -1211,6 +1223,31 @@ def furthest_stage_held(grouping_id=None) -> str | None:
         if stage in held:
             return stage
     return None
+
+
+def recorded_stages(grouping_id=None) -> list[str]:
+    """Which rounds this grouping actually has groups for, in playing order.
+
+    `current_stage` answers "which round is running", which is the right
+    default while one is. It is the wrong question for a Champion Duel that has
+    finished, where there is no current round and every round is worth looking
+    back at. A surface offering history needs the set, not the tip.
+
+    Ordered by `STAGES` rather than by what SQLite returns, so the picker reads
+    in the order the rounds were played rather than alphabetically, which would
+    put the knockouts before the qualifiers.
+    """
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    if grouping_id is None:
+        return []
+    with _get_conn() as conn:
+        held = {
+            r["stage"]
+            for r in conn.execute(
+                "SELECT DISTINCT stage FROM groups WHERE grouping_id = ?", (grouping_id,)
+            ).fetchall()
+        }
+    return [stage for stage in STAGES if stage in held]
 
 
 def is_finished(grouping_id=None) -> bool:

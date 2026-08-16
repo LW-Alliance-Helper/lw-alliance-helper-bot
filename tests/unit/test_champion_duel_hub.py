@@ -1538,13 +1538,22 @@ async def test_recording_asks_which_champion_duel_only_when_there_is_a_choice(cd
 
 
 def test_a_grouping_with_no_start_date_still_has_a_label(cd_db):
-    """An import can establish a grouping before anyone reads its dates off the
-    Match Overview box, and an option with a blank where the date goes is worse
-    than one that says the date is missing."""
+    """An import can establish one before anyone reads its dates off the Match
+    Overview box, and an option with a blank where the date goes is worse than
+    one that says the date is missing.
+
+    Says "Champion Duel", never "Grouping". The game uses that word for the
+    group of 8 ("Semi-final Grouping: Group H") and calls the 16 warzones
+    Participating Warzones, so the only meaning a member has already learned
+    for it is the one we do not mean. Corrected 2026-08-16; `UX.md` has the
+    reasoning under Settled.
+    """
     undated = db.find_grouping_by_warzone("738")
 
     assert undated["started_on"] is None
-    assert hub._grouping_option_label(undated) == f"Grouping {undated['id']} (no date recorded)"
+    label = hub._grouping_option_label(undated)
+    assert label == f"Champion Duel {undated['id']} (no date recorded)"
+    assert "rouping" not in label
 
 
 async def test_a_result_files_against_the_champion_duel_that_was_picked(cd_db, no_mm_link):

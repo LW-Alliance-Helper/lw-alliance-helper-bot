@@ -78,6 +78,23 @@ CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
 # 📥 is the catalog's "data coming into the bot", which is what a pasted group
 # listing is. Not ➕: `CD_BTN_ADD` already carries that on this grid, and two of
 # one glyph side by side give the eye nothing to navigate by.
+# 📇 is the directory-of-records glyph from `DESIGN.md`'s action catalog: the
+# whole set, each row with its own fields, as opposed to one record (🔍) or a
+# chart of them (📊). A group of 8 with their ranks is exactly that, so this
+# reuses the existing mark rather than minting one. 👥 was the obvious choice
+# and is Member Sync's, which rule 3 puts out of reach.
+CD_BTN_GROUP = "📇 Your group"
+# Deliberately not "prediction". The game runs its own prediction, and it is a
+# betting market on individual matches (Kevin, 2026-08-16). This answers a
+# question that one does not: whether you get out of your group.
+#
+# Bare, and every candidate glyph was rejected for a reason worth recording.
+# 📊 is Growth Breakdown's in the feature catalog and 🔍/📇 are already spoken
+# for here. 🎲 is the one that reads best and is the worst choice available:
+# the game's own prediction *is* a betting market, so a die would say we are
+# that feature, on the one surface where the distinction matters most. This is
+# the only control on its row and carries `primary`, so the label does the work.
+CD_BTN_ODDS = "Odds of advancing"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
 CD_BTN_LINE_NEW = "➕ Add as a new player"
@@ -1652,26 +1669,30 @@ def _grouping_option_label(grouping: dict) -> str:
     id would be exact and mean nothing to anybody.
     """
     started = _short_date(grouping.get("started_on"))
-    return f"Started {started}" if started else f"Grouping {grouping['id']} (no date recorded)"
+    return f"Started {started}" if started else f"Champion Duel {grouping['id']} (no date recorded)"
 
 
 def _grouping_name(grouping: dict | None, *, whose: str = "your") -> str:
-    """A grouping named so a member can tell which one is meant.
+    """Ours named so a member can tell which one is meant.
 
-    "Grouping" is overloaded twice over: Map Manager has season groupings, and
-    a member may be in a different Champion Duel grouping every season. `UX.md`
-    says qualify it every time it crosses a surface boundary, and the start date
-    is the qualifier a member can actually check, because it is the date on
-    their own Match Overview box.
+    **Never says "grouping".** The game uses that word for the group of 8 a
+    player is drawn into ("Semi-final Grouping: Group H") and calls the 16
+    warzones Participating Warzones, so the one meaning a member has already
+    learned for it is the one we do not mean. `UX.md`'s term table asserted the
+    opposite until 2026-08-16; the correction is under Settled there.
 
-    Falls back to the unqualified phrase when no date is stored. An import can
-    establish a grouping before anyone has read its dates, and a name with a
-    blank where the date goes is worse than no date at all.
+    That leaves the start date as the whole name, which it already was: nothing
+    in the game gives a Champion Duel a title, and the date is the one handle a
+    member can check against their own Match Overview box.
+
+    Falls back to the bare phrase when no date is stored. An import can
+    establish one before anyone has read its dates, and a name with a blank
+    where the date goes is worse than no date at all.
     """
     started = _short_date((grouping or {}).get("started_on"))
     if not started:
-        return f"{whose} Champion Duel grouping"
-    return f"{whose} Champion Duel grouping that started {started}"
+        return f"{whose} Champion Duel"
+    return f"{whose} Champion Duel that started {started}"
 
 
 def _warzone_list(zones) -> str:
@@ -2904,6 +2925,131 @@ def phase_line(grouping: dict | None) -> str:
     return line + "."
 
 
+def _group_title(stage: str, label: str | None) -> str:
+    """What the game calls this group, in the game's own words.
+
+    The game writes `Semi-final Grouping: Group H` on the screen a member reads
+    between the qualifiers and the semi-finals, so "Group H" is the phrase they
+    arrive already holding. The knockouts have no letter at all: 32 players, one
+    field, and `db.get_groups` drops them for exactly that reason.
+    """
+    if not label:
+        return db.STAGE_LABELS.get(stage, "This round")
+    return f"Group {label}"
+
+
+def _rank_basis(members: list[dict]) -> str:
+    """Whether these numbers are seed positions, results, or a mix of both.
+
+    `seed_rank` and `rank` are different facts and the surface has to say which
+    it is showing. A group recorded at the draw has seed positions and no
+    results; the same group recorded again at the standings has both. A column
+    of numbers that silently switches meaning between those two moments is the
+    failure the two columns exist to prevent.
+    """
+    if not members:
+        return "empty"
+    ranked = sum(1 for m in members if m.get("rank") is not None)
+    if ranked == len(members):
+        return "results"
+    if ranked == 0:
+        return "seeds"
+    return "mixed"
+
+
+def _member_line(member: dict, basis: str, stage: str) -> str:
+    """One player: where they are, who they are, and where they are from.
+
+    The number is whichever we hold, and in a mixed group it is marked per row
+    rather than in the header, because there the header cannot be true for
+    everybody at once.
+    """
+    rank = member.get("rank")
+    seed = member.get("seed_rank")
+    shown = rank if rank is not None else seed
+    position = f"`{shown}`" if shown is not None else "`-`"
+    if basis == "mixed":
+        position += " *(seed)*" if rank is None and seed is not None else ""
+
+    name = discord.utils.escape_markdown(member.get("display_name") or "?")
+    bits = [f"{position} **{name}**"]
+    where = " · ".join(str(x) for x in (member.get("server"), member.get("alliance")) if x)
+    if where:
+        bits.append(where)
+
+    # A knockout placement is an exit round, said forwards. Thirty of the 32 go
+    # out somewhere and naming each exit is a scoreboard nobody asked us to
+    # keep, so `knockout_result` gives "Made it to Top 16" rather than the match
+    # they lost (Kevin, 2026-08-15).
+    if stage == "knockouts" and rank is not None:
+        result = db.knockout_result(rank)
+        if result:
+            bits.append(result)
+    return " · ".join(bits)
+
+
+def build_group_embed(
+    *,
+    members: list[dict],
+    stage: str,
+    label: str | None,
+    grouping: dict | None,
+) -> discord.Embed:
+    """One group, with whatever standing we hold for it.
+
+    Deliberately renders at any size. An incomplete group still answers the
+    question a member actually came with, which is who am I facing, and saying
+    so is better than withholding seven names until somebody supplies the
+    eighth.
+    """
+    embed = discord.Embed(
+        title=f"{_group_title(stage, label)}",
+        color=discord.Color.blurple(),
+    )
+    basis = _rank_basis(members)
+    expected = db.GROUP_SIZE.get(stage)
+    where = _grouping_name(grouping)
+
+    if not members:
+        embed.description = (
+            f"We do not have anyone recorded for this group in {where}.\n\n"
+            f"Anyone can paste the standings in with "
+            f"**{_btn_words(CD_BTN_RECORD)}**."
+        )[:4096]
+        return embed
+
+    header = {
+        "results": f"**{db.STAGE_LABELS.get(stage, stage)}** standings, in {where}.",
+        "seeds": (
+            f"**{db.STAGE_LABELS.get(stage, stage)}** draw, in {where}. "
+            f"These are seed positions. No results are recorded yet."
+        ),
+        "mixed": (
+            f"**{db.STAGE_LABELS.get(stage, stage)}**, in {where}. "
+            f"Rows marked *(seed)* are draw positions, not results."
+        ),
+    }[basis]
+
+    lines = [_member_line(m, basis, stage) for m in members]
+    embed.description = f"{header}\n\n" + "\n".join(lines)[: 4096 - len(header) - 2]
+
+    # Completeness is stated, never inferred away. Eight names against a
+    # 100-player qualifier group is the normal case rather than a truncation,
+    # so this says what we hold against what the round holds and leaves the
+    # reader to judge it.
+    if expected and len(members) != expected:
+        embed.add_field(
+            name="Not the whole group",
+            value=(
+                f"We have **{_plural(len(members), 'player')}** of the "
+                f"**{expected}** in this group. Anyone can add the rest with "
+                f"**{_btn_words(CD_BTN_RECORD)}**."
+            ),
+            inline=False,
+        )
+    return embed
+
+
 def build_hub_embed(
     *,
     servers: list[dict],
@@ -3108,6 +3254,129 @@ class ChampionDuelFinishedView(discord.ui.View):
         )
 
 
+class _GroupPickerView(discord.ui.View):
+    """Which group to show, when this round has more than one recorded.
+
+    A select rather than a row of letter buttons: sixteen letters is four rows
+    of four and Discord allows five rows in total, which leaves nothing for
+    anything else. The reconcile view hit the same wall and settled on a select
+    for the same reason.
+    """
+
+    def __init__(self, *, user_id: int, stage: str, grouping: dict, groups: list[dict]):
+        super().__init__(timeout=900)
+        self.user_id = user_id
+        self.stage = stage
+        self.grouping = grouping
+        self.message: discord.Message | None = None
+
+        select = discord.ui.Select(
+            placeholder="Which group?",
+            options=[
+                discord.SelectOption(
+                    label=f"Group {g['group']}",
+                    value=str(g["group"]),
+                    description=f"{_plural(g['registrants'], 'player')} recorded",
+                )
+                for g in groups[:25]
+            ],
+        )
+        select.callback = self._on_pick
+        self.add_item(select)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_pick(self, inter: discord.Interaction):
+        label = inter.data["values"][0]
+        await inter.response.defer()
+        group = await asyncio.to_thread(
+            db.get_or_create_group, self.grouping["id"], self.stage, label
+        )
+        members = await asyncio.to_thread(db.get_group_members, group["id"])
+        await inter.edit_original_response(
+            embed=build_group_embed(
+                members=members, stage=self.stage, label=label, grouping=self.grouping
+            ),
+            view=self,
+        )
+
+
+async def send_group_view(
+    interaction: discord.Interaction, *, grouping: dict | None, user_id: int
+) -> None:
+    """Open the caller's group, asking which one only when there is a choice.
+
+    Scoped to the grouping the hub already resolved for this caller. Recording
+    asks which Champion Duel a result belongs to, because a write filed against
+    the wrong one is damage; reading the wrong one is a wasted click, so this
+    follows the hub rather than asking a second question up front. If a member
+    turns out to be in two at once, that is the same picker the record modal
+    already carries and it belongs here too.
+    """
+    if not grouping:
+        await interaction.followup.send(
+            "We do not know which Champion Duel your alliance is in yet. "
+            f"Set it with **{_btn_words(CD_BTN_ADD_GROUPING)}**.",
+            ephemeral=True,
+        )
+        return
+
+    stage = await asyncio.to_thread(db.current_stage, grouping["id"])
+    if stage is None:
+        await interaction.followup.send(
+            f"No rounds are recorded for {_grouping_name(grouping)} yet.",
+            ephemeral=True,
+        )
+        return
+
+    # The knockouts are one field of 32 with no letter, so there is nothing to
+    # pick and `get_groups` returns nothing for them by design.
+    if stage == "knockouts":
+        group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, None)
+        members = await asyncio.to_thread(db.get_group_members, group["id"])
+        await interaction.followup.send(
+            embed=build_group_embed(members=members, stage=stage, label=None, grouping=grouping),
+            ephemeral=True,
+        )
+        return
+
+    groups = await asyncio.to_thread(db.get_groups, stage, grouping["id"])
+    if not groups:
+        await interaction.followup.send(
+            embed=build_group_embed(members=[], stage=stage, label=None, grouping=grouping),
+            ephemeral=True,
+        )
+        return
+
+    if len(groups) == 1:
+        label = groups[0]["group"]
+        group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, label)
+        members = await asyncio.to_thread(db.get_group_members, group["id"])
+        await interaction.followup.send(
+            embed=build_group_embed(members=members, stage=stage, label=label, grouping=grouping),
+            ephemeral=True,
+        )
+        return
+
+    view = _GroupPickerView(user_id=user_id, stage=stage, grouping=grouping, groups=groups)
+    await interaction.followup.send(
+        f"**{db.STAGE_LABELS.get(stage, stage)}** in {_grouping_name(grouping)}. "
+        f"Pick a group to see who is in it.",
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
+
+
 class ChampionDuelHubView(discord.ui.View):
     """The button grid. Rows group by kind: everyone, contributors, operator."""
 
@@ -3180,6 +3449,12 @@ class ChampionDuelHubView(discord.ui.View):
         # paying for should be able to see what contributing involves, and it
         # is documentation: withholding it protects nothing.
         self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
+        # Never locked, and absent rather than disabled without a grouping, for
+        # the same reason as recording: with none resolved there is no group to
+        # show and the caller is being asked for their warzone instead. Reading
+        # who you are facing is not a contribution, so it is not Premium.
+        if self.grouping:
+            self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
         # Recording needs a grouping to file the group against, so it is absent
         # rather than disabled when there is none: on that surface the caller is
         # being asked for their warzone and has nothing to record yet.
@@ -3235,6 +3510,20 @@ class ChampionDuelHubView(discord.ui.View):
                 groupings=groupings,
             )
         )
+
+    async def _on_group(self, inter: discord.Interaction):
+        """Who this caller is facing.
+
+        The odds of advancing belong on the surface this opens, because odds
+        need a group and this is where a group exists. They are not wired yet:
+        the model behind them is being rebuilt in `champion-duel-simulator` as
+        of 2026-08-16, and `CD_BTN_ODDS` is the label waiting for it. No
+        disabled placeholder in the meantime -- `UX.md` principle 7 keeps phase
+        language out of anything a user reads, and a greyed button promising a
+        future feature is exactly that.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await send_group_view(inter, grouping=self.grouping, user_id=self.user_id)
 
     async def _on_guide(self, inter: discord.Interaction):
         """Its own button rather than part of the write flows.

@@ -228,21 +228,90 @@ def test_a_round_we_hold_nothing_for_is_not_offered(cd_db):
     assert db.recorded_stages(grouping["id"]) == ["semifinals"]
 
 
-def test_the_odds_say_which_players_they_could_not_include(cd_db):
-    """Six of eight is not this group. Naming who is missing is the difference
-    between a number the reader can weigh and one they cannot."""
+def test_a_short_group_is_told_to_add_players_not_to_look_up_power(cd_db):
+    """Two of eight is not this group, and the model refuses it outright rather
+    than scoring six invented players.
+
+    A short group almost always also has people we hold no power for, so the
+    order of the two checks is the whole point: pointing someone at two
+    players' Total Hero Power when they are six names short is the smaller job
+    and the wrong one.
+    """
     grouping, group = _group_of(cd_db, [("Alpha", 1, None), ("Beta", 2, None)])
     scouted = db.get_group_scouting(group["id"])
 
     embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
 
-    assert "fewer than two" in embed.description
-    assert hub._btn_words(hub.CD_BTN_SQUAD) in embed.description
+    assert "2 players" in embed.description and "8" in embed.description
+    assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
+    assert "Total Hero Power" not in embed.description
 
 
-def test_the_meeting_length_is_read_from_the_round(cd_db):
-    """A qualifier meeting is one match and a semifinal meeting is a Bo3. The
-    surface must not pick a length of its own."""
-    assert db.MEETING_LENGTH["qualifiers"] == 1
-    assert db.MEETING_LENGTH["semifinals"] == 3
-    assert db.MEETING_LENGTH["knockouts"] == 3
+def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
+    """The other refusal. Here the names are all there and the gap is real, so
+    the surface says which two people to go and check."""
+    rows = [(f"P{i}", i, None) for i in range(1, 9)]
+    grouping, group = _group_of(cd_db, rows)
+    for member in db.get_group_members(group["id"]):
+        if member["display_name"] in ("P3", "P6"):
+            continue
+        db.upsert_registrant(member["display_name"], server="738", thp=300_000_000)
+    scouted = db.get_group_scouting(group["id"])
+
+    embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
+
+    assert "Total Hero Power" in embed.description
+    assert "**P3**" in embed.description and "**P6**" in embed.description
+    # The negative half is the one that matters. Without it this passes when
+    # every player is reported missing, which is exactly the breakage it is
+    # written to rule out.
+    assert "**P1**" not in embed.description
+    assert "**P8**" not in embed.description
+
+
+def test_the_odds_button_is_offered_on_the_semi_finals_only(cd_db):
+    """The model is calibrated on a group of 8 playing a 7-meeting round robin.
+    The qualifiers are 100 players and the knockouts a field of 32, so offering
+    it there and refusing on size would tell someone with a complete qualifier
+    group to add more players to it."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    members = db.get_group_members(group["id"])
+
+    def labels(stage):
+        view = hub._GroupView(
+            user_id=1,
+            groupings=[grouping],
+            grouping=grouping,
+            stages=[stage],
+            stage=stage,
+            groups=[],
+            label="H",
+            members=members,
+        )
+        return [getattr(i, "label", None) for i in view.children]
+
+    assert hub.CD_BTN_ODDS in labels("semifinals")
+    assert hub.CD_BTN_ODDS not in labels("qualifiers")
+    assert hub.CD_BTN_ODDS not in labels("knockouts")
+
+
+def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
+    """The success path, end to end from the database.
+
+    Everything else about the odds is tested against hand-built dicts, which is
+    exactly how the surface came to be broken in a way no test saw:
+    `get_group_scouting` did not select `registrants.thp`, so every real group
+    was refused while every test passed. This one goes through the real query.
+    """
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    for i in range(1, 9):
+        db.upsert_registrant(f"P{i}", server="738", thp=300_000_000 + i * 9_000_000)
+    scouted = db.get_group_scouting(group["id"])
+
+    assert all(row["thp"] for row in scouted), "thp must survive the join"
+
+    embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
+
+    assert "simulations of the round" in embed.description
+    assert "**P8**" in embed.description
+    assert "Total Hero Power" not in embed.description

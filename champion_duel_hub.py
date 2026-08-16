@@ -3356,9 +3356,13 @@ class _GroupView(discord.ui.View):
             )
             row += 1
 
-        # The odds need a group to be about, so they are absent on a round that
-        # has none rather than present and refusing.
-        if self.members:
+        # Semi-finals only. The model is calibrated on a group of 8 playing a
+        # 7-meeting round robin, and the other two rounds are not that shape:
+        # the qualifiers are 100 players and the knockouts are a single-
+        # elimination field of 32. Offering the button there and refusing on
+        # size would tell someone with a complete qualifier group to go and add
+        # more players to it.
+        if self.members and self.stage == "semifinals":
             odds = discord.ui.Button(label=CD_BTN_ODDS, style=discord.ButtonStyle.primary, row=row)
             odds.callback = self._on_odds
             self.add_item(odds)
@@ -3433,10 +3437,10 @@ class _GroupView(discord.ui.View):
     async def _on_odds(self, inter: discord.Interaction):
         """Everyone's chance of getting out of this group.
 
-        Wired to the engine path, which needs squads for all eight. The model
-        behind this is being rebuilt in `champion-duel-simulator` and these
-        numbers are expected to move when it lands (Kevin, 2026-08-16, having
-        accepted that while nothing is merged nobody can see it).
+        The gate is Total Hero Power for all eight, not squads. Squads are
+        optional everywhere: the engine derives a lineup from THP and samples
+        what it has not been told, so a group nobody has scouted still gets
+        odds, just wider ones.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         group = await asyncio.to_thread(
@@ -3454,59 +3458,72 @@ class _GroupView(discord.ui.View):
 def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     """The odds, or the reason there are none.
 
-    Two different gates and they need different copy. A group can be short of
-    members, which is about what has been recorded; or short of players we can
-    predict, which is about how much scouting exists for the ones we hold. A
-    member hits the second far more often, and telling them to record more
-    names when the names are already there is a dead end pointing the wrong way.
+    The model refuses a group that is not exactly eight, and refuses a player
+    with no Total Hero Power. Both are hard stops rather than degraded answers,
+    and the copy has to say which one it hit: "add the missing players" and
+    "look up two people's power" are different jobs, and pointing at the wrong
+    one is a dead end.
+
+    Everything past THP is optional. The engine samples squads it has not been
+    given, so a group nobody has scouted still gets odds, just wider ones.
     """
     embed = discord.Embed(
         title=f"🔮 {_group_title(stage, label)}",
         color=discord.Color.blurple(),
     )
-    if not predict_lib.ENGINE_AVAILABLE:
+    if not odds_lib.ENGINE_AVAILABLE:
         embed.description = _ENGINE_MISSING
         return embed
 
-    best_of = db.MEETING_LENGTH.get(stage, 1)
     try:
-        result = odds_lib.group_advance_odds(scouted, best_of=best_of)
-    except odds_lib.NotEnoughPlayers:
-        embed.description = (
-            f"We cannot work these out yet. Odds need squads for the players in "
-            f"the group, and we hold them for fewer than two of these.\n\n"
-            f"Anyone can fill those in with **{_btn_words(CD_BTN_SQUAD)}** on a "
-            f"player's card."
-        )
+        result = odds_lib.group_advance_odds(scouted)
+    except odds_lib.NotEnoughData as exc:
+        if exc.missing_thp:
+            named = ", ".join(
+                f"**{discord.utils.escape_markdown(n)}**" for n in exc.missing_thp[:8]
+            )
+            # No route offered, because there is not one. Total Hero Power
+            # arrives with the roster import and no member-facing surface
+            # records it: `_SquadModal` takes a slot, a type and a power, and
+            # nothing else writes `registrants.thp`. Naming a button that
+            # cannot do the job is worse than saying plainly that this is not
+            # theirs to fix. `UX.md` principle 3 wants every dead end to carry
+            # its exit; where there is no exit, it must not invent one.
+            embed.description = (
+                f"Odds need each player's Total Hero Power, and we do not have it "
+                f"for {named}.\n\n"
+                f"That arrives with the roster rather than from this hub, so there "
+                f"is nothing to add here yet."
+            )[:4096]
+        else:
+            expected = db.GROUP_SIZE.get(stage)
+            embed.description = (
+                f"Odds need the whole group. We have "
+                f"**{_plural(len(scouted), 'player')}** of the **{expected}**.\n\n"
+                f"Anyone can add the rest with **{_btn_words(CD_BTN_RECORD)}**."
+            )[:4096]
         return embed
 
-    lines = []
-    for row in result.rows:
-        name = discord.utils.escape_markdown(row.name)
-        if row.is_range:
-            low, high = sorted((row.p_advance, row.p_advance_coinflip))
-            lines.append(f"`{low:>4.0%} to {high:>3.0%}` **{name}**")
-        else:
-            lines.append(f"`{row.p_advance:>11.0%}` **{name}**")
-
+    lines = [
+        f"`{row.advance:>4.0%}` `{row.win_group:>4.0%}`  "
+        f"**{discord.utils.escape_markdown(row.name)}**"
+        for row in result.rows
+    ]
     embed.description = (
-        f"Chance of finishing in the top **{result.advance}** and going through, "
-        f"over {result.trials:,} simulations of the round. Each meeting is a "
-        f"best-of-{result.best_of}.\n\n" + "\n".join(lines)
+        f"Over {result.trials:,} simulations of the round. The first column is "
+        f"the chance of finishing top two and going through, the second is the "
+        f"chance of winning the group outright.\n\n" + "\n".join(lines)
     )[:4096]
 
-    if result.skipped:
-        embed.add_field(
-            name="Not included",
-            value=(
-                "We have no squads for "
-                + ", ".join(f"**{discord.utils.escape_markdown(n)}**" for n in result.skipped)
-                + ", so they are left out rather than guessed at. The odds above "
-                "are for the rest of the group only."
-            )[:1024],
-            inline=False,
+    # The round ranks on points accumulated across all 21 matches, not on
+    # meetings won, so a player can lose a meeting and still gain on the group.
+    # Saying so stops the first column reading as "win 4 of 7".
+    embed.set_footer(
+        text=(
+            "Ranked on points across all 21 matches, not meetings won. "
+            "Squads we have not seen are sampled, so these carry that uncertainty."
         )
-    embed.set_footer(text="A range means the two tie-break rules disagree.")
+    )
     return embed
 
 

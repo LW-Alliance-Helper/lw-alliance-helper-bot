@@ -205,18 +205,6 @@ GROUPING_SIZE = 16
 # full at 6. Knockouts are one field of 32 rather than lettered groups.
 GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
 
-# How long one meeting is, per round (Kevin, 2026-08-15/16). A qualifier
-# meeting is a single match; semifinal and knockout meetings are a best-of-3.
-# Both finals are a Bo5, which is not here because a final is a match inside
-# the knockout bracket rather than a round of its own -- the bracket simulation
-# knows which two meetings those are, and nothing keyed by stage could.
-#
-# **A meeting is not a match**, and confusing the two is a bug that does not
-# raise: a Bo3 favours the stronger player, so scoring one as a single match
-# understates strong players and overstates weak ones by a plausible-looking
-# amount. It sat in the published workbooks for ten days on exactly that.
-MEETING_LENGTH = {"qualifiers": 1, "semifinals": 3, "knockouts": 3}
-
 # The lettered groups inside a round. Sixteen either way: the qualifiers split
 # 1,600 players into groups of 100, and the semifinals split the 128 advancers
 # into groups of 8. Knockouts are one field of 32 and carry no letter at all.
@@ -1597,7 +1585,7 @@ def get_group_members(group_id: int) -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT m.*, r.display_name, r.server, r.alliance
+            SELECT m.*, r.display_name, r.server, r.alliance, r.thp, r.fsp
             FROM group_members m JOIN registrants r ON r.id = m.registrant_id
             WHERE m.group_id = ?
             ORDER BY COALESCE(m.rank, m.seed_rank, 9999), r.display_name

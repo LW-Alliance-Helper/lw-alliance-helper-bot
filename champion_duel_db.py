@@ -1829,6 +1829,51 @@ def attach_stages(player: dict, grouping_id=None) -> dict:
     return player
 
 
+def get_group_scouting(group_id: int) -> list[dict]:
+    """One group's members with their squads and orders, in finishing order.
+
+    `get_group_members` answers "who is in this group", which is what a member
+    reading their group wants. This answers "what can we predict about them",
+    which is what the odds need, and it is a different query rather than a flag
+    on the first one: the group listing is read on every open and would be
+    paying for scouting nobody asked for.
+
+    Bulk rather than `get_player` per member. A group of 8 is 8 registrants, and
+    a query each for squads and orders per player is 16 round trips inside a
+    Discord interaction to answer something two queries cover.
+
+    Rows keep everything `get_group_members` returns, so a caller can render the
+    group and score it from one read. `id` is set to the registrant id, because
+    that is the key `build_side` and the squad lookups expect, and a group
+    membership row's own primary key would silently match nothing.
+    """
+    members = get_group_members(group_id)
+    if not members:
+        return []
+    ids = [m["registrant_id"] for m in members]
+    marks = ",".join("?" for _ in ids)
+    squads: dict[int, list] = {i: [] for i in ids}
+    orders: dict[int, list] = {i: [] for i in ids}
+    with _get_conn() as conn:
+        for r in conn.execute(
+            f"SELECT * FROM squads WHERE registrant_id IN ({marks}) ORDER BY registrant_id, slot",
+            tuple(ids),
+        ).fetchall():
+            squads[r["registrant_id"]].append(dict(r))
+        for r in conn.execute(
+            f"SELECT * FROM order_history WHERE registrant_id IN ({marks}) "
+            "ORDER BY registrant_id, COALESCE(observed_at, created_at) DESC",
+            tuple(ids),
+        ).fetchall():
+            orders[r["registrant_id"]].append(dict(r))
+    for m in members:
+        rid = m["registrant_id"]
+        m["id"] = rid
+        m["squads"] = squads.get(rid, [])
+        m["orders"] = orders.get(rid, [])
+    return members
+
+
 def get_player(name, server=None, include_scouting: bool = False) -> dict | None:
     """One player with their scouting, or None. Raises AmbiguousPlayer when the
     name exists on several servers and none was given."""

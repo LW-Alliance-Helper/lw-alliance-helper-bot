@@ -207,10 +207,32 @@ def predict(player_a: dict, player_b: dict) -> Prediction:
 
     a = build_side(player_a)
     b = build_side(player_b)
-    p_a = predict_matchup(
+    p_a = predict_pair(a, b, best_of=1)
+    return Prediction(p_a=p_a, a=a, b=b, engine=constants())
+
+
+def predict_pair(a: SideInput, b: SideInput, *, best_of: int) -> float:
+    """P(A beats B) over a best-of-`best_of` meeting, from two built sides.
+
+    Split out of `predict` for callers that score many pairs from the same
+    players: building a side reads the database, and a group of 8 has 28 pairs
+    over 8 sides. It also takes `best_of`, which `predict` does not need.
+
+    **`best_of` is required and has no default here.** The engine defaults it
+    to 1, and 1 is the identity transform, so a caller that forgets it gets a
+    plausible number at the wrong series length instead of an error. That is
+    the exact defect this argument exists to fix, and a default would reinstate
+    it one layer up. `predict` passes 1 explicitly for the same reason.
+
+    A qualifier meeting is a single match, semifinal and knockout meetings are
+    a Bo3, and both finals are a Bo5 (Kevin, 2026-08-15/16).
+    """
+    if not ENGINE_AVAILABLE:
+        raise RuntimeError("champion-duel-engine is not installed")
+    return predict_matchup(
         a.player,
         b.player,
         orders_a=a.orders or None,
         orders_b=b.orders or None,
+        best_of=best_of,
     )
-    return Prediction(p_a=p_a, a=a, b=b, engine=constants())

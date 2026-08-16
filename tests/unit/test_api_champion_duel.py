@@ -155,6 +155,50 @@ async def test_a_writer_can_add_a_player_we_dont_have(client, cd_db):
     # official record.
     assert body["origin"] == "self_reported"
     assert body["server"] == "1042"
+    # 1042 is in no grouping we hold, so the letter had nothing to belong to.
+    # The player still lands -- they are a real fact -- and the response says
+    # which part did not, rather than failing a call that already wrote a row.
+    assert body["group_recorded"] is False
+    assert "not recorded" in body["group_note"]
+
+
+async def test_a_group_letter_lands_when_the_warzone_is_in_a_grouping(client, cd_db):
+    """The other half. A letter inside a resolved grouping is exact, and this is
+    the path the web app and Map Manager will use."""
+    token = await _session(can_write=True)
+    resp = await client.post(
+        f"{P}/players",
+        json={"name": "Newcomer", "server": "738", "group": "N"},
+        headers=_auth(token),
+    )
+
+    assert resp.status == 200
+    body = await resp.json()
+    assert body.get("group_recorded") is not False
+    assert db.get_player("Newcomer", server="738")["grp"] == "N"
+
+
+async def test_a_payload_can_declare_its_own_grouping(client, cd_db):
+    """The Participating Warzone line settles it outright, where matching a
+    registrant's warzone against what we hold only works once something is
+    already loaded."""
+    sixteen = [str(700 + i) for i in range(16)]
+    token = await _session(user="111")
+    resp = await client.post(
+        f"{P}/admin/import",
+        json={
+            "grouping": {"warzones": sixteen, "started_on": "2026-08-04"},
+            "stage": "qualifiers",
+            "registrants": [{"name": "Fresh", "server": "700", "group": "A", "rank": 1}],
+        },
+        headers=_auth(token),
+    )
+
+    assert resp.status == 200
+    made = db.find_grouping_by_warzone("704")
+    assert made["warzones"] == sixteen, "all sixteen, not just the one with a player on it"
+    assert made["started_on"] == "2026-08-04"
+    assert db.get_roster(group="A", grouping_id=made["id"], stage="qualifiers")
 
 
 async def test_adding_a_player_needs_a_server(client, cd_db):

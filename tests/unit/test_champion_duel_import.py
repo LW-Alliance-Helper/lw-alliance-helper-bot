@@ -58,6 +58,12 @@ def test_a_pre_identity_database_is_rebuilt(tmp_path, monkeypatch):
     ALTER TABLE cannot fix it: the primary key changes and three tables change
     what they reference. So the obsolete tables are dropped and recreated, which
     is safe only because no import has ever completed against that shape.
+
+    What the import trips over first has moved -- a payload now resolves its
+    grouping before it writes anything, so the missing `groupings` table is
+    reached before the missing `origin` column. Either is the same fact: this
+    file predates the code and nothing may be written into it until `init_db`
+    has run. The assertion is that it refuses, not which table it names.
     """
     import sqlite3
 
@@ -72,7 +78,7 @@ def test_a_pre_identity_database_is_rebuilt(tmp_path, monkeypatch):
     old.commit()
     old.close()
 
-    with pytest.raises(sqlite3.OperationalError, match="origin"):
+    with pytest.raises(sqlite3.OperationalError, match="origin|groupings"):
         db.import_registrants(
             [{"name": "AlphaOne", "group": "M", "server": "738"}], stage="qualifiers"
         )

@@ -9,12 +9,26 @@ imports do not write edits, so there is nothing to revert.
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, timedelta
 
 import pytest
 
 import champion_duel_db as db
 
 ACTOR = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
+
+
+def started_so_today_is(phase: str) -> str:
+    """A start date that puts today in `phase`.
+
+    The round a grouping is playing comes from its calendar now, so a fixture
+    has to give it one. Computed backwards from today rather than hardcoded, or
+    every test in this module would start failing on a date nobody chose.
+    """
+    from datetime import timedelta
+
+    first_day = {key: first for key, first, _ in db.PHASES}[phase]
+    return (db._server_today() - timedelta(days=first_day)).isoformat()
 
 
 @pytest.fixture
@@ -27,8 +41,15 @@ def cd_db(tmp_path, monkeypatch):
             {"name": "BetaTwo", "group": "M", "rank": 2, "server": "738"},
         ],
         stage="qualifiers",
+        started_on=started_so_today_is("qualifiers"),
     )
     return None
+
+
+def _restart(phase: str) -> None:
+    """Move the grouping's start date so today lands in `phase`."""
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = ?", (started_so_today_is(phase),))
 
 
 def _rid(name, server="738"):
@@ -81,19 +102,62 @@ def test_an_unknown_round_is_refused(cd_db, bad):
 # ── Which round is running ────────────────────────────────────────────────────
 
 
-def test_the_running_round_is_the_furthest_draw_we_hold(cd_db):
-    """Derived rather than set by an operator: a semifinal draw does not exist
-    until the qualifiers producing it are over, so loading it is the signal."""
+def test_the_running_round_comes_from_the_calendar(cd_db):
+    """Still derived rather than set by an operator, but from the grouping's own
+    dates rather than from what we happen to hold.
+
+    The old rule was "the furthest round any draw exists for", which cannot
+    answer anything for a grouping with nothing loaded -- and that is every
+    grouping except the one that was imported."""
     assert db.current_stage() == "qualifiers"
 
-    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
     assert db.current_stage() == "semifinals"
 
-    db.set_stage(_rid("AlphaOne"), "knockouts", grp="A", rank=1)
+    _restart("knockouts")
     assert db.current_stage() == "knockouts"
 
 
-def test_no_draw_at_all_has_no_running_round(tmp_path, monkeypatch):
+def test_a_detail_window_reports_the_round_just_played(cd_db):
+    """A Detail window is not a round, but it is when the round before it is
+    still what everyone is talking about and the next draw becomes visible."""
+    _restart("qualifier_detail")
+    assert db.current_phase() == "qualifier_detail"
+    assert db.current_stage() == "qualifiers"
+
+
+def test_the_round_is_known_before_any_draw_is_loaded(tmp_path, monkeypatch):
+    """The state every grouping but one is in, and the reason the derivation
+    moved to the calendar: an alliance that has entered nothing but their
+    sixteen warzones can still be told the semifinals start on Monday."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "fresh.sqlite3"))
+    db.init_db()
+    grouping = db.create_grouping(["1500", "1501"], started_so_today_is("semifinals"))
+
+    assert db.get_roster(grouping_id=grouping["id"]) == []
+    assert db.current_stage(grouping["id"]) == "semifinals"
+
+
+def test_sign_up_is_not_a_round(cd_db):
+    """Nobody has played anything yet, so naming a round would be wrong."""
+    _restart("signup")
+    assert db.current_phase() == "signup"
+    assert db.current_stage() is None
+
+
+def test_a_grouping_with_no_dates_answers_nothing_rather_than_guessing(tmp_path, monkeypatch):
+    """An import can establish a grouping exists before anyone reads its
+    timeline off the Match Overview."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "undated.sqlite3"))
+    db.init_db()
+    grouping = db.create_grouping(["2000"], None)
+
+    assert db.current_phase(grouping["id"]) is None
+    assert db.current_stage(grouping["id"]) is None
+    assert db.is_finished(grouping["id"]) is False
+
+
+def test_no_grouping_at_all_has_no_running_round(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "empty.sqlite3"))
     db.init_db()
     assert db.current_stage() is None
@@ -105,6 +169,9 @@ def test_a_player_out_of_the_running_round_has_no_stage_to_display(cd_db):
     still in it."""
     survivor, eliminated = _rid("AlphaOne"), _rid("BetaTwo")
     db.set_stage(survivor, "semifinals", grp="D", rank=1)
+    # Placing someone in a round is no longer what makes that round current.
+    # The calendar is, so the clock has to move too.
+    _restart("semifinals")
 
     assert db.stage_for_display(survivor)["stage"] == "semifinals"
     assert db.stage_for_display(eliminated) is None
@@ -184,6 +251,7 @@ def test_two_players_in_different_rounds_get_the_default(cd_db):
     import champion_duel_hub as hub
 
     db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
 
     assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == hub.CARD_DEFAULT_SUBTITLE
 
@@ -210,13 +278,94 @@ def test_a_player_we_hold_no_round_for_gets_the_default(cd_db):
 
 
 def test_the_round_name_follows_the_event(cd_db):
-    """Once the semifinal draw lands, a semifinal fixture is captioned as one."""
+    """Once the semifinals are running, a semifinal fixture is captioned as
+    one."""
     import champion_duel_hub as hub
 
     for name in ("AlphaOne", "BetaTwo"):
         db.set_stage(_rid(name), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
 
-    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semifinals"
+    assert hub.card_subtitle(_player("AlphaOne"), _player("BetaTwo")) == "Group D · Semi-finals"
+
+
+def test_a_round_is_named_in_exactly_one_place():
+    """`STAGE_LABELS` is derived from `PHASE_LABELS`, not restated beside it.
+
+    Two tables meant two places to update and one place to forget, and that is
+    exactly what happened: the hub's phase line said "Semi-finals" while a
+    player card said "Semifinals", on the same screen.
+    """
+    for stage in db.STAGES:
+        assert db.STAGE_LABELS[stage] is db.PHASE_LABELS[stage], stage
+    assert set(db.STAGE_LABELS) == set(db.STAGES)
+
+
+# The Match Overview box for the 8/4 grouping, both halves, transcribed from
+# screenshots on 2026-08-15. The dates move with the start date; the durations
+# and the gaps between them do not, which is what makes one entered date enough
+# to derive every window for every grouping.
+OBSERVED_TIMELINE = (
+    ("signup", "Sign-up stage", "8/4", "8/9"),
+    ("signup_detail", "Sign-up Detail", "8/9", "8/10"),
+    ("qualifiers", "Qualifiers", "8/10", "8/14"),
+    ("qualifier_detail", "Qualifier Detail", "8/14", "8/17"),
+    ("semifinals", "Semi-finals", "8/17", "8/21"),
+    ("semifinal_detail", "Semi-final Detail", "8/21", "8/24"),
+    ("knockouts", "Knockout Stage", "8/24", "8/29"),
+    ("results", "Results", "8/29", "8/31"),
+)
+
+
+def test_the_whole_timeline_matches_the_game(cd_db):
+    """All eight phases, against the box they were read off.
+
+    Everything this feature states about dates comes out of one offset table
+    and one entered start date, so a slip anywhere in the table is wrong on
+    every surface at once and wrong for every grouping. Pinning it against the
+    real thing is cheap; finding it from a member's complaint is not.
+    """
+    import champion_duel_hub as hub
+
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = '2026-08-04'")
+    grouping_id = db.list_groupings()[0]["id"]
+
+    def short(value):
+        return f"{value.month}/{value.day}"
+
+    for key, label, first, last in OBSERVED_TIMELINE:
+        starts, ends = db.phase_window(grouping_id, key)
+        assert (short(starts), short(ends)) == (first, last), key
+        assert db.PHASE_LABELS[key] == label, key
+
+    # 8/4 plus the whole event lands on the last day the box shows.
+    assert db.EVENT_DAYS == 27
+    assert short(db.phase_window(grouping_id, "results")[1]) == "8/31"
+
+    # And the phase line reads back in the game's own format.
+    _restart("knockouts")
+    assert hub.phase_line(db.list_groupings()[0]).startswith("**Knockout Stage** ")
+
+
+def test_the_phases_run_end_to_end_with_no_gaps(cd_db):
+    """ "The time between each is always the same" is zero: each phase begins the
+    day the one before it ends. A gap would mean a day the hub could not name."""
+    days = [(first, end) for _, first, end in db.PHASES]
+    assert days[0][0] == 0
+    for (_, ends), (next_first, _) in zip(days, days[1:]):
+        assert ends == next_first
+
+
+def test_the_labels_are_the_games_own_spelling(cd_db):
+    """Verified against the Match Overview box, 2026-08-15. The hyphen in
+    "Semi-finals" and the word "Stage" in "Knockout Stage" are the game's."""
+    assert db.PHASE_LABELS["semifinals"] == "Semi-finals"
+    assert db.PHASE_LABELS["knockouts"] == "Knockout Stage"
+    assert db.PHASE_LABELS["signup"] == "Sign-up stage"
+    assert db.PHASE_LABELS["qualifier_detail"] == "Qualifier Detail"
+    # Every phase in the timeline has a name, and nothing else does.
+    assert set(db.PHASE_LABELS) == {key for key, _, _ in db.PHASES}
 
 
 # ── Importing without a round ─────────────────────────────────────────────────
@@ -274,22 +423,74 @@ def test_the_card_shows_every_round_a_player_has_reached(cd_db):
     rounds = next(f.value for f in embed.fields if f.name == "Rounds")
     assert "**Qualifiers** · Group M · Rank 1" in rounds
     # A draw is not a result, so a round nobody has played carries no rank.
-    assert "**Semifinals** · Group D" in rounds
-    assert "Semifinals** · Group D · Rank" not in rounds
-    assert rounds.index("Qualifiers") < rounds.index("Semifinals"), "oldest first"
+    assert "**Semi-finals** · Group D" in rounds
+    assert "Semi-finals** · Group D · Rank" not in rounds
+    assert rounds.index("Qualifiers") < rounds.index("Semi-finals"), "oldest first"
 
 
-def test_the_hub_says_which_round_is_running(cd_db):
+def test_the_hub_says_where_the_event_is_and_what_is_next(cd_db):
+    """The phase rather than the round, because a Detail window is not a round
+    and is still the honest answer to "what is happening right now". Both halves
+    on one line: the second is what a member actually opens this to find out."""
     import champion_duel_hub as hub
 
-    assert (
-        "**Qualifiers** are running"
-        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
-    )
+    _restart("qualifiers")
+    grouping = db.list_groupings()[0]
 
-    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D")
+    line = hub.phase_line(grouping)
+    assert line.startswith("**Qualifiers** ")
+    assert "then **Qualifier Detail**" in line
 
-    assert (
-        "**Semifinals** are running"
-        in hub.build_hub_embed(servers=db.get_servers(), can_write=True).description
-    )
+    # The event moving on is what changes this, not a draw being loaded.
+    _restart("semifinal_detail")
+    grouping = db.list_groupings()[0]
+
+    line = hub.phase_line(grouping)
+    assert line.startswith("**Semi-final Detail** ")
+    assert "then **Knockout Stage**" in line
+
+
+def test_the_phase_line_lays_out_dates_the_way_the_game_does(cd_db):
+    """Name then range, so each half is one row of the Match Overview box.
+
+    The layout is borrowed; the punctuation is not. The game writes `8/10~8/14`
+    because its UI uses a CJK-origin tilde throughout, and a tilde is not how a
+    range is written in the English copy around it.
+    """
+    import champion_duel_hub as hub
+
+    started = date.fromisoformat(started_so_today_is("qualifiers"))
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = ?", (started.isoformat(),))
+
+    line = hub.phase_line(db.list_groupings()[0])
+
+    qualifiers = started + timedelta(days=6)
+    detail = started + timedelta(days=10)
+    ends = started + timedelta(days=13)
+    assert f"**Qualifiers** {qualifiers.month}/{qualifiers.day}-{detail.month}/{detail.day}" in line
+    assert f"**Qualifier Detail** {detail.month}/{detail.day}-{ends.month}/{ends.day}" in line
+    assert "~" not in line
+    # No year: every date here is inside one 27-day event, and the box the
+    # member is comparing against has no year on it either.
+    assert str(started.year) not in line
+
+
+def test_the_last_phase_has_nothing_after_it(cd_db):
+    import champion_duel_hub as hub
+
+    _restart("results")
+
+    assert hub.phase_line(db.list_groupings()[0]).startswith("**Results** ")
+    assert "then" not in hub.phase_line(db.list_groupings()[0])
+
+
+def test_a_grouping_with_no_dates_says_nothing_about_the_calendar(cd_db):
+    """A line derived from a date we do not have would be a guess presented as
+    a schedule."""
+    import champion_duel_hub as hub
+
+    with db._get_conn() as conn:
+        conn.execute("UPDATE groupings SET started_on = NULL")
+
+    assert hub.phase_line(db.list_groupings()[0]) == ""

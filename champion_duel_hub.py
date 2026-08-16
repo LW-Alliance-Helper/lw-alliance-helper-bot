@@ -658,26 +658,42 @@ def build_player_embed(
     # A round with no rank shows the group alone: a draw is not a result, and
     # nobody has a position in a round until they play it.
     #
-    # The knockouts carry no group letter and their rank says more than a
-    # number does: a 32-bracket is rigid, so a placement is the match the
-    # player went out in and that is the thing worth reading.
+    # The knockouts carry no group letter, and their placement says more than a
+    # bare number does: a 32-bracket is rigid, so the position is how far the
+    # player got and that is the thing worth reading.
     def _group_bit(row: dict) -> str | None:
+        """The group letter, qualified when it belongs to a different draw.
+
+        "Group D" is only exact inside one grouping. On a player from another
+        one it reads as a claim the reader will act on, so it names which
+        Champion Duel it came from by the date that one started.
+        """
         if not row.get("grp"):
             return None
-        elsewhere = grouping and row.get("grouping_id") != grouping.get("id")
-        return f"Group {row['grp']}" + (" (another grouping)" if elsewhere else "")
+        if grouping and row.get("grouping_id") != grouping.get("id"):
+            # `grouping_started_on` rides along on the stage row rather than
+            # being looked up here: this runs on the event loop, and one more
+            # synchronous query per rendered card is the #366 class of bug.
+            started = _short_date(row.get("grouping_started_on"))
+            when = f" that started {started}" if started else ""
+            return f"Group {row['grp']} (in a different Champion Duel grouping{when})"
+        return f"Group {row['grp']}"
+
+    def _rank_bit(stage: str, row: dict) -> str | None:
+        """How they finished, in the terms that round is read in.
+
+        A knockout placement replaces the bare rank rather than sitting beside
+        it: "Rank 1 · 1st" says one thing twice, and for the other 29 the
+        position among the eliminated is not the part worth reading. The
+        number is still stored; this is what the card says about it.
+        """
+        if stage == "knockouts":
+            return db.knockout_result(row.get("rank"))
+        return f"Rank {row['rank']}" if row.get("rank") else None
 
     rounds = "\n".join(
         f"**{db.STAGE_LABELS.get(stage, stage.title())}** · "
-        + " · ".join(
-            bit
-            for bit in (
-                _group_bit(row),
-                f"Rank {row['rank']}" if row.get("rank") else None,
-                db.knockout_result(row.get("rank")) if stage == "knockouts" else None,
-            )
-            if bit
-        ).rstrip(" ·")
+        + " · ".join(bit for bit in (_group_bit(row), _rank_bit(stage, row)) if bit).rstrip(" ·")
         for stage, row in (player.get("stages") or {}).items()
     )
     if rounds:
@@ -960,13 +976,16 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             if not self.grouping:
                 aside = (
                     "\nℹ️ The group letter was not recorded: we do not know which "
-                    "grouping your alliance is in yet."
+                    "Champion Duel grouping your alliance is in yet."
                 )
             elif server not in self.grouping["warzones"]:
+                # Names the grouping by its start date. A member may be in a
+                # different one every season, and "your grouping" leaves them
+                # nothing to check this against.
                 aside = (
                     f"\nℹ️ The group letter was not recorded. Warzone **{server}** is not "
-                    f"in your grouping, so **Group {group}** there is a different group "
-                    f"from yours."
+                    f"in {_grouping_name(self.grouping)}, so **Group {group}** there is a "
+                    f"different group from yours."
                 )
             else:
                 stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
@@ -1615,6 +1634,35 @@ def _server_today():
     return server_date_for(datetime.now(timezone.utc))
 
 
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    """`1 warzone`, `16 warzones`. The count and its noun, agreeing.
+
+    Worth a helper rather than an f-string each time: "across 1 warzones" is
+    the kind of thing that reads as machine output and turns up in three
+    surfaces at once because each was written separately.
+    """
+    return f"{count} {singular if count == 1 else (plural or singular + 's')}"
+
+
+def _grouping_name(grouping: dict | None, *, whose: str = "your") -> str:
+    """A grouping named so a member can tell which one is meant.
+
+    "Grouping" is overloaded twice over: Map Manager has season groupings, and
+    a member may be in a different Champion Duel grouping every season. `UX.md`
+    says qualify it every time it crosses a surface boundary, and the start date
+    is the qualifier a member can actually check, because it is the date on
+    their own Match Overview box.
+
+    Falls back to the unqualified phrase when no date is stored. An import can
+    establish a grouping before anyone has read its dates, and a name with a
+    blank where the date goes is worse than no date at all.
+    """
+    started = _short_date((grouping or {}).get("started_on"))
+    if not started:
+        return f"{whose} Champion Duel grouping"
+    return f"{whose} Champion Duel grouping that started {started}"
+
+
 def _warzone_list(zones) -> str:
     """A grouping's warzones as one line, in the numeric order they are stored.
 
@@ -1662,7 +1710,7 @@ def build_onboarding_embed(*, servers: list[dict], warzone: str | None) -> disco
     embed = discord.Embed(title=CHAMPION_DUEL_HUB_TITLE, color=discord.Color.blurple())
     total = sum(s["registrants"] for s in servers)
     held = (
-        f"We currently have **{total}** players across **{len(servers)}** warzones.\n\n"
+        f"We currently have **{total}** players across **{_plural(len(servers), 'warzone')}**.\n\n"
         if total
         else ""
     )
@@ -2042,7 +2090,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         if len(zones) != db.GROUPING_SIZE:
             await self._refuse(
                 interaction,
-                f"⚠️ That is **{len(zones)}** warzones. A Champion Duel grouping is "
+                f"⚠️ That is **{_plural(len(zones), 'warzone')}**. A Champion Duel grouping is "
                 f"exactly **{db.GROUPING_SIZE}**, listed together at the bottom of the "
                 f"Match Overview box in game. Try again.",
             )
@@ -2356,8 +2404,9 @@ def build_reconcile_embed(*, rows: list[dict], stage: str, label, recording: str
     if expected and len(keeping) < expected:
         embed.set_footer(
             text=(
-                f"{_RECORDING_LABELS[recording]}. Recording {len(keeping)} of a "
-                f"{expected}-player group, which is fine: add the rest whenever."
+                f"Recording {_plural(len(keeping), 'player')} for "
+                f"{_RECORDING_LABELS[recording]}. If you want to add more, you can "
+                f"at any time."
             )
         )
     return embed
@@ -2574,14 +2623,27 @@ class _ReconcileView(discord.ui.View):
             )
         row = self.rows[self.index]
         why = _LINE_PROBLEMS.get(row.get("problem"))
-        detail = (
-            f"That line reads `{_typed(row.get('raw'), 60)}`, and {why}."
-            if why
-            else f"**{row.get('name')}** is on more than one warzone. Which of them is this?"
-        )
+        if why:
+            detail = f"That line reads `{_typed(row.get('raw'), 60)}`, and {why}."
+        else:
+            # Name the warzones rather than the count. "On more than one
+            # warzone" is a description of our problem; the two numbers are
+            # what the reader recognises one of.
+            zones = [str(c["server"]) for c in (row.get("candidates") or []) if c.get("server")]
+            listed = (
+                f"warzones {', '.join(zones[:-1])} and {zones[-1]}"
+                if len(zones) > 1
+                else f"warzone {zones[0]}"
+                if zones
+                else "more than one warzone"
+            )
+            detail = f"Our records show **{row.get('name')}** on {listed}. Which is correct?"
         return discord.Embed(
             title="👑 One line to settle",
-            description=f"{detail}\n\nSkipping leaves this line out and saves the rest.",
+            description=(
+                f"{detail}\n\nIf you don't know, you can skip this and all others "
+                f"entered will be saved."
+            ),
             color=discord.Color.orange(),
         )
 
@@ -2824,7 +2886,7 @@ def build_hub_embed(
         scope = "in your grouping" if grouping else "loaded"
         embed.description = (
             f"{opener}"
-            f"**{total}** players {scope} across **{len(servers)}** warzones: "
+            f"**{total}** players {scope} across **{_plural(len(servers), 'warzone')}**: "
             f"{listed}.\n\n"
             f"You can predict a match or look up a player's information to see their "
             f"squads and power (if we have it). If we don't have data from your "

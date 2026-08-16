@@ -231,7 +231,7 @@ async def test_a_group_letter_with_no_grouping_resolved_is_not_guessed_at(cd_db)
     interaction = _interaction()
     await modal.on_submit(interaction)
 
-    assert "do not know which grouping" in _sent(interaction)
+    assert "do not know which Champion Duel grouping" in _sent(interaction)
     assert db.get_player("Newcomer", server="738")["grp"] is None
 
 
@@ -254,7 +254,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
         for f in hub.build_player_embed(player, None, grouping=mine).fields
         if f.name == "Rounds"
     )
-    assert "Group D (another grouping)" in rounds
+    assert "Group D (in a different Champion Duel grouping that started 8/4)" in rounds
 
     # Inside the caller's own grouping it stays bare, because there it is exact.
     theirs_view = next(
@@ -262,7 +262,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
         for f in hub.build_player_embed(player, None, grouping=theirs).fields
         if f.name == "Rounds"
     )
-    assert "Group D" in theirs_view and "another grouping" not in theirs_view
+    assert "Group D" in theirs_view and "different Champion Duel" not in theirs_view
 
 
 async def test_adding_someone_we_already_have_opens_them(cd_db):
@@ -1291,7 +1291,7 @@ async def test_a_refusal_hands_back_the_sixteen_numbers(cd_db, no_mm_link):
 async def test_fifteen_warzones_is_refused_naming_the_count(cd_db, no_mm_link):
     interaction = await _add_grouping(" ".join(SIXTEEN[:15]))
 
-    assert "**15** warzones" in _sent(interaction)
+    assert "**15 warzones**" in _sent(interaction)
     assert len(db.list_groupings()) == 1
 
 
@@ -1511,14 +1511,14 @@ async def test_a_lettered_round_without_a_letter_is_refused(cd_db, no_mm_link):
 def test_a_knockout_placement_is_the_round_they_went_out_in():
     """A 32-bracket is rigid, so the finishing position carries the exit round
     and nothing extra has to be stored."""
-    assert db.knockout_result(11) == "lost in the round of 16"
-    assert db.knockout_result(1) == "won the final"
-    assert db.knockout_result(2) == "lost the final"
+    assert db.knockout_result(11) == "Made it to Top 16"
+    assert db.knockout_result(1) == "1st"
+    assert db.knockout_result(2) == "2nd"
     # The third-place match is what separates these two, and needs no column.
-    assert db.knockout_result(3) == "won the third-place match"
-    assert db.knockout_result(4) == "lost the third-place match"
-    assert db.knockout_result(8) == "lost in the quarter-finals"
-    assert db.knockout_result(32) == "lost in the first round"
+    assert db.knockout_result(3) == "3rd"
+    assert db.knockout_result(4) == "Made it to top 4"
+    assert db.knockout_result(8) == "Made it to Quarter-finals"
+    assert db.knockout_result(32) == "Made it to Top 32"
 
 
 def test_a_placement_outside_the_bracket_invents_no_round():
@@ -1561,7 +1561,7 @@ async def test_the_knockout_reconcile_shows_the_exit_round(cd_db, no_mm_link):
     interaction = _interaction()
     await modal.on_submit(interaction)
 
-    assert "lost in the round of 16" in _embed(interaction).description
+    assert "Made it to Top 16" in _embed(interaction).description
 
 
 def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
@@ -1571,7 +1571,8 @@ def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
     embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
 
     rounds = next(f.value for f in embed.fields if f.name == "Rounds")
-    assert "**Knockout Stage** · Rank 11 · lost in the round of 16" in rounds
+    assert "**Knockout Stage** · Made it to Top 16" in rounds
+    assert "Rank 11" not in rounds, "the placement replaces the bare rank, not sits beside it"
 
 
 async def test_a_partial_group_does_not_read_as_something_missing(cd_db, no_mm_link):
@@ -1583,7 +1584,8 @@ async def test_a_partial_group_does_not_read_as_something_missing(cd_db, no_mm_l
     await modal.on_submit(interaction)
 
     footer = _embed(interaction).footer.text
-    assert "1 of a 100-player group" in footer and "which is fine" in footer
+    assert "Recording 1 player for Final Standings." in footer
+    assert "you can at any time" in footer
 
 
 # ── Scoped to their grouping ──────────────────────────────────────────────────
@@ -1629,7 +1631,8 @@ def test_the_scoped_hub_says_whose_players_these_are(cd_db):
     )
 
     assert "**2** players in your grouping" in embed.description
-    assert "warzones" in embed.description and "servers" not in embed.description
+    assert "**1 warzone**" in embed.description, "agrees with its count"
+    assert "server" not in embed.description, "the game says warzone"
 
 
 def test_a_grouping_we_hold_nothing_for_says_so_rather_than_nothing(cd_db):

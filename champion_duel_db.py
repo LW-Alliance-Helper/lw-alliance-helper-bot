@@ -104,14 +104,18 @@ STAGE_LABELS = {stage: PHASE_LABELS[stage] for stage in STAGES}
 # Knockout rounds deliberately never become `stage` values. Nothing in the
 # schema has to hold both a Semi-finals phase and a semifinal match, and these
 # names exist only as display copy derived from a number.
+# **Say how far they got, never where they lost** (Kevin, 2026-08-15). Thirty
+# of the 32 go out somewhere, and a bracket that tells each of them which match
+# ended their run is a scoreboard nobody asked us to keep. The same fact framed
+# forwards is the one a member would repeat to their alliance.
 KNOCKOUT_RESULTS = (
-    (1, 1, "won the final"),
-    (2, 2, "lost the final"),
-    (3, 3, "won the third-place match"),
-    (4, 4, "lost the third-place match"),
-    (5, 8, "lost in the quarter-finals"),
-    (9, 16, "lost in the round of 16"),
-    (17, 32, "lost in the first round"),
+    (1, 1, "1st"),
+    (2, 2, "2nd"),
+    (3, 3, "3rd"),
+    (4, 4, "Made it to top 4"),
+    (5, 8, "Made it to Quarter-finals"),
+    (9, 16, "Made it to Top 16"),
+    (17, 32, "Made it to Top 32"),
 )
 
 
@@ -1332,8 +1336,11 @@ def get_stages(registrant_id: int, grouping_id=None) -> dict[str, dict]:
     """
     sql = """
         SELECT g.stage, g.label AS grp, g.grouping_id, g.id AS group_id,
+               gr.started_on AS grouping_started_on,
                m.seed_rank, m.rank, m.score, m.created_at, m.updated_at
-        FROM group_members m JOIN groups g ON g.id = m.group_id
+        FROM group_members m
+             JOIN groups g ON g.id = m.group_id
+             LEFT JOIN groupings gr ON gr.id = g.grouping_id
         WHERE m.registrant_id = ?
     """
     params: tuple = (registrant_id,)

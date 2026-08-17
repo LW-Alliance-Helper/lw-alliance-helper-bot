@@ -249,7 +249,13 @@ def test_a_short_group_is_told_to_add_players_not_to_look_up_power(cd_db):
 
 def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
     """The other refusal. Here the names are all there and the gap is real, so
-    the surface says which two people to go and check."""
+    the surface says which two people to go and check.
+
+    On 1.5 this also gained a real exit. The model used to need a Total Hero
+    Power, which only the roster import writes, so the copy had to say nobody
+    here could fix it. Any single squad power now places a player, and
+    `Correct a squad` writes one.
+    """
     rows = [(f"P{i}", i, None) for i in range(1, 9)]
     grouping, group = _group_of(cd_db, rows)
     for member in db.get_group_members(group["id"]):
@@ -260,8 +266,12 @@ def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
 
     embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
 
-    assert "Total Hero Power" in embed.description
+    assert "neither a Total Hero Power nor a single squad power" in embed.description
     assert "**P3**" in embed.description and "**P6**" in embed.description
+    # Deliberately names no button. `Correct a squad` writes the missing value
+    # but sits on a player's own card, two surfaces away, and renders locked
+    # without Premium. A signpost to a padlock is a worse dead end than none.
+    assert hub._btn_words(hub.CD_BTN_SQUAD) not in embed.description
     # The negative half is the one that matters. Without it this passes when
     # every player is reported missing, which is exactly the breakage it is
     # written to rule out.

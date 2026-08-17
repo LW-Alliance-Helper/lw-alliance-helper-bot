@@ -17,22 +17,28 @@ WHAT THE MODEL NEEDS, AND WHAT IT WILL NOT DO WITHOUT
 - **Exactly eight players.** `_check` refuses anything else rather than
   absorbing it: with an odd count the circle method silently drops a player
   from every round, and past eight the day schedule runs out. Both produce
-  numbers and neither produces the round being modelled. So an incomplete group
-  gets no odds at all, which is a harder stop than the old port had and is the
-  correct one.
-- **THP for every one of them.** Everything else is optional.
+  numbers and neither produces the round being modelled.
+- **Something to place each of them by**, which is a THP or any single squad
+  power. Only a player with neither has nothing at all, and the engine raises
+  rather than inventing a lineup.
 
-WHAT IT WILL TAKE, AND SAMPLE WHAT IT LACKS
+WHAT IT TAKES, AND WHAT IT SAMPLES INSTEAD
 
-`build_player` derives three squad powers from THP (`squad(M) = a + b x THP(M)`,
-fitted on the 41-player corpus) and samples types, mix and capacity. A
-`profile` overrides any part of that with something we actually hold, per
-field, so an alliance sharing everything and an alliance sharing only THP go
-through one path:
+Every field is optional and a partial reading is the normal case. Given powers
+are used exactly; missing ones are filled from the shape fit and carry the
+estimate residual, which a typed number does not. A reading whose rank cannot
+be read off the input is placed by matching against the THP-estimated lineup,
+so one box filled resolves correctly whether it is that player's strongest
+squad or their weakest.
 
-- `shape`  -- the squad power ratios, from stored squad powers. Supplying only
-  the second ratio is fine; the engine derives the third from it.
-- `types`  -- the three squad types, when we hold all three.
+- `squads`   up to three boxes in LINEUP ORDER, each a raw power and a type,
+             either of which may be missing. Never sorted here.
+- `thp`      what anchors a partial reading. Sent whenever we hold it, even
+             when all three squads are present.
+- `level`    troop level 1-11, defaulting to 11. Only matters across
+             mixed-level matchups: within a group where everyone is the same
+             level, ranking is unaffected. Absent until the bot collects it.
+- `profile`  what the boxes cannot carry, which is now only `mixed`.
 
 `jitter` stays on. Without it the model treats an estimate as a measurement,
 which the engine calls the single biggest source of false confidence in the old
@@ -90,9 +96,15 @@ class GroupOdds:
 class NotEnoughData(Exception):
     """The group cannot be modelled, with a reason a member can act on.
 
-    Carries `missing_thp` so a surface can name who to go and look up, rather
-    than saying the group is not ready and leaving the reader to work out which
-    of the eight is the problem.
+    Carries `missing_thp` so a surface can name who is short, rather than
+    saying the group is not ready and leaving the reader to work out which of
+    the eight is the problem. The name is now narrower than the meaning: since
+    1.5 it lists players with neither a THP nor any squad power, because either
+    one places them.
+
+    An empty `missing_thp` means the refusal was about group size instead.
+    `build_odds_embed` branches its copy on exactly that, so the two must stay
+    distinguishable.
     """
 
     def __init__(self, message: str, *, missing_thp: list[str] | None = None):
@@ -100,57 +112,81 @@ class NotEnoughData(Exception):
         self.missing_thp = missing_thp or []
 
 
-def _profile(member: dict) -> dict | None:
-    """What we actually hold about this player's squads, in the engine's shape.
+def _squads(member: dict) -> list[dict]:
+    """This player's three lineup boxes, exactly as they were entered.
 
-    Returns None when we hold nothing usable, which is the normal case and is
-    exactly what `build_player` expects when it is going to sample instead.
+    In SLOT order, never sorted. The engine sorts internally and hands back an
+    `order` mapping so it can translate anything else indexed against these
+    boxes -- `mixed` above all. Sorting here would silently break that
+    translation while still producing a lineup.
 
-    Three things about this mapping are easy to get wrong and produce a
-    plausible number rather than an error.
+    Powers go out raw, which is how `parse_power` stores them and what
+    `measured_base` expects; it divides by a million itself.
 
-    **Ordered by power, together.** The engine reads `shape` and `types` as
-    biggest squad first; the bot's slots are lineup positions and carry no
-    ordering. Sorting the powers and leaving the types alone puts every squad
-    type on the wrong squad and turns every counter-triangle decision over.
-    They are sorted as pairs here for that reason.
-
-    **All three or nothing, for both.** A shape from squads 1 and 3 with 2
-    missing would hand the engine the third ratio as if it were the second,
-    modelling a player's second squad at roughly a third of their top when the
-    corpus puts it near 0.9. Sampling the whole shape is far closer than that.
-
-    **The ratios are base-to-base and the panel is not.** `build_player` strips
-    the gorilla off the displayed top squad before applying the shape, warning
-    that getting the order wrong "inflates squads 2 and 3 by the whole
-    gorilla". The gorilla sits on the biggest squad in most lineups at about a
-    tenth of it, so dividing raw panel figures understates a scouted player's
-    lower squads by that much, and only scouted players -- everyone else's
-    shape is drawn correctly. The top squad is de-gorilla'd here before the
-    ratios are taken.
+    **Not de-gorilla'd.** A player reads squad power off the panel and it
+    already includes the gorilla, so the engine strips it from the strongest
+    reading. Deflating here would strip it twice and shrink the whole lineup,
+    because the other two squads are derived from the top one. An earlier
+    version of this file did exactly that.
     """
     squads = {s["slot"]: s for s in (member.get("squads") or [])}
-    out: dict = {}
+    out = []
+    for slot in SLOTS:
+        entry = squads.get(slot) or {}
+        # `estimated` rows are THP run through the fitted ratios, which
+        # `push_to_bot` writes for nearly the whole field. Forwarding one as a
+        # reading is the worst thing this module can do: `measured_base` uses a
+        # given power EXACTLY, on the stated grounds that a number somebody
+        # typed is not the THP fit being wrong, so the estimate residual never
+        # applies. The engine would then hand back near-certainty for a group
+        # nobody has looked at -- measured at 100/90/10/0 against a true
+        # 85/68/28/14 -- under a footer promising that unseen squads are
+        # sampled. The engine derives exactly these numbers itself, better,
+        # because it keeps the uncertainty attached.
+        if entry.get("source") == "estimated":
+            entry = {}
+        power = entry.get("power")
+        squad_type = entry.get("squad_type")
+        out.append(
+            {
+                "power": float(power) if power else None,
+                "type": squad_type if squad_type in semifinal.TYPES else None,
+            }
+        )
+    return out
 
-    pairs = [
-        (float(squads[s]["power"]), squads[s].get("squad_type"))
-        for s in SLOTS
-        if squads.get(s) and squads[s].get("power")
-    ]
-    if len(pairs) == len(SLOTS):
-        pairs.sort(key=lambda p: p[0], reverse=True)
-        powers = [p for p, _ in pairs]
-        base_top = powers[0] * (1.0 - semifinal.GORILLA_FRACTION)
-        if base_top > 0:
-            out["shape"] = (powers[1] / base_top, powers[2] / base_top)
 
-        types = [t for _, t in pairs]
-        # Anything outside the engine's triangle would raise a KeyError deep
-        # inside a trial rather than here, so it is dropped and sampled.
-        if all(t in semifinal.TYPES for t in types):
-            out["types"] = types
+def _profile(member: dict, squads: list[dict]) -> dict | None:
+    """What we measured that the squad boxes cannot carry.
 
-    return out or None
+    Types and lineup shape both ride on `squads` now, so this is only `mixed`:
+    which squads are 4-of-a-type rather than 5.
+
+    **`mixed` means two different things depending on whether any power was
+    read**, which is the sharpest edge in this contract. With at least one
+    power the engine treats it as positions against the input boxes and
+    translates through its own sort. With none, `measured_base` returns None,
+    the THP path runs, and the same tuple is applied directly as POWER RANKS.
+    We know which box a squad is, never which rank, so it is only sent on the
+    first path. Sending it on the second would land a 3.3% penalty on whichever
+    squads happened to sort into those positions.
+
+    An empty tuple is a measurement -- "we looked and every squad is pure" --
+    and is deliberately distinct from absent, so it is only sent when somebody
+    actually answered.
+    """
+    mixed = member.get("mixed_squads")
+    if mixed is None:
+        return None
+    mixed = tuple(mixed)
+    # An empty answer carries no rank ambiguity: there are no positions to
+    # translate, so it means the same thing on both paths and is always worth
+    # sending. Dropping it would make the engine sample a mixed pair from the
+    # population and put a 3.3% penalty on two squads of a player we were told
+    # has none.
+    if mixed and not any(s["power"] for s in squads):
+        return None
+    return {"mixed": mixed}
 
 
 def group_advance_odds(
@@ -183,25 +219,53 @@ def group_advance_odds(
             f"calibrated on groups of {semifinal.GROUP_SIZE}"
         )
 
-    missing = [(m.get("display_name") or "?") for m in members if not m.get("thp")]
+    # Keyed by row position rather than display name. The engine keys `pts`,
+    # `seen` and its summary entirely on `name`, so two members sharing one
+    # would collapse into a single simulated player: one vanishes from the
+    # results and the other banks both their points. A semifinal group is drawn
+    # from sixteen warzones and `registrants` is unique on (name, server)
+    # rather than on name, so this is live rather than hypothetical. Mapped
+    # back through `display` afterwards.
+    missing = []
+    display = {}
+    specs = []
+    for i, member in enumerate(members):
+        key = str(i)
+        display[key] = member.get("display_name") or "?"
+        squads = _squads(member)
+        thp = member.get("thp")
+        # A player is buildable from THP, from any single squad power, or from
+        # both. Only somebody with neither has nothing to place them by, and
+        # the engine raises rather than inventing a lineup for them.
+        if not thp and not any(s["power"] for s in squads):
+            missing.append(display[key])
+            continue
+        spec = {"name": key, "squads": squads}
+        # Sent even when the squads are complete. It is what anchors a partial
+        # reading to a rank, and one squad power plus THP places a player
+        # materially better than either alone.
+        if thp:
+            spec["thp"] = float(thp)
+        # Validated here rather than passed through. `scoring.troop_value`
+        # raises for anything outside 1-11, `build_odds_embed` catches only
+        # NotEnoughData, and the interaction has already been deferred -- so a
+        # bad level would leave a member watching a spinner that never
+        # resolves. Out of range is dropped and the engine's default applies.
+        level = member.get("troop_level")
+        if isinstance(level, int) and 1 <= level <= 11:
+            spec["level"] = level
+        profile = _profile(member, squads)
+        if profile:
+            spec["profile"] = profile
+        specs.append(spec)
+
     if missing:
         raise NotEnoughData(
-            f"{len(missing)} of {len(members)} players have no Total Hero Power",
+            f"{len(missing)} of {len(members)} players have neither a Total Hero "
+            f"Power nor a squad power",
             missing_thp=missing,
         )
 
-    # The engine keys everything on `name`, so two members sharing one would
-    # collapse into a single simulated player: one vanishes from the results
-    # and the other accumulates both their points. A semifinal group is drawn
-    # from sixteen warzones and `registrants` is unique on (name, server)
-    # rather than on name, so this is a live case rather than a hypothetical.
-    # Keyed by row position, which is unique by construction, and mapped back
-    # for display afterwards.
-    display = {str(i): (m.get("display_name") or "?") for i, m in enumerate(members)}
-    specs = [
-        {"name": str(i), "thp": float(m["thp"]), "profile": _profile(m)}
-        for i, m in enumerate(members)
-    ]
     scored = semifinal.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
 
     rows = [

@@ -3356,12 +3356,14 @@ class _GroupView(discord.ui.View):
             )
             row += 1
 
-        # Semi-finals only. The model is calibrated on a group of 8 playing a
-        # 7-meeting round robin, and the other two rounds are not that shape:
-        # the qualifiers are 100 players and the knockouts are a single-
-        # elimination field of 32. Offering the button there and refusing on
-        # size would tell someone with a complete qualifier group to go and add
-        # more players to it.
+        # Semi-finals only, because that is what is WIRED UP, not what can be
+        # modelled. Engine 1.4 added `champion_duel_engine.qualifier`, a points
+        # model for a group of 100, and the 1.5 pin pulls it in -- so the
+        # qualifiers are modellable today and simply have no join yet. The
+        # knockouts are a single-elimination field of 32 and have no model at
+        # all. Until a round has one, offering the button and refusing on size
+        # would tell someone with a complete qualifier group to add more
+        # players to it.
         if self.members and self.stage == "semifinals":
             odds = discord.ui.Button(label=CD_BTN_ODDS, style=discord.ButtonStyle.primary, row=row)
             odds.callback = self._on_odds
@@ -3437,10 +3439,10 @@ class _GroupView(discord.ui.View):
     async def _on_odds(self, inter: discord.Interaction):
         """Everyone's chance of getting out of this group.
 
-        The gate is Total Hero Power for all eight, not squads. Squads are
-        optional everywhere: the engine derives a lineup from THP and samples
-        what it has not been told, so a group nobody has scouted still gets
-        odds, just wider ones.
+        The gate is that every player has SOMETHING to place them by, which
+        is a Total Hero Power or any single squad power. Neither is
+        individually required. The engine fills what is missing from the shape
+        fit and samples what nobody has measured.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         group = await asyncio.to_thread(
@@ -3459,9 +3461,9 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     """The odds, or the reason there are none.
 
     The model refuses a group that is not exactly eight, and refuses a player
-    with no Total Hero Power. Both are hard stops rather than degraded answers,
+    it has nothing to place by. Both are hard stops rather than degraded answers,
     and the copy has to say which one it hit: "add the missing players" and
-    "look up two people's power" are different jobs, and pointing at the wrong
+    "record one squad for these two" are different jobs, and pointing at the wrong
     one is a dead end.
 
     Everything past THP is optional. The engine samples squads it has not been
@@ -3482,18 +3484,19 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
             named = ", ".join(
                 f"**{discord.utils.escape_markdown(n)}**" for n in exc.missing_thp[:8]
             )
-            # No route offered, because there is not one. Total Hero Power
-            # arrives with the roster import and no member-facing surface
-            # records it: `_SquadModal` takes a slot, a type and a power, and
-            # nothing else writes `registrants.thp`. Naming a button that
-            # cannot do the job is worse than saying plainly that this is not
-            # theirs to fix. `UX.md` principle 3 wants every dead end to carry
-            # its exit; where there is no exit, it must not invent one.
+            # Deliberately does NOT name a button. `Correct a squad` does
+            # write the missing value, but it lives on a player's own card,
+            # reached by searching each name from the hub, and it renders
+            # locked without `champion_duel_write`. Naming it from here
+            # would send a free-tier member through two surfaces to find a
+            # padlock, which is a worse dead end than saying plainly where
+            # the data comes from. `UX.md` principle 3 wants a real exit or
+            # none, not a signpost to a locked door.
             embed.description = (
-                f"Odds need each player's Total Hero Power, and we do not have it "
-                f"for {named}.\n\n"
-                f"That arrives with the roster rather than from this hub, so there "
-                f"is nothing to add here yet."
+                f"Odds need something to place each player by, and for {named} we "
+                f"have neither a Total Hero Power nor a single squad power.\n\n"
+                f"Either arrives with the roster, or from anyone who records a "
+                f"squad for them. One squad is enough."
             )[:4096]
         else:
             expected = db.GROUP_SIZE.get(stage)

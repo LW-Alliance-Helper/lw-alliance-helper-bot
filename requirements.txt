@@ -17,4 +17,4 @@ Pillow>=12.3.0,<13
 # Railway build environment. The token is NEVER committed: this repo is public.
 # Unset it and the install fails, which is why every route that needs the
 # engine degrades to 503 rather than the bot failing to boot.
-champion-duel-engine @ git+https://${CD_ENGINE_TOKEN}@github.com/kevinkidwell/champion-duel-simulator.git@v1.3
+champion-duel-engine @ git+https://${CD_ENGINE_TOKEN}@github.com/kevinkidwell/champion-duel-simulator.git@v1.5

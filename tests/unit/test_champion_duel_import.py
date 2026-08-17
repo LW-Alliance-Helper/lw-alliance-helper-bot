@@ -333,6 +333,65 @@ def test_an_import_writes_no_edit_rows(cd_db):
     assert db.list_edits()["total"] == before
 
 
+# ── The import log ────────────────────────────────────────────────────────────
+#
+# The open question was whether an import log is new storage or a change to the
+# rule above. It is new storage, and the test above still stands.
+#
+# `edits` is a per-value trail with a revert attached, and its job is finding
+# the handful of corrections a human made. An import is one file, hundreds of
+# rows, one actor, one moment, and nothing in it is revertable row by row.
+
+
+def test_an_import_is_logged_once_with_what_landed(cd_db):
+    """One row per import, never one per value. The question it is there to
+    answer is who has loaded what, which counts answer and values do not."""
+    entry = db.record_import(
+        door="discord",
+        results={
+            "registrants": {"total": 2, "inserted": 2},
+            "squads": {"applied": 6, "skipped": 1, "problems": []},
+            "profiles": {"applied": 1, "cleared": 2, "skipped": 0, "problems": []},
+        },
+        grouping_id=db.default_grouping_id(),
+        stage="qualifiers",
+        actor=ACTOR,
+    )
+
+    logged = db.list_imports()
+    assert logged["total"] == 1
+    row = logged["imports"][0]
+    assert row["id"] == entry
+    assert (row["registrants"], row["squads"], row["orders"], row["profiles"]) == (2, 6, 0, 1)
+    assert row["cleared"] == 2 and row["skipped"] == 1
+    assert row["door"] == "discord" and row["stage"] == "qualifiers"
+    assert row["actor_discord_id"] == ACTOR["discord_user_id"]
+
+
+def test_an_import_that_landed_nothing_is_still_logged(cd_db):
+    """Exactly the run somebody comes asking about. A log that only records
+    successes cannot answer them."""
+    db.record_import(
+        door="api",
+        results={"squads": {"applied": 0, "skipped": 400, "problems": []}},
+        actor=ACTOR,
+    )
+
+    row = db.list_imports()["imports"][0]
+    assert row["squads"] == 0 and row["skipped"] == 400
+
+
+def test_the_log_is_readable_per_grouping(cd_db):
+    """About 50 alliances use this bot and one grouping covers roughly two of
+    them, so "who has loaded what" is a question about one Champion Duel."""
+    mine = db.default_grouping_id()
+    db.record_import(door="discord", results={}, grouping_id=mine, actor=ACTOR)
+    db.record_import(door="discord", results={}, grouping_id=mine + 999, actor=ACTOR)
+
+    assert db.list_imports(grouping_id=mine)["total"] == 1
+    assert db.list_imports()["total"] == 2
+
+
 # ── Player profiles ───────────────────────────────────────────────────────────
 #
 # The block `push_to_bot.py` has been emitting since the 1.5 contract landed and
@@ -528,6 +587,21 @@ def test_one_bad_profile_does_not_abandon_the_rest(cd_db):
 
     assert result["applied"] == 2 and result["skipped"] == 1
     assert any("WhoDis" in p for p in result["problems"])
+
+
+def test_the_odds_query_carries_the_troop_level(cd_db):
+    """Collected, stored, read by the odds, and never selected: every player
+    reached the engine at the default level, so the dropdown that gathers this
+    could not have changed a number once. The odds tests build their member
+    dicts by hand, which is why nothing that passes them caught it."""
+    # Through `upsert_registrant`, which is the only thing that writes it: a
+    # troop level is read off a member's own screen, not off a roster file.
+    db.upsert_registrant("AlphaOne", server="738", troop_level=9, actor=ACTOR)
+    group = db.get_or_create_group(db.default_grouping_id(), "qualifiers", "M")
+
+    rows = db.get_group_scouting(group["id"])
+
+    assert {r["display_name"]: r["troop_level"] for r in rows}["AlphaOne"] == 9
 
 
 def test_the_odds_query_carries_the_profile(cd_db):

@@ -300,6 +300,18 @@ def test_the_members_own_answer_wins_over_the_corpus():
     assert odds._profile(member, odds._squads(member))["mixed"] == (0,)
 
 
+def test_a_half_answered_lineup_does_not_assert_purity():
+    """`mixed` is a set of positions and the engine reads a box's absence from
+    it as pure, so a partial answer would claim a measurement about squads
+    nobody was asked about. That is the NULL-versus-0 distinction the `squads`
+    schema keeps apart, and there is no way to say "box 2 unknown" here."""
+    member = _measured("A", 3e8, powers=[82e6, 94e6, 78e6], profile={"mixed": [0]})
+    member["squads"][0]["mixed"] = 1  # box 1 answered, boxes 2 and 3 never asked
+
+    # The corpus measured all three, so it answers instead of the partial.
+    assert odds._profile(member, odds._squads(member))["mixed"] == (1,)
+
+
 def test_the_corpus_answers_where_the_members_boxes_cannot():
     """A box answer with nothing read would be applied as power ranks, so that
     one case falls through to the corpus rather than being dropped."""

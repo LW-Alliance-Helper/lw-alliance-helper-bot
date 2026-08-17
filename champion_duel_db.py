@@ -564,6 +564,45 @@ def init_db() -> None:
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
+        # One row per import. Never one per value.
+        #
+        # **Deliberately not `edits`.** That was the open question and this is
+        # the answer. `edits` is a per-value audit trail with a revert
+        # attached, and its whole job is finding the handful of corrections a
+        # human made. A roster load is a different kind of event: one file,
+        # hundreds of rows, one actor, one moment, and nothing in it is
+        # revertable row by row. Folding imports into `edits` would bury every
+        # real correction under them and rank whoever ran the import above
+        # every scout in `contributor_summary`. So
+        # `test_an_import_writes_no_edit_rows` stands, and this table carries
+        # what that rule leaves unrecorded.
+        #
+        # What it is FOR is also different, and drove the shape: Kevin wants a
+        # population we can track. That question is answered by counts per
+        # import, not by values.
+        #
+        # `grouping_id` carries no foreign key on purpose. A merge moves rows
+        # between groupings and can retire the source, and a log entry records
+        # what was true when it ran rather than following the schema forward.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS import_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                grouping_id      INTEGER,
+                stage            TEXT,
+                registrants      INTEGER NOT NULL DEFAULT 0,
+                squads           INTEGER NOT NULL DEFAULT 0,
+                orders           INTEGER NOT NULL DEFAULT 0,
+                profiles         INTEGER NOT NULL DEFAULT 0,
+                cleared          INTEGER NOT NULL DEFAULT 0,
+                skipped          INTEGER NOT NULL DEFAULT 0,
+                -- which door it came through: 'discord' or 'api'
+                door             TEXT    NOT NULL,
+                actor_discord_id TEXT,
+                actor_name       TEXT,
+                actor_guild_id   TEXT,
+                created_at       TEXT    NOT NULL
+            )
+        """)
         # Every time we held a value, somebody offered a different one, and a
         # person was asked which is right.
         #
@@ -1690,11 +1729,20 @@ def set_placement(
 
 
 def get_group_members(group_id: int) -> list[dict]:
-    """Everyone in one group, in finishing order where it is known."""
+    """Everyone in one group, in finishing order where it is known.
+
+    `troop_level` rides along with `thp` because `group_advance_odds` reads it
+    off these rows. It was collected, stored and read, and never selected here,
+    so every player reached the engine at the default level and the dropdown
+    that gathers it could not have changed a number once. Same shape as the
+    `thp` gap this query had before it, and the same reason it survived: the
+    odds tests build their member dicts by hand, so nothing that passes them
+    ever goes through this SELECT.
+    """
     with _get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT m.*, r.display_name, r.server, r.alliance, r.thp, r.fsp
+            SELECT m.*, r.display_name, r.server, r.alliance, r.thp, r.fsp, r.troop_level
             FROM group_members m JOIN registrants r ON r.id = m.registrant_id
             WHERE m.group_id = ?
             ORDER BY COALESCE(m.rank, m.seed_rank, 9999), r.display_name
@@ -2867,6 +2915,78 @@ def import_orders(rows: list[dict], *, actor) -> dict:
         "players": len(prepared),
         "problems": problems[:50],
     }
+
+
+def record_import(*, door, results, grouping_id=None, stage=None, actor=None) -> int:
+    """Log one import, from whichever door it came through.
+
+    `results` is the per-section dict each importer returns, keyed by section:
+    `{"registrants": {...}, "squads": {...}}`. Sections the payload left out
+    are simply absent and count zero, which is the truth about that run.
+
+    Kept even when everything was skipped. An import that landed nothing is
+    exactly the run somebody will come asking about, and a log that only
+    records successes cannot answer them.
+    """
+    counts = {section: 0 for section in ("registrants", "squads", "orders", "profiles")}
+    cleared = skipped = 0
+    for section, result in (results or {}).items():
+        if not isinstance(result, dict):
+            continue
+        if section in counts:
+            # `import_registrants` reports a `total`; the rest report what they
+            # wrote. Both answer "how much of this section landed", which is
+            # the only question this column is asked.
+            counts[section] = result.get("applied", result.get("total", 0)) or 0
+        cleared += result.get("cleared", 0) or 0
+        skipped += result.get("skipped", 0) or 0
+
+    actor = actor or {}
+    with _get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO import_log
+                (grouping_id, stage, registrants, squads, orders, profiles, cleared,
+                 skipped, door, actor_discord_id, actor_name, actor_guild_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                grouping_id,
+                stage,
+                counts["registrants"],
+                counts["squads"],
+                counts["orders"],
+                counts["profiles"],
+                cleared,
+                skipped,
+                door,
+                actor.get("discord_user_id"),
+                actor.get("discord_name"),
+                actor.get("guild_id"),
+                _now(),
+            ),
+        )
+    return cur.lastrowid
+
+
+def list_imports(*, grouping_id=None, limit: int = 50, offset: int = 0) -> dict:
+    """Newest first. Who has loaded what, and when."""
+    where, params = "", []
+    if grouping_id is not None:
+        where = " AND grouping_id = ?"
+        params.append(grouping_id)
+    with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM import_log WHERE 1=1" + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        ]
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM import_log WHERE 1=1" + where, params
+        ).fetchone()["n"]
+    return {"imports": rows, "total": total}
 
 
 def _as_rank(value) -> int:

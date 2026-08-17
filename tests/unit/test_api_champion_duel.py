@@ -360,6 +360,9 @@ async def test_import_takes_profiles_on_their_own(client, cd_db):
 
     assert resp.status == 200
     assert (await resp.json())["profiles"]["applied"] == 1
+    # Both doors write to the import log, because an import through one is the
+    # same event as an import through the other.
+    assert db.list_imports()["imports"][0]["door"] == "api"
 
 
 async def test_import_rejects_a_profile_the_engine_would_choke_on(client, cd_db):

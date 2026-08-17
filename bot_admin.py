@@ -1190,10 +1190,11 @@ async def admin_champion_duel_import_slash(
 
     # Dependency order: squads and orders both resolve against registrant rows.
     lines, problems = [], []
+    results = {}
     if lines_prefix:
         lines.append(lines_prefix)
     if isinstance(payload.get("registrants"), list):
-        result = await asyncio.to_thread(
+        result = results["registrants"] = await asyncio.to_thread(
             cd_db.import_registrants,
             payload["registrants"],
             stage=stage,
@@ -1202,7 +1203,9 @@ async def admin_champion_duel_import_slash(
         )
         lines.append(f"**{result['total']}** registrants ({result['inserted']} new)")
     if isinstance(payload.get("squads"), list):
-        result = await asyncio.to_thread(cd_db.import_squads, payload["squads"], actor=actor)
+        result = results["squads"] = await asyncio.to_thread(
+            cd_db.import_squads, payload["squads"], actor=actor
+        )
         lines.append(
             f"**{result['applied']}** squad rows"
             + (
@@ -1214,14 +1217,18 @@ async def admin_champion_duel_import_slash(
         )
         problems += result["problems"]
     if isinstance(payload.get("orders"), list):
-        result = await asyncio.to_thread(cd_db.import_orders, payload["orders"], actor=actor)
+        result = results["orders"] = await asyncio.to_thread(
+            cd_db.import_orders, payload["orders"], actor=actor
+        )
         lines.append(
             f"**{result['applied']}** deployment orders across {result['players']} players"
             + (f", {result['skipped']} skipped" if result["skipped"] else "")
         )
         problems += result["problems"]
     if isinstance(payload.get("profiles"), list):
-        result = await asyncio.to_thread(cd_db.import_profiles, payload["profiles"], actor=actor)
+        result = results["profiles"] = await asyncio.to_thread(
+            cd_db.import_profiles, payload["profiles"], actor=actor
+        )
         # Coverage, not a total. The model runs without these and falls back to
         # the population, so what this number says is how much of the field is
         # measured rather than assumed.
@@ -1231,6 +1238,18 @@ async def admin_champion_duel_import_slash(
             + (f", {result['skipped']} skipped" if result["skipped"] else "")
         )
         problems += result["problems"]
+
+    # Logged after the sections rather than before, so the row records what
+    # actually landed. An import that skipped everything is exactly the run
+    # somebody comes asking about.
+    await asyncio.to_thread(
+        cd_db.record_import,
+        door="discord",
+        results=results,
+        grouping_id=grouping_id,
+        stage=stage,
+        actor=actor,
+    )
 
     groups = await asyncio.to_thread(cd_db.get_groups)
     # Names the round it used, so a wrong pick is visible now rather than after

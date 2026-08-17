@@ -420,15 +420,17 @@ async def admin_import(request: web.Request) -> web.Response:
 
     actor = request["cd_actor"]
     result = {}
+    # Resolved before the sections, not inside the registrants branch, because
+    # the import log needs it whichever sections the payload carries.
+    grouping = body.get("grouping") if isinstance(body.get("grouping"), dict) else None
+    grouping_id = None
+    if grouping and grouping.get("warzones"):
+        grouping_id = (
+            await asyncio.to_thread(
+                db.ensure_grouping, grouping["warzones"], grouping.get("started_on")
+            )
+        )["id"]
     if body.get("registrants") is not None:
-        grouping = body.get("grouping") if isinstance(body.get("grouping"), dict) else None
-        grouping_id = None
-        if grouping and grouping.get("warzones"):
-            grouping_id = (
-                await asyncio.to_thread(
-                    db.ensure_grouping, grouping["warzones"], grouping.get("started_on")
-                )
-            )["id"]
         result["registrants"] = await asyncio.to_thread(
             db.import_registrants,
             body["registrants"],
@@ -444,6 +446,17 @@ async def admin_import(request: web.Request) -> web.Response:
         result["profiles"] = await asyncio.to_thread(
             db.import_profiles, body["profiles"], actor=actor
         )
+    # Logged after the sections rather than before, so the row records what
+    # actually landed. An import that skipped everything is exactly the run
+    # somebody comes asking about.
+    await asyncio.to_thread(
+        db.record_import,
+        door="api",
+        results=result,
+        grouping_id=grouping_id,
+        stage=body.get("stage"),
+        actor=actor,
+    )
     return json_response(result, request)
 
 

@@ -255,7 +255,13 @@ def _purity(member: dict, imported: dict, powers: list) -> dict:
     # of positions, so it is assembled here.
     flags = {sq["slot"]: sq.get("mixed") for sq in (member.get("squads") or [])}
     answered = [flags.get(slot) for slot in SLOTS]
-    if any(v is not None for v in answered):
+    # **Every box, not any box.** `mixed` is a set of positions and the engine
+    # reads a box's absence from it as "pure", so a half-answered lineup would
+    # assert purity about squads nobody was asked about -- collapsing the NULL
+    # and 0 the `squads.mixed` column exists to keep apart. There is no way to
+    # say "box 2 unknown" in this contract, so a partial answer falls through
+    # to the corpus, which measured all three or none.
+    if all(v is not None for v in answered):
         boxes = tuple(i for i, v in enumerate(answered) if v)
         # Box positions with nothing read would be applied as power ranks, so
         # that one case falls through to the corpus, which measured this in
@@ -413,7 +419,11 @@ def group_advance_odds(
             missing_thp=missing,
         )
 
-    key = json.dumps([stage, trials, seed, jitter, specs], sort_keys=True, default=str)
+    # `display` is part of the key, not just `specs`. The specs are keyed by row
+    # POSITION so two members sharing a name stay two players, which means the
+    # names are nowhere in them -- and a correction that changes only a spelling
+    # would hit a warm entry and hand back the old names against the new group.
+    key = json.dumps([stage, trials, seed, jitter, specs, display], sort_keys=True, default=str)
     cached = _CACHE.get(key)
     if cached is not None:
         return cached

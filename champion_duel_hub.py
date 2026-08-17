@@ -23,11 +23,20 @@ exception ("hiding is reserved for surfaces behind a deploy flag") is exactly
 what this is. Showing an alliance member a greyed-out "Revert an edit" would
 advertise a surface no amount of paying gets them.
 
-The write buttons *do* follow the Premium rule: disabled and 🔒 on the free
-tier. Writes are Premium and deliberately community-gathering — if an alliance
-pays, it decides who on its team it trusts to enter data, and the dataset is
-only worth anything if more people contribute. Every write is attributed and
-revertable, so the blast radius is bounded.
+**Contributing is not gated, and the odds are.** Reversed 2026-08-17; the
+reasoning is in `notes/DESIGN_champion_duel_premium.md`. Every other gated
+feature produces value for the alliance that uses it, but Champion Duel
+contributions produce value for everyone, so gating them means fewer
+predictions for paying alliances too. Free alliances are the collection engine.
+Every write is attributed and revertable, so the blast radius is bounded.
+
+`🔮 Odds of advancing` is the one Premium control here, and it does follow the
+Premium rule: disabled and 🔒 on the free tier, with the upsell on the embed.
+
+`can_write` survives as a parameter and nothing sets it False. It is left
+threaded rather than ripped out because its 🔒-and-disable rendering is the
+shape any later gate reuses, and the odds gate proved that shape works. Read
+the padlock branches as unreachable today, not as a live gate.
 """
 
 from __future__ import annotations
@@ -45,6 +54,7 @@ import champion_duel_image
 import champion_duel_odds as odds_lib
 import champion_duel_predict as predict_lib
 import champion_duel_wording as words
+import premium
 from api.champion_duel_auth import admin_ids
 from messages import (
     CANCEL_BACKPEDAL,
@@ -3640,6 +3650,11 @@ def build_group_embed(
     stage: str,
     label: str | None,
     grouping: dict | None,
+    # Defaulted, unlike `_GroupView.can_odds`, which is required. This one only
+    # decides whether an upsell renders: omitting it shows no upsell, where
+    # omitting the view's would hand out the odds. The failure modes are not
+    # the same size and the constructors do not need the same rule.
+    can_odds: bool = True,
 ) -> discord.Embed:
     """One group, with whatever standing we hold for it.
 
@@ -3693,6 +3708,21 @@ def build_group_embed(
                 f"We have **{_plural(len(members), 'player')}** of the "
                 f"**{expected}** in this round. Anyone can add the rest with "
                 f"**{_btn_words(CD_BTN_RECORD)}**."
+            ),
+            inline=False,
+        )
+    # The upsell rides on the embed rather than on the disabled button, which
+    # cannot carry a reason. It names what the odds add over what this surface
+    # already gives away for nothing, because a member looking at their eight
+    # opponents can see most of the answer already.
+    if not can_odds and stage in odds_lib.STAGES_WITH_A_MODEL:
+        embed.add_field(
+            name=f"🔒 {_btn_words(CD_BTN_ODDS)}",
+            value=(
+                f"Everything above is free, and so is recording it. What "
+                f"{premium.PREMIUM_BRAND} adds here is the model: how often "
+                f"each of these players gets through, across thousands of "
+                f"simulated rounds. Run `/upgrade` to unlock it."
             ),
             inline=False,
         )
@@ -3924,9 +3954,11 @@ class _GroupView(discord.ui.View):
         groups: list[dict],
         label: str | None,
         members: list[dict],
+        can_odds: bool,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
+        self.can_odds = can_odds
         self.groupings = groupings
         self.grouping = grouping
         self.stages = stages
@@ -4001,8 +4033,22 @@ class _GroupView(discord.ui.View):
         # this deciding. The knockouts have no model at all -- a
         # single-elimination field of 32 is a different question again -- so
         # the button is absent there rather than present and refusing.
+        #
+        # Disabled with a padlock on the free tier rather than hidden, which is
+        # `DESIGN.md`'s Premium rule: a locked control lets the free tier see
+        # the shape of the paid product. It reads well here because everything
+        # around it is free. An alliance sees their eight opponents, sees the
+        # button, and knows exactly what it would tell them. The upsell rides
+        # on the embed, the same split `PlayerActionsView` used to use.
         if self.members and self.stage in odds_lib.STAGES_WITH_A_MODEL:
-            odds = discord.ui.Button(label=CD_BTN_ODDS, style=discord.ButtonStyle.primary, row=row)
+            odds = discord.ui.Button(
+                label=(CD_BTN_ODDS if self.can_odds else f"🔒 {CD_BTN_ODDS}")[:80],
+                style=discord.ButtonStyle.primary
+                if self.can_odds
+                else discord.ButtonStyle.secondary,
+                disabled=not self.can_odds,
+                row=row,
+            )
             odds.callback = self._on_odds
             self.add_item(odds)
 
@@ -4051,6 +4097,7 @@ class _GroupView(discord.ui.View):
                 stage=self.stage,
                 label=self.label,
                 grouping=self.grouping,
+                can_odds=self.can_odds,
             ),
             view=self,
         )
@@ -4082,6 +4129,17 @@ class _GroupView(discord.ui.View):
         fit and samples what nobody has measured.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
+        # Re-resolved, not read off `self`. The flag was captured when the view
+        # was built, and this view lives 15 minutes against a 5 minute
+        # entitlement cache -- so the stale case that matters is a subscription
+        # that lapsed while the group was on screen, where the button is still
+        # live because it was enabled at build time. Reading `self.can_odds`
+        # would let that through; checking here catches it. One cached lookup
+        # in front of a simulation that costs seconds is not a price worth
+        # optimising.
+        if not await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter):
+            await _send_odds_upsell(inter)
+            return
         group = await asyncio.to_thread(
             db.get_or_create_group, self.grouping["id"], self.stage, self.label
         )
@@ -4092,6 +4150,20 @@ class _GroupView(discord.ui.View):
             ),
             ephemeral=True,
         )
+
+
+async def _send_odds_upsell(interaction: discord.Interaction) -> None:
+    """Refuse the odds and offer the upgrade.
+
+    `upgrade_view` returns None when no SKU is configured, and discord.py
+    raises `TypeError` on a `view=None`. So the button is offered when there is
+    one and the embed's own "Run `/upgrade`" line carries it when there is not,
+    which is the same fallback `donate.py` uses.
+    """
+    view = premium.upgrade_view()
+    embed = premium.premium_locked_embed(feature_label=_btn_words(CD_BTN_ODDS))
+    kwargs = {"view": view} if view is not None else {}
+    await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
 
 
 def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
@@ -4217,6 +4289,15 @@ async def send_group_view(
     group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, label)
     members = await asyncio.to_thread(db.get_group_members, group["id"])
 
+    # The only gated thing in Champion Duel. Everything else on this surface,
+    # and every way of contributing to it, is free.
+    can_odds = bool(
+        interaction.guild_id
+        and await premium.feature_gate(
+            "champion_duel_odds", interaction.guild_id, interaction=interaction
+        )
+    )
+
     view = _GroupView(
         user_id=user_id,
         groupings=groupings,
@@ -4226,9 +4307,12 @@ async def send_group_view(
         groups=groups,
         label=label,
         members=members,
+        can_odds=can_odds,
     )
     await interaction.followup.send(
-        embed=build_group_embed(members=members, stage=stage, label=label, grouping=grouping),
+        embed=build_group_embed(
+            members=members, stage=stage, label=label, grouping=grouping, can_odds=can_odds
+        ),
         view=view,
         ephemeral=True,
     )

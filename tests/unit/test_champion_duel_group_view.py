@@ -292,21 +292,129 @@ def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
     members = db.get_group_members(group["id"])
 
     def labels(stage):
-        view = hub._GroupView(
-            user_id=1,
-            groupings=[grouping],
-            grouping=grouping,
-            stages=[stage],
-            stage=stage,
-            groups=[],
-            label="H",
-            members=members,
-        )
+        view = _odds_view(grouping, members, can_odds=True, stage=stage)
         return [getattr(i, "label", None) for i in view.children]
 
     assert hub.CD_BTN_ODDS in labels("semifinals")
     assert hub.CD_BTN_ODDS in labels("qualifiers")
     assert hub.CD_BTN_ODDS not in labels("knockouts")
+
+
+def _odds_view(grouping, members, *, can_odds, stage="semifinals"):
+    return hub._GroupView(
+        user_id=1,
+        groupings=[grouping],
+        grouping=grouping,
+        stages=[stage],
+        stage=stage,
+        groups=[],
+        label="H",
+        members=members,
+        can_odds=can_odds,
+    )
+
+
+def test_the_odds_are_the_one_gated_thing_and_it_locks_rather_than_hides(cd_db):
+    """`DESIGN.md`'s Premium rule: a locked control renders disabled so the
+    free tier can see the shape of the paid product. It reads well here because
+    everything around it is free. An alliance sees their eight opponents, sees
+    the button, and knows exactly what it would tell them."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    members = db.get_group_members(group["id"])
+
+    locked = _odds_view(grouping, members, can_odds=False)
+
+    button = next(b for b in locked.children if hub.CD_BTN_ODDS in (b.label or ""))
+    assert button.disabled is True
+    assert button.label.startswith("🔒")
+
+
+def test_the_upsell_rides_on_the_embed_not_the_disabled_button(cd_db):
+    """A disabled button cannot carry a reason, so the embed does. It names
+    what the odds add over what this surface already gives away for nothing."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    members = db.get_group_members(group["id"])
+
+    locked = hub.build_group_embed(
+        members=members, stage="semifinals", label="H", grouping=grouping, can_odds=False
+    )
+    paid = hub.build_group_embed(
+        members=members, stage="semifinals", label="H", grouping=grouping, can_odds=True
+    )
+
+    upsell = next(f for f in locked.fields if "🔒" in f.name)
+    assert "free" in upsell.value, "it has to say what is not being taken away"
+    assert "/upgrade" in upsell.value
+    assert not any("🔒" in f.name for f in paid.fields)
+
+
+def test_a_round_with_no_model_never_sells_odds_it_cannot_produce(cd_db):
+    """The knockouts have no model, so the button is absent there. An upsell
+    for it would be selling something no amount of paying reaches."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)], stage="knockouts")
+    members = db.get_group_members(group["id"])
+
+    embed = hub.build_group_embed(
+        members=members, stage="knockouts", label=None, grouping=grouping, can_odds=False
+    )
+
+    assert not any("🔒" in f.name for f in embed.fields)
+
+
+async def test_an_entitlement_that_lapsed_while_the_group_was_open_is_caught(cd_db, monkeypatch):
+    """The stale case that actually reaches this. A view built by a paying
+    alliance has the button ENABLED, and it stays pressable for the 15 minutes
+    the view lives against a 5 minute entitlement cache. Reading the flag
+    captured at build time would let that through, so the gate is re-resolved
+    on the press."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import premium
+
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    members = db.get_group_members(group["id"])
+    # Built while they were paying, pressed after they stopped.
+    view = _odds_view(grouping, members, can_odds=True)
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=False))
+    inter = MagicMock()
+    inter.response.defer = AsyncMock()
+    inter.followup.send = AsyncMock()
+
+    await view._on_odds(inter)
+
+    embed = inter.followup.send.await_args.kwargs["embed"]
+    assert "Premium" in embed.title
+
+
+async def test_the_upsell_survives_having_no_subscribe_button(cd_db, monkeypatch):
+    """`upgrade_view` returns None when no SKU is configured, and discord.py
+    raises `TypeError` on a `view=None`. The embed's own "Run `/upgrade`" line
+    carries it instead."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import premium
+
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=False))
+    monkeypatch.setattr(premium, "upgrade_view", lambda: None)
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    view = _odds_view(grouping, db.get_group_members(group["id"]), can_odds=True)
+    inter = MagicMock()
+    inter.response.defer = AsyncMock()
+    inter.followup.send = AsyncMock()
+
+    await view._on_odds(inter)
+
+    assert "view" not in inter.followup.send.await_args.kwargs
+
+
+def test_the_gate_flag_is_required_on_the_view(cd_db):
+    """No default, so a future call site cannot ship the odds free by omission.
+    `build_group_embed` keeps a default on purpose: omitting it there shows no
+    upsell, where omitting it here hands out the paid thing."""
+    import inspect
+
+    parameter = inspect.signature(hub._GroupView.__init__).parameters["can_odds"]
+    assert parameter.default is inspect.Parameter.empty
 
 
 def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):

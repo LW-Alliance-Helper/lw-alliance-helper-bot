@@ -932,7 +932,7 @@ def plan_upsert(
     """Plan an upsert of `rows` against a worksheet's current `values`.
 
     Locates each row by :class:`RowKey` — (Season, Tier, Group, Week, Tag,
-    Server) — and updates only that row's own cells, appending when absent. A
+    Warzone) and updates only that row's own cells, appending when absent. A
     neighbouring hand-edited row is never touched, and within a matched row
     only the columns the caller actually has a value for are written. Same rule
     member sync learned in 1.4.2 (#262).
@@ -2742,7 +2742,7 @@ def _check_own_alliance_present(
             severity=SEVERITY_WARNING,
             message=(
                 f"Your alliance doesn't appear anywhere in league {league}. "
-                "Check the Tag and Server on those rows match your setup."
+                "Check the Tag and Warzone on those rows match your setup."
             ),
             column=COL_TAG,
             alliance=own,
@@ -2894,7 +2894,7 @@ def skeleton_rows(
 ) -> list[AllianceWeek]:
     """Empty rows stamped with league identity, week and seed, ready to fill.
 
-    Setup is one sitting: the bracket screen shows all 16 alliances and their
+    Setup is one sitting: the League screen shows all 16 alliances and their
     seeds at league start, so the bot writes the rows and the user fills tag,
     warzone and seed straight off that screen.
 

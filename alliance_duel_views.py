@@ -94,7 +94,7 @@ def score_prompt_embed(
     embed = discord.Embed(
         title=f"🔔 Day {day}: {duel_day.theme}",
         description=(
-            f"Yesterday you played **{who}** for **{duel_day.points}** "
+            f"You played **{who}** for **{duel_day.points}** "
             f"{'point' if duel_day.points == 1 else 'points'}. "
             f"What did the two of you score?"
         ),
@@ -114,7 +114,7 @@ def score_prompt_embed(
             )
         embed.add_field(name="Before this day", value=standing, inline=False)
 
-    embed.set_footer(text=f"Week {week}. Times are server time.")
+    embed.set_footer(text=f"Week {week}. Duel days follow server time.")
     return embed
 
 

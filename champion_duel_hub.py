@@ -45,7 +45,6 @@ import champion_duel_image
 import champion_duel_odds as odds_lib
 import champion_duel_predict as predict_lib
 import champion_duel_wording as words
-import premium
 from api.champion_duel_auth import admin_ids
 from messages import (
     CANCEL_BACKPEDAL,
@@ -1066,7 +1065,18 @@ _TYPE_ORDERS = [
 
 
 def _parse_mixed(text: str) -> set[int] | None:
-    """Which boxes are 4-of-a-type, from something like `1,3`.
+    """Which boxes are mixed type, from something like `1,3`.
+
+    **Blank means none, not "not asked".** Kevin's decision, 2026-08-17: the
+    box is optional, and leaving it empty says the same thing as typing
+    "none". Somebody filling this screen in has the lineup in front of them,
+    so silence about a mixed squad is an answer.
+
+    That deliberately spends the NULL-versus-0 distinction the `squads.mixed`
+    column keeps, and it only spends it HERE, at the one surface where a person
+    was looking at the lineup when they said nothing. Everywhere else -- an
+    import, a player nobody has opened -- absence still means nobody has looked,
+    which is what stops the model treating an unscouted player as measured.
 
     Returns a set of 1-based box numbers, an empty set for an explicit "none",
     or None when it cannot be read.
@@ -1079,9 +1089,7 @@ def _parse_mixed(text: str) -> set[int] | None:
     player is weakest, it is where their best heroes are spread.
     """
     cleaned = (text or "").strip().lower()
-    if not cleaned:
-        return None
-    if cleaned in ("none", "no", "n", "-", "0"):
+    if not cleaned or cleaned in ("none", "no", "n", "-", "0"):
         return set()
     out = set()
     for piece in cleaned.replace(" ", "").split(","):
@@ -1123,11 +1131,19 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
             ],
         ),
     )
-    mixed = discord.ui.TextInput(
-        label="Which squads are 4-of-a-type?",
-        required=False,
-        max_length=8,
-        placeholder="e.g. 1,3   or   none",
+    # A Label rather than a bare TextInput so the question and the instruction
+    # can be separate lines. Discord caps a field label at 45 characters and
+    # both together run past it, and the question is the half that has to
+    # survive: somebody who reads only the bold line still knows what is being
+    # asked.
+    mixed = discord.ui.Label(
+        text="Are any of these squads mixed type?",
+        description="List which squads if so.",
+        component=discord.ui.TextInput(
+            required=False,
+            max_length=8,
+            placeholder="e.g. 1,3",
+        ),
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -1150,11 +1166,12 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
             )
             return
 
-        mixed = _parse_mixed(self.mixed.value)
-        if mixed is None and (self.mixed.value or "").strip():
+        raw_mixed = (self.mixed.component.value or "").strip()
+        mixed = _parse_mixed(raw_mixed)
+        if mixed is None:
             await interaction.followup.send(
-                "⚠️ Say which squads are 4-of-a-type as box numbers, like **1,3**, "
-                "or **none** if every squad is pure. Nothing was saved.",
+                "⚠️ Say which squads are mixed type as box numbers, like **1,3**. "
+                "Leave it blank if none of them are. Nothing was saved.",
                 ephemeral=True,
             )
             return
@@ -1162,19 +1179,28 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
         chosen = self.types.component.values
         order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
 
+        # A blank purity box means "none are mixed", but only once the member
+        # has told us something. Submitting the whole screen empty is not a
+        # measurement that every squad is pure -- nobody looked at anything --
+        # and without this check it would write one for all three boxes.
+        if not (any(p is not None for p in powers) or chosen or raw_mixed):
+            await interaction.followup.send(
+                f"↩️ Nothing to record for **{_label(self.player)}**. No changes made.",
+                ephemeral=True,
+            )
+            return
+
         # Offered per box, aligned with the powers, because that is how the
-        # engine reads them. `mixed` is None where nobody answered and 0 where
-        # they said none: the model samples a mixed pair for the first and
-        # treats the second as a measurement, so collapsing them would put a
-        # purity penalty on squads nobody has looked at.
+        # engine reads them. Every box carries a purity answer, because on this
+        # screen the member had the lineup in front of them: saying nothing
+        # about a squad is saying it is pure. That is the one place the
+        # NULL-versus-0 distinction on `squads.mixed` is deliberately spent.
         offered = {}
         for slot, (power, squad_type) in enumerate(zip(powers, order), start=1):
-            if power is None and squad_type is None and mixed is None:
-                continue
             offered[slot] = {
                 "squad_type": squad_type,
                 "power": power,
-                "mixed": None if mixed is None else int(slot in mixed),
+                "mixed": int(slot in mixed),
             }
 
         await _ask_or_write(interaction, self.player, offered, source="observed")
@@ -3669,16 +3695,12 @@ def build_hub_embed(
             ),
             inline=False,
         )
-    if not can_write:
-        embed.add_field(
-            name="🔒 Contributing is Premium",
-            value=(
-                f"Correcting squads and recording sightings are part of "
-                f"{premium.PREMIUM_BRAND}. Run `/upgrade` to unlock it. The more "
-                "people entering sightings, the sharper every prediction gets."
-            ),
-            inline=False,
-        )
+    # No upsell for contributing, because contributing is not gated. The field
+    # that stood here sold Premium on "correcting squads and recording
+    # sightings", which is the one thing in this feature that must never be
+    # gated: free alliances are the collection engine, and every sighting they
+    # enter sharpens the predictions paying alliances get.
+    #
     # No source legend here. 👁/≈/✏️ mark individual squad powers, which only
     # appear on a player's card -- `build_player_embed` carries the legend, next
     # to the marks it explains. On the hub it was a key to a map nobody was
@@ -4021,14 +4043,14 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
             named = ", ".join(
                 f"**{discord.utils.escape_markdown(n)}**" for n in exc.missing_thp[:8]
             )
-            # Deliberately does NOT name a button. `Correct a squad` does
-            # write the missing value, but it lives on a player's own card,
-            # reached by searching each name from the hub, and it renders
-            # locked without `champion_duel_write`. Naming it from here
-            # would send a free-tier member through two surfaces to find a
-            # padlock, which is a worse dead end than saying plainly where
-            # the data comes from. `UX.md` principle 3 wants a real exit or
-            # none, not a signpost to a locked door.
+            # Deliberately does not name a button. It used to be that
+            # `Correct a squad` rendered locked on the free tier, so pointing
+            # at it sent a member through two surfaces to find a padlock. That
+            # is no longer true -- contributing is free since 2026-08-17 -- but
+            # the control still lives on a player's own card, reached by
+            # searching each of these names one at a time, so naming it here
+            # would still be a signpost rather than an exit. Worth revisiting
+            # if the card ever becomes reachable from this surface.
             embed.description = (
                 f"Odds need something to place each player by, and for {named} we "
                 f"have neither a Total Hero Power nor a single squad power.\n\n"
@@ -4400,13 +4422,18 @@ async def _open_hub(
 
 
 async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> None:
-    """Top-level handler for `/champion_duel`. Opens the hub."""
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    """Top-level handler for `/champion_duel`. Opens the hub.
 
-    can_write = bool(
-        interaction.guild_id
-        and await premium.feature_gate(
-            "champion_duel_write", interaction.guild_id, interaction=interaction, bot=bot
-        )
-    )
-    await _open_hub(interaction, can_write=can_write)
+    **Contributing is not gated.** `can_write` used to be a Premium check here.
+    Kevin's decision, 2026-08-17: every other gated feature produces value for
+    the alliance that uses it, but Champion Duel contributions produce value
+    for everyone, so gating them means fewer predictions for paying alliances
+    too. Free alliances are the collection engine.
+
+    The flag stays threaded through the hub rather than being deleted, because
+    the surfaces it renders (`🔒` and the disabled state) are what the odds
+    gate will need when it is built. Nothing sets it False today, so no padlock
+    renders.
+    """
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await _open_hub(interaction, can_write=True)

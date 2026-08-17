@@ -401,6 +401,10 @@ def _slot_of(name, slot, server="738"):
     return next(s for s in player["squads"] if s["slot"] == slot)
 
 
+def _squads_of(name, server="738"):
+    return db.get_player(name, server=server, include_scouting=True)["squads"]
+
+
 async def test_agreeing_with_what_we_hold_passes_without_a_word(cd_db):
     """The common case by a distance. Two scouts reading the same panel must
     not be made to arbitrate between two identical numbers."""
@@ -603,7 +607,7 @@ async def test_recording_three_boxes_asks_once_not_three_times(cd_db):
     modal.squad2._value = "40M"
     modal.squad3._value = "30M"
     modal.types.component._values = []
-    modal.mixed._value = ""
+    modal.mixed.component._value = ""
 
     interaction = _interaction(user_id=SCOUT_ID)
     await modal.on_submit(interaction)
@@ -611,6 +615,53 @@ async def test_recording_three_boxes_asks_once_not_three_times(cd_db):
     assert interaction.followup.send.await_count == 1
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert len(embed.fields) == 3, "three contradicted powers, still one question"
+
+
+async def test_a_blank_purity_box_says_none_are_mixed(cd_db):
+    """Kevin's decision, 2026-08-17: the box is optional and blank says the
+    same thing as typing "none". Somebody filling in this screen has the lineup
+    in front of them, so silence about a mixed squad is an answer."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    modal.squad1._value = "94.2M"
+    modal.squad2._value = ""
+    modal.squad3._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = ""
+
+    await modal.on_submit(_interaction())
+
+    assert [s["mixed"] for s in _squads_of("AlphaOne")] == [0, 0, 0]
+
+
+async def test_an_empty_screen_is_not_a_measurement_that_everything_is_pure(cd_db):
+    """Blank means none only once the member has told us something. Nobody
+    looked at anything here, and without the guard it would write a purity
+    measurement for all three boxes."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    for box in (modal.squad1, modal.squad2, modal.squad3):
+        box._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "Nothing to record" in _sent(interaction)
+    assert _squads_of("AlphaOne") == []
+
+
+async def test_saying_none_alone_is_still_worth_recording(cd_db):
+    """Answering only the purity box is a real measurement: they looked, and
+    every squad is pure."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    for box in (modal.squad1, modal.squad2, modal.squad3):
+        box._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = "none"
+
+    await modal.on_submit(_interaction())
+
+    assert [s["mixed"] for s in _squads_of("AlphaOne")] == [0, 0, 0]
 
 
 def test_the_capture_guide_is_never_locked():
@@ -746,10 +797,16 @@ async def test_only_the_opener_can_press_the_buttons():
     intruder.response.send_message.assert_awaited_once()
 
 
-def test_hub_embed_names_the_gate_it_applied(cd_db):
+def test_the_hub_never_sells_premium_on_contributing(cd_db):
+    """Contributing is free and uncapped, so there is no upsell for it even on
+    the path that used to render one. Free alliances are the collection engine:
+    every sighting they enter sharpens the predictions paying alliances get, so
+    gating this is the one split in the product that makes the paid tier
+    worse."""
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=False)
+
     names = [f.name for f in embed.fields]
-    assert any("Premium" in n for n in names)
+    assert not any("Premium" in n for n in names)
     assert "2" in embed.description  # both registrants counted
 
 

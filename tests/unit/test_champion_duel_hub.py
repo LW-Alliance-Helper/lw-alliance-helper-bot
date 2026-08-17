@@ -8,6 +8,7 @@ directly rather than standing up a gateway.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 from datetime import date
@@ -136,7 +137,7 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
             user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True
         ).children
     ]
-    assert hub.CD_BTN_SQUAD not in labels
+    assert hub.CD_BTN_SQUADS not in labels
     assert hub.CD_BTN_ORDER not in labels
     assert {hub.CD_BTN_FIND, hub.CD_BTN_ADD} <= set(labels)
 
@@ -148,10 +149,12 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
             can_write=True,
         ).children
     ]
-    # `CD_BTN_SQUADS` leads: it is the second half of the add-a-player flow and
-    # takes all three squads in one open, which is what this view exists for.
-    # `CD_BTN_SQUAD` still follows it and still takes a single slot.
-    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_SQUAD, hub.CD_BTN_ORDER]
+    # One squad control, not two. `✏️ Correct a squad` did the same job a slot
+    # at a time and sat beside this one under the same glyph, which `DESIGN.md`
+    # forbids across a choice set: two identical glyphs give the eye nothing to
+    # navigate by, which is worse than bare.
+    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_ORDER]
+    assert not hasattr(hub, "_SquadModal")
 
 
 def test_the_player_card_locks_its_actions_on_the_free_tier():
@@ -327,12 +330,13 @@ async def test_a_locked_miss_still_shows_the_add_button(cd_db):
 
 
 async def test_the_squad_modal_does_not_ask_who_again(cd_db):
-    """The player came from the card, so the modal is three fields and cannot
-    fail on an ambiguous name."""
+    """The player came from the card, so there is no second chance to mistype
+    a name and no ambiguous match to resolve mid-flow."""
     player = db.get_player("AlphaOne", server="738")
-    squad_fields = {i.label for i in hub._SquadModal(player).children}
-    assert "Player name" not in squad_fields
-    assert squad_fields == {"Slot (1, 2 or 3)", "Squad type", "Power"}
+    modal = hub._SquadDetailModal(player=player)
+    labels = {getattr(i, "label", None) or getattr(i, "text", None) for i in modal.children}
+    assert "Player name" not in labels
+    assert {"Squad 1 power", "Squad 2 power", "Squad 3 power"} <= labels
 
 
 async def test_recording_an_order_opens_the_picker_with_no_modal(cd_db):
@@ -356,17 +360,14 @@ async def test_recording_an_order_opens_the_picker_with_no_modal(cd_db):
 
 async def test_a_squad_correction_applies_to_the_card_player(cd_db):
     player = db.get_player("AlphaOne", server="738")
-    modal = hub._SquadModal(player)
-    modal.slot._value = "1"
-    modal.squad_type._value = "Tank"
-    modal.power._value = "84.6M"
+    modal = _detail_modal(player, powers=("84.6M", "", ""), types=0)
 
     interaction = _interaction()
     await modal.on_submit(interaction)
 
     squad = db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]
     assert squad["squad_type"] == "Tank" and squad["power"] == 84_600_000
-    assert "84,600,000" in _sent(interaction)
+    assert "Recorded" in _sent(interaction)
 
 
 # ── "Which of these is right?" ────────────────────────────────────────────────
@@ -382,11 +383,20 @@ SCOUT = {"discord_user_id": "333", "discord_name": "Someone else", "guild_id": "
 SCOUT_ID = 333
 
 
-async def _submit_correction(player, *, slot="1", squad_type="", power="", user_id=SCOUT_ID):
-    modal = hub._SquadModal(player)
-    modal.slot._value = slot
-    modal.squad_type._value = squad_type
-    modal.power._value = power
+def _order_starting_with(squad_type):
+    """The dropdown index whose first box is this type, or None for no answer.
+
+    The control is a whole-lineup answer, so a test that only cares about
+    slot 1 still has to pick one of the six.
+    """
+    if not squad_type:
+        return None
+    return next(i for i, order in enumerate(hub._TYPE_ORDERS) if order[0] == squad_type)
+
+
+async def _submit_correction(player, *, squad_type="", power="", user_id=SCOUT_ID):
+    """One box entered through the squad screen, as a scout who is not KEV."""
+    modal = _detail_modal(player, powers=(power, "", ""), types=_order_starting_with(squad_type))
     interaction = _interaction(user_id=user_id)
     await modal.on_submit(interaction)
     return interaction
@@ -396,6 +406,14 @@ def _view_of(interaction):
     return (interaction.followup.send.call_args.kwargs or {}).get("view")
 
 
+def _first_sent(interaction):
+    """The first followup, where `_sent` gives the last."""
+    call = interaction.followup.send.call_args_list[0]
+    if call.args:
+        return call.args[0]
+    return call.kwargs.get("content") or ""
+
+
 def _slot_of(name, slot, server="738"):
     player = db.get_player(name, server=server, include_scouting=True)
     return next(s for s in player["squads"] if s["slot"] == slot)
@@ -403,6 +421,22 @@ def _slot_of(name, slot, server="738"):
 
 def _squads_of(name, server="738"):
     return db.get_player(name, server=server, include_scouting=True)["squads"]
+
+
+def _detail_modal(player, *, powers=("", "", ""), types=None, mixed=""):
+    """`_SquadDetailModal` with its five components filled in.
+
+    `types` is an index into `hub._TYPE_ORDERS`, or `hub._TYPE_ORDER_OTHER`,
+    or None for "not answered".
+    """
+    modal = hub._SquadDetailModal(player=player)
+    for box, value in zip((modal.squad1, modal.squad2, modal.squad3), powers):
+        box._value = value
+    modal.types.component._values = (
+        [] if types is None else [types if isinstance(types, str) else str(types)]
+    )
+    modal.mixed.component._value = mixed
+    return modal
 
 
 async def test_agreeing_with_what_we_hold_passes_without_a_word(cd_db):
@@ -615,6 +649,134 @@ async def test_recording_three_boxes_asks_once_not_three_times(cd_db):
     assert interaction.followup.send.await_count == 1
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert len(embed.fields) == 3, "three contradicted powers, still one question"
+
+
+# ── "Other": two of the same type ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "typed, expected",
+    [
+        ("Tank, Tank, Aircraft", ("Tank", "Tank", "Aircraft")),
+        ("tank tank air", ("Tank", "Tank", "Aircraft")),
+        ("T/M/A", ("Tank", "Missile", "Aircraft")),
+        ("aircraft - aircraft - missile", ("Aircraft", "Aircraft", "Missile")),
+    ],
+)
+def test_a_typed_squad_order_is_read_forgivingly(typed, expected):
+    """This is the path for somebody already told the dropdown does not fit
+    them. The three names share no first letter, which is what makes a single
+    character enough to disambiguate."""
+    assert hub._parse_type_order(typed) == expected
+
+
+@pytest.mark.parametrize(
+    "typed", ["Tank, Aircraft", "Tank, Tank, Tank, Tank", "", "blue red green"]
+)
+def test_an_unreadable_squad_order_is_refused_not_guessed(typed):
+    """A wrong type is a wrong counter matchup on every prediction that player
+    ever appears in, where a wrong power is a number slightly out."""
+    assert hub._parse_type_order(typed) is None
+
+
+async def test_other_saves_the_powers_then_asks_for_the_types(cd_db):
+    """The powers are written before the question, so somebody who picks Other
+    and then gets pulled away keeps everything except the types."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "82M", "78M"),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    interaction.client.wait_for = AsyncMock(side_effect=asyncio.TimeoutError)
+
+    await modal.on_submit(interaction)
+
+    assert [s["power"] for s in _squads_of("AlphaOne")] == [94_200_000, 82_000_000, 78_000_000]
+    assert all(s["squad_type"] is None for s in _squads_of("AlphaOne"))
+    assert "What are their three squad types?" in _first_sent(interaction)
+
+
+async def test_the_typed_order_lands_on_the_boxes(cd_db):
+    """No second modal. The question is asked the way every free-text step in
+    the setup wizards is asked, because Discord will not answer a modal with a
+    modal and a button in between costs a press to answer one question."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "82M", "78M"),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    reply = MagicMock()
+    reply.content = "Tank, Tank, Aircraft"
+    reply.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(return_value=reply)
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+    # Their reply is a line with no visible prompt above it, since the question
+    # was ephemeral and nobody can answer ephemerally.
+    reply.delete.assert_awaited_once()
+
+
+async def test_a_missing_delete_permission_does_not_lose_the_save(cd_db):
+    """Tidying the channel needs Manage Messages, and not having it is not a
+    reason to fail a save that has already happened."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    reply = MagicMock()
+    reply.content = "Tank, Tank, Aircraft"
+    reply.delete = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no"))
+    interaction.client.wait_for = AsyncMock(return_value=reply)
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+
+
+async def test_an_unreadable_answer_costs_one_step_not_the_flow(cd_db):
+    """`UX.md`: a validation failure gets a retry with an example before
+    bailing out, and the bail-out names the route back in."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    first, second = MagicMock(), MagicMock()
+    first.content, second.content = "no idea", "Tank, Tank, Aircraft"
+    first.delete = second.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(side_effect=[first, second])
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+    assert any("couldn't read" in str(c) for c in interaction.followup.send.call_args_list)
+
+
+async def test_giving_up_says_the_powers_are_safe_and_names_the_way_back(cd_db):
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    bad = MagicMock()
+    bad.content = "no idea"
+    bad.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(return_value=bad)
+
+    await modal.on_submit(interaction)
+
+    msg = _sent(interaction)
+    assert "powers are saved" in msg
+    assert hub.CD_BTN_SQUADS in msg, "a dead end has to name its exit"
+    assert _slot_of("AlphaOne", 1)["power"] == 94_200_000
 
 
 async def test_a_blank_purity_box_says_none_are_mixed(cd_db):
@@ -907,7 +1069,7 @@ async def test_predict_refuses_a_player_with_no_line_up(cd_db):
 
     msg = _sent(interaction)
     assert "BetaTwo" in msg and "no squad recorded" in msg
-    assert hub.CD_BTN_SQUAD in msg, "a dead end has to name its exit"
+    assert hub.CD_BTN_SQUADS in msg, "a dead end has to name its exit"
     # And the exit has to be reachable: correcting a squad starts from the
     # player's card now, so the hint routes through finding them first.
     assert hub.CD_BTN_FIND in msg

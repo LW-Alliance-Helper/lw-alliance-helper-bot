@@ -63,12 +63,18 @@ HUB_BTN_CHAMPION_DUEL = "👑 Champion Duel"
 CD_BTN_PREDICT = "🆚 Predict a match"
 CD_BTN_FIND = "🔍 Find a player"
 CD_BTN_ADD = "➕ Add a player"
-CD_BTN_SQUAD = "✏️ Correct a squad"
-# The second of the two entry screens. One open takes all three squads, the
-# types and the purity answer, where `CD_BTN_SQUAD` takes one slot at a time.
-# The two overlap and this one is strictly more capable, since every box is
-# optional -- see the note on `PlayerActionsView` about whether both should
-# stay.
+# The only squad entry screen. One open takes all three squads, their types
+# and the purity answer, and every box is optional so a partial reading is one
+# press rather than three.
+#
+# It replaced a second control, `✏️ Correct a squad`, which took one slot at a
+# time. The two did the same job from the user's end and sat side by side under
+# the same glyph, which `DESIGN.md` forbids across a choice set: two identical
+# glyphs give the eye nothing to navigate by. Retired 2026-08-17 (Kevin).
+#
+# The one thing the retired control could express and a fixed permutation
+# cannot is a lineup running two of the same type, which is about 4% of
+# players. `_TYPE_ORDER_OTHER` covers them instead.
 CD_BTN_SQUADS = "✏️ Record their squads"
 CD_BTN_ORDER = "➕ Record an order"
 CD_BTN_GUIDE = "📖 Where to find these numbers"
@@ -590,7 +596,7 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
                 f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to predict with.\n"
                 f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
-                f"**{CD_BTN_SQUAD}** to fill them in.",
+                f"**{CD_BTN_SQUADS}** to fill them in.",
                 ephemeral=True,
             )
             return
@@ -843,20 +849,8 @@ class PlayerActionsView(discord.ui.View):
         self.grouping = grouping
         self.message: discord.Message | None = None
 
-        # `CD_BTN_SQUADS` and `CD_BTN_SQUAD` overlap on purpose for now. The
-        # first is the second half of the add-a-player flow: one open, all
-        # three squads, their types and which are 4-of-a-type. The second
-        # predates it and takes a single slot.
-        #
-        # This view's own reason for existing argues for retiring the older
-        # one: it was built because "contributing three squad values and an
-        # order meant typing one name four times", and a one-slot modal is
-        # three of those four. Left in place because it is signed-off copy and
-        # removing a shipped control is Kevin's call, not a side effect of
-        # adding this.
         actions = [
             (CD_BTN_SQUADS, self._on_squads),
-            (CD_BTN_SQUAD, self._on_squad),
             (CD_BTN_ORDER, self._on_order),
         ]
         # Absent rather than disabled without a grouping: a group letter is
@@ -883,9 +877,6 @@ class PlayerActionsView(discord.ui.View):
         from wizard_registry import expire_view_message
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
-    async def _on_squad(self, inter: discord.Interaction):
-        await inter.response.send_modal(_SquadModal(self.player))
 
     async def _on_squads(self, inter: discord.Interaction):
         await inter.response.send_modal(_SquadDetailModal(player=self.player))
@@ -1063,6 +1054,68 @@ _TYPE_ORDERS = [
     ("Aircraft", "Missile", "Tank"),
 ]
 
+#: The seventh option, for a lineup the six permutations cannot describe.
+#:
+#: 96% of players run one of each type, so six options cover almost everyone
+#: and a dropdown beats typing for them. The rest run two of something, and
+#: enumerating those would take the list from six to twenty-seven to catch one
+#: player in twenty-five. So the list stays short and the exception says so.
+_TYPE_ORDER_OTHER = "other"
+
+#: How long to wait for somebody to type their squad types in the channel.
+#: The same 120s the setup wizards give a free-text step, and for the same
+#: reason: a member may be reading it off a game screen on the same phone.
+_TYPE_ORDER_TIMEOUT = 120
+
+
+def _parse_type_order(text: str) -> tuple | None:
+    """Three squad types in box order, from something a person typed.
+
+    Forgiving on separators and on how much of each word they wrote, because
+    this is the path for somebody who has already been told the dropdown does
+    not fit them and is now typing what they can see. `T/M/A` and
+    `tank, tank, air` both work.
+
+    Returns None when it cannot be read, which the caller turns into a retry
+    rather than a guess: a wrong type is a wrong counter matchup on every
+    prediction that player appears in.
+    """
+    cleaned = (text or "").strip().lower()
+    if not cleaned:
+        return None
+    for separator in (",", "/", "-", ">"):
+        cleaned = cleaned.replace(separator, " ")
+    words = cleaned.split()
+    if len(words) != 3:
+        return None
+    out = []
+    for word in words:
+        # Prefix match, so "air", "aircraft" and "a" all land. The three names
+        # share no first letter, which is what makes a single character enough.
+        matched = [t for t in db.VALID_TYPES if t.lower().startswith(word)]
+        if len(matched) != 1:
+            return None
+        out.append(matched[0])
+    return tuple(out)
+
+
+def _squad_offer(powers, order, mixed) -> dict:
+    """One squad submission as `{slot: {field: value}}`, aligned box by box.
+
+    Every box carries a purity answer, because on the screen this comes from
+    the member had the lineup in front of them: saying nothing about a squad is
+    saying it is pure. That is the one place the NULL-versus-0 distinction on
+    `squads.mixed` is deliberately spent.
+    """
+    return {
+        slot: {
+            "squad_type": squad_type,
+            "power": power,
+            "mixed": None if mixed is None else int(slot in mixed),
+        }
+        for slot, (power, squad_type) in enumerate(zip(powers, order), start=1)
+    }
+
 
 def _parse_mixed(text: str) -> set[int] | None:
     """Which boxes are mixed type, from something like `1,3`.
@@ -1128,6 +1181,13 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
             options=[
                 discord.SelectOption(label=" / ".join(order), value=str(i))
                 for i, order in enumerate(_TYPE_ORDERS)
+            ]
+            + [
+                discord.SelectOption(
+                    label="Other",
+                    value=_TYPE_ORDER_OTHER,
+                    description="If they run two of the same type",
+                )
             ],
         ),
     )
@@ -1177,7 +1237,6 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
             return
 
         chosen = self.types.component.values
-        order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
 
         # A blank purity box means "none are mixed", but only once the member
         # has told us something. Submitting the whole screen empty is not a
@@ -1190,19 +1249,16 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
             )
             return
 
-        # Offered per box, aligned with the powers, because that is how the
-        # engine reads them. Every box carries a purity answer, because on this
-        # screen the member had the lineup in front of them: saying nothing
-        # about a squad is saying it is pure. That is the one place the
-        # NULL-versus-0 distinction on `squads.mixed` is deliberately spent.
-        offered = {}
-        for slot, (power, squad_type) in enumerate(zip(powers, order), start=1):
-            offered[slot] = {
-                "squad_type": squad_type,
-                "power": power,
-                "mixed": int(slot in mixed),
-            }
+        # "Other" is a lineup the six permutations cannot describe, so the
+        # order has to be typed. Everything they already filled in is saved
+        # first, so the follow-up costs them only the types.
+        if chosen and chosen[0] == _TYPE_ORDER_OTHER:
+            await _write_squad_powers(interaction, self.player, powers, mixed, source="observed")
+            await _ask_for_type_order(interaction, self.player)
+            return
 
+        order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
+        offered = _squad_offer(powers, order, mixed)
         await _ask_or_write(interaction, self.player, offered, source="observed")
 
 
@@ -1336,105 +1392,6 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             can_write=self.can_write,
             note=note + aside,
             grouping=self.grouping,
-        )
-
-
-# ── Correct a squad (Premium) ─────────────────────────────────────────────────
-
-
-class _SquadModal(discord.ui.Modal, title="Correct a squad"):
-    """One slot per submission, for a player already on screen.
-
-    Three fields rather than five: the name and server came from the card this
-    opened from, so there is no second chance to mistype them and no ambiguous
-    match to resolve mid-flow.
-
-    Still one slot at a time. A five-field modal that half-fills is how a typo
-    in slot 3 silently overwrites a good slot 1.
-    """
-
-    def __init__(self, player: dict):
-        super().__init__()
-        self.player = player
-        self.title = f"Correct a squad: {player['display_name']}"[:45]
-
-    slot = discord.ui.TextInput(label="Slot (1, 2 or 3)", max_length=1)
-    squad_type = discord.ui.TextInput(
-        label="Squad type", required=False, max_length=16, placeholder="Tank, Missile or Aircraft"
-    )
-    # Takes the number in whatever form the game showed it. Demanding a
-    # normalised figure pushed a conversion onto the person reading "84.6M" off
-    # a screen, to produce a value the bot then renders back as "84.6M" -- work
-    # invented at the point of entry and undone at the point of display.
-    power = discord.ui.TextInput(
-        label="Power",
-        required=False,
-        max_length=24,
-        placeholder="84.6M, 84,600,000 or 84600000",
-    )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        squad_type = (self.squad_type.value or "").strip().title() or None
-        raw_power = (self.power.value or "").strip()
-        if not squad_type and not raw_power:
-            await interaction.followup.send(
-                "⚠️ Nothing to change. Fill in a squad type, a power, or both.", ephemeral=True
-            )
-            return
-        if squad_type and squad_type not in db.VALID_TYPES:
-            await interaction.followup.send(
-                f"⚠️ Squad type has to be one of {', '.join(db.VALID_TYPES)}.", ephemeral=True
-            )
-            return
-        power = parse_power(raw_power) if raw_power else None
-        if raw_power and power is None:
-            await interaction.followup.send(
-                f"⚠️ I couldn't read **{raw_power}** as a power. `84.6M`, "
-                f"`84,600,000` and `84600000` all work.",
-                ephemeral=True,
-            )
-            return
-        try:
-            slot = int(self.slot.value.strip())
-        except (ValueError, AttributeError):
-            slot = 0
-        if slot not in (1, 2, 3):
-            await interaction.followup.send("⚠️ Slot has to be 1, 2 or 3.", ephemeral=True)
-            return
-
-        found = self.player
-        # Ask before overwriting, but only where the two genuinely contradict.
-        # Somebody correcting a slot nobody has touched, or agreeing with what
-        # is there, still lands in one step.
-        offered = {"squad_type": squad_type, "power": power}
-        pending = await _pending_squad_entries(interaction, found, {slot: offered})
-        if pending[0]["disputed"]:
-            await _ask_which(interaction, found, pending, source="edited")
-            return
-
-        result = await asyncio.to_thread(
-            db.set_squad,
-            found["id"],
-            slot,
-            squad_type,
-            power,
-            actor=_actor(interaction),
-            source="edited",
-        )
-        if not result["edit_ids"]:
-            await interaction.followup.send(
-                f"ℹ️ Slot {slot} for **{_label(found)}** already said that. Nothing changed.",
-                ephemeral=True,
-            )
-            return
-        changed = ", ".join(
-            bit for bit in (squad_type, f"{power:,.0f}" if power is not None else None) if bit
-        )
-        await interaction.followup.send(
-            f"✅ Slot {slot} for **{_label(found)}** is now **{changed}**.",
-            ephemeral=True,
         )
 
 
@@ -1593,7 +1550,15 @@ class _DisagreementView(discord.ui.View):
                             for field, value in entry["offered"].items()
                             if field in disputed
                         },
-                        source=self.source,
+                        # `edited`, whatever the surface that collected it
+                        # says. A value that overrides one a person already
+                        # recorded is a correction by definition, and
+                        # `_import_would_downgrade` protects `edited` from
+                        # every later import where `observed` only outranks an
+                        # estimate. Losing that was the real cost of retiring
+                        # the one-slot modal, which wrote `edited` outright;
+                        # this puts it back on the only entries that need it.
+                        source="edited",
                     )
                 ).get("edits", {})
             await asyncio.to_thread(
@@ -1667,14 +1632,24 @@ async def _ask_which(interaction, player: dict, pending: list[dict], *, source: 
     )
 
 
-async def _ask_or_write(interaction, player: dict, offered_by_slot: dict, *, source: str) -> None:
-    """Save a squad submission, asking first only where it contradicts."""
+async def _ask_or_write(
+    interaction, player: dict, offered_by_slot: dict, *, source: str, quiet: bool = False
+) -> None:
+    """Save a squad submission, asking first only where it contradicts.
+
+    `quiet` suppresses the acknowledgement, for a caller that is only halfway
+    through and will say something itself. It never suppresses the
+    disagreement prompt: that is a question, not an acknowledgement, and
+    swallowing it would drop the answer on the floor.
+    """
     pending = await _pending_squad_entries(interaction, player, offered_by_slot)
     if any(entry["disputed"] for entry in pending):
         await _ask_which(interaction, player, pending, source=source)
         return
 
     written = await _write_undisputed(interaction, player, pending, source=source)
+    if quiet:
+        return
     if not written:
         await interaction.followup.send(
             f"↩️ Nothing to record for **{_label(player)}**. No changes made.",
@@ -1683,6 +1658,109 @@ async def _ask_or_write(interaction, player: dict, offered_by_slot: dict, *, sou
         return
     await interaction.followup.send(
         f"✅ Recorded {_plural(written, 'squad')} for **{_label(player)}**.",
+        ephemeral=True,
+    )
+
+
+# ── "Other": a lineup the six permutations cannot describe ────────────────────
+#
+# 96% of players run one of each type. The other 4% run two of something, and
+# enumerating those would take the dropdown from six options to twenty-seven to
+# catch one player in twenty-five. So the list stays short and the exception is
+# asked for afterwards.
+#
+# It cannot be a sixth field on the squad modal: five components is Discord's
+# cap and that screen is at it. And it cannot be a second modal, because
+# Discord will not accept a modal as the response to a modal submission. So it
+# is asked the way every free-text step in the setup wizards is asked -- an
+# ephemeral prompt, then `wait_for` on the member's next message.
+
+
+async def _write_squad_powers(interaction, player, powers, mixed, *, source: str) -> None:
+    """Save the half of an "Other" submission that needs no types.
+
+    Written before the question rather than after the answer, so a member who
+    reads three powers, picks Other and then gets pulled away keeps the powers.
+    The types are the only thing the follow-up adds.
+    """
+    offered = _squad_offer(powers, (None, None, None), mixed)
+    await _ask_or_write(interaction, player, offered, source=source, quiet=True)
+
+
+async def _ask_for_type_order(interaction, player: dict) -> None:
+    """Ask for the order in the channel, and wait for them to type it.
+
+    A modal cannot answer a modal, and the alternative -- a button that opens a
+    second modal -- makes somebody press twice to answer one question. So the
+    question is asked the way the setup wizards ask theirs: `wait_for` on their
+    next message in the channel.
+
+    The prompt is ephemeral, but their reply cannot be: nobody can send an
+    ephemeral message. So the reply is deleted once it has been read, which
+    leaves the channel as it was and keeps a line that means nothing without
+    the prompt above it from sitting there.
+
+    One retry before giving up, per `UX.md`: a validation failure costs one
+    step, not the whole flow. Their squad powers are already saved either way,
+    so the worst outcome is the types missing.
+    """
+    await interaction.followup.send(
+        "**What are their three squad types?**\n"
+        "Type them here in the same order as the power boxes, like "
+        "`Tank, Tank, Aircraft`.",
+        ephemeral=True,
+    )
+
+    def _mine(message):
+        return (
+            message.author.id == interaction.user.id
+            and message.channel.id == interaction.channel_id
+        )
+
+    for attempt in range(2):
+        try:
+            reply = await interaction.client.wait_for(
+                "message", check=_mine, timeout=_TYPE_ORDER_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                f"⏰ No squad types recorded for **{_label(player)}**. Their squad "
+                f"powers are saved. Run `{CHAMPION_DUEL_HUB_CMD}` → "
+                f"**{CD_BTN_FIND}** → **{CD_BTN_SQUADS}** when you have them.",
+                ephemeral=True,
+            )
+            return
+
+        raw = (reply.content or "").strip()
+        # Best effort. Deleting needs Manage Messages, and not having it is not
+        # a reason to fail a save that has already happened.
+        try:
+            await reply.delete()
+        except discord.HTTPException:
+            pass
+
+        parsed = _parse_type_order(raw)
+        if parsed is not None:
+            # `mixed` is None, not a set: purity was answered on the previous
+            # screen and written there. Sending a fresh answer nobody gave
+            # would be a measurement we invented.
+            offered = _squad_offer((None, None, None), parsed, None)
+            await _ask_or_write(interaction, player, offered, source="observed")
+            return
+
+        if attempt == 0:
+            await interaction.followup.send(
+                f"⚠️ I couldn't read **{discord.utils.escape_markdown(raw)[:60]}** as "
+                f"three squad types. Name all three in box order, like "
+                f"**Tank, Tank, Aircraft**. Try again.",
+                ephemeral=True,
+            )
+
+    await interaction.followup.send(
+        f"⚠️ Still couldn't read that as three squad types, so none were saved "
+        f"for **{_label(player)}**. Their squad powers are saved. Run "
+        f"`{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → **{CD_BTN_SQUADS}** "
+        f"to try again.",
         ephemeral=True,
     )
 

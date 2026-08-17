@@ -271,7 +271,7 @@ def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
     # Deliberately names no button. `Correct a squad` writes the missing value
     # but sits on a player's own card, two surfaces away, and renders locked
     # without Premium. A signpost to a padlock is a worse dead end than none.
-    assert hub._btn_words(hub.CD_BTN_SQUAD) not in embed.description
+    assert hub._btn_words(hub.CD_BTN_SQUADS) not in embed.description
     # The negative half is the one that matters. Without it this passes when
     # every player is reported missing, which is exactly the breakage it is
     # written to rule out.

@@ -148,7 +148,10 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
             can_write=True,
         ).children
     ]
-    assert on_card == [hub.CD_BTN_SQUAD, hub.CD_BTN_ORDER]
+    # `CD_BTN_SQUADS` leads: it is the second half of the add-a-player flow and
+    # takes all three squads in one open, which is what this view exists for.
+    # `CD_BTN_SQUAD` still follows it and still takes a single slot.
+    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_SQUAD, hub.CD_BTN_ORDER]
 
 
 def test_the_player_card_locks_its_actions_on_the_free_tier():

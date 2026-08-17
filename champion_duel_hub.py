@@ -65,6 +65,12 @@ CD_BTN_PREDICT = "🆚 Predict a match"
 CD_BTN_FIND = "🔍 Find a player"
 CD_BTN_ADD = "➕ Add a player"
 CD_BTN_SQUAD = "✏️ Correct a squad"
+# The second of the two entry screens. One open takes all three squads, the
+# types and the purity answer, where `CD_BTN_SQUAD` takes one slot at a time.
+# The two overlap and this one is strictly more capable, since every box is
+# optional -- see the note on `PlayerActionsView` about whether both should
+# stay.
+CD_BTN_SQUADS = "✏️ Record their squads"
 CD_BTN_ORDER = "➕ Record an order"
 CD_BTN_GUIDE = "📖 Where to find these numbers"
 CD_BTN_EDITS = "📜 Recent edits"
@@ -838,7 +844,22 @@ class PlayerActionsView(discord.ui.View):
         self.grouping = grouping
         self.message: discord.Message | None = None
 
-        actions = [(CD_BTN_SQUAD, self._on_squad), (CD_BTN_ORDER, self._on_order)]
+        # `CD_BTN_SQUADS` and `CD_BTN_SQUAD` overlap on purpose for now. The
+        # first is the second half of the add-a-player flow: one open, all
+        # three squads, their types and which are 4-of-a-type. The second
+        # predates it and takes a single slot.
+        #
+        # This view's own reason for existing argues for retiring the older
+        # one: it was built because "contributing three squad values and an
+        # order meant typing one name four times", and a one-slot modal is
+        # three of those four. Left in place because it is signed-off copy and
+        # removing a shipped control is Kevin's call, not a side effect of
+        # adding this.
+        actions = [
+            (CD_BTN_SQUADS, self._on_squads),
+            (CD_BTN_SQUAD, self._on_squad),
+            (CD_BTN_ORDER, self._on_order),
+        ]
         # Absent rather than disabled without a grouping: a group letter is
         # meaningless outside one, so there is nothing this could set.
         if grouping:
@@ -866,6 +887,14 @@ class PlayerActionsView(discord.ui.View):
 
     async def _on_squad(self, inter: discord.Interaction):
         await inter.response.send_modal(_SquadModal(self.player))
+
+    async def _on_squads(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _SquadDetailModal(
+                registrant_id=self.player["id"],
+                name=_label(self.player),
+            )
+        )
 
     async def _on_place(self, inter: discord.Interaction):
         await inter.response.send_modal(

@@ -236,12 +236,12 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     Raw, not derived: this is the "what have we actually typed in" view, and a
     blank cell renders as unknown rather than as a zero or an estimate. Sorted
-    by seed, because that is the order the in-game bracket screen shows and the
+    by seed, because that is the order the in-game League screen shows and the
     order someone copying off it will be reading in.
     """
     league = state.league
     embed = discord.Embed(
-        title="📊 Bracket",
+        title=VS_BTN_BRACKET,
         color=discord.Color.blurple(),
         description=(
             f"**{league.season} · {league.tier} {league.group}**"
@@ -283,7 +283,7 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
     rather than being folded into something that sounds like a call.
     """
     embed = discord.Embed(
-        title=f"📅 Week {week}",
+        title=f"{VS_BTN_WEEK.split()[0]} Week {week}",
         color=discord.Color.blurple(),
         description=f"**{state.league.season} · {state.league.tier} {state.league.group}**",
     )
@@ -771,9 +771,8 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
             embed=discord.Embed(
                 title="🏆 Alliance Duel (VS)",
                 description=(
-                    "Not set up yet. The tracker reads a tab in your own sheet, so it needs "
-                    "one sitting with the in-game League screen open.\n\n"
-                    f"Start at {ad_setup.VS_SETUP_NAV}."
+                    f"Not set up yet.\n\n{ad_setup.VS_WHAT_IT_IS} I will create "
+                    f"the tab for you.\n\nStart at {ad_setup.VS_SETUP_NAV}."
                 ),
                 color=discord.Color.blurple(),
             ),

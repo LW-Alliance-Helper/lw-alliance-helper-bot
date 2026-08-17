@@ -718,7 +718,18 @@ def declaration_embed(state, week: int) -> discord.Embed:
     if consequence:
         embed.add_field(name="If you save this week", value=consequence[:1024], inline=False)
 
-    embed.set_footer(text="Recorded on your own rows. Nothing is announced unless you ask.")
+    # The announce button hangs off the members' channel, which belongs to the
+    # day theme reminder. With none saved the button is absent, so the footer
+    # has to say why rather than leaving a control that silently never appears.
+    if state.cfg.get("day_theme_channel_id"):
+        embed.set_footer(text="Recorded on your own rows. Nothing is announced unless you ask.")
+    else:
+        embed.set_footer(
+            text=(
+                "Recorded on your own rows. To be able to tell members, set a channel "
+                "under Day theme reminder."
+            )
+        )
     return embed
 
 
@@ -768,6 +779,15 @@ def _trends_label() -> str:
     import alliance_duel_ui
 
     return alliance_duel_ui.VS_BTN_TRENDS
+
+
+def ad_wizard_btn_day_theme() -> str:
+    """The day theme settings button, imported lazily for the same one-way
+    dependency reason as `ad_hub_btn_path`. The members' channel lives there,
+    so copy about it has to name that button rather than the panel generally."""
+    import alliance_duel_wizard
+
+    return alliance_duel_wizard.VS_BTN_DAY_THEME
 
 
 def ad_hub_btn_path() -> str:
@@ -886,9 +906,9 @@ class DeclarationView(discord.ui.View):
         )
         if channel is None:
             await interaction.followup.send(
-                "⚠️ I could not post to your members' channel. Set it again in "
-                f"{ad_setup.VS_SETUP_NAV}, then open `/vs` and click "
-                f"**{VS_BTN_DECLARE}** to try again.",
+                "⚠️ I could not post to your members' channel. Set it again under "
+                f"**{ad_wizard_btn_day_theme()}** in {ad_setup.VS_SETUP_NAV}, then open "
+                f"`/vs` and click **{VS_BTN_DECLARE}** to try again.",
                 ephemeral=True,
             )
             return
@@ -898,8 +918,8 @@ class DeclarationView(discord.ui.View):
         except discord.Forbidden:
             await interaction.followup.send(
                 f"⚠️ I am not allowed to post in <#{channel.id}>. Give me permission "
-                "there, or pick another channel in "
-                f"{ad_setup.VS_SETUP_NAV}.",
+                f"there, or pick another channel under **{ad_wizard_btn_day_theme()}** "
+                f"in {ad_setup.VS_SETUP_NAV}.",
                 ephemeral=True,
             )
             return

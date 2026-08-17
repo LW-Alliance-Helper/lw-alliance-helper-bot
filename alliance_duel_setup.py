@@ -71,6 +71,14 @@ config_health.register(
 #: route stays identical across timeouts, gates and validation copy.
 VS_SETUP_NAV = f"`/setup` → **{HUB_BTN_VS}**"
 
+#: What the tracker is, in one sentence. Said on the door and again on the
+#: setup panel, so it lives here rather than being written twice.
+VS_WHAT_IT_IS = (
+    "Record your VS league in your own sheet, and I read it back as your "
+    "bracket, your projected path through it, and your record against every "
+    "alliance you have faced."
+)
+
 #: Re-exported from the pure layer, where it moved in #408 so the analytics
 #: module could use it without pulling in discord. Every surface still imports
 #: it from here, and the reasoning for the glyph lives on the definition.
@@ -115,11 +123,7 @@ def tracking_mode_embed() -> discord.Embed:
     """
     embed = discord.Embed(
         title="🏆 Alliance Duel (VS): what do you want to track?",
-        description=(
-            f"{TRACKING_MODE_QUESTION}\n\n"
-            "You can change this at any time, and switching to the full "
-            "bracket later offers to fill in the rows you skipped."
-        ),
+        description=TRACKING_MODE_QUESTION,
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -140,7 +144,16 @@ def tracking_mode_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Setup takes one sitting off the in-game bracket screen.")
+    # The reassurance sits in the footer because Discord renders it after the
+    # two options, and it only reads as reassurance once you know what you are
+    # choosing between. Above the fields it lands before the question means
+    # anything.
+    embed.set_footer(
+        text=(
+            "You can change this at any time, and switching to the whole "
+            "League bracket later offers to fill in the rows you skipped."
+        )
+    )
     return embed
 
 
@@ -227,19 +240,18 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Once per league, off the bracket screen",
+        name="Once per league",
         value=(
+            "Straight off the in-game League screen.\n"
             f"**{ad.COL_SEASON}** `S35` · **{ad.COL_TIER}** `Diamond` · "
             f"**{ad.COL_GROUP}** `12 - 2`\n"
             f"**{ad.COL_SEED}** `1` to `16`, fixed for the whole league.\n"
-            f"**{ad.COL_TAG}** and **{ad.COL_WARZONE}** identify an alliance. "
-            "Warzone is the game's word for the world an alliance plays in "
-            "(you may call it the server)."
+            f"**{ad.COL_TAG}** and **{ad.COL_WARZONE}** identify an alliance."
         ),
         inline=False,
     )
     embed.add_field(
-        name="Whenever you scout",
+        name="When you scout",
         value=(
             f"**{ad.COL_POWER}**, **{ad.COL_MEMBERS}**, **{ad.COL_GIFT_LEVEL}**. "
             "The latest value you fill in wins, so you only re-enter these "
@@ -260,7 +272,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
         inline=False,
     )
     embed.add_field(
-        name="Your reads, whenever you have one",
+        name="Your own reads",
         value=(
             f"**{ad.COL_KNOWN_1_5}** and **{ad.COL_KNOWN_6}** hold your own "
             "judgement of an alliance: "
@@ -509,7 +521,7 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
     States plainly what the rows will and will not contain. They carry the
     league identity and week, and nothing else: the bot has no way to know who
     the other alliances are, so tag, warzone and seed still come off the
-    in-game bracket screen. Saying so here stops the offer reading as though
+    in-game League screen. Saying so here stops the offer reading as though
     the bot is about to fill the bracket in for them.
     """
     total = sum(count for count, _stamp in missing.values())
@@ -521,7 +533,7 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
             f"{total} row{'s' if total != 1 else ''} missing across {weeks}.\n\n"
             "I can add them as blank rows, already stamped with the season, tier, "
             "group, week and date. You fill in the tag, warzone and seed for each "
-            "from the in-game bracket screen."
+            "from the in-game League screen."
         ),
         color=discord.Color.blurple(),
     )

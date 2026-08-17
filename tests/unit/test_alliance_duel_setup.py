@@ -54,12 +54,13 @@ def test_copy_never_says_guild(embed):
     assert "guild" not in _all_text(embed).lower()
 
 
-def test_the_column_guide_says_warzone_and_explains_it_once():
+def test_the_column_guide_names_warzone_without_glossing_it():
     text = _all_text(ads.column_guide_embed())
     assert "Warzone" in text
-    # Players say "server" colloquially, so it is acknowledged exactly once
-    # rather than left for them to work out.
-    assert "you may call it the server" in text
+    # Warzone is the game's own word, and UX.md exempts the game's vocabulary
+    # from the define-it-or-drop-it rule. Glossing it spent three lines on the
+    # one column nobody has to be taught.
+    assert "you may call it the server" not in text
 
 
 def test_no_internals_leak_into_copy():
@@ -451,7 +452,9 @@ def test_the_offer_is_honest_about_what_the_rows_contain():
     # It must not read as though the bot will fill the bracket in for them.
     assert "blank rows" in text
     assert "tag, warzone and seed" in text
-    assert "in-game bracket screen" in text
+    # One screen, one name. The game titles it "Alliance Duel League", so
+    # every surface says League screen.
+    assert "in-game League screen" in text
 
 
 def test_the_offer_counts_the_rows_and_names_the_weeks():

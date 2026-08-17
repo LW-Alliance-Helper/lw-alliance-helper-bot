@@ -315,6 +315,9 @@ async def test_import_seeds_roster_squads_and_orders_in_one_call(client, cd_db):
             "orders": [
                 {"name": "AlphaOne", "server": "738", "slots": ["Tank", "Missile", "Aircraft"]}
             ],
+            "profiles": [
+                {"name": "AlphaOne", "server": "738", "profile": {"gorilla": 0, "mixed": []}}
+            ],
         },
         headers=_auth(token),
     )
@@ -322,10 +325,66 @@ async def test_import_seeds_roster_squads_and_orders_in_one_call(client, cd_db):
     body = await resp.json()
     assert body["squads"]["applied"] == 3
     assert body["orders"]["applied"] == 1
+    assert body["profiles"]["applied"] == 1
 
     player = db.get_player("AlphaOne", server="738", include_scouting=True)
     assert len(player["squads"]) == 3
     assert len(player["orders"]) == 1
+    assert player["profile"] == {"mixed": [], "gorilla": 0}
+
+
+async def test_import_takes_profiles_on_their_own(client, cd_db):
+    """Every section is optional. A payload carrying only the newest one must
+    not fall through the "nothing to import" guard, which is what a route that
+    still names three sections would do."""
+    token = await _session(user="111")
+    await client.post(
+        f"{P}/admin/import",
+        json={"registrants": [{"name": "AlphaOne", "server": "738"}]},
+        headers=_auth(token),
+    )
+
+    resp = await client.post(
+        f"{P}/admin/import",
+        json={
+            "profiles": [
+                {
+                    "name": "AlphaOne",
+                    "server": "738",
+                    "profile": {"types": ["Aircraft", "Tank", "Missile"]},
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+
+    assert resp.status == 200
+    assert (await resp.json())["profiles"]["applied"] == 1
+
+
+async def test_import_rejects_a_profile_the_engine_would_choke_on(client, cd_db):
+    """The engine reads a profile inside a trial, after the interaction has
+    been deferred. A bad value there is a spinner that never resolves, so the
+    row is refused at the door and reported."""
+    token = await _session(user="111")
+    await client.post(
+        f"{P}/admin/import",
+        json={"registrants": [{"name": "AlphaOne", "server": "738"}]},
+        headers=_auth(token),
+    )
+
+    resp = await client.post(
+        f"{P}/admin/import",
+        json={
+            "profiles": [{"name": "AlphaOne", "server": "738", "profile": {"mixed": ["biggest"]}}]
+        },
+        headers=_auth(token),
+    )
+
+    body = await resp.json()
+    assert body["profiles"]["applied"] == 0
+    assert body["profiles"]["skipped"] == 1
+    assert "AlphaOne" in body["profiles"]["problems"][0]
 
 
 async def test_import_rejects_a_payload_with_nothing_in_it(client, cd_db):

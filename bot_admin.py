@@ -1127,10 +1127,10 @@ async def admin_champion_duel_import_slash(
         return
 
     if not isinstance(payload, dict) or not any(
-        isinstance(payload.get(k), list) for k in ("registrants", "squads", "orders")
+        isinstance(payload.get(k), list) for k in ("registrants", "squads", "orders", "profiles")
     ):
         await interaction.followup.send(
-            "⚠️ That JSON has none of `registrants`, `squads` or `orders`. "
+            "⚠️ That JSON has none of `registrants`, `squads`, `orders` or `profiles`. "
             "Generate it with `push_to_bot.py --out payload.json`.",
             ephemeral=True,
         )
@@ -1217,6 +1217,17 @@ async def admin_champion_duel_import_slash(
         result = await asyncio.to_thread(cd_db.import_orders, payload["orders"], actor=actor)
         lines.append(
             f"**{result['applied']}** deployment orders across {result['players']} players"
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+    if isinstance(payload.get("profiles"), list):
+        result = await asyncio.to_thread(cd_db.import_profiles, payload["profiles"], actor=actor)
+        # Coverage, not a total. The model runs without these and falls back to
+        # the population, so what this number says is how much of the field is
+        # measured rather than assumed.
+        lines.append(
+            f"**{result['applied']}** player profiles"
+            + (f", {result['cleared']} cleared" if result["cleared"] else "")
             + (f", {result['skipped']} skipped" if result["skipped"] else "")
         )
         problems += result["problems"]

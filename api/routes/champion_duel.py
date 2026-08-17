@@ -385,18 +385,20 @@ async def post_order(request: web.Request) -> web.Response:
 async def admin_import(request: web.Request) -> web.Response:
     """Bulk-load the roster, and optionally the scouting that goes with it.
 
-    One call rather than three, because the three are one operation: a roster
+    One call rather than four, because the four are one operation: a roster
     with no squads cannot be predicted at all (97% of registrants have never
     been seen, so almost every row needs its estimate to be useful), and orders
-    are meaningless without the registrants they hang off. Splitting them would
-    make a half-applied import the normal outcome of a dropped connection.
+    and profiles are meaningless without the registrants they hang off.
+    Splitting them would make a half-applied import the normal outcome of a
+    dropped connection.
 
-    Applied in dependency order for the same reason — squads and orders both
-    resolve against registrant rows, so those have to exist first.
+    Applied in dependency order for the same reason — squads, orders and
+    profiles all resolve against registrant rows, so those have to exist first.
 
-    An import must not downgrade an observed squad back to an estimate, and
-    must not double a deployment order's weight when it is re-run. Both rules
-    live in the data layer; see `import_squads` / `import_orders`.
+    An import must not downgrade an observed squad back to an estimate, must
+    not double a deployment order's weight when it is re-run, and must not let
+    a malformed profile reach the engine. All three rules live in the data
+    layer; see `import_squads` / `import_orders` / `import_profiles`.
     """
     if not db.NAMES_AVAILABLE:
         return json_response({"error": "identity_unavailable"}, request, status=503)
@@ -405,12 +407,13 @@ async def admin_import(request: web.Request) -> web.Response:
     except Exception:  # noqa: BLE001
         return json_response({"error": "bad_request"}, request, status=400)
 
-    for field in ("registrants", "squads", "orders"):
+    blocks = ("registrants", "squads", "orders", "profiles")
+    for field in blocks:
         if field in body and not isinstance(body[field], list):
             return json_response(
                 {"error": "bad_request", "detail": f"{field} must be a list"}, request, status=400
             )
-    if "registrants" not in body and "squads" not in body and "orders" not in body:
+    if not any(field in body for field in blocks):
         return json_response(
             {"error": "bad_request", "detail": "nothing to import"}, request, status=400
         )
@@ -437,6 +440,10 @@ async def admin_import(request: web.Request) -> web.Response:
         result["squads"] = await asyncio.to_thread(db.import_squads, body["squads"], actor=actor)
     if body.get("orders") is not None:
         result["orders"] = await asyncio.to_thread(db.import_orders, body["orders"], actor=actor)
+    if body.get("profiles") is not None:
+        result["profiles"] = await asyncio.to_thread(
+            db.import_profiles, body["profiles"], actor=actor
+        )
     return json_response(result, request)
 
 

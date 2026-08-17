@@ -86,13 +86,20 @@ def _payload():
             )
         ],
         "orders": [{"name": "AlphaOne", "server": "738", "slots": ["Tank", "Missile", "Aircraft"]}],
+        "profiles": [
+            {
+                "name": "AlphaOne",
+                "server": "738",
+                "profile": {"types": ["Aircraft", "Tank", "Missile"], "mixed": [0]},
+            }
+        ],
     }
 
 
 # ── The happy path reaches the same data layer as the route ───────────────────
 
 
-async def test_import_loads_all_three_sections(cd_db, command):
+async def test_import_loads_every_section(cd_db, command):
     interaction = _interaction()
     await command(interaction, _file(_payload()))
 
@@ -100,7 +107,22 @@ async def test_import_loads_all_three_sections(cd_db, command):
     assert player is not None
     assert len(player["squads"]) == 3
     assert len(player["orders"]) == 1
+    assert player["profile"] == {"types": ["Aircraft", "Tank", "Missile"], "mixed": [0]}
     assert "Imported" in _sent(interaction)
+
+
+async def test_a_payload_of_profiles_alone_is_accepted(cd_db, command):
+    """Every section is optional and this one is the newest, so a payload from
+    a simulator run that fitted nothing else must not read as an empty file."""
+    payload = {"profiles": _payload()["profiles"]}
+    db.import_registrants([{"name": "AlphaOne", "server": "738"}])
+    interaction = _interaction()
+
+    await command(interaction, _file(payload))
+
+    assert "Imported" in _sent(interaction)
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+    assert player["profile"] is not None
 
 
 async def test_rerunning_does_not_double_the_orders(cd_db, command):

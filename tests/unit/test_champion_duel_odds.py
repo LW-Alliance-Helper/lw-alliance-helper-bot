@@ -209,6 +209,146 @@ def test_an_answered_none_is_distinct_from_never_asked():
     assert odds._profile(never, odds._squads(never)) is None
 
 
+# ── The imported profile, and the frame it arrives in ─────────────────────────
+#
+# `import_profiles` stores what the sighting corpus measured, indexed by POWER
+# RANK. The `mixed` flag a member answers is indexed by BOX. The engine reads
+# the same key in whichever frame the rest of the input puts it in, so each
+# source is correct on exactly the path the other is wrong on.
+
+
+def _measured(name, thp, *, powers=None, profile=None, flags=None):
+    member = _member(name, thp, powers=powers, types=TYPES if powers else None)
+    if powers is None:
+        member["squads"] = [{"slot": s, "power": None, "squad_type": None} for s in (1, 2, 3)]
+    for squad in member["squads"]:
+        squad["source"] = "observed"
+    if flags is not None:
+        for squad, flag in zip(member["squads"], flags):
+            squad["mixed"] = flag
+    member["profile"] = profile
+    return member
+
+
+def test_what_only_the_corpus_measured_goes_out_untranslated():
+    """`types`, `shape` and `gorilla` are all power-rank facts, so none of them
+    needs the box translation `mixed` does. Nothing in the bot measures them at
+    all -- before the import block was read, an unscouted player got a type
+    ordering sampled from the population and a shape off the THP fit."""
+    member = _measured(
+        "A",
+        3e8,
+        profile={"types": ["Aircraft", "Tank", "Missile"], "shape": [0.94, 0.87], "gorilla": 1},
+    )
+
+    assert odds._profile(member, odds._squads(member)) == {
+        "types": ["Aircraft", "Tank", "Missile"],
+        "shape": [0.94, 0.87],
+        "gorilla": 1,
+    }
+
+
+def test_corpus_positions_go_straight_out_when_nothing_was_read():
+    """No power read means the THP path, where the engine applies the tuple
+    directly as power ranks -- which is the frame the corpus measured it in."""
+    member = _measured("A", 3e8, profile={"mixed": [0, 1]})
+
+    assert odds._profile(member, odds._squads(member)) == {"mixed": (0, 1)}
+
+
+def test_corpus_positions_are_translated_to_boxes_when_all_three_were_read():
+    """With every box carrying a power, which rank each box holds is readable
+    off what we store -- the same sort `measured_base` is about to do. Without
+    the translation the engine would read power ranks as box positions and land
+    the penalty on whichever squads sorted there."""
+    # Boxes in lineup order 82 / 94 / 78, so power ranks run box1, box0, box2.
+    member = _measured("A", 3e8, powers=[82e6, 94e6, 78e6], profile={"mixed": [0, 2]})
+
+    # Ranks 0 and 2 are the 94M and the 78M, which are boxes 1 and 2.
+    assert odds._profile(member, odds._squads(member))["mixed"] == (1, 2)
+
+
+def test_corpus_positions_are_dropped_when_only_some_boxes_were_read():
+    """Which rank a box holds is inferred by the engine from the THP fit and is
+    not knowable here, so there is no translation to make. A misplaced 3.3%
+    penalty is worse than a sampled one -- the call `build_player` makes
+    internally for the same reason."""
+    member = _measured("A", 3e8, powers=[82e6, None, None], profile={"mixed": [0, 2]})
+
+    assert odds._profile(member, odds._squads(member)) is None
+
+
+def test_a_corpus_none_is_safe_on_either_path():
+    """An empty answer names no positions, so it is true in both frames."""
+    read = _measured("A", 3e8, powers=[82e6, None, None], profile={"mixed": []})
+    unread = _measured("B", 3e8, profile={"mixed": []})
+
+    assert odds._profile(read, odds._squads(read)) == {"mixed": ()}
+    assert odds._profile(unread, odds._squads(unread)) == {"mixed": ()}
+
+
+def test_the_members_own_answer_wins_over_the_corpus():
+    """Not a ranking of sources -- a member reading their screen and a scout
+    watching a battle are the same kind of evidence. It is recency: the member
+    is describing the lineup they hold now, and the corpus fitted an ordering
+    from fights that may be a round old."""
+    member = _measured(
+        "A", 3e8, powers=[82e6, 94e6, 78e6], profile={"mixed": [0, 2]}, flags=(1, 0, 0)
+    )
+
+    # Box 1, which is what the member typed. The corpus would have said 1 and 2.
+    assert odds._profile(member, odds._squads(member))["mixed"] == (0,)
+
+
+def test_the_corpus_answers_where_the_members_boxes_cannot():
+    """A box answer with nothing read would be applied as power ranks, so that
+    one case falls through to the corpus rather than being dropped."""
+    member = _measured("A", 3e8, profile={"mixed": [1]}, flags=(1, 0, 1))
+
+    assert odds._profile(member, odds._squads(member)) == {"mixed": (1,)}
+
+
+def test_a_legacy_count_is_only_sent_on_the_path_it_expands_correctly_on():
+    """The engine reads a bare count as "the bottom n" POWER RANKS. On the
+    measured path `build_player` would then read that expansion as boxes, so
+    the count is dropped rather than moved to the wrong squads."""
+    unread = _measured("A", 3e8, profile={"n_mixed": 2})
+    read = _measured("B", 3e8, powers=[82e6, 94e6, 78e6], profile={"n_mixed": 2})
+
+    assert odds._profile(unread, odds._squads(unread)) == {"n_mixed": 2}
+    assert odds._profile(read, odds._squads(read)) is None
+
+
+def test_an_estimated_squad_leaves_the_corpus_positions_in_the_rank_frame():
+    """`_squads` withholds an estimate from the engine, so a player whose only
+    squads are THP-derived is on the THP path however many rows they have. The
+    profile has to follow that, not the row count."""
+    member = _measured("A", 3e8, powers=[82e6, 94e6, 78e6], profile={"mixed": [0, 2]})
+    for squad in member["squads"]:
+        squad["source"] = "estimated"
+
+    assert odds._profile(member, odds._squads(member)) == {"mixed": (0, 2)}
+
+
+def test_a_group_carrying_profiles_still_scores():
+    """The end of the join: everything above assembles a dict the engine has to
+    accept. A bad value in it raises inside a trial, after the interaction has
+    been deferred, and the member watches a spinner that never resolves."""
+    members = _group(n=8)
+    for i, member in enumerate(members):
+        member["profile"] = {
+            "types": ["Aircraft", "Tank", "Missile"],
+            "shape": [0.94, 0.87],
+            "mixed": [2] if i % 2 else [],
+            "gorilla": 0,
+        }
+
+    result = odds.group_advance_odds(members, trials=100)
+
+    assert len(result.rows) == 8
+    assert sum(r.advance for r in result.rows) == pytest.approx(2.0, abs=0.01)
+
+
 def test_a_squad_power_alone_is_enough_without_thp():
     """THP became optional in 1.5 when a reading is present. A player with one
     box filled and no THP is placed by the reading."""

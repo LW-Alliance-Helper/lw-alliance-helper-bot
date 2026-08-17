@@ -506,6 +506,49 @@ def init_db() -> None:
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
+        # What the sighting corpus MEASURED about a player, as opposed to what
+        # somebody saw them field once. `champion_duel_engine.semifinal` takes
+        # these as an argument and draws from a population distribution for
+        # anyone absent, so a missing row costs accuracy rather than breaking a
+        # prediction -- which is why they are their own table rather than
+        # columns on `squads`. A profile is about the player; a squad row is
+        # about one box on their lineup screen.
+        #
+        # **Every position here is a POWER RANK, 0 = biggest squad.** The
+        # `mixed` flag on `squads` is indexed by BOX. The two are different
+        # frames and translating between them needs all three powers, which is
+        # why `champion_duel_odds._profile` -- not this table -- owns the
+        # merge. Storing them apart is what keeps that translation visible.
+        #
+        # No `source` column: every row is imported by definition. A member's
+        # own answer about their squads lands on `squads.mixed`, which is the
+        # other half of the merge and carries its own provenance already.
+        #
+        # NULL means never measured, which is NOT a measured zero -- `mixed`
+        # is '' when somebody looked and every squad is pure, and the engine
+        # treats those two differently on purpose.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS registrant_profiles (
+                registrant_id INTEGER PRIMARY KEY,
+                -- "Aircraft,Tank,Missile" -- biggest squad first
+                types         TEXT,
+                -- lineup shape (r21, r31); either may be NULL if only the
+                -- other was read
+                shape_r21     REAL,
+                shape_r31     REAL,
+                -- which squads are 4-of-a-type, as power ranks: '0,1' is the
+                -- two biggest, '' is "we looked and all three are pure"
+                mixed         TEXT,
+                -- LEGACY: how many are 4-of-a-type, when nothing said which.
+                -- Only ever >= 1; a measured zero normalises to mixed = ''.
+                n_mixed       INTEGER,
+                -- which power rank the gorilla starts on, 0-2
+                gorilla       INTEGER,
+                updated_at    TEXT NOT NULL,
+                updated_by    TEXT,
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS order_history (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2121,6 +2164,51 @@ def attach_stages(player: dict, grouping_id=None) -> dict:
     return player
 
 
+def _profile_from_row(row) -> dict:
+    """One stored profile in the shape `champion_duel_engine.semifinal` reads.
+
+    Positions are POWER RANKS here, which is the frame the engine documents and
+    the frame the corpus measured them in. A caller pairing this with squad
+    boxes has a translation to do; see `champion_duel_odds._profile`.
+
+    `mixed` wins over `n_mixed`, the same way the engine picks between them, so
+    a legacy count never reaches a model that has been told which squads.
+    """
+    out: dict = {}
+    if row["types"]:
+        out["types"] = row["types"].split(",")
+    if row["shape_r21"] is not None or row["shape_r31"] is not None:
+        out["shape"] = [row["shape_r21"], row["shape_r31"]]
+    if row["mixed"] is not None:
+        # '' is a measurement -- "we looked and every squad is pure" -- and has
+        # to survive as an empty list rather than collapsing to absent.
+        out["mixed"] = [int(i) for i in row["mixed"].split(",") if i]
+    elif row["n_mixed"] is not None:
+        out["n_mixed"] = row["n_mixed"]
+    if row["gorilla"] is not None:
+        out["gorilla"] = row["gorilla"]
+    return out
+
+
+def get_profiles(registrant_ids) -> dict[int, dict]:
+    """`{registrant_id: profile}` for whichever of these have one measured.
+
+    Absent from the mapping means never measured, which is what the engine
+    answers by drawing from the population. A row of nulls would say something
+    quite different, so `import_profiles` refuses to write one.
+    """
+    ids = list(registrant_ids)
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM registrant_profiles WHERE registrant_id IN ({marks})",
+            tuple(ids),
+        ).fetchall()
+    return {r["registrant_id"]: _profile_from_row(r) for r in rows}
+
+
 def get_group_scouting(group_id: int) -> list[dict]:
     """One group's members with their squads and orders, in finishing order.
 
@@ -2138,6 +2226,11 @@ def get_group_scouting(group_id: int) -> list[dict]:
     group and score it from one read. `id` is set to the registrant id, because
     that is the key `build_side` and the squad lookups expect, and a group
     membership row's own primary key would silently match nothing.
+
+    The imported profile rides along for the same reason `thp` does: the odds
+    read it, and a query that returns everything except the one field the model
+    wants is a feature that cannot work in production and still passes its
+    tests.
     """
     members = get_group_members(group_id)
     if not members:
@@ -2146,6 +2239,7 @@ def get_group_scouting(group_id: int) -> list[dict]:
     marks = ",".join("?" for _ in ids)
     squads: dict[int, list] = {i: [] for i in ids}
     orders: dict[int, list] = {i: [] for i in ids}
+    profiles = get_profiles(ids)
     with _get_conn() as conn:
         for r in conn.execute(
             f"SELECT * FROM squads WHERE registrant_id IN ({marks}) ORDER BY registrant_id, slot",
@@ -2163,6 +2257,7 @@ def get_group_scouting(group_id: int) -> list[dict]:
         m["id"] = rid
         m["squads"] = squads.get(rid, [])
         m["orders"] = orders.get(rid, [])
+        m["profile"] = profiles.get(rid)
     return members
 
 
@@ -2190,6 +2285,7 @@ def get_player(name, server=None, include_scouting: bool = False) -> dict | None
                     (player["id"],),
                 ).fetchall()
             ]
+        player["profile"] = get_profiles([player["id"]]).get(player["id"])
     return player
 
 
@@ -2599,6 +2695,224 @@ def import_orders(rows: list[dict], *, actor) -> dict:
         "applied": applied,
         "skipped": skipped,
         "players": len(prepared),
+        "problems": problems[:50],
+    }
+
+
+def _as_rank(value) -> int:
+    """One squad position, 0-2, or a ValueError saying why it is not one.
+
+    Bools are refused outright. `int(True)` is 1 and would land a purity
+    penalty on the second-biggest squad of anyone whose profile carried a flag
+    where a position belongs.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{value!r} is not a squad position")
+    rank = int(value)
+    if not 0 <= rank <= 2:
+        raise ValueError(f"{value!r} is not a squad position (0-2)")
+    return rank
+
+
+def _profile_columns(profile) -> tuple[dict | None, str | None]:
+    """One imported profile as storable columns, or a reason it is unusable.
+
+    **Validated here rather than passed through, and that is the whole point of
+    the function.** The engine reads a profile deep inside a trial: `int(i)` on
+    a `mixed` entry, `tuple(profile["types"])` indexed three deep in `lineup`.
+    A bad value there raises after the interaction has been deferred, and
+    `build_odds_embed` catches only `NotEnoughData` -- so the member watches a
+    spinner that never resolves and nothing says why. Refusing the row at the
+    door costs that one player their profile and nothing else.
+
+    Unknown keys are ignored rather than refused: a newer simulator may fit
+    something this version has no column for, and dropping the row over it
+    would throw away the measurements we do understand.
+    """
+    if not isinstance(profile, dict):
+        return None, "profile is not an object"
+    cols: dict = {
+        "types": None,
+        "shape_r21": None,
+        "shape_r31": None,
+        "mixed": None,
+        "n_mixed": None,
+        "gorilla": None,
+    }
+
+    types = profile.get("types")
+    if types is not None:
+        # Exactly three. `lineup` indexes this list once per slot, so a short
+        # one is an IndexError inside a trial rather than a partial reading.
+        if not isinstance(types, (list, tuple)) or len(types) != 3:
+            return None, f"types {types!r} is not three squads"
+        if any(t not in VALID_TYPES for t in types):
+            return None, f"types {types!r} names something outside {VALID_TYPES}"
+        cols["types"] = ",".join(types)
+
+    shape = profile.get("shape")
+    if shape is not None:
+        if not isinstance(shape, (list, tuple)) or len(shape) != 2:
+            return None, f"shape {shape!r} is not (r21, r31)"
+        ratios: list = []
+        for ratio in shape:
+            if ratio is None:
+                ratios.append(None)
+                continue
+            try:
+                value = float(ratio)
+            except (TypeError, ValueError):
+                return None, f"shape {shape!r} is not numeric"
+            # Both ratios are against the biggest squad, which cannot be
+            # outranked by definition. Above 1 is a transcription slip, and it
+            # would not raise -- the engine sorts, so the lineup silently comes
+            # out in a different order from the one the profile describes.
+            if not 0 < value <= 1:
+                return None, f"shape ratio {ratio!r} is outside (0, 1]"
+            ratios.append(value)
+        cols["shape_r21"], cols["shape_r31"] = ratios
+
+    mixed = profile.get("mixed")
+    if mixed is not None:
+        if isinstance(mixed, (str, bytes)) or not isinstance(mixed, (list, tuple, set)):
+            return None, f"mixed {mixed!r} is not a list of positions"
+        try:
+            ranks = sorted({_as_rank(i) for i in mixed})
+        except (TypeError, ValueError) as exc:
+            return None, f"mixed {mixed!r}: {exc}"
+        cols["mixed"] = ",".join(str(rank) for rank in ranks)
+
+    # Only read when nothing said WHICH squads. The engine makes the same
+    # choice between the two, and storing both would leave the row ambiguous
+    # about which a later reader should believe.
+    n_mixed = profile.get("n_mixed")
+    if n_mixed is not None and cols["mixed"] is None:
+        if isinstance(n_mixed, bool):
+            return None, f"n_mixed {n_mixed!r} is not a count"
+        try:
+            count = int(n_mixed)
+        except (TypeError, ValueError):
+            return None, f"n_mixed {n_mixed!r} is not a count"
+        if count < 0:
+            return None, f"n_mixed {n_mixed!r} is negative"
+        # A measured zero says "we looked and every squad is pure", which is
+        # exactly what an empty `mixed` says -- and unlike a count it names no
+        # positions, so it stays true however the reading turned out.
+        # Normalised now so the legacy column only ever means "n of them and we
+        # cannot say which", which is the case that needs handling with care.
+        if count:
+            cols["n_mixed"] = count
+        else:
+            cols["mixed"] = ""
+
+    gorilla = profile.get("gorilla")
+    if gorilla is not None:
+        try:
+            cols["gorilla"] = _as_rank(gorilla)
+        except (TypeError, ValueError) as exc:
+            return None, f"gorilla {gorilla!r}: {exc}"
+
+    # An all-null result is not an error. It is a payload saying "here is what
+    # we hold for this player" and holding nothing, which is a retraction --
+    # `import_profiles` deletes on it rather than storing a row of nulls.
+    return cols, None
+
+
+def import_profiles(rows: list[dict], *, actor) -> dict:
+    """Load the per-player measurements the semifinal model takes as input.
+
+    Each row is `{name, server, profile}` -- the block `push_to_bot.py` has
+    been sending since the 1.5 contract landed and nothing here read.
+
+    **A profile is replaced whole, not merged key by key, and a payload row
+    measuring nothing deletes it.** Each import is a re-fit of the entire
+    corpus, so a measurement that has dropped out of the fit -- a sighting
+    reclassified, a fight re-read -- has to drop out of the row with it.
+    Merging would keep a retracted measurement alive with nothing able to clear
+    it, which is the shape of bug that shows up only as odds that are quietly
+    wrong forever.
+
+    **The retraction only reaches players the payload names.** A player who
+    drops out of the fit altogether is simply absent, and absent has to keep
+    meaning "this payload says nothing about them" -- a block that cleared
+    every profile it did not mention would let one alliance's import wipe
+    another's, which is the destructive shape the import gate exists to
+    contain. So the producer retracts by *sending* an empty profile. Today
+    `player_profiles.all_profiles()` omits those instead, which leaves that one
+    case uncovered end to end; the missing half is in the simulator.
+
+    Replacing whole is the opposite of `import_squads`, and deliberately so: a
+    squad row may carry a correction somebody typed, and an import must never
+    walk over it. Nobody hand-enters a profile. What a member does enter is the
+    per-box `mixed` flag on `squads`, which this never touches -- the two meet
+    at read time in `champion_duel_odds._profile`, where the member's answer
+    wins.
+    """
+    applied = cleared = skipped = 0
+    problems: list[str] = []
+    now = _now()
+    actor_id = (actor or {}).get("discord_user_id")
+
+    with _get_conn() as conn:
+        for row in rows:
+            registrant_id, problem = _resolve_for_import(row.get("name"), row.get("server"))
+            if problem:
+                problems.append(problem)
+                skipped += 1
+                continue
+
+            cols, problem = _profile_columns(row.get("profile"))
+            if problem:
+                problems.append(f"{row.get('name')!r} profile: {problem}")
+                skipped += 1
+                continue
+
+            if not any(value is not None for value in cols.values()):
+                # Nothing measurable in the row, so nothing measured -- and a
+                # profile we can no longer justify has to go, not sit there
+                # feeding a retracted measurement to every future run. Counted
+                # separately: clearing 400 profiles is a very different event
+                # from loading 400 and the summary must not read the same.
+                cleared += conn.execute(
+                    "DELETE FROM registrant_profiles WHERE registrant_id = ?",
+                    (registrant_id,),
+                ).rowcount
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO registrant_profiles
+                    (registrant_id, types, shape_r21, shape_r31, mixed, n_mixed,
+                     gorilla, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(registrant_id) DO UPDATE SET
+                    types      = excluded.types,
+                    shape_r21  = excluded.shape_r21,
+                    shape_r31  = excluded.shape_r31,
+                    mixed      = excluded.mixed,
+                    n_mixed    = excluded.n_mixed,
+                    gorilla    = excluded.gorilla,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (
+                    registrant_id,
+                    cols["types"],
+                    cols["shape_r21"],
+                    cols["shape_r31"],
+                    cols["mixed"],
+                    cols["n_mixed"],
+                    cols["gorilla"],
+                    now,
+                    actor_id,
+                ),
+            )
+            applied += 1
+
+    return {
+        "applied": applied,
+        "cleared": cleared,
+        "skipped": skipped,
         "problems": problems[:50],
     }
 

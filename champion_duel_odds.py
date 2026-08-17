@@ -38,7 +38,9 @@ squad or their weakest.
 - `level`    troop level 1-11, defaulting to 11. Only matters across
              mixed-level matchups: within a group where everyone is the same
              level, ranking is unaffected. Absent until the bot collects it.
-- `profile`  what the boxes cannot carry, which is now only `mixed`.
+- `profile`  what the boxes cannot carry: squad purity, and -- for a player
+             the sighting corpus measured and `import_profiles` loaded -- their
+             real type ordering, lineup shape and gorilla placement.
 
 `jitter` stays on. Without it the model treats an estimate as a measurement,
 which the engine calls the single biggest source of false confidence in the old
@@ -213,41 +215,104 @@ def _squads(member: dict) -> list[dict]:
     return out
 
 
-def _profile(member: dict, squads: list[dict]) -> dict | None:
-    """What we measured that the squad boxes cannot carry.
+def _purity(member: dict, imported: dict, powers: list) -> dict:
+    """Which of this player's squads are 4-of-a-type, in the frame the engine
+    will read them in.
 
-    Types and lineup shape both ride on `squads` now, so this is only `mixed`:
-    which squads are 4-of-a-type rather than 5.
+    Two sources answer this and **they are indexed differently**, which is the
+    sharpest edge in this whole contract:
 
-    **`mixed` means two different things depending on whether any power was
-    read**, which is the sharpest edge in this contract. With at least one
-    power the engine treats it as positions against the input boxes and
-    translates through its own sort. With none, `measured_base` returns None,
-    the THP path runs, and the same tuple is applied directly as POWER RANKS.
-    We know which box a squad is, never which rank, so it is only sent on the
-    first path. Sending it on the second would land a 3.3% penalty on whichever
+    - The `mixed` flag on `squads` is what a MEMBER answered, box by box,
+      looking at their own lineup screen. It is indexed by BOX.
+    - The `mixed` list on an imported profile is what the sighting corpus
+      MEASURED, and `player_profiles` fits it against squad power. It is
+      indexed by POWER RANK.
+
+    And the engine reads the same key in whichever of those two frames the rest
+    of the input puts it in. With at least one power read, `measured_base`
+    returns an `order` and `build_player` translates `mixed` from boxes to
+    ranks through it. With none, the THP path runs and the tuple is applied
+    directly as ranks. So each source is correct on exactly the path the other
+    is wrong on, and sending the wrong one lands a 3.3% penalty on whichever
     squads happened to sort into those positions.
 
-    An empty tuple is a measurement -- "we looked and every squad is pure" --
-    and is deliberately distinct from absent, so it is only sent when somebody
-    actually answered.
+    **The member's answer wins where both are usable.** Kevin's ruling is that
+    a member reading their own screen and a scout watching a battle are the
+    same kind of evidence, so this is not a ranking of sources -- it is
+    recency. The member is describing the lineup they hold now; the corpus
+    fitted an ordering from fights that may be a round old, and squads get
+    rebuilt between rounds.
+
+    An empty answer -- "we looked and every squad is pure" -- names no
+    positions at all, so it is true in both frames and always worth sending.
+    Dropping it would make the engine sample a mixed pair from the population
+    for a player we were explicitly told has none.
     """
+    read = [i for i, power in enumerate(powers) if power]
+
     # Per squad in the database, because that is what a member answers: they
     # are looking at their lineup screen box by box. The engine wants the set
     # of positions, so it is assembled here.
     flags = {sq["slot"]: sq.get("mixed") for sq in (member.get("squads") or [])}
     answered = [flags.get(slot) for slot in SLOTS]
-    if all(v is None for v in answered):
-        return None
-    mixed = tuple(i for i, v in enumerate(answered) if v)
-    # An empty answer carries no rank ambiguity: there are no positions to
-    # translate, so it means the same thing on both paths and is always worth
-    # sending. Dropping it would make the engine sample a mixed pair from the
-    # population and put a 3.3% penalty on two squads of a player we were told
-    # has none.
-    if mixed and not any(s["power"] for s in squads):
-        return None
-    return {"mixed": mixed}
+    if any(v is not None for v in answered):
+        boxes = tuple(i for i, v in enumerate(answered) if v)
+        # Box positions with nothing read would be applied as power ranks, so
+        # that one case falls through to the corpus, which measured this in
+        # exactly that frame.
+        if read or not boxes:
+            return {"mixed": boxes}
+
+    imported_mixed = imported.get("mixed")
+    if imported_mixed is not None:
+        ranks = tuple(sorted({int(i) for i in imported_mixed}))
+        if not ranks or not read:
+            return {"mixed": ranks}
+        if len(read) == 3:
+            # Every box carries a power, so which rank each box holds is
+            # readable off what we store -- the same sort `measured_base` is
+            # about to do. Translating here is what lets a corpus measurement
+            # reach a player whose squads somebody has since typed in.
+            order = sorted(read, key=lambda box: -powers[box])
+            return {"mixed": tuple(sorted(order[rank] for rank in ranks))}
+        # One or two powers. Which rank a box holds is inferred by the engine
+        # from the THP fit and is not knowable here, so there is no translation
+        # to make and the measurement is dropped. A misplaced penalty is worse
+        # than a sampled one -- the same call `build_player` makes internally.
+        return {}
+
+    # LEGACY, and only sendable where the engine's own "the bottom n" expansion
+    # lands in the frame it is then applied in. That is the THP path. With a
+    # power read, the engine would expand the count to power ranks and
+    # `build_player` would go on to read those as boxes.
+    count = imported.get("n_mixed")
+    if count is not None and not read:
+        return {"n_mixed": count}
+    return {}
+
+
+def _profile(member: dict, squads: list[dict]) -> dict | None:
+    """What we measured about this player that the squad boxes cannot carry.
+
+    Two things feed it: the per-box answers a member gave through the hub, and
+    the profile `import_profiles` loaded from the sighting corpus. `_purity`
+    owns the one key they both speak to; the rest come from the corpus alone,
+    because nothing in the bot measures them.
+
+    `types`, `shape` and `gorilla` are all POWER-RANK facts and need no
+    translation, so they go out whenever we hold them. The engine reads each on
+    the path it can use one: `types` on both, `shape` and `gorilla` only where
+    nothing was read. Sending a key the engine will ignore costs nothing;
+    withholding one costs a player their measurement.
+    """
+    imported = member.get("profile") or {}
+    powers = [squad["power"] for squad in squads]
+
+    out = {
+        key: imported[key] for key in ("types", "shape", "gorilla") if imported.get(key) is not None
+    }
+    out.update(_purity(member, imported, powers))
+    return out or None
 
 
 def group_advance_odds(

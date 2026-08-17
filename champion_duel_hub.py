@@ -94,6 +94,16 @@ CD_BTN_GROUP = "🏅 Your group"
 # Breakdown's, and 🎲 was the trap: the game's own prediction *is* a betting
 # market, so a die would say we are that feature on the one surface where the
 # distinction matters most. A crystal ball says forecast without saying wager.
+# Not "register for a round". A player registered for this Champion Duel in
+# the game weeks ago; what is missing is where the draw put them, which is a
+# fact somebody read off a screen. A label claiming registration would describe
+# an outcome the control does not have, which `UX.md` puts the wrong way round:
+# the label describes the control, and this one sets a group.
+#
+# 🏅 rather than a new glyph. `DESIGN.md` has it as one player's standing in a
+# round, and which group they are in is exactly that, so this and the group
+# view share a mark because they share a meaning.
+CD_BTN_PLACE = "🏅 Set their group"
 CD_BTN_ODDS = "🔮 Odds of advancing"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
@@ -734,6 +744,78 @@ def build_player_embed(
     return embed
 
 
+class _PlaceInGroupModal(discord.ui.Modal, title="Which group are they in?"):
+    """Put a player we already have into a round's group.
+
+    Two dropdowns and nothing typed, because both answers come from a fixed
+    set: there are three rounds and sixteen letters, and free text here only
+    creates ways to be wrong. It replaces the group box that used to sit on the
+    add-a-player screen, which had to guess a round and could not offer the
+    letters.
+
+    The knockouts are absent from the round list on purpose. They are one field
+    of 32 with no letter at all, so there would be nothing to pick.
+    """
+
+    def __init__(self, *, player: dict, grouping: dict):
+        super().__init__()
+        self.player = player
+        self.grouping = grouping
+
+    stage = discord.ui.Label(
+        text="Which round?",
+        component=discord.ui.Select(
+            options=[
+                discord.SelectOption(label=db.STAGE_LABELS[key], value=key)
+                for key in ("qualifiers", "semifinals")
+            ],
+        ),
+    )
+    group = discord.ui.Label(
+        text="Which group?",
+        component=discord.ui.Select(
+            options=[
+                discord.SelectOption(label=f"Group {letter}", value=letter)
+                for letter in db.GROUP_LABELS
+            ],
+        ),
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        stage = self.stage.component.values[0]
+        letter = self.group.component.values[0]
+        server = self.player.get("server")
+
+        # The guard that used to live on the add-a-player screen, kept because
+        # it is the one that matters: a letter belongs to one Champion Duel, and
+        # writing one for a player whose warzone is in a different draw is what
+        # put an officer in warzone 1500's opponent into the imported grouping's
+        # Group D. Refused out loud rather than dropped.
+        if server and server not in self.grouping["warzones"]:
+            await interaction.followup.send(
+                f"⚠️ Warzone **{server}** is not in {_grouping_name(self.grouping)}, "
+                f"so **Group {letter}** there is a different group from yours. "
+                f"Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        await asyncio.to_thread(
+            db.set_stage,
+            self.player["id"],
+            stage,
+            grp=letter,
+            grouping_id=self.grouping["id"],
+        )
+        await interaction.followup.send(
+            f"✅ Put **{_label(self.player)}** in **Group {letter}** for the "
+            f"**{db.STAGE_LABELS[stage]}**.",
+            ephemeral=True,
+        )
+
+
 class PlayerActionsView(discord.ui.View):
     """The write actions, attached to a player already on screen.
 
@@ -747,16 +829,22 @@ class PlayerActionsView(discord.ui.View):
     would look like.
     """
 
-    def __init__(self, *, player: dict, user_id: int, can_write: bool):
+    def __init__(
+        self, *, player: dict, user_id: int, can_write: bool, grouping: dict | None = None
+    ):
         super().__init__(timeout=600)
         self.player = player
         self.user_id = user_id
+        self.grouping = grouping
         self.message: discord.Message | None = None
 
-        for label, callback in (
-            (CD_BTN_SQUAD, self._on_squad),
-            (CD_BTN_ORDER, self._on_order),
-        ):
+        actions = [(CD_BTN_SQUAD, self._on_squad), (CD_BTN_ORDER, self._on_order)]
+        # Absent rather than disabled without a grouping: a group letter is
+        # meaningless outside one, so there is nothing this could set.
+        if grouping:
+            actions.append((CD_BTN_PLACE, self._on_place))
+
+        for label, callback in actions:
             button = discord.ui.Button(
                 label=(label if can_write else f"🔒 {label}")[:80],
                 style=discord.ButtonStyle.secondary,
@@ -778,6 +866,11 @@ class PlayerActionsView(discord.ui.View):
 
     async def _on_squad(self, inter: discord.Interaction):
         await inter.response.send_modal(_SquadModal(self.player))
+
+    async def _on_place(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _PlaceInGroupModal(player=self.player, grouping=self.grouping)
+        )
 
     async def _on_order(self, inter: discord.Interaction):
         # Straight to the picker. The modal that used to sit in front of this
@@ -816,7 +909,12 @@ async def send_player_card(
     would take that away.
     """
     top = await asyncio.to_thread(db.most_common_order, player["id"])
-    view = PlayerActionsView(player=player, user_id=interaction.user.id, can_write=can_write)
+    view = PlayerActionsView(
+        player=player,
+        user_id=interaction.user.id,
+        can_write=can_write,
+        grouping=grouping,
+    )
     await interaction.followup.send(
         content=note,
         embed=build_player_embed(player, top, grouping=grouping),

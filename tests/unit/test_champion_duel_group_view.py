@@ -329,3 +329,43 @@ def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
     assert "simulations of the round" in embed.description
     assert "**P8**" in embed.description
     assert "Total Hero Power" not in embed.description
+
+
+# ── Putting one player in a group ─────────────────────────────────────────────
+
+
+def test_setting_a_group_offers_only_the_rounds_that_have_letters(cd_db):
+    """The knockouts are one field of 32 with no letter, so there would be
+    nothing to pick. Both dropdowns come from the db's own constants rather
+    than a list here, so a renamed round cannot leave the two disagreeing."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    reg = db.upsert_registrant("Alpha", server="738")
+
+    modal = hub._PlaceInGroupModal(player=reg, grouping=grouping)
+
+    rounds = [o.value for o in modal.stage.component.options]
+    letters = [o.value for o in modal.group.component.options]
+    assert rounds == ["qualifiers", "semifinals"]
+    assert "knockouts" not in rounds
+    assert letters == list(db.GROUP_LABELS)
+
+
+def test_the_button_is_absent_without_a_champion_duel(cd_db):
+    """A group letter is meaningless outside one, so there is nothing the
+    control could set. Absent rather than disabled."""
+    reg = db.upsert_registrant("Alpha", server="738")
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+
+    without = hub.PlayerActionsView(player=reg, user_id=1, can_write=True, grouping=None)
+    with_one = hub.PlayerActionsView(player=reg, user_id=1, can_write=True, grouping=grouping)
+
+    assert hub.CD_BTN_PLACE not in [b.label for b in without.children]
+    assert hub.CD_BTN_PLACE in [b.label for b in with_one.children]
+
+
+def test_the_label_does_not_claim_they_are_being_registered(cd_db):
+    """They registered for this Champion Duel in the game weeks ago. What is
+    missing is where the draw put them, and a label saying otherwise describes
+    an outcome the control does not have."""
+    assert "register" not in hub.CD_BTN_PLACE.lower()
+    assert "group" in hub.CD_BTN_PLACE.lower()

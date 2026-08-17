@@ -51,29 +51,55 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 try:
-    from champion_duel_engine import semifinal
+    from champion_duel_engine import qualifier, semifinal
 
     ENGINE_AVAILABLE = True
 except ImportError:  # pragma: no cover - asserted through the degraded path
     ENGINE_AVAILABLE = False
 
-#: Trials per group, and deliberately not the engine's 4,000 default.
+#: Per-round model, how many go through, and how many trials to spend.
 #:
-#: The old port precomputed a 28-entry matrix and then spent one RNG draw per
-#: meeting, so trials were nearly free. This rebuilds all eight players every
-#: trial and plays 28 meetings of 3 matches, each up to three slot resolutions.
-#: Measured on a development machine, 4,000 trials is about 15 seconds of pure
-#: Python, and pure Python holds the GIL: the interaction survives because it
-#: runs in a thread, but the bot's event loop does not get a look in for that
-#: whole time, on one container, for every press.
+#: The two rounds are different models and the package docstring is explicit
+#: that they must not reach across to each other. They also cost wildly
+#: different amounts, which is why the trial counts are not shared.
 #:
-#: 800 keeps a two-of-eight question inside a percentage point, which is finer
-#: than the surface ever renders, at roughly three seconds. The number is a
-#: latency budget rather than a statistical one and should move if either
-#: changes.
+#: SEMIFINALS. 800 rather than the engine's 4,000 default. 8 players over 28
+#: meetings is cheap per trial but not free, and 4,000 measured about fifteen
+#: seconds of pure Python. 800 keeps a two-of-eight question inside a
+#: percentage point, finer than the surface renders, at roughly three seconds.
+#:
+#: QUALIFIERS. 200, which IS the engine's default, because the question needs
+#: it: a top-8-of-100 probability sits near 8%, where 50 trials carry about
+#: four points of standard error and would render as noise. 100 players over
+#: ~36 matches costs about **fourteen seconds**, and pure Python holds the GIL,
+#: so the whole bot is unresponsive for that long on every press. That is the
+#: known cost of this button and the reason it is worth watching: if qualifier
+#: odds get real use, the fix is to run the simulation off the event loop's
+#: process, not to cut the trials until the number stops meaning anything.
+#: Rounds a model exists for, so a surface can offer the control only where
+#: it will work. The knockouts are absent: a single-elimination field of 32 is
+#: a different question and nothing models it yet.
+STAGES_WITH_A_MODEL = ("qualifiers", "semifinals")
+
+
+def _models():
+    """Bound lazily so the module still imports without the engine."""
+    return {
+        "qualifiers": {"module": qualifier, "trials": 200},
+        "semifinals": {"module": semifinal, "trials": 800},
+    }
+
+
+#: Default for callers that do not name a round. Semifinals, because that is
+#: the surface this was built for.
 TRIALS = 800
 
 SLOTS = (1, 2, 3)
+
+#: Troop levels the game has. `scoring.troop_value` raises outside this, and
+#: only 10 and 11 are measured -- the rest are carried down the same 6 x
+#: (level + 1) step, which `scoring.MEASURED_LEVELS` will tell you.
+MIN_LEVEL, MAX_LEVEL = 1, 11
 
 
 @dataclass
@@ -85,12 +111,21 @@ class OddsRow:
     win_group: float
     points_mean: float
     points_sd: float
+    #: Share of matches won. The qualifier model reports it; the semifinal one
+    #: does not, because that round is scored on points across every match
+    #: rather than on matches won, and a win rate there would invite exactly
+    #: the misreading the footer exists to prevent.
+    win_rate: float | None = None
 
 
 @dataclass
 class GroupOdds:
     rows: list[OddsRow] = field(default_factory=list)
     trials: int = TRIALS
+    #: How many of the group go through. Two of eight in the semi-finals,
+    #: eight of a hundred in the qualifiers, and the surface has to say which
+    #: because the same percentage means a very different thing in each.
+    advance: int = 2
 
 
 class NotEnoughData(Exception):
@@ -175,10 +210,14 @@ def _profile(member: dict, squads: list[dict]) -> dict | None:
     and is deliberately distinct from absent, so it is only sent when somebody
     actually answered.
     """
-    mixed = member.get("mixed_squads")
-    if mixed is None:
+    # Per squad in the database, because that is what a member answers: they
+    # are looking at their lineup screen box by box. The engine wants the set
+    # of positions, so it is assembled here.
+    flags = {sq["slot"]: sq.get("mixed") for sq in (member.get("squads") or [])}
+    answered = [flags.get(slot) for slot in SLOTS]
+    if all(v is None for v in answered):
         return None
-    mixed = tuple(mixed)
+    mixed = tuple(i for i, v in enumerate(answered) if v)
     # An empty answer carries no rank ambiguity: there are no positions to
     # translate, so it means the same thing on both paths and is always worth
     # sending. Dropping it would make the engine sample a mixed pair from the
@@ -192,31 +231,52 @@ def _profile(member: dict, squads: list[dict]) -> dict | None:
 def group_advance_odds(
     members: list[dict],
     *,
-    trials: int = TRIALS,
+    stage: str = "semifinals",
+    trials: int | None = None,
     seed: int = 42,
     jitter: bool = True,
 ) -> GroupOdds:
-    """Everyone's chance of getting out of this group.
+    """Everyone's chance of getting out of this group, for the round it is in.
 
-    `members` are rows as `get_group_scouting` returns them: the group listing
-    plus each player's squads. THP rides on the registrant row.
+    `members` are rows as `get_group_scouting` returns them.
 
-    Raises `NotEnoughData` rather than scoring a partial group. The engine
-    refuses anything but eight, and filling the gaps with invented players
-    would produce a number about a group that does not exist.
+    The two rounds are separate models with separate constants, and the engine
+    is explicit that they must not be mixed. `stage` picks one; a round with no
+    model raises rather than being scored by the other one.
+
+    Each model refuses a group it cannot schedule rather than absorbing it, and
+    the two refuse different things: the semifinals need exactly eight, the
+    qualifiers need an even headcount. `NotEnoughData` carries no names in
+    either case, which is how the surface tells a size problem from a data one.
     """
     if not ENGINE_AVAILABLE:
         raise RuntimeError("champion-duel-engine is not installed")
 
-    # Size before power, deliberately. A short group usually also has people we
-    # hold no THP for, and telling someone to go and look up two players' power
-    # when they are four names short points at the smaller job. The engine's
-    # own constant rather than an 8 here: the group size is the model's, and a
-    # copy of it in the bot is a copy that can go stale.
-    if len(members) != semifinal.GROUP_SIZE:
+    config = _models().get(stage)
+    if config is None:
+        raise NotEnoughData(f"there is no model for the {stage} round")
+    model = config["module"]
+    trials = config["trials"] if trials is None else trials
+
+    # Group size first. A short group usually also has people we hold nothing
+    # for, and telling someone to record a squad for two players when they are
+    # forty names short points at the smaller job. The models own their own
+    # sizes, so this asks them rather than keeping a copy.
+    expected = getattr(model, "GROUP_SIZE", None)
+    if stage == "semifinals" and len(members) != expected:
         raise NotEnoughData(
             f"the group has {len(members)} players; the semifinal model is "
-            f"calibrated on groups of {semifinal.GROUP_SIZE}"
+            f"calibrated on groups of {expected}"
+        )
+    if stage == "qualifiers" and len(members) != expected:
+        # The model itself would take any even count of four or more, but
+        # top-8-of-40 is not top-8-of-100: scoring a partial group inflates
+        # everyone's chances by however many rivals are missing, and it does it
+        # silently, in the units the surface renders. So the whole group or
+        # nothing.
+        raise NotEnoughData(
+            f"the group has {len(members)} players of {expected}; odds over a "
+            f"partial group would count only the rivals we happen to hold"
         )
 
     # Keyed by row position rather than display name. The engine keys `pts`,
@@ -252,7 +312,7 @@ def group_advance_odds(
         # bad level would leave a member watching a spinner that never
         # resolves. Out of range is dropped and the engine's default applies.
         level = member.get("troop_level")
-        if isinstance(level, int) and 1 <= level <= 11:
+        if isinstance(level, int) and MIN_LEVEL <= level <= MAX_LEVEL:
             spec["level"] = level
         profile = _profile(member, squads)
         if profile:
@@ -266,7 +326,7 @@ def group_advance_odds(
             missing_thp=missing,
         )
 
-    scored = semifinal.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
+    scored = model.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
 
     rows = [
         OddsRow(
@@ -275,8 +335,9 @@ def group_advance_odds(
             win_group=vals["win_group"],
             points_mean=vals["points_mean"],
             points_sd=vals["points_sd"],
+            win_rate=vals.get("win_rate"),
         )
         for key, vals in scored.items()
     ]
     rows.sort(key=lambda r: r.advance, reverse=True)
-    return GroupOdds(rows=rows, trials=trials)
+    return GroupOdds(rows=rows, trials=trials, advance=getattr(model, "ADVANCE", 2))

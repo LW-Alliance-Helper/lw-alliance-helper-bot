@@ -349,6 +349,7 @@ def init_db() -> None:
                 rank         INTEGER,
                 thp          REAL,
                 fsp          REAL,
+                troop_level  INTEGER,
                 seeded       INTEGER NOT NULL DEFAULT 0,
                 origin       TEXT NOT NULL DEFAULT 'imported',
                 added_by     TEXT,
@@ -489,6 +490,14 @@ def init_db() -> None:
                 slot          INTEGER NOT NULL,
                 squad_type    TEXT,
                 power         REAL,
+                -- 1 when this squad is 4-of-a-type rather than 5, 0 when
+                -- somebody looked and it is pure, NULL when nobody has said.
+                -- The three are genuinely different: the engine samples a
+                -- mixed pair from the population for a player it has not been
+                -- told about, and treats a measured "none" as a measurement.
+                -- Collapsing NULL and 0 would put a 3.3% penalty on two squads
+                -- of every player nobody has scouted.
+                mixed         INTEGER,
                 source        TEXT NOT NULL,
                 observed_at   TEXT,
                 updated_at    TEXT NOT NULL,
@@ -574,6 +583,26 @@ def init_db() -> None:
                 conn.execute(stmt)
             except sqlite3.OperationalError as exc:  # pragma: no cover
                 print(f"[CHAMPION_DUEL] index skipped: {exc}")
+
+        # Columns added for the engine's 1.5 player spec. Each ALTER in its own
+        # try/except so a re-run is harmless, matching `config.init_db`; the
+        # CREATE TABLE statements above carry the same columns for fresh files.
+        #
+        # Both are NULLable with no default, deliberately. The engine
+        # distinguishes "not measured" from "measured and zero": an absent
+        # `mixed` makes it sample a mixed pair from the population, where a
+        # recorded 0 says somebody looked and every squad is pure. A DEFAULT 0
+        # would turn every unscouted player into a measurement and put a 3.3%
+        # purity penalty on squads nobody has ever seen.
+        for _table, _column, _decl in (
+            ("registrants", "troop_level", "INTEGER"),
+            ("squads", "mixed", "INTEGER"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_column} {_decl}")
+                print(f"[CHAMPION_DUEL] added {_table}.{_column}")
+            except sqlite3.OperationalError:
+                pass
 
         # One-time backfill: whatever `registrants` holds today is qualifier
         # data, because qualifiers are the only round that has ever been

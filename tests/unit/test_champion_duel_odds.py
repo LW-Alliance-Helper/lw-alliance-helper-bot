@@ -18,7 +18,7 @@ import pytest
 import champion_duel_odds as odds
 
 try:
-    from champion_duel_engine import semifinal
+    from champion_duel_engine import qualifier, semifinal
 except ImportError:  # pragma: no cover
     semifinal = None
 
@@ -178,11 +178,19 @@ def test_mixed_is_only_sent_when_a_power_was_read():
     none is, because `measured_base` returns None and the THP path applies it
     directly. We know which box a squad is, never which rank, so sending it on
     the second path would land the penalty on whichever squads sorted there."""
-    with_power = _member("A", 3e8, powers=[94e6, None, None])
-    with_power["mixed_squads"] = [0, 2]
+    with_power = _member("A", 3e8, powers=[94e6, 82e6, 78e6])
+    for squad, flag in zip(with_power["squads"], (1, 0, 1)):
+        squad["source"] = "observed"
+        squad["mixed"] = flag
     no_power = _member("B", 3e8)
-    no_power["mixed_squads"] = [0, 2]
+    no_power["squads"] = [
+        {"slot": s, "power": None, "squad_type": None, "mixed": f}
+        for s, f in zip((1, 2, 3), (1, 0, 1))
+    ]
 
+    # Boxes 1 and 3, which is what the member typed, arriving as positions 0
+    # and 2 -- the translation the engine's own summary calls the easiest
+    # off-by-one in the payload.
     assert odds._profile(with_power, odds._squads(with_power)) == {"mixed": (0, 2)}
     assert odds._profile(no_power, odds._squads(no_power)) is None
 
@@ -190,8 +198,12 @@ def test_mixed_is_only_sent_when_a_power_was_read():
 def test_an_answered_none_is_distinct_from_never_asked():
     """An empty tuple is a measurement: we looked and every squad is pure."""
     answered = _member("A", 3e8, powers=[94e6, 82e6, 78e6])
-    answered["mixed_squads"] = []
+    for squad in answered["squads"]:
+        squad["source"] = "observed"
+        squad["mixed"] = 0
     never = _member("B", 3e8, powers=[94e6, 82e6, 78e6])
+    for squad in never["squads"]:
+        squad["source"] = "observed"
 
     assert odds._profile(answered, odds._squads(answered)) == {"mixed": ()}
     assert odds._profile(never, odds._squads(never)) is None
@@ -223,59 +235,39 @@ def test_a_player_with_neither_power_nor_thp_is_named():
     assert caught.value.missing_thp == ["Nothing"]
 
 
-def test_the_measured_route_reproduces_the_engine_sessions_check():
-    """The regression check handed over with 1.5.0: pinkcatboi entered as
-    94/82/78 resolves to base 84.7 / 82.0 / 78.0 with a 9.27 gorilla.
+def test_the_engine_sessions_canonical_snippet_holds():
+    """The regression check as the engine session finally wrote it.
 
-    It reproduces exactly, and it is worth having because the two ways of
-    getting it wrong both still produce a lineup. Deflating the powers before
-    sending strips the gorilla twice; sorting the boxes breaks the `order`
-    mapping the engine uses to translate `mixed`.
+    Two things in it are worth keeping. `thp=None` on the measured route: three
+    readings place a player with no Total Hero Power at all, which is what
+    makes THP optional rather than merely tolerated. And `mixed: []` -- without
+    it the engine samples a mixed pair from the population and the second squad
+    moves to 79.294, so anyone quoting 82.0 without a profile is quoting a
+    number the model did not produce.
 
-    `mixed: ()` is required to reproduce it. Without a profile the engine
-    samples a mixed pair from the population, which lands a 3.3% penalty on two
-    squads and moves the second to 79.294.
+    Their first summary reported the THP-only route as 84.4 / 81.6 / 78.1. It
+    is 84.37 and then the shape fit; those two figures were the with-profile
+    validation against the same player, and the route was mislabelled. Only the
+    top squad and the gorilla are comparable across the two routes, which is
+    what this asserts.
     """
     import random
 
+    rng = random.Random(1)
     measured = semifinal.build_player(
         "pinkcatboi",
-        325.8e6,
-        random.Random(1),
-        profile={"mixed": ()},
+        None,
+        rng,
+        {"mixed": []},
         jitter=False,
-        level=11,
         squads=[{"power": 94e6}, {"power": 82e6}, {"power": 78e6}],
     )
+    assert measured["base"] == pytest.approx([84.732, 82.000, 78.000], abs=0.001)
+    assert round(measured["gorilla"], 2) == 9.27
 
-    assert measured["base"] == pytest.approx([84.73, 82.0, 78.0], abs=0.02)
-    assert measured["gorilla"] == pytest.approx(9.27, abs=0.01)
-
-
-def test_the_two_routes_agree_on_what_they_both_determine():
-    """Top squad and gorilla come from the THP fit on either route, so they
-    agree to well under a percent. The lower two do NOT: on the measured route
-    they are the numbers somebody typed, and on the THP-only route they are the
-    shape fit. Asserting whole-lineup agreement would be asserting that the fit
-    reproduces one particular player, which is not a property of anything.
-    """
-    import random
-
-    measured = semifinal.build_player(
-        "pinkcatboi",
-        325.8e6,
-        random.Random(1),
-        profile={"mixed": ()},
-        jitter=False,
-        level=11,
-        squads=[{"power": 94e6}, {"power": 82e6}, {"power": 78e6}],
-    )
-    estimated = semifinal.build_player(
-        "pinkcatboi", 325.8e6, random.Random(1), profile={"mixed": ()}, jitter=False
-    )
-
-    assert estimated["base"][0] == pytest.approx(measured["base"][0], rel=0.02)
-    assert estimated["gorilla"] == pytest.approx(measured["gorilla"], rel=0.02)
+    estimated = semifinal.build_player("pinkcatboi", 325_800_000, rng, {"mixed": []}, jitter=False)
+    assert round(estimated["base"][0], 2) == 84.37
+    assert round(estimated["gorilla"], 2) == 9.23
 
 
 def test_an_estimated_squad_is_never_forwarded_as_a_reading():
@@ -360,3 +352,73 @@ def test_the_two_refusals_stay_distinguishable():
 
     assert size_error.value.missing_thp == []
     assert len(data_error.value.missing_thp) == 8
+
+
+# ── The qualifiers are a different model ──────────────────────────────────────
+
+
+def test_the_qualifier_round_uses_its_own_model():
+    """Separate constants, separate scoring, and the package is explicit that
+    the two must not reach across. Eight of a hundred go through rather than
+    two of eight, and the round reports a win rate the semi-finals do not."""
+    group = [
+        {"display_name": f"Q{i}", "thp": 250e6 + i * 2e6, "squads": [], "orders": []}
+        for i in range(qualifier.GROUP_SIZE)
+    ]
+
+    result = odds.group_advance_odds(group, stage="qualifiers", trials=25)
+
+    assert result.advance == 8
+    assert len(result.rows) == qualifier.GROUP_SIZE
+    assert sum(r.advance for r in result.rows) == pytest.approx(8.0, abs=0.01)
+    assert all(r.win_rate is not None for r in result.rows)
+
+
+def test_the_semifinal_round_reports_no_win_rate():
+    """That round is scored on points across every match, so a win rate would
+    invite exactly the misreading the footer exists to prevent."""
+    result = odds.group_advance_odds(_group(), stage="semifinals", trials=200)
+
+    assert result.advance == 2
+    assert all(r.win_rate is None for r in result.rows)
+
+
+def test_a_partial_qualifier_group_is_refused_even_though_the_model_would_take_it():
+    """`qualifier._check` accepts any even headcount of four or more, because
+    it ships to events drawn differently. We refuse anything short of the full
+    hundred anyway: top-8-of-40 is not top-8-of-100, and scoring a partial
+    group inflates everyone by however many rivals are missing, silently, in
+    the units the surface renders."""
+    forty = [
+        {"display_name": f"Q{i}", "thp": 250e6 + i * 2e6, "squads": [], "orders": []}
+        for i in range(40)
+    ]
+
+    with pytest.raises(odds.NotEnoughData) as caught:
+        odds.group_advance_odds(forty, stage="qualifiers", trials=5)
+
+    assert caught.value.missing_thp == []
+    assert "partial group" in str(caught.value)
+
+
+def test_a_round_with_no_model_is_refused_rather_than_scored_by_another():
+    """The knockouts are a single-elimination field of 32. Scoring them with
+    either group model would answer a different question convincingly."""
+    with pytest.raises(odds.NotEnoughData) as caught:
+        odds.group_advance_odds(_group(), stage="knockouts", trials=5)
+
+    assert "no model" in str(caught.value)
+
+
+def test_a_troop_level_outside_the_game_is_dropped_not_forwarded():
+    """`scoring.troop_value` raises outside 1-11, `build_odds_embed` catches
+    only NotEnoughData, and the interaction is already deferred -- so a bad
+    level would leave a member watching a spinner that never resolves."""
+    group = _group()
+    group[0]["troop_level"] = 99
+    group[1]["troop_level"] = 0
+    group[2]["troop_level"] = 11
+
+    result = odds.group_advance_odds(group, trials=100)
+
+    assert len(result.rows) == 8

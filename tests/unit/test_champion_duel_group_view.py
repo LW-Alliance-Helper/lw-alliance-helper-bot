@@ -279,11 +279,15 @@ def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
     assert "**P8**" not in embed.description
 
 
-def test_the_odds_button_is_offered_on_the_semi_finals_only(cd_db):
-    """The model is calibrated on a group of 8 playing a 7-meeting round robin.
-    The qualifiers are 100 players and the knockouts a field of 32, so offering
-    it there and refusing on size would tell someone with a complete qualifier
-    group to add more players to it."""
+def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
+    """The qualifiers and the semi-finals are separate models with separate
+    constants, and both ship. The knockouts are a single-elimination field of
+    32, which nothing models, so the button is absent there rather than present
+    and refusing.
+
+    Gated on `odds_lib.STAGES_WITH_A_MODEL` rather than a list here, so adding
+    a model turns the control on in one place.
+    """
     grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
     members = db.get_group_members(group["id"])
 
@@ -301,7 +305,7 @@ def test_the_odds_button_is_offered_on_the_semi_finals_only(cd_db):
         return [getattr(i, "label", None) for i in view.children]
 
     assert hub.CD_BTN_ODDS in labels("semifinals")
-    assert hub.CD_BTN_ODDS not in labels("qualifiers")
+    assert hub.CD_BTN_ODDS in labels("qualifiers")
     assert hub.CD_BTN_ODDS not in labels("knockouts")
 
 

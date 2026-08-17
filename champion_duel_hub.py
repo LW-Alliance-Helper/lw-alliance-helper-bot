@@ -120,6 +120,11 @@ BROWSE_MAX = 20
 # the cap is here so a future stage with hundreds cannot turn the hub into a
 # wall, not because sixteen is close to the limit.
 _SERVERS_SHOWN = 30
+#: Rows on the odds embed. A qualifier group is 100 players and an embed
+#: description is 4,096 characters, so the list is cut and the remainder
+#: counted. Eight is what advances from a qualifier group, so the cut sits
+#: just past the line that decides the round.
+_ODDS_SHOWN = 12
 
 # The six deployment orders. Every line-up observed to date runs exactly one
 # Tank, one Missile and one Aircraft, so an order is a permutation of the three
@@ -3356,15 +3361,13 @@ class _GroupView(discord.ui.View):
             )
             row += 1
 
-        # Semi-finals only, because that is what is WIRED UP, not what can be
-        # modelled. Engine 1.4 added `champion_duel_engine.qualifier`, a points
-        # model for a group of 100, and the 1.5 pin pulls it in -- so the
-        # qualifiers are modellable today and simply have no join yet. The
-        # knockouts are a single-elimination field of 32 and have no model at
-        # all. Until a round has one, offering the button and refusing on size
-        # would tell someone with a complete qualifier group to add more
-        # players to it.
-        if self.members and self.stage == "semifinals":
+        # Wherever there is a model. The qualifiers and the semi-finals are
+        # separate models with separate constants and the engine is explicit
+        # that they must not be mixed, so `odds_lib` dispatches rather than
+        # this deciding. The knockouts have no model at all -- a
+        # single-elimination field of 32 is a different question again -- so
+        # the button is absent there rather than present and refusing.
+        if self.members and self.stage in odds_lib.STAGES_WITH_A_MODEL:
             odds = discord.ui.Button(label=CD_BTN_ODDS, style=discord.ButtonStyle.primary, row=row)
             odds.callback = self._on_odds
             self.add_item(odds)
@@ -3478,7 +3481,7 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
         return embed
 
     try:
-        result = odds_lib.group_advance_odds(scouted)
+        result = odds_lib.group_advance_odds(scouted, stage=stage)
     except odds_lib.NotEnoughData as exc:
         if exc.missing_thp:
             named = ", ".join(
@@ -3507,24 +3510,35 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
             )[:4096]
         return embed
 
+    # A hundred rows will not fit an embed and nobody reads past the first
+    # screen, so a big group is cut to the players actually in contention.
+    # The remainder is counted rather than dropped silently.
+    shown = result.rows[:_ODDS_SHOWN]
     lines = [
         f"`{row.advance:>4.0%}` `{row.win_group:>4.0%}`  "
         f"**{discord.utils.escape_markdown(row.name)}**"
-        for row in result.rows
+        for row in shown
     ]
+    more = len(result.rows) - len(shown)
+    tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
         f"Over {result.trials:,} simulations of the round. The first column is "
-        f"the chance of finishing top two and going through, the second is the "
-        f"chance of winning the group outright.\n\n" + "\n".join(lines)
+        f"the chance of finishing in the top **{result.advance}** and going "
+        f"through, the second is the chance of winning the group outright."
+        + "\n\n"
+        + "\n".join(lines)
+        + tail
     )[:4096]
 
-    # The round ranks on points accumulated across all 21 matches, not on
-    # meetings won, so a player can lose a meeting and still gain on the group.
-    # Saying so stops the first column reading as "win 4 of 7".
+    # Both rounds rank on points rather than on matches or meetings won, and
+    # the counts differ, so the line is built rather than fixed. Saying it at
+    # all stops the first column reading as "win 4 of 7".
+    matches = {"semifinals": "all 21 matches", "qualifiers": "every match"}
     embed.set_footer(
         text=(
-            "Ranked on points across all 21 matches, not meetings won. "
-            "Squads we have not seen are sampled, so these carry that uncertainty."
+            f"Ranked on points across {matches.get(stage, 'the round')}, not "
+            f"matches won. Squads we have not seen are sampled, so these carry "
+            f"that uncertainty."
         )
     )
     return embed

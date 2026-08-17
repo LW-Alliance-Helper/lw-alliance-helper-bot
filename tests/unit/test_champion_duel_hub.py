@@ -168,7 +168,6 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "Newcomer"
     modal.server._value = "1042"
-    modal.group._value = ""
     modal.alliance._value = "OGV"
 
     interaction = _interaction()
@@ -181,59 +180,6 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     # Lands on the card with the write actions, not a bare confirmation.
     assert isinstance(interaction.followup.send.call_args.kwargs["view"], hub.PlayerActionsView)
     assert "Added" in _sent(interaction)
-
-
-async def test_a_group_letter_from_outside_your_grouping_is_not_recorded(cd_db):
-    """The bug the whole grouping separation exists to stop. An officer in one
-    warzone recording an opponent as "Group D" landed that player in the
-    imported grouping's Group D, because a letter meant the same thing
-    everywhere. Refusing is honest; refusing silently is not."""
-    mine = db.find_grouping_by_warzone("738")
-    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
-    modal.name._value = "Stranger"
-    modal.server._value = "1500"
-    modal.group._value = "D"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    said = _sent(interaction)
-    assert "not recorded" in said and "**1500**" in said
-    assert db.get_player("Stranger", server="1500")["grp"] is None
-
-
-async def test_a_group_letter_from_inside_your_grouping_is_recorded(cd_db):
-    mine = db.find_grouping_by_warzone("738")
-    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
-    modal.name._value = "Newcomer"
-    modal.server._value = "738"
-    modal.group._value = "N"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    player = db.get_player("Newcomer", server="738")
-    assert player["grp"] == "N"
-    assert player["grouping_id"] == mine["id"], "theirs, not the globally-running one"
-    assert "not recorded" not in _sent(interaction)
-
-
-async def test_a_group_letter_with_no_grouping_resolved_is_not_guessed_at(cd_db):
-    """A letter belonging to no grouping is not a fact about anything."""
-    modal = hub._AddPlayerModal(can_write=True, grouping=None)
-    modal.name._value = "Newcomer"
-    modal.server._value = "738"
-    modal.group._value = "N"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    assert "do not know which Champion Duel" in _sent(interaction)
-    assert "rouping" not in _sent(interaction)
-    assert db.get_player("Newcomer", server="738")["grp"] is None
 
 
 def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
@@ -273,7 +219,6 @@ async def test_adding_someone_we_already_have_opens_them(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "AlphaOne"
     modal.server._value = "738"
-    modal.group._value = ""
     modal.alliance._value = ""
 
     interaction = _interaction()
@@ -290,7 +235,6 @@ async def test_adding_without_a_server_is_refused(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "Nameless"
     modal.server._value = ""
-    modal.group._value = ""
     modal.alliance._value = ""
 
     interaction = _interaction()
@@ -1808,3 +1752,18 @@ async def test_a_refusal_the_caller_can_fix_does_not_send_them_to_us(cd_db, no_m
 
     view = _view(interaction)
     assert _labels(view) == [hub.CD_BTN_RETRY_GROUPING]
+
+
+# The group letter came off the add-a-player screen on 2026-08-16, when Total
+# Hero Power and troop level took its place: five components is the cap and the
+# model cannot run without one of the two new fields, where a letter is round
+# data the record and reconcile flows already collect properly and in a
+# grouping-scoped way.
+#
+# Three tests went with it. They covered a real bug -- a letter is meaningless
+# outside a grouping, and writing one against the globally-running round put an
+# officer in warzone 1500's opponent into the imported grouping's Group D. That
+# rule still holds everywhere a letter IS written: the record and reconcile
+# paths go through `get_or_create_group` with an explicit grouping id, so they
+# cannot reach another Champion Duel's Group D at all. What is gone is the
+# ability to name a group while adding a stranger you just met.

@@ -126,6 +126,12 @@ _SERVERS_SHOWN = 30
 #: just past the line that decides the round.
 _ODDS_SHOWN = 12
 
+#: Troop levels the game has. Only 10 and 11 are measured; the rest carry the
+#: same step down, which `champion_duel_engine.scoring.MEASURED_LEVELS` will
+#: confirm. Levels only separate players in a mixed-level group: where everyone
+#: is the same, ranking is unaffected.
+MAX_TROOP_LEVEL = 11
+
 # The six deployment orders. Every line-up observed to date runs exactly one
 # Tank, one Missile and one Aircraft, so an order is a permutation of the three
 # and the whole space fits in one select — which is the point of offering it
@@ -909,6 +915,165 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
         await send_player_card(interaction, found, can_write=self.can_write, grouping=self.grouping)
 
 
+# ── Collecting a player, in the shape the model reads ─────────────────────────
+#
+# Two screens, because Discord allows five components a modal and the fields
+# split cleanly at five. Kevin's structure, 2026-08-16.
+#
+# The gorilla is deliberately absent. It sits on the biggest squad 93% of the
+# time and inflates whichever squad carries it by about a tenth, so the biggest
+# reading IS the carrier in almost every real lineup and the engine works that
+# out from the powers. Asking would spend a component on a question we can
+# answer better ourselves.
+
+#: The six type orders, which is every arrangement of one of each. Measured on
+#: 50 real lineups: nobody fields two of a type, so this is the whole space and
+#: one select covers what would otherwise be three.
+#:
+#: Ordered by BOX, not by power. The member is reading their lineup screen left
+#: to right and typing the powers in that order, so the types have to line up
+#: with the boxes beside them. The engine sorts and carries the types along.
+_TYPE_ORDERS = [
+    ("Tank", "Missile", "Aircraft"),
+    ("Tank", "Aircraft", "Missile"),
+    ("Missile", "Tank", "Aircraft"),
+    ("Missile", "Aircraft", "Tank"),
+    ("Aircraft", "Tank", "Missile"),
+    ("Aircraft", "Missile", "Tank"),
+]
+
+
+def _parse_mixed(text: str) -> set[int] | None:
+    """Which boxes are 4-of-a-type, from something like `1,3`.
+
+    Returns a set of 1-based box numbers, an empty set for an explicit "none",
+    or None when it cannot be read.
+
+    Free text rather than a dropdown, because the model needs to know WHICH
+    squads are mixed and not how many. It used to take a count and apply the
+    penalty to the bottom two, and the corpus says that is usually wrong:
+    across the players whose three squads have all been seen, the bottom pair
+    was the mixed one once against five for the top pair. Purity is not where a
+    player is weakest, it is where their best heroes are spread.
+    """
+    cleaned = (text or "").strip().lower()
+    if not cleaned:
+        return None
+    if cleaned in ("none", "no", "n", "-", "0"):
+        return set()
+    out = set()
+    for piece in cleaned.replace(" ", "").split(","):
+        if piece not in ("1", "2", "3"):
+            return None
+        out.add(int(piece))
+    return out
+
+
+class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
+    """The second screen: what the lineup screen shows, box by box.
+
+    Every box is optional. A player is placed by any single squad power or by
+    their Total Hero Power, so somebody who reads one number off and closes the
+    app has still helped. Given powers are used exactly and the rest are filled
+    from the shape fit, which is the whole reason partial entry is worth taking.
+    """
+
+    def __init__(self, *, registrant_id: int, name: str):
+        super().__init__()
+        self.registrant_id = registrant_id
+        self.name = name
+
+    squad1 = discord.ui.TextInput(
+        label="Squad 1 power", required=False, max_length=16, placeholder="e.g. 94.2M"
+    )
+    squad2 = discord.ui.TextInput(
+        label="Squad 2 power", required=False, max_length=16, placeholder="Leave blank if unknown"
+    )
+    squad3 = discord.ui.TextInput(
+        label="Squad 3 power", required=False, max_length=16, placeholder="Leave blank if unknown"
+    )
+    types = discord.ui.Label(
+        text="Squad types, in the same order as the boxes above",
+        component=discord.ui.Select(
+            required=False,
+            options=[
+                discord.SelectOption(label=" / ".join(order), value=str(i))
+                for i, order in enumerate(_TYPE_ORDERS)
+            ],
+        ),
+    )
+    mixed = discord.ui.TextInput(
+        label="Which squads are 4-of-a-type?",
+        required=False,
+        max_length=8,
+        placeholder="e.g. 1,3   or   none",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        powers = [parse_power(box.value) for box in (self.squad1, self.squad2, self.squad3)]
+        typed = [box.value for box in (self.squad1, self.squad2, self.squad3)]
+        unreadable = [
+            i + 1
+            for i, (raw, val) in enumerate(zip(typed, powers))
+            if (raw or "").strip() and val is None
+        ]
+        if unreadable:
+            await interaction.followup.send(
+                f"⚠️ Squad {_plural(len(unreadable), 'power')} "
+                f"{', '.join(str(i) for i in unreadable)} could not be read. "
+                f"The game writes **94.2M** and a spreadsheet writes "
+                f"**94,200,000**; both work. Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        mixed = _parse_mixed(self.mixed.value)
+        if mixed is None and (self.mixed.value or "").strip():
+            await interaction.followup.send(
+                "⚠️ Say which squads are 4-of-a-type as box numbers, like **1,3**, "
+                "or **none** if every squad is pure. Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        chosen = self.types.component.values
+        order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
+
+        # Written per box, aligned with the powers, because that is how the
+        # engine reads them. `mixed` is None where nobody answered and 0 where
+        # they said none: the model samples a mixed pair for the first and
+        # treats the second as a measurement, so collapsing them would put a
+        # purity penalty on squads nobody has looked at.
+        written = 0
+        for slot, (power, squad_type) in enumerate(zip(powers, order), start=1):
+            if power is None and squad_type is None and mixed is None:
+                continue
+            await asyncio.to_thread(
+                db.set_squad,
+                self.registrant_id,
+                slot,
+                squad_type=squad_type,
+                power=power,
+                mixed=(None if mixed is None else int(slot in mixed)),
+                source="observed",
+                actor=_actor(interaction),
+            )
+            written += 1
+
+        if not written:
+            await interaction.followup.send(
+                f"↩️ Nothing to record for **{self.name}**. No changes made.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            f"✅ Recorded {_plural(written, 'squad')} for **{self.name}**.",
+            ephemeral=True,
+        )
+
+
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     """Create a registrant from a sighting.
 
@@ -943,13 +1108,37 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         if server:
             self.server.default = server[:10]
 
+    # Five components is the cap and all five earn their place. `group` moved
+    # off this screen when Total Hero Power and troop level arrived: a letter
+    # is round data that the record and reconcile flows already collect
+    # properly, where these two are facts about the player that nothing else
+    # asks for and the model cannot run without one of them.
     name = discord.ui.TextInput(label="Player name", max_length=64)
-    server = discord.ui.TextInput(label="Server", max_length=10, placeholder="e.g. 738")
-    group = discord.ui.TextInput(
-        label="Group", required=False, max_length=2, placeholder="A single letter, if you know it"
-    )
+    server = discord.ui.TextInput(label="Warzone", max_length=10, placeholder="e.g. 738")
+    # The tag, not the name. `registrants.alliance` has always held three or
+    # four characters because that is what the game shows beside a player, and
+    # nothing said so, so people typed the whole alliance name into it.
     alliance = discord.ui.TextInput(
-        label="Alliance tag", required=False, max_length=16, placeholder="Optional"
+        label="Alliance tag",
+        required=False,
+        max_length=8,
+        placeholder="The 3 or 4 characters in brackets, e.g. OGV",
+    )
+    thp = discord.ui.TextInput(
+        label="Total Hero Power",
+        required=False,
+        max_length=16,
+        placeholder="e.g. 325.8M",
+    )
+    troop_level = discord.ui.Label(
+        text="Troop level",
+        component=discord.ui.Select(
+            required=False,
+            options=[
+                discord.SelectOption(label=f"Lv.{n}", value=str(n))
+                for n in range(MAX_TROOP_LEVEL, 0, -1)
+            ],
+        ),
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -969,14 +1158,28 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             )
             return
 
+        thp = parse_power(self.thp.value)
+        if (self.thp.value or "").strip() and thp is None:
+            await interaction.followup.send(
+                "⚠️ That Total Hero Power could not be read. The game writes "
+                "**325.8M** and a spreadsheet writes **325,800,000**; both work. "
+                "Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        chosen = self.troop_level.component.values
+        level = int(chosen[0]) if chosen else None
+
         existing = await asyncio.to_thread(db.find_registrants, name, server)
         try:
             player = await asyncio.to_thread(
                 db.upsert_registrant,
                 name,
                 server=server,
-                grp=(self.group.value or "").strip() or None,
                 alliance=(self.alliance.value or "").strip() or None,
+                thp=thp,
+                troop_level=level,
                 origin="self_reported",
                 actor=_actor(interaction),
             )
@@ -984,44 +1187,11 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
             return
 
-        # A group is round data, so it lands on the round being played rather
-        # than on the player. Only written when they actually gave one: a blank
-        # stage row would claim this player is in the round when all we know is
-        # that somebody met them.
-        #
-        # And only when the letter can be placed. A group letter is meaningless
-        # outside a grouping, so writing one against the globally-running round
-        # is what put an officer in warzone 1500's opponent into the imported
-        # grouping's Group D. Refusing to record it is the honest outcome, and
-        # it is said out loud rather than dropped.
-        group = (self.group.value or "").strip()
+        # The second screen cannot be opened from here: a modal has to be the
+        # first response to an interaction and this one has already answered.
+        # So the squads are offered as a button on the result instead, which
+        # also lets somebody who only knows a name stop after one screen.
         aside = ""
-        if group:
-            if not self.grouping:
-                aside = (
-                    "\nℹ️ The group letter was not recorded: we do not know which "
-                    "Champion Duel your alliance is in yet."
-                )
-            elif server not in self.grouping["warzones"]:
-                # Names the grouping by its start date. A member may be in a
-                # different one every season, and "your grouping" leaves them
-                # nothing to check this against.
-                aside = (
-                    f"\nℹ️ The group letter was not recorded. Warzone **{server}** is not "
-                    f"in {_grouping_name(self.grouping)}, so **Group {group}** there is a "
-                    f"different group from yours."
-                )
-            else:
-                stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
-                if stage:
-                    await asyncio.to_thread(
-                        db.set_stage,
-                        player["id"],
-                        stage,
-                        grp=group,
-                        grouping_id=self.grouping["id"],
-                    )
-                    player = await asyncio.to_thread(db.get_player, name, server)
 
         note = (
             f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."

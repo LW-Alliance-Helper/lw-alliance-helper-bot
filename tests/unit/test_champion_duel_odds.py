@@ -422,3 +422,55 @@ def test_a_troop_level_outside_the_game_is_dropped_not_forwarded():
     result = odds.group_advance_odds(group, trials=100)
 
     assert len(result.rows) == 8
+
+
+# ── The collection form's two new fields ──────────────────────────────────────
+
+
+def test_the_mixed_boxes_a_member_typed_become_engine_positions():
+    """A member reads their lineup screen and types `1,3`. The engine wants
+    positions against those same boxes, so 1 and 3 become 0 and 2 -- the
+    off-by-one the engine session called the easiest in the payload."""
+    member = _member("A", 3e8, powers=[94e6, 82e6, 78e6])
+    for squad, flag in zip(member["squads"], (1, 0, 1)):
+        squad["source"] = "observed"
+        squad["mixed"] = flag
+
+    assert odds._profile(member, odds._squads(member)) == {"mixed": (0, 2)}
+
+
+def test_a_mixed_answer_of_none_is_kept_as_a_measurement():
+    """0 across the board says somebody looked and every squad is pure, which
+    the engine treats as measured. Absent makes it sample a mixed pair."""
+    answered = _member("A", 3e8, powers=[94e6, 82e6, 78e6])
+    for squad in answered["squads"]:
+        squad["source"] = "observed"
+        squad["mixed"] = 0
+
+    assert odds._profile(answered, odds._squads(answered)) == {"mixed": ()}
+
+
+def test_the_troop_level_reaches_the_spec():
+    """Levels only separate players in a mixed-level group, but they do, and
+    the qualifier model scores on troop value."""
+    group = _group()
+    for member, level in zip(group, (11, 10, 11, 11, 9, 11, 11, 10)):
+        member["troop_level"] = level
+
+    result = odds.group_advance_odds(group, trials=200)
+
+    assert len(result.rows) == 8
+
+
+def test_two_runs_of_one_group_do_not_pay_twice():
+    """A qualifier group is fourteen seconds of pure Python and pure Python
+    holds the GIL, so the cost has to be per data change rather than per press.
+    The key is the spec list, so any edit misses."""
+    group = _group()
+    first = odds.group_advance_odds(group, trials=200)
+    second = odds.group_advance_odds(group, trials=200)
+
+    assert first is second
+
+    group[0]["thp"] = 999e6
+    assert odds.group_advance_odds(group, trials=200) is not first

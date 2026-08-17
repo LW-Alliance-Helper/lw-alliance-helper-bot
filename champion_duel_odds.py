@@ -48,6 +48,8 @@ are actually fielding, not just match variance.
 
 from __future__ import annotations
 
+import json
+import threading
 from dataclasses import dataclass, field
 
 try:
@@ -80,6 +82,26 @@ except ImportError:  # pragma: no cover - asserted through the degraded path
 #: it will work. The knockouts are absent: a single-elimination field of 32 is
 #: a different question and nothing models it yet.
 STAGES_WITH_A_MODEL = ("qualifiers", "semifinals")
+
+# One run at a time, and remember the last few answers.
+#
+# A qualifier group is 100 players over ~36 matches each, about fourteen
+# seconds of pure Python. Pure Python holds the GIL, so that is fourteen
+# seconds in which the bot serves nobody, not just the alliance that pressed
+# it. Two cheap things bound that without moving the simulation off this
+# process, which is the real fix and deliberately not this change:
+#
+#   The LOCK stops presses stacking. Without it three people pressing inside a
+#   minute cost forty-two seconds of dead bot rather than fourteen.
+#
+#   The CACHE makes the cost per data change rather than per press. The inputs
+#   are a whole recorded group and the model is seeded, so scoring one twice is
+#   the same answer arrived at twice. The key is the spec list itself, so any
+#   edit to any player misses and re-runs, and nothing has to remember to
+#   invalidate it.
+_RUN_LOCK = threading.Lock()
+_CACHE: dict[str, "GroupOdds"] = {}
+_CACHE_MAX = 32
 
 
 def _models():
@@ -326,7 +348,19 @@ def group_advance_odds(
             missing_thp=missing,
         )
 
-    scored = model.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
+    key = json.dumps([stage, trials, seed, jitter, specs], sort_keys=True, default=str)
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    with _RUN_LOCK:
+        # Re-checked inside the lock: several callers can queue on one cold
+        # group, and without this each pays a full run in turn to arrive at the
+        # answer the first one already has.
+        cached = _CACHE.get(key)
+        if cached is not None:
+            return cached
+        scored = model.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
 
     rows = [
         OddsRow(
@@ -340,4 +374,11 @@ def group_advance_odds(
         for key, vals in scored.items()
     ]
     rows.sort(key=lambda r: r.advance, reverse=True)
-    return GroupOdds(rows=rows, trials=trials, advance=getattr(model, "ADVANCE", 2))
+    result = GroupOdds(rows=rows, trials=trials, advance=getattr(model, "ADVANCE", 2))
+
+    # Oldest out first. Insertion order is enough for a handful of groups and
+    # needs no timestamp to go stale.
+    if len(_CACHE) >= _CACHE_MAX:
+        del _CACHE[next(iter(_CACHE))]
+    _CACHE[key] = result
+    return result

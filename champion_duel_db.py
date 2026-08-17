@@ -1821,8 +1821,9 @@ def upsert_registrant(
                 """
                 INSERT INTO registrants
                     (player_key, display_name, server, grp, alliance, rank, thp,
-                     fsp, seeded, origin, added_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     fsp, troop_level, seeded, origin, added_by, created_at,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     key,
@@ -1833,6 +1834,7 @@ def upsert_registrant(
                     fields.get("rank"),
                     fields.get("thp"),
                     fields.get("fsp"),
+                    fields.get("troop_level"),
                     1 if fields.get("seeded") else 0,
                     origin,
                     actor_id,
@@ -1849,7 +1851,7 @@ def upsert_registrant(
             if grp:
                 sets.append("grp = ?")
                 params.append(grp)
-            for col in ("alliance", "rank", "thp", "fsp"):
+            for col in ("alliance", "rank", "thp", "fsp", "troop_level"):
                 if fields.get(col) is not None:
                     sets.append(f"{col} = ?")
                     params.append(fields[col])
@@ -2244,10 +2246,20 @@ def _record_edit(conn, *, target, registrant_id, slot, field, old, new, actor, r
     return cur.lastrowid
 
 
-def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source="edited"):
+def set_squad(
+    registrant_id, slot, squad_type=None, power=None, *, actor, source="edited", mixed=None
+):
     """Set one squad slot. Each changed field becomes its own edit row, so
     reverting a wrong type does not also revert a correct power entered in the
-    same request."""
+    same request.
+
+    `mixed` is 1 when this squad is 4-of-a-type, 0 when somebody looked and it
+    is pure, and None for "not asked". The three are genuinely different to
+    the model: it samples a mixed pair from the population for a squad nobody
+    has reported, and treats a recorded 0 as a measurement. So None leaves the
+    stored value alone rather than clearing it, exactly like the other two
+    fields.
+    """
     if slot not in (1, 2, 3):
         raise ValueError("slot must be 1, 2 or 3")
     if squad_type is not None and squad_type not in VALID_TYPES:
@@ -2265,22 +2277,34 @@ def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source
         ).fetchone()
         old_type = row["squad_type"] if row else None
         old_power = row["power"] if row else None
+        old_mixed = row["mixed"] if row else None
         new_type = old_type if squad_type is None else squad_type
         new_power = old_power if power is None else float(power)
+        new_mixed = old_mixed if mixed is None else int(bool(mixed))
 
         conn.execute(
             """
-            INSERT INTO squads (registrant_id, slot, squad_type, power, source,
+            INSERT INTO squads (registrant_id, slot, squad_type, power, mixed, source,
                                 updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(registrant_id, slot) DO UPDATE SET
                 squad_type = excluded.squad_type,
                 power      = excluded.power,
+                mixed      = excluded.mixed,
                 source     = excluded.source,
                 updated_at = excluded.updated_at,
                 updated_by = excluded.updated_by
             """,
-            (registrant_id, slot, new_type, new_power, source, _now(), actor["discord_user_id"]),
+            (
+                registrant_id,
+                slot,
+                new_type,
+                new_power,
+                new_mixed,
+                source,
+                _now(),
+                actor["discord_user_id"],
+            ),
         )
         if squad_type is not None and old_type != new_type:
             edit_ids.append(
@@ -2305,6 +2329,19 @@ def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source
                     field="power",
                     old=old_power,
                     new=new_power,
+                    actor=actor,
+                )
+            )
+        if mixed is not None and old_mixed != new_mixed:
+            edit_ids.append(
+                _record_edit(
+                    conn,
+                    target="squad",
+                    registrant_id=registrant_id,
+                    slot=slot,
+                    field="mixed",
+                    old=old_mixed,
+                    new=new_mixed,
                     actor=actor,
                 )
             )

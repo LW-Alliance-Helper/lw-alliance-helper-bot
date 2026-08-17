@@ -889,12 +889,7 @@ class PlayerActionsView(discord.ui.View):
         await inter.response.send_modal(_SquadModal(self.player))
 
     async def _on_squads(self, inter: discord.Interaction):
-        await inter.response.send_modal(
-            _SquadDetailModal(
-                registrant_id=self.player["id"],
-                name=_label(self.player),
-            )
-        )
+        await inter.response.send_modal(_SquadDetailModal(player=self.player))
 
     async def _on_place(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -1105,10 +1100,9 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
     from the shape fit, which is the whole reason partial entry is worth taking.
     """
 
-    def __init__(self, *, registrant_id: int, name: str):
+    def __init__(self, *, player: dict):
         super().__init__()
-        self.registrant_id = registrant_id
-        self.name = name
+        self.player = player
 
     squad1 = discord.ui.TextInput(
         label="Squad 1 power", required=False, max_length=16, placeholder="e.g. 94.2M"
@@ -1168,37 +1162,22 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
         chosen = self.types.component.values
         order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
 
-        # Written per box, aligned with the powers, because that is how the
+        # Offered per box, aligned with the powers, because that is how the
         # engine reads them. `mixed` is None where nobody answered and 0 where
         # they said none: the model samples a mixed pair for the first and
         # treats the second as a measurement, so collapsing them would put a
         # purity penalty on squads nobody has looked at.
-        written = 0
+        offered = {}
         for slot, (power, squad_type) in enumerate(zip(powers, order), start=1):
             if power is None and squad_type is None and mixed is None:
                 continue
-            await asyncio.to_thread(
-                db.set_squad,
-                self.registrant_id,
-                slot,
-                squad_type=squad_type,
-                power=power,
-                mixed=(None if mixed is None else int(slot in mixed)),
-                source="observed",
-                actor=_actor(interaction),
-            )
-            written += 1
+            offered[slot] = {
+                "squad_type": squad_type,
+                "power": power,
+                "mixed": None if mixed is None else int(slot in mixed),
+            }
 
-        if not written:
-            await interaction.followup.send(
-                f"↩️ Nothing to record for **{self.name}**. No changes made.",
-                ephemeral=True,
-            )
-            return
-        await interaction.followup.send(
-            f"✅ Recorded {_plural(written, 'squad')} for **{self.name}**.",
-            ephemeral=True,
-        )
+        await _ask_or_write(interaction, self.player, offered, source="observed")
 
 
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
@@ -1400,6 +1379,15 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
             return
 
         found = self.player
+        # Ask before overwriting, but only where the two genuinely contradict.
+        # Somebody correcting a slot nobody has touched, or agreeing with what
+        # is there, still lands in one step.
+        offered = {"squad_type": squad_type, "power": power}
+        pending = await _pending_squad_entries(interaction, found, {slot: offered})
+        if pending[0]["disputed"]:
+            await _ask_which(interaction, found, pending, source="edited")
+            return
+
         result = await asyncio.to_thread(
             db.set_squad,
             found["id"],
@@ -1422,6 +1410,255 @@ class _SquadModal(discord.ui.Modal, title="Correct a squad"):
             f"✅ Slot {slot} for **{_label(found)}** is now **{changed}**.",
             ephemeral=True,
         )
+
+
+# ── When we already hold a different answer ───────────────────────────────────
+#
+# Kevin's design: if someone is entering data we already have, surface what we
+# have, show them the two pieces, and ask which is correct.
+#
+# One question per submission, never one per field. A member filling in three
+# boxes answered one thing; asking three times turns a correction into an
+# interrogation, and `compare_squad` already narrows this to real
+# contradictions -- an estimate giving way to a reading, somebody correcting
+# their own entry, and two people agreeing all pass without a word.
+
+#: How each disputed field is named to a member. `mixed` is stored as a flag
+#: and read off the game's lineup screen as a squad of four types rather than
+#: five, so it is named the way the screen shows it, not the way we store it.
+_FIELD_LABELS = {
+    "squad_type": "Squad type",
+    "power": "Power",
+    "mixed": "4-of-a-type",
+}
+
+
+def _value_text(field: str, value) -> str:
+    """One held or offered value, in the units the member reads it in."""
+    if value is None:
+        return "nothing"
+    if field == "power":
+        return f"{float(value):,.0f}"
+    if field == "mixed":
+        return "Yes" if value else "No"
+    return str(value)
+
+
+def build_disagreement_embed(player: dict, pending: list[dict]) -> discord.Embed:
+    """The two pieces, side by side, for every field that contradicts.
+
+    ❓ rather than ⚠️, per the row-state catalog: nothing is wrong here, there
+    is simply more than one right answer, and the two must not read the same.
+    """
+    disputed = [entry for entry in pending if entry["disputed"]]
+    count = sum(len(entry["disputed"]) for entry in disputed)
+    embed = discord.Embed(
+        title="❓ We already have a different answer",
+        description=(
+            f"**{_label(player)}** already has "
+            f"{'a value' if count == 1 else 'values'} recorded that "
+            f"{'does' if count == 1 else 'do'} not match what you entered. "
+            f"Pick whichever is right."
+        ),
+        color=discord.Color.blurple(),
+    )
+    for entry in disputed:
+        for row in entry["disputed"]:
+            embed.add_field(
+                name=f"Slot {entry['slot']}: {_FIELD_LABELS[row['field']]}",
+                value=(
+                    f"What we have: **{_value_text(row['field'], row['held'])}**\n"
+                    f"What you entered: **{_value_text(row['field'], row['offered'])}**"
+                ),
+                inline=False,
+            )
+    return embed
+
+
+async def _write_squad_fields(interaction, player, slot, values, *, source: str) -> dict:
+    """One `set_squad`, or nothing when there is nothing to say.
+
+    `source` travels from the surface that collected it and is not defaulted
+    here: `edited` outranks every later import and `observed` does not, so
+    guessing it would either bury a correction or protect a sighting that was
+    never meant to be permanent.
+    """
+    if not any(value is not None for value in values.values()):
+        return {}
+    return await asyncio.to_thread(
+        db.set_squad,
+        player["id"],
+        slot,
+        values.get("squad_type"),
+        values.get("power"),
+        mixed=values.get("mixed"),
+        source=source,
+        actor=_actor(interaction),
+    )
+
+
+async def _write_undisputed(interaction, player, pending, *, source: str) -> int:
+    """Save everything this submission says that nothing contradicts.
+
+    **Written before the question is asked, not after it is answered.** The
+    question is only about the fields that contradict; holding the rest hostage
+    to it means a member who reads three powers, is asked about one, and gets
+    interrupted loses all three. There is nothing to arbitrate about a value
+    nobody has offered a different one for, so there is no reason to wait.
+    """
+    written = 0
+    for entry in pending:
+        disputed = {row["field"] for row in entry["disputed"]}
+        values = {
+            field: value for field, value in entry["offered"].items() if field not in disputed
+        }
+        if await _write_squad_fields(interaction, player, entry["slot"], values, source=source):
+            written += 1
+    return written
+
+
+class _DisagreementView(discord.ui.View):
+    """Two pieces, two buttons.
+
+    It settles ONLY the contradicted fields. Everything else in the submission
+    was written before this view went up, so a member who never answers loses
+    nothing they told us that nobody disputes.
+
+    Bare labels. The alternatives differ by which value is right, which is a
+    parameter rather than a kind, and `DESIGN.md` sends parameter sets out
+    without glyphs rather than repeating one across the pair.
+
+    Neither button is `primary`. The bot has no view on which of two people
+    read the screen correctly, and styling one as recommended would be exactly
+    the opinion `UX.md` says it does not have.
+    """
+
+    def __init__(self, *, player: dict, pending: list[dict], user_id: int, source: str):
+        super().__init__(timeout=120)
+        self.player = player
+        self.pending = [entry for entry in pending if entry["disputed"]]
+        self.user_id = user_id
+        self.source = source
+        #: Set by `_ask_which` so the view can retire its own message.
+        self.message = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def _settle(self, inter: discord.Interaction, *, use_offered: bool):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        actor = _actor(inter)
+        for entry in self.pending:
+            edits = {}
+            if use_offered:
+                disputed = {row["field"] for row in entry["disputed"]}
+                edits = (
+                    await _write_squad_fields(
+                        inter,
+                        self.player,
+                        entry["slot"],
+                        {
+                            field: value
+                            for field, value in entry["offered"].items()
+                            if field in disputed
+                        },
+                        source=self.source,
+                    )
+                ).get("edits", {})
+            await asyncio.to_thread(
+                db.record_disagreement,
+                self.player["id"],
+                target="squad",
+                slot=entry["slot"],
+                rows=entry["disputed"],
+                chose="offered" if use_offered else "held",
+                actor=actor,
+                edits=edits,
+            )
+        settled = "Saved what you entered" if use_offered else "Kept what we had"
+        await inter.followup.send(
+            f"✅ {settled} for **{_label(self.player)}**. Either way, your answer is on record.",
+            ephemeral=True,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Keep what we have", style=discord.ButtonStyle.secondary)
+    async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._settle(inter, use_offered=False)
+
+    @discord.ui.button(label="Use what I entered", style=discord.ButtonStyle.secondary)
+    async def use_mine(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._settle(inter, use_offered=True)
+
+    async def on_timeout(self) -> None:
+        # A live-looking button on a dead view is a bug, not cosmetics: the
+        # member presses it, gets "Interaction failed", and never learns the
+        # question went unanswered.
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+
+async def _pending_squad_entries(interaction, player: dict, offered_by_slot: dict) -> list[dict]:
+    """What this submission would write, and where it contradicts what we hold.
+
+    `offered_by_slot` is `{slot: {field: value}}`, carrying only the fields the
+    member filled in. Omitting a field is not an assertion about it.
+    """
+    actor = _actor(interaction)
+    pending = []
+    for slot, offered in sorted(offered_by_slot.items()):
+        disputed = await asyncio.to_thread(
+            db.compare_squad, player["id"], slot, actor=actor, **offered
+        )
+        pending.append({"slot": slot, "offered": offered, "disputed": disputed})
+    return pending
+
+
+async def _ask_which(interaction, player: dict, pending: list[dict], *, source: str) -> None:
+    """Put the two pieces up with two buttons. The caller has deferred.
+
+    Everything nobody disputes is saved first, so the question is only ever
+    about the fields that contradict and an unanswered one costs only those.
+    """
+    await _write_undisputed(interaction, player, pending, source=source)
+    view = _DisagreementView(
+        player=player, pending=pending, user_id=interaction.user.id, source=source
+    )
+    # `wait=True` so the view holds its own message and can retire it on
+    # timeout. Without it `self.message` is None and the buttons stay live
+    # looking on a dead view.
+    view.message = await interaction.followup.send(
+        embed=build_disagreement_embed(player, pending),
+        view=view,
+        ephemeral=True,
+        wait=True,
+    )
+
+
+async def _ask_or_write(interaction, player: dict, offered_by_slot: dict, *, source: str) -> None:
+    """Save a squad submission, asking first only where it contradicts."""
+    pending = await _pending_squad_entries(interaction, player, offered_by_slot)
+    if any(entry["disputed"] for entry in pending):
+        await _ask_which(interaction, player, pending, source=source)
+        return
+
+    written = await _write_undisputed(interaction, player, pending, source=source)
+    if not written:
+        await interaction.followup.send(
+            f"↩️ Nothing to record for **{_label(player)}**. No changes made.",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        f"✅ Recorded {_plural(written, 'squad')} for **{_label(player)}**.",
+        ephemeral=True,
+    )
 
 
 # ── Record an order (Premium) ─────────────────────────────────────────────────

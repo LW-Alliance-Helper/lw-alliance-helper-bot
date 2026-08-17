@@ -369,6 +369,250 @@ async def test_a_squad_correction_applies_to_the_card_player(cd_db):
     assert "84,600,000" in _sent(interaction)
 
 
+# ── "Which of these is right?" ────────────────────────────────────────────────
+#
+# Kevin's design: surface what we already hold when somebody enters something
+# different, show them the two pieces, and ask.
+#
+# Almost every test here is about NOT asking. Two people entering the same
+# correct value is the common case, and a surface that questions every
+# re-entry is one nobody enters anything into twice.
+
+SCOUT = {"discord_user_id": "333", "discord_name": "Someone else", "guild_id": "999"}
+SCOUT_ID = 333
+
+
+async def _submit_correction(player, *, slot="1", squad_type="", power="", user_id=SCOUT_ID):
+    modal = hub._SquadModal(player)
+    modal.slot._value = slot
+    modal.squad_type._value = squad_type
+    modal.power._value = power
+    interaction = _interaction(user_id=user_id)
+    await modal.on_submit(interaction)
+    return interaction
+
+
+def _view_of(interaction):
+    return (interaction.followup.send.call_args.kwargs or {}).get("view")
+
+
+def _slot_of(name, slot, server="738"):
+    player = db.get_player(name, server=server, include_scouting=True)
+    return next(s for s in player["squads"] if s["slot"] == slot)
+
+
+async def test_agreeing_with_what_we_hold_passes_without_a_word(cd_db):
+    """The common case by a distance. Two scouts reading the same panel must
+    not be made to arbitrate between two identical numbers."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Tank", power="84.6M"
+    )
+
+    assert _view_of(interaction) is None
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_the_two_notations_for_one_number_do_not_contradict(cd_db):
+    """`parse_power` accepts `64.6M` and `64,600,000` as the same reading, and
+    in binary floating point they are not: 64.6 * 1e6 lands a fraction above.
+    Compared exactly, the member is shown two numbers that render identically
+    and asked which is right."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, power=64_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="64.6M")
+
+    assert _view_of(interaction) is None
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_a_field_nobody_has_answered_is_not_a_disagreement(cd_db):
+    """Nothing to contradict. The first thing anybody says about a field is
+    new information, however much else we hold about that squad."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="84.6M")
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_an_estimate_is_never_worth_arbitrating(cd_db):
+    """`push_to_bot` writes an estimate for nearly the whole field, so treating
+    one as something we hold would put this question in front of the very first
+    real reading of almost every player. The bot's own guess giving way to
+    somebody reading the screen is the system working."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Missile", power=13_500_000, actor=KEV, source="estimated")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Tank", power="84.6M"
+    )
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_correcting_your_own_entry_is_not_a_disagreement(cd_db):
+    """Somebody's newer reading of their own squad is simply better. Asking
+    them to arbitrate against themselves is noise."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), power="90.1M", user_id=ADMIN_ID
+    )
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 90_100_000
+
+
+async def test_a_real_contradiction_puts_both_pieces_up(cd_db):
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    view = _view_of(interaction)
+    assert isinstance(view, hub._DisagreementView)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    body = " ".join(f"{f.name} {f.value}" for f in embed.fields)
+    assert "84,600,000" in body and "90,100,000" in body
+    # Nothing is written until somebody answers.
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_the_two_buttons_are_bare(cd_db):
+    """They differ by which value is right, which is a parameter rather than a
+    kind, and `DESIGN.md` sends parameter sets out without glyphs rather than
+    repeating one across the pair."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    view = _view_of(interaction)
+
+    labels = _labels(view)
+    assert len(labels) == 2
+    assert all(label[0].isalpha() for label in labels), labels
+    # Neither is the recommended one. The bot has no view on which of two
+    # people read the screen correctly.
+    assert all(item.style is discord.ButtonStyle.secondary for item in view.children)
+
+
+async def test_keeping_what_we_hold_changes_nothing_and_is_recorded(cd_db):
+    """The half `edits` cannot carry. Nothing changed, and that a stored value
+    was challenged and survived is the only thing that says so."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+    before = db.list_edits()["total"]
+
+    press = _interaction(user_id=SCOUT_ID)
+    await view.keep.callback(press)
+
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+    assert db.list_edits()["total"] == before, "keeping a value is not an edit"
+    logged = db.list_disagreements()
+    assert logged["total"] == 1
+    row = logged["disagreements"][0]
+    assert row["field"] == "power"
+    assert row["held_value"] == "84600000.0" and row["offered_value"] == "90100000.0"
+    assert row["chose"] == "held" and row["edit_id"] is None
+    assert row["actor_discord_id"] == SCOUT["discord_user_id"]
+
+
+async def test_taking_the_new_value_writes_it_and_links_the_edit(cd_db):
+    """So `⏪ Revert an edit` and this history tell one story rather than two."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+
+    await view.use_mine.callback(_interaction(user_id=SCOUT_ID))
+
+    assert _slot_of("AlphaOne", 1)["power"] == 90_100_000
+    row = db.list_disagreements()["disagreements"][0]
+    assert row["chose"] == "offered"
+    edit = next(e for e in db.list_edits()["edits"] if e["id"] == row["edit_id"])
+    assert edit["field"] == "power" and edit["new_value"] == "90100000.0"
+
+
+async def test_a_field_nobody_disputed_lands_before_the_question_is_asked(cd_db):
+    """Somebody who reads a type we did not have and a power we did should not
+    lose the type because they said our power was the right one, and should not
+    lose it by being interrupted before answering either. There is nothing to
+    arbitrate about a value nobody offered a different one for."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Aircraft", power="90.1M"
+    )
+
+    squad = _slot_of("AlphaOne", 1)
+    assert squad["squad_type"] == "Aircraft", "saved without waiting for an answer"
+    assert squad["power"] == 84_600_000, "and the disputed one is still ours until they answer"
+
+    await _view_of(interaction).keep.callback(_interaction(user_id=SCOUT_ID))
+
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_an_unanswered_question_retires_its_own_buttons(cd_db, monkeypatch):
+    """A live-looking button on a dead view is a bug, not cosmetics: the member
+    presses it, gets "Interaction failed", and never learns the question went
+    unanswered."""
+    import wizard_registry
+
+    expired = AsyncMock()
+    monkeypatch.setattr(wizard_registry, "expire_view_message", expired)
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    await _view_of(interaction).on_timeout()
+
+    expired.assert_awaited_once()
+
+
+async def test_only_the_person_asked_can_answer(cd_db):
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+
+    intruder = _interaction(user_id=OUTSIDER_ID)
+    assert await view.interaction_check(intruder) is False
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_recording_three_boxes_asks_once_not_three_times(cd_db):
+    """A member filling in the whole lineup answered one thing. Asking per
+    field is what turns a correction into an interrogation."""
+    rid = _reg("AlphaOne")
+    _full_squads(rid)
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    modal.squad1._value = "50M"
+    modal.squad2._value = "40M"
+    modal.squad3._value = "30M"
+    modal.types.component._values = []
+    modal.mixed._value = ""
+
+    interaction = _interaction(user_id=SCOUT_ID)
+    await modal.on_submit(interaction)
+
+    assert interaction.followup.send.await_count == 1
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert len(embed.fields) == 3, "three contradicted powers, still one question"
+
+
 def test_the_capture_guide_is_never_locked():
     """Documentation, not a paid surface. Someone deciding whether to pay
     should be able to see what contributing involves, and withholding a picture

@@ -564,6 +564,43 @@ def init_db() -> None:
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
+        # Every time we held a value, somebody offered a different one, and a
+        # person was asked which is right.
+        #
+        # `edits` cannot carry this. An edit row is a change, and the answer
+        # worth recording most is the one where NOTHING changed: somebody
+        # challenged what we hold and a person confirmed it. Writing that as an
+        # edit with old == new would put a no-op in the revert history and make
+        # `contributor_summary` count a confirmation as a correction.
+        #
+        # One row per disputed field, all sharing one decision, because the
+        # question put to the member is about the entry as a whole: here are
+        # the two, which is right. Splitting the question per field is what
+        # turns a correction into an interrogation.
+        #
+        # `edit_id` is set only when the offered value won, and links the call
+        # to the change it caused so `⏪ Revert an edit` and this table tell one
+        # story rather than two.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS disagreements (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                -- same vocabulary as edits.target
+                target           TEXT    NOT NULL,
+                registrant_id    INTEGER NOT NULL,
+                slot             INTEGER,
+                field            TEXT    NOT NULL,
+                held_value       TEXT,
+                offered_value    TEXT,
+                -- 'held' or 'offered'
+                chose            TEXT    NOT NULL,
+                edit_id          INTEGER,
+                actor_discord_id TEXT    NOT NULL,
+                actor_name       TEXT,
+                actor_guild_id   TEXT,
+                created_at       TEXT    NOT NULL,
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
         # Append-only. A revert never updates or deletes a row here; it writes a
         # new one carrying revert_of, so the history stays the whole truth.
         conn.execute("""
@@ -2342,6 +2379,152 @@ def _record_edit(conn, *, target, registrant_id, slot, field, old, new, actor, r
     return cur.lastrowid
 
 
+# ── When a second person says something different ─────────────────────────────
+#
+# Kevin's design: if someone is entering data we already have, surface what we
+# have, show them the two pieces, and ask which is correct. Write a history of
+# those calls.
+#
+# The whole difficulty is in deciding when NOT to ask. Two people entering the
+# same correct value is the common case and has to pass in silence; a surface
+# that questions every re-entry is one nobody enters anything into twice.
+
+#: Squad fields worth arbitrating. Same names as the columns and as
+#: `set_squad`'s edit rows, so a call, an edit and a column never disagree
+#: about what a field is called.
+SQUAD_FIELDS = ("squad_type", "power", "mixed")
+
+
+def _same_value(field: str, held, offered) -> bool:
+    """Whether these two say the same thing to the person who would be asked.
+
+    A power is compared at whole units, which is the precision every surface
+    renders it at. `parse_power` deliberately accepts `64.6M` and `64,600,000`
+    as the same reading, and in binary floating point they are not: 64.6 * 1e6
+    lands a fraction above 64600000.0. Exact comparison would put those two up
+    side by side, rendered identically, and ask a member which is right.
+    """
+    if field == "power":
+        return round(float(held)) == round(float(offered))
+    return held == offered
+
+
+def compare_squad(registrant_id: int, slot: int, *, actor=None, **offered) -> list[dict]:
+    """Which of these offered squad values contradict one we already hold.
+
+    Empty means write it: either it agrees, or it is the first thing anybody
+    has said about that field. Callers pass only the fields the member filled
+    in; an omitted one is not an assertion and is never compared.
+
+    **An estimate is never worth arbitrating.** `push_to_bot` writes an
+    `estimated` row for nearly the whole field, so treating those as something
+    we hold would make the very first real reading of almost every player
+    trigger a question. The bot's own guess giving way to somebody reading the
+    screen is the system working, not a disagreement.
+
+    **Nor is somebody correcting their own entry.** If the value we hold was
+    last written by this same person, their newer reading is simply better and
+    asking them to arbitrate against themselves is noise.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM squads WHERE registrant_id = ? AND slot = ?",
+            (registrant_id, slot),
+        ).fetchone()
+    if row is None or row["source"] == "estimated":
+        return []
+    if actor and row["updated_by"] and row["updated_by"] == actor.get("discord_user_id"):
+        return []
+
+    out = []
+    for field in SQUAD_FIELDS:
+        new = offered.get(field)
+        held = row[field]
+        if new is None or held is None or _same_value(field, held, new):
+            continue
+        out.append({"field": field, "held": held, "offered": new})
+    return out
+
+
+def record_disagreement(registrant_id: int, *, target, slot, rows, chose, actor, edits=None):
+    """Log one "which of these is right" call, one row per disputed field.
+
+    `chose` is 'held' or 'offered' and is the same for every row: the member
+    answered one question about the entry, not one per field.
+
+    Recorded whichever way it went. The call where the member confirmed what we
+    already hold changes nothing and is the more interesting half of the
+    history: it is the only evidence that a stored value has been challenged
+    and survived.
+
+    `edits` is `set_squad`'s field-to-edit-id map. Linked by FIELD rather than
+    by position: one entry can write an edit for a field nobody disputed, so
+    the two lists are not the same length and pairing them by index would hang
+    a call off the wrong change.
+    """
+    if chose not in ("held", "offered"):
+        raise ValueError("chose must be 'held' or 'offered'")
+    now = _now()
+    edits = edits or {}
+    with _get_conn() as conn:
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO disagreements
+                    (target, registrant_id, slot, field, held_value, offered_value,
+                     chose, edit_id, actor_discord_id, actor_name, actor_guild_id,
+                     created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target,
+                    registrant_id,
+                    slot,
+                    row["field"],
+                    None if row["held"] is None else str(row["held"]),
+                    None if row["offered"] is None else str(row["offered"]),
+                    chose,
+                    edits.get(row["field"]) if chose == "offered" else None,
+                    actor["discord_user_id"],
+                    actor.get("discord_name"),
+                    actor.get("guild_id"),
+                    now,
+                ),
+            )
+    return len(rows)
+
+
+def list_disagreements(*, registrant_id=None, actor=None, limit: int = 50, offset: int = 0):
+    """Newest first. The history of every call, not only the ones that changed
+    something."""
+    sql = (
+        "SELECT d.*, r.display_name, r.server FROM disagreements d "
+        "LEFT JOIN registrants r ON r.id = d.registrant_id WHERE 1=1"
+    )
+    where: list[str] = []
+    params: list = []
+    if registrant_id is not None:
+        where.append(" AND d.registrant_id = ?")
+        params.append(registrant_id)
+    if actor:
+        where.append(" AND d.actor_discord_id = ?")
+        params.append(str(actor))
+
+    clause = "".join(where)
+    with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                sql + clause + " ORDER BY d.id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        ]
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM disagreements d WHERE 1=1" + clause, params
+        ).fetchone()["n"]
+    return {"disagreements": rows, "total": total}
+
+
 def set_squad(
     registrant_id, slot, squad_type=None, power=None, *, actor, source="edited", mixed=None
 ):
@@ -2363,6 +2546,9 @@ def set_squad(
     if source not in VALID_SOURCES:
         raise ValueError(f"source must be one of {VALID_SOURCES}")
 
+    # Keyed by field as well as listed, so a caller that has to link one edit
+    # to one field can, without depending on the order they were written in.
+    edits: dict[str, int] = {}
     edit_ids = []
     with _get_conn() as conn:
         if not conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone():
@@ -2402,46 +2588,30 @@ def set_squad(
                 actor["discord_user_id"],
             ),
         )
-        if squad_type is not None and old_type != new_type:
-            edit_ids.append(
-                _record_edit(
-                    conn,
-                    target="squad",
-                    registrant_id=registrant_id,
-                    slot=slot,
-                    field="squad_type",
-                    old=old_type,
-                    new=new_type,
-                    actor=actor,
-                )
+        for field, given, old, new in (
+            ("squad_type", squad_type, old_type, new_type),
+            ("power", power, old_power, new_power),
+            ("mixed", mixed, old_mixed, new_mixed),
+        ):
+            if given is None or old == new:
+                continue
+            edits[field] = _record_edit(
+                conn,
+                target="squad",
+                registrant_id=registrant_id,
+                slot=slot,
+                field=field,
+                old=old,
+                new=new,
+                actor=actor,
             )
-        if power is not None and old_power != new_power:
-            edit_ids.append(
-                _record_edit(
-                    conn,
-                    target="squad",
-                    registrant_id=registrant_id,
-                    slot=slot,
-                    field="power",
-                    old=old_power,
-                    new=new_power,
-                    actor=actor,
-                )
-            )
-        if mixed is not None and old_mixed != new_mixed:
-            edit_ids.append(
-                _record_edit(
-                    conn,
-                    target="squad",
-                    registrant_id=registrant_id,
-                    slot=slot,
-                    field="mixed",
-                    old=old_mixed,
-                    new=new_mixed,
-                    actor=actor,
-                )
-            )
-    return {"registrant_id": registrant_id, "slot": slot, "edit_ids": edit_ids}
+            edit_ids.append(edits[field])
+    return {
+        "registrant_id": registrant_id,
+        "slot": slot,
+        "edit_ids": edit_ids,
+        "edits": edits,
+    }
 
 
 def add_order(registrant_id, slots, *, actor, opponent=None, observed_at=None, source="observed"):
@@ -2714,6 +2884,11 @@ def _as_rank(value) -> int:
     return rank
 
 
+#: Every profile key this version understands. Anything else is ignored where
+#: there is a real measurement beside it, and refused where there is not.
+PROFILE_KEYS = frozenset({"types", "shape", "mixed", "n_mixed", "gorilla"})
+
+
 def _profile_columns(profile) -> tuple[dict | None, str | None]:
     """One imported profile as storable columns, or a reason it is unusable.
 
@@ -2728,6 +2903,12 @@ def _profile_columns(profile) -> tuple[dict | None, str | None]:
     Unknown keys are ignored rather than refused: a newer simulator may fit
     something this version has no column for, and dropping the row over it
     would throw away the measurements we do understand.
+
+    **But a row of nothing-we-recognise is not a row of nothing.** An empty
+    result tells `import_profiles` to retract, and combining that with the rule
+    above would turn one producer-side key rename into a mass deletion of every
+    profile we hold. So a payload that measured something, in words this
+    version cannot read, is refused rather than obeyed.
     """
     if not isinstance(profile, dict):
         return None, "profile is not an object"
@@ -2770,6 +2951,12 @@ def _profile_columns(profile) -> tuple[dict | None, str | None]:
             if not 0 < value <= 1:
                 return None, f"shape ratio {ratio!r} is outside (0, 1]"
             ratios.append(value)
+        # Squad 3 cannot outrank squad 2, which is what a transposed pair
+        # would say. `shape_from_power` clamps its own output the same way;
+        # `_profile_shape` does not clamp a given one, and the engine's later
+        # sort would reorder the lineup without reordering `types`.
+        if ratios[0] is not None and ratios[1] is not None and ratios[1] > ratios[0]:
+            return None, f"shape {shape!r} has squad 3 above squad 2"
         cols["shape_r21"], cols["shape_r31"] = ratios
 
     mixed = profile.get("mixed")
@@ -2812,6 +2999,8 @@ def _profile_columns(profile) -> tuple[dict | None, str | None]:
         except (TypeError, ValueError) as exc:
             return None, f"gorilla {gorilla!r}: {exc}"
 
+    if all(value is None for value in cols.values()) and set(profile) - PROFILE_KEYS:
+        return None, f"nothing this version can read in {sorted(set(profile) - PROFILE_KEYS)}"
     # An all-null result is not an error. It is a payload saying "here is what
     # we hold for this player" and holding nothing, which is a retraction --
     # `import_profiles` deletes on it rather than storing a row of nulls.

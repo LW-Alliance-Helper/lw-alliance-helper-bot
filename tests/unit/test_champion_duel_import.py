@@ -431,6 +431,7 @@ def test_a_reimport_replaces_the_profile_whole(cd_db):
         {"shape": [1.4, 0.8]},
         {"shape": [0.0, 0.8]},
         {"shape": ["big", 0.8]},
+        {"shape": [0.7, 0.9]},
         {"mixed": [0, 5]},
         {"mixed": ["first"]},
         {"mixed": 2},
@@ -476,6 +477,24 @@ def test_retracting_a_profile_nobody_holds_is_not_an_error(cd_db):
     result = db.import_profiles([{"name": "AlphaOne", "server": "738", "profile": {}}], actor=ACTOR)
 
     assert result == {"applied": 0, "cleared": 0, "skipped": 0, "problems": []}
+
+
+def test_a_profile_of_only_unreadable_keys_does_not_retract(cd_db):
+    """The two rules either side of this would otherwise combine badly: unknown
+    keys are ignored, and an empty profile retracts. A producer-side key rename
+    would then read as "we measured nothing about anybody" and delete the lot.
+
+    A payload that measured something, in words this version cannot read, is
+    refused and says so."""
+    db.import_profiles([_profile_row("AlphaOne", gorilla=1)], actor=ACTOR)
+
+    result = db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"nerve": 0.4}}], actor=ACTOR
+    )
+
+    assert result["cleared"] == 0 and result["skipped"] == 1
+    assert "nerve" in result["problems"][0]
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] is not None
 
 
 def test_a_bool_is_not_a_position(cd_db):

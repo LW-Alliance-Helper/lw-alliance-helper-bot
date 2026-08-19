@@ -159,12 +159,35 @@ PREMIUM_FEATURES: set[str] = {
     # member day-theme reminder (#406), which reads nothing from the sheet and
     # is gated separately by not calling this at all.
     "alliance_duel_vs",
-    # Champion Duel predictor. Reading the registrant list is open and reading
-    # scouting only needs a Discord login; *contributing* squad corrections and
-    # deployment sightings is Premium. The dataset is community-gathered on
-    # purpose — an alliance that pays decides who on its team it trusts to
-    # enter data, and every write is attributed and revertable.
-    "champion_duel_write",
+    # Champion Duel deliberately has NO write gate. `champion_duel_write` was
+    # registered here and came off on 2026-08-17.
+    #
+    # Every other capped or gated feature produces value for the alliance that
+    # uses it, so gating it trades their convenience against our revenue.
+    # Champion Duel contributions produce value for *everyone*, so gating them
+    # means fewer predictions for paying alliances too. It is the one place in
+    # the product where limiting the free tier makes the paid tier worse, and
+    # free alliances are the collection engine.
+    #
+    # What is meant to be Premium here is the *derived* work: the odds of
+    # advancing, sharing an alliance's own roster into the dataset, and
+    # auto-matching members to their groups. Each gets its own named entry when
+    # it is built. See `notes/DESIGN_champion_duel_premium.md`.
+    #
+    # Champion Duel odds of advancing. The first of those three.
+    #
+    # It does not break "never take their data and withhold the view of it"
+    # (#398), which is the rule that makes every Alliance Duel view Premium.
+    # That rule protects data the alliance TYPED: withholding Alliance Duel's
+    # bracket takes from the people who filled it in. These odds are derived
+    # from a corpus they did not type and a model built for it, and a free
+    # alliance still gets everything their own contribution touches -- the 1v1
+    # prediction on every player they entered, their group, the player cards.
+    #
+    # A member could run 1v1 repeatedly and assemble this by hand, which is
+    # exactly what makes it a legitimate upsell rather than a hostage: the paid
+    # thing is the convenience and the model, not access to their own work.
+    "champion_duel_odds",
 }
 
 

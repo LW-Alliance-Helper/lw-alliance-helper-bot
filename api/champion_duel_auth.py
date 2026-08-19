@@ -262,35 +262,34 @@ async def resolve_writer_context(bot, discord_user_id: str) -> tuple[bool, str |
     """Can this user write, and on whose behalf?
 
     The single place that decides write access, so swapping the rule is a
-    one-function change. Today: membership of any guild with an active Premium
-    entitlement. Under Map Manager later this comes from MM's alliance context
-    (roster ∩ leadership tier → canManage) instead, and no route handler moves.
+    one-function change. Under Map Manager later this comes from MM's alliance
+    context (roster ∩ leadership tier → canManage) instead, and no route
+    handler moves.
 
-    Premium is deliberately the gate rather than a hand-maintained allowlist:
-    if an alliance pays, it decides who on its team is trusted to enter data,
-    and the dataset is only worth anything if more people contribute sightings.
-    Every write is attributed and revertable, so the blast radius is bounded.
+    **Contributing is not gated.** This used to require membership of a guild
+    with an active Premium entitlement. Kevin's decision, 2026-08-17: every
+    other gated feature produces value for the alliance that uses it, but
+    Champion Duel contributions produce value for everyone, so gating them
+    means fewer predictions for paying alliances too. Free alliances are the
+    collection engine. What is Premium here is the derived work built on top of
+    the corpus, not the act of filling it.
+
+    So the rule is now simply "somebody the bot can see", which is what the
+    guild walk still establishes: it resolves *which* guild to attribute the
+    writes to. A logged-in stranger who shares no server with the bot writes
+    nothing, because there is nobody to attribute them to and no alliance whose
+    conduct they fall under.
+
+    Damage is bounded the way it always was: every write is attributed and
+    revertable.
     """
     if bot is None:
-        return False, None
-    try:
-        import premium
-    except ImportError:  # pragma: no cover
         return False, None
 
     uid = int(discord_user_id)
     for guild in getattr(bot, "guilds", []):
-        member = guild.get_member(uid)
-        if member is None:
-            continue
-        try:
-            # feature_gate rather than is_premium: it is the canonical gate and
-            # it raises on an unregistered name, so a premium feature cannot
-            # quietly ship ungated.
-            if await premium.feature_gate("champion_duel_write", guild.id, bot=bot):
-                return True, str(guild.id)
-        except Exception as exc:  # noqa: BLE001 - a premium lookup must not 500 a login
-            print(f"[CHAMPION_DUEL] premium check failed for guild {guild.id}: {exc}")
+        if guild.get_member(uid) is not None:
+            return True, str(guild.id)
     return False, None
 
 

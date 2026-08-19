@@ -329,4 +329,291 @@ def test_an_import_writes_no_edit_rows(cd_db):
         [{"name": "AlphaOne", "server": "738", "slots": ["Tank", "Missile", "Aircraft"]}],
         actor=ACTOR,
     )
+    db.import_profiles([_profile_row("AlphaOne")], actor=ACTOR)
     assert db.list_edits()["total"] == before
+
+
+# ── The import log ────────────────────────────────────────────────────────────
+#
+# The open question was whether an import log is new storage or a change to the
+# rule above. It is new storage, and the test above still stands.
+#
+# `edits` is a per-value trail with a revert attached, and its job is finding
+# the handful of corrections a human made. An import is one file, hundreds of
+# rows, one actor, one moment, and nothing in it is revertable row by row.
+
+
+def test_an_import_is_logged_once_with_what_landed(cd_db):
+    """One row per import, never one per value. The question it is there to
+    answer is who has loaded what, which counts answer and values do not."""
+    entry = db.record_import(
+        door="discord",
+        results={
+            "registrants": {"total": 2, "inserted": 2},
+            "squads": {"applied": 6, "skipped": 1, "problems": []},
+            "profiles": {"applied": 1, "cleared": 2, "skipped": 0, "problems": []},
+        },
+        grouping_id=db.default_grouping_id(),
+        stage="qualifiers",
+        actor=ACTOR,
+    )
+
+    logged = db.list_imports()
+    assert logged["total"] == 1
+    row = logged["imports"][0]
+    assert row["id"] == entry
+    assert (row["registrants"], row["squads"], row["orders"], row["profiles"]) == (2, 6, 0, 1)
+    assert row["cleared"] == 2 and row["skipped"] == 1
+    assert row["door"] == "discord" and row["stage"] == "qualifiers"
+    assert row["actor_discord_id"] == ACTOR["discord_user_id"]
+
+
+def test_an_import_that_landed_nothing_is_still_logged(cd_db):
+    """Exactly the run somebody comes asking about. A log that only records
+    successes cannot answer them."""
+    db.record_import(
+        door="api",
+        results={"squads": {"applied": 0, "skipped": 400, "problems": []}},
+        actor=ACTOR,
+    )
+
+    row = db.list_imports()["imports"][0]
+    assert row["squads"] == 0 and row["skipped"] == 400
+
+
+def test_the_log_is_readable_per_grouping(cd_db):
+    """About 50 alliances use this bot and one grouping covers roughly two of
+    them, so "who has loaded what" is a question about one Champion Duel."""
+    mine = db.default_grouping_id()
+    db.record_import(door="discord", results={}, grouping_id=mine, actor=ACTOR)
+    db.record_import(door="discord", results={}, grouping_id=mine + 999, actor=ACTOR)
+
+    assert db.list_imports(grouping_id=mine)["total"] == 1
+    assert db.list_imports()["total"] == 2
+
+
+# ── Player profiles ───────────────────────────────────────────────────────────
+#
+# The block `push_to_bot.py` has been emitting since the 1.5 contract landed and
+# nothing here read, so every row of it hit the floor. What it carries cannot be
+# derived from what the bot stores: `player_profiles` fits against the whole
+# sightings corpus, and the bot only ever has whatever somebody typed in.
+
+
+def _profile_row(name, server="738", **profile):
+    base = {"types": ["Aircraft", "Tank", "Missile"], "shape": [0.94, 0.87], "mixed": [0, 1]}
+    return {"name": name, "server": server, "profile": {**base, **profile}}
+
+
+def test_a_profile_round_trips_in_the_shape_the_engine_reads(cd_db):
+    """Positions are POWER RANKS on the way in and on the way out. The frame is
+    the whole contract -- `champion_duel_odds._profile` is what translates."""
+    result = db.import_profiles([_profile_row("AlphaOne", gorilla=0)], actor=ACTOR)
+
+    assert result == {"applied": 1, "cleared": 0, "skipped": 0, "problems": []}
+    player = db.get_player("AlphaOne", server="738", include_scouting=True)
+    assert player["profile"] == {
+        "types": ["Aircraft", "Tank", "Missile"],
+        "shape": [0.94, 0.87],
+        "mixed": [0, 1],
+        "gorilla": 0,
+    }
+
+
+def test_a_player_with_nothing_measured_has_no_profile_at_all(cd_db):
+    """Absent is what makes the engine draw from the population. A row of nulls
+    would say something quite different, so it is never written."""
+    assert db.get_player("BetaTwo", server="738", include_scouting=True)["profile"] is None
+    assert db.get_profiles([]) == {}
+
+
+def test_a_measured_none_survives_as_a_measurement(cd_db):
+    """ "We looked and every squad is pure" is not "nobody looked". Collapsing
+    the two puts a 3.3% penalty on two squads of every unscouted player."""
+    db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"mixed": []}}], actor=ACTOR
+    )
+
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] == {
+        "mixed": []
+    }
+
+
+def test_a_legacy_count_of_zero_becomes_an_empty_mixed(cd_db):
+    """`n_mixed: 0` and `mixed: []` say the same thing -- every squad is pure --
+    but only one of them names no positions. Normalising at the door leaves the
+    legacy column meaning "n of them and we cannot say which", which is the
+    case the read side has to be careful with."""
+    db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"n_mixed": 0}}], actor=ACTOR
+    )
+
+    profile = db.get_player("AlphaOne", server="738", include_scouting=True)["profile"]
+    assert profile == {"mixed": []}
+
+
+def test_positions_win_over_a_legacy_count(cd_db):
+    """The engine prefers `mixed` and reads a bare count as "the bottom n",
+    which the corpus says is usually wrong. Storing both would leave the row
+    ambiguous about which a later reader should believe."""
+    db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"mixed": [0], "n_mixed": 2}}],
+        actor=ACTOR,
+    )
+
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] == {
+        "mixed": [0]
+    }
+
+
+def test_a_reimport_replaces_the_profile_whole(cd_db):
+    """Every import is a re-fit of the entire corpus, so a measurement that has
+    dropped out of the fit has to drop out of the row. Merging key by key would
+    keep a retracted measurement alive with nothing able to clear it."""
+    db.import_profiles([_profile_row("AlphaOne", gorilla=2)], actor=ACTOR)
+    db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"types": ["Tank", "Tank", "Tank"]}}],
+        actor=ACTOR,
+    )
+
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] == {
+        "types": ["Tank", "Tank", "Tank"]
+    }
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {"types": ["Tank", "Missile"]},
+        {"types": ["Tank", "Missile", "Submarine"]},
+        {"shape": [0.9]},
+        {"shape": [1.4, 0.8]},
+        {"shape": [0.0, 0.8]},
+        {"shape": ["big", 0.8]},
+        {"shape": [0.7, 0.9]},
+        {"mixed": [0, 5]},
+        {"mixed": ["first"]},
+        {"mixed": 2},
+        {"gorilla": 7},
+        {"gorilla": None, "n_mixed": -1},
+        {"n_mixed": "two"},
+    ],
+)
+def test_a_profile_the_engine_would_choke_on_is_refused_at_the_door(cd_db, profile):
+    """The engine reads a profile deep inside a trial, long after the
+    interaction has been deferred, and `build_odds_embed` catches only
+    `NotEnoughData` -- so a bad value there leaves a member watching a spinner
+    that never resolves. Refusing the row costs that player their profile and
+    nothing else."""
+    result = db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": profile}], actor=ACTOR
+    )
+
+    assert result["applied"] == 0 and result["skipped"] == 1
+    assert "AlphaOne" in result["problems"][0]
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] is None
+
+
+def test_a_profile_that_measures_nothing_retracts_the_one_we_hold(cd_db):
+    """Replacing whole only reaches a player the payload names, so this is the
+    producer's one way of saying "we can no longer justify what you hold".
+    Without it a retracted measurement sits there feeding every future run, and
+    nothing in the system can ever clear it."""
+    db.import_profiles([_profile_row("AlphaOne", gorilla=1)], actor=ACTOR)
+
+    result = db.import_profiles([{"name": "AlphaOne", "server": "738", "profile": {}}], actor=ACTOR)
+
+    # Cleared, not applied: wiping 400 profiles is a different event from
+    # loading 400 and the operator's summary must not read the same.
+    assert result["applied"] == 0 and result["cleared"] == 1 and result["skipped"] == 0
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] is None
+
+
+def test_retracting_a_profile_nobody_holds_is_not_an_error(cd_db):
+    """Every import is the whole corpus, so most rows in a retracting payload
+    have nothing to retract. Counting those as failures would bury the ones
+    that did clear something."""
+    result = db.import_profiles([{"name": "AlphaOne", "server": "738", "profile": {}}], actor=ACTOR)
+
+    assert result == {"applied": 0, "cleared": 0, "skipped": 0, "problems": []}
+
+
+def test_a_profile_of_only_unreadable_keys_does_not_retract(cd_db):
+    """The two rules either side of this would otherwise combine badly: unknown
+    keys are ignored, and an empty profile retracts. A producer-side key rename
+    would then read as "we measured nothing about anybody" and delete the lot.
+
+    A payload that measured something, in words this version cannot read, is
+    refused and says so."""
+    db.import_profiles([_profile_row("AlphaOne", gorilla=1)], actor=ACTOR)
+
+    result = db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"nerve": 0.4}}], actor=ACTOR
+    )
+
+    assert result["cleared"] == 0 and result["skipped"] == 1
+    assert "nerve" in result["problems"][0]
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] is not None
+
+
+def test_a_bool_is_not_a_position(cd_db):
+    """`int(True)` is 1, so an unguarded flag where a position belongs would
+    land the purity penalty on the second-biggest squad."""
+    result = db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"gorilla": True}}], actor=ACTOR
+    )
+
+    assert result["skipped"] == 1
+
+
+def test_a_key_this_version_has_no_column_for_is_ignored_not_fatal(cd_db):
+    """A newer simulator may fit something we cannot store yet. Dropping the
+    row over it would throw away the measurements we do understand."""
+    result = db.import_profiles(
+        [{"name": "AlphaOne", "server": "738", "profile": {"mixed": [1], "nerve": 0.4}}],
+        actor=ACTOR,
+    )
+
+    assert result["applied"] == 1
+    assert db.get_player("AlphaOne", server="738", include_scouting=True)["profile"] == {
+        "mixed": [1]
+    }
+
+
+def test_one_bad_profile_does_not_abandon_the_rest(cd_db):
+    result = db.import_profiles(
+        [_profile_row("AlphaOne"), _profile_row("WhoDis"), _profile_row("BetaTwo")], actor=ACTOR
+    )
+
+    assert result["applied"] == 2 and result["skipped"] == 1
+    assert any("WhoDis" in p for p in result["problems"])
+
+
+def test_the_odds_query_carries_the_troop_level(cd_db):
+    """Collected, stored, read by the odds, and never selected: every player
+    reached the engine at the default level, so the dropdown that gathers this
+    could not have changed a number once. The odds tests build their member
+    dicts by hand, which is why nothing that passes them caught it."""
+    # Through `upsert_registrant`, which is the only thing that writes it: a
+    # troop level is read off a member's own screen, not off a roster file.
+    db.upsert_registrant("AlphaOne", server="738", troop_level=9, actor=ACTOR)
+    group = db.get_or_create_group(db.default_grouping_id(), "qualifiers", "M")
+
+    rows = db.get_group_scouting(group["id"])
+
+    assert {r["display_name"]: r["troop_level"] for r in rows}["AlphaOne"] == 9
+
+
+def test_the_odds_query_carries_the_profile(cd_db):
+    """`get_group_scouting` is what the odds read. A query that returns
+    everything except the one field the model wants is a feature that cannot
+    work in production and still passes its tests -- which is exactly what
+    happened to `thp` on this query once already."""
+    db.import_profiles([_profile_row("AlphaOne")], actor=ACTOR)
+    group = db.get_or_create_group(db.default_grouping_id(), "qualifiers", "M")
+
+    rows = db.get_group_scouting(group["id"])
+
+    by_name = {r["display_name"]: r for r in rows}
+    assert by_name["AlphaOne"]["profile"]["types"] == ["Aircraft", "Tank", "Missile"]
+    assert by_name["BetaTwo"]["profile"] is None

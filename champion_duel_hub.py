@@ -23,11 +23,20 @@ exception ("hiding is reserved for surfaces behind a deploy flag") is exactly
 what this is. Showing an alliance member a greyed-out "Revert an edit" would
 advertise a surface no amount of paying gets them.
 
-The write buttons *do* follow the Premium rule: disabled and 🔒 on the free
-tier. Writes are Premium and deliberately community-gathering — if an alliance
-pays, it decides who on its team it trusts to enter data, and the dataset is
-only worth anything if more people contribute. Every write is attributed and
-revertable, so the blast radius is bounded.
+**Contributing is not gated, and the odds are.** Reversed 2026-08-17; the
+reasoning is in `notes/DESIGN_champion_duel_premium.md`. Every other gated
+feature produces value for the alliance that uses it, but Champion Duel
+contributions produce value for everyone, so gating them means fewer
+predictions for paying alliances too. Free alliances are the collection engine.
+Every write is attributed and revertable, so the blast radius is bounded.
+
+`🔮 Odds of advancing` is the one Premium control here, and it does follow the
+Premium rule: disabled and 🔒 on the free tier, with the upsell on the embed.
+
+`can_write` survives as a parameter and nothing sets it False. It is left
+threaded rather than ripped out because its 🔒-and-disable rendering is the
+shape any later gate reuses, and the odds gate proved that shape works. Read
+the padlock branches as unreachable today, not as a live gate.
 """
 
 from __future__ import annotations
@@ -42,6 +51,7 @@ import discord
 
 import champion_duel_db as db
 import champion_duel_image
+import champion_duel_odds as odds_lib
 import champion_duel_predict as predict_lib
 import champion_duel_wording as words
 import premium
@@ -63,7 +73,19 @@ HUB_BTN_CHAMPION_DUEL = "👑 Champion Duel"
 CD_BTN_PREDICT = "🆚 Predict a match"
 CD_BTN_FIND = "🔍 Find a player"
 CD_BTN_ADD = "➕ Add a player"
-CD_BTN_SQUAD = "✏️ Correct a squad"
+# The only squad entry screen. One open takes all three squads, their types
+# and the purity answer, and every box is optional so a partial reading is one
+# press rather than three.
+#
+# It replaced a second control, `✏️ Correct a squad`, which took one slot at a
+# time. The two did the same job from the user's end and sat side by side under
+# the same glyph, which `DESIGN.md` forbids across a choice set: two identical
+# glyphs give the eye nothing to navigate by. Retired 2026-08-17 (Kevin).
+#
+# The one thing the retired control could express and a fixed permutation
+# cannot is a lineup running two of the same type, which is about 4% of
+# players. `_TYPE_ORDER_OTHER` covers them instead.
+CD_BTN_SQUADS = "✏️ Record their squads"
 CD_BTN_ORDER = "➕ Record an order"
 CD_BTN_GUIDE = "📖 Where to find these numbers"
 CD_BTN_EDITS = "📜 Recent edits"
@@ -73,11 +95,37 @@ CD_BTN_FILTER = "🔍 Filter these"
 CD_BTN_SHARE = "📤 Share this prediction to current channel"
 CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
-CD_BTN_ADD_GROUPING = "➕ Add your warzone grouping"
+CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
 # 📥 is the catalog's "data coming into the bot", which is what a pasted group
 # listing is. Not ➕: `CD_BTN_ADD` already carries that on this grid, and two of
 # one glyph side by side give the eye nothing to navigate by.
+# 🏅 is the game's own mark for a standing: its Ranking line carries a medal
+# badge, so `DESIGN.md` rule 5 (borrow the game's iconography) has something to
+# take here. It is also legible at button size, which 📇 was not -- Kevin could
+# not identify that glyph at 200% zoom, and an icon nobody can read is doing
+# none of the scanning work an emoji is on a label to do.
+# 👥 was the obvious choice and is Member Sync's, which rule 3 puts out of reach.
+CD_BTN_GROUP = "🏅 Your group"
+# Deliberately not "prediction". The game runs its own prediction, and it is a
+# betting market on individual matches (Kevin, 2026-08-16). This answers a
+# question that one does not: whether you get out of your group.
+#
+# 🔮 for the thing being predicted (Kevin, 2026-08-16). 📊 was out as Growth
+# Breakdown's, and 🎲 was the trap: the game's own prediction *is* a betting
+# market, so a die would say we are that feature on the one surface where the
+# distinction matters most. A crystal ball says forecast without saying wager.
+# Not "register for a round". A player registered for this Champion Duel in
+# the game weeks ago; what is missing is where the draw put them, which is a
+# fact somebody read off a screen. A label claiming registration would describe
+# an outcome the control does not have, which `UX.md` puts the wrong way round:
+# the label describes the control, and this one sets a group.
+#
+# 🏅 rather than a new glyph. `DESIGN.md` has it as one player's standing in a
+# round, and which group they are in is exactly that, so this and the group
+# view share a mark because they share a meaning.
+CD_BTN_PLACE = "🏅 Set their group"
+CD_BTN_ODDS = "🔮 Odds of advancing"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
 CD_BTN_LINE_NEW = "➕ Add as a new player"
@@ -103,6 +151,17 @@ BROWSE_MAX = 20
 # the cap is here so a future stage with hundreds cannot turn the hub into a
 # wall, not because sixteen is close to the limit.
 _SERVERS_SHOWN = 30
+#: Rows on the odds embed. A qualifier group is 100 players and an embed
+#: description is 4,096 characters, so the list is cut and the remainder
+#: counted. Eight is what advances from a qualifier group, so the cut sits
+#: just past the line that decides the round.
+_ODDS_SHOWN = 12
+
+#: Troop levels the game has. Only 10 and 11 are measured; the rest carry the
+#: same step down, which `champion_duel_engine.scoring.MEASURED_LEVELS` will
+#: confirm. Levels only separate players in a mixed-level group: where everyone
+#: is the same, ranking is unaffected.
+MAX_TROOP_LEVEL = 11
 
 # The six deployment orders. Every line-up observed to date runs exactly one
 # Tank, one Missile and one Aircraft, so an order is a permutation of the three
@@ -547,7 +606,7 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
                 f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to predict with.\n"
                 f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
-                f"**{CD_BTN_SQUAD}** to fill them in.",
+                f"**{CD_BTN_SQUADS}** to fill them in.",
                 ephemeral=True,
             )
             return
@@ -665,18 +724,20 @@ def build_player_embed(
         """The group letter, qualified when it belongs to a different draw.
 
         "Group D" is only exact inside one grouping. On a player from another
-        one it reads as a claim the reader will act on, so it names which
-        Champion Duel it came from by the date that one started.
+        one it reads as a claim the reader will act on, so it says plainly that
+        this is not the reader's.
+
+        It deliberately does NOT name the other one by its start date. Every
+        draw in a season starts on the same day, so the date would print the
+        reader's own Champion Duel's name while asserting it is a different
+        one, which is worse than saying nothing. Naming it would need the thing
+        that actually separates the two, which is the other set of
+        Participating Warzones, and that is a list rather than a label.
         """
         if not row.get("grp"):
             return None
         if grouping and row.get("grouping_id") != grouping.get("id"):
-            # `grouping_started_on` rides along on the stage row rather than
-            # being looked up here: this runs on the event loop, and one more
-            # synchronous query per rendered card is the #366 class of bug.
-            started = _short_date(row.get("grouping_started_on"))
-            when = f" that started {started}" if started else ""
-            return f"Group {row['grp']} (in a different Champion Duel grouping{when})"
+            return f"Group {row['grp']} (not your Champion Duel)"
         return f"Group {row['grp']}"
 
     def _rank_bit(stage: str, row: dict) -> str | None:
@@ -704,6 +765,78 @@ def build_player_embed(
     return embed
 
 
+class _PlaceInGroupModal(discord.ui.Modal, title="Which group are they in?"):
+    """Put a player we already have into a round's group.
+
+    Two dropdowns and nothing typed, because both answers come from a fixed
+    set: there are three rounds and sixteen letters, and free text here only
+    creates ways to be wrong. It replaces the group box that used to sit on the
+    add-a-player screen, which had to guess a round and could not offer the
+    letters.
+
+    The knockouts are absent from the round list on purpose. They are one field
+    of 32 with no letter at all, so there would be nothing to pick.
+    """
+
+    def __init__(self, *, player: dict, grouping: dict):
+        super().__init__()
+        self.player = player
+        self.grouping = grouping
+
+    stage = discord.ui.Label(
+        text="Which round?",
+        component=discord.ui.Select(
+            options=[
+                discord.SelectOption(label=db.STAGE_LABELS[key], value=key)
+                for key in ("qualifiers", "semifinals")
+            ],
+        ),
+    )
+    group = discord.ui.Label(
+        text="Which group?",
+        component=discord.ui.Select(
+            options=[
+                discord.SelectOption(label=f"Group {letter}", value=letter)
+                for letter in db.GROUP_LABELS
+            ],
+        ),
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        stage = self.stage.component.values[0]
+        letter = self.group.component.values[0]
+        server = self.player.get("server")
+
+        # The guard that used to live on the add-a-player screen, kept because
+        # it is the one that matters: a letter belongs to one Champion Duel, and
+        # writing one for a player whose warzone is in a different draw is what
+        # put an officer in warzone 1500's opponent into the imported grouping's
+        # Group D. Refused out loud rather than dropped.
+        if server and server not in self.grouping["warzones"]:
+            await interaction.followup.send(
+                f"⚠️ Warzone **{server}** is not in {_grouping_name(self.grouping)}, "
+                f"so **Group {letter}** there is a different group from yours. "
+                f"Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        await asyncio.to_thread(
+            db.set_stage,
+            self.player["id"],
+            stage,
+            grp=letter,
+            grouping_id=self.grouping["id"],
+        )
+        await interaction.followup.send(
+            f"✅ Put **{_label(self.player)}** in **Group {letter}** for the "
+            f"**{db.STAGE_LABELS[stage]}**.",
+            ephemeral=True,
+        )
+
+
 class PlayerActionsView(discord.ui.View):
     """The write actions, attached to a player already on screen.
 
@@ -717,16 +850,25 @@ class PlayerActionsView(discord.ui.View):
     would look like.
     """
 
-    def __init__(self, *, player: dict, user_id: int, can_write: bool):
+    def __init__(
+        self, *, player: dict, user_id: int, can_write: bool, grouping: dict | None = None
+    ):
         super().__init__(timeout=600)
         self.player = player
         self.user_id = user_id
+        self.grouping = grouping
         self.message: discord.Message | None = None
 
-        for label, callback in (
-            (CD_BTN_SQUAD, self._on_squad),
+        actions = [
+            (CD_BTN_SQUADS, self._on_squads),
             (CD_BTN_ORDER, self._on_order),
-        ):
+        ]
+        # Absent rather than disabled without a grouping: a group letter is
+        # meaningless outside one, so there is nothing this could set.
+        if grouping:
+            actions.append((CD_BTN_PLACE, self._on_place))
+
+        for label, callback in actions:
             button = discord.ui.Button(
                 label=(label if can_write else f"🔒 {label}")[:80],
                 style=discord.ButtonStyle.secondary,
@@ -746,8 +888,13 @@ class PlayerActionsView(discord.ui.View):
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
-    async def _on_squad(self, inter: discord.Interaction):
-        await inter.response.send_modal(_SquadModal(self.player))
+    async def _on_squads(self, inter: discord.Interaction):
+        await inter.response.send_modal(_SquadDetailModal(player=self.player))
+
+    async def _on_place(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _PlaceInGroupModal(player=self.player, grouping=self.grouping)
+        )
 
     async def _on_order(self, inter: discord.Interaction):
         # Straight to the picker. The modal that used to sit in front of this
@@ -786,7 +933,12 @@ async def send_player_card(
     would take that away.
     """
     top = await asyncio.to_thread(db.most_common_order, player["id"])
-    view = PlayerActionsView(player=player, user_id=interaction.user.id, can_write=can_write)
+    view = PlayerActionsView(
+        player=player,
+        user_id=interaction.user.id,
+        can_write=can_write,
+        grouping=grouping,
+    )
     await interaction.followup.send(
         content=note,
         embed=build_player_embed(player, top, grouping=grouping),
@@ -885,6 +1037,241 @@ class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
         await send_player_card(interaction, found, can_write=self.can_write, grouping=self.grouping)
 
 
+# ── Collecting a player, in the shape the model reads ─────────────────────────
+#
+# Two screens, because Discord allows five components a modal and the fields
+# split cleanly at five. Kevin's structure, 2026-08-16.
+#
+# The gorilla is deliberately absent. It sits on the biggest squad 93% of the
+# time and inflates whichever squad carries it by about a tenth, so the biggest
+# reading IS the carrier in almost every real lineup and the engine works that
+# out from the powers. Asking would spend a component on a question we can
+# answer better ourselves.
+
+#: The six type orders, which is every arrangement of one of each. Measured on
+#: 50 real lineups: nobody fields two of a type, so this is the whole space and
+#: one select covers what would otherwise be three.
+#:
+#: Ordered by BOX, not by power. The member is reading their lineup screen left
+#: to right and typing the powers in that order, so the types have to line up
+#: with the boxes beside them. The engine sorts and carries the types along.
+_TYPE_ORDERS = [
+    ("Tank", "Missile", "Aircraft"),
+    ("Tank", "Aircraft", "Missile"),
+    ("Missile", "Tank", "Aircraft"),
+    ("Missile", "Aircraft", "Tank"),
+    ("Aircraft", "Tank", "Missile"),
+    ("Aircraft", "Missile", "Tank"),
+]
+
+#: The seventh option, for a lineup the six permutations cannot describe.
+#:
+#: 96% of players run one of each type, so six options cover almost everyone
+#: and a dropdown beats typing for them. The rest run two of something, and
+#: enumerating those would take the list from six to twenty-seven to catch one
+#: player in twenty-five. So the list stays short and the exception says so.
+_TYPE_ORDER_OTHER = "other"
+
+#: How long to wait for somebody to type their squad types in the channel.
+#: The same 120s the setup wizards give a free-text step, and for the same
+#: reason: a member may be reading it off a game screen on the same phone.
+_TYPE_ORDER_TIMEOUT = 120
+
+
+def _parse_type_order(text: str) -> tuple | None:
+    """Three squad types in box order, from something a person typed.
+
+    Forgiving on separators and on how much of each word they wrote, because
+    this is the path for somebody who has already been told the dropdown does
+    not fit them and is now typing what they can see. `T/M/A` and
+    `tank, tank, air` both work.
+
+    Returns None when it cannot be read, which the caller turns into a retry
+    rather than a guess: a wrong type is a wrong counter matchup on every
+    prediction that player appears in.
+    """
+    cleaned = (text or "").strip().lower()
+    if not cleaned:
+        return None
+    for separator in (",", "/", "-", ">"):
+        cleaned = cleaned.replace(separator, " ")
+    words = cleaned.split()
+    if len(words) != 3:
+        return None
+    out = []
+    for word in words:
+        # Prefix match, so "air", "aircraft" and "a" all land. The three names
+        # share no first letter, which is what makes a single character enough.
+        matched = [t for t in db.VALID_TYPES if t.lower().startswith(word)]
+        if len(matched) != 1:
+            return None
+        out.append(matched[0])
+    return tuple(out)
+
+
+def _squad_offer(powers, order, mixed) -> dict:
+    """One squad submission as `{slot: {field: value}}`, aligned box by box.
+
+    Every box carries a purity answer, because on the screen this comes from
+    the member had the lineup in front of them: saying nothing about a squad is
+    saying it is pure. That is the one place the NULL-versus-0 distinction on
+    `squads.mixed` is deliberately spent.
+    """
+    return {
+        slot: {
+            "squad_type": squad_type,
+            "power": power,
+            "mixed": None if mixed is None else int(slot in mixed),
+        }
+        for slot, (power, squad_type) in enumerate(zip(powers, order), start=1)
+    }
+
+
+def _parse_mixed(text: str) -> set[int] | None:
+    """Which boxes are mixed type, from something like `1,3`.
+
+    **Blank means none, not "not asked".** Kevin's decision, 2026-08-17: the
+    box is optional, and leaving it empty says the same thing as typing
+    "none". Somebody filling this screen in has the lineup in front of them,
+    so silence about a mixed squad is an answer.
+
+    That deliberately spends the NULL-versus-0 distinction the `squads.mixed`
+    column keeps, and it only spends it HERE, at the one surface where a person
+    was looking at the lineup when they said nothing. Everywhere else -- an
+    import, a player nobody has opened -- absence still means nobody has looked,
+    which is what stops the model treating an unscouted player as measured.
+
+    Returns a set of 1-based box numbers, an empty set for an explicit "none",
+    or None when it cannot be read.
+
+    Free text rather than a dropdown, because the model needs to know WHICH
+    squads are mixed and not how many. It used to take a count and apply the
+    penalty to the bottom two, and the corpus says that is usually wrong:
+    across the players whose three squads have all been seen, the bottom pair
+    was the mixed one once against five for the top pair. Purity is not where a
+    player is weakest, it is where their best heroes are spread.
+    """
+    cleaned = (text or "").strip().lower()
+    if not cleaned or cleaned in ("none", "no", "n", "-", "0"):
+        return set()
+    out = set()
+    for piece in cleaned.replace(" ", "").split(","):
+        if piece not in ("1", "2", "3"):
+            return None
+        out.add(int(piece))
+    return out
+
+
+class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
+    """The second screen: what the lineup screen shows, box by box.
+
+    Every box is optional. A player is placed by any single squad power or by
+    their Total Hero Power, so somebody who reads one number off and closes the
+    app has still helped. Given powers are used exactly and the rest are filled
+    from the shape fit, which is the whole reason partial entry is worth taking.
+    """
+
+    def __init__(self, *, player: dict):
+        super().__init__()
+        self.player = player
+
+    squad1 = discord.ui.TextInput(
+        label="Squad 1 power", required=False, max_length=16, placeholder="e.g. 94.2M"
+    )
+    squad2 = discord.ui.TextInput(
+        label="Squad 2 power", required=False, max_length=16, placeholder="Leave blank if unknown"
+    )
+    squad3 = discord.ui.TextInput(
+        label="Squad 3 power", required=False, max_length=16, placeholder="Leave blank if unknown"
+    )
+    types = discord.ui.Label(
+        text="Squad types, in the same order as the boxes above",
+        component=discord.ui.Select(
+            required=False,
+            options=[
+                discord.SelectOption(label=" / ".join(order), value=str(i))
+                for i, order in enumerate(_TYPE_ORDERS)
+            ]
+            + [
+                discord.SelectOption(
+                    label="Other",
+                    value=_TYPE_ORDER_OTHER,
+                    description="If they run two of the same type",
+                )
+            ],
+        ),
+    )
+    # A Label rather than a bare TextInput so the question and the instruction
+    # can be separate lines. Discord caps a field label at 45 characters and
+    # both together run past it, and the question is the half that has to
+    # survive: somebody who reads only the bold line still knows what is being
+    # asked.
+    mixed = discord.ui.Label(
+        text="Are any of these squads mixed type?",
+        description="List which squads if so.",
+        component=discord.ui.TextInput(
+            required=False,
+            max_length=8,
+            placeholder="e.g. 1,3",
+        ),
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        powers = [parse_power(box.value) for box in (self.squad1, self.squad2, self.squad3)]
+        typed = [box.value for box in (self.squad1, self.squad2, self.squad3)]
+        unreadable = [
+            i + 1
+            for i, (raw, val) in enumerate(zip(typed, powers))
+            if (raw or "").strip() and val is None
+        ]
+        if unreadable:
+            await interaction.followup.send(
+                f"⚠️ Squad {_plural(len(unreadable), 'power')} "
+                f"{', '.join(str(i) for i in unreadable)} could not be read. "
+                f"The game writes **94.2M** and a spreadsheet writes "
+                f"**94,200,000**; both work. Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        raw_mixed = (self.mixed.component.value or "").strip()
+        mixed = _parse_mixed(raw_mixed)
+        if mixed is None:
+            await interaction.followup.send(
+                "⚠️ Say which squads are mixed type as box numbers, like **1,3**. "
+                "Leave it blank if none of them are. Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        chosen = self.types.component.values
+
+        # A blank purity box means "none are mixed", but only once the member
+        # has told us something. Submitting the whole screen empty is not a
+        # measurement that every squad is pure -- nobody looked at anything --
+        # and without this check it would write one for all three boxes.
+        if not (any(p is not None for p in powers) or chosen or raw_mixed):
+            await interaction.followup.send(
+                f"↩️ Nothing to record for **{_label(self.player)}**. No changes made.",
+                ephemeral=True,
+            )
+            return
+
+        # "Other" is a lineup the six permutations cannot describe, so the
+        # order has to be typed. Everything they already filled in is saved
+        # first, so the follow-up costs them only the types.
+        if chosen and chosen[0] == _TYPE_ORDER_OTHER:
+            await _write_squad_powers(interaction, self.player, powers, mixed, source="observed")
+            await _ask_for_type_order(interaction, self.player)
+            return
+
+        order = _TYPE_ORDERS[int(chosen[0])] if chosen else (None, None, None)
+        offered = _squad_offer(powers, order, mixed)
+        await _ask_or_write(interaction, self.player, offered, source="observed")
+
+
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     """Create a registrant from a sighting.
 
@@ -919,13 +1306,37 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         if server:
             self.server.default = server[:10]
 
+    # Five components is the cap and all five earn their place. `group` moved
+    # off this screen when Total Hero Power and troop level arrived: a letter
+    # is round data that the record and reconcile flows already collect
+    # properly, where these two are facts about the player that nothing else
+    # asks for and the model cannot run without one of them.
     name = discord.ui.TextInput(label="Player name", max_length=64)
-    server = discord.ui.TextInput(label="Server", max_length=10, placeholder="e.g. 738")
-    group = discord.ui.TextInput(
-        label="Group", required=False, max_length=2, placeholder="A single letter, if you know it"
-    )
+    server = discord.ui.TextInput(label="Warzone", max_length=10, placeholder="e.g. 738")
+    # The tag, not the name. `registrants.alliance` has always held three or
+    # four characters because that is what the game shows beside a player, and
+    # nothing said so, so people typed the whole alliance name into it.
     alliance = discord.ui.TextInput(
-        label="Alliance tag", required=False, max_length=16, placeholder="Optional"
+        label="Alliance tag",
+        required=False,
+        max_length=8,
+        placeholder="The 3 or 4 characters in brackets, e.g. OGV",
+    )
+    thp = discord.ui.TextInput(
+        label="Total Hero Power",
+        required=False,
+        max_length=16,
+        placeholder="e.g. 325.8M",
+    )
+    troop_level = discord.ui.Label(
+        text="Troop level",
+        component=discord.ui.Select(
+            required=False,
+            options=[
+                discord.SelectOption(label=f"Lv.{n}", value=str(n))
+                for n in range(MAX_TROOP_LEVEL, 0, -1)
+            ],
+        ),
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -945,14 +1356,28 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             )
             return
 
+        thp = parse_power(self.thp.value)
+        if (self.thp.value or "").strip() and thp is None:
+            await interaction.followup.send(
+                "⚠️ That Total Hero Power could not be read. The game writes "
+                "**325.8M** and a spreadsheet writes **325,800,000**; both work. "
+                "Nothing was saved.",
+                ephemeral=True,
+            )
+            return
+
+        chosen = self.troop_level.component.values
+        level = int(chosen[0]) if chosen else None
+
         existing = await asyncio.to_thread(db.find_registrants, name, server)
         try:
             player = await asyncio.to_thread(
                 db.upsert_registrant,
                 name,
                 server=server,
-                grp=(self.group.value or "").strip() or None,
                 alliance=(self.alliance.value or "").strip() or None,
+                thp=thp,
+                troop_level=level,
                 origin="self_reported",
                 actor=_actor(interaction),
             )
@@ -960,44 +1385,11 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
             return
 
-        # A group is round data, so it lands on the round being played rather
-        # than on the player. Only written when they actually gave one: a blank
-        # stage row would claim this player is in the round when all we know is
-        # that somebody met them.
-        #
-        # And only when the letter can be placed. A group letter is meaningless
-        # outside a grouping, so writing one against the globally-running round
-        # is what put an officer in warzone 1500's opponent into the imported
-        # grouping's Group D. Refusing to record it is the honest outcome, and
-        # it is said out loud rather than dropped.
-        group = (self.group.value or "").strip()
+        # The second screen cannot be opened from here: a modal has to be the
+        # first response to an interaction and this one has already answered.
+        # So the squads are offered as a button on the result instead, which
+        # also lets somebody who only knows a name stop after one screen.
         aside = ""
-        if group:
-            if not self.grouping:
-                aside = (
-                    "\nℹ️ The group letter was not recorded: we do not know which "
-                    "Champion Duel grouping your alliance is in yet."
-                )
-            elif server not in self.grouping["warzones"]:
-                # Names the grouping by its start date. A member may be in a
-                # different one every season, and "your grouping" leaves them
-                # nothing to check this against.
-                aside = (
-                    f"\nℹ️ The group letter was not recorded. Warzone **{server}** is not "
-                    f"in {_grouping_name(self.grouping)}, so **Group {group}** there is a "
-                    f"different group from yours."
-                )
-            else:
-                stage = await asyncio.to_thread(db.current_stage, self.grouping["id"])
-                if stage:
-                    await asyncio.to_thread(
-                        db.set_stage,
-                        player["id"],
-                        stage,
-                        grp=group,
-                        grouping_id=self.grouping["id"],
-                    )
-                    player = await asyncio.to_thread(db.get_player, name, server)
 
         note = (
             f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
@@ -1013,94 +1405,374 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         )
 
 
-# ── Correct a squad (Premium) ─────────────────────────────────────────────────
+# ── When we already hold a different answer ───────────────────────────────────
+#
+# Kevin's design: if someone is entering data we already have, surface what we
+# have, show them the two pieces, and ask which is correct.
+#
+# One question per submission, never one per field. A member filling in three
+# boxes answered one thing; asking three times turns a correction into an
+# interrogation, and `compare_squad` already narrows this to real
+# contradictions -- an estimate giving way to a reading, somebody correcting
+# their own entry, and two people agreeing all pass without a word.
+
+#: How each disputed field is named to a member. `mixed` is stored as a flag
+#: and read off the game's lineup screen as a squad of four types rather than
+#: five, so it is named the way the screen shows it, not the way we store it.
+_FIELD_LABELS = {
+    "squad_type": "Squad type",
+    "power": "Power",
+    "mixed": "4-of-a-type",
+}
 
 
-class _SquadModal(discord.ui.Modal, title="Correct a squad"):
-    """One slot per submission, for a player already on screen.
+def _value_text(field: str, value) -> str:
+    """One held or offered value, in the units the member reads it in."""
+    if value is None:
+        return "nothing"
+    if field == "power":
+        return f"{float(value):,.0f}"
+    if field == "mixed":
+        return "Yes" if value else "No"
+    return str(value)
 
-    Three fields rather than five: the name and server came from the card this
-    opened from, so there is no second chance to mistype them and no ambiguous
-    match to resolve mid-flow.
 
-    Still one slot at a time. A five-field modal that half-fills is how a typo
-    in slot 3 silently overwrites a good slot 1.
+def build_disagreement_embed(player: dict, pending: list[dict]) -> discord.Embed:
+    """The two pieces, side by side, for every field that contradicts.
+
+    ❓ rather than ⚠️, per the row-state catalog: nothing is wrong here, there
+    is simply more than one right answer, and the two must not read the same.
+    """
+    disputed = [entry for entry in pending if entry["disputed"]]
+    count = sum(len(entry["disputed"]) for entry in disputed)
+    embed = discord.Embed(
+        title="❓ We already have a different answer",
+        description=(
+            f"**{_label(player)}** already has "
+            f"{'a value' if count == 1 else 'values'} recorded that "
+            f"{'does' if count == 1 else 'do'} not match what you entered. "
+            f"Pick whichever is right."
+        ),
+        color=discord.Color.blurple(),
+    )
+    for entry in disputed:
+        for row in entry["disputed"]:
+            embed.add_field(
+                name=f"Slot {entry['slot']}: {_FIELD_LABELS[row['field']]}",
+                value=(
+                    f"What we have: **{_value_text(row['field'], row['held'])}**\n"
+                    f"What you entered: **{_value_text(row['field'], row['offered'])}**"
+                ),
+                inline=False,
+            )
+    return embed
+
+
+async def _write_squad_fields(interaction, player, slot, values, *, source: str) -> dict:
+    """One `set_squad`, or nothing when there is nothing to say.
+
+    `source` travels from the surface that collected it and is not defaulted
+    here: `edited` outranks every later import and `observed` does not, so
+    guessing it would either bury a correction or protect a sighting that was
+    never meant to be permanent.
+    """
+    if not any(value is not None for value in values.values()):
+        return {}
+    return await asyncio.to_thread(
+        db.set_squad,
+        player["id"],
+        slot,
+        values.get("squad_type"),
+        values.get("power"),
+        mixed=values.get("mixed"),
+        source=source,
+        actor=_actor(interaction),
+    )
+
+
+async def _write_undisputed(interaction, player, pending, *, source: str) -> int:
+    """Save everything this submission says that nothing contradicts.
+
+    **Written before the question is asked, not after it is answered.** The
+    question is only about the fields that contradict; holding the rest hostage
+    to it means a member who reads three powers, is asked about one, and gets
+    interrupted loses all three. There is nothing to arbitrate about a value
+    nobody has offered a different one for, so there is no reason to wait.
+    """
+    written = 0
+    for entry in pending:
+        disputed = {row["field"] for row in entry["disputed"]}
+        values = {
+            field: value for field, value in entry["offered"].items() if field not in disputed
+        }
+        if await _write_squad_fields(interaction, player, entry["slot"], values, source=source):
+            written += 1
+    return written
+
+
+class _DisagreementView(discord.ui.View):
+    """Two pieces, two buttons.
+
+    It settles ONLY the contradicted fields. Everything else in the submission
+    was written before this view went up, so a member who never answers loses
+    nothing they told us that nobody disputes.
+
+    Bare labels. The alternatives differ by which value is right, which is a
+    parameter rather than a kind, and `DESIGN.md` sends parameter sets out
+    without glyphs rather than repeating one across the pair.
+
+    Neither button is `primary`. The bot has no view on which of two people
+    read the screen correctly, and styling one as recommended would be exactly
+    the opinion `UX.md` says it does not have.
     """
 
-    def __init__(self, player: dict):
-        super().__init__()
+    def __init__(self, *, player: dict, pending: list[dict], user_id: int, source: str):
+        super().__init__(timeout=120)
         self.player = player
-        self.title = f"Correct a squad: {player['display_name']}"[:45]
+        self.pending = [entry for entry in pending if entry["disputed"]]
+        self.user_id = user_id
+        self.source = source
+        #: Set by `_ask_which` so the view can retire its own message.
+        self.message = None
 
-    slot = discord.ui.TextInput(label="Slot (1, 2 or 3)", max_length=1)
-    squad_type = discord.ui.TextInput(
-        label="Squad type", required=False, max_length=16, placeholder="Tank, Missile or Aircraft"
-    )
-    # Takes the number in whatever form the game showed it. Demanding a
-    # normalised figure pushed a conversion onto the person reading "84.6M" off
-    # a screen, to produce a value the bot then renders back as "84.6M" -- work
-    # invented at the point of entry and undone at the point of display.
-    power = discord.ui.TextInput(
-        label="Power",
-        required=False,
-        max_length=24,
-        placeholder="84.6M, 84,600,000 or 84600000",
-    )
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        squad_type = (self.squad_type.value or "").strip().title() or None
-        raw_power = (self.power.value or "").strip()
-        if not squad_type and not raw_power:
-            await interaction.followup.send(
-                "⚠️ Nothing to change. Fill in a squad type, a power, or both.", ephemeral=True
+    async def _settle(self, inter: discord.Interaction, *, use_offered: bool):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        actor = _actor(inter)
+        for entry in self.pending:
+            edits = {}
+            if use_offered:
+                disputed = {row["field"] for row in entry["disputed"]}
+                edits = (
+                    await _write_squad_fields(
+                        inter,
+                        self.player,
+                        entry["slot"],
+                        {
+                            field: value
+                            for field, value in entry["offered"].items()
+                            if field in disputed
+                        },
+                        # `edited`, whatever the surface that collected it
+                        # says. A value that overrides one a person already
+                        # recorded is a correction by definition, and
+                        # `_import_would_downgrade` protects `edited` from
+                        # every later import where `observed` only outranks an
+                        # estimate. Losing that was the real cost of retiring
+                        # the one-slot modal, which wrote `edited` outright;
+                        # this puts it back on the only entries that need it.
+                        source="edited",
+                    )
+                ).get("edits", {})
+            await asyncio.to_thread(
+                db.record_disagreement,
+                self.player["id"],
+                target="squad",
+                slot=entry["slot"],
+                rows=entry["disputed"],
+                chose="offered" if use_offered else "held",
+                actor=actor,
+                edits=edits,
             )
-            return
-        if squad_type and squad_type not in db.VALID_TYPES:
-            await interaction.followup.send(
-                f"⚠️ Squad type has to be one of {', '.join(db.VALID_TYPES)}.", ephemeral=True
-            )
-            return
-        power = parse_power(raw_power) if raw_power else None
-        if raw_power and power is None:
-            await interaction.followup.send(
-                f"⚠️ I couldn't read **{raw_power}** as a power. `84.6M`, "
-                f"`84,600,000` and `84600000` all work.",
-                ephemeral=True,
-            )
-            return
-        try:
-            slot = int(self.slot.value.strip())
-        except (ValueError, AttributeError):
-            slot = 0
-        if slot not in (1, 2, 3):
-            await interaction.followup.send("⚠️ Slot has to be 1, 2 or 3.", ephemeral=True)
-            return
-
-        found = self.player
-        result = await asyncio.to_thread(
-            db.set_squad,
-            found["id"],
-            slot,
-            squad_type,
-            power,
-            actor=_actor(interaction),
-            source="edited",
-        )
-        if not result["edit_ids"]:
-            await interaction.followup.send(
-                f"ℹ️ Slot {slot} for **{_label(found)}** already said that. Nothing changed.",
-                ephemeral=True,
-            )
-            return
-        changed = ", ".join(
-            bit for bit in (squad_type, f"{power:,.0f}" if power is not None else None) if bit
-        )
-        await interaction.followup.send(
-            f"✅ Slot {slot} for **{_label(found)}** is now **{changed}**.",
+        settled = "Saved what you entered" if use_offered else "Kept what we had"
+        await inter.followup.send(
+            f"✅ {settled} for **{_label(self.player)}**. Either way, your answer is on record.",
             ephemeral=True,
         )
+        self.stop()
+
+    @discord.ui.button(label="Keep what we have", style=discord.ButtonStyle.secondary)
+    async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._settle(inter, use_offered=False)
+
+    @discord.ui.button(label="Use what I entered", style=discord.ButtonStyle.secondary)
+    async def use_mine(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._settle(inter, use_offered=True)
+
+    async def on_timeout(self) -> None:
+        # A live-looking button on a dead view is a bug, not cosmetics: the
+        # member presses it, gets "Interaction failed", and never learns the
+        # question went unanswered.
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+
+async def _pending_squad_entries(interaction, player: dict, offered_by_slot: dict) -> list[dict]:
+    """What this submission would write, and where it contradicts what we hold.
+
+    `offered_by_slot` is `{slot: {field: value}}`, carrying only the fields the
+    member filled in. Omitting a field is not an assertion about it.
+    """
+    actor = _actor(interaction)
+    pending = []
+    for slot, offered in sorted(offered_by_slot.items()):
+        disputed = await asyncio.to_thread(
+            db.compare_squad, player["id"], slot, actor=actor, **offered
+        )
+        pending.append({"slot": slot, "offered": offered, "disputed": disputed})
+    return pending
+
+
+async def _ask_which(interaction, player: dict, pending: list[dict], *, source: str) -> None:
+    """Put the two pieces up with two buttons. The caller has deferred.
+
+    Everything nobody disputes is saved first, so the question is only ever
+    about the fields that contradict and an unanswered one costs only those.
+    """
+    await _write_undisputed(interaction, player, pending, source=source)
+    view = _DisagreementView(
+        player=player, pending=pending, user_id=interaction.user.id, source=source
+    )
+    # `wait=True` so the view holds its own message and can retire it on
+    # timeout. Without it `self.message` is None and the buttons stay live
+    # looking on a dead view.
+    view.message = await interaction.followup.send(
+        embed=build_disagreement_embed(player, pending),
+        view=view,
+        ephemeral=True,
+        wait=True,
+    )
+
+
+async def _ask_or_write(
+    interaction, player: dict, offered_by_slot: dict, *, source: str, quiet: bool = False
+) -> None:
+    """Save a squad submission, asking first only where it contradicts.
+
+    `quiet` suppresses the acknowledgement, for a caller that is only halfway
+    through and will say something itself. It never suppresses the
+    disagreement prompt: that is a question, not an acknowledgement, and
+    swallowing it would drop the answer on the floor.
+    """
+    pending = await _pending_squad_entries(interaction, player, offered_by_slot)
+    if any(entry["disputed"] for entry in pending):
+        await _ask_which(interaction, player, pending, source=source)
+        return
+
+    written = await _write_undisputed(interaction, player, pending, source=source)
+    if quiet:
+        return
+    if not written:
+        await interaction.followup.send(
+            f"↩️ Nothing to record for **{_label(player)}**. No changes made.",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        f"✅ Recorded {_plural(written, 'squad')} for **{_label(player)}**.",
+        ephemeral=True,
+    )
+
+
+# ── "Other": a lineup the six permutations cannot describe ────────────────────
+#
+# 96% of players run one of each type. The other 4% run two of something, and
+# enumerating those would take the dropdown from six options to twenty-seven to
+# catch one player in twenty-five. So the list stays short and the exception is
+# asked for afterwards.
+#
+# It cannot be a sixth field on the squad modal: five components is Discord's
+# cap and that screen is at it. And it cannot be a second modal, because
+# Discord will not accept a modal as the response to a modal submission. So it
+# is asked the way every free-text step in the setup wizards is asked -- an
+# ephemeral prompt, then `wait_for` on the member's next message.
+
+
+async def _write_squad_powers(interaction, player, powers, mixed, *, source: str) -> None:
+    """Save the half of an "Other" submission that needs no types.
+
+    Written before the question rather than after the answer, so a member who
+    reads three powers, picks Other and then gets pulled away keeps the powers.
+    The types are the only thing the follow-up adds.
+    """
+    offered = _squad_offer(powers, (None, None, None), mixed)
+    await _ask_or_write(interaction, player, offered, source=source, quiet=True)
+
+
+async def _ask_for_type_order(interaction, player: dict) -> None:
+    """Ask for the order in the channel, and wait for them to type it.
+
+    A modal cannot answer a modal, and the alternative -- a button that opens a
+    second modal -- makes somebody press twice to answer one question. So the
+    question is asked the way the setup wizards ask theirs: `wait_for` on their
+    next message in the channel.
+
+    The prompt is ephemeral, but their reply cannot be: nobody can send an
+    ephemeral message. So the reply is deleted once it has been read, which
+    leaves the channel as it was and keeps a line that means nothing without
+    the prompt above it from sitting there.
+
+    One retry before giving up, per `UX.md`: a validation failure costs one
+    step, not the whole flow. Their squad powers are already saved either way,
+    so the worst outcome is the types missing.
+    """
+    await interaction.followup.send(
+        "**What are their three squad types?**\n"
+        "Type them here in the same order as the power boxes, like "
+        "`Tank, Tank, Aircraft`.",
+        ephemeral=True,
+    )
+
+    def _mine(message):
+        return (
+            message.author.id == interaction.user.id
+            and message.channel.id == interaction.channel_id
+        )
+
+    for attempt in range(2):
+        try:
+            reply = await interaction.client.wait_for(
+                "message", check=_mine, timeout=_TYPE_ORDER_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                f"⏰ No squad types recorded for **{_label(player)}**. Their squad "
+                f"powers are saved. Run `{CHAMPION_DUEL_HUB_CMD}` → "
+                f"**{CD_BTN_FIND}** → **{CD_BTN_SQUADS}** when you have them.",
+                ephemeral=True,
+            )
+            return
+
+        raw = (reply.content or "").strip()
+        # Best effort. Deleting needs Manage Messages, and not having it is not
+        # a reason to fail a save that has already happened.
+        try:
+            await reply.delete()
+        except discord.HTTPException:
+            pass
+
+        parsed = _parse_type_order(raw)
+        if parsed is not None:
+            # `mixed` is None, not a set: purity was answered on the previous
+            # screen and written there. Sending a fresh answer nobody gave
+            # would be a measurement we invented.
+            offered = _squad_offer((None, None, None), parsed, None)
+            await _ask_or_write(interaction, player, offered, source="observed")
+            return
+
+        if attempt == 0:
+            await interaction.followup.send(
+                f"⚠️ I couldn't read **{discord.utils.escape_markdown(raw)[:60]}** as "
+                f"three squad types. Name all three in box order, like "
+                f"**Tank, Tank, Aircraft**. Try again.",
+                ephemeral=True,
+            )
+
+    await interaction.followup.send(
+        f"⚠️ Still couldn't read that as three squad types, so none were saved "
+        f"for **{_label(player)}**. Their squad powers are saved. Run "
+        f"`{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → **{CD_BTN_SQUADS}** "
+        f"to try again.",
+        ephemeral=True,
+    )
 
 
 # ── Record an order (Premium) ─────────────────────────────────────────────────
@@ -1652,26 +2324,30 @@ def _grouping_option_label(grouping: dict) -> str:
     id would be exact and mean nothing to anybody.
     """
     started = _short_date(grouping.get("started_on"))
-    return f"Started {started}" if started else f"Grouping {grouping['id']} (no date recorded)"
+    return f"Started {started}" if started else f"Champion Duel {grouping['id']} (no date recorded)"
 
 
 def _grouping_name(grouping: dict | None, *, whose: str = "your") -> str:
-    """A grouping named so a member can tell which one is meant.
+    """Ours named so a member can tell which one is meant.
 
-    "Grouping" is overloaded twice over: Map Manager has season groupings, and
-    a member may be in a different Champion Duel grouping every season. `UX.md`
-    says qualify it every time it crosses a surface boundary, and the start date
-    is the qualifier a member can actually check, because it is the date on
-    their own Match Overview box.
+    **Never says "grouping".** The game uses that word for the group of 8 a
+    player is drawn into ("Semi-final Grouping: Group H") and calls the 16
+    warzones Participating Warzones, so the one meaning a member has already
+    learned for it is the one we do not mean. `UX.md`'s term table asserted the
+    opposite until 2026-08-16; the correction is under Settled there.
 
-    Falls back to the unqualified phrase when no date is stored. An import can
-    establish a grouping before anyone has read its dates, and a name with a
-    blank where the date goes is worse than no date at all.
+    That leaves the start date as the whole name, which it already was: nothing
+    in the game gives a Champion Duel a title, and the date is the one handle a
+    member can check against their own Match Overview box.
+
+    Falls back to the bare phrase when no date is stored. An import can
+    establish one before anyone has read its dates, and a name with a blank
+    where the date goes is worse than no date at all.
     """
     started = _short_date((grouping or {}).get("started_on"))
     if not started:
-        return f"{whose} Champion Duel grouping"
-    return f"{whose} Champion Duel grouping that started {started}"
+        return f"{whose} Champion Duel"
+    return f"{whose} Champion Duel that started {started}"
 
 
 def _warzone_list(zones) -> str:
@@ -1730,16 +2406,16 @@ def build_onboarding_embed(*, servers: list[dict], warzone: str | None) -> disco
             f"{held}"
             f"Your alliance is on warzone **{warzone}**. We do not currently know what "
             f"warzones you are matched with for this Champion Duel. Please add your "
-            f"warzone grouping. You can find it listed at the bottom of the Match "
-            f"Overview box in game."
+            f"**Participating Warzones**. The game lists them at the bottom of the "
+            f"Match Overview box."
         )[:4096]
     else:
         embed.description = (
             f"{held}"
             f"Which warzone is your alliance on? Champion Duel matches "
-            f"{db.GROUPING_SIZE} warzones and all of the data will be unique to your "
-            f"grouping. Add your warzone and we will either automatically add you to "
-            f"your grouping or ask you to add the other warzones you are matched with."
+            f"{db.GROUPING_SIZE} warzones together, and all of the data will be unique "
+            f"to yours. Add your warzone and we will either match you to a Champion "
+            f"Duel we already hold or ask you for the other participating warzones."
         )[:4096]
     return embed
 
@@ -1850,7 +2526,7 @@ class _WarzoneModal(discord.ui.Modal, title="Your alliance's warzone"):
             )
             await interaction.followup.send(
                 f"⚠️ Your alliance is set to warzone **{self.current}**. Changing it to "
-                f"**{zone}** points everyone on this server at a different grouping.",
+                f"**{zone}** points everyone on this server at a different Champion Duel.",
                 view=view,
                 ephemeral=True,
             )
@@ -1983,9 +2659,9 @@ def build_confirm_warzone_embed(*, warzone: str, grouping: dict) -> discord.Embe
     # A grouping can exist before anyone has read its dates, so the second
     # sentence has a version that claims nothing about when it began.
     began = (
-        f"Your grouping is already set and began on **{started}**."
+        f"Your Champion Duel is already set and began on **{started}**."
         if started
-        else "Your grouping is already set."
+        else "Your Champion Duel is already set."
     )
     return discord.Embed(
         title=CHAMPION_DUEL_HUB_TITLE,
@@ -2020,7 +2696,7 @@ async def _pin_warzone(interaction: discord.Interaction, zone: str, *, can_write
     )
 
 
-class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone grouping"):
+class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones"):
     """The 16 warzones and the day it started, which is the whole grouping.
 
     Two fields because that is everything the game shows: the Participating
@@ -2094,14 +2770,14 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         if repeated is not None:
             await self._refuse(
                 interaction,
-                f"⚠️ Warzone **{repeated}** is in that list twice. A grouping is "
+                f"⚠️ Warzone **{repeated}** is in that list twice. Your Participating Warzones are "
                 f"{db.GROUPING_SIZE} different warzones. Try again.",
             )
             return
         if len(zones) != db.GROUPING_SIZE:
             await self._refuse(
                 interaction,
-                f"⚠️ That is **{_plural(len(zones), 'warzone')}**. A Champion Duel grouping is "
+                f"⚠️ That is **{_plural(len(zones), 'warzone')}**. Participating Warzones are "
                 f"exactly **{db.GROUPING_SIZE}**, listed together at the bottom of the "
                 f"Match Overview box in game. Try again.",
             )
@@ -2129,7 +2805,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         if exact is not None:
             grouping = exact
             note = (
-                f"ℹ️ That grouping has already been entered.\n"
+                f"ℹ️ Those Participating Warzones have already been entered.\n"
                 f"The {db.GROUPING_SIZE} warzones: {_warzone_list(exact['warzones'])}."
             )
         else:
@@ -2142,7 +2818,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
                 discord_id=str(interaction.user.id),
             )
             note = (
-                f"✅ Added your warzone grouping, starting **{_short_date(started)}**.\n"
+                f"✅ Added your Participating Warzones, starting **{_short_date(started)}**.\n"
                 f"The {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
             )
 
@@ -2199,10 +2875,10 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Champion Duel warzone 
         """
         other, shared = overlap
         embed = discord.Embed(
-            title=f"⚠️ Warzone {shared} in two groupings",
+            title=f"⚠️ Warzone {shared} is in two different lists",
             description=(
-                f"A warzone is only ever matched into one grouping, so one of these "
-                f"two lists has a mistake in it. Nothing was saved.\n\n"
+                f"A warzone is only ever drawn into one set of Participating Warzones, "
+                f"so one of these two lists has a mistake in it. Nothing was saved.\n\n"
                 f"**You entered**, starting {_short_date(started)}:\n"
                 f"{_warzone_list(zones)}\n\n"
                 f"**Already here**, starting {_short_date(other.get('started_on')) or 'an unknown date'}:\n"
@@ -2904,6 +3580,155 @@ def phase_line(grouping: dict | None) -> str:
     return line + "."
 
 
+def _group_title(stage: str, label: str | None) -> str:
+    """What the game calls this group, in the game's own words.
+
+    The game writes `Semi-final Grouping: Group H` on the screen a member reads
+    between the qualifiers and the semi-finals, so "Group H" is the phrase they
+    arrive already holding. The knockouts have no letter at all: 32 players, one
+    field, and `db.get_groups` drops them for exactly that reason.
+    """
+    round_name = db.STAGE_LABELS.get(stage, "This round")
+    if not label:
+        return round_name
+    return f"{round_name} - Group {label}"
+
+
+def _rank_basis(members: list[dict]) -> str:
+    """Whether these numbers are seed positions, results, or a mix of both.
+
+    `seed_rank` and `rank` are different facts and the surface has to say which
+    it is showing. A group recorded at the draw has seed positions and no
+    results; the same group recorded again at the standings has both. A column
+    of numbers that silently switches meaning between those two moments is the
+    failure the two columns exist to prevent.
+    """
+    if not members:
+        return "empty"
+    ranked = sum(1 for m in members if m.get("rank") is not None)
+    if ranked == len(members):
+        return "results"
+    if ranked == 0:
+        return "seeds"
+    return "mixed"
+
+
+def _member_line(member: dict, basis: str, stage: str) -> str:
+    """One player: where they are, who they are, and where they are from.
+
+    The number is whichever we hold, and in a mixed group it is marked per row
+    rather than in the header, because there the header cannot be true for
+    everybody at once.
+    """
+    rank = member.get("rank")
+    seed = member.get("seed_rank")
+    shown = rank if rank is not None else seed
+    position = f"`{shown}`" if shown is not None else "`-`"
+    if basis == "mixed":
+        position += " *(seed)*" if rank is None and seed is not None else ""
+
+    name = discord.utils.escape_markdown(member.get("display_name") or "?")
+    bits = [f"{position} **{name}**"]
+    where = " · ".join(str(x) for x in (member.get("server"), member.get("alliance")) if x)
+    if where:
+        bits.append(where)
+
+    # A knockout placement is an exit round, said forwards. Thirty of the 32 go
+    # out somewhere and naming each exit is a scoreboard nobody asked us to
+    # keep, so `knockout_result` gives "Made it to Top 16" rather than the match
+    # they lost (Kevin, 2026-08-15).
+    if stage == "knockouts" and rank is not None:
+        result = db.knockout_result(rank)
+        if result:
+            bits.append(result)
+    return " · ".join(bits)
+
+
+def build_group_embed(
+    *,
+    members: list[dict],
+    stage: str,
+    label: str | None,
+    grouping: dict | None,
+    # Defaulted, unlike `_GroupView.can_odds`, which is required. This one only
+    # decides whether an upsell renders: omitting it shows no upsell, where
+    # omitting the view's would hand out the odds. The failure modes are not
+    # the same size and the constructors do not need the same rule.
+    can_odds: bool = True,
+) -> discord.Embed:
+    """One group, with whatever standing we hold for it.
+
+    Deliberately renders at any size. An incomplete group still answers the
+    question a member actually came with, which is who am I facing, and saying
+    so is better than withholding seven names until somebody supplies the
+    eighth.
+    """
+    embed = discord.Embed(
+        title=f"{_group_title(stage, label)}",
+        color=discord.Color.blurple(),
+    )
+    basis = _rank_basis(members)
+    expected = db.GROUP_SIZE.get(stage)
+
+    # The round and the group letter are the title now, so the description no
+    # longer repeats them and opens on the one fact the title cannot carry:
+    # which Champion Duel this is. Undated ones say nothing rather than leaving
+    # a sentence with a blank in it.
+    started = _short_date((grouping or {}).get("started_on"))
+    opener = f"This Champion Duel started {started}. " if started else ""
+
+    if not members:
+        embed.description = (
+            f"{opener}We do not have anyone recorded for this group.\n\n"
+            f"Anyone can paste the standings in with "
+            f"**{_btn_words(CD_BTN_RECORD)}**."
+        )[:4096]
+        return embed
+
+    header = (
+        opener
+        + {
+            "results": "These are the final standings that we have recorded.",
+            "seeds": "These are seed positions. No results are recorded yet.",
+            "mixed": "Rows marked *(seed)* are draw positions, not results.",
+        }[basis]
+    )
+
+    lines = [_member_line(m, basis, stage) for m in members]
+    embed.description = f"{header}\n\n" + "\n".join(lines)[: 4096 - len(header) - 2]
+
+    # Completeness is stated, never inferred away. Eight names against a
+    # 100-player qualifier group is the normal case rather than a truncation,
+    # so this says what we hold against what the round holds and leaves the
+    # reader to judge it.
+    if expected and len(members) != expected:
+        embed.add_field(
+            name="Not the whole group",
+            value=(
+                f"We have **{_plural(len(members), 'player')}** of the "
+                f"**{expected}** in this round. Anyone can add the rest with "
+                f"**{_btn_words(CD_BTN_RECORD)}**."
+            ),
+            inline=False,
+        )
+    # The upsell rides on the embed rather than on the disabled button, which
+    # cannot carry a reason. It names what the odds add over what this surface
+    # already gives away for nothing, because a member looking at their eight
+    # opponents can see most of the answer already.
+    if not can_odds and stage in odds_lib.STAGES_WITH_A_MODEL:
+        embed.add_field(
+            name=f"🔒 {_btn_words(CD_BTN_ODDS)}",
+            value=(
+                f"Everything above is free, and so is recording it. What "
+                f"{premium.PREMIUM_BRAND} adds here is the model: how often "
+                f"each of these players gets through, across thousands of "
+                f"simulated rounds. Run `/upgrade` to unlock it."
+            ),
+            inline=False,
+        )
+    return embed
+
+
 def build_hub_embed(
     *,
     servers: list[dict],
@@ -2937,7 +3762,7 @@ def build_hub_embed(
         # calendar still works, and the gap is exactly what a contribution fills.
         embed.description = (
             f"{opener}"
-            f"We do not have any players for your grouping yet.\n\n"
+            f"We do not have any players for your Champion Duel yet.\n\n"
             f"Predictions and look-ups need players. Anyone{mine} can add the ones "
             f"they meet, and every one entered sharpens the next prediction."
         )[:4096]
@@ -2952,7 +3777,7 @@ def build_hub_embed(
         more = len(servers) - _SERVERS_SHOWN
         if more > 0:
             listed += f", and {more} more"
-        scope = "in your grouping" if grouping else "loaded"
+        scope = "in your Champion Duel" if grouping else "loaded"
         embed.description = (
             f"{opener}"
             f"**{total}** players {scope} across **{_plural(len(servers), 'warzone')}**: "
@@ -2978,16 +3803,12 @@ def build_hub_embed(
             ),
             inline=False,
         )
-    if not can_write:
-        embed.add_field(
-            name="🔒 Contributing is Premium",
-            value=(
-                f"Correcting squads and recording sightings are part of "
-                f"{premium.PREMIUM_BRAND}. Run `/upgrade` to unlock it. The more "
-                "people entering sightings, the sharper every prediction gets."
-            ),
-            inline=False,
-        )
+    # No upsell for contributing, because contributing is not gated. The field
+    # that stood here sold Premium on "correcting squads and recording
+    # sightings", which is the one thing in this feature that must never be
+    # gated: free alliances are the collection engine, and every sighting they
+    # enter sharpens the predictions paying alliances get.
+    #
     # No source legend here. 👁/≈/✏️ mark individual squad powers, which only
     # appear on a player's card -- `build_player_embed` carries the legend, next
     # to the marks it explains. On the hub it was a key to a map nobody was
@@ -3011,7 +3832,7 @@ def build_finished_embed(*, grouping: dict, servers: list[dict], warzone: str | 
         description=(
             f"The Champion Duel {whose} has finished.\n\n"
             f"When the next Champion Duel happens, you can enter your own warzone and "
-            f"other participating warzones to create a new grouping. You can also "
+            f"other Participating Warzones to start a new one. You can also "
             f"record past Champion Duel results if you want to keep a historical "
             f"record and help better improve future predictions."
         )[:4096],
@@ -3108,6 +3929,396 @@ class ChampionDuelFinishedView(discord.ui.View):
         )
 
 
+class _GroupView(discord.ui.View):
+    """One group, plus every way of getting to a different one.
+
+    Three selects rather than a sequence of steps. A member who has been
+    knocked out, or whose Champion Duel has finished, is looking backwards
+    rather than forwards, and making them re-enter the flow to change one axis
+    is the wrong shape for that. All three are on screen at once and any of
+    them re-reads the group.
+
+    Each select is present only when it has something to choose between, so
+    the common live case -- one Champion Duel, the round that is running, one
+    group recorded -- renders as the odds button alone.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        groupings: list[dict],
+        grouping: dict,
+        stages: list[str],
+        stage: str,
+        groups: list[dict],
+        label: str | None,
+        members: list[dict],
+        can_odds: bool,
+    ):
+        super().__init__(timeout=900)
+        self.user_id = user_id
+        self.can_odds = can_odds
+        self.groupings = groupings
+        self.grouping = grouping
+        self.stages = stages
+        self.stage = stage
+        self.groups = groups
+        self.label = label
+        self.members = members
+        self.message: discord.Message | None = None
+        self._build()
+
+    # ── shape ────────────────────────────────────────────────────────────────
+
+    def _build(self):
+        self.clear_items()
+        row = 0
+        if len(self.groupings) > 1:
+            self.add_item(
+                self._select(
+                    "Which Champion Duel?",
+                    [
+                        discord.SelectOption(
+                            label=_grouping_option_label(g),
+                            value=str(g["id"]),
+                            default=g["id"] == self.grouping["id"],
+                        )
+                        for g in self.groupings[:25]
+                    ],
+                    row,
+                    self._on_grouping,
+                )
+            )
+            row += 1
+        if len(self.stages) > 1:
+            self.add_item(
+                self._select(
+                    "Which round?",
+                    [
+                        discord.SelectOption(
+                            label=db.STAGE_LABELS.get(s, s),
+                            value=s,
+                            default=s == self.stage,
+                        )
+                        for s in self.stages
+                    ],
+                    row,
+                    self._on_stage,
+                )
+            )
+            row += 1
+        if len(self.groups) > 1:
+            self.add_item(
+                self._select(
+                    "Which group?",
+                    [
+                        discord.SelectOption(
+                            label=f"Group {g['group']}",
+                            value=str(g["group"]),
+                            description=f"{_plural(g['registrants'], 'player')} recorded",
+                            default=str(g["group"]) == str(self.label),
+                        )
+                        for g in self.groups[:25]
+                    ],
+                    row,
+                    self._on_group,
+                )
+            )
+            row += 1
+
+        # Wherever there is a model. The qualifiers and the semi-finals are
+        # separate models with separate constants and the engine is explicit
+        # that they must not be mixed, so `odds_lib` dispatches rather than
+        # this deciding. The knockouts have no model at all -- a
+        # single-elimination field of 32 is a different question again -- so
+        # the button is absent there rather than present and refusing.
+        #
+        # Disabled with a padlock on the free tier rather than hidden, which is
+        # `DESIGN.md`'s Premium rule: a locked control lets the free tier see
+        # the shape of the paid product. It reads well here because everything
+        # around it is free. An alliance sees their eight opponents, sees the
+        # button, and knows exactly what it would tell them. The upsell rides
+        # on the embed, the same split `PlayerActionsView` used to use.
+        if self.members and self.stage in odds_lib.STAGES_WITH_A_MODEL:
+            odds = discord.ui.Button(
+                label=(CD_BTN_ODDS if self.can_odds else f"🔒 {CD_BTN_ODDS}")[:80],
+                style=discord.ButtonStyle.primary
+                if self.can_odds
+                else discord.ButtonStyle.secondary,
+                disabled=not self.can_odds,
+                row=row,
+            )
+            odds.callback = self._on_odds
+            self.add_item(odds)
+
+    def _select(self, placeholder, options, row, callback):
+        select = discord.ui.Select(placeholder=placeholder, options=options, row=row)
+        select.callback = callback
+        return select
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    # ── moving between groups ────────────────────────────────────────────────
+
+    async def _reload(self, inter: discord.Interaction):
+        """Re-read whichever group the three selects now point at.
+
+        Every axis is re-resolved rather than patched, because changing one
+        invalidates the ones below it: a different Champion Duel has its own
+        rounds, and a different round has its own letters. Carrying the old
+        letter across would show a group from the wrong round or none at all.
+        """
+        self.stages = await asyncio.to_thread(db.recorded_stages, self.grouping["id"])
+        if self.stage not in self.stages:
+            self.stage = self.stages[-1] if self.stages else self.stage
+        self.groups = await asyncio.to_thread(db.get_groups, self.stage, self.grouping["id"])
+        labels = [str(g["group"]) for g in self.groups]
+        if str(self.label) not in labels:
+            self.label = labels[0] if labels else None
+
+        group = await asyncio.to_thread(
+            db.get_or_create_group, self.grouping["id"], self.stage, self.label
+        )
+        self.members = await asyncio.to_thread(db.get_group_members, group["id"])
+        self._build()
+        await inter.edit_original_response(
+            embed=build_group_embed(
+                members=self.members,
+                stage=self.stage,
+                label=self.label,
+                grouping=self.grouping,
+                can_odds=self.can_odds,
+            ),
+            view=self,
+        )
+
+    async def _on_grouping(self, inter: discord.Interaction):
+        await inter.response.defer()
+        chosen = inter.data["values"][0]
+        self.grouping = next((g for g in self.groupings if str(g["id"]) == chosen), self.grouping)
+        await self._reload(inter)
+
+    async def _on_stage(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.stage = inter.data["values"][0]
+        await self._reload(inter)
+
+    async def _on_group(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.label = inter.data["values"][0]
+        await self._reload(inter)
+
+    # ── odds ─────────────────────────────────────────────────────────────────
+
+    async def _on_odds(self, inter: discord.Interaction):
+        """Everyone's chance of getting out of this group.
+
+        The gate is that every player has SOMETHING to place them by, which
+        is a Total Hero Power or any single squad power. Neither is
+        individually required. The engine fills what is missing from the shape
+        fit and samples what nobody has measured.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        # Re-resolved, not read off `self`. The flag was captured when the view
+        # was built, and this view lives 15 minutes against a 5 minute
+        # entitlement cache -- so the stale case that matters is a subscription
+        # that lapsed while the group was on screen, where the button is still
+        # live because it was enabled at build time. Reading `self.can_odds`
+        # would let that through; checking here catches it. One cached lookup
+        # in front of a simulation that costs seconds is not a price worth
+        # optimising.
+        if not await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter):
+            await _send_odds_upsell(inter)
+            return
+        group = await asyncio.to_thread(
+            db.get_or_create_group, self.grouping["id"], self.stage, self.label
+        )
+        scouted = await asyncio.to_thread(db.get_group_scouting, group["id"])
+        await inter.followup.send(
+            embed=await asyncio.to_thread(
+                build_odds_embed, scouted, self.stage, self.label, self.grouping
+            ),
+            ephemeral=True,
+        )
+
+
+async def _send_odds_upsell(interaction: discord.Interaction) -> None:
+    """Refuse the odds and offer the upgrade.
+
+    `upgrade_view` returns None when no SKU is configured, and discord.py
+    raises `TypeError` on a `view=None`. So the button is offered when there is
+    one and the embed's own "Run `/upgrade`" line carries it when there is not,
+    which is the same fallback `donate.py` uses.
+    """
+    view = premium.upgrade_view()
+    embed = premium.premium_locked_embed(feature_label=_btn_words(CD_BTN_ODDS))
+    kwargs = {"view": view} if view is not None else {}
+    await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
+
+
+def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
+    """The odds, or the reason there are none.
+
+    The model refuses a group that is not exactly eight, and refuses a player
+    it has nothing to place by. Both are hard stops rather than degraded answers,
+    and the copy has to say which one it hit: "add the missing players" and
+    "record one squad for these two" are different jobs, and pointing at the wrong
+    one is a dead end.
+
+    Everything past THP is optional. The engine samples squads it has not been
+    given, so a group nobody has scouted still gets odds, just wider ones.
+    """
+    embed = discord.Embed(
+        title=f"🔮 {_group_title(stage, label)}",
+        color=discord.Color.blurple(),
+    )
+    if not odds_lib.ENGINE_AVAILABLE:
+        embed.description = _ENGINE_MISSING
+        return embed
+
+    try:
+        result = odds_lib.group_advance_odds(scouted, stage=stage)
+    except odds_lib.NotEnoughData as exc:
+        if exc.missing_thp:
+            named = ", ".join(
+                f"**{discord.utils.escape_markdown(n)}**" for n in exc.missing_thp[:8]
+            )
+            # Deliberately does not name a button. It used to be that
+            # `Correct a squad` rendered locked on the free tier, so pointing
+            # at it sent a member through two surfaces to find a padlock. That
+            # is no longer true -- contributing is free since 2026-08-17 -- but
+            # the control still lives on a player's own card, reached by
+            # searching each of these names one at a time, so naming it here
+            # would still be a signpost rather than an exit. Worth revisiting
+            # if the card ever becomes reachable from this surface.
+            embed.description = (
+                f"Odds need something to place each player by, and for {named} we "
+                f"have neither a Total Hero Power nor a single squad power.\n\n"
+                f"Either arrives with the roster, or from anyone who records a "
+                f"squad for them. One squad is enough."
+            )[:4096]
+        else:
+            expected = db.GROUP_SIZE.get(stage)
+            embed.description = (
+                f"Odds need the whole group. We have "
+                f"**{_plural(len(scouted), 'player')}** of the **{expected}**.\n\n"
+                f"Anyone can add the rest with **{_btn_words(CD_BTN_RECORD)}**."
+            )[:4096]
+        return embed
+
+    # A hundred rows will not fit an embed and nobody reads past the first
+    # screen, so a big group is cut to the players actually in contention.
+    # The remainder is counted rather than dropped silently.
+    shown = result.rows[:_ODDS_SHOWN]
+    lines = [
+        f"`{row.advance:>4.0%}` `{row.win_group:>4.0%}`  "
+        f"**{discord.utils.escape_markdown(row.name)}**"
+        for row in shown
+    ]
+    more = len(result.rows) - len(shown)
+    tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
+    embed.description = (
+        f"Over {result.trials:,} simulations of the round. The first column is "
+        f"the chance of finishing in the top **{result.advance}** and going "
+        f"through, the second is the chance of winning the group outright."
+        + "\n\n"
+        + "\n".join(lines)
+        + tail
+    )[:4096]
+
+    # Both rounds rank on points rather than on matches or meetings won, and
+    # the counts differ, so the line is built rather than fixed. Saying it at
+    # all stops the first column reading as "win 4 of 7".
+    matches = {"semifinals": "all 21 matches", "qualifiers": "every match"}
+    embed.set_footer(
+        text=(
+            f"Ranked on points across {matches.get(stage, 'the round')}, not "
+            f"matches won. Squads we have not seen are sampled, so these carry "
+            f"that uncertainty."
+        )
+    )
+    return embed
+
+
+async def send_group_view(
+    interaction: discord.Interaction, *, grouping: dict | None, warzone: str | None, user_id: int
+) -> None:
+    """Open the caller's group, with the history reachable from it.
+
+    Starts on the Champion Duel the hub resolved and the round currently
+    running, which is what somebody asking during an event means. Everything
+    else is one select away, because a member who is out, or whose Champion
+    Duel has finished, is looking backwards and there is no live round to show
+    them.
+    """
+    if not grouping:
+        await interaction.followup.send(
+            "We do not know which Champion Duel your alliance is in yet. "
+            f"Set it with **{_btn_words(CD_BTN_ADD_GROUPING)}**.",
+            ephemeral=True,
+        )
+        return
+
+    groupings = await asyncio.to_thread(db.groupings_for_warzone, warzone) if warzone else []
+    if not any(g["id"] == grouping["id"] for g in groupings):
+        groupings = [grouping] + list(groupings)
+
+    stages = await asyncio.to_thread(db.recorded_stages, grouping["id"])
+    if not stages:
+        await interaction.followup.send(
+            f"No rounds are recorded for {_grouping_name(grouping)} yet.",
+            ephemeral=True,
+        )
+        return
+
+    running = await asyncio.to_thread(db.current_stage, grouping["id"])
+    stage = running if running in stages else stages[-1]
+    groups = await asyncio.to_thread(db.get_groups, stage, grouping["id"])
+    label = str(groups[0]["group"]) if groups else None
+
+    group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, label)
+    members = await asyncio.to_thread(db.get_group_members, group["id"])
+
+    # The only gated thing in Champion Duel. Everything else on this surface,
+    # and every way of contributing to it, is free.
+    can_odds = bool(
+        interaction.guild_id
+        and await premium.feature_gate(
+            "champion_duel_odds", interaction.guild_id, interaction=interaction
+        )
+    )
+
+    view = _GroupView(
+        user_id=user_id,
+        groupings=groupings,
+        grouping=grouping,
+        stages=stages,
+        stage=stage,
+        groups=groups,
+        label=label,
+        members=members,
+        can_odds=can_odds,
+    )
+    await interaction.followup.send(
+        embed=build_group_embed(
+            members=members, stage=stage, label=label, grouping=grouping, can_odds=can_odds
+        ),
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
+
+
 class ChampionDuelHubView(discord.ui.View):
     """The button grid. Rows group by kind: everyone, contributors, operator."""
 
@@ -3180,6 +4391,12 @@ class ChampionDuelHubView(discord.ui.View):
         # paying for should be able to see what contributing involves, and it
         # is documentation: withholding it protects nothing.
         self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
+        # Never locked, and absent rather than disabled without a grouping, for
+        # the same reason as recording: with none resolved there is no group to
+        # show and the caller is being asked for their warzone instead. Reading
+        # who you are facing is not a contribution, so it is not Premium.
+        if self.grouping:
+            self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
         # Recording needs a grouping to file the group against, so it is absent
         # rather than disabled when there is none: on that surface the caller is
         # being asked for their warzone and has nothing to record yet.
@@ -3234,6 +4451,22 @@ class ChampionDuelHubView(discord.ui.View):
                 stage=stage,
                 groupings=groupings,
             )
+        )
+
+    async def _on_group(self, inter: discord.Interaction):
+        """Who this caller is facing.
+
+        The odds of advancing belong on the surface this opens, because odds
+        need a group and this is where a group exists. They are not wired yet:
+        the model behind them is being rebuilt in `champion-duel-simulator` as
+        of 2026-08-16, and `CD_BTN_ODDS` is the label waiting for it. No
+        disabled placeholder in the meantime -- `UX.md` principle 7 keeps phase
+        language out of anything a user reads, and a greyed button promising a
+        future feature is exactly that.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await send_group_view(
+            inter, grouping=self.grouping, warzone=self.warzone, user_id=self.user_id
         )
 
     async def _on_guide(self, inter: discord.Interaction):
@@ -3351,13 +4584,18 @@ async def _open_hub(
 
 
 async def handle_champion_duel_hub(bot, interaction: discord.Interaction) -> None:
-    """Top-level handler for `/champion_duel`. Opens the hub."""
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    """Top-level handler for `/champion_duel`. Opens the hub.
 
-    can_write = bool(
-        interaction.guild_id
-        and await premium.feature_gate(
-            "champion_duel_write", interaction.guild_id, interaction=interaction, bot=bot
-        )
-    )
-    await _open_hub(interaction, can_write=can_write)
+    **Contributing is not gated.** `can_write` used to be a Premium check here.
+    Kevin's decision, 2026-08-17: every other gated feature produces value for
+    the alliance that uses it, but Champion Duel contributions produce value
+    for everyone, so gating them means fewer predictions for paying alliances
+    too. Free alliances are the collection engine.
+
+    The flag stays threaded through the hub rather than being deleted, because
+    the surfaces it renders (`🔒` and the disabled state) are what the odds
+    gate will need when it is built. Nothing sets it False today, so no padlock
+    renders.
+    """
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await _open_hub(interaction, can_write=True)

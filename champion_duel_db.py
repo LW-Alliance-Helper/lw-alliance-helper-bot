@@ -349,6 +349,7 @@ def init_db() -> None:
                 rank         INTEGER,
                 thp          REAL,
                 fsp          REAL,
+                troop_level  INTEGER,
                 seeded       INTEGER NOT NULL DEFAULT 0,
                 origin       TEXT NOT NULL DEFAULT 'imported',
                 added_by     TEXT,
@@ -489,11 +490,62 @@ def init_db() -> None:
                 slot          INTEGER NOT NULL,
                 squad_type    TEXT,
                 power         REAL,
+                -- 1 when this squad is 4-of-a-type rather than 5, 0 when
+                -- somebody looked and it is pure, NULL when nobody has said.
+                -- The three are genuinely different: the engine samples a
+                -- mixed pair from the population for a player it has not been
+                -- told about, and treats a measured "none" as a measurement.
+                -- Collapsing NULL and 0 would put a 3.3% penalty on two squads
+                -- of every player nobody has scouted.
+                mixed         INTEGER,
                 source        TEXT NOT NULL,
                 observed_at   TEXT,
                 updated_at    TEXT NOT NULL,
                 updated_by    TEXT,
                 PRIMARY KEY (registrant_id, slot),
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
+        # What the sighting corpus MEASURED about a player, as opposed to what
+        # somebody saw them field once. `champion_duel_engine.semifinal` takes
+        # these as an argument and draws from a population distribution for
+        # anyone absent, so a missing row costs accuracy rather than breaking a
+        # prediction -- which is why they are their own table rather than
+        # columns on `squads`. A profile is about the player; a squad row is
+        # about one box on their lineup screen.
+        #
+        # **Every position here is a POWER RANK, 0 = biggest squad.** The
+        # `mixed` flag on `squads` is indexed by BOX. The two are different
+        # frames and translating between them needs all three powers, which is
+        # why `champion_duel_odds._profile` -- not this table -- owns the
+        # merge. Storing them apart is what keeps that translation visible.
+        #
+        # No `source` column: every row is imported by definition. A member's
+        # own answer about their squads lands on `squads.mixed`, which is the
+        # other half of the merge and carries its own provenance already.
+        #
+        # NULL means never measured, which is NOT a measured zero -- `mixed`
+        # is '' when somebody looked and every squad is pure, and the engine
+        # treats those two differently on purpose.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS registrant_profiles (
+                registrant_id INTEGER PRIMARY KEY,
+                -- "Aircraft,Tank,Missile" -- biggest squad first
+                types         TEXT,
+                -- lineup shape (r21, r31); either may be NULL if only the
+                -- other was read
+                shape_r21     REAL,
+                shape_r31     REAL,
+                -- which squads are 4-of-a-type, as power ranks: '0,1' is the
+                -- two biggest, '' is "we looked and all three are pure"
+                mixed         TEXT,
+                -- LEGACY: how many are 4-of-a-type, when nothing said which.
+                -- Only ever >= 1; a measured zero normalises to mixed = ''.
+                n_mixed       INTEGER,
+                -- which power rank the gorilla starts on, 0-2
+                gorilla       INTEGER,
+                updated_at    TEXT NOT NULL,
+                updated_by    TEXT,
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
@@ -509,6 +561,82 @@ def init_db() -> None:
                 source        TEXT NOT NULL,
                 created_at    TEXT NOT NULL,
                 created_by    TEXT,
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
+        # One row per import. Never one per value.
+        #
+        # **Deliberately not `edits`.** That was the open question and this is
+        # the answer. `edits` is a per-value audit trail with a revert
+        # attached, and its whole job is finding the handful of corrections a
+        # human made. A roster load is a different kind of event: one file,
+        # hundreds of rows, one actor, one moment, and nothing in it is
+        # revertable row by row. Folding imports into `edits` would bury every
+        # real correction under them and rank whoever ran the import above
+        # every scout in `contributor_summary`. So
+        # `test_an_import_writes_no_edit_rows` stands, and this table carries
+        # what that rule leaves unrecorded.
+        #
+        # What it is FOR is also different, and drove the shape: Kevin wants a
+        # population we can track. That question is answered by counts per
+        # import, not by values.
+        #
+        # `grouping_id` carries no foreign key on purpose. A merge moves rows
+        # between groupings and can retire the source, and a log entry records
+        # what was true when it ran rather than following the schema forward.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS import_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                grouping_id      INTEGER,
+                stage            TEXT,
+                registrants      INTEGER NOT NULL DEFAULT 0,
+                squads           INTEGER NOT NULL DEFAULT 0,
+                orders           INTEGER NOT NULL DEFAULT 0,
+                profiles         INTEGER NOT NULL DEFAULT 0,
+                cleared          INTEGER NOT NULL DEFAULT 0,
+                skipped          INTEGER NOT NULL DEFAULT 0,
+                -- which door it came through: 'discord' or 'api'
+                door             TEXT    NOT NULL,
+                actor_discord_id TEXT,
+                actor_name       TEXT,
+                actor_guild_id   TEXT,
+                created_at       TEXT    NOT NULL
+            )
+        """)
+        # Every time we held a value, somebody offered a different one, and a
+        # person was asked which is right.
+        #
+        # `edits` cannot carry this. An edit row is a change, and the answer
+        # worth recording most is the one where NOTHING changed: somebody
+        # challenged what we hold and a person confirmed it. Writing that as an
+        # edit with old == new would put a no-op in the revert history and make
+        # `contributor_summary` count a confirmation as a correction.
+        #
+        # One row per disputed field, all sharing one decision, because the
+        # question put to the member is about the entry as a whole: here are
+        # the two, which is right. Splitting the question per field is what
+        # turns a correction into an interrogation.
+        #
+        # `edit_id` is set only when the offered value won, and links the call
+        # to the change it caused so `⏪ Revert an edit` and this table tell one
+        # story rather than two.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS disagreements (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                -- same vocabulary as edits.target
+                target           TEXT    NOT NULL,
+                registrant_id    INTEGER NOT NULL,
+                slot             INTEGER,
+                field            TEXT    NOT NULL,
+                held_value       TEXT,
+                offered_value    TEXT,
+                -- 'held' or 'offered'
+                chose            TEXT    NOT NULL,
+                edit_id          INTEGER,
+                actor_discord_id TEXT    NOT NULL,
+                actor_name       TEXT,
+                actor_guild_id   TEXT,
+                created_at       TEXT    NOT NULL,
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
@@ -574,6 +702,26 @@ def init_db() -> None:
                 conn.execute(stmt)
             except sqlite3.OperationalError as exc:  # pragma: no cover
                 print(f"[CHAMPION_DUEL] index skipped: {exc}")
+
+        # Columns added for the engine's 1.5 player spec. Each ALTER in its own
+        # try/except so a re-run is harmless, matching `config.init_db`; the
+        # CREATE TABLE statements above carry the same columns for fresh files.
+        #
+        # Both are NULLable with no default, deliberately. The engine
+        # distinguishes "not measured" from "measured and zero": an absent
+        # `mixed` makes it sample a mixed pair from the population, where a
+        # recorded 0 says somebody looked and every squad is pure. A DEFAULT 0
+        # would turn every unscouted player into a measurement and put a 3.3%
+        # purity penalty on squads nobody has ever seen.
+        for _table, _column, _decl in (
+            ("registrants", "troop_level", "INTEGER"),
+            ("squads", "mixed", "INTEGER"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_column} {_decl}")
+                print(f"[CHAMPION_DUEL] added {_table}.{_column}")
+            except sqlite3.OperationalError:
+                pass
 
         # One-time backfill: whatever `registrants` holds today is qualifier
         # data, because qualifiers are the only round that has ever been
@@ -987,6 +1135,226 @@ def overlapping_groupings(warzones, started_on=None) -> list[tuple[dict, str]]:
     return out
 
 
+def find_grouping_conflicts() -> list[dict]:
+    """Every pair of groupings that claim a warzone they cannot both have.
+
+    `overlapping_groupings` answers the question one member's entry asks: does
+    what I just typed collide with anything. This answers the operator's: what
+    is broken right now. Same rule, swept over what is already stored rather
+    than over a candidate.
+
+    A conflict is two groupings inside one event window sharing at least one
+    warzone but not the whole set. An exact match is two people entering the
+    same sixteen, which is agreement rather than a contradiction, and the
+    entry path already joins them instead.
+
+    Each pair carries the counts, because the operator's whole decision is
+    which one to keep and that turns on which holds real data. A grouping with
+    a roster and results is almost never the one to fold away.
+    """
+    groupings = list_groupings()
+    out: list[dict] = []
+    for i, first in enumerate(groupings):
+        for second in groupings[i + 1 :]:
+            zones_a, zones_b = set(first["warzones"]), set(second["warzones"])
+            shared = sorted(zones_a & zones_b, key=int)
+            if not shared or zones_a == zones_b:
+                continue
+            start_a, start_b = _started(first), _started(second)
+            if start_a and start_b and abs((start_a - start_b).days) >= EVENT_DAYS:
+                continue
+            out.append(
+                {
+                    "a": first,
+                    "b": second,
+                    "shared": shared,
+                    "a_counts": grouping_counts(first["id"]),
+                    "b_counts": grouping_counts(second["id"]),
+                }
+            )
+    return out
+
+
+def grouping_counts(grouping_id: int) -> dict:
+    """How much this grouping actually holds, for deciding whether to keep it.
+
+    Players rather than rows: a registrant in three rounds is one person, and
+    an operator weighing two groupings against each other is counting people.
+    """
+    with _get_conn() as conn:
+        groups = conn.execute(
+            "SELECT COUNT(*) AS n FROM groups WHERE grouping_id = ?", (grouping_id,)
+        ).fetchone()["n"]
+        players = conn.execute(
+            "SELECT COUNT(DISTINCT m.registrant_id) AS n FROM group_members m "
+            "JOIN groups g ON g.id = m.group_id WHERE g.grouping_id = ?",
+            (grouping_id,),
+        ).fetchone()["n"]
+        results = conn.execute(
+            "SELECT COUNT(*) AS n FROM group_members m JOIN groups g ON g.id = m.group_id "
+            "WHERE g.grouping_id = ? AND m.rank IS NOT NULL",
+            (grouping_id,),
+        ).fetchone()["n"]
+        guilds = conn.execute(
+            "SELECT COUNT(*) AS n FROM guild_warzone WHERE confirmed_grouping_id = ?",
+            (grouping_id,),
+        ).fetchone()["n"]
+    return {"groups": groups, "players": players, "results": results, "guilds": guilds}
+
+
+class MergeRefused(Exception):
+    """The merge was not attempted, because the two are not a conflict."""
+
+
+def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
+    """Fold `source` into `target` and delete it. Not revertable.
+
+    The bot never does this on its own. Two member-made groupings claiming one
+    warzone only arises from a wrong claim, an alliance cannot undo it, and
+    deciding which community's entry was the mistake is the kind of opinion
+    `UX.md` principle 6 says the bot does not have. So this exists and only
+    `/admin` reaches it.
+
+    **The kept grouping's warzone list is the truth and is not touched.** An
+    earlier version unioned the two sets, which was wrong twice over: a
+    Champion Duel is exactly `GROUPING_SIZE` warzones, so the union produced a
+    31-warzone grouping that no member surface can render and the entry path
+    would reject; and it glued the mistaken claim's warzones permanently onto
+    the survivor, so the alliance actually drawn into them would conflict all
+    over again the moment they entered their real set. The whole premise of a
+    conflict is that one of the two lists is wrong. Folding it in keeps the
+    wrong answer.
+
+    **The target wins any value it already holds, and the source fills its
+    gaps.** Where both hold a placement for one player in one round, each field
+    is taken from the target when it has one and from the source otherwise --
+    the same COALESCE rule `set_placement` uses, and for the same reason. Doing
+    it row-at-a-time instead loses real data: a target holding only the draw and
+    a source holding the standings would have thrown the standings away, and
+    this cannot be undone.
+
+    Returns what actually moved, because "merged" on its own is not something
+    an operator can check.
+    """
+    if source_id == target_id:
+        raise MergeRefused("a grouping cannot be merged into itself")
+    source, target = get_grouping(source_id), get_grouping(target_id)
+    if source is None or target is None:
+        raise MergeRefused("one of those groupings no longer exists")
+
+    now = _now()
+    moved = {
+        "groups": 0,
+        "players": 0,
+        "filled": 0,
+        "unchanged": 0,
+        "guilds": 0,
+        "unpinned": 0,
+        "dropped_warzones": sorted(set(source["warzones"]) - set(target["warzones"]), key=int),
+    }
+    with _get_conn() as conn:
+        groups = conn.execute("SELECT * FROM groups WHERE grouping_id = ?", (source_id,)).fetchall()
+        for group in groups:
+            dest_row = conn.execute(
+                "SELECT id FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                "ORDER BY id LIMIT 1",
+                (target_id, group["stage"], group["label"]),
+            ).fetchone()
+            if dest_row is None:
+                conn.execute(
+                    "INSERT INTO groups "
+                    "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        target_id,
+                        group["stage"],
+                        group["label"],
+                        group["created_by_guild_id"],
+                        now,
+                        now,
+                    ),
+                )
+                dest_row = conn.execute(
+                    "SELECT id FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                    "ORDER BY id LIMIT 1",
+                    (target_id, group["stage"], group["label"]),
+                ).fetchone()
+            dest = dest_row["id"]
+            moved["groups"] += 1
+            for member in conn.execute(
+                "SELECT * FROM group_members WHERE group_id = ?", (group["id"],)
+            ).fetchall():
+                existing = conn.execute(
+                    "SELECT * FROM group_members WHERE group_id = ? AND registrant_id = ?",
+                    (dest, member["registrant_id"]),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        "INSERT INTO group_members "
+                        "(group_id, registrant_id, seed_rank, rank, score, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            dest,
+                            member["registrant_id"],
+                            member["seed_rank"],
+                            member["rank"],
+                            member["score"],
+                            now,
+                            now,
+                        ),
+                    )
+                    moved["players"] += 1
+                    continue
+                gaps = {
+                    field: member[field]
+                    for field in ("seed_rank", "rank", "score")
+                    if existing[field] is None and member[field] is not None
+                }
+                if not gaps:
+                    moved["unchanged"] += 1
+                    continue
+                sets = ", ".join(f"{field} = ?" for field in gaps)
+                conn.execute(
+                    f"UPDATE group_members SET {sets}, updated_at = ? "
+                    "WHERE group_id = ? AND registrant_id = ?",
+                    (*gaps.values(), now, dest, member["registrant_id"]),
+                )
+                moved["filled"] += 1
+
+        # A guild pinned to the grouping that is about to vanish would resolve
+        # to nothing. Repoint the ones the survivor actually contains; for the
+        # rest, clear the pin rather than point them at a Champion Duel their
+        # warzone is not in. An unpinned guild re-resolves by warzone on the
+        # next read, which is the self-healing path this column exists beside.
+        kept_zones = set(target["warzones"])
+        for row in conn.execute(
+            "SELECT guild_id, warzone FROM guild_warzone WHERE confirmed_grouping_id = ?",
+            (source_id,),
+        ).fetchall():
+            if row["warzone"] in kept_zones:
+                conn.execute(
+                    "UPDATE guild_warzone SET confirmed_grouping_id = ?, updated_at = ? "
+                    "WHERE guild_id = ?",
+                    (target_id, now, row["guild_id"]),
+                )
+                moved["guilds"] += 1
+            else:
+                conn.execute(
+                    "UPDATE guild_warzone SET confirmed_grouping_id = NULL, updated_at = ? "
+                    "WHERE guild_id = ?",
+                    (now, row["guild_id"]),
+                )
+                moved["unpinned"] += 1
+
+        # CASCADE takes this grouping's own warzones, groups and members with
+        # it. Everything worth keeping has already been copied across.
+        conn.execute("DELETE FROM groupings WHERE id = ?", (source_id,))
+        conn.execute("UPDATE groupings SET updated_at = ? WHERE id = ?", (now, target_id))
+
+    print(f"[CHAMPION_DUEL] merged grouping {source_id} into {target_id} by {actor}: {moved}")
+    return moved
+
+
 def groupings_for_warzone(warzone) -> list[dict]:
     """Every grouping this warzone has ever been drawn into, newest start first.
 
@@ -1213,6 +1581,31 @@ def furthest_stage_held(grouping_id=None) -> str | None:
     return None
 
 
+def recorded_stages(grouping_id=None) -> list[str]:
+    """Which rounds this grouping actually has groups for, in playing order.
+
+    `current_stage` answers "which round is running", which is the right
+    default while one is. It is the wrong question for a Champion Duel that has
+    finished, where there is no current round and every round is worth looking
+    back at. A surface offering history needs the set, not the tip.
+
+    Ordered by `STAGES` rather than by what SQLite returns, so the picker reads
+    in the order the rounds were played rather than alphabetically, which would
+    put the knockouts before the qualifiers.
+    """
+    grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
+    if grouping_id is None:
+        return []
+    with _get_conn() as conn:
+        held = {
+            r["stage"]
+            for r in conn.execute(
+                "SELECT DISTINCT stage FROM groups WHERE grouping_id = ?", (grouping_id,)
+            ).fetchall()
+        }
+    return [stage for stage in STAGES if stage in held]
+
+
 def is_finished(grouping_id=None) -> bool:
     """Past the last day. The hub shows results and offers the next grouping."""
     grouping = get_grouping(grouping_id if grouping_id is not None else default_grouping_id())
@@ -1253,6 +1646,15 @@ def get_or_create_group(grouping_id, stage: str, label=None, *, guild_id=None) -
     `label` is the letter the game shows, or None for knockouts, which are a
     single field of 32 rather than lettered groups. The letter is not the
     identity -- `groups.id` is -- so two groupings' Group D never meet.
+
+    **Selects before inserting rather than relying on `INSERT OR IGNORE`.**
+    The UNIQUE index over (grouping_id, stage, label) does not constrain the
+    knockouts at all, because their label is NULL and SQLite treats every NULL
+    as distinct in a unique index. So the insert never collided there and every
+    call created another knockout row, with an unordered read afterwards
+    deciding which of them a placement landed in. Lettered rounds were always
+    fine, which is why nothing noticed: the knockouts are the one round with no
+    letter.
     """
     stage = _stage(stage)
     label = _group(label)
@@ -1260,16 +1662,23 @@ def get_or_create_group(grouping_id, stage: str, label=None, *, guild_id=None) -
         raise ValueError("a group belongs to a grouping")
     now = _now()
     with _get_conn() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO groups "
-            "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (grouping_id, stage, label, _text(guild_id), now, now),
-        )
         row = conn.execute(
-            "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ?",
+            "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+            "ORDER BY id LIMIT 1",
             (grouping_id, stage, label),
         ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO groups "
+                "(grouping_id, stage, label, created_by_guild_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (grouping_id, stage, label, _text(guild_id), now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM groups WHERE grouping_id = ? AND stage = ? AND label IS ? "
+                "ORDER BY id LIMIT 1",
+                (grouping_id, stage, label),
+            ).fetchone()
     return dict(row)
 
 
@@ -1320,11 +1729,20 @@ def set_placement(
 
 
 def get_group_members(group_id: int) -> list[dict]:
-    """Everyone in one group, in finishing order where it is known."""
+    """Everyone in one group, in finishing order where it is known.
+
+    `troop_level` rides along with `thp` because `group_advance_odds` reads it
+    off these rows. It was collected, stored and read, and never selected here,
+    so every player reached the engine at the default level and the dropdown
+    that gathers it could not have changed a number once. Same shape as the
+    `thp` gap this query had before it, and the same reason it survived: the
+    odds tests build their member dicts by hand, so nothing that passes them
+    ever goes through this SELECT.
+    """
     with _get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT m.*, r.display_name, r.server, r.alliance
+            SELECT m.*, r.display_name, r.server, r.alliance, r.thp, r.fsp, r.troop_level
             FROM group_members m JOIN registrants r ON r.id = m.registrant_id
             WHERE m.group_id = ?
             ORDER BY COALESCE(m.rank, m.seed_rank, 9999), r.display_name
@@ -1531,8 +1949,9 @@ def upsert_registrant(
                 """
                 INSERT INTO registrants
                     (player_key, display_name, server, grp, alliance, rank, thp,
-                     fsp, seeded, origin, added_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     fsp, troop_level, seeded, origin, added_by, created_at,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     key,
@@ -1543,6 +1962,7 @@ def upsert_registrant(
                     fields.get("rank"),
                     fields.get("thp"),
                     fields.get("fsp"),
+                    fields.get("troop_level"),
                     1 if fields.get("seeded") else 0,
                     origin,
                     actor_id,
@@ -1559,7 +1979,7 @@ def upsert_registrant(
             if grp:
                 sets.append("grp = ?")
                 params.append(grp)
-            for col in ("alliance", "rank", "thp", "fsp"):
+            for col in ("alliance", "rank", "thp", "fsp", "troop_level"):
                 if fields.get(col) is not None:
                     sets.append(f"{col} = ?")
                     params.append(fields[col])
@@ -1829,6 +2249,103 @@ def attach_stages(player: dict, grouping_id=None) -> dict:
     return player
 
 
+def _profile_from_row(row) -> dict:
+    """One stored profile in the shape `champion_duel_engine.semifinal` reads.
+
+    Positions are POWER RANKS here, which is the frame the engine documents and
+    the frame the corpus measured them in. A caller pairing this with squad
+    boxes has a translation to do; see `champion_duel_odds._profile`.
+
+    `mixed` wins over `n_mixed`, the same way the engine picks between them, so
+    a legacy count never reaches a model that has been told which squads.
+    """
+    out: dict = {}
+    if row["types"]:
+        out["types"] = row["types"].split(",")
+    if row["shape_r21"] is not None or row["shape_r31"] is not None:
+        out["shape"] = [row["shape_r21"], row["shape_r31"]]
+    if row["mixed"] is not None:
+        # '' is a measurement -- "we looked and every squad is pure" -- and has
+        # to survive as an empty list rather than collapsing to absent.
+        out["mixed"] = [int(i) for i in row["mixed"].split(",") if i]
+    elif row["n_mixed"] is not None:
+        out["n_mixed"] = row["n_mixed"]
+    if row["gorilla"] is not None:
+        out["gorilla"] = row["gorilla"]
+    return out
+
+
+def get_profiles(registrant_ids) -> dict[int, dict]:
+    """`{registrant_id: profile}` for whichever of these have one measured.
+
+    Absent from the mapping means never measured, which is what the engine
+    answers by drawing from the population. A row of nulls would say something
+    quite different, so `import_profiles` refuses to write one.
+    """
+    ids = list(registrant_ids)
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM registrant_profiles WHERE registrant_id IN ({marks})",
+            tuple(ids),
+        ).fetchall()
+    return {r["registrant_id"]: _profile_from_row(r) for r in rows}
+
+
+def get_group_scouting(group_id: int) -> list[dict]:
+    """One group's members with their squads and orders, in finishing order.
+
+    `get_group_members` answers "who is in this group", which is what a member
+    reading their group wants. This answers "what can we predict about them",
+    which is what the odds need, and it is a different query rather than a flag
+    on the first one: the group listing is read on every open and would be
+    paying for scouting nobody asked for.
+
+    Bulk rather than `get_player` per member. A group of 8 is 8 registrants, and
+    a query each for squads and orders per player is 16 round trips inside a
+    Discord interaction to answer something two queries cover.
+
+    Rows keep everything `get_group_members` returns, so a caller can render the
+    group and score it from one read. `id` is set to the registrant id, because
+    that is the key `build_side` and the squad lookups expect, and a group
+    membership row's own primary key would silently match nothing.
+
+    The imported profile rides along for the same reason `thp` does: the odds
+    read it, and a query that returns everything except the one field the model
+    wants is a feature that cannot work in production and still passes its
+    tests.
+    """
+    members = get_group_members(group_id)
+    if not members:
+        return []
+    ids = [m["registrant_id"] for m in members]
+    marks = ",".join("?" for _ in ids)
+    squads: dict[int, list] = {i: [] for i in ids}
+    orders: dict[int, list] = {i: [] for i in ids}
+    profiles = get_profiles(ids)
+    with _get_conn() as conn:
+        for r in conn.execute(
+            f"SELECT * FROM squads WHERE registrant_id IN ({marks}) ORDER BY registrant_id, slot",
+            tuple(ids),
+        ).fetchall():
+            squads[r["registrant_id"]].append(dict(r))
+        for r in conn.execute(
+            f"SELECT * FROM order_history WHERE registrant_id IN ({marks}) "
+            "ORDER BY registrant_id, COALESCE(observed_at, created_at) DESC",
+            tuple(ids),
+        ).fetchall():
+            orders[r["registrant_id"]].append(dict(r))
+    for m in members:
+        rid = m["registrant_id"]
+        m["id"] = rid
+        m["squads"] = squads.get(rid, [])
+        m["orders"] = orders.get(rid, [])
+        m["profile"] = profiles.get(rid)
+    return members
+
+
 def get_player(name, server=None, include_scouting: bool = False) -> dict | None:
     """One player with their scouting, or None. Raises AmbiguousPlayer when the
     name exists on several servers and none was given."""
@@ -1853,6 +2370,7 @@ def get_player(name, server=None, include_scouting: bool = False) -> dict | None
                     (player["id"],),
                 ).fetchall()
             ]
+        player["profile"] = get_profiles([player["id"]]).get(player["id"])
     return player
 
 
@@ -1909,10 +2427,166 @@ def _record_edit(conn, *, target, registrant_id, slot, field, old, new, actor, r
     return cur.lastrowid
 
 
-def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source="edited"):
+# ── When a second person says something different ─────────────────────────────
+#
+# Kevin's design: if someone is entering data we already have, surface what we
+# have, show them the two pieces, and ask which is correct. Write a history of
+# those calls.
+#
+# The whole difficulty is in deciding when NOT to ask. Two people entering the
+# same correct value is the common case and has to pass in silence; a surface
+# that questions every re-entry is one nobody enters anything into twice.
+
+#: Squad fields worth arbitrating. Same names as the columns and as
+#: `set_squad`'s edit rows, so a call, an edit and a column never disagree
+#: about what a field is called.
+SQUAD_FIELDS = ("squad_type", "power", "mixed")
+
+
+def _same_value(field: str, held, offered) -> bool:
+    """Whether these two say the same thing to the person who would be asked.
+
+    A power is compared at whole units, which is the precision every surface
+    renders it at. `parse_power` deliberately accepts `64.6M` and `64,600,000`
+    as the same reading, and in binary floating point they are not: 64.6 * 1e6
+    lands a fraction above 64600000.0. Exact comparison would put those two up
+    side by side, rendered identically, and ask a member which is right.
+    """
+    if field == "power":
+        return round(float(held)) == round(float(offered))
+    return held == offered
+
+
+def compare_squad(registrant_id: int, slot: int, *, actor=None, **offered) -> list[dict]:
+    """Which of these offered squad values contradict one we already hold.
+
+    Empty means write it: either it agrees, or it is the first thing anybody
+    has said about that field. Callers pass only the fields the member filled
+    in; an omitted one is not an assertion and is never compared.
+
+    **An estimate is never worth arbitrating.** `push_to_bot` writes an
+    `estimated` row for nearly the whole field, so treating those as something
+    we hold would make the very first real reading of almost every player
+    trigger a question. The bot's own guess giving way to somebody reading the
+    screen is the system working, not a disagreement.
+
+    **Nor is somebody correcting their own entry.** If the value we hold was
+    last written by this same person, their newer reading is simply better and
+    asking them to arbitrate against themselves is noise.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM squads WHERE registrant_id = ? AND slot = ?",
+            (registrant_id, slot),
+        ).fetchone()
+    if row is None or row["source"] == "estimated":
+        return []
+    if actor and row["updated_by"] and row["updated_by"] == actor.get("discord_user_id"):
+        return []
+
+    out = []
+    for field in SQUAD_FIELDS:
+        new = offered.get(field)
+        held = row[field]
+        if new is None or held is None or _same_value(field, held, new):
+            continue
+        out.append({"field": field, "held": held, "offered": new})
+    return out
+
+
+def record_disagreement(registrant_id: int, *, target, slot, rows, chose, actor, edits=None):
+    """Log one "which of these is right" call, one row per disputed field.
+
+    `chose` is 'held' or 'offered' and is the same for every row: the member
+    answered one question about the entry, not one per field.
+
+    Recorded whichever way it went. The call where the member confirmed what we
+    already hold changes nothing and is the more interesting half of the
+    history: it is the only evidence that a stored value has been challenged
+    and survived.
+
+    `edits` is `set_squad`'s field-to-edit-id map. Linked by FIELD rather than
+    by position: one entry can write an edit for a field nobody disputed, so
+    the two lists are not the same length and pairing them by index would hang
+    a call off the wrong change.
+    """
+    if chose not in ("held", "offered"):
+        raise ValueError("chose must be 'held' or 'offered'")
+    now = _now()
+    edits = edits or {}
+    with _get_conn() as conn:
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO disagreements
+                    (target, registrant_id, slot, field, held_value, offered_value,
+                     chose, edit_id, actor_discord_id, actor_name, actor_guild_id,
+                     created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target,
+                    registrant_id,
+                    slot,
+                    row["field"],
+                    None if row["held"] is None else str(row["held"]),
+                    None if row["offered"] is None else str(row["offered"]),
+                    chose,
+                    edits.get(row["field"]) if chose == "offered" else None,
+                    actor["discord_user_id"],
+                    actor.get("discord_name"),
+                    actor.get("guild_id"),
+                    now,
+                ),
+            )
+    return len(rows)
+
+
+def list_disagreements(*, registrant_id=None, actor=None, limit: int = 50, offset: int = 0):
+    """Newest first. The history of every call, not only the ones that changed
+    something."""
+    sql = (
+        "SELECT d.*, r.display_name, r.server FROM disagreements d "
+        "LEFT JOIN registrants r ON r.id = d.registrant_id WHERE 1=1"
+    )
+    where: list[str] = []
+    params: list = []
+    if registrant_id is not None:
+        where.append(" AND d.registrant_id = ?")
+        params.append(registrant_id)
+    if actor:
+        where.append(" AND d.actor_discord_id = ?")
+        params.append(str(actor))
+
+    clause = "".join(where)
+    with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                sql + clause + " ORDER BY d.id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        ]
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM disagreements d WHERE 1=1" + clause, params
+        ).fetchone()["n"]
+    return {"disagreements": rows, "total": total}
+
+
+def set_squad(
+    registrant_id, slot, squad_type=None, power=None, *, actor, source="edited", mixed=None
+):
     """Set one squad slot. Each changed field becomes its own edit row, so
     reverting a wrong type does not also revert a correct power entered in the
-    same request."""
+    same request.
+
+    `mixed` is 1 when this squad is 4-of-a-type, 0 when somebody looked and it
+    is pure, and None for "not asked". The three are genuinely different to
+    the model: it samples a mixed pair from the population for a squad nobody
+    has reported, and treats a recorded 0 as a measurement. So None leaves the
+    stored value alone rather than clearing it, exactly like the other two
+    fields.
+    """
     if slot not in (1, 2, 3):
         raise ValueError("slot must be 1, 2 or 3")
     if squad_type is not None and squad_type not in VALID_TYPES:
@@ -1920,6 +2594,9 @@ def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source
     if source not in VALID_SOURCES:
         raise ValueError(f"source must be one of {VALID_SOURCES}")
 
+    # Keyed by field as well as listed, so a caller that has to link one edit
+    # to one field can, without depending on the order they were written in.
+    edits: dict[str, int] = {}
     edit_ids = []
     with _get_conn() as conn:
         if not conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone():
@@ -1930,50 +2607,59 @@ def set_squad(registrant_id, slot, squad_type=None, power=None, *, actor, source
         ).fetchone()
         old_type = row["squad_type"] if row else None
         old_power = row["power"] if row else None
+        old_mixed = row["mixed"] if row else None
         new_type = old_type if squad_type is None else squad_type
         new_power = old_power if power is None else float(power)
+        new_mixed = old_mixed if mixed is None else int(bool(mixed))
 
         conn.execute(
             """
-            INSERT INTO squads (registrant_id, slot, squad_type, power, source,
+            INSERT INTO squads (registrant_id, slot, squad_type, power, mixed, source,
                                 updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(registrant_id, slot) DO UPDATE SET
                 squad_type = excluded.squad_type,
                 power      = excluded.power,
+                mixed      = excluded.mixed,
                 source     = excluded.source,
                 updated_at = excluded.updated_at,
                 updated_by = excluded.updated_by
             """,
-            (registrant_id, slot, new_type, new_power, source, _now(), actor["discord_user_id"]),
+            (
+                registrant_id,
+                slot,
+                new_type,
+                new_power,
+                new_mixed,
+                source,
+                _now(),
+                actor["discord_user_id"],
+            ),
         )
-        if squad_type is not None and old_type != new_type:
-            edit_ids.append(
-                _record_edit(
-                    conn,
-                    target="squad",
-                    registrant_id=registrant_id,
-                    slot=slot,
-                    field="squad_type",
-                    old=old_type,
-                    new=new_type,
-                    actor=actor,
-                )
+        for field, given, old, new in (
+            ("squad_type", squad_type, old_type, new_type),
+            ("power", power, old_power, new_power),
+            ("mixed", mixed, old_mixed, new_mixed),
+        ):
+            if given is None or old == new:
+                continue
+            edits[field] = _record_edit(
+                conn,
+                target="squad",
+                registrant_id=registrant_id,
+                slot=slot,
+                field=field,
+                old=old,
+                new=new,
+                actor=actor,
             )
-        if power is not None and old_power != new_power:
-            edit_ids.append(
-                _record_edit(
-                    conn,
-                    target="squad",
-                    registrant_id=registrant_id,
-                    slot=slot,
-                    field="power",
-                    old=old_power,
-                    new=new_power,
-                    actor=actor,
-                )
-            )
-    return {"registrant_id": registrant_id, "slot": slot, "edit_ids": edit_ids}
+            edit_ids.append(edits[field])
+    return {
+        "registrant_id": registrant_id,
+        "slot": slot,
+        "edit_ids": edit_ids,
+        "edits": edits,
+    }
 
 
 def add_order(registrant_id, slots, *, actor, opponent=None, observed_at=None, source="observed"):
@@ -2227,6 +2913,315 @@ def import_orders(rows: list[dict], *, actor) -> dict:
         "applied": applied,
         "skipped": skipped,
         "players": len(prepared),
+        "problems": problems[:50],
+    }
+
+
+def record_import(*, door, results, grouping_id=None, stage=None, actor=None) -> int:
+    """Log one import, from whichever door it came through.
+
+    `results` is the per-section dict each importer returns, keyed by section:
+    `{"registrants": {...}, "squads": {...}}`. Sections the payload left out
+    are simply absent and count zero, which is the truth about that run.
+
+    Kept even when everything was skipped. An import that landed nothing is
+    exactly the run somebody will come asking about, and a log that only
+    records successes cannot answer them.
+    """
+    counts = {section: 0 for section in ("registrants", "squads", "orders", "profiles")}
+    cleared = skipped = 0
+    for section, result in (results or {}).items():
+        if not isinstance(result, dict):
+            continue
+        if section in counts:
+            # `import_registrants` reports a `total`; the rest report what they
+            # wrote. Both answer "how much of this section landed", which is
+            # the only question this column is asked.
+            counts[section] = result.get("applied", result.get("total", 0)) or 0
+        cleared += result.get("cleared", 0) or 0
+        skipped += result.get("skipped", 0) or 0
+
+    actor = actor or {}
+    with _get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO import_log
+                (grouping_id, stage, registrants, squads, orders, profiles, cleared,
+                 skipped, door, actor_discord_id, actor_name, actor_guild_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                grouping_id,
+                stage,
+                counts["registrants"],
+                counts["squads"],
+                counts["orders"],
+                counts["profiles"],
+                cleared,
+                skipped,
+                door,
+                actor.get("discord_user_id"),
+                actor.get("discord_name"),
+                actor.get("guild_id"),
+                _now(),
+            ),
+        )
+    return cur.lastrowid
+
+
+def list_imports(*, grouping_id=None, limit: int = 50, offset: int = 0) -> dict:
+    """Newest first. Who has loaded what, and when."""
+    where, params = "", []
+    if grouping_id is not None:
+        where = " AND grouping_id = ?"
+        params.append(grouping_id)
+    with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM import_log WHERE 1=1" + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        ]
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM import_log WHERE 1=1" + where, params
+        ).fetchone()["n"]
+    return {"imports": rows, "total": total}
+
+
+def _as_rank(value) -> int:
+    """One squad position, 0-2, or a ValueError saying why it is not one.
+
+    Bools are refused outright. `int(True)` is 1 and would land a purity
+    penalty on the second-biggest squad of anyone whose profile carried a flag
+    where a position belongs.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{value!r} is not a squad position")
+    rank = int(value)
+    if not 0 <= rank <= 2:
+        raise ValueError(f"{value!r} is not a squad position (0-2)")
+    return rank
+
+
+#: Every profile key this version understands. Anything else is ignored where
+#: there is a real measurement beside it, and refused where there is not.
+PROFILE_KEYS = frozenset({"types", "shape", "mixed", "n_mixed", "gorilla"})
+
+
+def _profile_columns(profile) -> tuple[dict | None, str | None]:
+    """One imported profile as storable columns, or a reason it is unusable.
+
+    **Validated here rather than passed through, and that is the whole point of
+    the function.** The engine reads a profile deep inside a trial: `int(i)` on
+    a `mixed` entry, `tuple(profile["types"])` indexed three deep in `lineup`.
+    A bad value there raises after the interaction has been deferred, and
+    `build_odds_embed` catches only `NotEnoughData` -- so the member watches a
+    spinner that never resolves and nothing says why. Refusing the row at the
+    door costs that one player their profile and nothing else.
+
+    Unknown keys are ignored rather than refused: a newer simulator may fit
+    something this version has no column for, and dropping the row over it
+    would throw away the measurements we do understand.
+
+    **But a row of nothing-we-recognise is not a row of nothing.** An empty
+    result tells `import_profiles` to retract, and combining that with the rule
+    above would turn one producer-side key rename into a mass deletion of every
+    profile we hold. So a payload that measured something, in words this
+    version cannot read, is refused rather than obeyed.
+    """
+    if not isinstance(profile, dict):
+        return None, "profile is not an object"
+    cols: dict = {
+        "types": None,
+        "shape_r21": None,
+        "shape_r31": None,
+        "mixed": None,
+        "n_mixed": None,
+        "gorilla": None,
+    }
+
+    types = profile.get("types")
+    if types is not None:
+        # Exactly three. `lineup` indexes this list once per slot, so a short
+        # one is an IndexError inside a trial rather than a partial reading.
+        if not isinstance(types, (list, tuple)) or len(types) != 3:
+            return None, f"types {types!r} is not three squads"
+        if any(t not in VALID_TYPES for t in types):
+            return None, f"types {types!r} names something outside {VALID_TYPES}"
+        cols["types"] = ",".join(types)
+
+    shape = profile.get("shape")
+    if shape is not None:
+        if not isinstance(shape, (list, tuple)) or len(shape) != 2:
+            return None, f"shape {shape!r} is not (r21, r31)"
+        ratios: list = []
+        for ratio in shape:
+            if ratio is None:
+                ratios.append(None)
+                continue
+            try:
+                value = float(ratio)
+            except (TypeError, ValueError):
+                return None, f"shape {shape!r} is not numeric"
+            # Both ratios are against the biggest squad, which cannot be
+            # outranked by definition. Above 1 is a transcription slip, and it
+            # would not raise -- the engine sorts, so the lineup silently comes
+            # out in a different order from the one the profile describes.
+            if not 0 < value <= 1:
+                return None, f"shape ratio {ratio!r} is outside (0, 1]"
+            ratios.append(value)
+        # Squad 3 cannot outrank squad 2, which is what a transposed pair
+        # would say. `shape_from_power` clamps its own output the same way;
+        # `_profile_shape` does not clamp a given one, and the engine's later
+        # sort would reorder the lineup without reordering `types`.
+        if ratios[0] is not None and ratios[1] is not None and ratios[1] > ratios[0]:
+            return None, f"shape {shape!r} has squad 3 above squad 2"
+        cols["shape_r21"], cols["shape_r31"] = ratios
+
+    mixed = profile.get("mixed")
+    if mixed is not None:
+        if isinstance(mixed, (str, bytes)) or not isinstance(mixed, (list, tuple, set)):
+            return None, f"mixed {mixed!r} is not a list of positions"
+        try:
+            ranks = sorted({_as_rank(i) for i in mixed})
+        except (TypeError, ValueError) as exc:
+            return None, f"mixed {mixed!r}: {exc}"
+        cols["mixed"] = ",".join(str(rank) for rank in ranks)
+
+    # Only read when nothing said WHICH squads. The engine makes the same
+    # choice between the two, and storing both would leave the row ambiguous
+    # about which a later reader should believe.
+    n_mixed = profile.get("n_mixed")
+    if n_mixed is not None and cols["mixed"] is None:
+        if isinstance(n_mixed, bool):
+            return None, f"n_mixed {n_mixed!r} is not a count"
+        try:
+            count = int(n_mixed)
+        except (TypeError, ValueError):
+            return None, f"n_mixed {n_mixed!r} is not a count"
+        if count < 0:
+            return None, f"n_mixed {n_mixed!r} is negative"
+        # A measured zero says "we looked and every squad is pure", which is
+        # exactly what an empty `mixed` says -- and unlike a count it names no
+        # positions, so it stays true however the reading turned out.
+        # Normalised now so the legacy column only ever means "n of them and we
+        # cannot say which", which is the case that needs handling with care.
+        if count:
+            cols["n_mixed"] = count
+        else:
+            cols["mixed"] = ""
+
+    gorilla = profile.get("gorilla")
+    if gorilla is not None:
+        try:
+            cols["gorilla"] = _as_rank(gorilla)
+        except (TypeError, ValueError) as exc:
+            return None, f"gorilla {gorilla!r}: {exc}"
+
+    if all(value is None for value in cols.values()) and set(profile) - PROFILE_KEYS:
+        return None, f"nothing this version can read in {sorted(set(profile) - PROFILE_KEYS)}"
+    # An all-null result is not an error. It is a payload saying "here is what
+    # we hold for this player" and holding nothing, which is a retraction --
+    # `import_profiles` deletes on it rather than storing a row of nulls.
+    return cols, None
+
+
+def import_profiles(rows: list[dict], *, actor) -> dict:
+    """Load the per-player measurements the semifinal model takes as input.
+
+    Each row is `{name, server, profile}` -- the block `push_to_bot.py` has
+    been sending since the 1.5 contract landed and nothing here read.
+
+    **A profile is replaced whole, not merged key by key, and a payload row
+    measuring nothing deletes it.** Each import is a re-fit of the entire
+    corpus, so a measurement that has dropped out of the fit -- a sighting
+    reclassified, a fight re-read -- has to drop out of the row with it.
+    Merging would keep a retracted measurement alive with nothing able to clear
+    it, which is the shape of bug that shows up only as odds that are quietly
+    wrong forever.
+
+    **The retraction only reaches players the payload names.** A player who
+    drops out of the fit altogether is simply absent, and absent has to keep
+    meaning "this payload says nothing about them" -- a block that cleared
+    every profile it did not mention would let one alliance's import wipe
+    another's, which is the destructive shape the import gate exists to
+    contain. So the producer retracts by *sending* an empty profile. Today
+    `player_profiles.all_profiles()` omits those instead, which leaves that one
+    case uncovered end to end; the missing half is in the simulator.
+
+    Replacing whole is the opposite of `import_squads`, and deliberately so: a
+    squad row may carry a correction somebody typed, and an import must never
+    walk over it. Nobody hand-enters a profile. What a member does enter is the
+    per-box `mixed` flag on `squads`, which this never touches -- the two meet
+    at read time in `champion_duel_odds._profile`, where the member's answer
+    wins.
+    """
+    applied = cleared = skipped = 0
+    problems: list[str] = []
+    now = _now()
+    actor_id = (actor or {}).get("discord_user_id")
+
+    with _get_conn() as conn:
+        for row in rows:
+            registrant_id, problem = _resolve_for_import(row.get("name"), row.get("server"))
+            if problem:
+                problems.append(problem)
+                skipped += 1
+                continue
+
+            cols, problem = _profile_columns(row.get("profile"))
+            if problem:
+                problems.append(f"{row.get('name')!r} profile: {problem}")
+                skipped += 1
+                continue
+
+            if not any(value is not None for value in cols.values()):
+                # Nothing measurable in the row, so nothing measured -- and a
+                # profile we can no longer justify has to go, not sit there
+                # feeding a retracted measurement to every future run. Counted
+                # separately: clearing 400 profiles is a very different event
+                # from loading 400 and the summary must not read the same.
+                cleared += conn.execute(
+                    "DELETE FROM registrant_profiles WHERE registrant_id = ?",
+                    (registrant_id,),
+                ).rowcount
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO registrant_profiles
+                    (registrant_id, types, shape_r21, shape_r31, mixed, n_mixed,
+                     gorilla, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(registrant_id) DO UPDATE SET
+                    types      = excluded.types,
+                    shape_r21  = excluded.shape_r21,
+                    shape_r31  = excluded.shape_r31,
+                    mixed      = excluded.mixed,
+                    n_mixed    = excluded.n_mixed,
+                    gorilla    = excluded.gorilla,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (
+                    registrant_id,
+                    cols["types"],
+                    cols["shape_r21"],
+                    cols["shape_r31"],
+                    cols["mixed"],
+                    cols["n_mixed"],
+                    cols["gorilla"],
+                    now,
+                    actor_id,
+                ),
+            )
+            applied += 1
+
+    return {
+        "applied": applied,
+        "cleared": cleared,
+        "skipped": skipped,
         "problems": problems[:50],
     }
 

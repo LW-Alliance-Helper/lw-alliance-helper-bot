@@ -8,6 +8,7 @@ directly rather than standing up a gateway.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 from datetime import date
@@ -136,7 +137,7 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
             user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True
         ).children
     ]
-    assert hub.CD_BTN_SQUAD not in labels
+    assert hub.CD_BTN_SQUADS not in labels
     assert hub.CD_BTN_ORDER not in labels
     assert {hub.CD_BTN_FIND, hub.CD_BTN_ADD} <= set(labels)
 
@@ -148,7 +149,12 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
             can_write=True,
         ).children
     ]
-    assert on_card == [hub.CD_BTN_SQUAD, hub.CD_BTN_ORDER]
+    # One squad control, not two. `✏️ Correct a squad` did the same job a slot
+    # at a time and sat beside this one under the same glyph, which `DESIGN.md`
+    # forbids across a choice set: two identical glyphs give the eye nothing to
+    # navigate by, which is worse than bare.
+    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_ORDER]
+    assert not hasattr(hub, "_SquadModal")
 
 
 def test_the_player_card_locks_its_actions_on_the_free_tier():
@@ -168,7 +174,6 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "Newcomer"
     modal.server._value = "1042"
-    modal.group._value = ""
     modal.alliance._value = "OGV"
 
     interaction = _interaction()
@@ -181,58 +186,6 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     # Lands on the card with the write actions, not a bare confirmation.
     assert isinstance(interaction.followup.send.call_args.kwargs["view"], hub.PlayerActionsView)
     assert "Added" in _sent(interaction)
-
-
-async def test_a_group_letter_from_outside_your_grouping_is_not_recorded(cd_db):
-    """The bug the whole grouping separation exists to stop. An officer in one
-    warzone recording an opponent as "Group D" landed that player in the
-    imported grouping's Group D, because a letter meant the same thing
-    everywhere. Refusing is honest; refusing silently is not."""
-    mine = db.find_grouping_by_warzone("738")
-    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
-    modal.name._value = "Stranger"
-    modal.server._value = "1500"
-    modal.group._value = "D"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    said = _sent(interaction)
-    assert "not recorded" in said and "**1500**" in said
-    assert db.get_player("Stranger", server="1500")["grp"] is None
-
-
-async def test_a_group_letter_from_inside_your_grouping_is_recorded(cd_db):
-    mine = db.find_grouping_by_warzone("738")
-    modal = hub._AddPlayerModal(can_write=True, grouping=mine)
-    modal.name._value = "Newcomer"
-    modal.server._value = "738"
-    modal.group._value = "N"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    player = db.get_player("Newcomer", server="738")
-    assert player["grp"] == "N"
-    assert player["grouping_id"] == mine["id"], "theirs, not the globally-running one"
-    assert "not recorded" not in _sent(interaction)
-
-
-async def test_a_group_letter_with_no_grouping_resolved_is_not_guessed_at(cd_db):
-    """A letter belonging to no grouping is not a fact about anything."""
-    modal = hub._AddPlayerModal(can_write=True, grouping=None)
-    modal.name._value = "Newcomer"
-    modal.server._value = "738"
-    modal.group._value = "N"
-    modal.alliance._value = ""
-
-    interaction = _interaction()
-    await modal.on_submit(interaction)
-
-    assert "do not know which Champion Duel grouping" in _sent(interaction)
-    assert db.get_player("Newcomer", server="738")["grp"] is None
 
 
 def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
@@ -254,7 +207,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
         for f in hub.build_player_embed(player, None, grouping=mine).fields
         if f.name == "Rounds"
     )
-    assert "Group D (in a different Champion Duel grouping that started 8/4)" in rounds
+    assert "Group D (not your Champion Duel)" in rounds
 
     # Inside the caller's own grouping it stays bare, because there it is exact.
     theirs_view = next(
@@ -272,7 +225,6 @@ async def test_adding_someone_we_already_have_opens_them(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "AlphaOne"
     modal.server._value = "738"
-    modal.group._value = ""
     modal.alliance._value = ""
 
     interaction = _interaction()
@@ -289,7 +241,6 @@ async def test_adding_without_a_server_is_refused(cd_db):
     modal = hub._AddPlayerModal(can_write=True)
     modal.name._value = "Nameless"
     modal.server._value = ""
-    modal.group._value = ""
     modal.alliance._value = ""
 
     interaction = _interaction()
@@ -379,12 +330,13 @@ async def test_a_locked_miss_still_shows_the_add_button(cd_db):
 
 
 async def test_the_squad_modal_does_not_ask_who_again(cd_db):
-    """The player came from the card, so the modal is three fields and cannot
-    fail on an ambiguous name."""
+    """The player came from the card, so there is no second chance to mistype
+    a name and no ambiguous match to resolve mid-flow."""
     player = db.get_player("AlphaOne", server="738")
-    squad_fields = {i.label for i in hub._SquadModal(player).children}
-    assert "Player name" not in squad_fields
-    assert squad_fields == {"Slot (1, 2 or 3)", "Squad type", "Power"}
+    modal = hub._SquadDetailModal(player=player)
+    labels = {getattr(i, "label", None) or getattr(i, "text", None) for i in modal.children}
+    assert "Player name" not in labels
+    assert {"Squad 1 power", "Squad 2 power", "Squad 3 power"} <= labels
 
 
 async def test_recording_an_order_opens_the_picker_with_no_modal(cd_db):
@@ -408,17 +360,470 @@ async def test_recording_an_order_opens_the_picker_with_no_modal(cd_db):
 
 async def test_a_squad_correction_applies_to_the_card_player(cd_db):
     player = db.get_player("AlphaOne", server="738")
-    modal = hub._SquadModal(player)
-    modal.slot._value = "1"
-    modal.squad_type._value = "Tank"
-    modal.power._value = "84.6M"
+    modal = _detail_modal(player, powers=("84.6M", "", ""), types=0)
 
     interaction = _interaction()
     await modal.on_submit(interaction)
 
     squad = db.get_player("AlphaOne", server="738", include_scouting=True)["squads"][0]
     assert squad["squad_type"] == "Tank" and squad["power"] == 84_600_000
-    assert "84,600,000" in _sent(interaction)
+    assert "Recorded" in _sent(interaction)
+
+
+# ── "Which of these is right?" ────────────────────────────────────────────────
+#
+# Kevin's design: surface what we already hold when somebody enters something
+# different, show them the two pieces, and ask.
+#
+# Almost every test here is about NOT asking. Two people entering the same
+# correct value is the common case, and a surface that questions every
+# re-entry is one nobody enters anything into twice.
+
+SCOUT = {"discord_user_id": "333", "discord_name": "Someone else", "guild_id": "999"}
+SCOUT_ID = 333
+
+
+def _order_starting_with(squad_type):
+    """The dropdown index whose first box is this type, or None for no answer.
+
+    The control is a whole-lineup answer, so a test that only cares about
+    slot 1 still has to pick one of the six.
+    """
+    if not squad_type:
+        return None
+    return next(i for i, order in enumerate(hub._TYPE_ORDERS) if order[0] == squad_type)
+
+
+async def _submit_correction(player, *, squad_type="", power="", user_id=SCOUT_ID):
+    """One box entered through the squad screen, as a scout who is not KEV."""
+    modal = _detail_modal(player, powers=(power, "", ""), types=_order_starting_with(squad_type))
+    interaction = _interaction(user_id=user_id)
+    await modal.on_submit(interaction)
+    return interaction
+
+
+def _view_of(interaction):
+    return (interaction.followup.send.call_args.kwargs or {}).get("view")
+
+
+def _first_sent(interaction):
+    """The first followup, where `_sent` gives the last."""
+    call = interaction.followup.send.call_args_list[0]
+    if call.args:
+        return call.args[0]
+    return call.kwargs.get("content") or ""
+
+
+def _slot_of(name, slot, server="738"):
+    player = db.get_player(name, server=server, include_scouting=True)
+    return next(s for s in player["squads"] if s["slot"] == slot)
+
+
+def _squads_of(name, server="738"):
+    return db.get_player(name, server=server, include_scouting=True)["squads"]
+
+
+def _detail_modal(player, *, powers=("", "", ""), types=None, mixed=""):
+    """`_SquadDetailModal` with its five components filled in.
+
+    `types` is an index into `hub._TYPE_ORDERS`, or `hub._TYPE_ORDER_OTHER`,
+    or None for "not answered".
+    """
+    modal = hub._SquadDetailModal(player=player)
+    for box, value in zip((modal.squad1, modal.squad2, modal.squad3), powers):
+        box._value = value
+    modal.types.component._values = (
+        [] if types is None else [types if isinstance(types, str) else str(types)]
+    )
+    modal.mixed.component._value = mixed
+    return modal
+
+
+async def test_agreeing_with_what_we_hold_passes_without_a_word(cd_db):
+    """The common case by a distance. Two scouts reading the same panel must
+    not be made to arbitrate between two identical numbers."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Tank", power="84.6M"
+    )
+
+    assert _view_of(interaction) is None
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_the_two_notations_for_one_number_do_not_contradict(cd_db):
+    """`parse_power` accepts `64.6M` and `64,600,000` as the same reading, and
+    in binary floating point they are not: 64.6 * 1e6 lands a fraction above.
+    Compared exactly, the member is shown two numbers that render identically
+    and asked which is right."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, power=64_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="64.6M")
+
+    assert _view_of(interaction) is None
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_a_field_nobody_has_answered_is_not_a_disagreement(cd_db):
+    """Nothing to contradict. The first thing anybody says about a field is
+    new information, however much else we hold about that squad."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="84.6M")
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_an_estimate_is_never_worth_arbitrating(cd_db):
+    """`push_to_bot` writes an estimate for nearly the whole field, so treating
+    one as something we hold would put this question in front of the very first
+    real reading of almost every player. The bot's own guess giving way to
+    somebody reading the screen is the system working."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Missile", power=13_500_000, actor=KEV, source="estimated")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Tank", power="84.6M"
+    )
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+    assert db.list_disagreements()["total"] == 0
+
+
+async def test_correcting_your_own_entry_is_not_a_disagreement(cd_db):
+    """Somebody's newer reading of their own squad is simply better. Asking
+    them to arbitrate against themselves is noise."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), power="90.1M", user_id=ADMIN_ID
+    )
+
+    assert _view_of(interaction) is None
+    assert _slot_of("AlphaOne", 1)["power"] == 90_100_000
+
+
+async def test_a_real_contradiction_puts_both_pieces_up(cd_db):
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    view = _view_of(interaction)
+    assert isinstance(view, hub._DisagreementView)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    body = " ".join(f"{f.name} {f.value}" for f in embed.fields)
+    assert "84,600,000" in body and "90,100,000" in body
+    # Nothing is written until somebody answers.
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_the_two_buttons_are_bare(cd_db):
+    """They differ by which value is right, which is a parameter rather than a
+    kind, and `DESIGN.md` sends parameter sets out without glyphs rather than
+    repeating one across the pair."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    view = _view_of(interaction)
+
+    labels = _labels(view)
+    assert len(labels) == 2
+    assert all(label[0].isalpha() for label in labels), labels
+    # Neither is the recommended one. The bot has no view on which of two
+    # people read the screen correctly.
+    assert all(item.style is discord.ButtonStyle.secondary for item in view.children)
+
+
+async def test_keeping_what_we_hold_changes_nothing_and_is_recorded(cd_db):
+    """The half `edits` cannot carry. Nothing changed, and that a stored value
+    was challenged and survived is the only thing that says so."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+    before = db.list_edits()["total"]
+
+    press = _interaction(user_id=SCOUT_ID)
+    await view.keep.callback(press)
+
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+    assert db.list_edits()["total"] == before, "keeping a value is not an edit"
+    logged = db.list_disagreements()
+    assert logged["total"] == 1
+    row = logged["disagreements"][0]
+    assert row["field"] == "power"
+    assert row["held_value"] == "84600000.0" and row["offered_value"] == "90100000.0"
+    assert row["chose"] == "held" and row["edit_id"] is None
+    assert row["actor_discord_id"] == SCOUT["discord_user_id"]
+
+
+async def test_taking_the_new_value_writes_it_and_links_the_edit(cd_db):
+    """So `⏪ Revert an edit` and this history tell one story rather than two."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+
+    await view.use_mine.callback(_interaction(user_id=SCOUT_ID))
+
+    assert _slot_of("AlphaOne", 1)["power"] == 90_100_000
+    row = db.list_disagreements()["disagreements"][0]
+    assert row["chose"] == "offered"
+    edit = next(e for e in db.list_edits()["edits"] if e["id"] == row["edit_id"])
+    assert edit["field"] == "power" and edit["new_value"] == "90100000.0"
+
+
+async def test_a_field_nobody_disputed_lands_before_the_question_is_asked(cd_db):
+    """Somebody who reads a type we did not have and a power we did should not
+    lose the type because they said our power was the right one, and should not
+    lose it by being interrupted before answering either. There is nothing to
+    arbitrate about a value nobody offered a different one for."""
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, power=84_600_000, actor=KEV, source="observed")
+
+    interaction = await _submit_correction(
+        db.get_player("AlphaOne", server="738"), squad_type="Aircraft", power="90.1M"
+    )
+
+    squad = _slot_of("AlphaOne", 1)
+    assert squad["squad_type"] == "Aircraft", "saved without waiting for an answer"
+    assert squad["power"] == 84_600_000, "and the disputed one is still ours until they answer"
+
+    await _view_of(interaction).keep.callback(_interaction(user_id=SCOUT_ID))
+
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_an_unanswered_question_retires_its_own_buttons(cd_db, monkeypatch):
+    """A live-looking button on a dead view is a bug, not cosmetics: the member
+    presses it, gets "Interaction failed", and never learns the question went
+    unanswered."""
+    import wizard_registry
+
+    expired = AsyncMock()
+    monkeypatch.setattr(wizard_registry, "expire_view_message", expired)
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+
+    await _view_of(interaction).on_timeout()
+
+    expired.assert_awaited_once()
+
+
+async def test_only_the_person_asked_can_answer(cd_db):
+    rid = _reg("AlphaOne")
+    db.set_squad(rid, 1, squad_type="Tank", power=84_600_000, actor=KEV, source="observed")
+    interaction = await _submit_correction(db.get_player("AlphaOne", server="738"), power="90.1M")
+    view = _view_of(interaction)
+
+    intruder = _interaction(user_id=OUTSIDER_ID)
+    assert await view.interaction_check(intruder) is False
+    assert _slot_of("AlphaOne", 1)["power"] == 84_600_000
+
+
+async def test_recording_three_boxes_asks_once_not_three_times(cd_db):
+    """A member filling in the whole lineup answered one thing. Asking per
+    field is what turns a correction into an interrogation."""
+    rid = _reg("AlphaOne")
+    _full_squads(rid)
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    modal.squad1._value = "50M"
+    modal.squad2._value = "40M"
+    modal.squad3._value = "30M"
+    modal.types.component._values = []
+    modal.mixed.component._value = ""
+
+    interaction = _interaction(user_id=SCOUT_ID)
+    await modal.on_submit(interaction)
+
+    assert interaction.followup.send.await_count == 1
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert len(embed.fields) == 3, "three contradicted powers, still one question"
+
+
+# ── "Other": two of the same type ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "typed, expected",
+    [
+        ("Tank, Tank, Aircraft", ("Tank", "Tank", "Aircraft")),
+        ("tank tank air", ("Tank", "Tank", "Aircraft")),
+        ("T/M/A", ("Tank", "Missile", "Aircraft")),
+        ("aircraft - aircraft - missile", ("Aircraft", "Aircraft", "Missile")),
+    ],
+)
+def test_a_typed_squad_order_is_read_forgivingly(typed, expected):
+    """This is the path for somebody already told the dropdown does not fit
+    them. The three names share no first letter, which is what makes a single
+    character enough to disambiguate."""
+    assert hub._parse_type_order(typed) == expected
+
+
+@pytest.mark.parametrize(
+    "typed", ["Tank, Aircraft", "Tank, Tank, Tank, Tank", "", "blue red green"]
+)
+def test_an_unreadable_squad_order_is_refused_not_guessed(typed):
+    """A wrong type is a wrong counter matchup on every prediction that player
+    ever appears in, where a wrong power is a number slightly out."""
+    assert hub._parse_type_order(typed) is None
+
+
+async def test_other_saves_the_powers_then_asks_for_the_types(cd_db):
+    """The powers are written before the question, so somebody who picks Other
+    and then gets pulled away keeps everything except the types."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "82M", "78M"),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    interaction.client.wait_for = AsyncMock(side_effect=asyncio.TimeoutError)
+
+    await modal.on_submit(interaction)
+
+    assert [s["power"] for s in _squads_of("AlphaOne")] == [94_200_000, 82_000_000, 78_000_000]
+    assert all(s["squad_type"] is None for s in _squads_of("AlphaOne"))
+    assert "What are their three squad types?" in _first_sent(interaction)
+
+
+async def test_the_typed_order_lands_on_the_boxes(cd_db):
+    """No second modal. The question is asked the way every free-text step in
+    the setup wizards is asked, because Discord will not answer a modal with a
+    modal and a button in between costs a press to answer one question."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "82M", "78M"),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    reply = MagicMock()
+    reply.content = "Tank, Tank, Aircraft"
+    reply.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(return_value=reply)
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+    # Their reply is a line with no visible prompt above it, since the question
+    # was ephemeral and nobody can answer ephemerally.
+    reply.delete.assert_awaited_once()
+
+
+async def test_a_missing_delete_permission_does_not_lose_the_save(cd_db):
+    """Tidying the channel needs Manage Messages, and not having it is not a
+    reason to fail a save that has already happened."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    reply = MagicMock()
+    reply.content = "Tank, Tank, Aircraft"
+    reply.delete = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no"))
+    interaction.client.wait_for = AsyncMock(return_value=reply)
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+
+
+async def test_an_unreadable_answer_costs_one_step_not_the_flow(cd_db):
+    """`UX.md`: a validation failure gets a retry with an example before
+    bailing out, and the bail-out names the route back in."""
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    first, second = MagicMock(), MagicMock()
+    first.content, second.content = "no idea", "Tank, Tank, Aircraft"
+    first.delete = second.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(side_effect=[first, second])
+
+    await modal.on_submit(interaction)
+
+    assert [s["squad_type"] for s in _squads_of("AlphaOne")] == ["Tank", "Tank", "Aircraft"]
+    assert any("couldn't read" in str(c) for c in interaction.followup.send.call_args_list)
+
+
+async def test_giving_up_says_the_powers_are_safe_and_names_the_way_back(cd_db):
+    modal = _detail_modal(
+        player=db.get_player("AlphaOne", server="738"),
+        powers=("94.2M", "", ""),
+        types=hub._TYPE_ORDER_OTHER,
+    )
+    interaction = _interaction()
+    bad = MagicMock()
+    bad.content = "no idea"
+    bad.delete = AsyncMock()
+    interaction.client.wait_for = AsyncMock(return_value=bad)
+
+    await modal.on_submit(interaction)
+
+    msg = _sent(interaction)
+    assert "powers are saved" in msg
+    assert hub.CD_BTN_SQUADS in msg, "a dead end has to name its exit"
+    assert _slot_of("AlphaOne", 1)["power"] == 94_200_000
+
+
+async def test_a_blank_purity_box_says_none_are_mixed(cd_db):
+    """Kevin's decision, 2026-08-17: the box is optional and blank says the
+    same thing as typing "none". Somebody filling in this screen has the lineup
+    in front of them, so silence about a mixed squad is an answer."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    modal.squad1._value = "94.2M"
+    modal.squad2._value = ""
+    modal.squad3._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = ""
+
+    await modal.on_submit(_interaction())
+
+    assert [s["mixed"] for s in _squads_of("AlphaOne")] == [0, 0, 0]
+
+
+async def test_an_empty_screen_is_not_a_measurement_that_everything_is_pure(cd_db):
+    """Blank means none only once the member has told us something. Nobody
+    looked at anything here, and without the guard it would write a purity
+    measurement for all three boxes."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    for box in (modal.squad1, modal.squad2, modal.squad3):
+        box._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = ""
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert "Nothing to record" in _sent(interaction)
+    assert _squads_of("AlphaOne") == []
+
+
+async def test_saying_none_alone_is_still_worth_recording(cd_db):
+    """Answering only the purity box is a real measurement: they looked, and
+    every squad is pure."""
+    modal = hub._SquadDetailModal(player=db.get_player("AlphaOne", server="738"))
+    for box in (modal.squad1, modal.squad2, modal.squad3):
+        box._value = ""
+    modal.types.component._values = []
+    modal.mixed.component._value = "none"
+
+    await modal.on_submit(_interaction())
+
+    assert [s["mixed"] for s in _squads_of("AlphaOne")] == [0, 0, 0]
 
 
 def test_the_capture_guide_is_never_locked():
@@ -554,10 +959,16 @@ async def test_only_the_opener_can_press_the_buttons():
     intruder.response.send_message.assert_awaited_once()
 
 
-def test_hub_embed_names_the_gate_it_applied(cd_db):
+def test_the_hub_never_sells_premium_on_contributing(cd_db):
+    """Contributing is free and uncapped, so there is no upsell for it even on
+    the path that used to render one. Free alliances are the collection engine:
+    every sighting they enter sharpens the predictions paying alliances get, so
+    gating this is the one split in the product that makes the paid tier
+    worse."""
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=False)
+
     names = [f.name for f in embed.fields]
-    assert any("Premium" in n for n in names)
+    assert not any("Premium" in n for n in names)
     assert "2" in embed.description  # both registrants counted
 
 
@@ -658,7 +1069,7 @@ async def test_predict_refuses_a_player_with_no_line_up(cd_db):
 
     msg = _sent(interaction)
     assert "BetaTwo" in msg and "no squad recorded" in msg
-    assert hub.CD_BTN_SQUAD in msg, "a dead end has to name its exit"
+    assert hub.CD_BTN_SQUADS in msg, "a dead end has to name its exit"
     # And the exit has to be reachable: correcting a squad starts from the
     # player's card now, so the hint routes through finding them first.
     assert hub.CD_BTN_FIND in msg
@@ -1332,7 +1743,7 @@ async def test_the_confirmation_reads_back_every_warzone(cd_db, no_mm_link):
     interaction = await _add_grouping(" ".join(SIXTEEN))
 
     said = _sent(interaction)
-    assert "Added your warzone grouping" in said and "**8/4**" in said
+    assert "Added your Participating Warzones" in said and "**8/4**" in said
     for zone in SIXTEEN:
         assert zone in said
 
@@ -1538,13 +1949,22 @@ async def test_recording_asks_which_champion_duel_only_when_there_is_a_choice(cd
 
 
 def test_a_grouping_with_no_start_date_still_has_a_label(cd_db):
-    """An import can establish a grouping before anyone reads its dates off the
-    Match Overview box, and an option with a blank where the date goes is worse
-    than one that says the date is missing."""
+    """An import can establish one before anyone reads its dates off the Match
+    Overview box, and an option with a blank where the date goes is worse than
+    one that says the date is missing.
+
+    Says "Champion Duel", never "Grouping". The game uses that word for the
+    group of 8 ("Semi-final Grouping: Group H") and calls the 16 warzones
+    Participating Warzones, so the only meaning a member has already learned
+    for it is the one we do not mean. Corrected 2026-08-16; `UX.md` has the
+    reasoning under Settled.
+    """
     undated = db.find_grouping_by_warzone("738")
 
     assert undated["started_on"] is None
-    assert hub._grouping_option_label(undated) == f"Grouping {undated['id']} (no date recorded)"
+    label = hub._grouping_option_label(undated)
+    assert label == f"Champion Duel {undated['id']} (no date recorded)"
+    assert "rouping" not in label
 
 
 async def test_a_result_files_against_the_champion_duel_that_was_picked(cd_db, no_mm_link):
@@ -1712,7 +2132,7 @@ def test_the_scoped_hub_says_whose_players_these_are(cd_db):
         servers=db.get_servers(mine["id"]), can_write=True, grouping=mine, warzone="738"
     )
 
-    assert "**2** players in your grouping" in embed.description
+    assert "**2** players in your Champion Duel" in embed.description
     assert "**1 warzone**" in embed.description, "agrees with its count"
     assert "server" not in embed.description, "the game says warzone"
 
@@ -1726,7 +2146,7 @@ def test_a_grouping_we_hold_nothing_for_says_so_rather_than_nothing(cd_db):
         servers=db.get_servers(theirs["id"]), can_write=True, grouping=theirs, warzone="1500"
     )
 
-    assert "do not have any players for your grouping" in embed.description
+    assert "do not have any players for your Champion Duel" in embed.description
     assert "warzone **1500**" in embed.description
 
 
@@ -1798,3 +2218,18 @@ async def test_a_refusal_the_caller_can_fix_does_not_send_them_to_us(cd_db, no_m
 
     view = _view(interaction)
     assert _labels(view) == [hub.CD_BTN_RETRY_GROUPING]
+
+
+# The group letter came off the add-a-player screen on 2026-08-16, when Total
+# Hero Power and troop level took its place: five components is the cap and the
+# model cannot run without one of the two new fields, where a letter is round
+# data the record and reconcile flows already collect properly and in a
+# grouping-scoped way.
+#
+# Three tests went with it. They covered a real bug -- a letter is meaningless
+# outside a grouping, and writing one against the globally-running round put an
+# officer in warzone 1500's opponent into the imported grouping's Group D. That
+# rule still holds everywhere a letter IS written: the record and reconcile
+# paths go through `get_or_create_group` with an explicit grouping id, so they
+# cannot reach another Champion Duel's Group D at all. What is gone is the
+# ability to name a group while adding a stranger you just met.

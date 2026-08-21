@@ -1,8 +1,18 @@
-"""Odds of advancing out of one semifinal group.
+"""Odds of getting through a round: two group joins and one bracket join.
 
 **The model lives in `champion_duel_engine`, not here.** This module is the join
-between what the bot stores and the shape `semifinal.simulate_group` wants, and
-nothing else. It holds no constants, no Monte Carlo and no ranking rule.
+between what the bot stores and the shape the engine wants, and nothing else. It
+holds no constants, no Monte Carlo and no ranking rule.
+
+TWO ENTRY POINTS, BECAUSE THERE ARE TWO QUESTIONS.
+
+`group_advance_odds` scores a group — the qualifiers and the semi-finals, each
+its own model with its own constants, both ranking on points. `bracket_odds`
+scores the knockout field of 32, which is not a group at all: a player's path
+depends on who else wins, the engine entry point is `simulate_bracket` rather
+than `simulate_group`, it returns a tuple rather than a dict, and there are no
+points in that round to rank on. Keeping them apart is why neither has to carry
+a column the other invented; `STAGES_WITH_A_MODEL` is what a surface asks.
 
 The version this replaces was a port: a pairwise meeting matrix, a round robin
 Monte Carlo over it, and two tie-break rules. It answered the wrong question.
@@ -61,6 +71,23 @@ try:
 except ImportError:  # pragma: no cover - asserted through the degraded path
     ENGINE_AVAILABLE = False
 
+# **Imported separately, and this is not tidiness.** `knockout` arrived in
+# engine 1.12.0 and the two group models have been there since 1.0. Putting the
+# three on one import line makes an older pin raise `ImportError` for the whole
+# statement, which the handler above turns into ENGINE_AVAILABLE = False -- so a
+# bot running any engine before 1.12.0 would lose the qualifier and semifinal
+# odds it has always had, silently, reported as "the engine is not installed".
+#
+# That is not hypothetical: `dev` is pinned at v1.5 today and the pin moves in a
+# separate merge. A round the engine cannot model is simply absent from
+# `STAGES_WITH_A_MODEL`, which is what that tuple is for.
+try:
+    from champion_duel_engine import knockout
+
+    KNOCKOUT_AVAILABLE = True
+except ImportError:  # pragma: no cover - engines before 1.12.0
+    KNOCKOUT_AVAILABLE = False
+
 #: Per-round model, how many go through, and how many trials to spend.
 #:
 #: The two rounds are different models and the package docstring is explicit
@@ -81,9 +108,22 @@ except ImportError:  # pragma: no cover - asserted through the degraded path
 #: odds get real use, the fix is to run the simulation off the event loop's
 #: process, not to cut the trials until the number stops meaning anything.
 #: Rounds a model exists for, so a surface can offer the control only where
-#: it will work. The knockouts are absent: a single-elimination field of 32 is
-#: a different question and nothing models it yet.
-STAGES_WITH_A_MODEL = ("qualifiers", "semifinals")
+#: it will work.
+#:
+#: The knockouts joined this list on 2026-08-20. The sentence that used to sit
+#: here -- "a single-elimination field of 32 is a different question and
+#: nothing models it yet" -- was true when it was written and stopped being
+#: true when `knockout.py` landed in engine 1.12.0. The first half of it is
+#: still right and is why `bracket_odds` is a separate function from
+#: `group_advance_odds`: it IS a different question, it just has a model now.
+STAGES_WITH_A_MODEL = ("qualifiers", "semifinals") + (("knockouts",) if KNOCKOUT_AVAILABLE else ())
+
+#: Bracket trials, and the pairwise-matrix trials underneath them. Separate
+#: numbers because they cost wildly different amounts: the bracket sampler is
+#: free and the matrix is the entire bill. See `bracket_odds` for the measured
+#: table behind these two.
+BRACKET_TRIALS = 20_000
+MATRIX_TRIALS = 60
 
 # One run at a time, and remember the last few answers.
 #
@@ -107,7 +147,18 @@ _CACHE_MAX = 32
 
 
 def _models():
-    """Bound lazily so the module still imports without the engine."""
+    """The GROUP models, bound lazily so the module still imports with no engine.
+
+    **The knockouts are deliberately not in here**, and the first version of
+    this change put them in. `group_advance_odds` looks a stage up in this dict
+    and scores anything it finds, so registering the bracket here made it
+    accept a round with no `simulate_group`, no points and no group -- reaching
+    an `AttributeError` several steps later instead of the refusal that used to
+    be immediate. Membership of this dict IS the guarantee, so the guarantee is
+    kept by leaving it out rather than by a comment saying not to.
+
+    `STAGES_WITH_A_MODEL` is the union and is what a surface asks.
+    """
     return {
         "qualifiers": {"module": qualifier, "trials": 200},
         "semifinals": {"module": semifinal, "trials": 800},
@@ -321,57 +372,15 @@ def _profile(member: dict, squads: list[dict]) -> dict | None:
     return out or None
 
 
-def group_advance_odds(
-    members: list[dict],
-    *,
-    stage: str = "semifinals",
-    trials: int | None = None,
-    seed: int = 42,
-    jitter: bool = True,
-) -> GroupOdds:
-    """Everyone's chance of getting out of this group, for the round it is in.
+def _specs(members: list[dict]) -> tuple[list[dict], dict, list[str]]:
+    """Every member as one engine spec, plus the names to map back through.
 
-    `members` are rows as `get_group_scouting` returns them.
-
-    The two rounds are separate models with separate constants, and the engine
-    is explicit that they must not be mixed. `stage` picks one; a round with no
-    model raises rather than being scored by the other one.
-
-    Each model refuses a group it cannot schedule rather than absorbing it, and
-    the two refuse different things: the semifinals need exactly eight, the
-    qualifiers need an even headcount. `NotEnoughData` carries no names in
-    either case, which is how the surface tells a size problem from a data one.
+    Lifted out of `group_advance_odds` when the knockouts arrived, because both
+    joins have to build a spec exactly the same way and the one thing that must
+    not drift between two rounds' surfaces is what the bot decided to tell the
+    engine about a player. The refusals differ per round and stay with their
+    own function; this is only the shaping.
     """
-    if not ENGINE_AVAILABLE:
-        raise RuntimeError("champion-duel-engine is not installed")
-
-    config = _models().get(stage)
-    if config is None:
-        raise NotEnoughData(f"there is no model for the {stage} round")
-    model = config["module"]
-    trials = config["trials"] if trials is None else trials
-
-    # Group size first. A short group usually also has people we hold nothing
-    # for, and telling someone to record a squad for two players when they are
-    # forty names short points at the smaller job. The models own their own
-    # sizes, so this asks them rather than keeping a copy.
-    expected = getattr(model, "GROUP_SIZE", None)
-    if stage == "semifinals" and len(members) != expected:
-        raise NotEnoughData(
-            f"the group has {len(members)} players; the semifinal model is "
-            f"calibrated on groups of {expected}"
-        )
-    if stage == "qualifiers" and len(members) != expected:
-        # The model itself would take any even count of four or more, but
-        # top-8-of-40 is not top-8-of-100: scoring a partial group inflates
-        # everyone's chances by however many rivals are missing, and it does it
-        # silently, in the units the surface renders. So the whole group or
-        # nothing.
-        raise NotEnoughData(
-            f"the group has {len(members)} players of {expected}; odds over a "
-            f"partial group would count only the rivals we happen to hold"
-        )
-
     # Keyed by row position rather than display name. The engine keys `pts`,
     # `seen` and its summary entirely on `name`, so two members sharing one
     # would collapse into a single simulated player: one vanishes from the
@@ -411,6 +420,73 @@ def group_advance_odds(
         if profile:
             spec["profile"] = profile
         specs.append(spec)
+
+    return specs, display, missing
+
+
+def group_advance_odds(
+    members: list[dict],
+    *,
+    stage: str = "semifinals",
+    trials: int | None = None,
+    seed: int = 42,
+    jitter: bool = True,
+) -> GroupOdds:
+    """Everyone's chance of getting out of this group, for the round it is in.
+
+    `members` are rows as `get_group_scouting` returns them.
+
+    The two rounds are separate models with separate constants, and the engine
+    is explicit that they must not be mixed. `stage` picks one; a round with no
+    model raises rather than being scored by the other one.
+
+    Each model refuses a group it cannot schedule rather than absorbing it, and
+    the two refuse different things: the semifinals need exactly eight, the
+    qualifiers need an even headcount. `NotEnoughData` carries no names in
+    either case, which is how the surface tells a size problem from a data one.
+    """
+    if not ENGINE_AVAILABLE:
+        raise RuntimeError("champion-duel-engine is not installed")
+
+    config = _models().get(stage)
+    if config is None:
+        # The knockouts get their own sentence. Since engine 1.12.0 they DO
+        # have a model, so "there is no model for the knockouts round" became
+        # false while staying the thing this function had to say -- and a
+        # refusal that gives a wrong reason is how a caller ends up building
+        # the wrong fix. They are refused here because they are not a group,
+        # not because nothing can score them.
+        if stage == "knockouts":
+            raise NotEnoughData(
+                "the knockouts are a bracket rather than a group, so they are "
+                "scored by bracket_odds; there is no group model for them"
+            )
+        raise NotEnoughData(f"there is no model for the {stage} round")
+    model = config["module"]
+    trials = config["trials"] if trials is None else trials
+
+    # Group size first. A short group usually also has people we hold nothing
+    # for, and telling someone to record a squad for two players when they are
+    # forty names short points at the smaller job. The models own their own
+    # sizes, so this asks them rather than keeping a copy.
+    expected = getattr(model, "GROUP_SIZE", None)
+    if stage == "semifinals" and len(members) != expected:
+        raise NotEnoughData(
+            f"the group has {len(members)} players; the semifinal model is "
+            f"calibrated on groups of {expected}"
+        )
+    if stage == "qualifiers" and len(members) != expected:
+        # The model itself would take any even count of four or more, but
+        # top-8-of-40 is not top-8-of-100: scoring a partial group inflates
+        # everyone's chances by however many rivals are missing, and it does it
+        # silently, in the units the surface renders. So the whole group or
+        # nothing.
+        raise NotEnoughData(
+            f"the group has {len(members)} players of {expected}; odds over a "
+            f"partial group would count only the rivals we happen to hold"
+        )
+
+    specs, display, missing = _specs(members)
 
     if missing:
         raise NotEnoughData(
@@ -453,6 +529,168 @@ def group_advance_odds(
 
     # Oldest out first. Insertion order is enough for a handful of groups and
     # needs no timestamp to go stale.
+    if len(_CACHE) >= _CACHE_MAX:
+        del _CACHE[next(iter(_CACHE))]
+    _CACHE[key] = result
+    return result
+
+
+@dataclass
+class BracketRow:
+    """One player's knockout odds. A different shape from `OddsRow`, on purpose.
+
+    A group round is scored on points and ranks eight players against each
+    other, so one number describes a player and `OddsRow` carries it. A bracket
+    does not work that way: a player's path depends on who else wins, so what
+    exists is a chance of reaching each round and nothing that behaves like a
+    points total. Forcing this into `OddsRow` would mean inventing a
+    `points_mean` for a round that has no points.
+    """
+
+    name: str
+    #: Keyed by `knockout.ROUND_NAMES` — last32, last16, last8, last4, final,
+    #: champion — plus `third` and `podium`. Every round is carried rather than
+    #: the one a surface currently renders, because which of them "advancing"
+    #: means in a bracket is an open product question and this join must not
+    #: settle it by only computing one.
+    reach: dict[str, float]
+
+    @property
+    def champion(self) -> float:
+        return self.reach.get("champion", 0.0)
+
+    @property
+    def podium(self) -> float:
+        return self.reach.get("podium", 0.0)
+
+
+@dataclass
+class BracketOdds:
+    rows: list[BracketRow] = field(default_factory=list)
+    trials: int = BRACKET_TRIALS
+    matrix_trials: int = MATRIX_TRIALS
+    #: The draw was not supplied, so every trial reshuffled it. That answers
+    #: "how does this player do across the draws that could happen" rather than
+    #: "how do they do in the draw they got", and a surface has to say which —
+    #: they are different claims and only one of them is available before the
+    #: bracket is published.
+    draw_known: bool = False
+
+
+def bracket_odds(
+    members: list[dict],
+    *,
+    trials: int | None = None,
+    matrix_trials: int | None = None,
+    seed: int = 42,
+    jitter: bool = True,
+) -> BracketOdds:
+    """How far each of the 32 gets, over a reshuffled draw.
+
+    The second join, and it is a second one rather than a branch inside
+    `group_advance_odds` because almost nothing carries over. The engine entry
+    point is `simulate_bracket` rather than `simulate_group`; it returns a
+    tuple rather than a dict; the field is 32 rather than 8 or 100; there are
+    no points to rank on; and the expensive part is a pairwise matrix that the
+    group models do not have at all.
+
+    WHAT IT COSTS, AND WHY THE DEFAULT IS WHAT IT IS. The bracket simulation
+    itself is free — 20,000 trials over the matrices measured 0.44 seconds. All
+    of the cost is `meeting_matrix`, which is 496 pairs simulated twice, once
+    at Bo3 and once at Bo5, because a player's path runs through both series
+    lengths. Measured on this machine:
+
+        matrix trials   both matrices   error against a 600-trial reference
+                 60         13.0 s      last-16 mean 0.89pp, worst 3.50pp
+                100         21.9 s      mean 0.79pp, worst 2.59pp
+                150         39.0 s      mean 0.66pp, worst 2.22pp
+                250         63.5 s      mean 0.56pp, worst 1.51pp
+                600        133.0 s      (the reference)
+
+    The error falls far more slowly than the cost, because most of what is left
+    at 250 is the bracket sampler's own noise rather than the matrix's — at
+    20,000 trials that floor is about 0.35pp on its own. So 60 buys nearly all
+    of the accuracy 250 does, at a fifth of the time.
+
+    **60 is chosen to sit inside the qualifier's budget, not because it is
+    cheap.** A qualifier run is about fourteen seconds of pure Python and that
+    is already the most expensive thing this bot does; pure Python holds the
+    GIL, so it is fourteen seconds in which the bot serves nobody. Knockouts at
+    60 cost thirteen. Anything above that would make this the new worst case
+    rather than matching the existing one, and the fix for both is the same one
+    that is already deferred: move the simulation off this process.
+
+    The noise that buys is worth stating rather than burying, because it is
+    larger than the group models': repeat runs at different seeds move a
+    last-16 figure by about 1pp typically and up to 4pp at worst. A surface
+    rendering these to the nearest percent is rendering finer than the number
+    is measured.
+    """
+    if not ENGINE_AVAILABLE or not KNOCKOUT_AVAILABLE:
+        raise RuntimeError(
+            "the installed champion-duel-engine has no knockout model; it arrived in 1.12.0"
+        )
+
+    trials = BRACKET_TRIALS if trials is None else trials
+    matrix_trials = MATRIX_TRIALS if matrix_trials is None else matrix_trials
+
+    expected = knockout.BRACKET_SIZE
+    if len(members) != expected:
+        raise NotEnoughData(
+            f"the knockouts are a field of {expected} and we hold "
+            f"{len(members)}; odds over a partial bracket would count only the "
+            f"rivals we happen to have"
+        )
+
+    specs, display, missing = _specs(members)
+    if missing:
+        raise NotEnoughData(
+            f"{len(missing)} of {len(members)} players have neither a Total Hero "
+            f"Power nor a squad power",
+            missing_thp=missing,
+        )
+
+    key = json.dumps(
+        ["knockouts", trials, matrix_trials, seed, jitter, specs, display],
+        sort_keys=True,
+        default=str,
+    )
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    with _RUN_LOCK:
+        cached = _CACHE.get(key)
+        if cached is not None:
+            return cached
+        # Returns a tuple, unlike `simulate_group`. The matrices come back so a
+        # caller can reuse them; nothing here does, because the cache already
+        # makes the cost per data change rather than per press, and holding two
+        # 32x32 matrices per cached entry would grow this cache by more than
+        # the answers in it.
+        scored, _matrices = knockout.simulate_bracket(
+            specs, trials=trials, seed=seed, matrix_trials=matrix_trials, jitter=jitter
+        )
+
+    rows = [BracketRow(name=display[key_], reach=dict(reach)) for key_, reach in scored.items()]
+    # Sorted on the title first, because it is the one thing every player in a
+    # bracket is unambiguously playing for -- any other lead key would be this
+    # join answering "which round does advancing mean", which is a product
+    # question and not its to settle.
+    #
+    # Then out through the earlier rounds as tie-breaks, and that cascade is
+    # not decoration. Most of a 32-field has a title chance that rounds to
+    # zero, so on the title alone the bottom two thirds of the table come back
+    # in whatever order the engine's dict happened to be in -- a 358M player
+    # below a 278M one, which reads as a broken table rather than as a tie.
+    rows.sort(
+        key=lambda row: tuple(
+            row.reach.get(name, 0.0) for name in ("champion", "final", "last4", "last8", "last16")
+        ),
+        reverse=True,
+    )
+    result = BracketOdds(rows=rows, trials=trials, matrix_trials=matrix_trials, draw_known=False)
+
     if len(_CACHE) >= _CACHE_MAX:
         del _CACHE[next(iter(_CACHE))]
     _CACHE[key] = result

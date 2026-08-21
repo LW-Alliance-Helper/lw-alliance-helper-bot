@@ -19,6 +19,7 @@ import pytest
 
 import champion_duel_db as db
 import champion_duel_hub as hub
+import champion_duel_odds as odds_lib
 
 
 @pytest.fixture
@@ -280,13 +281,18 @@ def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
 
 
 def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
-    """The qualifiers and the semi-finals are separate models with separate
-    constants, and both ship. The knockouts are a single-elimination field of
-    32, which nothing models, so the button is absent there rather than present
-    and refusing.
+    """The three rounds are three separately fitted models, and each turns the
+    control on as it lands.
 
-    Gated on `odds_lib.STAGES_WITH_A_MODEL` rather than a list here, so adding
-    a model turns the control on in one place.
+    The knockouts arrived in engine 1.12.0 and were green-lit on 2026-08-19.
+    Before that this test asserted the button was ABSENT there, on the grounds
+    that nothing modelled a single-elimination field of 32 — true when written,
+    and the sentence the wiring map records as wrong in eight places once
+    `knockout.py` shipped.
+
+    Still gated on `odds_lib.STAGES_WITH_A_MODEL` rather than on a list here,
+    which is what lets an older pin keep the two group rounds and simply not
+    offer the third.
     """
     grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
     members = db.get_group_members(group["id"])
@@ -297,7 +303,7 @@ def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
 
     assert hub.CD_BTN_ODDS in labels("semifinals")
     assert hub.CD_BTN_ODDS in labels("qualifiers")
-    assert hub.CD_BTN_ODDS not in labels("knockouts")
+    assert (hub.CD_BTN_ODDS in labels("knockouts")) == odds_lib.KNOCKOUT_AVAILABLE
 
 
 def _odds_view(grouping, members, *, can_odds, stage="semifinals"):
@@ -349,8 +355,13 @@ def test_the_upsell_rides_on_the_embed_not_the_disabled_button(cd_db):
 
 
 def test_a_round_with_no_model_never_sells_odds_it_cannot_produce(cd_db):
-    """The knockouts have no model, so the button is absent there. An upsell
-    for it would be selling something no amount of paying reaches."""
+    """The upsell follows the model, in both directions.
+
+    A padlock on a round nothing can score sells something no amount of paying
+    reaches, and an absent padlock on a round that CAN be scored hides the paid
+    product from the tier it is aimed at. Both are decided by the same tuple,
+    which is why this asserts against it rather than naming a round.
+    """
     grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)], stage="knockouts")
     members = db.get_group_members(group["id"])
 
@@ -358,7 +369,8 @@ def test_a_round_with_no_model_never_sells_odds_it_cannot_produce(cd_db):
         members=members, stage="knockouts", label=None, grouping=grouping, can_odds=False
     )
 
-    assert not any("🔒" in f.name for f in embed.fields)
+    locked = any("🔒" in f.name for f in embed.fields)
+    assert locked == ("knockouts" in odds_lib.STAGES_WITH_A_MODEL)
 
 
 async def test_an_entitlement_that_lapsed_while_the_group_was_open_is_caught(cd_db, monkeypatch):

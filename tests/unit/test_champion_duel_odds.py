@@ -417,9 +417,25 @@ def test_the_engine_sessions_canonical_snippet_holds():
     assert measured["base"] == pytest.approx([84.732, 82.000, 78.000], abs=0.001)
     assert round(measured["gorilla"], 2) == 9.27
 
+    # THE THP ROUTE MOVES WITH `ESTIMATE_LIFT`, so it is asserted against the
+    # constant rather than against the number the constant produced.
+    #
+    # 84.37 and 9.23 are the pre-lift figures and they are what an engine
+    # before 1.13.0 returns. That version multiplies the whole THP-derived
+    # line-up by ESTIMATE_LIFT at the end of `build_player`'s THP path, which
+    # takes the top squad to 87.61 -- exactly 84.37 x 1.0384. Pinned as a
+    # literal, this test fails the moment the engine pin moves, and it fails
+    # looking like a regression when what it has caught is a documented model
+    # change on the route the constant exists to correct.
+    #
+    # The measured route above is deliberately NOT scaled. A caller who sends
+    # real `squads` never touches the lift, which is the whole contract, so
+    # those three numbers are the same on every engine and any drift in them
+    # IS a regression.
+    lift = getattr(semifinal, "ESTIMATE_LIFT", 1.0)
     estimated = semifinal.build_player("pinkcatboi", 325_800_000, rng, {"mixed": []}, jitter=False)
-    assert round(estimated["base"][0], 2) == 84.37
-    assert round(estimated["gorilla"], 2) == 9.23
+    assert round(estimated["base"][0], 2) == pytest.approx(round(84.37 * lift, 2), abs=0.02)
+    assert round(estimated["gorilla"], 2) == pytest.approx(round(9.23 * lift, 2), abs=0.02)
 
 
 def test_an_estimated_squad_is_never_forwarded_as_a_reading():
@@ -555,11 +571,31 @@ def test_a_partial_qualifier_group_is_refused_even_though_the_model_would_take_i
 
 def test_a_round_with_no_model_is_refused_rather_than_scored_by_another():
     """The knockouts are a single-elimination field of 32. Scoring them with
-    either group model would answer a different question convincingly."""
+    either group model would answer a different question convincingly.
+
+    The refusal survived the arrival of `knockout.py` in engine 1.12.0; only
+    its reason changed. It used to say "there is no model for the knockouts
+    round", which stopped being true — and a refusal giving a reason that is
+    false is how a caller ends up building the wrong fix. Membership of
+    `_models()` is what enforces this: the knockouts are deliberately absent
+    from it, because the first version of that change registered them there and
+    `group_advance_odds` went on to accept a round with no `simulate_group` at
+    all, reaching an AttributeError several steps past the refusal.
+    """
     with pytest.raises(odds.NotEnoughData) as caught:
         odds.group_advance_odds(_group(), stage="knockouts", trials=5)
 
-    assert "no model" in str(caught.value)
+    message = str(caught.value)
+    assert "no group model" in message
+    assert "bracket_odds" in message
+
+
+def test_a_round_that_genuinely_has_no_model_still_says_so_plainly():
+    """The generic branch, kept apart from the knockouts' own sentence."""
+    with pytest.raises(odds.NotEnoughData) as caught:
+        odds.group_advance_odds(_group(), stage="quarterfinals", trials=5)
+
+    assert "no model for the quarterfinals round" in str(caught.value)
 
 
 def test_a_troop_level_outside_the_game_is_dropped_not_forwarded():

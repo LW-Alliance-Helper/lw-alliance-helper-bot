@@ -18,7 +18,7 @@ and PR description.
 - **Daily score prompt** (💎 Premium): an opt-in post that asks for the duel day that just finished, with one button that opens the same score modal the hub uses. You choose the time and the channel ([#405](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/405)).
 - **Champion Duel** (`/champion_duel`): odds for a match from the same calibrated engine the backtest validates, plus what a registrant fields and the order they have been seen deploying in. The prediction comes back as a card you can share to your channel ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
 - Every Champion Duel squad value says whether it was observed or estimated, and every prediction says what it was built on — so a guess never reads as a sighting ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
-- 💎 Premium alliances can correct a Champion Duel squad or record a deployment order they have seen. Every entry is attributed and can be put back ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- Anyone can correct a Champion Duel squad or record a deployment order they have seen. Every entry is attributed and can be put back ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
 
 ### Fixed
 - The bot's own storage no longer grows without bound on its hosting volume, which would eventually have taken every alliance's configuration offline at once.

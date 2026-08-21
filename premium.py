@@ -188,6 +188,28 @@ PREMIUM_FEATURES: set[str] = {
     # exactly what makes it a legitimate upsell rather than a hostage: the paid
     # thing is the convenience and the model, not access to their own work.
     "champion_duel_odds",
+    # Champion Duel intel & recommendations. The second of the three, and it
+    # passes the same test the odds do (Kevin, 2026-08-19: "This should be a
+    # premium feature").
+    #
+    # What is being sold is a model output over a corpus the alliance did not
+    # type: which line-up an opponent repeats, and what to set against it. The
+    # habit half is scouting other alliances contributed; the recommendation
+    # half is the engine run over every deployment either side could field.
+    # Neither is the asking alliance's own work, which is exactly the line the
+    # #398 rule draws.
+    #
+    # A free alliance keeps everything their own contribution touches: the
+    # player card still shows the most-seen order and its confidence, and the
+    # 1v1 prediction is still free on every player they entered. What they do
+    # not get is the grid over it.
+    #
+    # NOTE the surface deliberately refuses to answer -- for paying alliances
+    # too -- when the asking member's own squad types are not recorded. That is
+    # not a second gate: with a placeholder assignment on your own side every
+    # deployment order is the same order relabelled, so there is no
+    # recommendation to withhold. It points at the free control that fixes it.
+    "champion_duel_intel",
 }
 
 

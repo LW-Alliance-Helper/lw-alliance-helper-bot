@@ -51,6 +51,7 @@ import discord
 
 import champion_duel_db as db
 import champion_duel_image
+import champion_duel_intel as intel_lib
 import champion_duel_odds as odds_lib
 import champion_duel_predict as predict_lib
 import champion_duel_wording as words
@@ -126,6 +127,40 @@ CD_BTN_GROUP = "🏅 Your group"
 # view share a mark because they share a meaning.
 CD_BTN_PLACE = "🏅 Set their group"
 CD_BTN_ODDS = "🔮 Odds of advancing"
+# ⚠️ PLACEHOLDER NAME — NOT SIGNED OFF (2026-08-20).
+#
+# The feature is decided and the name is not (Kevin, 2026-08-19: Premium, its
+# own surface, and *not* called "scout", because "scout" describes reading back
+# what we hold and that is what `CD_BTN_FIND` already does; this thing is a
+# recommendation). Built behind one constant so settling the name is this line
+# and nothing else — no literal of it exists anywhere but here.
+#
+# The label. Candidates, all of which describe the control rather than promise
+# an outcome, per `UX.md`:
+#
+#     🏹 Counter a player          <- placeholder in force
+#     🏹 What to field against them
+#     🏹 Plan against a player
+#     🏹 Read an opponent
+#
+# "Counter a player" is the placeholder because it makes a family with
+# `🔍 Find a player` and `➕ Add a player` — same shape, same grammar, four
+# words apart in meaning — and "counter" is the game's own word for the type
+# triangle the whole surface turns on.
+#
+# The emoji, which had fewer options than it looks. 🎯 was the obvious choice
+# and is out under rule 3: `events_hub` (Pick a preset), `storm_roster_builder`
+# (Auto-fill) and `transfer_setup` (Is one of specific values) already use it,
+# so a fourth sense would be the fourth. ⚔️ is Desert Storm's feature glyph
+# (rules 3 and 4). 🔍/🔎 is Find and is the exact confusion this feature has to
+# avoid. 🔮 is the odds. 🧭 is transfer_setup's Decisions. 🗡️ collides with ⚔️
+# at button size, and ♟️ is unreadable there — which is what retired 📇.
+#
+# 🏹 is unused anywhere in the bot, legible at button size, and names the
+# action rather than a mood (rule 2): taking aim at one named opponent. It is
+# not in the `DESIGN.md` catalog yet and needs an entry there when the name is
+# settled.
+CD_BTN_INTEL = "🏹 Counter a player"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
 CD_BTN_LINE_NEW = "➕ Add as a new player"
@@ -613,6 +648,323 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
 
         subtitle = await asyncio.to_thread(card_subtitle, sides[0], sides[1])
         await _send_prediction(interaction, result, subtitle=subtitle)
+
+
+# ── Intel and recommendations ─────────────────────────────────────────────────
+
+
+def _order_text(order) -> str:
+    """A deployment as the reader sets it: first squad first, arrows between.
+
+    Types spelled out rather than initialled. T/M/A saves two lines and costs
+    the reader a key to learn, and this surface already asks them to hold a
+    grade and a range in their head.
+    """
+    return " → ".join(order)
+
+
+def _intel_title(result) -> str:
+    return f"{CD_BTN_INTEL.split(' ', 1)[0]} {result.them.name}"
+
+
+#: The three field names, paired so the eye sorts them by the possessive.
+#: Kevin's naming, 2026-08-20. THEY DO NOT CHANGE BY STATE: a heading that
+#: appears and disappears costs more cohesion than it buys precision, so
+#: "Your recommended line-up" stays put and the body says there is no
+#: recommendation when there is not. Constants because two of them are
+#: referenced from the tests and one is referenced twice here.
+FIELD_THEIRS = "Their typical line-up"
+FIELD_YOURS = "Your recommended line-up"
+FIELD_OTHERS = "Other line-ups & winning odds"
+FIELD_FIX = "What would fix this"
+FIELD_ANYWAY = "Worth recording anyway"
+FIELD_WORTH = "What the choice is worth"
+
+
+def _card_path(button: str) -> str:
+    """Where a control lives, as the reader would get to it.
+
+    Every dead end carries its exit (`UX.md`), and this surface has three of
+    them now. Button labels come through `_btn_words`: `CD_BTN_ORDER` leads
+    with U+2795 HEAVY PLUS SIGN, which Discord renders near-black on an embed
+    and which therefore vanishes mid-sentence.
+    """
+    return (
+        f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{_btn_words(CD_BTN_FIND)}** → **{_btn_words(button)}**."
+    )
+
+
+def build_intel_embed(result) -> discord.Embed:
+    """What they field, what to set, and how much the choice is worth.
+
+    ORDERED BY WHAT DECIDES THE MATCH, not by what we know most about. The
+    power gap leads, because it is the one thing on the surface a reader will
+    get backwards: the intuition is that more scouting means a better read, and
+    what actually decides whether a read is worth anything is how far apart the
+    two players are. Under a 5% gap the deployment is very nearly the whole
+    match; past 10% a counter has never overturned it in 39 recorded attempts.
+
+    Then what they do, then what to set, then what they can do about it. The
+    last section is the one with no equivalent anywhere else in the product and
+    it is deliberately last, because it is the widest claim and it reads as
+    hedging if it comes before the advice it qualifies.
+    """
+    embed = discord.Embed(title=_intel_title(result), color=discord.Color.blurple())
+    # Decided once. Three sections below turn on it, and the whole point of the
+    # grade is that a surface answering "the line-up does not decide this one"
+    # should then not spend four fields ranking line-ups.
+    worth_little = result.worth == intel_lib.WORTH_SETTLED
+
+    lead = words.worth_line(result.worth)
+    if result.gap is not None:
+        lead = f"Total Hero Power gap **{result.gap:.1%}**. {lead}"
+    embed.description = lead or None
+
+    # ── what they do ─────────────────────────────────────────────────────────
+    if result.habit:
+        embed.add_field(
+            name=FIELD_THEIRS,
+            # The line-up on its own line, unbolded, against the bolded
+            # recommendation below it: their observed thing is plain and the
+            # reader's action is emphasised. Then one paragraph of what the
+            # record says and what it is worth. Kevin's layout, 2026-08-20.
+            value=(
+                _order_text(result.habit.top)
+                + "\n"
+                + words.habit_line(result.habit)
+                + " "
+                + words.read_line(result.read)
+            )[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(name=FIELD_THEIRS, value=words.NOTHING_SEEN[:1024], inline=False)
+
+    # ── what to set ──────────────────────────────────────────────────────────
+    if result.you is None:
+        # Asked about one player, so there is no grid and no number — but the
+        # counter triangle does not need one. Withholding the answer because
+        # the caller did not name themselves would refuse a question we can
+        # fully answer.
+        if result.counter_types:
+            embed.add_field(
+                name=FIELD_YOURS,
+                value=(
+                    f"**{_order_text(result.counter_types)}** counters the line-up "
+                    f"they show most often, slot for slot.\n"
+                    f"Add your own name to this to see what it is worth against "
+                    f"your squads."
+                )[:1024],
+                inline=False,
+            )
+    elif worth_little:
+        # One sentence and stop. Ranking six line-ups that are all the same
+        # number to the nearest point makes the reader work to arrive at what
+        # the sentence already told them, and six rows of "<1%" reads as a
+        # broken surface rather than as a finding. This is also the one case
+        # where the answer IS a recommendation, so it needs no refusal: set
+        # whatever you normally would is advice a member can act on.
+        embed.add_field(
+            name=FIELD_YOURS,
+            value=words.order_barely_matters(result.envelope.spread)[:1024],
+            inline=False,
+        )
+    elif result.needs_your_squads:
+        embed.add_field(
+            name=FIELD_YOURS,
+            value=(
+                words.CANNOT_RECOMMEND
+                + "\n"
+                + words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))
+            )[:1024],
+            inline=False,
+        )
+    elif result.recommended is not None and not result.choice_matters:
+        # Kevin, on review: rather than give a false recommendation, be honest
+        # about what we can give them and carry the control that fixes it.
+        #
+        # Same shape as the `worth_little` branch above and a different finding.
+        # There the line-up does not decide the match. Here it decides it
+        # completely and we cannot say which way, because every arrangement they
+        # could field was averaged and your six came out level. The two must not
+        # be confused: one says the choice does not matter, the other says the
+        # choice matters and I cannot call it.
+        refusal = [
+            words.CANNOT_RECOMMEND,
+            words.CANNOT_RECOMMEND_FLAT.format(measured=words.points(result.choice_spread)),
+        ]
+        # Only their squad types are named here. The other thing that could be
+        # missing is a line-up, and the field above has already said so and
+        # already named the press: `NOTHING_SEEN` ends with "Anyone who has
+        # faced them can add one from their card". Saying it twice in one embed
+        # reads as a surface that is not listening to itself.
+        if not result.their_types_known:
+            refusal.append(words.CANNOT_RECOMMEND_WHY)
+        embed.add_field(name=FIELD_YOURS, value="\n".join(refusal)[:1024], inline=False)
+
+        if not result.their_types_known:
+            embed.add_field(
+                name=FIELD_FIX,
+                value=words.WHAT_WOULD_HELP.format(path=_card_path(CD_BTN_SQUADS))[:1024],
+                inline=False,
+            )
+    elif result.recommended is not None:
+        lines = [f"**{_order_text(result.recommended.order)}**"]
+        if result.counter_types and result.recommended.order == result.counter_types:
+            lines.append(
+                f"That counters the line-up they show most often, slot for slot. "
+                f"If they hold it your odds of winning are "
+                f"**{words.probability(result.recommended.mean)}**."
+            )
+        else:
+            lines.append(
+                f"Best across everything they could field: your odds of winning are "
+                f"**{words.probability(result.recommended.mean)}** on average, "
+                f"between {words.probability(result.recommended.worst)} and "
+                f"{words.probability(result.recommended.best)} depending on what they set."
+            )
+        if result.their_best_reply is not None and result.p_if_they_switch is not None:
+            lines.append(
+                f"Their best answer to it is {_order_text(result.their_best_reply)}, "
+                f"which would drop your odds of winning to "
+                f"{words.probability(result.p_if_they_switch)}."
+            )
+        embed.add_field(name=FIELD_YOURS, value="\n".join(lines)[:1024], inline=False)
+
+    # ── the other five ───────────────────────────────────────────────────────
+    if len(result.options) > 1 and not worth_little and result.choice_matters:
+        embed.add_field(
+            name=FIELD_OTHERS,
+            value="\n".join(
+                f"{_order_text(option.order)}: {words.probability(option.mean)}"
+                for option in result.options[1:]
+            )[:1024],
+            inline=False,
+        )
+
+    # ── worth recording anyway ─────────────────────────────────────────
+    # Kevin, on review: recording squads is worth nothing in the matchup you are
+    # doing now, and it is still data worth collecting for other rounds and for
+    # the next Champion Duel. The old surface suppressed the ask here entirely,
+    # which optimised for the answer on screen and threw the contribution away.
+    #
+    # The suppression it replaces was right about one thing and that is kept:
+    # `NEEDS_YOUR_SQUADS` promises this becomes a recommendation, and at a 45%
+    # gap that is false. So this is a different sentence, not the same one
+    # un-suppressed.
+    if worth_little and (result.needs_your_squads or not result.their_types_known):
+        embed.add_field(
+            name=FIELD_ANYWAY,
+            value=words.SQUADS_WORTH_RECORDING_ANYWAY.format(path=_card_path(CD_BTN_SQUADS))[:1024],
+            inline=False,
+        )
+
+    # ── what the choice is worth ─────────────────────────────────────────────
+    # Suppressed where it is worth nothing: the range is then "<1% to <1%",
+    # which is true, useless, and reads as a bug. The description already
+    # carried that finding as a sentence.
+    if result.envelope is not None and not worth_little:
+        envelope = result.envelope
+        embed.add_field(
+            name=FIELD_WORTH,
+            value=(
+                f"Across every line-up the two of you could set, this match runs "
+                f"from {words.probability(envelope.floor)} to "
+                f"{words.probability(envelope.ceiling)}.\n{words.ENVELOPE_NOTE}"
+            )[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(text=f"{words.intel_basis(result)} {words.THEY_READ_YOU}"[:2048])
+    return embed
+
+
+class _IntelModal(discord.ui.Modal, title="What to field against a player"):
+    """Them, and optionally you.
+
+    Two shapes of answer come out of one modal rather than two controls,
+    because they are the same question asked with more or less information.
+    Their name alone gets the habit and the counter to it, which needs nothing
+    about you — the counter triangle does not care what you field. Adding your
+    own name gets the grid: what your squads make of theirs, what they can do
+    about it, and the range.
+
+    Your side is optional rather than required for a reason that is not
+    politeness: a member has to know their own registrant name to fill it in,
+    and the Discord-user-to-registrant link that would spare them is
+    deliberately post-MVP. Requiring it would make the whole surface unreachable
+    for anyone who does not know how their name is spelled in the roster.
+    """
+
+    opponent = discord.ui.TextInput(label="Which player?", max_length=64)
+    opponent_server = discord.ui.TextInput(
+        label="Their server", required=False, max_length=10, placeholder="e.g. 738"
+    )
+    you = discord.ui.TextInput(
+        label="Your name (optional)",
+        required=False,
+        max_length=64,
+        placeholder="Add yours for what to set against them",
+    )
+    your_server = discord.ui.TextInput(
+        label="Your server", required=False, max_length=10, placeholder="e.g. 1042"
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not intel_lib.ENGINE_AVAILABLE:
+            await interaction.followup.send(_ENGINE_MISSING, ephemeral=True)
+            return
+        # Re-checked here rather than trusted off the button, exactly as the
+        # odds do: this view outlives the five-minute entitlement cache, so a
+        # subscription that lapsed while the hub was on screen would otherwise
+        # come through on a button that was live when it was drawn.
+        if not await premium.feature_gate(
+            "champion_duel_intel", interaction.guild_id, interaction=interaction
+        ):
+            await _send_intel_upsell(interaction)
+            return
+
+        them = await _resolve(self.opponent.value, self.opponent_server.value or None)
+        if isinstance(them, str):
+            await interaction.followup.send(them, ephemeral=True)
+            return
+
+        you = None
+        if self.you.value.strip():
+            you = await _resolve(self.you.value, self.your_server.value or None)
+            if isinstance(you, str):
+                await interaction.followup.send(you, ephemeral=True)
+                return
+
+        try:
+            result = await asyncio.to_thread(intel_lib.intel, them, you)
+        except predict_lib.NotEnoughData as exc:
+            slots = ", ".join(str(s) for s in exc.missing)
+            await interaction.followup.send(
+                f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
+                f"have no squad recorded, so there's nothing to work out.\n"
+                f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
+                f"**{CD_BTN_SQUADS}** to fill them in.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(embed=build_intel_embed(result), ephemeral=True)
+
+
+async def _send_intel_upsell(interaction: discord.Interaction) -> None:
+    """Refuse the recommendation and offer the upgrade.
+
+    Same fallback as the odds: `upgrade_view` returns None with no SKU
+    configured and discord.py raises on `view=None`, so the embed's own
+    "Run `/upgrade`" line carries it in that case.
+    """
+    view = premium.upgrade_view()
+    embed = premium.premium_locked_embed(feature_label=_btn_words(CD_BTN_INTEL))
+    kwargs = {"view": view} if view is not None else {}
+    await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
 
 
 # ── Look up ───────────────────────────────────────────────────────────────────
@@ -4166,6 +4518,115 @@ async def _send_odds_upsell(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
 
 
+#: Which two rounds the bracket table puts in its columns.
+#:
+#: ⚠️ PLACEHOLDER PRESENTATION — NOT SIGNED OFF (2026-08-20).
+#:
+#: `bracket_odds` computes every round, deliberately, because "what does
+#: advancing mean in a bracket" is an open product question (Kevin's list, and
+#: it is not a code question). This constant is the one place that question is
+#: currently answered, so changing the answer is this line.
+#:
+#: The default is `last8` and `champion`, chosen to be the exact analogue of
+#: the group table beside it rather than because it is obviously right:
+#:
+#:   semifinal group   top 2 of 8      = a 25% base rate, and winning the group
+#:   knockout bracket  the last 8      = a 25% base rate, and winning the title
+#:
+#: `last16` was the other candidate and reads worse: reaching it is winning one
+#: match, which is the head-to-head number a member can already get from
+#: `Predict a match`, so the column would sell back something free.
+#:
+#: The alternatives worth weighing, all already computed:
+#:   - `last8` + `champion`  (this one) — parallel with the group table
+#:   - `podium` + `champion` — the two outcomes the game itself rewards
+#:   - every round as its own column — the most honest and the least readable
+#:   - "how far they get", one modal round per player — reads as a prediction
+#:     of the outcome rather than a distribution, which is the misreading the
+#:     whole surface exists to avoid
+BRACKET_COLUMNS = ("last8", "champion")
+
+#: What each round is called in copy. Said as *reaching* a round, never as
+#: going out in one: thirty of the thirty-two are eliminated somewhere, and a
+#: table naming each exit is a scoreboard nobody asked for (`notes/UX.md`).
+BRACKET_ROUND_WORDS = {
+    "last32": "the field of 32",
+    "last16": "the last 16",
+    "last8": "the last 8",
+    "last4": "the last 4",
+    "final": "the final",
+    "champion": "the title",
+    "podium": "a podium finish",
+}
+
+
+def build_bracket_embed(result, grouping) -> discord.Embed:
+    """How far each of the 32 gets, as a table.
+
+    Kept apart from `build_odds_embed` rather than branched inside it, because
+    almost none of that function survives the change of round: there is no
+    group letter, no points to rank on, no "top N and through", and the footer
+    it sets would be actively wrong here. What the two share is the refusals,
+    and those are `NotEnoughData` either way.
+    """
+    embed = discord.Embed(
+        title=f"🔮 {db.STAGE_LABELS['knockouts']}",
+        color=discord.Color.blurple(),
+    )
+    first, second = BRACKET_COLUMNS
+    # Re-sorted on the columns this table actually shows, rather than taken in
+    # the join's order. `bracket_odds` ranks on the title and then cascades out
+    # through every round, which is the right canonical order for a caller that
+    # wants all of them — but two thirds of a 32-field share a title chance
+    # under half a percent, and among those the join's next key is a round this
+    # table does not print. The visible result is a column that goes backwards
+    # under a column that does not, which reads as a sorting bug. Ordering by
+    # what is on screen costs nothing and cannot do that.
+    shown = sorted(
+        result.rows,
+        key=lambda row: (row.reach.get(second, 0.0), row.reach.get(first, 0.0)),
+        reverse=True,
+    )[:_ODDS_SHOWN]
+    # Through `probability()`, not `:.0%`. In a group of eight a bottom row
+    # rounds to 0% occasionally; in a field of thirty-two most of the table
+    # does, and a column of `0%` tells twenty players the title is arithmetically
+    # out of reach when what it means is "under half a percent". That is the
+    # exact claim `probability()` exists to refuse, and this is the surface
+    # where the refusal earns its keep.
+    lines = [
+        f"`{words.probability(row.reach.get(first, 0)):>4}` "
+        f"`{words.probability(row.reach.get(second, 0)):>4}`  "
+        f"**{discord.utils.escape_markdown(row.name)}**"
+        for row in shown
+    ]
+    more = len(result.rows) - len(shown)
+    tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
+    embed.description = (
+        f"Over {result.trials:,} simulations of the bracket. The first column "
+        f"is the chance of reaching **{BRACKET_ROUND_WORDS[first]}**, the "
+        f"second is the chance of taking **{BRACKET_ROUND_WORDS[second]}**."
+        + "\n\n"
+        + "\n".join(lines)
+        + tail
+    )[:4096]
+
+    # The one thing this surface has to say that the group one does not. A
+    # bracket answer depends on who a player meets, and nobody knows that yet
+    # -- so the draw is reshuffled every trial and these are averages over the
+    # draws that could happen, not the draw anyone will get. A reader who takes
+    # them for the second thing will be badly wrong about one specific player,
+    # which is exactly the failure a footer can prevent and a table cannot.
+    embed.set_footer(
+        text=(
+            "The draw is not published yet, so every simulation redraws it — "
+            "these are odds across the brackets that could happen, not the one "
+            "that will. Squads we have not seen are sampled, so they carry that "
+            "uncertainty too."
+        )
+    )
+    return embed
+
+
 def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     """The odds, or the reason there are none.
 
@@ -4187,6 +4648,13 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
         return embed
 
     try:
+        # The knockouts are a bracket rather than a group, so they take the
+        # other join. Dispatched here rather than inside `group_advance_odds`
+        # because the two return different shapes -- a bracket has no points
+        # and no "top N", so there is no row type both could fill without one
+        # of them inventing a column.
+        if stage == "knockouts":
+            return build_bracket_embed(odds_lib.bracket_odds(scouted), grouping)
         result = odds_lib.group_advance_odds(scouted, stage=stage)
     except odds_lib.NotEnoughData as exc:
         if exc.missing_thp:
@@ -4220,8 +4688,14 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     # screen, so a big group is cut to the players actually in contention.
     # The remainder is counted rather than dropped silently.
     shown = result.rows[:_ODDS_SHOWN]
+    # Through `probability()`, not `:.0%`. A weak player in a strong group
+    # rounds to `0%` in both columns, which reads as "you are arithmetically
+    # eliminated" when what it means is "under half a percent" -- and it is the
+    # same overclaim, in the same direction, that the prediction card refuses
+    # at the other end of the scale. Same strings, same formatter, one fewer
+    # false claim.
     lines = [
-        f"`{row.advance:>4.0%}` `{row.win_group:>4.0%}`  "
+        f"`{words.probability(row.advance):>4}` `{words.probability(row.win_group):>4}`  "
         f"**{discord.utils.escape_markdown(row.name)}**"
         for row in shown
     ]
@@ -4331,12 +4805,17 @@ class ChampionDuelHubView(discord.ui.View):
         engine_ok: bool,
         warzone: str | None = None,
         grouping: dict | None = None,
+        can_intel: bool = False,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.is_admin = is_admin
         self.can_write = can_write
         self.engine_ok = engine_ok
+        # Defaults False so a caller that forgets it renders the padlock rather
+        # than handing out the paid surface. The gate is re-checked inside the
+        # modal anyway; this only decides how the button is drawn.
+        self.can_intel = can_intel
         self.warzone = warzone
         self.grouping = grouping
         self.message: discord.Message | None = None
@@ -4369,6 +4848,18 @@ class ChampionDuelHubView(discord.ui.View):
             self._on_predict,
             disabled=not self.engine_ok,
         )
+        # Beside Predict rather than beside Find, because the pairing that
+        # matters to the eye is the two controls that take two names. It renders
+        # locked rather than hidden on the free tier, which is the Premium rule
+        # in `DESIGN.md`: an alliance should see the shape of what they would be
+        # buying, and this one is hard to describe and easy to show.
+        self._add(
+            CD_BTN_INTEL if self.can_intel else f"🔒 {CD_BTN_INTEL}",
+            discord.ButtonStyle.secondary,
+            0,
+            self._on_intel,
+            disabled=not self.can_intel or not self.engine_ok,
+        )
         self._add(
             CD_BTN_FIND,
             discord.ButtonStyle.secondary,
@@ -4376,9 +4867,16 @@ class ChampionDuelHubView(discord.ui.View):
             self._on_find,
             disabled=not self.engine_ok,
         )
-        # Adding is Premium because it is a write, but it is deliberately on
-        # the front row: meeting someone we do not have is the most common way
-        # a contributor is currently turned away.
+        # Deliberately on the front row: meeting someone we do not have is the
+        # most common way a contributor is currently turned away.
+        #
+        # NOT Premium, despite the padlock branch below. This comment used to
+        # say "Adding is Premium because it is a write", which was true until
+        # contributing came off the gate on 2026-08-17 and has described a gate
+        # that does not exist since -- nothing sets `can_write` False, so no
+        # padlock renders here. The branch survives because its 🔒-and-disable
+        # rendering is the shape any later gate reuses, which the odds and the
+        # intel surface both went on to use. Read it as unreachable, not live.
         self._add(
             f"🔒 {CD_BTN_ADD}" if not self.can_write else CD_BTN_ADD,
             discord.ButtonStyle.secondary,
@@ -4425,6 +4923,9 @@ class ChampionDuelHubView(discord.ui.View):
     async def _on_predict(self, inter: discord.Interaction):
         await inter.response.send_modal(_PredictModal())
 
+    async def _on_intel(self, inter: discord.Interaction):
+        await inter.response.send_modal(_IntelModal())
+
     async def _on_find(self, inter: discord.Interaction):
         await inter.response.send_modal(_FindPlayerModal(self.can_write, grouping=self.grouping))
 
@@ -4457,12 +4958,15 @@ class ChampionDuelHubView(discord.ui.View):
         """Who this caller is facing.
 
         The odds of advancing belong on the surface this opens, because odds
-        need a group and this is where a group exists. They are not wired yet:
-        the model behind them is being rebuilt in `champion-duel-simulator` as
-        of 2026-08-16, and `CD_BTN_ODDS` is the label waiting for it. No
-        disabled placeholder in the meantime -- `UX.md` principle 7 keeps phase
-        language out of anything a user reads, and a greyed button promising a
-        future feature is exactly that.
+        need a group and this is where a group exists. They are wired and
+        gated: `CD_BTN_ODDS` renders there disabled with a padlock on the free
+        tier, which is the Premium rule, and `champion_duel_odds` is the one
+        entry in `PREMIUM_FEATURES` this feature has.
+
+        This docstring described them as unwired until 2026-08-20. That was
+        true when written -- the model was being rebuilt in
+        `champion-duel-simulator` as of 2026-08-16 -- and stopped being true
+        when #506 merged on the 19th.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         await send_group_view(
@@ -4546,6 +5050,13 @@ async def _open_hub(
         return
 
     engine_ok = predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE
+    # Asked once here rather than inside `_build_buttons`, which is not async.
+    # One cached entitlement lookup on the way into the hub, and the modal
+    # re-checks it before doing any work -- so this decides the padlock and
+    # nothing else.
+    can_intel = engine_ok and await premium.feature_gate(
+        "champion_duel_intel", interaction.guild_id, interaction=interaction
+    )
 
     if grouping and await asyncio.to_thread(db.is_finished, grouping["id"]):
         view = ChampionDuelFinishedView(
@@ -4571,6 +5082,7 @@ async def _open_hub(
         engine_ok=engine_ok,
         warzone=warzone,
         grouping=grouping,
+        can_intel=can_intel,
     )
     await interaction.followup.send(
         content=note,

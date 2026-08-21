@@ -281,8 +281,8 @@ def test_a_full_group_missing_power_names_who_to_look_up(cd_db):
 
 
 def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
-    """The three rounds are three separately fitted models, and each turns the
-    control on as it lands.
+    """Each round turns the control on as its model lands, and off if the model
+    is taken away again.
 
     The knockouts arrived in engine 1.12.0 and were green-lit on 2026-08-19.
     Before that this test asserted the button was ABSENT there, on the grounds
@@ -290,9 +290,14 @@ def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
     and the sentence the wiring map records as wrong in eight places once
     `knockout.py` shipped.
 
+    The qualifiers went the other way on 2026-08-21. Nothing about the model
+    changed: odds need a power for every player in the group, a qualifier group
+    is 100, and no path exists that delivers 100 of them, so the button was
+    offered in the round people first meet the feature and refused every press.
+
     Still gated on `odds_lib.STAGES_WITH_A_MODEL` rather than on a list here,
-    which is what lets an older pin keep the two group rounds and simply not
-    offer the third.
+    which is what lets an older pin keep the group round and simply not offer
+    the bracket.
     """
     grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
     members = db.get_group_members(group["id"])
@@ -302,7 +307,7 @@ def test_the_odds_button_is_offered_wherever_there_is_a_model(cd_db):
         return [getattr(i, "label", None) for i in view.children]
 
     assert hub.CD_BTN_ODDS in labels("semifinals")
-    assert hub.CD_BTN_ODDS in labels("qualifiers")
+    assert hub.CD_BTN_ODDS not in labels("qualifiers")
     assert (hub.CD_BTN_ODDS in labels("knockouts")) == odds_lib.KNOCKOUT_AVAILABLE
 
 

@@ -18,7 +18,7 @@ import pytest
 import champion_duel_odds as odds
 
 try:
-    from champion_duel_engine import qualifier, semifinal
+    from champion_duel_engine import semifinal
 except ImportError:  # pragma: no cover
     semifinal = None
 
@@ -522,51 +522,35 @@ def test_the_two_refusals_stay_distinguishable():
     assert len(data_error.value.missing_thp) == 8
 
 
-# ── The qualifiers are a different model ──────────────────────────────────────
+# ── One group round, and the one that came out ────────────────────────────────
 
 
-def test_the_qualifier_round_uses_its_own_model():
-    """Separate constants, separate scoring, and the package is explicit that
-    the two must not reach across. Eight of a hundred go through rather than
-    two of eight, and the round reports a win rate the semi-finals do not."""
-    group = [
-        {"display_name": f"Q{i}", "thp": 250e6 + i * 2e6, "squads": [], "orders": []}
-        for i in range(qualifier.GROUP_SIZE)
-    ]
-
-    result = odds.group_advance_odds(group, stage="qualifiers", trials=25)
-
-    assert result.advance == 8
-    assert len(result.rows) == qualifier.GROUP_SIZE
-    assert sum(r.advance for r in result.rows) == pytest.approx(8.0, abs=0.01)
-    assert all(r.win_rate is not None for r in result.rows)
-
-
-def test_the_semifinal_round_reports_no_win_rate():
-    """That round is scored on points across every match, so a win rate would
-    invite exactly the misreading the footer exists to prevent."""
+def test_the_semifinal_round_puts_two_of_eight_through():
+    """Read off the model rather than fixed in the join, because the surface
+    prints the number and a top-2 percentage is a different claim from a top-8
+    one wearing the same units."""
     result = odds.group_advance_odds(_group(), stage="semifinals", trials=200)
 
     assert result.advance == 2
-    assert all(r.win_rate is None for r in result.rows)
+    assert len(result.rows) == 8
 
 
-def test_a_partial_qualifier_group_is_refused_even_though_the_model_would_take_it():
-    """`qualifier._check` accepts any even headcount of four or more, because
-    it ships to events drawn differently. We refuse anything short of the full
-    hundred anyway: top-8-of-40 is not top-8-of-100, and scoring a partial
-    group inflates everyone by however many rivals are missing, silently, in
-    the units the surface renders."""
-    forty = [
-        {"display_name": f"Q{i}", "thp": 250e6 + i * 2e6, "squads": [], "orders": []}
-        for i in range(40)
-    ]
+def test_the_qualifier_round_no_longer_has_a_model_to_be_scored_by():
+    """Removed on 2026-08-21, and for reachability rather than value: odds need
+    a hero power or a squad power for every player in the group, a qualifier
+    group is 100, and there is no mechanism by which 100 of them arrive. The
+    control sat in the round people first meet the feature and refused every
+    press, which is worse than not offering it.
+
+    Removed rather than hidden, so it cannot be confused with a live surface.
+    Recording a qualifier group is untouched and is asserted elsewhere."""
+    assert "qualifiers" not in odds.STAGES_WITH_A_MODEL
+    assert "qualifiers" not in odds._models()
 
     with pytest.raises(odds.NotEnoughData) as caught:
-        odds.group_advance_odds(forty, stage="qualifiers", trials=5)
+        odds.group_advance_odds(_group(), stage="qualifiers", trials=5)
 
-    assert caught.value.missing_thp == []
-    assert "partial group" in str(caught.value)
+    assert "no model" in str(caught.value)
 
 
 def test_a_round_with_no_model_is_refused_rather_than_scored_by_another():
@@ -640,7 +624,7 @@ def test_a_mixed_answer_of_none_is_kept_as_a_measurement():
 
 def test_the_troop_level_reaches_the_spec():
     """Levels only separate players in a mixed-level group, but they do, and
-    the qualifier model scores on troop value."""
+    the semifinal model scores on troop value."""
     group = _group()
     for member, level in zip(group, (11, 10, 11, 11, 9, 11, 11, 10)):
         member["troop_level"] = level
@@ -651,7 +635,7 @@ def test_the_troop_level_reaches_the_spec():
 
 
 def test_two_runs_of_one_group_do_not_pay_twice():
-    """A qualifier group is fourteen seconds of pure Python and pure Python
+    """The runs behind this cache are seconds of pure Python and pure Python
     holds the GIL, so the cost has to be per data change rather than per press.
     The key is the spec list, so any edit misses."""
     group = _group()

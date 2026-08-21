@@ -4749,15 +4749,16 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
         + tail
     )[:4096]
 
-    # Both rounds rank on points rather than on matches or meetings won, and
-    # the counts differ, so the line is built rather than fixed. Saying it at
-    # all stops the first column reading as "win 4 of 7".
-    matches = {"semifinals": "all 21 matches", "qualifiers": "every match"}
+    # The round ranks on points rather than on matches or meetings won, and
+    # saying so stops the first column reading as "win 4 of 7". This used to be
+    # keyed off a per-round phrase; the qualifiers were the other key and their
+    # odds came out on 2026-08-21, so the count is stated rather than looked up.
+    # The knockouts never reached here: they return above, through
+    # `build_bracket_embed`.
     embed.set_footer(
         text=(
-            f"Ranked on points across {matches.get(stage, 'the round')}, not "
-            f"matches won. Squads we have not seen are sampled, so these carry "
-            f"that uncertainty."
+            "Ranked on points across all 21 matches, not matches won. Squads "
+            "we have not seen are sampled, so these carry that uncertainty."
         )
     )
     return embed

@@ -1833,6 +1833,28 @@ async def test_saving_writes_the_standings_and_adds_the_new_player(cd_db, no_mm_
     assert db.get_player("Wren", server="744")["origin"] == "self_reported"
 
 
+async def test_a_pasted_hero_power_reaches_the_registrant(cd_db, no_mm_link):
+    """The gap this field was added to close. `group_advance_odds` refuses a
+    group where anybody has neither a power nor a squad, and before this the
+    paste could not carry one: eight players meant eight separate modals."""
+    modal = _record_modal(
+        cd_db,
+        players="AlphaOne, 738, 3, 327,159,292, 33,500,000\nWren, 744, 25, 325.8M",
+    )
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    # Shown before it is written, so a misread line is caught by the person who
+    # pasted it rather than by the odds being quietly wrong a week later.
+    said = _embed(interaction).description
+    assert "327.2M" in said and "325.8M" in said
+
+    await _view(interaction)._on_save(_interaction())
+
+    assert db.get_player("AlphaOne", server="738")["thp"] == 327_159_292
+    assert db.get_player("Wren", server="744")["thp"] == 325_800_000
+
+
 async def test_the_draw_and_the_standings_do_not_overwrite_each_other(cd_db, no_mm_link):
     """Two columns exist for exactly this. A group is recorded twice over its
     life and the second entry must not destroy the first."""

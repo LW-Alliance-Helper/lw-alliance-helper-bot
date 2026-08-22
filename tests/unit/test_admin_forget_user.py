@@ -66,12 +66,20 @@ def interaction(user_id=OWNER_ID):
     inter.response.send_message = AsyncMock()
     inter.response.defer = AsyncMock()
     inter.response.edit_message = AsyncMock()
+    inter.edit_original_response = AsyncMock()
     inter.followup.send = AsyncMock()
     return inter
 
 
 def followup(inter):
     return inter.followup.send.call_args.kwargs
+
+
+def receipt(inter):
+    """What the operator is left looking at after pressing the danger button.
+    Written by `edit_original_response`, not by the first response, because the
+    run is acknowledged before it starts."""
+    return inter.edit_original_response.call_args.kwargs
 
 
 def seed_both_databases():
@@ -186,7 +194,7 @@ async def test_the_receipt_reports_what_it_touched(command, temp_db, cd_temp_db)
     press = interaction()
     await view.confirm.callback(press)
 
-    embed = press.response.edit_message.call_args.kwargs["embed"]
+    embed = receipt(press)["embed"]
     assert embed.title == "Data removal"
     fields = {f.name: f.value for f in embed.fields}
     assert "`storm_signups` 1" in fields["Deleted (2)"]
@@ -288,8 +296,78 @@ async def test_the_config_half_still_runs_and_still_says_so(
     press = interaction()
     await view.confirm.callback(press)
 
-    embed = press.response.edit_message.call_args.kwargs["embed"]
+    embed = receipt(press)["embed"]
     fields = {f.name: f.value for f in embed.fields}
     assert "`storm_signups` 1" in fields["Deleted (2)"]
     assert "disk I/O error" in fields["Champion Duel database"]
     assert config.get_storm_signups(GUILD, "DS", DATE) == []
+
+
+@pytest.mark.asyncio
+async def test_zero_is_refused_like_any_other_bad_id(command, temp_db):
+    """Zero is the scrub sentinel on three columns and the recorded owner of a
+    guild nobody captured. A run for it would match rows belonging to no person
+    and inflate the counts that are the only check the ID was right."""
+    config.upsert_guild_install_metadata(guild_id=GUILD, guild_name="Wind Runners", owner_id=0)
+    inter = interaction()
+
+    await command(inter, "0")
+
+    inter.response.send_message.assert_awaited_once()
+    assert inter.response.defer.await_count == 0
+    assert config.get_guild_install_metadata(GUILD)["guild_name"] == "Wind Runners"
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_acknowledged_before_it_starts(command, temp_db, cd_temp_db):
+    """Two SQLite files and a rewrite of every roster draft can outrun the
+    three seconds Discord allows. Acknowledging after the work buys a removal
+    that happened with no receipt and buttons still live."""
+    seed_both_databases()
+    inter = interaction()
+    await command(inter, str(REQUESTER))
+    view = followup(inter)["view"]
+
+    press = interaction()
+    await view.confirm.callback(press)
+
+    press.response.edit_message.assert_awaited_once()
+    assert "embed" not in press.response.edit_message.call_args.kwargs
+    press.edit_original_response.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_config_side_failure_is_reported_too(
+    command, admin_module, monkeypatch, temp_db, cd_temp_db
+):
+    """Both halves are caught, not just the Champion Duel one. A failure with
+    no reporting path is what turns a half-done removal into a "done"."""
+    seed_both_databases()
+    monkeypatch.setattr(
+        config, "purge_user_data", MagicMock(side_effect=RuntimeError("database is locked"))
+    )
+    inter = interaction()
+
+    await command(inter, str(REQUESTER))
+
+    fields = {f.name: f.value for f in followup(inter)["embed"].fields}
+    assert "database is locked" in fields["Guild config database"]
+    assert "`squads` 1" in fields["To scrub (3)"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_database_still_offers_the_run(
+    command, admin_module, monkeypatch, temp_db, cd_temp_db
+):
+    """A database that could not be read has not said the person is absent
+    from it. Withholding the confirm would make an outage look like an answer."""
+    monkeypatch.setattr(
+        cd_db, "purge_user_data", MagicMock(side_effect=RuntimeError("unable to open database"))
+    )
+    inter = interaction()
+
+    await command(inter, str(REQUESTER))
+
+    sent = followup(inter)
+    assert sent["view"] is not None
+    assert sent["embed"].footer.text is None

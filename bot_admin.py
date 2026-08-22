@@ -389,8 +389,16 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
 
 def _parse_user_id(raw: str) -> int | None:
     """Same parse as `_parse_guild_id`, named for what it reads. Snowflakes
-    arrive as strings because they exceed JavaScript's safe-integer range."""
-    return _parse_guild_id(raw)
+    arrive as strings because they exceed JavaScript's safe-integer range.
+
+    Zero is refused as well as unparseable input. It is the scrub sentinel on
+    `voter_user_id`, `saved_by_user_id` and `posted_by_user_id`, and the
+    recorded value of a guild owner nobody captured, so a run for `0` would
+    match rows belonging to no person and inflate the counts that are the only
+    check the operator has that the ID was right.
+    """
+    uid = _parse_guild_id(raw)
+    return uid if uid and uid > 0 else None
 
 
 def _removal_lines(counts: dict) -> str:
@@ -407,7 +415,7 @@ def _removal_embed(
     label: str,
     config_result: dict,
     cd_result: dict,
-    cd_error: str | None,
+    errors: list[tuple[str, str]],
 ) -> discord.Embed:
     """One removal report. Same shape for the preview and the receipt, because
     the operator reads the second against the first."""
@@ -434,9 +442,9 @@ def _removal_embed(
         value=_removal_lines(scrubbed),
         inline=True,
     )
-    if cd_error:
-        embed.add_field(name="Champion Duel database", value=f"Not reached: `{cd_error}`")
-    if not (n_deleted or n_scrubbed or cd_error):
+    for where, message in errors:
+        embed.add_field(name=where, value=f"Not reached: `{message}`", inline=False)
+    if not (n_deleted or n_scrubbed or errors):
         embed.set_footer(text="Nothing held under this ID in either database.")
     elif "guild_install_metadata" in scrubbed:
         # Worth saying every time it applies: on_ready rewrites owner_id for
@@ -446,24 +454,34 @@ def _removal_embed(
     return embed
 
 
-def _run_user_removal(uid: int, *, apply: bool) -> tuple[dict, dict, str | None]:
-    """Both databases, one call. Returns `(config_result, cd_result, cd_error)`.
+def _run_user_removal(uid: int, *, apply: bool) -> tuple[dict, dict, list[tuple[str, str]]]:
+    """Both databases, one call. Returns `(config_result, cd_result, errors)`,
+    where each error is the database that could not be reached and why.
 
-    The Champion Duel half is caught separately so a failure there cannot leave
-    the operator believing the config half did not run either. A removal that
-    half-happened and reported nothing is the worst outcome available here.
+    Each half is caught on its own so a failure in one cannot leave the operator
+    believing the other did not run either. A removal that half-happened and
+    reported nothing is the worst outcome available here, and it is the one that
+    gets written back to a person as "done".
     """
+    errors: list[tuple[str, str]] = []
+
     import config  # noqa: PLC0415
 
-    config_result = config.purge_user_data(uid, apply=apply)
+    try:
+        config_result = config.purge_user_data(uid, apply=apply)
+    except Exception as exc:
+        config_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
+        errors.append(("Guild config database", str(exc)))
 
     import champion_duel_db as cd_db  # noqa: PLC0415
 
     try:
         cd_result = cd_db.purge_user_data(uid, apply=apply)
     except Exception as exc:
-        return config_result, {"deleted": {}, "scrubbed": {}, "applied": apply}, str(exc)
-    return config_result, cd_result, None
+        cd_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
+        errors.append(("Champion Duel database", str(exc)))
+
+    return config_result, cd_result, errors
 
 
 class _ForgetUserConfirm(discord.ui.View):
@@ -487,7 +505,15 @@ class _ForgetUserConfirm(discord.ui.View):
     async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True
-        config_result, cd_result, cd_error = _run_user_removal(self._user_id, apply=True)
+
+        # Acknowledge before the work, not after. Two SQLite files and a
+        # rewrite of every roster draft can outrun the three seconds Discord
+        # allows, and the failure that buys is the removal happening with no
+        # receipt and the buttons still live -- which reads as "it did not run"
+        # and invites a second press.
+        await inter.response.edit_message(view=self)
+
+        config_result, cd_result, errors = _run_user_removal(self._user_id, apply=True)
 
         # Premium is cached per guild and per user and the assignment row may
         # have just gone. Clearing the whole cache is blunt, but a removal
@@ -497,9 +523,9 @@ class _ForgetUserConfirm(discord.ui.View):
 
         premium.clear_cache()
 
-        await inter.response.edit_message(
+        await inter.edit_original_response(
             content=f"🗑️ Ran data removal for `{self._user_id}`.",
-            embed=_removal_embed(self._user_id, self._label, config_result, cd_result, cd_error),
+            embed=_removal_embed(self._user_id, self._label, config_result, cd_result, errors),
             view=self,
         )
         self.stop()
@@ -554,15 +580,18 @@ async def admin_forget_user_slash(interaction: discord.Interaction, user_id: str
             user = None
     label = user.name if user is not None else ""
 
-    config_result, cd_result, cd_error = _run_user_removal(uid, apply=False)
-    embed = _removal_embed(uid, label, config_result, cd_result, cd_error)
+    config_result, cd_result, errors = _run_user_removal(uid, apply=False)
+    embed = _removal_embed(uid, label, config_result, cd_result, errors)
     total = (
         sum(config_result["deleted"].values())
         + sum(config_result["scrubbed"].values())
         + sum(cd_result.get("deleted", {}).values())
         + sum(cd_result.get("scrubbed", {}).values())
     )
-    if not total:
+    # A database that could not be read has not said this person is absent from
+    # it. Withholding the confirm on a blank preview would make an outage look
+    # like an answer.
+    if not total and not errors:
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 

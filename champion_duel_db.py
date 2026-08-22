@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import itertools
 import os
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -873,33 +875,280 @@ def parse_warzones(text, *, unique: bool = True) -> list[str]:
     return sorted(set(out), key=int)
 
 
-def parse_placement_line(line: str) -> dict:
-    """One pasted line of a group listing: `name, warzone, rank, score`.
+# ── Reading the numbers out of a pasted line ──────────────────────────────────
+#
+# A line is `name, warzone, rank, thp, score`, and its four numbers cannot be
+# found by counting commas: people type `2,308` for a warzone, `1,103` for a
+# rank and `327,159,292` for a hero power, and every one of those is a comma
+# *inside* a number rather than between two of them. So the tokens after the
+# name are partitioned into contiguous groups every valid way and the readings
+# are scored. There are only a handful per line; this is not a search.
+#
+# The bands below were measured on 2026-08-21, against the 1,600-row qualifier
+# register and the 128-player semi-final field:
+#
+#     total hero power   164,288,841 .. 499,230,216
+#     duel score              73,728 ..  48,303,042
+#     rank                          1 .. 100
+#     warzone                     677 .. 804
+#
+# Two different jobs come out of that, and conflating them is how a parser like
+# this goes wrong. The MIN/MAX pairs say what is *possible*, and are deliberately
+# far wider than anything measured: refusing a number for being unlike the
+# register is the phone-field pattern, and being errored for typing a number the
+# way you naturally type it is miserable to be on the wrong end of. The LIKELY
+# values say what is *typical*, and are consulted only where structure has
+# already left more than one reading standing.
+#
+# `_LIKELY_POWER_FLOOR` is the one that earns its keep. Hero power and duel
+# score do not overlap and are not close -- the largest score on record is 3.4x
+# below the smallest hero power -- and that gap is the only thing separating a
+# four-number line typed in the old `name, warzone, rank, score` order from one
+# typed in the new order with the score left off.
+
+#: How well one number sits in one field. Graded rather than boolean because
+#: `_readings` compares whole readings against each other and needs to say that
+#: one is better, not just that both are allowed.
+_IMPOSSIBLE, _POSSIBLE, _TYPICAL, _KNOWN, _OURS = 0, 2, 4, 6, 8
+
+_WARZONE_MAX = 9_999
+#: Every warzone in every grouping we hold is three digits, and the only four
+#: digit one on record is a test case. One and two digit warzones exist in the
+#: game, so they are possible; they are just not what a Champion Duel line
+#: normally names, and saying so is what keeps `2,308` from reading as warzone
+#: 2 followed by rank 308 when neither prior is available.
+_WARZONE_TYPICAL_DIGITS = (3, 4)
+# Every real placement is a position inside a group, and the largest group the
+# game draws is 100. This ceiling is not measured, then: it is the smallest
+# round number that still admits a four-digit grouped rank like `1,103`, which
+# is a shape that must not be assumed away. Above it a "rank" is a partition
+# that cut in the wrong place, and saying so is what makes a line with no
+# readable answer flag rather than guess.
+_RANK_MAX = 1_999
+_LIKELY_RANK_MAX = 200
+_THP_MIN, _THP_MAX = 1_000_000, 10_000_000_000
+_SCORE_MIN, _SCORE_MAX = 1_000, 1_000_000_000
+_LIKELY_POWER_FLOOR = 100_000_000
+
+#: A real line cannot need more tokens than this: two for a grouped warzone,
+#: two for a rank past a thousand, four each for a hero power and a score. Past
+#: it, whatever was pasted is not a placement line, and enumerating its
+#: partitions is work with nothing at the end of it.
+_MAX_NUMBER_TOKENS = 12
+
+#: `325.8M` is how the game writes a power and `84,600,000` is how a spreadsheet
+#: writes it. Both are the same number and neither is the user's mistake to fix.
+_SUFFIX_MULTIPLIERS = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+#: A slot the user deliberately left empty, as in `AlphaOne, , 3`. That is not
+#: a malformed line, it is somebody saying they do not know the warzone but do
+#: know the rank, and the empty comma is the only thing holding the rank in its
+#: own position. So it stays a token and takes a field rather than being swept
+#: up: dropping it would slide the rank into the warzone slot.
+_ABSENT = object()
+
+_PLAIN_NUMBER = re.compile(r"0|[1-9][0-9]*")
+_SUFFIXED_NUMBER = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[kmbKMB]")
+_GROUP_LEAD = re.compile(r"[1-9][0-9]{0,2}")
+_GROUP_TAIL = re.compile(r"[0-9]{3}")
+
+#: Which slot a token that is not a number at all was standing in, so a flagged
+#: line can name the field it choked on rather than shrug at the whole line.
+_FIELD_AT_POSITION = ("bad_server", "bad_rank", "bad_thp", "bad_score")
+
+_LINE_FIELDS = (
+    ("server",),
+    ("server", "rank"),
+    ("server", "rank", "thp"),
+    # The old four-column format, `name, warzone, rank, score`, which is still
+    # in the fingers of everyone who used this before hero power was asked for.
+    # Kept as a reading rather than migrated away from: their score is a score,
+    # and filing it as a hero power would put a number an order of magnitude too
+    # small into the one field the model cannot run without.
+    ("server", "rank", "score"),
+    ("server", "rank", "thp", "score"),
+)
+
+
+def _unpadded(token: str) -> str:
+    """`05` is a rank of 5 and `0738` is warzone 738. `000` is not a zero.
+
+    A leading zero is only meaningful on a token that could be continuing the
+    number in front of it, and a continuation is exactly three digits. So the
+    padding comes off everything else, which is what the old parser did through
+    `int()` and `parse_warzones`, and stays on the three-digit case, where
+    dropping it would let `33,500,000` read as a number followed by a zero.
+    """
+    if len(token) == 3 or not token.isdigit():
+        return token
+    return str(int(token))
+
+
+def _group_value(tokens: list[str]) -> float | None:
+    """One contiguous run of tokens as a single number, or None if it is not one.
+
+    A **single token** is a plain integer of any length. `2308` and `325800000`
+    are both fine, and this is the rule that is easy to get wrong: an earlier
+    prototype required a 1-3 digit lead and rejected every ungrouped long
+    number, which broke exactly the people who type plainly while still passing
+    a test suite built only from grouped examples.
+
+    **Several tokens** are one comma-grouped number, so the lead is 1-3 digits
+    with no leading zero and every continuation is exactly three. That is the
+    rule which forces the cut in `327,159,292,33,500,000`: `33` cannot continue
+    a group, so there is only one place the first number can end.
+    """
+    if len(tokens) == 1:
+        token = tokens[0]
+        if not token:
+            return _ABSENT
+        if _PLAIN_NUMBER.fullmatch(token):
+            return float(token)
+        if _SUFFIXED_NUMBER.fullmatch(token):
+            # Rounded, and this is not cosmetic. `8.2 * 1_000_000` is
+            # 8199999.999999999 in binary floating point, which is not an
+            # integer -- so a score written `8.2M` failed the whole-number
+            # check below and took the rest of its line down with it, and a
+            # power written `4.1M` reached the database as 4099999.9999999995.
+            # Neither number has a fractional part in the world it came from.
+            return float(round(float(token[:-1]) * _SUFFIX_MULTIPLIERS[token[-1].lower()]))
+        return None
+    if not _GROUP_LEAD.fullmatch(tokens[0]):
+        return None
+    if not all(_GROUP_TAIL.fullmatch(token) for token in tokens[1:]):
+        return None
+    return float(int("".join(tokens)))
+
+
+def _fits(field: str, value: float, *, warzone, known) -> int:
+    """How well one number sits in one field, on the scale above."""
+    if field == "server":
+        if value != int(value) or not 1 <= value <= _WARZONE_MAX:
+            return _IMPOSSIBLE
+        # Most lines an alliance pastes are its own warzone, and every line it
+        # can legitimately paste names one of the grouping's sixteen. Between
+        # them, `2,308` stops being ambiguous before plausibility is reached.
+        text = str(int(value))
+        if warzone and text == str(warzone):
+            return _OURS
+        if text in known:
+            return _KNOWN
+        return _TYPICAL if len(text) in _WARZONE_TYPICAL_DIGITS else _POSSIBLE
+    if field == "rank":
+        if value != int(value) or not 1 <= value <= _RANK_MAX:
+            return _IMPOSSIBLE
+        return _TYPICAL if value <= _LIKELY_RANK_MAX else _POSSIBLE
+    if field == "thp":
+        if not _THP_MIN <= value <= _THP_MAX:
+            return _IMPOSSIBLE
+        return _TYPICAL if value >= _LIKELY_POWER_FLOOR else _POSSIBLE
+    # Zero is a real score and belongs to somebody who did not play, so it is
+    # admitted on its own rather than by dropping the floor. Points arrive in
+    # chunks -- a victory alone is 300,000 -- so there is nothing between zero
+    # and the floor for the floor to be refusing, and keeping it up is what
+    # makes a line whose numbers have no readable split flag instead of guess.
+    if value != int(value) or not (value == 0 or _SCORE_MIN <= value <= _SCORE_MAX):
+        return _IMPOSSIBLE
+    if value == 0:
+        return _POSSIBLE
+    return _TYPICAL if value < _LIKELY_POWER_FLOOR else _POSSIBLE
+
+
+#: Scaled so a reading is scored on how well its fields fit ON AVERAGE, in
+#: whole numbers so two readings can tie exactly. 12 is the common multiple of
+#: the one to four fields a line can fill.
+#:
+#: **Averaged, not summed, and that is the whole point.** Summing pays a
+#: reading for filling more fields, so `Kestrel, 2,308` scored better read as
+#: warzone 2 plus rank 308 than as the warzone 2308 it plainly is, purely
+#: because the wrong answer used two fields and the right one used one. Every
+#: reading consumes all the tokens either way, so the number of fields is not
+#: evidence about anything.
+_FIT_SCALE = 12
+
+
+def _readings(tokens: list[str], *, warzone, known) -> list[tuple[int, dict]]:
+    """Every way this line's numbers read, best first."""
+    scored: list[tuple[int, dict]] = []
+    for fields in _LINE_FIELDS:
+        if len(fields) > len(tokens):
+            continue
+        for cuts in itertools.combinations(range(1, len(tokens)), len(fields) - 1):
+            edges = (0, *cuts, len(tokens))
+            values: dict[str, float] = {}
+            total = 0
+            for field, start, end in zip(fields, edges, edges[1:]):
+                value = _group_value(tokens[start:end])
+                if value is None:
+                    break
+                if value is _ABSENT:
+                    # Counted, not judged. A slot left empty says nothing about
+                    # whether this partition is the right one, so it takes the
+                    # neutral grade rather than tipping the reading either way.
+                    values[field], total = None, total + _POSSIBLE
+                    continue
+                fit = _fits(field, value, warzone=warzone, known=known)
+                if not fit:
+                    break
+                values[field], total = value, total + fit
+            else:
+                # A hero power all but always exceeds a duel score. On the one
+                # line where both are present and both are readable either way,
+                # that is the last thing left to tell them apart.
+                thp, score = values.get("thp"), values.get("score")
+                if thp is not None and score is not None and thp > score:
+                    total += 1
+                scored.append((total * (_FIT_SCALE // len(fields)), values))
+    scored.sort(key=lambda reading: -reading[0])
+    return scored
+
+
+def parse_placement_line(line: str, *, warzone=None, known_warzones=None) -> dict:
+    """One pasted line of a group listing: `name, warzone, rank, thp, score`.
 
     Left to right as the in-game Duel card reads, so somebody copying it out is
     transcribing rather than translating. Only the name is required; a line that
     stops early simply carries less.
 
-    Returns a dict with `name`, `alliance`, `server`, `rank`, `score` and
+    Returns a dict with `name`, `alliance`, `server`, `rank`, `thp`, `score` and
     `problem`. **`problem` is a flag, not an exception**: a line that cannot be
-    read has to reach the reconcile view and be shown, because silently
-    mangling one row of a paste of eight is the failure mode that gets noticed
-    a week later.
+    read has to reach the reconcile view and be shown, because silently mangling
+    one row of a paste of eight is the failure mode that gets noticed a week
+    later.
 
-    Split on the first three commas only. Scores run to tens of millions and
-    people type `33,500,000`; taking only three separators leaves the rest to
-    the score field, which then has its commas stripped. Asking the user to
-    omit them would be asking them to reformat what they are copying.
+    **No format is imposed on the user.** Every one of these parses, and the
+    first two differ only in whether the warzone carries its own separator:
+
+        pincatboiiii,2308,225,10,200,000,436,873
+        pincatboiiii,2,308,225,10,200,000,436,873
+        Kevin,738,5,327,159,292,33,500,000
+        Deep,738,1,103,327,159,292,33,500,000          (a rank past a thousand)
+        Name,738,5,325800000,33500000                  (no separators at all)
+        [OGV]Kestrel,738,1,325.8M,33,500,000
+        Name<TAB>738<TAB>5<TAB>327,159,292<TAB>33,500,000
+        Wren,744,25                                    (stops early)
+
+    Hero power is **fourth, before score**, which is what lets the score keep
+    the tail of the line. The commas inside these numbers are why the old
+    split-on-the-first-three-commas approach could not simply be extended by
+    one: see `_readings`, and the band comment above it, for how the four
+    numbers are actually found.
+
+    `warzone` is the guild's own pinned warzone and `known_warzones` are the
+    ones we hold anybody on. Both are priors, not filters: a line naming a
+    warzone we have never seen still parses, it just stops being the thing that
+    settles an otherwise tied reading.
     """
     raw = (line or "").strip()
     if not raw:
         return {"raw": raw, "problem": "blank"}
 
-    parts = [p.strip() for p in raw.split(",", 3)]
-    name = parts[0]
-    server = parts[1] if len(parts) > 1 else ""
-    rank = parts[2] if len(parts) > 2 else ""
-    score = parts[3] if len(parts) > 3 else ""
+    # Tab and newline are separators alongside the comma. Anyone pasting out of
+    # a spreadsheet has tabs available, a tab cannot collide with a digit group
+    # the way a comma does, and it costs nothing to anyone typing by hand.
+    flat = raw.replace("\t", ",").replace("\r", ",").replace("\n", ",")
+    name, _, rest = flat.partition(",")
+    name = name.strip()
 
     out = {
         "raw": raw,
@@ -907,6 +1156,7 @@ def parse_placement_line(line: str) -> dict:
         "alliance": None,
         "server": None,
         "rank": None,
+        "thp": None,
         "score": None,
         "problem": None,
     }
@@ -919,43 +1169,85 @@ def parse_placement_line(line: str) -> dict:
     # keeping it rather than throwing it away: it is the one field on the line
     # we would otherwise have to ask for separately.
     if name.startswith("[") and "]" in name:
-        tag, _, rest = name[1:].partition("]")
-        if rest.strip():
-            out["alliance"], out["name"] = tag.strip() or None, rest.strip()
+        tag, _, remainder = name[1:].partition("]")
+        if remainder.strip():
+            out["alliance"], out["name"] = tag.strip() or None, remainder.strip()
 
-    # A name containing a comma lands its second half in the warzone slot. That
-    # is not a warzone and it is not recoverable here, so it is flagged for a
-    # human rather than guessed at.
-    if server:
-        zones = parse_warzones(server)
-        if len(zones) != 1 or parse_warzones(server, unique=False) != zones:
-            out["problem"] = "bad_server"
+    # `#` is how the game prints a warzone. A space inside a number is how a
+    # good part of the world writes a thousands separator, and the parser this
+    # replaces already stripped them out of the score. A trailing comma is not
+    # a statement about anything, so it comes off; an empty slot with something
+    # after it IS one, and stays. See `_ABSENT`.
+    tokens = [token.replace("#", "").replace(" ", "").strip() for token in rest.split(",")]
+    tokens = [_unpadded(token) for token in tokens]
+    while tokens and not tokens[-1]:
+        tokens.pop()
+    if not tokens:
+        return out
+
+    # A name containing a comma lands its second half in the warzone slot, and
+    # that is not recoverable here. Reported by the slot the unreadable token
+    # was standing in, so the reconcile view can name the field it choked on
+    # rather than shrug at the line -- but only where the tokens in front of it
+    # pin that slot down. A three-digit token before it might be a continuation
+    # of the number before THAT, in which case its position is one field to the
+    # right of where it looks, and a message naming the wrong field is worse
+    # than one naming none.
+    for position, token in enumerate(tokens):
+        if not token:
+            continue
+        if not (
+            _PLAIN_NUMBER.fullmatch(token)
+            or _SUFFIXED_NUMBER.fullmatch(token)
+            or _GROUP_TAIL.fullmatch(token)
+        ):
+            grouped = any(_GROUP_TAIL.fullmatch(earlier) for earlier in tokens[1:position])
+            out["problem"] = (
+                "bad_numbers"
+                if grouped
+                else _FIELD_AT_POSITION[min(position, len(_FIELD_AT_POSITION) - 1)]
+            )
             return out
-        out["server"] = zones[0]
 
-    if rank:
-        digits = rank.replace("#", "").strip()
-        if not digits.isdigit():
-            out["problem"] = "bad_rank"
-            return out
-        out["rank"] = int(digits)
+    if len(tokens) > _MAX_NUMBER_TOKENS:
+        out["problem"] = "bad_numbers"
+        return out
 
-    if score:
-        digits = score.replace(",", "").replace(" ", "").strip()
-        if not digits.isdigit():
-            out["problem"] = "bad_score"
-            return out
-        out["score"] = int(digits)
+    readings = _readings(tokens, warzone=warzone, known=set(known_warzones or ()))
+    if not readings:
+        out["problem"] = "bad_numbers"
+        return out
 
+    # A line whose every token is three digits can have two readings that fit
+    # equally well, and no correct answer is available for it. Saying so is the
+    # honest move: the parser does not have to be perfect, only honest about
+    # when it is not, and the reconcile view is already built to put a flagged
+    # line in front of a human.
+    best, values = readings[0]
+    if any(total == best and other != values for total, other in readings[1:]):
+        out["problem"] = "bad_numbers"
+        return out
+
+    if values.get("server") is not None:
+        out["server"] = str(int(values["server"]))
+    if values.get("rank") is not None:
+        out["rank"] = int(values["rank"])
+    if values.get("thp") is not None:
+        out["thp"] = values["thp"]
+    if values.get("score") is not None:
+        out["score"] = int(values["score"])
     return out
 
 
-def parse_placement_lines(text: str) -> list[dict]:
+def parse_placement_lines(text: str, *, warzone=None, known_warzones=None) -> list[dict]:
     """Every non-blank line of a paste, parsed. Blank lines are dropped rather
     than flagged: a trailing newline is not a mistake anyone made."""
     return [
         parsed
-        for parsed in (parse_placement_line(line) for line in str(text or "").splitlines())
+        for parsed in (
+            parse_placement_line(line, warzone=warzone, known_warzones=known_warzones)
+            for line in str(text or "").splitlines()
+        )
         if parsed.get("problem") != "blank"
     ]
 
@@ -2021,6 +2313,30 @@ def _grouping_for_payload(rows: list[dict], *, started_on=None) -> int:
             )
         return only
     return create_grouping(zones, started_on, origin="imported")["id"]
+
+
+def set_registrant_thp(registrant_id: int, thp) -> None:
+    """Fill in a Total Hero Power on a registrant we already hold.
+
+    `upsert_registrant` is the wrong door for this and cannot be used: it is
+    keyed on (name, server), and a pasted line that matched a player by name
+    alone has an id without necessarily having the warzone that row is filed
+    under. Upserting on half an identity would make a second row rather than
+    update the first.
+
+    Overwrites rather than asking which is right. Hero power climbs as heroes
+    level, so a newer reading supersedes an older one instead of contradicting
+    it, and the single-player path has always worked this way. The disagreement
+    flow exists for squads, where two people can genuinely be describing
+    different things.
+    """
+    if thp is None:
+        return
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE registrants SET thp = ?, updated_at = ? WHERE id = ?",
+            (float(thp), _now(), registrant_id),
+        )
 
 
 def import_registrants(

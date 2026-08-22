@@ -6,8 +6,8 @@ holds no constants, no Monte Carlo and no ranking rule.
 
 TWO ENTRY POINTS, BECAUSE THERE ARE TWO QUESTIONS.
 
-`group_advance_odds` scores a group — the qualifiers and the semi-finals, each
-its own model with its own constants, both ranking on points. `bracket_odds`
+`group_advance_odds` scores a group of eight — the semi-finals, ranked on
+points accumulated across all 21 matches. `bracket_odds`
 scores the knockout field of 32, which is not a group at all: a player's path
 depends on who else wins, the engine entry point is `simulate_bracket` rather
 than `simulate_group`, it returns a tuple rather than a dict, and there are no
@@ -65,21 +65,22 @@ import threading
 from dataclasses import dataclass, field
 
 try:
-    from champion_duel_engine import qualifier, semifinal
+    from champion_duel_engine import semifinal
 
     ENGINE_AVAILABLE = True
 except ImportError:  # pragma: no cover - asserted through the degraded path
     ENGINE_AVAILABLE = False
 
 # **Imported separately, and this is not tidiness.** `knockout` arrived in
-# engine 1.12.0 and the two group models have been there since 1.0. Putting the
-# three on one import line makes an older pin raise `ImportError` for the whole
-# statement, which the handler above turns into ENGINE_AVAILABLE = False -- so a
-# bot running any engine before 1.12.0 would lose the qualifier and semifinal
-# odds it has always had, silently, reported as "the engine is not installed".
+# engine 1.12.0 and `semifinal` has been there since 1.0. Putting both on one
+# import line makes an older pin raise `ImportError` for the whole statement,
+# which the handler above turns into ENGINE_AVAILABLE = False -- so a bot
+# running any engine before 1.12.0 would lose the semi-final odds it has always
+# had, silently, reported as "the engine is not installed".
 #
-# That is not hypothetical: `dev` is pinned at v1.5 today and the pin moves in a
-# separate merge. A round the engine cannot model is simply absent from
+# That is not hypothetical. The pin has sat behind the newest tag for most of
+# this feature's life and moves in its own merge, so the two are routinely out
+# of step. A round the engine cannot model is simply absent from
 # `STAGES_WITH_A_MODEL`, which is what that tuple is for.
 try:
     from champion_duel_engine import knockout
@@ -88,25 +89,14 @@ try:
 except ImportError:  # pragma: no cover - engines before 1.12.0
     KNOCKOUT_AVAILABLE = False
 
-#: Per-round model, how many go through, and how many trials to spend.
-#:
-#: The two rounds are different models and the package docstring is explicit
-#: that they must not reach across to each other. They also cost wildly
-#: different amounts, which is why the trial counts are not shared.
+#: Per-round model, how many go through, and how many trials to spend. One
+#: round is in here, and the dict shape is kept rather than flattened because
+#: a trial count is a property of a model, not of this module.
 #:
 #: SEMIFINALS. 800 rather than the engine's 4,000 default. 8 players over 28
 #: meetings is cheap per trial but not free, and 4,000 measured about fifteen
 #: seconds of pure Python. 800 keeps a two-of-eight question inside a
 #: percentage point, finer than the surface renders, at roughly three seconds.
-#:
-#: QUALIFIERS. 200, which IS the engine's default, because the question needs
-#: it: a top-8-of-100 probability sits near 8%, where 50 trials carry about
-#: four points of standard error and would render as noise. 100 players over
-#: ~36 matches costs about **fourteen seconds**, and pure Python holds the GIL,
-#: so the whole bot is unresponsive for that long on every press. That is the
-#: known cost of this button and the reason it is worth watching: if qualifier
-#: odds get real use, the fix is to run the simulation off the event loop's
-#: process, not to cut the trials until the number stops meaning anything.
 #: Rounds a model exists for, so a surface can offer the control only where
 #: it will work.
 #:
@@ -116,7 +106,15 @@ except ImportError:  # pragma: no cover - engines before 1.12.0
 #: true when `knockout.py` landed in engine 1.12.0. The first half of it is
 #: still right and is why `bracket_odds` is a separate function from
 #: `group_advance_odds`: it IS a different question, it just has a model now.
-STAGES_WITH_A_MODEL = ("qualifiers", "semifinals") + (("knockouts",) if KNOCKOUT_AVAILABLE else ())
+#:
+#: The qualifiers left this list on 2026-08-21, and the reason was reachability
+#: rather than value. Odds need a hero power or a squad power for every player
+#: in the group, a qualifier group is 100, and there is no mechanism by which
+#: 100 of them arrive: the bulk import is bot-owner-only and the paste would be
+#: a hundred lines. So the control sat in the round people first meet the
+#: feature and refused every press. Recording a qualifier group is untouched
+#: and stays free; only the model wiring came out.
+STAGES_WITH_A_MODEL = ("semifinals",) + (("knockouts",) if KNOCKOUT_AVAILABLE else ())
 
 #: Bracket trials, and the pairwise-matrix trials underneath them. Separate
 #: numbers because they cost wildly different amounts: the bracket sampler is
@@ -127,11 +125,12 @@ MATRIX_TRIALS = 60
 
 # One run at a time, and remember the last few answers.
 #
-# A qualifier group is 100 players over ~36 matches each, about fourteen
-# seconds of pure Python. Pure Python holds the GIL, so that is fourteen
+# The most expensive thing this bot does is a knockout bracket: about thirteen
+# seconds of pure Python. Pure Python holds the GIL, so that is thirteen
 # seconds in which the bot serves nobody, not just the alliance that pressed
-# it. Two cheap things bound that without moving the simulation off this
-# process, which is the real fix and deliberately not this change:
+# it. A semi-final group is nearer three. Both come through here, and two cheap
+# things bound them without moving the simulation off this process, which is
+# the real fix and deliberately not this change:
 #
 #   The LOCK stops presses stacking. Without it three people pressing inside a
 #   minute cost forty-two seconds of dead bot rather than fourteen.
@@ -160,7 +159,6 @@ def _models():
     `STAGES_WITH_A_MODEL` is the union and is what a surface asks.
     """
     return {
-        "qualifiers": {"module": qualifier, "trials": 200},
         "semifinals": {"module": semifinal, "trials": 800},
     }
 
@@ -186,20 +184,16 @@ class OddsRow:
     win_group: float
     points_mean: float
     points_sd: float
-    #: Share of matches won. The qualifier model reports it; the semifinal one
-    #: does not, because that round is scored on points across every match
-    #: rather than on matches won, and a win rate there would invite exactly
-    #: the misreading the footer exists to prevent.
-    win_rate: float | None = None
 
 
 @dataclass
 class GroupOdds:
     rows: list[OddsRow] = field(default_factory=list)
     trials: int = TRIALS
-    #: How many of the group go through. Two of eight in the semi-finals,
-    #: eight of a hundred in the qualifiers, and the surface has to say which
-    #: because the same percentage means a very different thing in each.
+    #: How many of the group go through: two of eight. Still read off the
+    #: model rather than fixed here, and still rendered by the surface rather
+    #: than assumed by it, because a top-2 percentage and a top-8 percentage
+    #: are different claims wearing the same units.
     advance: int = 2
 
 
@@ -436,14 +430,13 @@ def group_advance_odds(
 
     `members` are rows as `get_group_scouting` returns them.
 
-    The two rounds are separate models with separate constants, and the engine
-    is explicit that they must not be mixed. `stage` picks one; a round with no
-    model raises rather than being scored by the other one.
+    Every round is its own model with its own constants, and the engine is
+    explicit that they must not be mixed. `stage` picks one; a round with no
+    model raises rather than being scored by another round's.
 
-    Each model refuses a group it cannot schedule rather than absorbing it, and
-    the two refuse different things: the semifinals need exactly eight, the
-    qualifiers need an even headcount. `NotEnoughData` carries no names in
-    either case, which is how the surface tells a size problem from a data one.
+    The model refuses a group it cannot schedule rather than absorbing it: the
+    semifinals need exactly eight. `NotEnoughData` carries no names in that
+    case, which is how the surface tells a size problem from a data one.
     """
     if not ENGINE_AVAILABLE:
         raise RuntimeError("champion-duel-engine is not installed")
@@ -475,17 +468,6 @@ def group_advance_odds(
             f"the group has {len(members)} players; the semifinal model is "
             f"calibrated on groups of {expected}"
         )
-    if stage == "qualifiers" and len(members) != expected:
-        # The model itself would take any even count of four or more, but
-        # top-8-of-40 is not top-8-of-100: scoring a partial group inflates
-        # everyone's chances by however many rivals are missing, and it does it
-        # silently, in the units the surface renders. So the whole group or
-        # nothing.
-        raise NotEnoughData(
-            f"the group has {len(members)} players of {expected}; odds over a "
-            f"partial group would count only the rivals we happen to hold"
-        )
-
     specs, display, missing = _specs(members)
 
     if missing:
@@ -520,7 +502,6 @@ def group_advance_odds(
             win_group=vals["win_group"],
             points_mean=vals["points_mean"],
             points_sd=vals["points_sd"],
-            win_rate=vals.get("win_rate"),
         )
         for key, vals in scored.items()
     ]
@@ -612,13 +593,15 @@ def bracket_odds(
     20,000 trials that floor is about 0.35pp on its own. So 60 buys nearly all
     of the accuracy 250 does, at a fifth of the time.
 
-    **60 is chosen to sit inside the qualifier's budget, not because it is
-    cheap.** A qualifier run is about fourteen seconds of pure Python and that
-    is already the most expensive thing this bot does; pure Python holds the
-    GIL, so it is fourteen seconds in which the bot serves nobody. Knockouts at
-    60 cost thirteen. Anything above that would make this the new worst case
-    rather than matching the existing one, and the fix for both is the same one
-    that is already deferred: move the simulation off this process.
+    **60 makes this the most expensive thing the bot does, and that is now a
+    ceiling rather than a match.** It used to be chosen to sit inside the
+    qualifier run's fourteen seconds, which was the existing worst case;
+    qualifier odds came out on 2026-08-21 and took that budget with them. At
+    thirteen seconds this bracket is the worst case now, with nothing above it
+    to shelter under, and pure Python holds the GIL, so those are thirteen
+    seconds in which the bot serves nobody. Raising this number raises that
+    directly. The fix is the one already deferred: move the simulation off this
+    process. The value has not moved; only what justifies it has.
 
     The noise that buys is worth stating rather than burying, because it is
     larger than the group models': repeat runs at different seeds move a

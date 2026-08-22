@@ -3353,7 +3353,12 @@ _LINE_PROBLEMS = {
     "no_name": "no name on this line",
     "bad_server": "the warzone slot is not a number",
     "bad_rank": "the rank is not a number",
+    "bad_thp": "the total hero power is not a number",
     "bad_score": "the score is not a number",
+    # Every number on the line is readable and there is still more than one way
+    # to read them, which happens when nothing structural breaks the tie. The
+    # parser does not guess at these; it says so and they come here.
+    "bad_numbers": "I can't tell which number is which",
 }
 
 
@@ -3392,6 +3397,13 @@ def _line_summary(rows: list[dict]) -> str:
     ):
         if counts.get(state):
             parts.append(f"{counts[state]} {word}")
+    # No "N still have no hero power" count here, and it was written and taken
+    # back out. `group_advance_odds` refuses a player with neither a power NOR
+    # any squad power, and `find_registrants` returns registrant columns only --
+    # so the count could see the power and not the squads, and would have named
+    # players the odds are perfectly happy with. Answering it properly needs a
+    # squad lookup for the whole paste; the per-line power in `_line_row` is
+    # what a human checks in the meantime.
     return " · ".join(parts)
 
 
@@ -3400,6 +3412,11 @@ def _line_row(row: dict, *, stage: str | None = None, recording: str | None = No
     rank = str(row["rank"]) if row.get("rank") is not None else "–"
     name = row.get("name") or row.get("raw") or ""
     warzone = f"  #{row['server']}" if row.get("server") else ""
+    # Rendered the way the game writes it and the way the Add a player
+    # placeholder asks for it, rather than as nine digits: this row is read on a
+    # phone next to a warzone and a score, and it is here to be checked at a
+    # glance rather than audited.
+    thp = f"  ·  {row['thp'] / 1_000_000:,.1f}M" if row.get("thp") else ""
     score = f"  ·  {row['score']:,}" if row.get("score") is not None else ""
     # A knockout placement is the match they went out in, and that is what a
     # reader can actually check against what they watched. The seed order is
@@ -3408,11 +3425,11 @@ def _line_row(row: dict, *, stage: str | None = None, recording: str | None = No
         exit_round = db.knockout_result(row.get("rank"))
         score = f"  ·  {exit_round}" if exit_round else score
     if row["state"] == "matched":
-        return f"`{rank:>3}` ✅ **{name}**{warzone}{score}"
+        return f"`{rank:>3}` ✅ **{name}**{warzone}{thp}{score}"
     if row["state"] == "ambiguous":
         return f"`{rank:>3}` ❓ **{name}**: on {len(row['candidates'])} warzones, pick one"
     if row["state"] == "new":
-        return f"`{rank:>3}` ➕ **{name}**{warzone}: new, will be added"
+        return f"`{rank:>3}` ➕ **{name}**{warzone}{thp}: new, will be added"
     if row["state"] == "skipped":
         return f"`{rank:>3}` ⏭️ ~~{name}~~ (skipped)"
     why = _LINE_PROBLEMS.get(row.get("problem"), "can't be read")
@@ -3466,11 +3483,18 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         grouping: dict,
         stage: str | None = None,
         groupings: list[dict] | None = None,
+        warzone: str | None = None,
     ):
         super().__init__()
         self.can_write = can_write
         self.grouping = grouping
         self.groupings = groupings or [grouping]
+        # Goes to the parser as a prior on which number is the warzone. Most
+        # lines an alliance pastes are its own, and between this and the
+        # grouping's sixteen a warzone typed as `2,308` stops being ambiguous.
+        # Neither is a filter: a line naming a warzone we have never seen still
+        # parses, it just stops being what settles an otherwise tied reading.
+        self.warzone = warzone
 
         # Which Champion Duel this is for. A warzone is drawn into a new
         # grouping every season, so "the one running now" is only the right
@@ -3538,13 +3562,17 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
             ],
         ),
     )
+    # Total Hero Power is fourth, before the score, which is what lets the
+    # score keep the tail of the line. The placeholder writes it the way the
+    # game does, but it is an example and not a specification: `325,800,000`
+    # and `325800000` read the same, and a line that stops early is fine.
     players = discord.ui.Label(
         text="Add one player per line",
-        description="Format: Name, Warzone, Rank, Score. Name is required.",
+        description="Name, Warzone, Rank, Total Hero Power, Score. Only the name is required.",
         component=discord.ui.TextInput(
             style=discord.TextStyle.paragraph,
             max_length=4000,
-            placeholder="[OGV]Kestrel, 738, 1, 33,500,000\nWren, 744, 25",
+            placeholder="[OGV]Kestrel, 738, 1, 325.8M, 33,500,000\nWren, 744, 25",
         ),
     )
 
@@ -3578,11 +3606,15 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
             )
             return
 
-        rows = db.parse_placement_lines(self.players.component.value)
+        rows = db.parse_placement_lines(
+            self.players.component.value,
+            warzone=self.warzone,
+            known_warzones=grouping.get("warzones") or (),
+        )
         if not rows:
             await interaction.followup.send(
                 "⚠️ No players were entered. Paste them one per line, as "
-                "`name, warzone, rank, score`.",
+                "`name, warzone, rank, total hero power, score`.",
                 ephemeral=True,
             )
             return
@@ -3841,10 +3873,16 @@ class _ReconcileView(discord.ui.View):
                     row["name"],
                     server=row["server"],
                     alliance=row.get("alliance"),
+                    thp=row.get("thp"),
                     origin="self_reported",
                     actor=actor,
                 )
                 registrant_id = player["id"]
+            elif row.get("thp") is not None:
+                # The whole reason the paste now asks for a power. Without one
+                # on every member of a group `group_advance_odds` refuses the
+                # group, and this is the only bulk path that can supply eight.
+                db.set_registrant_thp(registrant_id, row["thp"])
             db.set_placement(
                 group["id"],
                 registrant_id,
@@ -4277,6 +4315,7 @@ class ChampionDuelFinishedView(discord.ui.View):
                 grouping=self.grouping,
                 stage=stage,
                 groupings=groupings,
+                warzone=self.warzone,
             )
         )
 
@@ -4710,15 +4749,16 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
         + tail
     )[:4096]
 
-    # Both rounds rank on points rather than on matches or meetings won, and
-    # the counts differ, so the line is built rather than fixed. Saying it at
-    # all stops the first column reading as "win 4 of 7".
-    matches = {"semifinals": "all 21 matches", "qualifiers": "every match"}
+    # The round ranks on points rather than on matches or meetings won, and
+    # saying so stops the first column reading as "win 4 of 7". This used to be
+    # keyed off a per-round phrase; the qualifiers were the other key and their
+    # odds came out on 2026-08-21, so the count is stated rather than looked up.
+    # The knockouts never reached here: they return above, through
+    # `build_bracket_embed`.
     embed.set_footer(
         text=(
-            f"Ranked on points across {matches.get(stage, 'the round')}, not "
-            f"matches won. Squads we have not seen are sampled, so these carry "
-            f"that uncertainty."
+            "Ranked on points across all 21 matches, not matches won. Squads "
+            "we have not seen are sampled, so these carry that uncertainty."
         )
     )
     return embed
@@ -4951,6 +4991,7 @@ class ChampionDuelHubView(discord.ui.View):
                 grouping=self.grouping,
                 stage=stage,
                 groupings=groupings,
+                warzone=self.warzone,
             )
         )
 

@@ -148,8 +148,181 @@ def test_a_name_with_a_comma_is_flagged_not_mangled(cd_db):
 
 
 def test_non_numeric_ranks_and_scores_are_flagged(cd_db):
+    """Named by the slot the unreadable token was standing in. Hero power sits
+    fourth now, so a fourth field that is not a number is a bad power and the
+    score is the one after it."""
     assert db.parse_placement_line("Wren, 744, first")["problem"] == "bad_rank"
-    assert db.parse_placement_line("Wren, 744, 1, lots")["problem"] == "bad_score"
+    assert db.parse_placement_line("Wren, 744, 1, lots")["problem"] == "bad_thp"
+    assert db.parse_placement_line("Wren, 744, 1, 325.8M, lots")["problem"] == "bad_score"
+
+
+# ── Total Hero Power in the paste ─────────────────────────────────────────────
+#
+# The format is `name, warzone, rank, thp, score`, and every case below was a
+# real worry rather than a hypothetical: the four numbers are separated by
+# commas and three of them can contain commas.
+
+
+@pytest.mark.parametrize(
+    "line, server, rank, thp, score",
+    [
+        # A warzone typed plainly, and the same line with the warzone grouped.
+        ("pincatboiiii,2308,225,10,200,000,436,873", "2308", 225, 10_200_000, 436_873),
+        ("pincatboiiii,2,308,225,10,200,000,436,873", "2308", 225, 10_200_000, 436_873),
+        # An unrounded hero power against an unrounded score. `33` cannot
+        # continue a digit group, so the cut between them is forced.
+        ("Kevin,738,5,327,159,292,33,500,000", "738", 5, 327_159_292, 33_500_000),
+        # A rank past a thousand, which is a grouped number in the rank slot.
+        ("Deep,738,1,103,327,159,292,33,500,000", "738", 1103, 327_159_292, 33_500_000),
+        # No separators at all, which is what an AI-generated CSV produces.
+        # This is the rule an earlier prototype got wrong: a single token is a
+        # plain integer of ANY length, and requiring a 1-3 digit lead here
+        # rejected everybody who types plainly while still passing a suite
+        # built only from grouped examples.
+        ("Name,738,5,325800000,33500000", "738", 5, 325_800_000, 33_500_000),
+        # The way the game itself writes a power.
+        ("[OGV]Kestrel,738,1,325.8M,33,500,000", "738", 1, 325_800_000, 33_500_000),
+        # Out of a spreadsheet. A tab cannot collide with a digit group.
+        ("Name	738	5	327,159,292	33,500,000", "738", 5, 327_159_292, 33_500_000),
+        # Stops early, which is most of what an alliance actually pastes.
+        ("Wren,744,25", "744", 25, None, None),
+    ],
+)
+def test_no_format_is_imposed_on_the_person_pasting(cd_db, line, server, rank, thp, score):
+    """Being errored for typing a number the way you naturally type it is the
+    phone-field pattern, and it is miserable to be on the wrong end of. Every
+    one of these parses without complaint."""
+    row = db.parse_placement_line(line)
+
+    assert row["problem"] is None
+    assert (row["server"], row["rank"], row["score"]) == (server, rank, score)
+    assert (row["thp"] and int(row["thp"])) == thp
+
+
+def test_a_four_number_line_in_the_old_order_still_reads_its_score_as_a_score(cd_db):
+    """Everyone who used this before hero power was asked for still has
+    `name, warzone, rank, score` in their fingers. Filing their score as a hero
+    power would put a number an order of magnitude too small into the one field
+    the odds cannot run without, so the measured gap between the two bands is
+    what tells them apart: no duel score has ever reached 48.4M and no hero
+    power has ever been under 164M."""
+    old = db.parse_placement_line("Kestrel, 738, 1, 33,500,000")
+    assert (old["thp"], old["score"]) == (None, 33_500_000)
+
+    new = db.parse_placement_line("Kestrel, 738, 1, 327,159,292")
+    assert (new["thp"], new["score"]) == (327_159_292, None)
+
+
+def test_the_guilds_own_warzone_settles_a_line_that_structure_cannot(cd_db):
+    """`Someone,1,200,1,103` is warzone 1200 and rank 1103 to an alliance on
+    1200, and warzone 1 rank 200 with a score of 1103 to anybody else. Both
+    readings are structurally sound and both are plausible, so the tie is
+    broken by the one thing that is actually evidence: most lines an alliance
+    pastes are its own warzone. This is why the prior is threaded through, and
+    the grouping's own sixteen do the same job for an opponent's line."""
+    line = "Someone,1,200,1,103"
+
+    assert db.parse_placement_line(line)["server"] == "1", "nothing to go on"
+
+    for prior in ({"warzone": "1200"}, {"known_warzones": {"1200"}}):
+        settled = db.parse_placement_line(line, **prior)
+        assert (settled["server"], settled["rank"]) == ("1200", 1103)
+        assert settled["problem"] is None
+
+
+def test_a_reading_is_judged_on_how_well_it_fits_not_on_how_much_it_fills(cd_db):
+    """Every reading consumes all of the tokens, so the number of fields one of
+    them happens to fill is not evidence about anything. Scoring by the sum
+    said otherwise: `Kestrel, 2,308` came out as warzone 2 with a rank of 308,
+    because the wrong answer used two fields and the right one used one."""
+    short = db.parse_placement_line("Kestrel, 2,308")
+    assert (short["server"], short["rank"]) == ("2308", None)
+
+    longer = db.parse_placement_line("Player, 2,308, 1,500")
+    assert (longer["server"], longer["rank"], longer["score"]) == ("2308", 1500, None)
+
+
+def test_a_space_inside_a_number_is_a_thousands_separator(cd_db):
+    """Most of the world writes them this way, and the parser this replaced
+    already stripped them out of the score field."""
+    row = db.parse_placement_line("Wren, 744, 25, 1 000 000")
+
+    assert (row["server"], row["rank"], row["score"]) == ("744", 25, 1_000_000)
+
+
+def test_an_unreadable_field_is_only_named_when_its_position_is_certain(cd_db):
+    """A three-digit token might be a continuation of the number in front of
+    it, which puts everything after it one field to the right of where it
+    looks. `Wren, 2,308, first` has an unreadable RANK, and calling it a bad
+    hero power because it is the third token is worse than saying nothing:
+    a message naming the wrong field sends somebody to fix the wrong thing."""
+    assert db.parse_placement_line("Wren, 744, first")["problem"] == "bad_rank"
+    assert db.parse_placement_line("Wren, 2,308, first")["problem"] == "bad_numbers"
+
+
+def test_a_suffixed_number_survives_binary_floating_point(cd_db):
+    """`8.2 * 1_000_000` is 8199999.999999999, which is not a whole number.
+    Unrounded, that failed the score check and took the whole line with it, and
+    a power written `4.1M` reached the database as 4099999.9999999995."""
+    row = db.parse_placement_line("Wren, 738, 5, 325.7M, 8.2M")
+
+    assert row["problem"] is None
+    assert (row["thp"], row["score"]) == (325_700_000, 8_200_000)
+    assert float(row["thp"]).is_integer()
+
+
+def test_a_score_of_zero_does_not_discard_the_line(cd_db):
+    """Somebody who did not play scored nothing, and that is a real reading.
+    Refusing it left no reading standing at all, so the hero power this field
+    exists to collect went out with it."""
+    row = db.parse_placement_line("Wren, 738, 5, 327,159,292, 0")
+
+    assert (row["thp"], row["score"], row["problem"]) == (327_159_292, 0, None)
+
+
+def test_a_padded_number_reads_as_the_number(cd_db):
+    """`05` is a rank of 5 and `0738` is warzone 738, both of which the parser
+    this replaced accepted. Three digits are left alone, because that is the
+    one width where a leading zero might be continuing the number in front of
+    it and `33,500,000` would otherwise read as a number followed by a zero."""
+    padded = db.parse_placement_line("Wren, 0738, 05")
+    assert (padded["server"], padded["rank"]) == ("738", 5)
+
+    grouped = db.parse_placement_line("Wren, 738, 1, 33,500,000")
+    assert grouped["score"] == 33_500_000
+
+
+def test_a_line_with_no_readable_answer_is_flagged_rather_than_guessed_at(cd_db):
+    """Every token three digits and nothing structural to break the tie. There
+    is no correct answer available, so the parser says so and the reconcile view
+    puts it in front of a human. It does not have to be perfect, only honest
+    about when it is not."""
+    row = db.parse_placement_line("Odd,738,5,325,800,123,456")
+
+    assert row["problem"] == "bad_numbers"
+    assert row["thp"] is None
+
+
+def test_an_empty_slot_holds_its_position(cd_db):
+    """`AlphaOne, , 3` is somebody saying they do not know the warzone but do
+    know the rank. Sweeping the empty comma up would slide the rank into the
+    warzone slot and record a player on warzone 3."""
+    row = db.parse_placement_line("AlphaOne, , 3")
+
+    assert (row["server"], row["rank"]) == (None, 3)
+    assert row["problem"] is None
+
+
+def test_a_hero_power_lands_on_the_registrant(cd_db):
+    """The reason the field was added: `group_advance_odds` refuses a group
+    where anybody has neither a power nor a squad, and this is the only bulk
+    path that can supply eight of them."""
+    player = db.upsert_registrant("Kestrel", server="738")
+    assert player["thp"] is None
+
+    db.set_registrant_thp(player["id"], 325_800_000)
+
+    assert db.find_registrants("Kestrel", "738")[0]["thp"] == 325_800_000
 
 
 def test_a_paste_drops_blank_lines_and_keeps_the_rest(cd_db):

@@ -61,15 +61,14 @@ def scored():
 # ── the degraded path, which is the live one until the pin moves ─────────────
 
 
-def test_an_engine_without_the_bracket_keeps_the_two_group_rounds():
+def test_an_engine_without_the_bracket_keeps_the_group_round():
     """The reason `knockout` is imported on its own line.
 
-    On one import statement an older pin raises for all three names, the
-    handler sets ENGINE_AVAILABLE False, and a bot that has always had
-    qualifier and semifinal odds loses them — reported as "the engine is not
-    installed", which is both wrong and unactionable.
+    On one import statement an older pin raises for both names, the handler
+    sets ENGINE_AVAILABLE False, and a bot that has always had semi-final odds
+    loses them — reported as "the engine is not installed", which is both wrong
+    and unactionable.
     """
-    assert "qualifiers" in odds.STAGES_WITH_A_MODEL
     assert "semifinals" in odds.STAGES_WITH_A_MODEL
     if not odds.KNOCKOUT_AVAILABLE:
         assert odds.ENGINE_AVAILABLE, "the group models must survive a missing bracket"
@@ -97,7 +96,7 @@ def test_the_bracket_is_never_reachable_through_the_group_join():
     danger is the engine that DOES have it.
     """
     assert "knockouts" not in odds._models()
-    assert set(odds._models()) == {"qualifiers", "semifinals"}
+    assert set(odds._models()) == {"semifinals"}
 
 
 def test_asking_for_a_bracket_without_a_model_says_which_version_added_it():

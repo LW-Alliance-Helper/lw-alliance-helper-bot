@@ -3808,3 +3808,112 @@ def consume_auth_code(code: str) -> dict | None:
         "can_write": bool(row["can_write"]),
         "writer_guild_id": row["writer_guild_id"],
     }
+
+
+# ── Data removal ────────────────────────────────────────────────────────────
+#
+# Actioning a removal request from someone with a Discord identity (#517).
+# Champion Duel *player* records are out of scope by the #499 decision: there is
+# no player-keyed route here and there should not be one. A player row is about
+# a name the game shows everyone, and this is about the people who used the bot.
+#
+# Two shapes, and what a table gets is decided by what its rows are.
+#
+#   * A record a person WROTE keeps its contribution and loses its attribution.
+#     The reading is information the game already shows anyone, and removing it
+#     would take it from the alliances it was contributed for.
+#   * A record ABOUT a person goes whole. Nothing survives scrubbing a row whose
+#     entire content is "this person signed in".
+#
+# `sessions` and `auth_codes` are the second kind. Everything else here is the
+# first.
+#
+# The scrub sentinel is NULL wherever the column allows it, because NULL is
+# already this schema's "nobody said" and every reader of these columns treats
+# it that way. `edits.actor_discord_id` and `disagreements.actor_discord_id` are
+# NOT NULL, so they take '' instead -- the readers treat both as falsy, and
+# rewriting two live tables to relax a constraint is a worse trade than one
+# inconsistent sentinel.
+#
+# Every scrub predicate is disjoint from every delete predicate, so a preview
+# and the run it previews cannot disagree about a row: nothing is counted by one
+# pass and removed by another.
+
+_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    ("sessions", "discord_user_id = :sid"),
+    ("auth_codes", "discord_user_id = :sid"),
+)
+
+_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    (
+        "edits",
+        "actor_discord_id = '', actor_name = NULL, actor_guild_id = NULL",
+        "actor_discord_id = :sid",
+    ),
+    (
+        "disagreements",
+        "actor_discord_id = '', actor_name = NULL, actor_guild_id = NULL",
+        "actor_discord_id = :sid",
+    ),
+    (
+        "import_log",
+        "actor_discord_id = NULL, actor_name = NULL, actor_guild_id = NULL",
+        "actor_discord_id = :sid",
+    ),
+    ("registrants", "added_by = NULL", "added_by = :sid"),
+    ("squads", "updated_by = NULL", "updated_by = :sid"),
+    ("registrant_profiles", "updated_by = NULL", "updated_by = :sid"),
+    ("order_history", "created_by = NULL", "created_by = :sid"),
+    (
+        "groupings",
+        "created_by_discord_id = NULL, created_by_guild_id = NULL",
+        "created_by_discord_id = :sid",
+    ),
+    ("guild_warzone", "set_by_discord_id = NULL", "set_by_discord_id = :sid"),
+)
+
+
+def purge_user_data(discord_user_id, *, apply: bool = False) -> dict:
+    """Remove one person from the Champion Duel database.
+
+    With `apply=False` (the default) this counts what a run would touch and
+    changes nothing, so the same call can render a preview and then do the work.
+    Both paths walk the same two spec tables above and share every predicate --
+    a preview that ran a different query from the run would be worth less than
+    no preview at all.
+
+    Returns `{"deleted": {table: rows}, "scrubbed": {table: rows},
+    "applied": bool}`, with tables that matched nothing left out. A removal
+    nobody can audit is a removal nobody can trust, so the counts are the point
+    rather than a debugging aid.
+    """
+    sid = str(discord_user_id).strip()
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    if not sid:
+        return out
+    params = {"sid": sid}
+    with _get_conn() as conn:
+        for table, where in _REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        for table, sets, where in _REMOVAL_SCRUBS:
+            if apply:
+                n = conn.execute(
+                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    params,
+                ).rowcount
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["scrubbed"][table] = n
+    return out

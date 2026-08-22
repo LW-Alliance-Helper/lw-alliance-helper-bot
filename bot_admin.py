@@ -371,6 +371,242 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
     )
 
 
+# The other half of `forget_guild` (#517). That one clears a guild's install
+# metadata row; this is the route for a person, which nothing had before --
+# `remove_premium_assignment` was the only user-keyed delete anywhere in the
+# tree and it exists for subscription management.
+#
+# Preview first, then confirm, because this runs delete statements against
+# production on somebody else's say-so and the counts are the only thing that
+# says the ID was right. The preview and the run share every predicate (see
+# `config.purge_user_data`), so the preview cannot promise something the run
+# does not do.
+#
+# The receipt is the post-run counts rather than the preview's. Nothing stops a
+# sign-up landing between the two, and what gets written back to the person has
+# to be what happened, not what was going to.
+
+
+def _parse_user_id(raw: str) -> int | None:
+    """Same parse as `_parse_guild_id`, named for what it reads. Snowflakes
+    arrive as strings because they exceed JavaScript's safe-integer range.
+
+    Zero is refused as well as unparseable input. It is the scrub sentinel on
+    `voter_user_id`, `saved_by_user_id` and `posted_by_user_id`, and the
+    recorded value of a guild owner nobody captured, so a run for `0` would
+    match rows belonging to no person and inflate the counts that are the only
+    check the operator has that the ID was right.
+    """
+    uid = _parse_guild_id(raw)
+    return uid if uid and uid > 0 else None
+
+
+def _removal_lines(counts: dict) -> str:
+    """One line per table, widest first. Nothing renders as an em dash rather
+    than an empty string, which Discord rejects as a field value."""
+    if not counts:
+        return "—"
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return "\n".join(f"`{table}` {n}" for table, n in ordered)
+
+
+def _removal_embed(
+    uid: int,
+    label: str,
+    config_result: dict,
+    cd_result: dict,
+    errors: list[tuple[str, str]],
+) -> discord.Embed:
+    """One removal report. Same shape for the preview and the receipt, because
+    the operator reads the second against the first."""
+    deleted = dict(config_result["deleted"])
+    deleted.update(cd_result.get("deleted", {}))
+    scrubbed = dict(config_result["scrubbed"])
+    scrubbed.update(cd_result.get("scrubbed", {}))
+    applied = bool(config_result.get("applied"))
+    n_deleted = sum(deleted.values())
+    n_scrubbed = sum(scrubbed.values())
+
+    embed = discord.Embed(
+        title="Data removal" if applied else "Data removal preview",
+        description=f"**{label}**\n`{uid}`" if label else f"`{uid}`",
+        color=discord.Color.red() if applied else discord.Color.orange(),
+    )
+    embed.add_field(
+        name=f"{'Deleted' if applied else 'To delete'} ({n_deleted})",
+        value=_removal_lines(deleted),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"{'Scrubbed' if applied else 'To scrub'} ({n_scrubbed})",
+        value=_removal_lines(scrubbed),
+        inline=True,
+    )
+    for where, message in errors:
+        embed.add_field(name=where, value=f"Not reached: `{message}`", inline=False)
+    if not (n_deleted or n_scrubbed or errors):
+        embed.set_footer(text="Nothing held under this ID in either database.")
+    elif "guild_install_metadata" in scrubbed:
+        # Worth saying every time it applies: on_ready rewrites owner_id for
+        # every guild the bot is in, so that column comes back on the next boot
+        # for as long as the install stands.
+        embed.set_footer(text="owner_id returns on the next boot while the bot is in that guild.")
+    return embed
+
+
+def _run_user_removal(uid: int, *, apply: bool) -> tuple[dict, dict, list[tuple[str, str]]]:
+    """Both databases, one call. Returns `(config_result, cd_result, errors)`,
+    where each error is the database that could not be reached and why.
+
+    Each half is caught on its own so a failure in one cannot leave the operator
+    believing the other did not run either. A removal that half-happened and
+    reported nothing is the worst outcome available here, and it is the one that
+    gets written back to a person as "done".
+    """
+    errors: list[tuple[str, str]] = []
+
+    import config  # noqa: PLC0415
+
+    try:
+        config_result = config.purge_user_data(uid, apply=apply)
+    except Exception as exc:
+        config_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
+        errors.append(("Guild config database", str(exc)))
+
+    import champion_duel_db as cd_db  # noqa: PLC0415
+
+    try:
+        cd_result = cd_db.purge_user_data(uid, apply=apply)
+    except Exception as exc:
+        cd_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
+        errors.append(("Champion Duel database", str(exc)))
+
+    return config_result, cd_result, errors
+
+
+class _ForgetUserConfirm(discord.ui.View):
+    """Two-button confirm for /admin forget_user. Auto-cancels on timeout."""
+
+    def __init__(self, user_id: int, owner_id: int, label: str):
+        super().__init__(timeout=120)
+        self._user_id = user_id
+        self._owner_id = owner_id
+        self._label = label
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._owner_id:
+            await interaction.response.send_message(
+                "⛔ Only the bot owner who started this can confirm.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🗑️ Run removal", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+
+        # Acknowledge before the work, not after. Two SQLite files and a
+        # rewrite of every roster draft can outrun the three seconds Discord
+        # allows, and the failure that buys is the removal happening with no
+        # receipt and the buttons still live -- which reads as "it did not run"
+        # and invites a second press.
+        await inter.response.edit_message(view=self)
+
+        config_result, cd_result, errors = _run_user_removal(self._user_id, apply=True)
+
+        # Premium is cached per guild and per user and the assignment row may
+        # have just gone. Clearing the whole cache is blunt, but a removal
+        # request is a rare owner action and a stale premium read is not worth
+        # the precision.
+        import premium  # noqa: PLC0415
+
+        premium.clear_cache()
+
+        await inter.edit_original_response(
+            content=f"🗑️ Ran data removal for `{self._user_id}`.",
+            embed=_removal_embed(self._user_id, self._label, config_result, cd_result, errors),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content=f"❌ Cancelled — nothing removed for `{self._user_id}`.",
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+
+@admin_group.command(
+    name="forget_user",
+    description="(Bot owner only) Action a data-removal request for a Discord user ID.",
+)
+@app_commands.describe(user_id="Discord user ID making the removal request")
+async def admin_forget_user_slash(interaction: discord.Interaction, user_id: str):
+    """Preview, then run, a data removal for one person across both databases.
+
+    Champion Duel *player* records are out of scope by the #499 decision. This
+    reaches people with Discord identities only, which is what the privacy
+    policy's removal promise is about.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    uid = _parse_user_id(user_id)
+    if uid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{user_id}` isn't a valid integer user ID.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    # Worth one REST call: the operator is about to delete rows on the strength
+    # of an ID somebody typed, and a name is the only check available that the
+    # ID is the person who asked.
+    user = bot.get_user(uid)
+    if user is None:
+        try:
+            user = await bot.fetch_user(uid)
+        except Exception:
+            # Anything at all. The name is a check on the ID, not part of the
+            # removal, and a lookup that fails must not be what stops a request
+            # from being actioned.
+            user = None
+    label = user.name if user is not None else ""
+
+    config_result, cd_result, errors = _run_user_removal(uid, apply=False)
+    embed = _removal_embed(uid, label, config_result, cd_result, errors)
+    total = (
+        sum(config_result["deleted"].values())
+        + sum(config_result["scrubbed"].values())
+        + sum(cd_result.get("deleted", {}).values())
+        + sum(cd_result.get("scrubbed", {}).values())
+    )
+    # A database that could not be read has not said this person is absent from
+    # it. Withholding the confirm on a blank preview would make an outage look
+    # like an answer.
+    if not total and not errors:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    view = _ForgetUserConfirm(user_id=uid, owner_id=interaction.user.id, label=label)
+    await interaction.followup.send(
+        content=(
+            "⚠️ Deletes are permanent and scrubs cannot be undone. "
+            "`/admin forget_guild` is the separate route for a guild's install record."
+        ),
+        embed=embed,
+        view=view,
+        ephemeral=True,
+    )
+
+
 @admin_group.command(
     name="shiny_servers",
     description="(Bot owner only) Dump stored shiny_task_servers rows for a server-number range.",

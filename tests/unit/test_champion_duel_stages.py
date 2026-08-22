@@ -494,3 +494,155 @@ def test_a_grouping_with_no_dates_says_nothing_about_the_calendar(cd_db):
         conn.execute("UPDATE groupings SET started_on = NULL")
 
     assert hub.phase_line(db.list_groupings()[0]) == ""
+
+
+# ── Which round the roster reports (#519) ─────────────────────────────────────
+
+
+def test_a_stage_filtered_roster_reports_the_round_it_filtered_on(cd_db):
+    """The window that shipped broken, and that unit tests did not catch.
+
+    `get_roster` scoped its *filter* by round, but every row's `grp` came from
+    the furthest round that player was in. So a semifinal draw landing while
+    the qualifiers were still running made one response contradict itself:
+    filtered into group M, reporting group D. `rank` flipped with it, so the
+    Rank column beside it was a semifinal seeding under a qualifier heading.
+    """
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=3)
+
+    roster = {p["display_name"]: p for p in db.get_roster(group="M")}
+
+    assert set(roster) == {"AlphaOne", "BetaTwo"}, "both are still in qualifier group M"
+    assert roster["AlphaOne"]["grp"] == "M", "the round the caller asked about"
+    assert roster["AlphaOne"]["rank"] == 1, "and that round's rank, not the semifinal seeding"
+    assert roster["AlphaOne"]["stage"] == "qualifiers"
+    # The later round is not lost, only not what `grp` surfaces.
+    assert roster["AlphaOne"]["stages"]["semifinals"]["grp"] == "D"
+
+
+def test_an_explicit_stage_scopes_the_report_as_well_as_the_filter(cd_db):
+    """The same rule when the caller names the round instead of inheriting it.
+    Asking for the qualifiers during the semifinals has to answer about the
+    qualifiers all the way down."""
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=3)
+    _restart("semifinals")
+
+    alpha = db.get_roster(group="M", stage="qualifiers")[0]
+
+    assert (alpha["grp"], alpha["rank"], alpha["stage"]) == ("M", 1, "qualifiers")
+
+
+def test_the_player_card_still_reports_the_furthest_round(cd_db):
+    """The other half of the same rule, and why this is an argument one caller
+    passes rather than a change to `attach_stages` outright.
+
+    A card answers "where is this player in the pathway", so it names the
+    furthest round they have reached. Someone knocked out in the qualifiers
+    should still show the group they went out of.
+    """
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=3)
+
+    player = _player("AlphaOne")
+
+    assert (player["grp"], player["rank"], player["stage"]) == ("D", 3, "semifinals")
+
+
+def test_the_unfiltered_roster_is_scoped_too_and_takes_the_blanks(cd_db):
+    """The decision on #519's open question, pinned here because it is a choice
+    and not a derivation.
+
+    `get_roster` resolves a round whether or not a group was named, so the
+    unfiltered read is about that round as well. A player who is not in it
+    reports no group rather than a letter from a round nobody asked for. A
+    blank is honest; a letter from the wrong round is not, and exempting this
+    path would put the bug back where it is hardest to notice. `stages` still
+    carries every round for any caller wanting the fuller picture.
+    """
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
+
+    roster = {p["display_name"]: p for p in db.get_roster()}
+
+    assert roster["AlphaOne"]["grp"] == "D", "in the round being read"
+    assert roster["BetaTwo"]["grp"] is None, "knocked out in the qualifiers"
+    assert roster["BetaTwo"]["rank"] is None
+    assert roster["BetaTwo"]["stage"] is None, "and `stage` says so rather than claiming the round"
+    assert roster["BetaTwo"]["stages"]["qualifiers"]["grp"] == "M", "not lost, just not surfaced"
+
+
+def test_a_player_out_of_the_running_round_sorts_after_the_players_in_it(cd_db):
+    """The sort needed deciding with it: every newly blank `grp` collapses to
+    "" under the old key and lands ahead of Group A. A roster is read for the
+    round it is about, so the people no longer in it go last."""
+    db.import_registrants(
+        [{"name": "AaronZero", "group": "A", "rank": 1, "server": "738"}], stage="qualifiers"
+    )
+    db.set_stage(_rid("AlphaOne"), "semifinals", grp="D", rank=1)
+    _restart("semifinals")
+
+    order = [p["display_name"] for p in db.get_roster()]
+
+    assert order == ["AlphaOne", "AaronZero", "BetaTwo"], (
+        "the one still in the semifinals first, then the two who are not, by name"
+    )
+
+
+def test_a_roster_with_no_running_round_falls_back_to_the_furthest(cd_db):
+    """Sign-up names no round, so there is nothing to scope to and the rows
+    answer the way a player card does. Blanking them instead would report an
+    empty draw while the qualifier draw is loaded and perfectly readable."""
+    _restart("signup")
+
+    assert db.current_stage() is None
+    assert {p["display_name"]: p["grp"] for p in db.get_roster()} == {
+        "AlphaOne": "M",
+        "BetaTwo": "M",
+    }
+
+
+def test_the_knockout_roster_still_says_who_is_in_it(cd_db):
+    """The round with no letter, and the one this nearly broke.
+
+    The knockouts are a single field of 32, so every row in them carries `grp`
+    None -- the same value as someone who went out in the qualifiers. `stage`
+    is what separates the two, and the sort has to key on that: keying on the
+    letter put the eliminated ahead of the survivors in the one round where the
+    letter says nothing at all.
+    """
+    db.set_stage(_rid("AlphaOne"), "knockouts", rank=1)
+    _restart("knockouts")
+
+    roster = db.get_roster()
+    by_name = {p["display_name"]: p for p in roster}
+
+    assert by_name["AlphaOne"]["stage"] == "knockouts", "still in, with no letter to show for it"
+    assert by_name["AlphaOne"]["grp"] is None
+    assert by_name["AlphaOne"]["rank"] == 1, "the placement is the whole story here"
+    assert by_name["BetaTwo"]["stage"] is None, "out, and the response says which is which"
+    assert [p["display_name"] for p in roster] == ["AlphaOne", "BetaTwo"], "still in, first"
+
+
+def test_a_round_we_hold_no_draw_for_reports_nothing_rather_than_the_last_one(cd_db):
+    """The window at every round transition: the calendar has rolled into the
+    semifinals and nobody has imported the draw yet.
+
+    The rest of the API is already silent here -- `get_groups` returns nothing
+    and a group-filtered roster returns nobody, because there is no semifinal
+    group to be in yet. The unfiltered roster says the same rather than handing
+    back qualifier letters under a semifinal heading, which is the shape #519
+    was about. Falling back to the furthest round we hold would make this the
+    one endpoint of the three claiming letters for a round the other two say we
+    have nothing for. `stages` still carries the qualifiers for anyone who
+    needs them.
+    """
+    _restart("semifinals")
+
+    assert db.current_stage() == "semifinals"
+    assert db.get_groups() == [], "the rest of the API is already silent here"
+    assert db.get_roster(group="M") == [], "and so is the filtered read"
+
+    roster = db.get_roster()
+
+    assert [p["grp"] for p in roster] == [None, None]
+    assert [p["stage"] for p in roster] == [None, None]
+    assert all(p["stages"]["qualifiers"]["grp"] == "M" for p in roster), "not lost, just not shown"

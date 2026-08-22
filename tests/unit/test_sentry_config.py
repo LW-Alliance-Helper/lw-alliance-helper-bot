@@ -35,18 +35,24 @@ FAKE_DSN = "https://public@example.ingest.sentry.io/1"
 
 
 def _sentry_init_kwargs() -> dict[str, ast.expr]:
-    """The keywords ``bot.py`` passes to ``sentry_sdk.init``, unevaluated."""
+    """The keywords ``bot.py`` passes to ``sentry_sdk.init``, unevaluated.
+
+    Insists on exactly one init call. Asserting against the first one found
+    would let a second init ship frame locals with this guard still green.
+    """
     tree = ast.parse(BOT_PY.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "init"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "sentry_sdk"
-        ):
-            return {kw.arg: kw.value for kw in node.keywords if kw.arg}
-    pytest.fail(f"no sentry_sdk.init(...) call found in {BOT_PY.name}")
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "init"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "sentry_sdk"
+    ]
+    if len(calls) != 1:
+        pytest.fail(f"expected one sentry_sdk.init(...) in {BOT_PY.name}, found {len(calls)}")
+    return {kw.arg: kw.value for kw in calls[0].keywords if kw.arg}
 
 
 class TestInitOptions:
@@ -84,10 +90,16 @@ def _frames_of_one_captured_event(**init_kwargs) -> list[dict]:
     """Raise inside ``_handler`` under ``init_kwargs`` and return the frames
     of the event that would have left the process."""
     transport = _CapturingTransport()
+    # Integrations install process-wide and survive ``close()`` — the default
+    # set replaces ``sys.excepthook`` and patches aiohttp, logging and
+    # threading for every test file that runs after this one. None of them are
+    # involved in capturing locals, so switch them off.
     client = sentry_sdk.Client(
         dsn=FAKE_DSN,
         traces_sample_rate=0.0,
         send_default_pii=False,
+        default_integrations=False,
+        auto_enabling_integrations=False,
         transport=transport,
         **init_kwargs,
     )

@@ -6403,3 +6403,213 @@ def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:
             "SELECT * FROM vs_score_prompt_posts WHERE server_date >= ?", (cutoff,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Data removal ────────────────────────────────────────────────────────────
+#
+# Actioning a removal request from someone with a Discord identity (#517).
+# Before this, `remove_premium_assignment` was the only user-keyed delete in
+# the file and it exists for subscription management; everything else was
+# guild-scoped or event-scoped, so nothing could remove a person.
+#
+# Two shapes, and what a table gets is decided by what its rows are.
+#
+#   * A record a person WROTE keeps its contribution and loses its attribution.
+#     A team plan the officer saved is the alliance's record of who it committed
+#     in-game, and it is not theirs to take back on the way out.
+#   * A record ABOUT a person goes whole. Nothing survives scrubbing a row whose
+#     entire content is "this member chose A".
+#
+# `storm_signups` and `storm_signup_history` carry both kinds, which is why they
+# appear in both lists. A row is about the person named in `target_member_id`;
+# the officer in `voter_user_id` only wrote it. So the requester's own votes go
+# and their on-behalf votes for other members keep the vote and lose the
+# officer -- otherwise one person leaving would silently withdraw somebody
+# else's sign-up.
+#
+# `target_member_id` is free-form by design (see the `storm_signups` schema
+# comment): `str(discord_user_id)` for a member on Discord, a roster name for
+# one who is not. This route matches the first form only, which is the whole
+# scope of the issue -- a person with no Discord identity has no request to
+# make through Discord.
+#
+# The scrub sentinel is 0 for the `INTEGER NOT NULL` officer columns, which is
+# the value `guild_install_metadata.owner_id` already uses for "not known", and
+# NULL for `installer_user_id`, which allows it.
+#
+# Every scrub predicate is disjoint from every delete predicate, so a preview
+# and the run it previews cannot disagree about a row: nothing is counted by one
+# pass and removed by another.
+
+_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    ("storm_signups", "target_member_id = :sid"),
+    ("storm_signup_history", "target_member_id = :sid"),
+    ("storm_team_plans", "target_member_id = :sid"),
+    ("storm_power_refresh_dms_sent", "voter_user_id = :uid"),
+    ("storm_session_state", "user_id = :uid"),
+    ("walkthrough_dismissals", "user_id = :uid"),
+    ("premium_assignments", "user_id = :uid"),
+)
+
+_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    (
+        "storm_signups",
+        "voter_user_id = 0",
+        "voter_user_id = :uid AND target_member_id <> :sid",
+    ),
+    (
+        "storm_signup_history",
+        "voter_user_id = 0",
+        "voter_user_id = :uid AND target_member_id <> :sid",
+    ),
+    (
+        "storm_team_plans",
+        "saved_by_user_id = 0",
+        "saved_by_user_id = :uid AND target_member_id <> :sid",
+    ),
+    ("storm_roster_images", "posted_by_user_id = 0", "posted_by_user_id = :uid"),
+    # One statement rather than two so a person who is both the owner and the
+    # installer of a guild counts as one row touched instead of two.
+    (
+        "guild_install_metadata",
+        "owner_id = CASE WHEN owner_id = :uid THEN 0 ELSE owner_id END, "
+        "installer_user_id = CASE WHEN installer_user_id = :uid "
+        "THEN NULL ELSE installer_user_id END",
+        "owner_id = :uid OR installer_user_id = :uid",
+    ),
+)
+
+
+def _scrub_member_from_draft(node, member_key: str):
+    """Drop every trace of one member key from a decoded roster-draft payload.
+
+    Structural rather than field-by-field on purpose. `storm_roster_builder
+    ._serialize_session` owns this format and it has grown fields before
+    (`member_names_at_save` arrived as a follow-up to #240); a scrub naming each
+    field would go quietly stale the next time it grows, and a stale scrub in a
+    removal path leaves a live Discord ID behind while reporting success.
+
+    The rule is the same wherever the key can appear: a list drops elements
+    equal to it, and a dict drops entries whose key or value equals it. That
+    covers `subs`, the per-phase assignment and override lists and
+    `member_names_at_save`, and it drops a `paired_subs` entry whole when either
+    side of the pairing is this member -- which is right, because half a pairing
+    is not a pairing. `_apply_saved_state` already drops member keys that are no
+    longer in the pool, so what comes back is a state the loader handles rather
+    than a new one.
+    """
+    if isinstance(node, dict):
+        return {
+            k: _scrub_member_from_draft(v, member_key)
+            for k, v in node.items()
+            if k != member_key and v != member_key
+        }
+    if isinstance(node, list):
+        return [_scrub_member_from_draft(v, member_key) for v in node if v != member_key]
+    return node
+
+
+def _purge_user_from_roster_drafts(conn, member_key: str, *, apply: bool) -> tuple[int, int]:
+    """Scrub one member out of every saved roster draft. Returns
+    `(scrubbed, deleted)`.
+
+    Drafts are the one place a member's Discord ID lives inside a blob rather
+    than a column, and they outlive the event they were built for -- the table
+    keeps one row per team, reused across weeks, so a draft saved once can hold
+    an ID indefinitely.
+
+    `updated_at` is deliberately left alone. It means "when the officer last
+    saved", and the officer did not save.
+
+    A row whose JSON will not parse cannot be scrubbed and cannot be loaded
+    either, so it is deleted if the raw text mentions the member at all. That
+    should be unreachable -- the only writer is `json.dumps` -- but a removal
+    path is the wrong place to assume a row is well-formed.
+    """
+    rows = conn.execute(
+        "SELECT guild_id, event_type, team, session_json FROM storm_roster_drafts"
+    ).fetchall()
+    scrubbed = 0
+    deleted = 0
+    for row in rows:
+        key = (row["guild_id"], row["event_type"], row["team"])
+        raw = row["session_json"]
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            if member_key and member_key in (raw or ""):
+                deleted += 1
+                if apply:
+                    conn.execute(
+                        "DELETE FROM storm_roster_drafts "
+                        "WHERE guild_id = ? AND event_type = ? AND team = ?",
+                        key,
+                    )
+            continue
+        cleaned = _scrub_member_from_draft(payload, member_key)
+        if cleaned == payload:
+            continue
+        scrubbed += 1
+        if apply:
+            conn.execute(
+                "UPDATE storm_roster_drafts SET session_json = ? "
+                "WHERE guild_id = ? AND event_type = ? AND team = ?",
+                (json.dumps(cleaned), *key),
+            )
+    return scrubbed, deleted
+
+
+def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
+    """Remove one person from the guild-config database.
+
+    With `apply=False` (the default) this counts what a run would touch and
+    changes nothing, so the same call can render a preview and then do the work.
+    Both paths walk the same two spec tables above and share every predicate --
+    a preview that ran a different query from the run would be worth less than
+    no preview at all.
+
+    Returns `{"deleted": {table: rows}, "scrubbed": {table: rows},
+    "applied": bool}`, with tables that matched nothing left out. A removal
+    nobody can audit is a removal nobody can trust, so the counts are the point
+    rather than a debugging aid.
+
+    Deleting the `premium_assignments` row drops the assigned guild's Premium.
+    The caller is responsible for clearing the premium cache afterwards, the
+    same obligation `remove_premium_assignment` carries.
+    """
+    uid = int(user_id)
+    sid = str(uid)
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"uid": uid, "sid": sid}
+    with _get_conn() as conn:
+        for table, where in _REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        for table, sets, where in _REMOVAL_SCRUBS:
+            if apply:
+                n = conn.execute(
+                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    params,
+                ).rowcount
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["scrubbed"][table] = n
+        draft_scrubbed, draft_deleted = _purge_user_from_roster_drafts(conn, sid, apply=apply)
+        if draft_scrubbed:
+            out["scrubbed"]["storm_roster_drafts"] = draft_scrubbed
+        if draft_deleted:
+            out["deleted"]["storm_roster_drafts"] = draft_deleted
+        if apply:
+            conn.commit()
+    return out

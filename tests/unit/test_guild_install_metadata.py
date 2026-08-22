@@ -190,6 +190,7 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "overview",
         "guild_info",
         "forget_guild",
+        "forget_user",
         "shiny_servers",
         "shiny_import",
         "shiny_set",
@@ -200,6 +201,7 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "transfer_dump",
         "verify",
         "champion_duel_import",
+        "champion_duel_conflicts",
     }
     # bot.py's own `_ADMIN_GUILD_IDS` is a `from bot_admin import ...`
     # snapshot taken during its reload above -- it doesn't retroactively
@@ -236,6 +238,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "overview",
             "guild_info",
             "forget_guild",
+            "forget_user",
             "shiny_servers",
             "shiny_import",
             "shiny_set",
@@ -246,6 +249,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "transfer_dump",
             "verify",
             "champion_duel_import",
+            "champion_duel_conflicts",
         }
 
     # Unrelated guild sees nothing.

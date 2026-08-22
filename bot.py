@@ -45,7 +45,17 @@ __version__ = "1.9.0"
 # Initialised only if SENTRY_DSN is set in the environment so local dev runs
 # without a DSN don't ship telemetry. Configuration choices:
 #   * traces_sample_rate=0.0 — errors only, no performance traces.
-#   * send_default_pii=False — no Discord user IDs / IPs in events.
+#   * send_default_pii=False — no user or request context (IDs, IPs)
+#     attached to events. It does NOT cover stack-frame locals; those are
+#     the separate option below.
+#   * include_local_variables=False — no frame locals in the traceback. The
+#     SDK default is True, and nearly every frame in this codebase has a
+#     guild_id, user_id, member name, sheet ID or the Google service-account
+#     JSON in scope at the point something raises, so the default sends all
+#     of it. privacy.html promises crash reports carry none of that, and a
+#     published promise outranks the convenience (#518). The exception type,
+#     message and full frame list are unaffected — only the values are gone,
+#     so diagnosis now leans on a repro rather than a locals dump.
 #   * environment — read from $ENV (defaults to "production"); local dev
 #     should set ENV=development to keep dev errors out of prod alerts.
 #   * before_send — drops upstream failures nobody can fix from the code
@@ -62,6 +72,7 @@ if _sentry_dsn:
         environment=os.getenv("ENV", "production"),
         traces_sample_rate=0.0,
         send_default_pii=False,
+        include_local_variables=False,
         before_send=sentry_before_send,
     )
     print(

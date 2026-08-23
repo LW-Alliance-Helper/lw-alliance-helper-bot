@@ -1,7 +1,7 @@
 """
 Manual roster builder for Desert Storm and Canyon Storm (#128).
 
-Opened from the `👁️ View sign-ups + set up teams` officer view via
+Opened from the `👀 View sign-ups + set up teams` officer view via
 its "Apply preset" picker (hub-restructure #187; legacy
 `/desertstorm strategy apply` slash subcommand pre-#125). Leadership
 picks the team, the bot loads the named preset + member rules + roster
@@ -1741,7 +1741,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     event_label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
-    title = f"🛡️ Roster Builder Template: {session.preset.name}"
+    title = f"📋 Roster Builder Template: {session.preset.name}"
 
     # Event + team line: `🗺️ Desert Storm: Team A` for DS, `🗺️ Canyon Storm:
     # <faction>` for CS with a faction, bare `🗺️ Canyon Storm` otherwise.
@@ -1863,13 +1863,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             # this zone. Surface both so leadership can tell at a glance
             # which rule is in play.
             lines.append(
-                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"⭐ Active zone: {active_icon}{selected} · minimum "
                 f"{format_power(effective_floor) if effective_floor else '(none)'} "
                 f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"⭐ Active zone: {active_icon}{selected} · minimum "
                 f"{format_power(effective_floor) if effective_floor else '(none)'}"
             )
     has_unknown = any(m.get("power") is None for m in session.members.values())
@@ -1887,7 +1887,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     af = session.auto_fill_summary
     if af is not None:
         lines.append("")
-        lines.append("## 🎯 Auto-fill summary")
+        lines.append("## ✨ Auto-fill summary")
         if af.get("starters_short", 0) > 0:
             # #219: surface short-signup counts up front so officers
             # see the gap before scanning the per-zone fill state.
@@ -1964,10 +1964,10 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         embed.set_footer(
             text=(
                 "💾 Auto-saving as you go. Close anytime; resume from "
-                "/desertstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
+                "/desertstorm → 👀 View sign-ups + set up teams → ▶️ Resume Team X."
                 if session.event_type == "DS"
                 else "💾 Auto-saving as you go. Close anytime; resume from "
-                "/canyonstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
+                "/canyonstorm → 👀 View sign-ups + set up teams → ▶️ Resume Team X."
             )
         )
     return embed
@@ -2372,7 +2372,7 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(edit_btn)
 
         unassign_btn = discord.ui.Button(
-            label="🧹 Clear this zone",
+            label="🗑️ Clear this zone",
             style=discord.ButtonStyle.secondary,
             row=action_row,
         )
@@ -2452,7 +2452,7 @@ class RosterBuilderView(discord.ui.View):
         auto_fill_row = post_row if (s.is_structured and post_row is not None) else action_row
         if s.is_structured:
             auto_fill_btn = discord.ui.Button(
-                label="🎯 Auto-fill",
+                label="✨ Auto-fill",
                 style=discord.ButtonStyle.primary,
                 row=auto_fill_row,
             )
@@ -2533,9 +2533,9 @@ class RosterBuilderView(discord.ui.View):
                     "Pick how to distribute the 20 starters across "
                     "this team's zones:\n"
                     "\n"
-                    "- ⚖️ **Balanced spread:** one starter per zone per "
+                    "- **Balanced spread:** one starter per zone per "
                     "pass, power distributed across every zone.\n"
-                    "- 💪 **Strength to priority:** send the strongest "
+                    "- **Strength to priority:** send the strongest "
                     "members to the highest-priority zones first, keeping "
                     "power even between zones that share a priority."
                 )
@@ -2628,7 +2628,7 @@ class RosterBuilderView(discord.ui.View):
 
             preview_row = post_row if post_row is not None else final_row
             preview_btn = discord.ui.Button(
-                label="📄 Preview mail",
+                label="👀 Preview mail",
                 style=discord.ButtonStyle.secondary,
                 row=preview_row,
             )
@@ -2698,9 +2698,9 @@ class RosterBuilderView(discord.ui.View):
         # #240 follow-up: structured mode now persists the draft on
         # every action, so closing the builder doesn't lose work.
         # Button label switches from "❌ Cancel" (which implied
-        # destruction) to "👋 Close (draft saved)" so officers know
+        # destruction) to "Close (draft saved)" so officers know
         # they can come back via ♻️ Resume.
-        cancel_label = "👋 Close (draft saved)" if s.is_structured else "✅ Done"
+        cancel_label = "Close (draft saved)" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
             label=cancel_label,
             style=discord.ButtonStyle.secondary if s.is_structured else discord.ButtonStyle.danger,
@@ -2715,8 +2715,8 @@ class RosterBuilderView(discord.ui.View):
             if s.is_structured:
                 hub_cmd = "/desertstorm" if s.event_type == "DS" else "/canyonstorm"
                 close_msg = (
-                    f"👋 Builder closed. **Your draft is saved** — "
-                    f"come back via `{hub_cmd}` → **👁️ View sign-ups + set up teams** and click "
+                    f"Builder closed. **Your draft is saved** — "
+                    f"come back via `{hub_cmd}` → **👀 View sign-ups + set up teams** and click "
                     f"**♻️ Resume Team {s.team}** to pick up where "
                     f"you left off."
                 )
@@ -3204,7 +3204,7 @@ class _SubsManageView(discord.ui.View):
         self.add_item(return_btn)
 
         done_btn = discord.ui.Button(
-            label="✔ Done",
+            label="Done",
             style=discord.ButtonStyle.secondary,
             row=1,
         )
@@ -3295,7 +3295,7 @@ class _SubsManageView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="✔ Done managing subs.",
+                content="✅ Done managing subs.",
                 view=None,
             )
         except discord.HTTPException:
@@ -3482,8 +3482,8 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     The Auto-fill button always opens this picker. Officers pick one
     of two strategies, each described in the picker's body copy:
 
-      🎯 Balanced spread      — one starter per zone per pass.
-      🔝 Strength to priority — fill top-priority zones first.
+      Balanced spread      — one starter per zone per pass.
+      Strength to priority — fill top-priority zones first.
 
     A third button cancels without running. When the parent session
     already has assignments, the parent builder prepends a
@@ -3580,24 +3580,25 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    # Primary style on both strategy buttons. The new ⚖️ / 💪 glyphs
-    # read fine against the blue background (the earlier 🎯 / 🔝
-    # rendered washed-out at small sizes). All three buttons fit on a
-    # single row.
-    @discord.ui.button(label="⚖️ Balanced spread", style=discord.ButtonStyle.primary, row=0)
+    # Primary style on both strategy buttons; all three fit on a single
+    # row. Both go bare per `notes/DESIGN.md` emoji rule 7: the two
+    # strategies differ by parameter, not by kind, so any glyph would be
+    # the same one twice. Earlier attempts (🎯 / 🔝, then ⚖️ / 💪) were
+    # both chasing a distinction the labels already carry.
+    @discord.ui.button(label="Balanced spread", style=discord.ButtonStyle.primary, row=0)
     async def balanced(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
             inter,
             "balanced",
-            "⚖️ Balanced spread auto-fill",
+            "Balanced spread auto-fill",
         )
 
-    @discord.ui.button(label="💪 Strength to priority", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Strength to priority", style=discord.ButtonStyle.primary, row=0)
     async def priority_greedy(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
             inter,
             "priority_greedy",
-            "💪 Strength-to-priority auto-fill",
+            "Strength-to-priority auto-fill",
         )
 
     @discord.ui.button(label="↩️ Cancel Auto-fill", style=discord.ButtonStyle.secondary, row=0)
@@ -3970,7 +3971,7 @@ class _PairSubsView(discord.ui.View):
         self.add_item(assign_btn)
 
         unpair_btn = discord.ui.Button(
-            label="🔄 Unpair…",
+            label="🔗 Unpair…",
             style=discord.ButtonStyle.secondary,
             row=2,
             disabled=not bool(self._phase_pairings()),
@@ -3979,7 +3980,7 @@ class _PairSubsView(discord.ui.View):
         self.add_item(unpair_btn)
 
         done_btn = discord.ui.Button(
-            label="✔ Done",
+            label="Done",
             style=discord.ButtonStyle.secondary,
             row=2,
         )
@@ -4038,7 +4039,7 @@ class _PairSubsView(discord.ui.View):
             self.add_item(unpair_select)
 
         confirm_btn = discord.ui.Button(
-            label="🔄 Confirm unpair",
+            label="🔗 Confirm unpair",
             style=discord.ButtonStyle.danger,
             row=1,
             disabled=not self.selected_unpair_primary,
@@ -4482,7 +4483,7 @@ class _RenderActionView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="📥 Download", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="💾 Download", style=discord.ButtonStyle.secondary)
     async def download_btn(
         self,
         inter: discord.Interaction,
@@ -4496,7 +4497,7 @@ class _RenderActionView(discord.ui.View):
             dm = await inter.user.create_dm()
             await dm.send(
                 content=(
-                    f"📥 Here's the roster image you asked to download "
+                    f"💾 Here's the roster image you asked to download "
                     f"(from {self.event_type} on {self.event_date or 'today'}). "
                     f"Right-click → Save image, or tap → save on mobile."
                 ),
@@ -4522,18 +4523,18 @@ class _RenderActionView(discord.ui.View):
             )
             return
         await inter.response.send_message(
-            "📥 Sent to your DMs. Check your direct messages with the bot.",
+            "✅ Sent to your DMs. Check your direct messages with the bot.",
             ephemeral=True,
         )
 
-    @discord.ui.button(label="💾 Save to history", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📜 Save to history", style=discord.ButtonStyle.primary)
     async def save_btn(
         self,
         inter: discord.Interaction,
         _btn: discord.ui.Button,
     ):
         """Store the (channel, message) pointer so the history browser
-        can offer a `📷 View image` button on this event. Image bytes
+        can offer a `🖼️ View image` button on this event. Image bytes
         live in Discord; we just remember where."""
         import config
 
@@ -4568,14 +4569,14 @@ class _RenderActionView(discord.ui.View):
             )
             return
         await inter.response.send_message(
-            f"💾 Saved. The image is now linked from "
+            f"📜 Saved. The image is now linked from "
             f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PAST_ROSTERS}** "
             f"for this event date "
             f"(stays available until the original message is deleted).",
             ephemeral=True,
         )
 
-    @discord.ui.button(label="📢 Post to channel...", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="📣 Post to channel...", style=discord.ButtonStyle.secondary)
     async def post_btn(
         self,
         inter: discord.Interaction,
@@ -5474,7 +5475,7 @@ def _other_team_claimed_keys(
 #                          the second message always starts with a
 #                          `**Heading**` line and sections stay
 #                          together.
-#   📎 Send as .txt      — full mail as a .txt file attachment
+#   💾 Send as .txt      — full mail as a .txt file attachment
 #                          alongside the image (the #234 fallback).
 #
 # Plus a Cancel button so the officer can back out and edit the
@@ -5542,7 +5543,7 @@ class _LongMailPickerView(discord.ui.View):
     async def split_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "split")
 
-    @discord.ui.button(label="📎 Send as .txt attachment", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="💾 Send as .txt attachment", style=discord.ButtonStyle.primary)
     async def attach_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "txt")
 
@@ -6201,7 +6202,7 @@ async def _finalize_structured_roster(
                 "📨 **Send as 2 posts** splits at the next natural "
                 "break so the second post starts with a section "
                 "heading.\n\n"
-                "📎 **Send as .txt attachment** posts the full mail as "
+                "💾 **Send as .txt attachment** posts the full mail as "
                 "a file alongside the image. Copy the file's contents "
                 "to send in-game.",
                 view=picker,
@@ -7128,7 +7129,7 @@ async def open_roster_builder(
                     from storm_date_helpers import format_event_date
 
                     lines.append(
-                        f"📅 Resumed a draft last saved for "
+                        f"▶️ Resumed a draft last saved for "
                         f"**{format_event_date(report['stale_event_date'])}**. "
                         f"Re-applied to this week's signups — review "
                         f"before posting."

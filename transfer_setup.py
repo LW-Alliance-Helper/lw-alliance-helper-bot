@@ -274,7 +274,7 @@ class _SheetStepView(discord.ui.View):
             )
             keep.callback = self._keep
             self.add_item(keep)
-        enter = discord.ui.Button(label="📝 Enter sheet", style=discord.ButtonStyle.primary)
+        enter = discord.ui.Button(label="✏️ Enter sheet", style=discord.ButtonStyle.primary)
         enter.callback = self._enter
         self.add_item(enter)
 
@@ -412,15 +412,13 @@ class _ModeStepView(discord.ui.View):
             self.add_item(keep)
             r = 1
         b1 = discord.ui.Button(
-            label="🔀 A shared sheet that populates my own sheet",
+            label="📥 A shared sheet that populates my own sheet",
             style=discord.ButtonStyle.primary,
             row=r,
         )
         b1.callback = self._pick_source_to_own
         self.add_item(b1)
-        b2 = discord.ui.Button(
-            label="🏠 My own sheet", style=discord.ButtonStyle.primary, row=r + 1
-        )
+        b2 = discord.ui.Button(label="✏️ My own sheet", style=discord.ButtonStyle.primary, row=r + 1)
         b2.callback = self._pick_own
         self.add_item(b2)
         b3 = discord.ui.Button(
@@ -559,7 +557,7 @@ def _mode_embed() -> discord.Embed:
         ),
     )
     embed.add_field(
-        name="🔀 A shared sheet that populates my own sheet",
+        name="📥 A shared sheet that populates my own sheet",
         value=(
             "This is a two-sheet setup where you have one that is the entry point for data and "
             "then one that you edit separately. (E.g. your entire server shares a sheet but your "
@@ -568,7 +566,7 @@ def _mode_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🏠 My own sheet",
+        name="✏️ My own sheet",
         value=(
             "This is when you have a single sheet that you add transfers to, record statuses, and "
             "make edits all in one place."
@@ -1449,7 +1447,7 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             owner_id,
             [
                 ("🔤 Contains text", "contains", discord.ButtonStyle.primary),
-                ("🎯 Is one of specific values", "in", discord.ButtonStyle.secondary),
+                ("🔽 Is one of specific values", "in", discord.ButtonStyle.secondary),
                 ("↩️ Back", "BACK", discord.ButtonStyle.secondary),
             ],
         )
@@ -1494,7 +1492,7 @@ async def _build_filter(
     *,
     intro: str | None = None,
     none_label: str = "✅ Every new applicant",
-    build_label: str = "🔎 Only ones matching a filter",
+    build_label: str = "🔍 Only ones matching a filter",
     current_filter=None,
 ):
     """Walk the recruiter through an AND/OR filter. Returns the filter dict,
@@ -1783,7 +1781,7 @@ async def _configure_source(
             "For example: only rows where *Requested Landing Alliance* contains your tag."
         ),
         none_label="📥 Pull every row",
-        build_label="🔎 Only rows matching a filter",
+        build_label="🔍 Only rows matching a filter",
         current_filter=cur_pull_filter,
     )
     if filt in ("CANCEL", "TIMEOUT"):
@@ -2147,7 +2145,7 @@ async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
     srcv = _ButtonChoiceView(
         user_id,
         [
-            ("🆕 Create a new column", "new", discord.ButtonStyle.primary),
+            ("➕ Create a new column", "new", discord.ButtonStyle.primary),
             ("🗂️ Use an existing column", "existing", discord.ButtonStyle.secondary),
         ],
     )
@@ -2266,7 +2264,7 @@ async def _edit_one_decision(channel, user_id, sheet_id, tab, decision, cancel_e
 
 
 def _decisions_embed(decisions: list) -> discord.Embed:
-    embed = discord.Embed(title="🧭 Decisions", color=discord.Color.blurple())
+    embed = discord.Embed(title="📋 Decisions", color=discord.Color.blurple())
     if not decisions:
         embed.description = (
             "No decisions yet.\n\n"
@@ -2641,7 +2639,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                     "*Requested Alliance contains your tag*)?"
                 ),
                 none_label="✅ Every new applicant on the sheet",
-                build_label="🔎 Only ones matching a filter",
+                build_label="🔍 Only ones matching a filter",
                 current_filter=cur_filter,
             )
             if filt == "CANCEL":
@@ -2840,12 +2838,12 @@ class _EditMenuView(discord.ui.View):
         # menu stays short and the labels say plainly what they touch.
         specs = [("🗂️ Your Sheet Columns", "columns", 0)]
         if mode in (_MODE_OWN, _MODE_WATCH):
-            specs.append(("🔎 Filter", "filter", 0))
+            specs.append(("🔍 Filter", "filter", 0))
         if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
             specs.append(("📥 Shared sheet configuration", "shared", 1))
         specs.append(("🔔 Notifications", "notifications", 1))
-        specs.append(("✉️ Message templates", "templates", 2))
-        specs.append(("📑 Change Setup", "resetup", 2))
+        specs.append(("📄 Message templates", "templates", 2))
+        specs.append(("⚙️ Change Setup", "resetup", 2))
         for label, value, row in specs:
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
             btn.callback = self._make(value)
@@ -3067,7 +3065,7 @@ async def _edit_style(channel, guild_id, user, cfg, cancel_event) -> str:
         if (cfg.get("notification_style") or "each") == "each"
         else "a digest"
     )
-    g = await _edit_gate(channel, user.id, "Notification style", cur, cancel_event)
+    g = await _edit_gate(channel, user.id, "Delivery", cur, cancel_event)
     if g != "change":
         return g
     st, style = await _step_style(channel, user.id, cancel_event)
@@ -3117,7 +3115,7 @@ async def _edit_filter(channel, guild_id, user, cfg, cancel_event) -> str:
                 "Get pinged for every new row, or only the ones matching a filter?"
             ),
             none_label="✅ Every new applicant on the sheet",
-            build_label="🔎 Only ones matching a filter",
+            build_label="🔍 Only ones matching a filter",
         )
     else:
         filt = await _build_filter(channel, user.id, header, rows, cancel_event)
@@ -3330,7 +3328,7 @@ async def _edit_columns(channel, guild_id, user, cfg, cancel_event) -> str:
     specs = [("🗂️ Map columns", "mapping")]
     handlers = {"mapping": _edit_mapping, "decisions": _edit_decisions}
     if mode != _MODE_WATCH:
-        specs.append(("🧭 Decision columns", "decisions"))
+        specs.append(("📋 Decision columns", "decisions"))
     return await _run_submenu(
         channel,
         guild_id,
@@ -3352,7 +3350,7 @@ async def _edit_shared(channel, guild_id, user, cfg, cancel_event) -> str:
         title="Shared sheet configuration",
         specs=[
             ("📥 Sheets & column matching", "intake"),
-            ("🧩 Fill-in from source", "enrich"),
+            ("✏️ Fill-in from source", "enrich"),
         ],
         handlers={"intake": _edit_intake, "enrich": _edit_enrich},
     )
@@ -3363,8 +3361,8 @@ async def _edit_notifications(channel, guild_id, user, cfg, cancel_event) -> str
     mode = cfg.get("setup_mode") or ""
     specs = [
         ("📢 Channel", "channel"),
-        ("🎚️ Style", "style"),
-        ("⏱️ Frequency", "frequency"),
+        ("📬 Delivery", "style"),
+        ("🕒 Frequency", "frequency"),
     ]
     handlers = {
         "channel": _edit_channel,

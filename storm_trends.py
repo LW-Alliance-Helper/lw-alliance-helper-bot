@@ -376,8 +376,8 @@ def _render_builder_embed(state: _TrendsState) -> discord.Embed:
             "_No trendable questions configured yet. The Trends Viewer "
             "needs at least one **Roster multi-select** question on "
             "the participation flow, or attendance records from the "
-            f"**📋 Record attendance** button. Run `/setup → "
-            f"{'⚔️ Desert Storm' if state.event_type == 'DS' else '🏜️ Canyon Storm'}` "
+            f"**✏️ Record attendance** button. Run `/setup → "
+            f"{'⚔️ Desert Storm' if state.event_type == 'DS' else '🛡️ Canyon Storm'}` "
             "to add a question, or record attendance for a past event "
             "first._"
         )
@@ -581,7 +581,7 @@ class _TrendsView(discord.ui.View):
         self.add_item(run_btn)
 
         copy_btn = discord.ui.Button(
-            label="📋 Copy as text",
+            label="💾 Copy as text",
             style=discord.ButtonStyle.secondary,
             row=4,
             disabled=(s.last_query is None),

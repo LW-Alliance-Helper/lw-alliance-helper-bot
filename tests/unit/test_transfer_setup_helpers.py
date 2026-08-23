@@ -242,7 +242,7 @@ class TestSectionPickerView:
 
     def test_specs_and_back(self):
         v = transfer_setup._SectionPickerView(
-            owner_id=1, specs=[("📢 Channel", "channel"), ("⏱️ Frequency", "frequency")]
+            owner_id=1, specs=[("📢 Channel", "channel"), ("🕒 Frequency", "frequency")]
         )
         labels = [c.label for c in v.children]
         assert any("Channel" in lbl for lbl in labels)

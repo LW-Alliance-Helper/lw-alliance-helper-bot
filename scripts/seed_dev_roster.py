@@ -228,7 +228,7 @@ def main() -> int:
         f"'{tab_name}' for guild {args.guild_id}."
     )
     print("\nNext steps:")
-    print("  - In /setup → ⚔️ Desert Storm (or /setup → 🏜️ Canyon Storm), set Power")
+    print("  - In /setup → ⚔️ Desert Storm (or /setup → 🛡️ Canyon Storm), set Power")
     print("    Metric Column to G (the column this script writes power to).")
     print("  - Do NOT run /members sync on this guild. It'll wipe these")
     print("    rows. Re-seed via this script after a sync if you want both")

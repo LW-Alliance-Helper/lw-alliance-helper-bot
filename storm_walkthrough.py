@@ -2,7 +2,7 @@
 Guided first-run walkthrough on the storm event hub (#130, rewritten
 for #187 + #190).
 
-Surfaces a `[👋 Walk me through this]` offer the first time an officer
+Surfaces a `[📖 Walk me through this]` offer the first time an officer
 opens `/desertstorm` or `/canyonstorm`. Clicking it runs a narrated
 5-step tour that walks through the hub layout, the weekly event cycle,
 the strategy presets + member rules surfaces, free vs Premium gating,
@@ -174,7 +174,7 @@ async def maybe_offer_storm_hub_tour(
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
         msg = await interaction.followup.send(
-            f"👋 First time opening {label}? Want a quick walkthrough of how this hub works?",
+            f"📖 First time opening {label}? Want a quick walkthrough of how this hub works?",
             view=view,
             ephemeral=True,
             wait=True,
@@ -211,7 +211,7 @@ class _OfferView(discord.ui.View):
         self.event_type = event_type
         self.message: discord.Message | discord.WebhookMessage | None = None
 
-    @discord.ui.button(label="👋 Walk me through this", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="📖 Walk me through this", style=discord.ButtonStyle.success)
     async def accept(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user.id != self.user_id:
             await inter.response.send_message(
@@ -259,7 +259,7 @@ class _OfferView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="👍 Got it, won't ask again. Run `/help` any "
+                content="✅ Got it, won't ask again. Run `/help` any "
                 "time and pick Desert Storm or Canyon Storm "
                 "for a refresher.",
                 view=self,

@@ -38,6 +38,7 @@ from messages import (
     WIZARD_TIMEOUT,
 )
 from setup_hub import (
+    STORM_GLYPH,
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
     HUB_BTN_EVENTS,
@@ -1884,7 +1885,7 @@ class ScheduleTypeView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="📅 Add manually each time", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="✏️ Add manually each time", style=discord.ButtonStyle.secondary)
     async def manual(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.selected = "manual"
         for item in self.children:
@@ -1998,7 +1999,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Spreadsheet ID:** {sheet_id_display}",
         f"**Member Tab:** {cfg.tab_member_default}",
     ]
-    embed.add_field(name="🛠️ Core", value="\n".join(core_lines)[:1024], inline=False)
+    embed.add_field(name="⚙️ Core", value="\n".join(core_lines)[:1024], inline=False)
 
     ev_lines = [
         f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
@@ -2077,7 +2078,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         return f"**Team {team_letter} Time:** *not set — Step 3 of {setup_hint}*"
 
     ds_hint = "`/setup` → ⚔️ Desert Storm"
-    cs_hint = "`/setup` → 🏜️ Canyon Storm"
+    cs_hint = "`/setup` → 🛡️ Canyon Storm"
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
@@ -2094,7 +2095,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, cs_hint),
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
-    embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
+    embed.add_field(name="🛡️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
 
     translate_bot = (
         f"<@{cfg.survey_translate_bot_id}>" if cfg.survey_translate_bot_id else "*not set*"
@@ -2417,7 +2418,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "🚂 **Train** — Train schedule, blurb generation, and reminders\n"
         "🎂 **Birthdays** — Birthday tracking and announcements\n"
         "⚔️ **Desert Storm** — Mail drafts and participation logs\n"
-        "🏜️ **Canyon Storm** — Mail drafts and participation logs\n"
+        "🛡️ **Canyon Storm** — Mail drafts and participation logs\n"
         "📋 **Survey** — Squad powers survey\n"
         "📈 **Growth** — Growth tracking (snapshot your members' stats over time)\n"
         "🌟 **Shiny Tasks** — Daily announcement of today's shiny task servers for your Alliance\n\n"
@@ -4352,9 +4353,7 @@ async def _run_train_rotation_step(
                 self.modal_out = None
                 self.cancelled = False
 
-            @discord.ui.button(
-                label="📋 Set roster tab + column", style=discord.ButtonStyle.primary
-            )
+            @discord.ui.button(label="⚙️ Set roster tab + column", style=discord.ButtonStyle.primary)
             async def _set(self, inter: discord.Interaction, _btn: discord.ui.Button):
                 modal = _RosterModal()
                 await inter.response.send_modal(modal)
@@ -4406,7 +4405,7 @@ async def _run_train_rotation_step(
     reminder_time = current.get("reminder_time", "22:00") or "22:00"
     if reminder_channel_id:
         await channel.send(
-            "🗓️ Rotation will post the weekly draft and daily confirmation in "
+            "📅 Rotation will post the weekly draft and daily confirmation in "
             f"<#{reminder_channel_id}> at **{_format_time_with_tz(reminder_time, guild_tz)}** "
             "(reusing your reminder channel and time)."
         )
@@ -5406,7 +5405,7 @@ async def _ask_new_survey_template(channel, cancel_event) -> str | None:
             super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.start_choice = None
 
-        @discord.ui.button(label="📋 Start from a template", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="➕ Start from a template", style=discord.ButtonStyle.primary)
         async def from_template(self, inter: discord.Interaction, button: discord.ui.Button):
             self.start_choice = "template"
             for item in self.children:
@@ -6171,7 +6170,7 @@ async def run_survey_setup(
     # the moment the one-pair-per-survey rule matters, and it's cheaper to
     # explain once than to reject a name and explain then.
     await channel.send(
-        "📑 **Next: your two sheet tabs**\n"
+        "**Next: your two sheet tabs**\n"
         "This survey needs its own pair of tabs, separate from any other "
         "survey's: one holding each member's current answers, one holding "
         "every submission over time. **I'll create them for you** if they "
@@ -6373,7 +6372,7 @@ async def run_survey_setup(
                         "✏️ Entering edit mode...",
                     )
                 _add(
-                    "🔄 Start from scratch",
+                    "♻️ Start from scratch",
                     discord.ButtonStyle.secondary,
                     "scratch",
                     "🔄 Starting from scratch...",
@@ -6893,7 +6892,7 @@ async def run_survey_setup(
         )
     if seeded:
         await channel.send(
-            "📑 Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
+            "Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
         )
 
     q_summary = "\n".join(
@@ -6953,7 +6952,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # `/setup` hub (#201); the hint now points officers at the button
     # they actually need to click. For internal slug uses (channel-name
     # suggestion) helpers derive a separate `cmd_short` from `event_type`.
-    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🏜️ Canyon Storm"
+    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🛡️ Canyon Storm"
     cmd_name = f"setup → {storm_button}"
     cancel_event = wizard_registry.register(user.id)
 
@@ -7087,7 +7086,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         else:
             _times_value = f"Team A: {_slot_blurb(_a_idx)} · Team B: {_slot_blurb(_b_idx)}"
         fields.insert(2, ("Team Times", _times_value))
-        emoji = "⚔️" if event_type == "DS" else "🏜️"
+        emoji = STORM_GLYPH[event_type]
         proceed = await ask_proceed_with_existing_config(
             channel,
             title=f"{emoji} Current {label} Setup",
@@ -7649,7 +7648,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
     # The body of the DM that fires when leadership clicks
-    # 🔔 Send DM reminder to roster on the storm hub. Stored per
+    # 📨 Send DM reminder to roster on the storm hub. Stored per
     # (guild_id, event_type) so DS and CS can have different copy. Free
     # guilds can configure this now too — it just won't fire until they
     # upgrade.
@@ -7661,7 +7660,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     remind_dm = await ask_keep_or_change(
         channel,
         f"**Step 9 of 9: {label} Reminder DM (💎 Premium)**\n"
-        f"When leadership clicks **🔔 Send DM reminder to roster** on "
+        f"When leadership clicks **📨 Send DM reminder to roster** on "
         f"`/{parent_cmd}`, the bot DMs every roster member this message. "
         f"Free guilds can configure it now; it just won't fire until "
         f"you have Premium + Member Sync.\n\n"
@@ -8932,7 +8931,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Create my first preset now", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="➕ Create my first preset now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:
@@ -8994,7 +8993,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Add a power-band rule now", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="➕ Add a power-band rule now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:
@@ -10701,7 +10700,7 @@ async def _build_participation_question(
                     self.stop()
 
                 @discord.ui.button(
-                    label="✋ Manual selection only",
+                    label="✏️ Manual selection only",
                     style=discord.ButtonStyle.secondary,
                 )
                 async def manual(self, inter, _btn):
@@ -10832,7 +10831,7 @@ async def _build_participation_question(
                 self.cancelled = False
 
             @discord.ui.button(
-                label="📊 Show counts per member during the log",
+                label="📋 Show counts per member during the log",
                 style=discord.ButtonStyle.primary,
             )
             async def yes_btn(self, inter, _btn):
@@ -10847,7 +10846,7 @@ async def _build_participation_question(
                 self.stop()
 
             @discord.ui.button(
-                label="🔕 Only show in the Trends Viewer",
+                label="🔍 Only show in the Trends Viewer",
                 style=discord.ButtonStyle.secondary,
             )
             async def no_btn(self, inter, _btn):
@@ -11325,7 +11324,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 self.stop()
 
             @discord.ui.button(
-                label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary
+                label="↔️ Assign nearby if taken", style=discord.ButtonStyle.secondary
             )
             async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1

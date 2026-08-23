@@ -1260,7 +1260,7 @@ class TestStormSignups:
 
 class TestStormRosterImages:
     """Pointer to a saved roster-image message — written by the
-    `💾 Save to history` action, read by the history browser."""
+    `📜 Save to history` action, read by the history browser."""
 
     def test_save_and_list_single_image(self, temp_db):
         import config

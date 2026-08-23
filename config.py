@@ -820,7 +820,7 @@ def init_db():
         # storm_roster_drafts — per-(guild, event_type, team) snapshot of
         # the structured roster builder's in-progress state (#240).
         # Auto-saved on every state change; loaded when the officer
-        # clicks `♻️ Resume Team X roster` on the OfficerView. Survives
+        # clicks `▶️ Resume Team X roster` on the OfficerView. Survives
         # View timeouts AND Railway redeploys so a builder session can
         # take longer than 1 hour without losing work.
         #
@@ -846,9 +846,9 @@ def init_db():
         conn.commit()
 
         # storm_roster_images — pointer to a public roster-image message
-        # in Discord, written by the `💾 Save to history` action on the
+        # in Discord, written by the `📜 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
-        # a `📷 View image` button on the matching event embed so a
+        # a `🖼️ View image` button on the matching event embed so a
         # roster image from week N is still retrievable in week N+8.
         # `team` differentiates DS Team A / Team B; CS uses empty string.
         # UPSERT on the composite key — re-saving overwrites the prior
@@ -3662,7 +3662,7 @@ def delete_roster_draft(
 ) -> int:
     """Delete the saved draft for one team. Returns the rowcount (0
     if nothing was saved). Called when the officer confirms
-    🆕 Set up new — the draft is cleared and a fresh builder opens."""
+    ➕ Set up new — the draft is cleared and a fresh builder opens."""
     with _get_conn() as conn:
         cur = conn.execute(
             "DELETE FROM storm_roster_drafts WHERE guild_id = ? AND event_type = ? AND team = ?",
@@ -3935,7 +3935,7 @@ def list_roster_image_refs(
 ) -> list[dict]:
     """All saved roster-image pointers for a (guild, event) — usually
     one for CS, up to two (Team A + Team B) for DS. Empty list if no
-    `💾 Save to history` clicks have been recorded for this event.
+    `📜 Save to history` clicks have been recorded for this event.
     Ordered so DS Team A renders before Team B in the history view."""
     with _get_conn() as conn:
         rows = conn.execute(

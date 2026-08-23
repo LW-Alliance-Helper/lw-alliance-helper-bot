@@ -311,10 +311,10 @@ def test_assignment_logs_embed_sections():
     ]
     embed = ui.build_assignment_logs_embed(tally, posted)
     fields = {f.name: f.value for f in embed.fields}
-    most = fields["🔝 Most trains"]
+    most = fields["Most trains"]
     assert most.index("Alice") < most.index("Bob")  # most-driven first
     assert "5 trains" in most
-    fewest = fields["🔻 Fewest trains"]
+    fewest = fields["Fewest trains"]
     assert "Zoe" in fewest and "never" in fewest  # never-driven roster member surfaces
     assert "2026-06-08" in fields["🕒 Most recent"]
     assert "3 conductor" in (embed.footer.text or "")

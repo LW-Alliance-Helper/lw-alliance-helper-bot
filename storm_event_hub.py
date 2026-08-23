@@ -25,12 +25,14 @@ from typing import Optional
 import discord
 
 from messages import DENY_NOT_OWNER
+from setup_hub import STORM_GLYPH
 
 logger = logging.getLogger(__name__)
 
 
 _EVENT_LABEL = {"DS": "Desert Storm", "CS": "Canyon Storm"}
-_EVENT_EMOJI = {"DS": "⚔️", "CS": "🏜️"}
+# Imported, not retyped — see setup_hub.STORM_GLYPH (rule 4).
+_EVENT_EMOJI = STORM_GLYPH
 _PARENT_CMD = {"DS": "desertstorm", "CS": "canyonstorm"}
 _FIXED_EVENT_DAY = {"DS": "Friday", "CS": "Thursday"}
 
@@ -47,11 +49,11 @@ HUB_COMMAND = {"DS": "/desertstorm", "CS": "/canyonstorm"}
 # These are the "active" (premium-unlocked) forms. The free-tier locked
 # form is derived via `_locked()` so we don't carry both spellings.
 HUB_BTN_POST_SIGNUP = "📣 Post sign-up poll"
-HUB_BTN_VIEW_SIGNUPS = "👁️ View sign-ups + set up teams"
-HUB_BTN_ATTENDANCE = "📋 Record attendance"
+HUB_BTN_VIEW_SIGNUPS = "👀 View sign-ups + set up teams"
+HUB_BTN_ATTENDANCE = "✏️ Record attendance"
 HUB_BTN_PARTICIPATION = "📊 Fill out participation questions"
-HUB_BTN_REMIND = "🔔 Send DM reminder to roster"
-HUB_BTN_PRESETS = "🧮 Manage strategy presets"
+HUB_BTN_REMIND = "📨 Send DM reminder to roster"
+HUB_BTN_PRESETS = "📋 Manage strategy presets"
 HUB_BTN_RULES = "👤 Manage member rules"
 HUB_BTN_DRAFT = "📄 Generate mail"
 HUB_BTN_LOGS = "📜 View past participation logs"
@@ -134,7 +136,7 @@ def _build_event_hub_embed(
         structured_on = True
         structured_line = "✅ Enabled"
     else:
-        structured_line = "⚪ Not enabled (free-tier flow only)"
+        structured_line = "🔒 Not enabled (free-tier flow only)"
 
     # Preset count.
     try:
@@ -154,7 +156,7 @@ def _build_event_hub_embed(
     description_lines = [
         f"📅 **Next event:** {next_event_line}",
         f"📍 **Sign-up post:** {signup_channel_line}",
-        f"🧑‍🤝‍🧑 **Teams:** {teams_display}",
+        f"**Teams:** {teams_display}",
         f"📋 **Presets saved:** {preset_count}",
         f"💎 **Structured Flow:** {structured_line}",
     ]
@@ -185,10 +187,10 @@ class _EventHubView(discord.ui.View):
 
     Layout (3 rows, 11 buttons total):
         Row 0 (active event-day actions):
-          📣 Post sign-up poll (blue) | 👁️ View sign-ups + set up teams (green) |
-          📋 Record attendance | 📊 Fill out participation questions
+          📣 Post sign-up poll (blue) | 👀 View sign-ups + set up teams (green) |
+          ✏️ Record attendance | 📊 Fill out participation questions
         Row 1 (Communications + configuration):
-          🔔 Send DM reminder to roster | 🧮 Manage strategy presets |
+          📨 Send DM reminder to roster | 📋 Manage strategy presets |
           👤 Manage member rules | 📄 Generate mail
         Row 2 (Reference + setup):
           📜 View past participation logs | 📜 View past rosters |

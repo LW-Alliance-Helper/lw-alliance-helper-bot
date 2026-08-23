@@ -490,7 +490,7 @@ class TestTrendsView:
         labels = {b.label for b in buttons}
         assert any("Teams: both" in lab for lab in labels)
         assert "🔍 View trends" in labels
-        assert "📋 Copy as text" in labels
+        assert "💾 Copy as text" in labels
 
     def test_copy_button_disabled_before_first_query(self):
         from storm_trends import _TrendsView

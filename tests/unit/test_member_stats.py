@@ -243,8 +243,8 @@ class TestBuildEmbed:
         names = [f.name for f in embed.fields]
         assert "Identity" in names
         # Everything missing -> a "More you can track" field listing them
-        assert "💡 More you can track" in names
-        hint = next(f.value for f in embed.fields if f.name == "💡 More you can track")
+        assert "ℹ️ More you can track" in names
+        hint = next(f.value for f in embed.fields if f.name == "ℹ️ More you can track")
         assert "Power trends" in hint and "Storm participation" in hint and "Surveys" in hint
         assert "Train history" not in hint  # leadership-only hint, not in member view
 

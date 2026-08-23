@@ -402,12 +402,12 @@ class TestEventHubViewPremiumGating:
         # Six premium-gated buttons in the hub (#246 added the Trends
         # Viewer to the existing five).
         assert len(locked) == 6
-        # 📣/👁️/📋/🔔/🔍/📜 are the original emoji that should NOT
+        # 📣/👀/📋/📨/🔍/📜 are the original emoji that should NOT
         # survive the locked rewrite (they're the leading character
         # on the premium-gated active labels).
         for label in locked:
             assert "📣" not in label  # Post sign-up
-            assert "🔔" not in label  # DM reminder
+            assert "📨" not in label  # DM reminder
             assert "🔍" not in label  # Trends viewer (#246)
 
     def test_button_layout_three_rows(self):

@@ -66,9 +66,9 @@ _MAX_EACH = 25
 _NOTICE_TIMEOUT = 21600  # 6h — act-now window; older applicants via the hub
 
 _TEMPLATE_BTN = {
-    "apply_invitation": "📩 Apply message",
-    "confirm_request": "📩 Confirm message",
-    "decline": "📩 Decline message",
+    "apply_invitation": "Apply message",
+    "confirm_request": "Confirm message",
+    "decline": "Decline message",
 }
 
 
@@ -256,7 +256,7 @@ def _display_status_value(value) -> str:
 
 def _new_applicant_embed(name: str, display_pairs: list) -> discord.Embed:
     embed = discord.Embed(
-        title=f"📥 New transfer applicant: {name}"[:256], color=discord.Color.green()
+        title=f"🔔 New transfer applicant: {name}"[:256], color=discord.Color.green()
     )
     body = "\n".join(f"**{h}:** {v}" for h, v in display_pairs)
     embed.description = body[:4000] if body else "*(no display columns configured)*"
@@ -404,7 +404,7 @@ class _NoticeView(discord.ui.View):
         self.add_item(details)
         for kind in template_kinds:
             btn = discord.ui.Button(
-                label=_TEMPLATE_BTN.get(kind, "📩 Message"),
+                label=_TEMPLATE_BTN.get(kind, "Message"),
                 style=discord.ButtonStyle.primary,
                 row=0,
             )
@@ -934,7 +934,7 @@ class TransferCog(commands.Cog):
     async def _post_digest(self, channel, hidx, name_header, display_headers, diff, deletions):
         if not (diff.new_applicants or diff.status_changes or deletions):
             return
-        embed = discord.Embed(title="📥 Transfer update", color=discord.Color.green())
+        embed = discord.Embed(title="🔔 Transfer update", color=discord.Color.green())
 
         if diff.new_applicants:
             lines = []

@@ -112,14 +112,14 @@ class TestPresetEditorPolish:
 
     def test_action_button_labels_self_describe(self):
         """Decision #13's button-sweep: '✏️ Rename' → '✏️ Rename preset',
-        '🔙 Abandon' → '🔙 Abandon this preset' so the button is
+        '↩️ Abandon' → '↩️ Abandon this preset' so the button is
         understandable out of context (e.g. on mobile where the embed
         is collapsed)."""
         buf = ss.PresetBuffer(name="P", event_type="DS")
         view = ssui._PresetEditorView(guild_id=1, user_id=1, buf=buf)
         labels = [getattr(c, "label", "") for c in view.children]
         assert "✏️ Rename preset" in labels
-        assert "🔙 Abandon this preset" in labels
+        assert "↩️ Abandon this preset" in labels
         # The Add Zone button is gone.
         assert not any("Add zone" in lab for lab in labels)
 

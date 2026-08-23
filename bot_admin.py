@@ -168,7 +168,7 @@ async def admin_overview_slash(interaction: discord.Interaction):
         ).fetchall()
 
     embed = discord.Embed(
-        title="🛠️ Admin Overview",
+        title="⚙️ Admin Overview",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -241,7 +241,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
         return
 
     title = (meta["guild_name"] if meta else None) or f"Guild {gid}"
-    embed = discord.Embed(title=f"🔎 {title}", color=discord.Color.blurple())
+    embed = discord.Embed(title=f"🔍 {title}", color=discord.Color.blurple())
     embed.add_field(name="Guild ID", value=f"`{gid}`", inline=False)
 
     if meta is not None:
@@ -1090,7 +1090,7 @@ async def admin_verify_slash(
             role_managed=role.managed,
         )
         set_app_setting(support_join_watch.VERIFIED_ROLE_SETTING, str(role.id))
-        line = f"🏷️ Verified role set to **{role.name}**."
+        line = f"✅ Verified role set to **{role.name}**."
         if blocker:
             line += f"\n   ⚠️ Heads up: {blocker} — I can't assign it until that's fixed."
         changes.append(line)
@@ -1197,7 +1197,7 @@ async def _run_verify_scan(interaction: discord.Interaction):
         )
     buf = io.BytesIO(text.encode("utf-8"))
     await interaction.followup.send(
-        f"🔎 Scanned **{len(members)}** members of **{guild.name}** — "
+        f"🔍 Scanned **{len(members)}** members of **{guild.name}** — "
         f"**{len(none_lines)}** in no other bot server, "
         f"**{len(some_lines)}** with overlap{verify_summary}. Full breakdown attached.",
         file=discord.File(buf, filename=f"member_scan_{guild.id}.txt"),

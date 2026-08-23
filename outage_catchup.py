@@ -497,7 +497,7 @@ async def scan_train_reminder(bot, guild, cfg, window: OutageWindow) -> list[Mis
         display = await dm.mention_or_name(bot, guild.id, name)
         msg = (
             f"🚂 **Reset! Today's train is for {display}.**\n\n"
-            f"To get the ChatGPT prompt, use `/train` → 📋 Schedule overview → 📋 Generate Prompt."
+            f"To get the ChatGPT prompt, use `/train` → 📅 Schedule overview → 📋 Generate Prompt."
         )
         try:
             await ch.send(msg)

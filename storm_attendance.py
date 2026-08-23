@@ -1,7 +1,7 @@
 """
 Post-event attendance tracking (#133 — Step 7 of the #38 8-step flow).
 
-Reached via the `📋 Record attendance` button on `/desertstorm` and
+Reached via the `✏️ Record attendance` button on `/desertstorm` and
 `/canyonstorm` (hub-restructure #187; legacy
 `/desertstorm attendance event_date:YYYY-MM-DD` subcommand pre-#187).
 Opens an officer view that lets leadership mark who actually showed
@@ -819,7 +819,7 @@ class _AttendanceView(discord.ui.View):
 
 # ── Hub button handler ───────────────────────────────────────────────────────
 #
-# Wired from the `📋 Record attendance` button on the `/desertstorm`
+# Wired from the `✏️ Record attendance` button on the `/desertstorm`
 # and `/canyonstorm` event hubs (storm_event_hub.py). This module
 # exposes the handler body so the hub stays a thin dispatcher.
 

@@ -83,7 +83,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "**Event hub.** Opens an embed showing the alliance's current "
                 "event config plus a button grid.\n"
                 "**Read row:** 📅 Today's events (open the draft editor), "
-                "📆 Upcoming events (next firing dates), 📜 Event log "
+                "🔜 Upcoming events (next firing dates), 📜 Event log "
                 "(recent approvals: free 7 days / 💎 Premium 30 days).\n"
                 "**Write row:** ➕ Create an event (pick a preset or define "
                 "your own), ⏸️ Pause or resume (stop an event for a season "
@@ -168,7 +168,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         ],
     },
     "canyonstorm": {
-        "emoji": "🏜️",
+        "emoji": "🛡️",
         "label": "Canyon Storm",
         "description": (
             "Same shape as Desert Storm: mail drafts, strategy presets, "
@@ -249,12 +249,12 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "/buddy",
                 "**Buddy hub.** Everyone can tap 🔍 Who's my buddy? or 📋 View "
                 "buddy list. Leadership gets ✏️ Manage pairings (unpair / pair / "
-                "re-pair) and 📤 Post buddy list.",
+                "re-pair) and 📣 Post buddy list.",
             ),
             (
                 "💎 Auto-assign + self-service",
-                "Premium adds 🪄 Auto-assign (keeps existing pairs), ♻️ Re-pair "
-                "from scratch, 📌 one-click profession buttons members swap "
+                "Premium adds ✨ Auto-assign (keeps existing pairs), ♻️ Re-pair "
+                "from scratch, 📣 one-click profession buttons members swap "
                 "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
@@ -390,7 +390,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "buttons.\n"
                 "**Not linked:** 🔗 Link this server (💎): enter your game server "
                 "number and alliance tag.\n"
-                "**Linked:** ✏️ Change link, 🔌 Unlink, and 🌐 Open Map Manager.",
+                "**Linked:** ✏️ Change link, 🔗 Unlink, and 🗺️ Open Map Manager.",
             ),
         ],
     },
@@ -467,12 +467,12 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "DM-mode reminders",
                 f"`/survey` → {SURVEY_HUB_BTN_REMIND} plus the "
-                "**🔔 Send DM reminder to roster** button on `/desertstorm` and "
+                "**📨 Send DM reminder to roster** button on `/desertstorm` and "
                 "`/canyonstorm` all gain DM-via-roster delivery; survey reminders "
                 "can also schedule recurring DMs.",
             ),
             (
-                "✨ More",
+                "More",
                 "Personal birthday DMs, train-assignment DMs, auto-mention "
                 "members in train reminders, threads as destinations, "
                 "multi-template train and storm support, advanced question "
@@ -496,7 +496,7 @@ def build_overview_embed(is_premium: bool) -> discord.Embed:
         color=color,
         description=OVERVIEW_DESCRIPTION,
     )
-    embed.add_field(name="🧰 Always handy", value=ALWAYS_HANDY, inline=False)
+    embed.add_field(name="Always handy", value=ALWAYS_HANDY, inline=False)
     if is_premium:
         embed.set_footer(
             text="💎 Premium is active. Pick a category below for details.",

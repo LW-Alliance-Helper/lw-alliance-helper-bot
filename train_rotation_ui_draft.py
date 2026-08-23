@@ -118,8 +118,8 @@ class WeeklyDraftView(discord.ui.View):
         for label, style, cb in [
             ("⏭️ Go to next person", discord.ButtonStyle.primary, self._on_next),
             ("✏️ Assign someone", discord.ButtonStyle.secondary, self._on_assign),
-            ("📝 Add reason", discord.ButtonStyle.secondary, self._on_add_reason),
-            ("✋ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
+            ("✏️ Add reason", discord.ButtonStyle.secondary, self._on_add_reason),
+            ("✏️ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
             ("🔄 Re-draft the whole week", discord.ButtonStyle.danger, self._on_regen),
         ]:
             btn = discord.ui.Button(label=label, style=style, row=2)
@@ -287,7 +287,7 @@ class WeeklyDraftView(discord.ui.View):
             await interaction.response.send_message(ui.DENY_NOT_LEADER, ephemeral=True)
             return
         confirm = discord.ui.View(timeout=60)
-        yes = discord.ui.Button(label="🔄 Yes, re-draft", style=discord.ButtonStyle.danger)
+        yes = discord.ui.Button(label="♻️ Yes, re-draft", style=discord.ButtonStyle.danger)
         no = discord.ui.Button(label="↩️ Keep current draft", style=discord.ButtonStyle.secondary)
 
         redrafting = {"on": False}

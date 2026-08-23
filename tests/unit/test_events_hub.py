@@ -77,7 +77,7 @@ def test_hub_button_labels_match_expected_text():
     every importing module."""
     assert EVENTS_HUB_TITLE == "📣 Event Announcements"
     assert EVENTS_HUB_BTN_TODAY == "📅 Today's events"
-    assert EVENTS_HUB_BTN_UPCOMING == "📆 Upcoming events"
+    assert EVENTS_HUB_BTN_UPCOMING == "🔜 Upcoming events"
     assert EVENTS_HUB_BTN_LOG == "📜 Event log"
     assert EVENTS_HUB_BTN_CREATE == "➕ Create an event"
     assert EVENTS_HUB_BTN_PAUSE == "⏸️ Pause or resume"

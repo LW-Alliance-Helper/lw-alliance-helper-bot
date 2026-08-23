@@ -1337,7 +1337,7 @@ class TestOnBehalfMultiSelect:
         assert sorted(m["name"] for m in view.members) == ["Alice", "Bob"]
 
     def test_show_voted_button_only_rendered_when_voted_set_nonempty(self, seeded_db):
-        """No prior votes → the 👁️ toggle button doesn't render; the
+        """No prior votes → the 👀 toggle button doesn't render; the
         affordance would have nothing to toggle."""
         roster = [{"name": "Alice"}]
         view_no_votes = sov._OnBehalfVoteView(
@@ -1359,7 +1359,7 @@ class TestOnBehalfMultiSelect:
         assert any("Show already-voted" in lab for lab in labels)
 
     async def test_select_all_not_voted_stages_picks(self, seeded_db):
-        """📥 button drops every not-yet-voted member into
+        """🗳️ button drops every not-yet-voted member into
         selected_members without auto-submitting. Submit gate stays in
         place so a misclick doesn't cast 100 votes."""
         roster = [
@@ -1374,9 +1374,7 @@ class TestOnBehalfMultiSelect:
             voted_target_ids={"10"},
         )
         select_all_btns = [
-            c
-            for c in view.children
-            if getattr(c, "label", "").startswith("📥 Select all not-voted")
+            c for c in view.children if getattr(c, "label", "").startswith("🗳️ Select all not-voted")
         ]
         assert select_all_btns
         interaction = self._fake_interaction(user_id=view.parent_view.owner_user_id)
@@ -1397,9 +1395,7 @@ class TestOnBehalfMultiSelect:
             voted_target_ids={"10"},
         )
         select_all_btns = [
-            c
-            for c in view.children
-            if getattr(c, "label", "").startswith("📥 Select all not-voted")
+            c for c in view.children if getattr(c, "label", "").startswith("🗳️ Select all not-voted")
         ]
         assert select_all_btns and select_all_btns[0].disabled is True
 

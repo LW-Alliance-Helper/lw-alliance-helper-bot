@@ -427,13 +427,13 @@ def build_assignment_logs_embed(
     most = tr.sort_tally(tally, tr.TALLY_SORT_MOST)[:top_n]
     fewest = tr.sort_tally(tally, tr.TALLY_SORT_FEWEST)[:top_n]
     embed.add_field(
-        name="🔝 Most trains",
+        name="Most trains",
         value="\n".join(_tally_line(n, c, l, rank=i + 1) for i, (n, c, l) in enumerate(most))[:1024]
         or "*none yet*",
         inline=False,
     )
     embed.add_field(
-        name="🔻 Fewest trains",
+        name="Fewest trains",
         value="\n".join(_tally_line(n, c, l, rank=i + 1) for i, (n, c, l) in enumerate(fewest))[
             :1024
         ]
@@ -515,10 +515,10 @@ class AssignmentLogsView(discord.ui.View):
 
     BTN_VIEW_ALL = "📜 View all history"
     BTN_BY_MEMBER = "👥 By member"
-    BTN_BY_DATE = "🗓️ By date"
+    BTN_BY_DATE = "📅 By date"
     BTN_PREV = "◀️ Prev"
     BTN_NEXT = "▶️ Next"
-    BTN_BACK = "🔙 Back"
+    BTN_BACK = "↩️ Back"
 
     def __init__(self, owner_id: int, tally: list, posted: list):
         super().__init__(timeout=300)

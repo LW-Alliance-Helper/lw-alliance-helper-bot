@@ -558,7 +558,7 @@ class TestScanTrainReminder:
                 ok = await items[0].fire()
         assert ok is True
         sent = ch.send.await_args.args[0]
-        assert "/train` → 📋 Schedule overview → 📋 Generate Prompt" in sent
+        assert "/train` → 📅 Schedule overview → 📋 Generate Prompt" in sent
         assert "/train overview" not in sent
 
     @pytest.mark.asyncio

@@ -6,7 +6,7 @@ admin-gated (running it asserts this guild represents the alliance) and adapts t
 the current link state:
 
 - **Not linked** → 🔗 Link this server (the Premium-gated link action)
-- **Linked**     → ✏️ Change link · 🔌 Unlink, plus a 🌐 link button to the
+- **Linked**     → ✏️ Change link · 🔗 Unlink, plus a 🗺️ link button to the
   alliance's Map Manager page when MM returned an id
 
 All MM I/O goes through ``mapmanager_client``; the Premium gate (link only) +
@@ -38,8 +38,8 @@ MAPMANAGER_HUB_CMD = "/map_manager"
 # Hub button labels (kept as constants per the HUB_BTN_* convention).
 MM_HUB_BTN_LINK = "🔗 Link this server"
 MM_HUB_BTN_CHANGE = "✏️ Change link"
-MM_HUB_BTN_UNLINK = "🔌 Unlink"
-MM_HUB_BTN_OPEN = "🌐 Open Map Manager"
+MM_HUB_BTN_UNLINK = "🔗 Unlink"
+MM_HUB_BTN_OPEN = "🗺️ Open Map Manager"
 
 _DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
@@ -242,7 +242,7 @@ class _UnlinkConfirm(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🔌 Remove link", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="🔗 Remove link", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True

@@ -1020,7 +1020,7 @@ class _TranslationHelperView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="🚫 Remove helper", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="🗑️ Remove helper", style=discord.ButtonStyle.danger)
     async def btn_clear(self, inter: discord.Interaction, _b: discord.ui.Button):
         from config import update_config_field
 
@@ -1030,7 +1030,7 @@ class _TranslationHelperView(discord.ui.View):
         await wizard_registry.safe_edit_response(
             inter,
             content=(
-                "🚫 **Translation helper removed.** New survey threads will only "
+                "🗑️ **Translation helper removed.** New survey threads will only "
                 "contain the member and me."
             ),
             embed=None,
@@ -1113,7 +1113,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
         return
 
     await interaction.response.send_message(
-        "🚀 Let's get started! Your private thread is being created...",
+        "⏳ Let's get started! Your private thread is being created...",
         ephemeral=True,
     )
 
@@ -1139,7 +1139,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
     await add_translation_helper(thread, interaction.guild, cfg.survey_translate_bot_id)
 
     await interaction.followup.send(
-        f"🚀 Your thread is ready — head over here to get started: {thread.mention}",
+        f"✅ Your thread is ready — head over here to get started: {thread.mention}",
         ephemeral=True,
     )
 
@@ -1684,7 +1684,7 @@ class _ReminderHubView(discord.ui.View):
         super().__init__(timeout=120)
         self.choice: str | None = None  # "send" | "schedule" | None
 
-    @discord.ui.button(label="📤 Send reminder now", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="📬 Send reminder now", style=discord.ButtonStyle.success)
     async def send_now(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "send"
         for item in self.children:
@@ -1692,7 +1692,7 @@ class _ReminderHubView(discord.ui.View):
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
-    @discord.ui.button(label="⚙️ Manage scheduled reminders", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📅 Manage scheduled reminders", style=discord.ButtonStyle.primary)
     async def manage(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "schedule"
         for item in self.children:
@@ -1744,7 +1744,7 @@ class _DestinationPickView(discord.ui.View):
         self.choice: str | None = None  # "channel" | "dm" | None
 
         ch_btn = discord.ui.Button(
-            label="📢 Post to a channel",
+            label="📣 Post to a channel",
             style=discord.ButtonStyle.primary,
         )
 

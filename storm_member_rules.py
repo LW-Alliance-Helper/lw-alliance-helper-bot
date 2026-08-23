@@ -615,7 +615,7 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.parent = parent
 
         pb_btn = discord.ui.Button(
-            label="⚡ Add a power-band rule",
+            label="➕ Add a power-band rule",
             style=discord.ButtonStyle.primary,
         )
         pb_btn.callback = self._on_power_band
@@ -820,7 +820,7 @@ async def open_member_rule_list(
 #
 # Streamlined `set_power_band` flow for the storm setup wizard's
 # 'add your first rule now?' branch (reached via /setup → ⚔️ Desert Storm
-# or /setup → 🏜️ Canyon Storm). The full
+# or /setup → 🛡️ Canyon Storm). The full
 # slash command (`/<parent> member_rule set_power_band`) takes threshold +
 # zone + optional notes; this inline flow omits notes for brevity —
 # alliances can edit later via the slash command if they want to add notes.

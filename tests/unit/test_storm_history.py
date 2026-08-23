@@ -638,7 +638,7 @@ class TestOpenHistoryEphemeralConsistency:
 
 
 class TestRosterImageLinksView:
-    """`[📷 View image]` buttons attached to the history embed when a
+    """`[🖼️ View image]` buttons attached to the history embed when a
     saved roster-image pointer exists. Resolves the message at click
     time so deletion is detected gracefully."""
 
@@ -656,7 +656,7 @@ class TestRosterImageLinksView:
             refs=refs,
         )
         labels = [b.label for b in view.children]
-        assert labels == ["📷 View Team A image", "📷 View Team B image"]
+        assert labels == ["🖼️ View Team A image", "🖼️ View Team B image"]
 
     def test_cs_single_button_no_team_suffix(self, fake_env):
         fake, gid = fake_env
@@ -669,7 +669,7 @@ class TestRosterImageLinksView:
             refs=refs,
         )
         assert len(view.children) == 1
-        assert view.children[0].label == "📷 View image"
+        assert view.children[0].label == "🖼️ View image"
 
     @pytest.mark.asyncio
     async def test_deleted_message_prunes_pointer_and_warns(self, fake_env):

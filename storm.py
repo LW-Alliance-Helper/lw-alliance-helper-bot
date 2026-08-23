@@ -32,6 +32,7 @@ from config import get_config
 from messages import HUB_TIMEOUT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
+from setup_hub import STORM_GLYPH
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
@@ -938,7 +939,7 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
         return
 
     is_ds = event_type == "DS"
-    icon = "🔥" if is_ds else "⚡"
+    icon = STORM_GLYPH[event_type]
     label = "Desert Storm" if is_ds else "Canyon Storm"
 
     # Step 1: Pick team
@@ -1014,12 +1015,12 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     from config import get_storm_config, get_config
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    icon = "⚔️" if event_type == "DS" else "🏜️"
+    icon = STORM_GLYPH[event_type]
     cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
     # The per-event `/setup_*` slash commands were retired in favour of
     # the `/setup` hub (#201); point officers at the hub + correct
     # button instead of a non-existent slash command.
-    setup_hint = "setup → ⚔️ Desert Storm" if event_type == "DS" else "setup → 🏜️ Canyon Storm"
+    setup_hint = "setup → ⚔️ Desert Storm" if event_type == "DS" else "setup → 🛡️ Canyon Storm"
 
     cfg = get_config(interaction.guild_id)
     scfg = get_storm_config(interaction.guild_id, event_type)

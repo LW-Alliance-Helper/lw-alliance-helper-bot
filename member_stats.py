@@ -715,7 +715,7 @@ def build_embed(guild_id: int, target: Target, *, leadership_view: bool) -> disc
 
     hints = _missing_hints(shown, leadership_view=leadership_view)
     if hints:
-        embed.add_field(name="💡 More you can track", value=hints, inline=False)
+        embed.add_field(name="ℹ️ More you can track", value=hints, inline=False)
     return embed
 
 
@@ -912,7 +912,7 @@ class SharePowerView(discord.ui.View):
         self.target = target
 
     @discord.ui.button(
-        label="📤 Share my power stats to this channel", style=discord.ButtonStyle.secondary
+        label="📣 Share my power stats to this channel", style=discord.ButtonStyle.secondary
     )
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()

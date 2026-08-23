@@ -127,7 +127,7 @@ async def expire_view_message(message, command_hint: str = "") -> None:
     `command_hint` is the pre-formatted re-initiate hint shown to
     leadership. Callers own the formatting — wrap the slash command in
     backticks yourself (e.g. "`/events`") or include button-label
-    markdown (e.g. "`/desertstorm` → **👁️ View sign-ups + set up teams**").
+    markdown (e.g. "`/desertstorm` → **👀 View sign-ups + set up teams**").
     Leave empty to drop the suffix.
 
     Idempotent — re-running on the same message is a no-op. Swallows

@@ -22,6 +22,9 @@ and PR description.
 - **Champion Duel head to head** (💎 Premium): what an opponent usually fields, how often they change it, and which line-up to set against them ([#513](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/513)).
 - **Champion Duel knockout odds** (💎 Premium): the odds of advancing now cover the knockout bracket, across the brackets that could still happen ([#513](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/513)).
 
+### Changed
+- Button icons now mean one thing each across the whole bot: the same icon no longer stands for two different actions, and the same action no longer wears two different icons. Twenty-odd buttons and messages pick up a clearer icon; none of them changed what they do.
+
 ### Fixed
 - The bot's own storage no longer grows without bound on its hosting volume, which would eventually have taken every alliance's configuration offline at once.
 

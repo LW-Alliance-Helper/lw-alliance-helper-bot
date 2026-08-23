@@ -1132,7 +1132,7 @@ async def run_log_flow(bot, channel, user, event_type):
     """
     Walk leadership through the participation log flow. The questions
     asked are read from the per-guild participation config saved by
-    the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). The date is always asked
+    the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🛡️ Canyon Storm`). The date is always asked
     first (mandatory, never configurable).
     """
     is_ds = event_type.upper() == "DS"
@@ -1899,7 +1899,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 # ── Default DM body + safe template rendering ────────────────────────────────
 
 # Hardcoded fallback when a guild hasn't configured its own DM body via
-# the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). `{label}` is substituted at
+# the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🛡️ Canyon Storm`). `{label}` is substituted at
 # call time from the event_type so DS and CS share one default. The only
 # user-supplied placeholder is `{name}` (member's roster name).
 DEFAULT_STORM_REMINDER_DM = (

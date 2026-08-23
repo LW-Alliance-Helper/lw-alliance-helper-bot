@@ -302,12 +302,12 @@ __all__ = ["scout_embed", "ScoutPickerView", "open_scout_picker"]
 
 # ── Trends (#408) ─────────────────────────────────────────────────────────────
 
-#: 🔎 is the catalog's "view trends" glyph, and deliberately not 📊, which
+#: 🔍 is the catalog's "view trends" glyph, and deliberately not 📊, which
 #: already names Growth Breakdown, nor 🔍, which this feature already spends on
 #: Scout. The two magnifiers reading as a pair here is fine: scouting one
 #: alliance and reading your own patterns are the same kind of act on different
 #: subjects.
-VS_BTN_TRENDS = "🔎 Trends"
+VS_BTN_TRENDS = "🔍 Trends"
 
 #: Days below this are reported as a shape rather than a rate. One recorded
 #: week is not a pattern, and rendering "you lose Age of Science 100% of the

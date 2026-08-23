@@ -3,10 +3,10 @@
 One command opens a hub that adapts to tier and role:
 
 - **Everyone:** 🔍 Who's my buddy? · 📋 View buddy list
-- **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📤 Post buddy
+- **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
   list · ⚙️ Open setup
-- **Premium leadership:** 🪄 Auto-assign · ♻️ Re-pair from scratch ·
-  📌 Post self-service buttons
+- **Premium leadership:** ✨ Auto-assign · ♻️ Re-pair from scratch ·
+  📣 Post self-service buttons
 
 The member-facing lookup is free and works whether the caller is a War Leader
 or an Engineer. Leadership actions are role-gated; the Premium actions gate via
@@ -148,12 +148,12 @@ class _BuddyHubView(discord.ui.View):
             self._add(
                 "🔄 Refresh from sheet", discord.ButtonStyle.secondary, 1, self._refresh_sheet
             )
-            self._add("📤 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
+            self._add("📣 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
             self._add("⚙️ Open setup", discord.ButtonStyle.secondary, 1, self._setup)
-            self._add("🪄 Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
+            self._add("✨ Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
             self._add("♻️ Re-pair from scratch", discord.ButtonStyle.danger, 2, self._from_scratch)
             self._add(
-                "📌 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
+                "📣 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
             )
 
     # ── everyone ──────────────────────────────────────────────────────────────
@@ -218,7 +218,7 @@ class _BuddyHubView(discord.ui.View):
         await inter.followup.send(
             content=(
                 "🔄 Read your sheet and synced the buddy list. Invalid pairs (like two "
-                "Engineers together) were cleared. Use 🪄 Auto-assign to fill any gaps."
+                "Engineers together) were cleared. Use ✨ Auto-assign to fill any gaps."
             ),
             embed=embed,
             ephemeral=True,
@@ -236,7 +236,7 @@ class _BuddyHubView(discord.ui.View):
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         try:
             await inter.channel.send(embed=embed)
-            await inter.followup.send("📤 Posted the buddy list here.", ephemeral=True)
+            await inter.followup.send("📣 Posted the buddy list here.", ephemeral=True)
         except discord.HTTPException:
             await inter.followup.send("⚠️ Couldn't post in this channel.", ephemeral=True)
 
@@ -289,7 +289,7 @@ class _BuddyHubView(discord.ui.View):
         rel_note = " Engineers ordered by reliability." if cfg.get("reliability_enabled") else ""
         roster_note = await asyncio.to_thread(ui.roster_warning, self.guild_id, cfg)
         await inter.followup.send(
-            content=f"🪄 Buddies assigned (existing pairs kept).{rel_note}"
+            content=f"✨ Buddies assigned (existing pairs kept).{rel_note}"
             + (f"\n\n{roster_note}" if roster_note else ""),
             embed=embed,
             ephemeral=True,
@@ -362,7 +362,7 @@ class _BuddyHubView(discord.ui.View):
         msg = await ui.post_self_service_message(self.bot, inter.channel, self.guild_id)
         if msg is not None:
             await inter.followup.send(
-                "📌 Posted the self-service profession message here. Members can set "
+                "📣 Posted the self-service profession message here. Members can set "
                 "their profession and check their buddy from it.",
                 ephemeral=True,
             )

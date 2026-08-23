@@ -44,8 +44,15 @@ HUB_BTN_TRAIN = "🚂 Train"
 HUB_BTN_GROWTH = "📈 Growth"
 HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
 HUB_BTN_EVENTS = "📣 Events"
-HUB_BTN_DS = "⚔️ Desert Storm"
-HUB_BTN_CS = "🏜️ Canyon Storm"
+# The storm pair, split from its labels so the glyph can be imported on its
+# own. `notes/DESIGN.md` emoji rule 4 says feature emoji come from the
+# `HUB_BTN_*` constant rather than being retyped — but a welded
+# "glyph + label" string cannot be reused by the seven surfaces that need only
+# the mark, so they all hardcoded it, and two of them drifted to 🔥 / ⚡ before
+# anyone noticed. Import STORM_GLYPH; do not retype the emoji.
+STORM_GLYPH = {"DS": "⚔️", "CS": "🛡️"}
+HUB_BTN_DS = f"{STORM_GLYPH['DS']} Desert Storm"
+HUB_BTN_CS = f"{STORM_GLYPH['CS']} Canyon Storm"
 HUB_BTN_SHINY = "🌟 Shiny Tasks"
 HUB_BTN_MEMBERS = "👥 Member Sync"
 HUB_BTN_SURVEY = "📋 Survey"
@@ -73,7 +80,7 @@ def _state_dot(is_configured: bool, *, premium_locked: bool = False) -> str:
     """Compact configured/unconfigured/locked indicator for the embed body."""
     if premium_locked:
         return "💎"
-    return "✅" if is_configured else "⚪"
+    return "✅" if is_configured else "❌"
 
 
 def _build_setup_hub_embed(
@@ -85,7 +92,7 @@ def _build_setup_hub_embed(
 
     Foundations come from `guild_configs`; per-feature state comes from
     each feature's own config helper. Premium-only features show 💎 on
-    the free tier rather than ⚪ so officers see at a glance which
+    the free tier rather than ❌ so officers see at a glance which
     capabilities are locked vs simply unconfigured.
     """
     import config
@@ -179,7 +186,7 @@ def _build_setup_hub_embed(
     except Exception:
         vs_on = False
 
-    # Premium-gated features show 💎 on free tier instead of ⚪.
+    # Premium-gated features show 💎 on free tier instead of ❌.
     def _free(state: bool) -> str:
         return _state_dot(state)
 
@@ -251,7 +258,7 @@ class _SetupHubView(discord.ui.View):
         Row 1 (free-tier features):
           🚂 Train | 📈 Growth | 🎂 Birthdays | 📣 Events | 🤝 Buddy System
         Row 2 (Premium event flow):
-          ⚔️ Desert Storm | 🏜️ Canyon Storm | 🌟 Shiny Tasks
+          ⚔️ Desert Storm | 🛡️ Canyon Storm | 🌟 Shiny Tasks
         Row 3 (Premium roster + survey + growth breakdown):
           👥 Member Sync 💎 | 📋 Survey 💎 | 📊 Growth Breakdown 💎
 

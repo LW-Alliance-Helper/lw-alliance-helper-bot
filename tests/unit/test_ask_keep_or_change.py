@@ -17,7 +17,7 @@ function picking the right label automatically:
     layout: "✅ Use default: X" / "✏️ Define my own". `keep` returns
     `default`.
   * `current` is set AND differs from `default` → 3-button layout:
-    "✅ Keep current: <current>" / "↩️ Use default: <default>" /
+    "Keep current: <current>" / "↩️ Use default: <default>" /
     "✏️ Define my own". The "Keep current" button returns `current`,
     "Use default" returns `default`.
 """

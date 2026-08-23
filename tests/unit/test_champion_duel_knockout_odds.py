@@ -263,9 +263,9 @@ def test_the_table_names_the_rounds_as_reaching_them_never_as_going_out(scored):
 
 @needs_knockout
 def test_the_bracket_goes_through_its_own_builder_not_the_group_one(scored):
-    """A group embed would print "the chance of finishing in the top 2 and
-    going through" over a field of 32, which is a sentence about a round that
-    is not being played."""
+    """A group embed would print "the odds of finishing in the top 2 and going
+    through" over a field of 32, which is a sentence about a round that is not
+    being played."""
     embed = hub.build_odds_embed(_field(), "knockouts", None, None)
     assert "top" not in (embed.description or "").lower().split("second")[0]
     assert "bracket" in (embed.description or "").lower()

@@ -84,7 +84,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "event config plus a button grid.\n"
                 "**Read row:** 📅 Today's events (open the draft editor), "
                 "📆 Upcoming events (next firing dates), 📜 Event log "
-                "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
+                "(recent approvals: free 7 days / 💎 Premium 30 days).\n"
                 "**Write row:** ➕ Create an event (pick a preset or define "
                 "your own), ⏸️ Pause or resume (stop an event for a season "
                 "and turn it back on later, keeping every setting), "
@@ -97,7 +97,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Train Schedule",
         "description": (
             "Track who's assigned the alliance train each day; optionally "
-            "generate a personalised ChatGPT blurb prompt, or let the bot "
+            "generate a personalized ChatGPT blurb prompt, or let the bot "
             "pick fair conductors with Conductor Rotation."
         ),
         "commands": [
@@ -399,7 +399,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Champion Duel",
         "description": (
             "Odds for a Champion Duel match, from the same calibrated engine the "
-            "backtest validates — not a rule of thumb. Look up what a registrant "
+            "backtest validates, not a rule of thumb. Look up what a registrant "
             "fields and how they've been seen deploying, and 💎 contribute what "
             "your alliance scouts. Every squad value says whether it was observed "
             "or estimated, so a guess never reads as a sighting."
@@ -408,9 +408,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "/champion_duel",
                 "**Champion Duel hub.**\n"
-                "🆚 Predict a match: two names in, each side's chance of winning.\n"
-                "🔍 Look up a player: squads, sources, and their most common order.\n"
-                "💎 ✏️ Correct a squad and ➕ Record an order: what your alliance "
+                "🆚 Predict a match: two names in, each side's odds of winning.\n"
+                "🔍 Find a player: squads, sources, and their typical line-up.\n"
+                "💎 ✏️ Record their squads and ➕ Record a line-up: what your alliance "
                 "scouts, attributed to you and revertable.",
             ),
         ],

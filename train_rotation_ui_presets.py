@@ -142,7 +142,7 @@ class _SpecificMemberPickerView(discord.ui.View):
         self.stop()
         try:
             await interaction.response.edit_message(
-                content="Cancelled — the specific member was left unchanged.", view=None
+                content="Canceled. The specific member was left unchanged.", view=None
             )
         except discord.HTTPException:
             pass

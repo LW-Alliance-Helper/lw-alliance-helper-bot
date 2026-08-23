@@ -873,9 +873,7 @@ class _RosterPickerView(discord.ui.View):
     async def _on_cancel(self, interaction: discord.Interaction):
         self.stop()
         try:
-            await interaction.response.edit_message(
-                content="Cancelled — nothing changed.", view=None
-            )
+            await interaction.response.edit_message(content="Canceled. Nothing changed.", view=None)
         except discord.HTTPException:
             pass
 

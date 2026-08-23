@@ -523,7 +523,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -624,7 +624,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -704,7 +704,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -1705,7 +1705,7 @@ class _ReminderHubView(discord.ui.View):
         self.choice = None
         for item in self.children:
             item.disabled = True
-        await wizard_registry.safe_edit_response(inter, content="Cancelled.", view=self)
+        await wizard_registry.safe_edit_response(inter, content="Canceled.", view=self)
         self.stop()
 
 

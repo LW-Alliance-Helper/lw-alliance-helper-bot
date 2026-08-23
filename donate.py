@@ -524,7 +524,7 @@ class DonateCog(commands.Cog):
 
             if not view.confirmed:
                 await interaction.followup.send(
-                    "Cancelled — your subscription is unchanged.",
+                    "Canceled. Your subscription is unchanged.",
                     ephemeral=True,
                 )
                 return
@@ -578,7 +578,7 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your subscription is unchanged.",
+                "Canceled. Your subscription is unchanged.",
                 ephemeral=True,
             )
             return
@@ -656,7 +656,7 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your assignment is unchanged.",
+                "Canceled. Your assignment is unchanged.",
                 ephemeral=True,
             )
             return

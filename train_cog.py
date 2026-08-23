@@ -456,7 +456,7 @@ class TrainCog(commands.Cog):
         except ImportError:
             pass
         if cancelled:
-            await interaction.response.send_message("❌ Session cancelled.", ephemeral=True)
+            await interaction.response.send_message("❌ Session canceled.", ephemeral=True)
         else:
             await interaction.response.send_message(
                 "ℹ️ You don't have an active session running.", ephemeral=True

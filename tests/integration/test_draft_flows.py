@@ -243,7 +243,7 @@ class TestDsDraftFlowEditCancel:
             )
 
         contents = _all_send_contents(channel)
-        assert any("Draft cancelled" in c or "cancelled" in c.lower() for c in contents)
+        assert any("Draft canceled" in c or "canceled" in c.lower() for c in contents)
         assert not save_called, "save_ds_assignments should not run on cancel"
 
 

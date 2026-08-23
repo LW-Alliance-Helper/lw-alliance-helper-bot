@@ -656,7 +656,7 @@ class ExportImportCog(commands.Cog):
         await channel.send(embed=embed, view=confirm)
         await wizard_registry.wait_view_or_cancel(confirm, cancel_event)
         if cancel_event.is_set() or not confirm.confirmed:
-            await channel.send("❌ Import cancelled.")
+            await channel.send("❌ Import canceled.")
             wizard_registry.unregister(user.id, cancel_event)
             return
 
@@ -687,7 +687,7 @@ class ExportImportCog(commands.Cog):
             )
             await wizard_registry.wait_view_or_cancel(sheet_view, cancel_event)
             if cancel_event.is_set() or sheet_view.decision is None:
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             sheet_decision = sheet_view.decision
@@ -718,7 +718,7 @@ class ExportImportCog(commands.Cog):
             await channel.send(prompt, view=view)
             await wizard_registry.wait_view_or_cancel(view, cancel_event)
             if cancel_event.is_set():
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:
@@ -739,7 +739,7 @@ class ExportImportCog(commands.Cog):
             await channel.send(prompt, view=view)
             await wizard_registry.wait_view_or_cancel(view, cancel_event)
             if cancel_event.is_set():
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:

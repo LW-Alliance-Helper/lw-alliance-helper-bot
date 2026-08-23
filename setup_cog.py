@@ -1766,7 +1766,7 @@ async def _run_reset_flow(interaction: discord.Interaction) -> None:
         )
     else:
         await interaction.followup.send(
-            "✅ Reset cancelled. Your configuration is still active and has not been reset.",
+            "✅ Reset canceled. Your configuration is still active and has not been reset.",
             ephemeral=True,
         )
 
@@ -2412,7 +2412,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "✅ **Core setup complete!**\n\n"
         "Now configure whichever features you want to use. Run `/setup` "
         "again to re-open the hub — every feature wizard lives behind a "
-        "labelled button:\n\n"
+        "labeled button:\n\n"
         "📣 **Events** — Event announcements (Plague Marauder, Zombie Siege, etc.)\n"
         "🚂 **Train** — Train schedule, blurb generation, and reminders\n"
         "🎂 **Birthdays** — Birthday tracking and announcements\n"
@@ -3647,7 +3647,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 2 of 9 — ChatGPT Blurb Generation**\n"
         "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
-        "This lets you quickly produce a personalised announcement blurb for the member.\n"
+        "This lets you quickly produce a personalized announcement blurb for the member.\n"
         f"*(You can always set this up later by running `/setup` → {HUB_BTN_TRAIN} again)*",
         view=blurb_view,
     )
@@ -5687,7 +5687,7 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
         @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
         async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
             await wizard_registry.safe_edit_response(
-                inter, content="❌ Cancelled. No surveys removed.", view=None
+                inter, content="❌ Canceled. No surveys removed.", view=None
             )
             self.stop()
 
@@ -8112,7 +8112,7 @@ async def _run_participation_preset_picker_step(
         f"**Step 7.6: Use any preset questions?**\n"
         f"Pre-configured templates for the common participation "
         f"questions. Pick any you want and they'll land in your "
-        f"question list ready to use. You can still customise them "
+        f"question list ready to use. You can still customize them "
         f"later in the next step.{tier_note}",
         view=view,
     )
@@ -10328,7 +10328,7 @@ async def _run_structured_flow_setup_step(
             "\nNext we'll set up the three DMs the bot sends after "
             "Approve & Post when leadership clicks 📨 DM rostered "
             "members. Each role (Starter, Paired Sub, Pool Sub) gets "
-            "its own message. You can use the defaults or customise "
+            "its own message. You can use the defaults or customize "
             "each one."
         )
 

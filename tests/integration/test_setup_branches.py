@@ -228,7 +228,7 @@ class TestSetupResetBranches:
     @pytest.mark.asyncio
     async def test_reset_flow_cancel_keeps_config(self, seeded_db):
         """Clicking Cancel preserves the existing config and surfaces the
-        explicit 'Reset cancelled' message."""
+        explicit 'Reset canceled' message."""
         import config
         import setup_cog
 

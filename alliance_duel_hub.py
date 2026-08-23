@@ -365,7 +365,7 @@ def _match_status(state: HubState, left, right, week: int, estimate) -> str:
     }.get(projection.status, "Estimated")
     if projection.outlook == ad.OUTLOOK_TOSSUP:
         return f"{label}: too close to call."
-    return f"{label}: {state.display_name(favoured)} favoured ({projection.outlook})."
+    return f"{label}: {state.display_name(favoured)} favored ({projection.outlook})."
 
 
 # ── My path (#403) ────────────────────────────────────────────────────────────

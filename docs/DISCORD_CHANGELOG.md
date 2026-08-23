@@ -130,7 +130,7 @@ accident.
 - Check my sheet names the row and column of every entry mistake it finds
 - An optional daily post asks for the duel day that just finished
 - `/champion_duel` gives the odds for a match, as a card you can share
-- Premium alliances can record the Champion Duel squads and orders they scout
+- Champion Duel Premium adds a head to head read, knockout odds, and recording the squads and line-ups you scout
 
 ---
 
@@ -150,7 +150,7 @@ by the existing notice.
 
 **1.8.5** — 2026-08-07
 - Add a survey from a template or from scratch, in your own wording
-- A survey's two sheet tabs are created and labelled for you
+- A survey's two sheet tabs are created and labeled for you
 - Editing a survey's questions no longer shifts later answers into the wrong columns
 - Two surveys can no longer share a sheet tab
 - Naming a tab another feature already uses now warns you
@@ -198,7 +198,7 @@ by the existing notice.
 **1.7.6** — 2026-07-30
 - Growth Breakdown buckets metrics with thousands separators instead of reporting no members
 - Growth snapshot columns are written with thousands separators, matching your source columns
-- The 0-5% growth bucket is now labelled No Change instead of None
+- The 0-5% growth bucket is now labeled No Change instead of None
 
 ---
 

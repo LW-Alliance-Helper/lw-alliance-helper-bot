@@ -4020,7 +4020,7 @@ class TestFinalizePostOutcomes:
             (
                 c
                 for c in inter.followup.send.await_args_list
-                if "Cancelled" in (c.args[0] if c.args else "")
+                if "Canceled" in (c.args[0] if c.args else "")
             ),
             None,
         )

@@ -331,7 +331,7 @@ class _ForgetGuildConfirm(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await inter.response.edit_message(
-            content=f"❌ Cancelled — `{self._guild_id}` metadata left intact.",
+            content=f"❌ Canceled. `{self._guild_id}` metadata left intact.",
             view=self,
         )
         self.stop()
@@ -535,7 +535,7 @@ class _ForgetUserConfirm(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await inter.response.edit_message(
-            content=f"❌ Cancelled — nothing removed for `{self._user_id}`.",
+            content=f"❌ Canceled. Nothing removed for `{self._user_id}`.",
             embed=None,
             view=self,
         )

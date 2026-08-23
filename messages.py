@@ -47,17 +47,17 @@ HUB_TIMEOUT = "⏰ Timed out. Run `/{cmd}` and click **{hub_btn}** to start agai
 
 # User cancelled a top-level command/wizard. Whole flow is dead, no
 # parent state to preserve.
-CANCEL_PLAIN = "❌ Cancelled."
+CANCEL_PLAIN = "❌ Canceled."
 
 # User backed out of a sub-step. Parent flow is intact; the generic
 # "nothing happened, you can continue" reassurance.
-CANCEL_BACKPEDAL_DEFAULT = "↩️ Cancelled. No changes made."
+CANCEL_BACKPEDAL_DEFAULT = "↩️ Canceled. No changes made."
 
 # User backed out of a sub-step with meaningful state context to
 # preserve. Caller passes the contextual sentence as {detail} (e.g.
 # "Your saved draft is still there." or "**Glacieradon** was not
 # deleted."). Always end {detail} with a period.
-CANCEL_BACKPEDAL = "↩️ Cancelled. {detail}"
+CANCEL_BACKPEDAL = "↩️ Canceled. {detail}"
 
 # The app's commands are installed here but the bot user never joined.
 # Happens when a guild install grants `applications.commands` without

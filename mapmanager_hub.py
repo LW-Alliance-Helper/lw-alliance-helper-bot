@@ -267,7 +267,7 @@ class _UnlinkConfirm(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(
-            content="❌ Cancelled — the Map Manager link is unchanged.", view=self
+            content="❌ Canceled. The Map Manager link is unchanged.", view=self
         )
         self.stop()
 

@@ -544,7 +544,7 @@ async def _run_post_signup_confirm_flow(
             )
         else:
             await interaction.followup.send(
-                "❌ Sign-up post cancelled. Nothing was posted.",
+                "❌ Sign-up post canceled. Nothing was posted.",
                 ephemeral=True,
             )
         return None

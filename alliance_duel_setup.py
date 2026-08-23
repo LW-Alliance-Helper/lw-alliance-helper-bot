@@ -275,7 +275,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
         name="Your own reads",
         value=(
             f"**{ad.COL_KNOWN_1_5}** and **{ad.COL_KNOWN_6}** hold your own "
-            "judgement of an alliance: "
+            "judgment of an alliance: "
             f"`{'` / `'.join(ad.KNOWN_SCALE)}`.\n"
             f"**{ad.COL_PICKED}** is your call on one week's match. "
             f"**{ad.COL_NOTES}** is free text."

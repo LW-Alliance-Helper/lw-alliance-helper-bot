@@ -1003,7 +1003,7 @@ def test_hub_embed_invites_a_player_from_a_server_we_do_not_have(cd_db):
     invitation rather than a rejection."""
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
 
-    assert "don't have data from your warzone" in embed.description
+    assert "Missing someone?" in embed.description
     # Named by its words: the button's leading emoji is a near-black glyph that
     # disappears against the embed background.
     assert "**Add a player**" in embed.description
@@ -1238,7 +1238,7 @@ def test_a_single_recorded_order_never_renders_as_one_of_one(cd_db):
 
     embed = hub.build_player_embed(player, db.most_common_order(rid))
 
-    order_field = next(f.value for f in embed.fields if f.name == "Most common order")
+    order_field = next(f.value for f in embed.fields if f.name == hub.FIELD_THEIRS)
     assert "1 of 1" not in order_field
     assert "Their only recorded order" in order_field
 
@@ -1258,7 +1258,7 @@ def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
     assert "Group" in next(f.value for f in embed.fields if f.name == "Rounds")
 
 
-# ── Record an order ───────────────────────────────────────────────────────────
+# ── Record a line-up ──────────────────────────────────────────────────────────
 
 
 def test_the_select_offers_every_permutation_and_only_those():
@@ -1424,6 +1424,30 @@ def test_describe_renders_a_revert_marker():
         }
     )
     assert "#7" in line and "revert of #3" in line and "<@111>" in line
+
+
+def test_a_scrubbed_actor_reads_as_unknown_rather_than_as_an_empty_mention():
+    """A data removal scrubs `actor_discord_id` and keeps the edit, so the
+    history has to render a row whose actor is gone. Formatted unconditionally
+    that produced `<@>`, which Discord does not resolve and which reads as a
+    rendering bug rather than as a person who asked to be forgotten."""
+    line = hub._describe(
+        {
+            "id": 7,
+            "display_name": "AlphaOne",
+            "server": "738",
+            "slot": 1,
+            "field": "squad_type",
+            "old_value": "Tank",
+            "new_value": "Missile",
+            "actor_discord_id": None,
+            "created_at": "2026-08-12T10:00:00+00:00",
+            "target": "squad",
+        }
+    )
+    assert "<@>" not in line
+    # The same word this function already uses for a name it does not have.
+    assert "(unknown)" in line
 
 
 # ── Access ────────────────────────────────────────────────────────────────────

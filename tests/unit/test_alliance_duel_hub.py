@@ -240,7 +240,7 @@ def test_a_confirmed_result_outranks_every_projection():
 def test_an_unassessed_matchup_never_reads_like_a_call():
     text = _text(hub.week_embed(_state(_bracket_rows()), 1))
     assert "Not assessed" in text
-    for word in ("favoured", "easy", "likely"):
+    for word in ("favored", "easy", "likely"):
         assert word not in text.lower()
 
 
@@ -252,7 +252,7 @@ def test_a_projected_matchup_names_the_evidence_it_rests_on():
         }
     )
     text = _text(hub.week_embed(_state(rows), 1))
-    assert "Estimated: [US] favoured" in text
+    assert "Estimated: [US] favored" in text
 
 
 def test_own_alliance_mode_still_shows_the_matchup_it_recorded():

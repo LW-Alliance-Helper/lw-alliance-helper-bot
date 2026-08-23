@@ -2241,7 +2241,7 @@ class OfficerView(discord.ui.View):
         # just that team's button.
         #
         # #240: when a saved draft exists for a team, that team's row
-        # becomes `[♻️ Resume <ts>]  [➕ Set up new]`. Resume is success/
+        # becomes `[▶️ Resume <ts>]  [➕ Set up new]`. Resume is success/
         # green (the most likely intended path), Set up new is
         # secondary. When no draft exists, the row shows a single
         # `[🅰️ Set up Team A]` success button (pre-#240 behaviour).
@@ -2297,7 +2297,7 @@ class OfficerView(discord.ui.View):
             if has_draft:
                 ts_label = _format_draft_timestamp(draft["updated_at"])
                 resume_btn = discord.ui.Button(
-                    label=f"♻️ Resume Team {team_letter} ({ts_label})",
+                    label=f"▶️ Resume Team {team_letter} ({ts_label})",
                     style=discord.ButtonStyle.success,
                     row=row,
                 )

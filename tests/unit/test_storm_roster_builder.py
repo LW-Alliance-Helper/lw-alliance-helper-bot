@@ -5522,8 +5522,8 @@ class TestEmbedLayoutOverhaul:
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
         # `←` no longer appears on the Power Tower zone line. The
-        # `🎯 Active zone:` line below already calls it out.
-        # (`🎯 Active zone:` is its own line; the marker we're checking
+        # `⭐ Active zone:` line below already calls it out.
+        # (`⭐ Active zone:` is its own line; the marker we're checking
         # is the inline one next to the zone name.)
         zone_line = next(
             line for line in body.splitlines() if "Power Tower" in line and "/" in line
@@ -5606,9 +5606,9 @@ class TestEmbedLayoutOverhaul:
         srb._auto_fill_session(sess)
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
-        assert "## 🎯 Auto-fill summary" in body
+        assert "## ✨ Auto-fill summary" in body
         # The summary section uses `- ` bullets instead of `• `.
-        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_idx = body.index("## ✨ Auto-fill summary")
         summary_block = body[summary_idx:]
         assert "- Per-member rules applied" in summary_block
         assert "- Auto-filled by power" in summary_block
@@ -5634,7 +5634,7 @@ class TestEmbedLayoutOverhaul:
         assert "- Auto-paired subs: " in body
         # The explicit `Primary ↔ Sub` strings should NOT appear inside
         # the summary block (they're in the section above).
-        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_idx = body.index("## ✨ Auto-fill summary")
         summary_block = body[summary_idx:]
         assert "↔" not in summary_block
 
@@ -5690,7 +5690,7 @@ class TestEmbedLayoutOverhaul:
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
         filled_line = next(line for line in body.splitlines() if line.startswith("📊 Filled:"))
-        active_line = next(line for line in body.splitlines() if line.startswith("🎯 Active zone:"))
+        active_line = next(line for line in body.splitlines() if line.startswith("⭐ Active zone:"))
         # No `**` markdown bold around the labels or counts.
         assert "**" not in filled_line
         # The `_(preset minimum ... relaxed)_` italic note can use

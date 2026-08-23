@@ -310,7 +310,7 @@ class _ZoneEditModal(discord.ui.Modal):
                 )
                 apply_view.message = await interaction.followup.send(
                     content=(
-                        f"💡 **{self._zone_name}** has similar zones in this preset: "
+                        f"ℹ️ **{self._zone_name}** has similar zones in this preset: "
                         f"{', '.join(siblings)}. Would you like to apply the "
                         f"same settings to these as well?"
                     ),
@@ -606,7 +606,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 )
                 apply_view.message = await interaction.followup.send(
                     content=(
-                        f"💡 **{self._zone_name}** has similar zones in this preset: "
+                        f"ℹ️ **{self._zone_name}** has similar zones in this preset: "
                         f"{', '.join(siblings)}. Would you like to apply the "
                         f"same settings to these as well?"
                     ),

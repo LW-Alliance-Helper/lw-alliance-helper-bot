@@ -715,7 +715,7 @@ def build_embed(guild_id: int, target: Target, *, leadership_view: bool) -> disc
 
     hints = _missing_hints(shown, leadership_view=leadership_view)
     if hints:
-        embed.add_field(name="💡 More you can track", value=hints, inline=False)
+        embed.add_field(name="ℹ️ More you can track", value=hints, inline=False)
     return embed
 
 

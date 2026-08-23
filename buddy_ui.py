@@ -742,7 +742,7 @@ class BuddyManageView(discord.ui.View):
         self.guild_id = guild_id
         self.owner_id = owner_id
         self.message: Optional[discord.Message] = None
-        self._add("🔓 Unpair", discord.ButtonStyle.danger, self._unpair)
+        self._add("🔗 Unpair", discord.ButtonStyle.danger, self._unpair)
         self._add("➕ Pair", discord.ButtonStyle.success, self._pair)
         self._add("🔁 Re-pair", discord.ButtonStyle.primary, self._repair)
         self._add("🔄 Refresh", discord.ButtonStyle.secondary, self._rerender)
@@ -807,7 +807,7 @@ class BuddyManageView(discord.ui.View):
             await i.response.defer(ephemeral=True, thinking=True)
             remaining = [p for p in pairs if _pair_value(p) != value]
             result = await self._save_pairs_list(cfg, remaining)
-            await i.followup.send("🔓 Unpaired.", ephemeral=True)
+            await i.followup.send("🔗 Unpaired.", ephemeral=True)
             await self._refresh_editor(i, result, cfg)
 
         await inter.followup.send(

@@ -6373,7 +6373,7 @@ async def run_survey_setup(
                         "✏️ Entering edit mode...",
                     )
                 _add(
-                    "🔄 Start from scratch",
+                    "♻️ Start from scratch",
                     discord.ButtonStyle.secondary,
                     "scratch",
                     "🔄 Starting from scratch...",
@@ -8932,7 +8932,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Create my first preset now", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="➕ Create my first preset now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:
@@ -8994,7 +8994,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Add a power-band rule now", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="➕ Add a power-band rule now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:

@@ -1863,13 +1863,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             # this zone. Surface both so leadership can tell at a glance
             # which rule is in play.
             lines.append(
-                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"⭐ Active zone: {active_icon}{selected} · minimum "
                 f"{format_power(effective_floor) if effective_floor else '(none)'} "
                 f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"⭐ Active zone: {active_icon}{selected} · minimum "
                 f"{format_power(effective_floor) if effective_floor else '(none)'}"
             )
     has_unknown = any(m.get("power") is None for m in session.members.values())
@@ -1887,7 +1887,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     af = session.auto_fill_summary
     if af is not None:
         lines.append("")
-        lines.append("## 🎯 Auto-fill summary")
+        lines.append("## ✨ Auto-fill summary")
         if af.get("starters_short", 0) > 0:
             # #219: surface short-signup counts up front so officers
             # see the gap before scanning the per-zone fill state.
@@ -1964,10 +1964,10 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         embed.set_footer(
             text=(
                 "💾 Auto-saving as you go. Close anytime; resume from "
-                "/desertstorm → 👀 View sign-ups + set up teams → ♻️ Resume Team X."
+                "/desertstorm → 👀 View sign-ups + set up teams → ▶️ Resume Team X."
                 if session.event_type == "DS"
                 else "💾 Auto-saving as you go. Close anytime; resume from "
-                "/canyonstorm → 👀 View sign-ups + set up teams → ♻️ Resume Team X."
+                "/canyonstorm → 👀 View sign-ups + set up teams → ▶️ Resume Team X."
             )
         )
     return embed
@@ -2452,7 +2452,7 @@ class RosterBuilderView(discord.ui.View):
         auto_fill_row = post_row if (s.is_structured and post_row is not None) else action_row
         if s.is_structured:
             auto_fill_btn = discord.ui.Button(
-                label="🎯 Auto-fill",
+                label="✨ Auto-fill",
                 style=discord.ButtonStyle.primary,
                 row=auto_fill_row,
             )
@@ -3482,7 +3482,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     The Auto-fill button always opens this picker. Officers pick one
     of two strategies, each described in the picker's body copy:
 
-      🎯 Balanced spread      — one starter per zone per pass.
+      Balanced spread      — one starter per zone per pass.
       Strength to priority — fill top-priority zones first.
 
     A third button cancels without running. When the parent session
@@ -3971,7 +3971,7 @@ class _PairSubsView(discord.ui.View):
         self.add_item(assign_btn)
 
         unpair_btn = discord.ui.Button(
-            label="🔄 Unpair…",
+            label="🔗 Unpair…",
             style=discord.ButtonStyle.secondary,
             row=2,
             disabled=not bool(self._phase_pairings()),
@@ -4039,7 +4039,7 @@ class _PairSubsView(discord.ui.View):
             self.add_item(unpair_select)
 
         confirm_btn = discord.ui.Button(
-            label="🔄 Confirm unpair",
+            label="🔗 Confirm unpair",
             style=discord.ButtonStyle.danger,
             row=1,
             disabled=not self.selected_unpair_primary,

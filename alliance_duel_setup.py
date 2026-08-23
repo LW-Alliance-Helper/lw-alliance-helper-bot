@@ -445,9 +445,12 @@ def _clock(hhmm: str) -> str:
 def _finding_line(finding: ad.Finding) -> str:
     """One finding as a bullet. Location first, because the reader is about to
     go and look at it."""
-    icon = "⚠️" if finding.severity == ad.SEVERITY_WARNING else "❌"
+    # One glyph for both severities, per `notes/DESIGN.md` emoji rule 8: the
+    # words carry the difference, not the icon. The embed already says which
+    # is which twice over — the summary counts them separately ("3 things to
+    # fix, 2 worth a look") and the colour goes red when any error is present.
     where = finding.where or "your sheet"
-    return f"{icon} **{where}**: {finding.message}"
+    return f"⚠️ **{where}**: {finding.message}"
 
 
 def validation_report_embed(

@@ -148,18 +148,22 @@ CD_BTN_ODDS = "🔮 Odds of advancing"
 # words apart in meaning — and "counter" is the game's own word for the type
 # triangle the whole surface turns on.
 #
-# The emoji, which had fewer options than it looks. 🎯 was the obvious choice
-# and is out under rule 3: `events_hub` (Pick a preset), `storm_roster_builder`
-# (Auto-fill) and `transfer_setup` (Is one of specific values) already use it,
-# so a fourth sense would be the fourth. ⚔️ is Desert Storm's feature glyph
-# (rules 3 and 4). 🔍/🔎 is Find and is the exact confusion this feature has to
-# avoid. 🔮 is the odds. 🧭 is transfer_setup's Decisions. 🗡️ collides with ⚔️
-# at button size, and ♟️ is unreadable there — which is what retired 📇.
+# The emoji, which had fewer options than it looks. ⚔️ is Desert Storm's
+# feature glyph (rules 3 and 4). 🔍/🔎 is Find and is the exact confusion this
+# feature has to avoid. 🔮 is the odds. 🧭 is transfer_setup's Decisions. 🗡️
+# collides with ⚔️ at button size, and ♟️ is unreadable there — which is what
+# retired 📇.
 #
-# 🏹 is unused anywhere in the bot, legible at button size, and names the
-# action rather than a mood (rule 2): taking aim at one named opponent. It is
-# not in the `DESIGN.md` catalog yet and needs an entry there when the name is
-# settled.
+# 🎯 was the obvious choice and was ruled out only because three other senses
+# held it. **Two of those cleared in the 2026-08-23 consolidation pass**:
+# `events_hub`'s Pick a preset took 📋, and `storm_roster_builder`'s Auto-fill
+# took ✨. The third, `transfer_setup`'s "Is one of specific values", is parked
+# with the Transfers pass. So 🎯 is a live candidate again and taking aim at
+# one named opponent is what it means — but that is Kevin's call, still open.
+#
+# 🏹 remains the placeholder. It is unused anywhere else in the bot, legible at
+# button size, and names the action rather than a mood (rule 2). Whichever wins
+# needs a `DESIGN.md` catalog entry when the name is settled.
 CD_BTN_INTEL = "🏹 Counter a player"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"

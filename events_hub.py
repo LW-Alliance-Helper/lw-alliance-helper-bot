@@ -671,7 +671,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
 
 
 class _CreatePickerView(discord.ui.View):
-    """Two equally-weighted entry buttons: 🎯 Pick a preset, ✏️ Define
+    """Two equally-weighted entry buttons: 📋 Pick a preset, ✏️ Define
     my own. Custom events stay first-class — this view exists only to
     branch on which prefill the officer wants."""
 
@@ -690,7 +690,7 @@ class _CreatePickerView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🎯 Pick a preset", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="📋 Pick a preset", style=discord.ButtonStyle.primary, row=0)
     async def pick_preset(self, inter: discord.Interaction, _btn: discord.ui.Button):
         for item in self.children:
             item.disabled = True

@@ -820,7 +820,7 @@ def init_db():
         # storm_roster_drafts — per-(guild, event_type, team) snapshot of
         # the structured roster builder's in-progress state (#240).
         # Auto-saved on every state change; loaded when the officer
-        # clicks `♻️ Resume Team X roster` on the OfficerView. Survives
+        # clicks `▶️ Resume Team X roster` on the OfficerView. Survives
         # View timeouts AND Railway redeploys so a builder session can
         # take longer than 1 hour without losing work.
         #

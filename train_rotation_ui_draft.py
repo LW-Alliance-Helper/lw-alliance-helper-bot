@@ -287,7 +287,7 @@ class WeeklyDraftView(discord.ui.View):
             await interaction.response.send_message(ui.DENY_NOT_LEADER, ephemeral=True)
             return
         confirm = discord.ui.View(timeout=60)
-        yes = discord.ui.Button(label="🔄 Yes, re-draft", style=discord.ButtonStyle.danger)
+        yes = discord.ui.Button(label="♻️ Yes, re-draft", style=discord.ButtonStyle.danger)
         no = discord.ui.Button(label="↩️ Keep current draft", style=discord.ButtonStyle.secondary)
 
         redrafting = {"on": False}

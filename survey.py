@@ -1113,7 +1113,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
         return
 
     await interaction.response.send_message(
-        "🚀 Let's get started! Your private thread is being created...",
+        "⏳ Let's get started! Your private thread is being created...",
         ephemeral=True,
     )
 
@@ -1139,7 +1139,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
     await add_translation_helper(thread, interaction.guild, cfg.survey_translate_bot_id)
 
     await interaction.followup.send(
-        f"🚀 Your thread is ready — head over here to get started: {thread.mention}",
+        f"✅ Your thread is ready — head over here to get started: {thread.mention}",
         ephemeral=True,
     )
 

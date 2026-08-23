@@ -1741,7 +1741,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     event_label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
-    title = f"🛡️ Roster Builder Template: {session.preset.name}"
+    title = f"📋 Roster Builder Template: {session.preset.name}"
 
     # Event + team line: `🗺️ Desert Storm: Team A` for DS, `🗺️ Canyon Storm:
     # <faction>` for CS with a faction, bare `🗺️ Canyon Storm` otherwise.
@@ -2698,9 +2698,9 @@ class RosterBuilderView(discord.ui.View):
         # #240 follow-up: structured mode now persists the draft on
         # every action, so closing the builder doesn't lose work.
         # Button label switches from "❌ Cancel" (which implied
-        # destruction) to "👋 Close (draft saved)" so officers know
+        # destruction) to "Close (draft saved)" so officers know
         # they can come back via ♻️ Resume.
-        cancel_label = "👋 Close (draft saved)" if s.is_structured else "✅ Done"
+        cancel_label = "Close (draft saved)" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
             label=cancel_label,
             style=discord.ButtonStyle.secondary if s.is_structured else discord.ButtonStyle.danger,
@@ -2715,7 +2715,7 @@ class RosterBuilderView(discord.ui.View):
             if s.is_structured:
                 hub_cmd = "/desertstorm" if s.event_type == "DS" else "/canyonstorm"
                 close_msg = (
-                    f"👋 Builder closed. **Your draft is saved** — "
+                    f"Builder closed. **Your draft is saved** — "
                     f"come back via `{hub_cmd}` → **👀 View sign-ups + set up teams** and click "
                     f"**♻️ Resume Team {s.team}** to pick up where "
                     f"you left off."
@@ -3204,7 +3204,7 @@ class _SubsManageView(discord.ui.View):
         self.add_item(return_btn)
 
         done_btn = discord.ui.Button(
-            label="✅ Done",
+            label="Done",
             style=discord.ButtonStyle.secondary,
             row=1,
         )
@@ -3980,7 +3980,7 @@ class _PairSubsView(discord.ui.View):
         self.add_item(unpair_btn)
 
         done_btn = discord.ui.Button(
-            label="✅ Done",
+            label="Done",
             style=discord.ButtonStyle.secondary,
             row=2,
         )
@@ -4576,7 +4576,7 @@ class _RenderActionView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="📢 Post to channel...", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="📣 Post to channel...", style=discord.ButtonStyle.secondary)
     async def post_btn(
         self,
         inter: discord.Interaction,

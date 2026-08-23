@@ -1744,7 +1744,7 @@ class _DestinationPickView(discord.ui.View):
         self.choice: str | None = None  # "channel" | "dm" | None
 
         ch_btn = discord.ui.Button(
-            label="📢 Post to a channel",
+            label="📣 Post to a channel",
             style=discord.ButtonStyle.primary,
         )
 

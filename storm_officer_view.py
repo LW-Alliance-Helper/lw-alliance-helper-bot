@@ -554,7 +554,7 @@ def _render_embed(
         used += len(block)
 
     if has_off_discord:
-        footnote = "\n¹ Not on Discord. Cast their vote with **🙋 Record on-behalf vote**."
+        footnote = "\n¹ Not on Discord. Cast their vote with **🗳️ Record on-behalf vote**."
         if used + len(footnote) <= _DESCRIPTION_BUDGET:
             desc_lines.append(footnote)
 
@@ -2107,7 +2107,7 @@ class OfficerView(discord.ui.View):
 
         # Vote on behalf
         on_behalf_btn = discord.ui.Button(
-            label="🙋 Record on-behalf vote",
+            label="🗳️ Record on-behalf vote",
             style=discord.ButtonStyle.primary,
         )
 
@@ -2159,7 +2159,7 @@ class OfficerView(discord.ui.View):
             try:
                 msg = await inter.followup.send(
                     content=(
-                        "🙋 Pick one or more members and a vote, then "
+                        "🗳️ Pick one or more members and a vote, then "
                         "**Submit**. Already-voted members are hidden — "
                         "use **👀 Show already-voted** to correct a "
                         "prior vote. **🗳️ Select all not-voted** stages "
@@ -2209,7 +2209,7 @@ class OfficerView(discord.ui.View):
 
         # Clear-votes controls (#287). Both are destructive, so each
         # routes through an ephemeral confirm before touching the tally.
-        # No explicit row — they auto-flow onto row 1 alongside 🙋 / 🔄
+        # No explicit row — they auto-flow onto row 1 alongside 🗳️ / 🔄
         # (the filter Select fills row 0; rows 2-4 hold the team setup /
         # plan buttons).
         clear_all_btn = discord.ui.Button(

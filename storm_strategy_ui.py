@@ -2,7 +2,7 @@
 storm_strategy_ui.py — Discord UI for Desert Storm / Canyon Storm strategy
 presets (#126), split from the data/I/O layer in #371.
 
-Reached via the `🧮 Manage strategy presets` button on /desertstorm and
+Reached via the `📋 Manage strategy presets` button on /desertstorm and
 /canyonstorm (hub-restructure #187; legacy
 /desertstorm strategy create / edit / list / delete subcommands pre-#126).
 The button opens the preset list, which carries inline buttons for
@@ -57,7 +57,7 @@ def _build_editor_embed(
     buf: ss.PresetBuffer, team_size_hint: int = ss._TEAM_SIZE_HINT, *, teams: str = "both"
 ) -> discord.Embed:
     label = "Desert Storm" if buf.event_type == "DS" else "Canyon Storm"
-    title = f"🛡️ Editing Preset: {buf.name}"
+    title = f"📋 Editing Preset: {buf.name}"
     desc_lines = [f"🗺️ Event: {label}"]
     if teams in ("A", "B"):
         # Surface the gate on the embed too — without this, an officer

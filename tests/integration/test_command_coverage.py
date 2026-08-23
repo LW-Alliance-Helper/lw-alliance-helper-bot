@@ -594,7 +594,7 @@ class TestStormCommandsGate:
         seeded_db,
         event_type,
     ):
-        """The hub's `🧮 Manage strategy presets` button calls
+        """The hub's `📋 Manage strategy presets` button calls
         `open_strategy_list`. Confirm that path enforces the same
         leadership gate the legacy `/<event> strategy list` subcommand
         did."""

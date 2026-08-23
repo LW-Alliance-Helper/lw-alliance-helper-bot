@@ -2894,7 +2894,7 @@ class TestApprovePostButtonSplit:
         approve_image_row = next(r for l, r in rows_by_label.items() if "with image" in l)
         approve_text_row = next(r for l, r in rows_by_label.items() if "text only" in l)
         # #240 follow-up renamed the structured-mode close button from
-        # "❌ Cancel" to "👋 Close (draft saved)" since the draft now
+        # "❌ Cancel" to "Close (draft saved)" since the draft now
         # persists and there's nothing to "cancel" anymore.
         close_row = next(r for l, r in rows_by_label.items() if "Close" in l)
         assert approve_image_row == approve_text_row == close_row
@@ -3405,7 +3405,7 @@ class TestRenderActionView:
         labels = [getattr(c, "label", "") for c in view.children]
         assert "📥 Download" in labels
         assert "💾 Save to history" in labels
-        assert "📢 Post to channel..." in labels
+        assert "📣 Post to channel..." in labels
 
     @pytest.mark.asyncio
     async def test_non_owner_blocked_by_interaction_check(self):
@@ -5488,7 +5488,7 @@ class TestEmbedLayoutOverhaul:
     def test_title_drops_team_label(self):
         sess = _make_session(team="A")
         embed = srb._render_builder_embed(sess)
-        assert embed.title == "🛡️ Roster Builder Template: Standard"
+        assert embed.title == "📋 Roster Builder Template: Standard"
 
     def test_body_opens_with_bulleted_event_and_team(self):
         sess = _make_session(team="B")

@@ -2,7 +2,7 @@
 train.py — Train schedule blurb generator + schedule management
 
 Slash commands (leadership role + channel only):
-  /train              — Train hub (📋 Schedule overview, 📜 Prompt log,
+  /train              — Train hub (📅 Schedule overview, 📜 Prompt log,
                         🎂 Run birthday check; rotation guilds also get
                         📋 This week's draft / 📅 Schedule presets / 👤 Member rules)
   /birthdays          — Show upcoming birthdays in the next 14 days (standalone)
@@ -612,7 +612,7 @@ class ReminderView(discord.ui.View):
 
         await expire_view_message(
             self.message,
-            command_hint="`/train` → 📋 Schedule overview → 📋 Generate Prompt",
+            command_hint="`/train` → 📅 Schedule overview → 📋 Generate Prompt",
         )
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)

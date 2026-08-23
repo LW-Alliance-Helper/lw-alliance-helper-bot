@@ -254,7 +254,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "💎 Auto-assign + self-service",
                 "Premium adds ✨ Auto-assign (keeps existing pairs), ♻️ Re-pair "
-                "from scratch, 📌 one-click profession buttons members swap "
+                "from scratch, 📣 one-click profession buttons members swap "
                 "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
@@ -390,7 +390,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "buttons.\n"
                 "**Not linked:** 🔗 Link this server (💎): enter your game server "
                 "number and alliance tag.\n"
-                "**Linked:** ✏️ Change link, 🔗 Unlink, and 🌐 Open Map Manager.",
+                "**Linked:** ✏️ Change link, 🔗 Unlink, and 🗺️ Open Map Manager.",
             ),
         ],
     },

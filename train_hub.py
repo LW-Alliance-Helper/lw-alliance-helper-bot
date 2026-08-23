@@ -7,7 +7,7 @@ One command opens a hub that adapts to what the alliance has configured:
 
 - **Rotation on** → 📋 This week's draft · 📊 Assignment logs ·
   📅 Schedule presets · 👤 Member rules · ⚙️ Open setup
-- **Rotation off** → the legacy blurb surface: 📋 Schedule overview ·
+- **Rotation off** → the legacy blurb surface: 📅 Schedule overview ·
   📜 Prompt log · 🎂 Run birthday check · ⚙️ Open setup
 
 Every button dispatches into a flow that already exists (the preset editor,
@@ -37,7 +37,7 @@ TRAIN_HUB_BTN_LOGS = "📊 Assignment logs"
 TRAIN_HUB_BTN_PRESETS = "📅 Schedule presets"
 TRAIN_HUB_BTN_MEMBER_RULES = "👤 Member rules"
 # Legacy blurb surface
-TRAIN_HUB_BTN_OVERVIEW = "📋 Schedule overview"
+TRAIN_HUB_BTN_OVERVIEW = "📅 Schedule overview"
 TRAIN_HUB_BTN_LOG = "📜 Prompt log"
 TRAIN_HUB_BTN_BIRTHDAYS = "🎂 Run birthday check"
 # Always

@@ -48,10 +48,10 @@ HUB_COMMAND = {"DS": "/desertstorm", "CS": "/canyonstorm"}
 # form is derived via `_locked()` so we don't carry both spellings.
 HUB_BTN_POST_SIGNUP = "📣 Post sign-up poll"
 HUB_BTN_VIEW_SIGNUPS = "👀 View sign-ups + set up teams"
-HUB_BTN_ATTENDANCE = "📋 Record attendance"
+HUB_BTN_ATTENDANCE = "✏️ Record attendance"
 HUB_BTN_PARTICIPATION = "📊 Fill out participation questions"
 HUB_BTN_REMIND = "📨 Send DM reminder to roster"
-HUB_BTN_PRESETS = "🧮 Manage strategy presets"
+HUB_BTN_PRESETS = "📋 Manage strategy presets"
 HUB_BTN_RULES = "👤 Manage member rules"
 HUB_BTN_DRAFT = "📄 Generate mail"
 HUB_BTN_LOGS = "📜 View past participation logs"
@@ -186,9 +186,9 @@ class _EventHubView(discord.ui.View):
     Layout (3 rows, 11 buttons total):
         Row 0 (active event-day actions):
           📣 Post sign-up poll (blue) | 👀 View sign-ups + set up teams (green) |
-          📋 Record attendance | 📊 Fill out participation questions
+          ✏️ Record attendance | 📊 Fill out participation questions
         Row 1 (Communications + configuration):
-          📨 Send DM reminder to roster | 🧮 Manage strategy presets |
+          📨 Send DM reminder to roster | 📋 Manage strategy presets |
           👤 Manage member rules | 📄 Generate mail
         Row 2 (Reference + setup):
           📜 View past participation logs | 📜 View past rosters |

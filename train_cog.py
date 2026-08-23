@@ -715,7 +715,7 @@ class TrainCog(commands.Cog):
                     f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
-                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Schedule overview → 📋 Generate Prompt instead.*"
+                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📅 Schedule overview → 📋 Generate Prompt instead.*"
                 )
                 view.message = await channel.send(msg, view=view)
             else:

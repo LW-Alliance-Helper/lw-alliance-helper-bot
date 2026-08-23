@@ -149,7 +149,7 @@ CD_BTN_ODDS = "🔮 Odds of advancing"
 # triangle the whole surface turns on.
 #
 # The emoji, which had fewer options than it looks. ⚔️ is Desert Storm's
-# feature glyph (rules 3 and 4). 🔍/🔎 is Find and is the exact confusion this
+# feature glyph (rules 3 and 4). 🔍 is Find and is the exact confusion this
 # feature has to avoid. 🔮 is the odds. 🧭 is transfer_setup's Decisions. 🗡️
 # collides with ⚔️ at button size, and ♟️ is unreadable there — which is what
 # retired 📇.

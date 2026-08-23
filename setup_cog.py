@@ -4352,9 +4352,7 @@ async def _run_train_rotation_step(
                 self.modal_out = None
                 self.cancelled = False
 
-            @discord.ui.button(
-                label="📋 Set roster tab + column", style=discord.ButtonStyle.primary
-            )
+            @discord.ui.button(label="⚙️ Set roster tab + column", style=discord.ButtonStyle.primary)
             async def _set(self, inter: discord.Interaction, _btn: discord.ui.Button):
                 modal = _RosterModal()
                 await inter.response.send_modal(modal)
@@ -5406,7 +5404,7 @@ async def _ask_new_survey_template(channel, cancel_event) -> str | None:
             super().__init__(timeout=WIZARD_STEP_TIMEOUT)
             self.start_choice = None
 
-        @discord.ui.button(label="📋 Start from a template", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="➕ Start from a template", style=discord.ButtonStyle.primary)
         async def from_template(self, inter: discord.Interaction, button: discord.ui.Button):
             self.start_choice = "template"
             for item in self.children:
@@ -6171,7 +6169,7 @@ async def run_survey_setup(
     # the moment the one-pair-per-survey rule matters, and it's cheaper to
     # explain once than to reject a name and explain then.
     await channel.send(
-        "📑 **Next: your two sheet tabs**\n"
+        "**Next: your two sheet tabs**\n"
         "This survey needs its own pair of tabs, separate from any other "
         "survey's: one holding each member's current answers, one holding "
         "every submission over time. **I'll create them for you** if they "
@@ -6893,7 +6891,7 @@ async def run_survey_setup(
         )
     if seeded:
         await channel.send(
-            "📑 Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
+            "Added column headers to " + " and ".join(f"**{t}**" for t in seeded) + "."
         )
 
     q_summary = "\n".join(

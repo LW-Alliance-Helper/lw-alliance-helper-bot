@@ -284,7 +284,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
     )
     if tracking_mode == ad.MODE_OWN_ALLIANCE:
         embed.add_field(
-            name="📌 You're tracking just your alliance",
+            name="✅ You're tracking just your alliance",
             value=(
                 "So you only need your own rows and the opponent you face. "
                 "Everything above still applies to them."

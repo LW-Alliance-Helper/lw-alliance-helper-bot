@@ -6,7 +6,7 @@ One command opens a hub that adapts to tier and role:
 - **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
   list · ⚙️ Open setup
 - **Premium leadership:** ✨ Auto-assign · ♻️ Re-pair from scratch ·
-  📌 Post self-service buttons
+  📣 Post self-service buttons
 
 The member-facing lookup is free and works whether the caller is a War Leader
 or an Engineer. Leadership actions are role-gated; the Premium actions gate via
@@ -153,7 +153,7 @@ class _BuddyHubView(discord.ui.View):
             self._add("✨ Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
             self._add("♻️ Re-pair from scratch", discord.ButtonStyle.danger, 2, self._from_scratch)
             self._add(
-                "📌 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
+                "📣 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
             )
 
     # ── everyone ──────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ class _BuddyHubView(discord.ui.View):
         msg = await ui.post_self_service_message(self.bot, inter.channel, self.guild_id)
         if msg is not None:
             await inter.followup.send(
-                "📌 Posted the self-service profession message here. Members can set "
+                "📣 Posted the self-service profession message here. Members can set "
                 "their profession and check their buddy from it.",
                 ephemeral=True,
             )

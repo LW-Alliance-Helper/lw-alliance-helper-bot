@@ -2077,7 +2077,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         return f"**Team {team_letter} Time:** *not set — Step 3 of {setup_hint}*"
 
     ds_hint = "`/setup` → ⚔️ Desert Storm"
-    cs_hint = "`/setup` → 🏜️ Canyon Storm"
+    cs_hint = "`/setup` → 🛡️ Canyon Storm"
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
@@ -2094,7 +2094,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, cs_hint),
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
-    embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
+    embed.add_field(name="🛡️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
 
     translate_bot = (
         f"<@{cfg.survey_translate_bot_id}>" if cfg.survey_translate_bot_id else "*not set*"
@@ -2417,7 +2417,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "🚂 **Train** — Train schedule, blurb generation, and reminders\n"
         "🎂 **Birthdays** — Birthday tracking and announcements\n"
         "⚔️ **Desert Storm** — Mail drafts and participation logs\n"
-        "🏜️ **Canyon Storm** — Mail drafts and participation logs\n"
+        "🛡️ **Canyon Storm** — Mail drafts and participation logs\n"
         "📋 **Survey** — Squad powers survey\n"
         "📈 **Growth** — Growth tracking (snapshot your members' stats over time)\n"
         "🌟 **Shiny Tasks** — Daily announcement of today's shiny task servers for your Alliance\n\n"
@@ -6951,7 +6951,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # `/setup` hub (#201); the hint now points officers at the button
     # they actually need to click. For internal slug uses (channel-name
     # suggestion) helpers derive a separate `cmd_short` from `event_type`.
-    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🏜️ Canyon Storm"
+    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🛡️ Canyon Storm"
     cmd_name = f"setup → {storm_button}"
     cancel_event = wizard_registry.register(user.id)
 
@@ -7085,7 +7085,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         else:
             _times_value = f"Team A: {_slot_blurb(_a_idx)} · Team B: {_slot_blurb(_b_idx)}"
         fields.insert(2, ("Team Times", _times_value))
-        emoji = "⚔️" if event_type == "DS" else "🏜️"
+        emoji = "⚔️" if event_type == "DS" else "🛡️"
         proceed = await ask_proceed_with_existing_config(
             channel,
             title=f"{emoji} Current {label} Setup",

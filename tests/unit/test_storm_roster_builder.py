@@ -3403,8 +3403,8 @@ class TestRenderActionView:
     def test_three_buttons_present(self):
         view = self._make_view()
         labels = [getattr(c, "label", "") for c in view.children]
-        assert "📥 Download" in labels
-        assert "💾 Save to history" in labels
+        assert "💾 Download" in labels
+        assert "📜 Save to history" in labels
         assert "📣 Post to channel..." in labels
 
     @pytest.mark.asyncio
@@ -3434,7 +3434,7 @@ class TestRenderActionView:
         inter.response.send_message = AsyncMock()
 
         # Find the save button and drive its callback.
-        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "📜 Save to history")
         await save_btn.callback(inter)
 
         refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
@@ -3461,7 +3461,7 @@ class TestRenderActionView:
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "📜 Save to history")
         await save_btn.callback(inter)
 
         # Nothing was written.
@@ -3489,7 +3489,7 @@ class TestRenderActionView:
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        download_btn = next(c for c in view.children if getattr(c, "label", "") == "📥 Download")
+        download_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Download")
         await download_btn.callback(inter)
 
         inter.response.send_message.assert_awaited_once()

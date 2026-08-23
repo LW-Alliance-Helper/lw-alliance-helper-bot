@@ -83,7 +83,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "**Event hub.** Opens an embed showing the alliance's current "
                 "event config plus a button grid.\n"
                 "**Read row:** 📅 Today's events (open the draft editor), "
-                "📆 Upcoming events (next firing dates), 📜 Event log "
+                "🔜 Upcoming events (next firing dates), 📜 Event log "
                 "(recent approvals: free 7 days / 💎 Premium 30 days).\n"
                 "**Write row:** ➕ Create an event (pick a preset or define "
                 "your own), ⏸️ Pause or resume (stop an event for a season "
@@ -168,7 +168,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         ],
     },
     "canyonstorm": {
-        "emoji": "🏜️",
+        "emoji": "🛡️",
         "label": "Canyon Storm",
         "description": (
             "Same shape as Desert Storm: mail drafts, strategy presets, "

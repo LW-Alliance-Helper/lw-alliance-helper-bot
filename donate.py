@@ -39,10 +39,10 @@ DONATION_PLATFORMS = [
         "emoji": "☕",
         "default": "https://ko-fi.com/pinkcatboi",
     },
-    {"env": "BUYMEACOFFEE_URL", "name": "Buy Me a Coffee", "emoji": "🥤", "default": ""},
+    {"env": "BUYMEACOFFEE_URL", "name": "Buy Me a Coffee", "emoji": "", "default": ""},
     {"env": "GITHUB_SPONSORS_URL", "name": "GitHub Sponsors", "emoji": "💖", "default": ""},
-    {"env": "PATREON_URL", "name": "Patreon", "emoji": "🎁", "default": ""},
-    {"env": "PAYPAL_URL", "name": "PayPal", "emoji": "💵", "default": ""},
+    {"env": "PATREON_URL", "name": "Patreon", "emoji": "", "default": ""},
+    {"env": "PAYPAL_URL", "name": "PayPal", "emoji": "", "default": ""},
 ]
 
 
@@ -212,7 +212,10 @@ class DonateCog(commands.Cog):
         )
 
         if platforms:
-            lines = [f"{emoji} **[{name}]({url})**" for name, emoji, url in platforms]
+            lines = [
+                f"{emoji + ' ' if emoji else ''}**[{name}]({url})**"
+                for name, emoji, url in platforms
+            ]
             embed.add_field(name="Ways to Donate", value="\n".join(lines), inline=False)
         else:
             embed.add_field(

@@ -66,9 +66,9 @@ _MAX_EACH = 25
 _NOTICE_TIMEOUT = 21600  # 6h — act-now window; older applicants via the hub
 
 _TEMPLATE_BTN = {
-    "apply_invitation": "📩 Apply message",
-    "confirm_request": "📩 Confirm message",
-    "decline": "📩 Decline message",
+    "apply_invitation": "Apply message",
+    "confirm_request": "Confirm message",
+    "decline": "Decline message",
 }
 
 
@@ -404,7 +404,7 @@ class _NoticeView(discord.ui.View):
         self.add_item(details)
         for kind in template_kinds:
             btn = discord.ui.Button(
-                label=_TEMPLATE_BTN.get(kind, "📩 Message"),
+                label=_TEMPLATE_BTN.get(kind, "Message"),
                 style=discord.ButtonStyle.primary,
                 row=0,
             )

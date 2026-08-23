@@ -509,7 +509,7 @@ def _render_embed(
     from storm_date_helpers import format_event_date
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    emoji = "⚔️" if event_type == "DS" else "🏜️"
+    emoji = "⚔️" if event_type == "DS" else "🛡️"
     date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())

@@ -589,7 +589,7 @@ class _RosterImageLinksView(discord.ui.View):
             f"⚠️ The saved roster {what}{team_label} can no longer be "
             f"found. It was deleted from the original channel. The link "
             f"has been cleared. To save a new image: open the roster "
-            f"builder, click 🖼️ Render image, then 💾 Save to history.",
+            f"builder, click 🖼️ Render image, then 📜 Save to history.",
             ephemeral=True,
         )
 

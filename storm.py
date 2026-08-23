@@ -938,7 +938,7 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
         return
 
     is_ds = event_type == "DS"
-    icon = "🔥" if is_ds else "⚡"
+    icon = "⚔️" if is_ds else "🛡️"
     label = "Desert Storm" if is_ds else "Canyon Storm"
 
     # Step 1: Pick team
@@ -1014,12 +1014,12 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     from config import get_storm_config, get_config
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    icon = "⚔️" if event_type == "DS" else "🏜️"
+    icon = "⚔️" if event_type == "DS" else "🛡️"
     cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
     # The per-event `/setup_*` slash commands were retired in favour of
     # the `/setup` hub (#201); point officers at the hub + correct
     # button instead of a non-existent slash command.
-    setup_hint = "setup → ⚔️ Desert Storm" if event_type == "DS" else "setup → 🏜️ Canyon Storm"
+    setup_hint = "setup → ⚔️ Desert Storm" if event_type == "DS" else "setup → 🛡️ Canyon Storm"
 
     cfg = get_config(interaction.guild_id)
     scfg = get_storm_config(interaction.guild_id, event_type)

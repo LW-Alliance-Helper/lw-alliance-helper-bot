@@ -522,9 +522,9 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
                 bday = " 🎂" if is_bday else ""
                 done = date_str in blurb_log
                 status = "✅ Done" if done else "⏳ Pending"
-                upcoming_lines.append(f"🟢 {day_str} — {name}{bday} — {status}")
+                upcoming_lines.append(f"➡️ {day_str} — {name}{bday} — {status}")
             else:
-                upcoming_lines.append(f"🟢 {day_str} — [Empty]")
+                upcoming_lines.append(f"➡️ {day_str} — [Empty]")
         else:
             if entry:
                 name = entry.get("name", "Unknown")

@@ -9,7 +9,7 @@ current event config + a button grid that dispatches into every
 existing event flow:
 
   - 📅 Today's events  → scheduler.EventEditorView for today
-  - 📆 Upcoming events → cycle projections (lifted from /events overview)
+  - 🔜 Upcoming events → cycle projections (lifted from /events overview)
   - 📜 Event log       → recent approved posts (lifted from /events log)
   - ➕ Create an event → preset picker OR define-your-own free-text flow
   - ⏸️ Pause or resume → toggle `guild_events.active`, re-anchoring a
@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 EVENTS_HUB_TITLE = "📣 Event Announcements"
 EVENTS_HUB_CMD = "/events"
 EVENTS_HUB_BTN_TODAY = "📅 Today's events"
-EVENTS_HUB_BTN_UPCOMING = "📆 Upcoming events"
+EVENTS_HUB_BTN_UPCOMING = "🔜 Upcoming events"
 EVENTS_HUB_BTN_LOG = "📜 Event log"
 EVENTS_HUB_BTN_CREATE = "➕ Create an event"
 EVENTS_HUB_BTN_PAUSE = "⏸️ Pause or resume"
@@ -282,7 +282,7 @@ class _EventsHubView(discord.ui.View):
 
     Layout (2 rows, 6 buttons):
         Row 0 (read surfaces):
-          📅 Today's events (blue) | 📆 Upcoming events (secondary) |
+          📅 Today's events (blue) | 🔜 Upcoming events (secondary) |
           📜 Event log (secondary)
         Row 1 (write surfaces):
           ➕ Create an event (green) | ⏸️ Pause or resume (secondary) |
@@ -525,7 +525,7 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
     events = get_guild_events(interaction.guild_id, active_only=True)
     today = date_cls.today()
 
-    embed = discord.Embed(title="📆 Upcoming events", color=discord.Color.blurple())
+    embed = discord.Embed(title="🔜 Upcoming events", color=discord.Color.blurple())
 
     if not events:
         embed.description = (

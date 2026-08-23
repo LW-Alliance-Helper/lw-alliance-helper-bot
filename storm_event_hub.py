@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 _EVENT_LABEL = {"DS": "Desert Storm", "CS": "Canyon Storm"}
-_EVENT_EMOJI = {"DS": "⚔️", "CS": "🏜️"}
+_EVENT_EMOJI = {"DS": "⚔️", "CS": "🛡️"}
 _PARENT_CMD = {"DS": "desertstorm", "CS": "canyonstorm"}
 _FIXED_EVENT_DAY = {"DS": "Friday", "CS": "Thursday"}
 
@@ -134,7 +134,7 @@ def _build_event_hub_embed(
         structured_on = True
         structured_line = "✅ Enabled"
     else:
-        structured_line = "⚪ Not enabled (free-tier flow only)"
+        structured_line = "🔒 Not enabled (free-tier flow only)"
 
     # Preset count.
     try:

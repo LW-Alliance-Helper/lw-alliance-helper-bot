@@ -44,7 +44,7 @@ def test_hub_button_labels_match_expected_text():
     assert HUB_BTN_BIRTHDAYS == "🎂 Birthdays"
     assert HUB_BTN_EVENTS == "📣 Events"
     assert HUB_BTN_DS == "⚔️ Desert Storm"
-    assert HUB_BTN_CS == "🏜️ Canyon Storm"
+    assert HUB_BTN_CS == "🛡️ Canyon Storm"
     assert HUB_BTN_SHINY == "🌟 Shiny Tasks"
     assert HUB_BTN_MEMBERS == "👥 Member Sync"
     assert HUB_BTN_SURVEY == "📋 Survey"
@@ -63,7 +63,7 @@ def test_survey_hub_button_labels_match_expected_text():
 
 def test_storm_setup_nav_builds_correctly():
     assert STORM_SETUP_NAV["DS"] == "/setup → ⚔️ Desert Storm"
-    assert STORM_SETUP_NAV["CS"] == "/setup → 🏜️ Canyon Storm"
+    assert STORM_SETUP_NAV["CS"] == "/setup → 🛡️ Canyon Storm"
     # Always exactly two keys — guards against accidentally adding a
     # third storm type without a deliberate refactor.
     assert set(STORM_SETUP_NAV) == {"DS", "CS"}

@@ -121,7 +121,7 @@ def _build_registration_embed(
     # surfaces the time on each button). The embed itself stays
     # minimal: title, one-line ask, and the vote-replacement disclaimer.
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    emoji = "⚔️" if event_type == "DS" else "🏜️"
+    emoji = "⚔️" if event_type == "DS" else "🛡️"
     date_pretty = format_event_date(event_date_iso)
     desc = (
         f"Select your availability for {label}!\n"
@@ -477,7 +477,7 @@ async def _run_post_signup_confirm_flow(
         return "—"
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    emoji = "⚔️" if event_type == "DS" else "🏜️"
+    emoji = "⚔️" if event_type == "DS" else "🛡️"
     date_pretty = format_event_date(event_date)
 
     needs_a = teams_setting in ("both", "A")

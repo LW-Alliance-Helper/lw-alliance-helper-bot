@@ -846,7 +846,7 @@ def init_db():
         conn.commit()
 
         # storm_roster_images — pointer to a public roster-image message
-        # in Discord, written by the `💾 Save to history` action on the
+        # in Discord, written by the `📜 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
         # a `🖼️ View image` button on the matching event embed so a
         # roster image from week N is still retrievable in week N+8.
@@ -3935,7 +3935,7 @@ def list_roster_image_refs(
 ) -> list[dict]:
     """All saved roster-image pointers for a (guild, event) — usually
     one for CS, up to two (Team A + Team B) for DS. Empty list if no
-    `💾 Save to history` clicks have been recorded for this event.
+    `📜 Save to history` clicks have been recorded for this event.
     Ordered so DS Team A renders before Team B in the history view."""
     with _get_conn() as conn:
         rows = conn.execute(

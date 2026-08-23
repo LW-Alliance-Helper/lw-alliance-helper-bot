@@ -150,16 +150,21 @@ CD_BTN_ODDS = "🔮 Odds of advancing"
 #
 # The emoji, which had fewer options than it looks. ⚔️ is Desert Storm's
 # feature glyph (rules 3 and 4). 🔍 is Find and is the exact confusion this
-# feature has to avoid. 🔮 is the odds. 🧭 is transfer_setup's Decisions. 🗡️
+# feature has to avoid. 🔮 is the odds. 📋 is transfer_setup's Decisions. 🗡️
 # collides with ⚔️ at button size, and ♟️ is unreadable there — which is what
 # retired 📇.
 #
 # 🎯 was the obvious choice and was ruled out only because three other senses
-# held it. **Two of those cleared in the 2026-08-23 consolidation pass**:
-# `events_hub`'s Pick a preset took 📋, and `storm_roster_builder`'s Auto-fill
-# took ✨. The third, `transfer_setup`'s "Is one of specific values", is parked
-# with the Transfers pass. So 🎯 is a live candidate again and taking aim at
-# one named opponent is what it means — but that is Kevin's call, still open.
+# held it. **All three cleared in the 2026-08-23 consolidation pass**:
+# `events_hub`'s Pick a preset took 📋, `storm_roster_builder`'s Auto-fill took
+# ✨, and `transfer_setup`'s "Is one of specific values" took 🔽 with the rest
+# of the Transfers filter set. 🎯 is now unused anywhere in the bot, so the
+# only reason it was rejected no longer holds, and taking aim at one named
+# opponent is what it means. Kevin's call, still open.
+#
+# The label is stale too: `notes/HANDOFF_glyph_system.md` records the name as
+# settled — "the second field becomes required and it is **Head to head**" —
+# and this constant still says "Counter a player".
 #
 # 🏹 remains the placeholder. It is unused anywhere else in the bot, legible at
 # button size, and names the action rather than a mood (rule 2). Whichever wins

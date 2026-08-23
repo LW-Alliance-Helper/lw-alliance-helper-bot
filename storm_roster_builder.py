@@ -2628,7 +2628,7 @@ class RosterBuilderView(discord.ui.View):
 
             preview_row = post_row if post_row is not None else final_row
             preview_btn = discord.ui.Button(
-                label="📄 Preview mail",
+                label="👀 Preview mail",
                 style=discord.ButtonStyle.secondary,
                 row=preview_row,
             )
@@ -4483,7 +4483,7 @@ class _RenderActionView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="📥 Download", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="💾 Download", style=discord.ButtonStyle.secondary)
     async def download_btn(
         self,
         inter: discord.Interaction,
@@ -4497,7 +4497,7 @@ class _RenderActionView(discord.ui.View):
             dm = await inter.user.create_dm()
             await dm.send(
                 content=(
-                    f"📥 Here's the roster image you asked to download "
+                    f"💾 Here's the roster image you asked to download "
                     f"(from {self.event_type} on {self.event_date or 'today'}). "
                     f"Right-click → Save image, or tap → save on mobile."
                 ),
@@ -4527,7 +4527,7 @@ class _RenderActionView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="💾 Save to history", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📜 Save to history", style=discord.ButtonStyle.primary)
     async def save_btn(
         self,
         inter: discord.Interaction,
@@ -4569,7 +4569,7 @@ class _RenderActionView(discord.ui.View):
             )
             return
         await inter.response.send_message(
-            f"💾 Saved. The image is now linked from "
+            f"📜 Saved. The image is now linked from "
             f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PAST_ROSTERS}** "
             f"for this event date "
             f"(stays available until the original message is deleted).",

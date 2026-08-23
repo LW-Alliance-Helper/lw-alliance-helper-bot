@@ -6958,7 +6958,7 @@ class TestZoneMemberEditView:
 
     def test_main_picker_renders_renamed_clear_button(self):
         """`Remove current zone assignees` was a destructive name that
-        invited misclicks; it's now `🧹 Clear this zone`."""
+        invited misclicks; it's now `🗑️ Clear this zone`."""
         from unittest.mock import patch
 
         members = {

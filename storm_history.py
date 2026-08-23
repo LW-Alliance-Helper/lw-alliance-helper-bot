@@ -461,8 +461,8 @@ def render_history_list_embed(
 
 
 class _RosterImageLinksView(discord.ui.View):
-    """`[📷 View Team A image]` / `[📷 View Team B image]` (or just
-    `[📷 View image]` for CS / single-team DS) buttons attached below
+    """`[🖼️ View Team A image]` / `[🖼️ View Team B image]` (or just
+    `[🖼️ View image]` for CS / single-team DS) buttons attached below
     the event-detail embed. Each click fetches the saved message at
     runtime; on `discord.NotFound` (the image was deleted from the
     original channel), the officer gets a friendly explanation + the
@@ -493,9 +493,9 @@ class _RosterImageLinksView(discord.ui.View):
             # Two-team events (DS or CS with teams=both) get per-team
             # labels; single-team events fall back to "View image".
             if team:
-                label = f"📷 View Team {team} image"
+                label = f"🖼️ View Team {team} image"
             else:
-                label = "📷 View image"
+                label = "🖼️ View image"
             btn = discord.ui.Button(
                 label=label,
                 style=discord.ButtonStyle.secondary,
@@ -552,7 +552,7 @@ class _RosterImageLinksView(discord.ui.View):
 
             link = msg.jump_url
             await inter.response.send_message(
-                f"📷 [Open the saved roster image]({link}) (posted in {channel.mention}).",
+                f"🖼️ [Open the saved roster image]({link}) (posted in {channel.mention}).",
                 ephemeral=True,
             )
 

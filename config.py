@@ -848,7 +848,7 @@ def init_db():
         # storm_roster_images — pointer to a public roster-image message
         # in Discord, written by the `💾 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
-        # a `📷 View image` button on the matching event embed so a
+        # a `🖼️ View image` button on the matching event embed so a
         # roster image from week N is still retrievable in week N+8.
         # `team` differentiates DS Team A / Team B; CS uses empty string.
         # UPSERT on the composite key — re-saving overwrites the prior
@@ -3662,7 +3662,7 @@ def delete_roster_draft(
 ) -> int:
     """Delete the saved draft for one team. Returns the rowcount (0
     if nothing was saved). Called when the officer confirms
-    🆕 Set up new — the draft is cleared and a fresh builder opens."""
+    ➕ Set up new — the draft is cleared and a fresh builder opens."""
     with _get_conn() as conn:
         cur = conn.execute(
             "DELETE FROM storm_roster_drafts WHERE guild_id = ? AND event_type = ? AND team = ?",

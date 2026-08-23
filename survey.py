@@ -1020,7 +1020,7 @@ class _TranslationHelperView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="🚫 Remove helper", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="🗑️ Remove helper", style=discord.ButtonStyle.danger)
     async def btn_clear(self, inter: discord.Interaction, _b: discord.ui.Button):
         from config import update_config_field
 
@@ -1030,7 +1030,7 @@ class _TranslationHelperView(discord.ui.View):
         await wizard_registry.safe_edit_response(
             inter,
             content=(
-                "🚫 **Translation helper removed.** New survey threads will only "
+                "🗑️ **Translation helper removed.** New survey threads will only "
                 "contain the member and me."
             ),
             embed=None,

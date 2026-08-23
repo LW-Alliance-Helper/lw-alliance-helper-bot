@@ -387,7 +387,7 @@ class TrainPresetEditorView(discord.ui.View):
     async def _on_cancel(self, interaction: discord.Interaction):
         if not await self._guard(interaction):
             return
-        await self._close(interaction, "👍 Closed. No changes were needed.")
+        await self._close(interaction, "✅ Closed. No changes were needed.")
 
     async def _on_done(self, interaction: discord.Interaction):
         if not await self._guard(interaction):

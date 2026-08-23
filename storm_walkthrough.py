@@ -259,7 +259,7 @@ class _OfferView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="👍 Got it, won't ask again. Run `/help` any "
+                content="✅ Got it, won't ask again. Run `/help` any "
                 "time and pick Desert Storm or Canyon Storm "
                 "for a refresher.",
                 view=self,

@@ -496,7 +496,7 @@ def build_overview_embed(is_premium: bool) -> discord.Embed:
         color=color,
         description=OVERVIEW_DESCRIPTION,
     )
-    embed.add_field(name="🧰 Always handy", value=ALWAYS_HANDY, inline=False)
+    embed.add_field(name="Always handy", value=ALWAYS_HANDY, inline=False)
     if is_premium:
         embed.set_footer(
             text="💎 Premium is active. Pick a category below for details.",

@@ -1998,7 +1998,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Spreadsheet ID:** {sheet_id_display}",
         f"**Member Tab:** {cfg.tab_member_default}",
     ]
-    embed.add_field(name="🛠️ Core", value="\n".join(core_lines)[:1024], inline=False)
+    embed.add_field(name="⚙️ Core", value="\n".join(core_lines)[:1024], inline=False)
 
     ev_lines = [
         f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
@@ -4406,7 +4406,7 @@ async def _run_train_rotation_step(
     reminder_time = current.get("reminder_time", "22:00") or "22:00"
     if reminder_channel_id:
         await channel.send(
-            "🗓️ Rotation will post the weekly draft and daily confirmation in "
+            "📅 Rotation will post the weekly draft and daily confirmation in "
             f"<#{reminder_channel_id}> at **{_format_time_with_tz(reminder_time, guild_tz)}** "
             "(reusing your reminder channel and time)."
         )
@@ -10701,7 +10701,7 @@ async def _build_participation_question(
                     self.stop()
 
                 @discord.ui.button(
-                    label="✋ Manual selection only",
+                    label="✏️ Manual selection only",
                     style=discord.ButtonStyle.secondary,
                 )
                 async def manual(self, inter, _btn):

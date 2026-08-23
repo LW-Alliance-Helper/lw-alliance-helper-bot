@@ -1032,7 +1032,7 @@ class _PresetEditorView(discord.ui.View):
             disabled=not self.buf.dirty,
         )
         cancel_btn = discord.ui.Button(
-            label="🔙 Abandon this preset", style=discord.ButtonStyle.danger
+            label="↩️ Abandon this preset", style=discord.ButtonStyle.danger
         )
 
         async def _rename(inter):
@@ -1097,7 +1097,7 @@ class _PresetEditorView(discord.ui.View):
                 item.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="🔙 Abandoned. Changes were not saved.",
+                    content="↩️ Abandoned. Changes were not saved.",
                     embed=_build_editor_embed(self.buf, teams=self.teams),
                     view=self,
                 )

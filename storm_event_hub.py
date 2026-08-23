@@ -154,7 +154,7 @@ def _build_event_hub_embed(
     description_lines = [
         f"📅 **Next event:** {next_event_line}",
         f"📍 **Sign-up post:** {signup_channel_line}",
-        f"🧑‍🤝‍🧑 **Teams:** {teams_display}",
+        f"**Teams:** {teams_display}",
         f"📋 **Presets saved:** {preset_count}",
         f"💎 **Structured Flow:** {structured_line}",
     ]

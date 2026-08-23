@@ -2372,7 +2372,7 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(edit_btn)
 
         unassign_btn = discord.ui.Button(
-            label="🧹 Clear this zone",
+            label="🗑️ Clear this zone",
             style=discord.ButtonStyle.secondary,
             row=action_row,
         )
@@ -2533,9 +2533,9 @@ class RosterBuilderView(discord.ui.View):
                     "Pick how to distribute the 20 starters across "
                     "this team's zones:\n"
                     "\n"
-                    "- ⚖️ **Balanced spread:** one starter per zone per "
+                    "- **Balanced spread:** one starter per zone per "
                     "pass, power distributed across every zone.\n"
-                    "- 💪 **Strength to priority:** send the strongest "
+                    "- **Strength to priority:** send the strongest "
                     "members to the highest-priority zones first, keeping "
                     "power even between zones that share a priority."
                 )
@@ -3204,7 +3204,7 @@ class _SubsManageView(discord.ui.View):
         self.add_item(return_btn)
 
         done_btn = discord.ui.Button(
-            label="✔ Done",
+            label="✅ Done",
             style=discord.ButtonStyle.secondary,
             row=1,
         )
@@ -3295,7 +3295,7 @@ class _SubsManageView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="✔ Done managing subs.",
+                content="✅ Done managing subs.",
                 view=None,
             )
         except discord.HTTPException:
@@ -3483,7 +3483,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     of two strategies, each described in the picker's body copy:
 
       🎯 Balanced spread      — one starter per zone per pass.
-      🔝 Strength to priority — fill top-priority zones first.
+      Strength to priority — fill top-priority zones first.
 
     A third button cancels without running. When the parent session
     already has assignments, the parent builder prepends a
@@ -3580,24 +3580,25 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    # Primary style on both strategy buttons. The new ⚖️ / 💪 glyphs
-    # read fine against the blue background (the earlier 🎯 / 🔝
-    # rendered washed-out at small sizes). All three buttons fit on a
-    # single row.
-    @discord.ui.button(label="⚖️ Balanced spread", style=discord.ButtonStyle.primary, row=0)
+    # Primary style on both strategy buttons; all three fit on a single
+    # row. Both go bare per `notes/DESIGN.md` emoji rule 7: the two
+    # strategies differ by parameter, not by kind, so any glyph would be
+    # the same one twice. Earlier attempts (🎯 / 🔝, then ⚖️ / 💪) were
+    # both chasing a distinction the labels already carry.
+    @discord.ui.button(label="Balanced spread", style=discord.ButtonStyle.primary, row=0)
     async def balanced(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
             inter,
             "balanced",
-            "⚖️ Balanced spread auto-fill",
+            "Balanced spread auto-fill",
         )
 
-    @discord.ui.button(label="💪 Strength to priority", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Strength to priority", style=discord.ButtonStyle.primary, row=0)
     async def priority_greedy(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._run_with_strategy(
             inter,
             "priority_greedy",
-            "💪 Strength-to-priority auto-fill",
+            "Strength-to-priority auto-fill",
         )
 
     @discord.ui.button(label="↩️ Cancel Auto-fill", style=discord.ButtonStyle.secondary, row=0)
@@ -3979,7 +3980,7 @@ class _PairSubsView(discord.ui.View):
         self.add_item(unpair_btn)
 
         done_btn = discord.ui.Button(
-            label="✔ Done",
+            label="✅ Done",
             style=discord.ButtonStyle.secondary,
             row=2,
         )
@@ -4533,7 +4534,7 @@ class _RenderActionView(discord.ui.View):
         _btn: discord.ui.Button,
     ):
         """Store the (channel, message) pointer so the history browser
-        can offer a `📷 View image` button on this event. Image bytes
+        can offer a `🖼️ View image` button on this event. Image bytes
         live in Discord; we just remember where."""
         import config
 
@@ -5474,7 +5475,7 @@ def _other_team_claimed_keys(
 #                          the second message always starts with a
 #                          `**Heading**` line and sections stay
 #                          together.
-#   📎 Send as .txt      — full mail as a .txt file attachment
+#   💾 Send as .txt      — full mail as a .txt file attachment
 #                          alongside the image (the #234 fallback).
 #
 # Plus a Cancel button so the officer can back out and edit the
@@ -5542,7 +5543,7 @@ class _LongMailPickerView(discord.ui.View):
     async def split_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "split")
 
-    @discord.ui.button(label="📎 Send as .txt attachment", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="💾 Send as .txt attachment", style=discord.ButtonStyle.primary)
     async def attach_btn(self, inter: discord.Interaction, _btn: discord.ui.Button):
         await self._pick(inter, "txt")
 
@@ -6201,7 +6202,7 @@ async def _finalize_structured_roster(
                 "📨 **Send as 2 posts** splits at the next natural "
                 "break so the second post starts with a section "
                 "heading.\n\n"
-                "📎 **Send as .txt attachment** posts the full mail as "
+                "💾 **Send as .txt attachment** posts the full mail as "
                 "a file alongside the image. Copy the file's contents "
                 "to send in-game.",
                 view=picker,

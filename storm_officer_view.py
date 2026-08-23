@@ -509,7 +509,7 @@ def _render_embed(
     from storm_date_helpers import format_event_date
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    emoji = "🔥" if event_type == "DS" else "🏜️"
+    emoji = "⚔️" if event_type == "DS" else "🏜️"
     date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())
@@ -2241,7 +2241,7 @@ class OfficerView(discord.ui.View):
         # just that team's button.
         #
         # #240: when a saved draft exists for a team, that team's row
-        # becomes `[♻️ Resume <ts>]  [🆕 Set up new]`. Resume is success/
+        # becomes `[♻️ Resume <ts>]  [➕ Set up new]`. Resume is success/
         # green (the most likely intended path), Set up new is
         # secondary. When no draft exists, the row shows a single
         # `[🅰️ Set up Team A]` success button (pre-#240 behaviour).
@@ -2314,7 +2314,7 @@ class OfficerView(discord.ui.View):
                 self.add_item(resume_btn)
 
                 fresh_btn = discord.ui.Button(
-                    label=f"🆕 Set up new Team {team_letter} roster",
+                    label=f"➕ Set up new Team {team_letter} roster",
                     style=discord.ButtonStyle.secondary,
                     row=row,
                 )
@@ -2596,7 +2596,7 @@ async def _confirm_discard_and_setup(
     *,
     team: str,
 ) -> None:
-    """#240: when the officer clicks `🆕 Set up new Team X` and a saved
+    """#240: when the officer clicks `➕ Set up new Team X` and a saved
     draft exists, confirm before discarding the draft. Yes → delete
     the draft + open the preset picker; Cancel → back to officer
     view, draft untouched."""
@@ -2636,7 +2636,7 @@ async def _confirm_discard_and_setup(
 
 
 class _DiscardDraftConfirmView(discord.ui.View):
-    """Two-button confirm shown before `🆕 Set up new` overwrites a
+    """Two-button confirm shown before `➕ Set up new` overwrites a
     saved draft (#240). Yes → delete draft + open preset picker;
     Cancel → close ephemeral, draft untouched."""
 
@@ -2677,7 +2677,7 @@ class _DiscardDraftConfirmView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content=(
-                    f"🆕 Starting fresh for **Team {self.team}**. Pick a "
+                    f"➕ Starting fresh for **Team {self.team}**. Pick a "
                     f"strategy preset to apply..."
                 ),
                 view=self,

@@ -654,14 +654,14 @@ class EventEditorView(discord.ui.View):
             "Choose an event to remove:", view=view, ephemeral=True
         )
 
-    @discord.ui.button(label="📝 Add Announcement Text", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="✏️ Add Announcement Text", style=discord.ButtonStyle.secondary, row=1)
     async def add_notes(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel = interaction.channel
         await interaction.response.defer()
 
         current_note = f"\n\nCurrent announcement text:\n> {self.notes}" if self.notes else ""
         prompt = await channel.send(
-            f"📝 {interaction.user.mention} — type the additional announcement text "
+            f"✏️ {interaction.user.mention} — type the additional announcement text "
             f"that should be appended to today's announcement, or type `clear` to remove "
             f"existing text.{current_note}"
         )
@@ -905,7 +905,7 @@ class ApprovalView(discord.ui.View):
                 guild_id=self.guild_id,
             )
             sent = await channel.send(
-                f"📝 **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
+                f"✏️ **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
                 view=new_view,
             )
             new_view.message = sent
@@ -1276,7 +1276,7 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         _now = datetime.now(tz=ET)
         _h12 = _now.hour % 12 or 12
         _ts = f"{_h12}:{_now:%M%p ET}".lower()
-        await leadership.send(f"⏱️ **5-minute warning auto-posted** at {_ts}")
+        await leadership.send(f"🕒 **5-minute warning auto-posted** at {_ts}")
 
     pending_warnings.pop(event_key, None)
     from config import delete_pending_warning

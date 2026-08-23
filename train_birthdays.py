@@ -305,7 +305,7 @@ def render_conflict_message(conflicts: list[dict]) -> str:
         for c in conflicts
     ]
     return (
-        "🚨 **Birthday scheduling conflict — manual action needed!**\n\n"
+        "⚠️ **Birthday scheduling conflict — manual action needed!**\n\n"
         + "\n\n".join(sections)
         + "\n\nUse the buttons below to place "
         + ("this member" if len(conflicts) == 1 else "these members")

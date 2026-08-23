@@ -168,7 +168,7 @@ async def admin_overview_slash(interaction: discord.Interaction):
         ).fetchall()
 
     embed = discord.Embed(
-        title="🛠️ Admin Overview",
+        title="⚙️ Admin Overview",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -1090,7 +1090,7 @@ async def admin_verify_slash(
             role_managed=role.managed,
         )
         set_app_setting(support_join_watch.VERIFIED_ROLE_SETTING, str(role.id))
-        line = f"🏷️ Verified role set to **{role.name}**."
+        line = f"✅ Verified role set to **{role.name}**."
         if blocker:
             line += f"\n   ⚠️ Heads up: {blocker} — I can't assign it until that's fixed."
         changes.append(line)

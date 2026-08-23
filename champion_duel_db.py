@@ -2499,12 +2499,38 @@ def get_roster(
     currently running. A group letter is only meaningful inside both: "group D"
     in the semifinals is a different set of people from "group D" in the
     qualifiers, and a different set again in somebody else's grouping.
+
+    **The round that scopes the read also scopes what each row reports.** The
+    same `stage` the filter joins on is handed to `attach_stages`, so `grp` /
+    `rank` name the round the caller asked about and not some other one (#519).
+    That applies to the unfiltered read too, where the resolved round is still
+    what the response is about: a player who is not in it comes back with
+    `stage` and `grp` both None rather than a letter from a round nobody asked
+    for. Their `stages` still carries every round they are in, and `stage` is
+    what says whether they are in the one being read -- the knockouts have no
+    letter, so `grp` cannot say it there.
+
+    Where no round resolves at all -- sign-up, or a grouping with no dates and
+    no draw -- there is nothing to scope to, so rows fall back to the furthest
+    round the same way a player card does.
+
+    Where a round resolves but we hold no draw for it, which is every round
+    transition until the import lands, every row reports `grp` None. That is
+    what `get_groups` and a group-filtered read already say in that window --
+    no groups, nobody in them -- and falling back to the last round we hold
+    would make this the one endpoint of the three claiming letters for a round
+    the other two have nothing for.
     """
     grouping_id = grouping_id if grouping_id is not None else default_grouping_id()
     stage = _stage(stage) if stage else current_stage(grouping_id)
     sql = "SELECT r.* FROM registrants r"
     params: tuple = ()
     if group:
+        # A group letter has to be looked up in some round, so an unresolved
+        # one falls back here rather than matching nothing. Assigned rather
+        # than inlined into `params`, because the round the filter used is the
+        # round the rows have to report.
+        stage = stage or "qualifiers"
         # Joined through `groups` rather than filtered on `registrants.grp`,
         # which is legacy and no longer written. See #495.
         sql += (
@@ -2512,14 +2538,30 @@ def get_roster(
             " JOIN groups g ON g.id = m.group_id"
             " WHERE g.grouping_id = ? AND g.stage = ? AND g.label = ?"
         )
-        params = (grouping_id, stage or "qualifiers", _group(group))
+        params = (grouping_id, stage, _group(group))
     sql += " ORDER BY r.display_name"
 
     with _get_conn() as conn:
         players = [dict(r) for r in conn.execute(sql, params).fetchall()]
     for player in players:
-        attach_stages(player, grouping_id)
-    players.sort(key=lambda p: (p.get("grp") or "", p.get("rank") or 0, p["display_name"]))
+        attach_stages(player, grouping_id, stage=stage)
+    # A player who is not in the round being read -- eliminated, or not drawn
+    # into it yet -- belongs after the round the list is about rather than in
+    # front of it. Only the unfiltered read can produce one; a group filter
+    # already guarantees every row is placed in that round.
+    #
+    # Keyed on `stage` and not on `grp`, because the knockouts are one field of
+    # 32 with no letter at all: every player still in them carries `grp` None,
+    # so keying on the letter sorted the eliminated ahead of the survivors in
+    # the one round where it matters most.
+    players.sort(
+        key=lambda p: (
+            p.get("stage") is None,
+            p.get("grp") or "",
+            p.get("rank") or 0,
+            p["display_name"],
+        )
+    )
 
     with _get_conn() as conn:
         if include_scouting and players:
@@ -2533,35 +2575,46 @@ def get_roster(
     return players
 
 
-def attach_stages(player: dict, grouping_id=None) -> dict:
+def attach_stages(player: dict, grouping_id=None, *, stage: str | None = None) -> dict:
     """Fill a registrant's round data, in place.
 
     Adds `stages` (every round, in playing order) and points `grp` / `rank` at
-    the furthest round the player is actually in. Those two keys are the ones
-    every existing caller already reads, so filling them here keeps the embed,
-    the API and the roster export working off round data without each of them
-    having to know where a group lives.
+    one of them. Those two keys are the ones every existing caller already
+    reads, so filling them here keeps the embed, the API and the roster export
+    working off round data without each of them having to know where a group
+    lives.
 
-    The furthest round rather than the running one: a player knocked out in the
-    qualifiers should still show the group they went out of, not a blank where
-    the semifinal they are not in would go.
+    Which round `grp` / `rank` report is the caller's to say:
+
+    - **Given a `stage`**, that round. For a read already scoped to one --
+      `get_roster` filtering by group -- reporting any other round's letter is
+      what #519 was: the response filtered players into group M and then told
+      the caller they were in group D.
+    - **Without one**, the furthest round the player is in. Right for a player
+      card: someone knocked out in the qualifiers should still show the group
+      they went out of, not a blank where the semifinal they are not in would
+      go. `get_player` relies on this and must keep doing so.
+
+    A named `stage` the player is not in blanks `stage`, `grp` and `rank`
+    together, rather than falling back to another round -- falling back is the
+    bug. Blanking `stage` with the other two is what makes "not in this round"
+    readable at all during the knockouts, which are one field of 32 with no
+    letter: every knockout row carries `grp` None, so the letter alone cannot
+    tell someone still in from someone who went out in the qualifiers.
+    `stages` carries every round either way, so a caller wanting the whole
+    pathway still has it.
 
     Also sets `grouping_id`, so a surface showing a player from outside the
     caller's own grouping can say which one a bare group letter belongs to.
     """
     stages = get_stages(player["id"], grouping_id)
     player["stages"] = stages
-    if stages:
-        stage = list(stages)[-1]
-        player["stage"] = stage
-        player["grp"] = stages[stage]["grp"]
-        player["rank"] = stages[stage]["rank"]
-        player["grouping_id"] = stages[stage]["grouping_id"]
-    else:
-        player["stage"] = None
-        player["grp"] = None
-        player["rank"] = None
-        player["grouping_id"] = None
+    reported = stage or (list(stages)[-1] if stages else None)
+    row = stages.get(reported) if reported else None
+    player["stage"] = reported if row else None
+    player["grp"] = row["grp"] if row else None
+    player["rank"] = row["rank"] if row else None
+    player["grouping_id"] = row["grouping_id"] if row else None
     return player
 
 

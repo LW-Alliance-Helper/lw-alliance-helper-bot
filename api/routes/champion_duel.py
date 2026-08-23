@@ -136,7 +136,15 @@ async def roster(request: web.Request) -> web.Response:
 def _ambiguous(exc, request):
     """409 listing the candidates. Names repeat across servers, so picking one
     would attach a sighting to the wrong player -- unrecoverable, and the
-    caller is in a position to ask."""
+    caller is in a position to ask.
+
+    The server is what a human picks between, so it is what the list carries.
+    A `group` used to ride along too, read off `registrants.grp` -- dead since
+    #495, so null on anything imported since and a stale letter from an older
+    round on anything before it. Dropped rather than refilled from the stage
+    rows (#519): neither value can help anyone choose, and an absent key says
+    nothing instead of saying something wrong.
+    """
     return json_response(
         {
             "error": "ambiguous_player",
@@ -145,7 +153,6 @@ def _ambiguous(exc, request):
                 {
                     "id": c["id"],
                     "server": c["server"],
-                    "group": c["grp"],
                     "display_name": c["display_name"],
                 }
                 for c in exc.candidates

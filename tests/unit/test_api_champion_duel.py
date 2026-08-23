@@ -109,6 +109,29 @@ async def test_player_requires_login(client):
     assert (await client.get(f"{P}/player/AlphaOne")).status == 401
 
 
+async def test_an_ambiguous_name_offers_the_servers_and_no_group(client, cd_db):
+    """Two players share a name and the server is what tells them apart.
+
+    The candidate list used to carry a `group` read straight off
+    `registrants.grp` -- dead since #495, so null for anything imported since
+    and a stale letter from an older round for anything before it. Dropped
+    rather than refilled from the stage rows (#519): a field that is
+    structurally null reads as "this player has no group" instead of "we
+    stopped filling this in", and neither value helps a human pick.
+    """
+    db.upsert_registrant("Twinned", server="738", origin="imported")
+    db.upsert_registrant("Twinned", server="1042", origin="imported")
+    token = await _session()
+
+    resp = await client.get(f"{P}/player/Twinned", headers=_auth(token))
+    body = await resp.json()
+
+    assert resp.status == 409
+    assert body["error"] == "ambiguous_player"
+    assert sorted(c["server"] for c in body["candidates"]) == ["1042", "738"]
+    assert all("group" not in c for c in body["candidates"]), "the dead column stays out"
+
+
 # ── Writes ────────────────────────────────────────────────────────────────────
 
 

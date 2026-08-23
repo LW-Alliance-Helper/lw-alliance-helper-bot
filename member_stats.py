@@ -912,7 +912,7 @@ class SharePowerView(discord.ui.View):
         self.target = target
 
     @discord.ui.button(
-        label="📤 Share my power stats to this channel", style=discord.ButtonStyle.secondary
+        label="📣 Share my power stats to this channel", style=discord.ButtonStyle.secondary
     )
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()

@@ -498,7 +498,7 @@ class ExportImportCog(commands.Cog):
 
         view = CategoryPickerView(available)
         await interaction.response.send_message(
-            "📦 **Export Config**\n"
+            "📤 **Export Config**\n"
             "Pick the categories you want to export. Categories with no saved "
             "data are hidden. After confirming, the bot will DM you a JSON "
             "file that you (or another officer) can attach to `/config import` "
@@ -527,7 +527,7 @@ class ExportImportCog(commands.Cog):
         try:
             dm = await user.create_dm()
             await dm.send(
-                "📦 **Your alliance's bot config export** — keep this file "
+                "📤 **Your alliance's bot config export** — keep this file "
                 "private (it contains your sheet ID and channel/role IDs). "
                 "Attach it to `/config import` in the destination server.",
                 file=discord.File(io.BytesIO(payload), filename=filename),

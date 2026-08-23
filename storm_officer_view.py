@@ -1,6 +1,6 @@
 """
 Officer view for storm sign-ups — reached via the
-`👁️ View sign-ups + set up teams` button on `/desertstorm` and
+`👀 View sign-ups + set up teams` button on `/desertstorm` and
 `/canyonstorm` (hub-restructure #187; legacy `/desertstorm signups`
 subcommand pre-#125).
 
@@ -812,8 +812,8 @@ class _OnBehalfVoteView(discord.ui.View):
     Picks are persisted across pages so officers can paginate, tick more
     names, and submit once. By default the picker hides members who
     already have a vote on this event so officers can't accidentally
-    clobber sign-up-post votes; the 👁️ button toggles them back in for
-    correction flows. The 📥 button stages every not-yet-voted member
+    clobber sign-up-post votes; the 👀 button toggles them back in for
+    correction flows. The 🗳️ button stages every not-yet-voted member
     in one click — Submit still required.
 
     Roster lists longer than 25 paginate via Prev/Next buttons + a
@@ -834,7 +834,7 @@ class _OnBehalfVoteView(discord.ui.View):
         self.parent_view = parent_view
         self.teams_setting = teams_setting
         # Set of target_ids whose vote is already recorded on this event.
-        # Drives the "hide already-voted" default + the 📥 shortcut's
+        # Drives the "hide already-voted" default + the 🗳️ shortcut's
         # not-voted scope. Empty set = "no prior votes" → toggle/shortcut
         # are still rendered but no-op.
         self.voted_target_ids: set[str] = set(voted_target_ids or ())
@@ -938,7 +938,7 @@ class _OnBehalfVoteView(discord.ui.View):
         # Toggle: when False (default), the Member Select hides any
         # roster row whose target_id is in `voted_target_ids` so an
         # officer can't accidentally overwrite a vote already cast via
-        # the sign-up post. Flip True via the 👁️ button when the
+        # the sign-up post. Flip True via the 👀 button when the
         # officer's intentionally correcting a prior vote.
         self.show_voted: bool = False
         self.message: discord.Message | None = None
@@ -956,7 +956,7 @@ class _OnBehalfVoteView(discord.ui.View):
     @property
     def not_voted_count(self) -> int:
         """Members in `_all_members` whose target_id isn't already voted.
-        Drives the 📥 shortcut button label + disable state. Independent
+        Drives the 🗳️ shortcut button label + disable state. Independent
         of `show_voted` — the shortcut always means "not-voted only"."""
         if not self.voted_target_ids:
             return len(self._all_members)
@@ -1096,12 +1096,12 @@ class _OnBehalfVoteView(discord.ui.View):
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
 
-        # 📥 Stage every not-yet-voted member in one click. Officer still
+        # 🗳️ Stage every not-yet-voted member in one click. Officer still
         # has to hit Submit — no auto-submit, because a misclick at 100
         # members is brutal. Disabled when nothing to stage.
         not_voted_n = self.not_voted_count
         select_all_btn = discord.ui.Button(
-            label=f"📥 Select all not-voted ({not_voted_n})",
+            label=f"🗳️ Select all not-voted ({not_voted_n})",
             style=discord.ButtonStyle.secondary,
             disabled=(not_voted_n == 0),
             row=4,
@@ -1125,14 +1125,14 @@ class _OnBehalfVoteView(discord.ui.View):
         select_all_btn.callback = _on_select_all
         self.add_item(select_all_btn)
 
-        # 👁️ Toggle whether already-voted members appear in the picker.
+        # 👀 Toggle whether already-voted members appear in the picker.
         # Hidden by default to keep officers out of accidental-overwrite
         # range; flip on for correction flows.
         if self.voted_target_ids:
             toggle_label = (
-                "🙈 Hide already-voted"
+                "👀 Hide already-voted"
                 if self.show_voted
-                else f"👁️ Show already-voted ({len(self.voted_target_ids)})"
+                else f"👀 Show already-voted ({len(self.voted_target_ids)})"
             )
             toggle_btn = discord.ui.Button(
                 label=toggle_label,
@@ -2145,7 +2145,7 @@ class OfficerView(discord.ui.View):
             teams_setting = (cfg.get("teams") or "both").strip()
             # Collect target_ids already in a vote bucket so the picker
             # can hide them by default — officers can flip them back in
-            # via 👁️ when intentionally correcting a prior vote.
+            # via 👀 when intentionally correcting a prior vote.
             voted_target_ids: set[str] = set()
             for k in ("a", "b", "either", "cannot"):
                 for e in self.buckets.get(k, []):
@@ -2161,8 +2161,8 @@ class OfficerView(discord.ui.View):
                     content=(
                         "🙋 Pick one or more members and a vote, then "
                         "**Submit**. Already-voted members are hidden — "
-                        "use **👁️ Show already-voted** to correct a "
-                        "prior vote. **📥 Select all not-voted** stages "
+                        "use **👀 Show already-voted** to correct a "
+                        "prior vote. **🗳️ Select all not-voted** stages "
                         "the remaining roster in one click. `/members "
                         "sync` refreshes the list."
                     ),
@@ -3013,7 +3013,7 @@ class _PresetPickerView(discord.ui.View):
 
 # ── Slash command handler ────────────────────────────────────────────────────
 #
-# Wired from the `👁️ View sign-ups + set up teams` button on the
+# Wired from the `👀 View sign-ups + set up teams` button on the
 # `/desertstorm` and `/canyonstorm` event hubs (storm_event_hub.py).
 # This module exposes the handler body so the hub stays a thin
 # dispatcher.

@@ -1,7 +1,7 @@
 """
 Manual roster builder for Desert Storm and Canyon Storm (#128).
 
-Opened from the `👁️ View sign-ups + set up teams` officer view via
+Opened from the `👀 View sign-ups + set up teams` officer view via
 its "Apply preset" picker (hub-restructure #187; legacy
 `/desertstorm strategy apply` slash subcommand pre-#125). Leadership
 picks the team, the bot loads the named preset + member rules + roster
@@ -1964,10 +1964,10 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         embed.set_footer(
             text=(
                 "💾 Auto-saving as you go. Close anytime; resume from "
-                "/desertstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
+                "/desertstorm → 👀 View sign-ups + set up teams → ♻️ Resume Team X."
                 if session.event_type == "DS"
                 else "💾 Auto-saving as you go. Close anytime; resume from "
-                "/canyonstorm → 👁️ View sign-ups + set up teams → ♻️ Resume Team X."
+                "/canyonstorm → 👀 View sign-ups + set up teams → ♻️ Resume Team X."
             )
         )
     return embed
@@ -2716,7 +2716,7 @@ class RosterBuilderView(discord.ui.View):
                 hub_cmd = "/desertstorm" if s.event_type == "DS" else "/canyonstorm"
                 close_msg = (
                     f"👋 Builder closed. **Your draft is saved** — "
-                    f"come back via `{hub_cmd}` → **👁️ View sign-ups + set up teams** and click "
+                    f"come back via `{hub_cmd}` → **👀 View sign-ups + set up teams** and click "
                     f"**♻️ Resume Team {s.team}** to pick up where "
                     f"you left off."
                 )
@@ -4522,7 +4522,7 @@ class _RenderActionView(discord.ui.View):
             )
             return
         await inter.response.send_message(
-            "📥 Sent to your DMs. Check your direct messages with the bot.",
+            "✅ Sent to your DMs. Check your direct messages with the bot.",
             ephemeral=True,
         )
 
@@ -7128,7 +7128,7 @@ async def open_roster_builder(
                     from storm_date_helpers import format_event_date
 
                     lines.append(
-                        f"📅 Resumed a draft last saved for "
+                        f"▶️ Resumed a draft last saved for "
                         f"**{format_event_date(report['stale_event_date'])}**. "
                         f"Re-applied to this week's signups — review "
                         f"before posting."

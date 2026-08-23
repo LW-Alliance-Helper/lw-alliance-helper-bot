@@ -249,7 +249,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "/buddy",
                 "**Buddy hub.** Everyone can tap 🔍 Who's my buddy? or 📋 View "
                 "buddy list. Leadership gets ✏️ Manage pairings (unpair / pair / "
-                "re-pair) and 📤 Post buddy list.",
+                "re-pair) and 📣 Post buddy list.",
             ),
             (
                 "💎 Auto-assign + self-service",
@@ -467,7 +467,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "DM-mode reminders",
                 f"`/survey` → {SURVEY_HUB_BTN_REMIND} plus the "
-                "**🔔 Send DM reminder to roster** button on `/desertstorm` and "
+                "**📨 Send DM reminder to roster** button on `/desertstorm` and "
                 "`/canyonstorm` all gain DM-via-roster delivery; survey reminders "
                 "can also schedule recurring DMs.",
             ),

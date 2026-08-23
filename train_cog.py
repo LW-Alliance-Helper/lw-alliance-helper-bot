@@ -103,7 +103,7 @@ class BirthdayConflictView(discord.ui.View):
         places the member with one click and writes it to the schedule,
       • 📋 Show next 7 days — an ephemeral read-only view of the surrounding
         schedule so leadership can see what's free,
-      • 🙈 Ignore — persists a dismissal so the *daily* re-post stops
+      • 🔕 Ignore — persists a dismissal so the *daily* re-post stops
         nagging about a conflict that's been handled off-schedule.
 
     Placing a member silences future alerts on its own: the next daily run's
@@ -161,7 +161,7 @@ class BirthdayConflictView(discord.ui.View):
         show_btn.callback = self._on_show
         self.add_item(show_btn)
 
-        ignore_btn = discord.ui.Button(label="🙈 Ignore", style=discord.ButtonStyle.danger)
+        ignore_btn = discord.ui.Button(label="🔕 Ignore", style=discord.ButtonStyle.danger)
         ignore_btn.callback = self._on_ignore
         self.add_item(ignore_btn)
 
@@ -264,12 +264,12 @@ class BirthdayConflictView(discord.ui.View):
         for c in self.conflicts:
             mark_conflict_ignored(self.guild_id, c["key"])
         await interaction.response.send_message(
-            "🙈 Dismissed — you won't get this alert again for these birthdays.",
+            "🔕 Dismissed — you won't get this alert again for these birthdays.",
             ephemeral=True,
         )
         try:
             await self.message.edit(
-                content=f"🙈 **Birthday conflict dismissed.** Won't alert again about: {names}.",
+                content=f"🔕 **Birthday conflict dismissed.** Won't alert again about: {names}.",
                 view=None,
             )
         except discord.HTTPException:

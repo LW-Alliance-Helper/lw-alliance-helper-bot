@@ -1684,7 +1684,7 @@ class _ReminderHubView(discord.ui.View):
         super().__init__(timeout=120)
         self.choice: str | None = None  # "send" | "schedule" | None
 
-    @discord.ui.button(label="📤 Send reminder now", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="📬 Send reminder now", style=discord.ButtonStyle.success)
     async def send_now(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "send"
         for item in self.children:
@@ -1692,7 +1692,7 @@ class _ReminderHubView(discord.ui.View):
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
-    @discord.ui.button(label="⚙️ Manage scheduled reminders", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📅 Manage scheduled reminders", style=discord.ButtonStyle.primary)
     async def manage(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "schedule"
         for item in self.children:

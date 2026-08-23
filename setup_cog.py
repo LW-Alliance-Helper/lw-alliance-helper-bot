@@ -1884,7 +1884,7 @@ class ScheduleTypeView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="📅 Add manually each time", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="✏️ Add manually each time", style=discord.ButtonStyle.secondary)
     async def manual(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.selected = "manual"
         for item in self.children:
@@ -7649,7 +7649,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
     # The body of the DM that fires when leadership clicks
-    # 🔔 Send DM reminder to roster on the storm hub. Stored per
+    # 📨 Send DM reminder to roster on the storm hub. Stored per
     # (guild_id, event_type) so DS and CS can have different copy. Free
     # guilds can configure this now too — it just won't fire until they
     # upgrade.
@@ -7661,7 +7661,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     remind_dm = await ask_keep_or_change(
         channel,
         f"**Step 9 of 9: {label} Reminder DM (💎 Premium)**\n"
-        f"When leadership clicks **🔔 Send DM reminder to roster** on "
+        f"When leadership clicks **📨 Send DM reminder to roster** on "
         f"`/{parent_cmd}`, the bot DMs every roster member this message. "
         f"Free guilds can configure it now; it just won't fire until "
         f"you have Premium + Member Sync.\n\n"
@@ -10832,7 +10832,7 @@ async def _build_participation_question(
                 self.cancelled = False
 
             @discord.ui.button(
-                label="📊 Show counts per member during the log",
+                label="📋 Show counts per member during the log",
                 style=discord.ButtonStyle.primary,
             )
             async def yes_btn(self, inter, _btn):
@@ -10847,7 +10847,7 @@ async def _build_participation_question(
                 self.stop()
 
             @discord.ui.button(
-                label="🔕 Only show in the Trends Viewer",
+                label="🔍 Only show in the Trends Viewer",
                 style=discord.ButtonStyle.secondary,
             )
             async def no_btn(self, inter, _btn):
@@ -11325,7 +11325,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 self.stop()
 
             @discord.ui.button(
-                label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary
+                label="↔️ Assign nearby if taken", style=discord.ButtonStyle.secondary
             )
             async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1

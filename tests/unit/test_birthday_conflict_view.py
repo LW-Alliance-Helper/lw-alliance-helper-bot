@@ -5,7 +5,7 @@ conflict alert that replaced the old fire-and-forget text post.
 The view lets leadership resolve a scheduling conflict in place:
   * 📅 a dropdown of open days places the member and writes the schedule,
   * 📋 Show next 7 days renders an ephemeral read-only window,
-  * 🙈 Ignore persists a dismissal so the daily re-post stops.
+  * 🔕 Ignore persists a dismissal so the daily re-post stops.
 
 These exercise the callbacks directly (not through Discord) with fake
 interaction / message objects, patching the Sheets and SQLite boundaries.

@@ -857,7 +857,7 @@ async def _run_create_event_wizard(
         await channel.send(
             f"✅ Using preset: **{preset['name']}** ({preset['stage_note']})\n"
             "You'll still pick the schedule, anchor date, and time below. "
-            "Pick **📅 Manual** at the schedule step if you run this event "
+            "Pick **✏️ Manual** at the schedule step if you run this event "
             "ad-hoc rather than on a fixed cycle."
         )
         name = preset["name"]
@@ -928,7 +928,7 @@ async def _run_create_event_wizard(
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
-        @discord.ui.button(label="📅 Manual", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label="✏️ Manual", style=discord.ButtonStyle.secondary)
         async def manual(self, inter: discord.Interaction, _b: discord.ui.Button):
             self.selected = "manual"
             for item in self.children:

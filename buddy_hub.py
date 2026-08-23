@@ -3,7 +3,7 @@
 One command opens a hub that adapts to tier and role:
 
 - **Everyone:** 🔍 Who's my buddy? · 📋 View buddy list
-- **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📤 Post buddy
+- **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
   list · ⚙️ Open setup
 - **Premium leadership:** 🪄 Auto-assign · ♻️ Re-pair from scratch ·
   📌 Post self-service buttons
@@ -148,7 +148,7 @@ class _BuddyHubView(discord.ui.View):
             self._add(
                 "🔄 Refresh from sheet", discord.ButtonStyle.secondary, 1, self._refresh_sheet
             )
-            self._add("📤 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
+            self._add("📣 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
             self._add("⚙️ Open setup", discord.ButtonStyle.secondary, 1, self._setup)
             self._add("🪄 Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
             self._add("♻️ Re-pair from scratch", discord.ButtonStyle.danger, 2, self._from_scratch)
@@ -236,7 +236,7 @@ class _BuddyHubView(discord.ui.View):
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         try:
             await inter.channel.send(embed=embed)
-            await inter.followup.send("📤 Posted the buddy list here.", ephemeral=True)
+            await inter.followup.send("📣 Posted the buddy list here.", ephemeral=True)
         except discord.HTTPException:
             await inter.followup.send("⚠️ Couldn't post in this channel.", ephemeral=True)
 

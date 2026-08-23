@@ -25,12 +25,14 @@ from typing import Optional
 import discord
 
 from messages import DENY_NOT_OWNER
+from setup_hub import STORM_GLYPH
 
 logger = logging.getLogger(__name__)
 
 
 _EVENT_LABEL = {"DS": "Desert Storm", "CS": "Canyon Storm"}
-_EVENT_EMOJI = {"DS": "⚔️", "CS": "🛡️"}
+# Imported, not retyped — see setup_hub.STORM_GLYPH (rule 4).
+_EVENT_EMOJI = STORM_GLYPH
 _PARENT_CMD = {"DS": "desertstorm", "CS": "canyonstorm"}
 _FIXED_EVENT_DAY = {"DS": "Friday", "CS": "Thursday"}
 

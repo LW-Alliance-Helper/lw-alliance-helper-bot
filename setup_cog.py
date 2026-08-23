@@ -38,6 +38,7 @@ from messages import (
     WIZARD_TIMEOUT,
 )
 from setup_hub import (
+    STORM_GLYPH,
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
     HUB_BTN_EVENTS,
@@ -7085,7 +7086,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         else:
             _times_value = f"Team A: {_slot_blurb(_a_idx)} · Team B: {_slot_blurb(_b_idx)}"
         fields.insert(2, ("Team Times", _times_value))
-        emoji = "⚔️" if event_type == "DS" else "🛡️"
+        emoji = STORM_GLYPH[event_type]
         proceed = await ask_proceed_with_existing_config(
             channel,
             title=f"{emoji} Current {label} Setup",

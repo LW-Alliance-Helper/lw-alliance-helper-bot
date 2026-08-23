@@ -54,6 +54,7 @@ from messages import (
     DENY_NOT_OWNER,
 )
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
+from setup_hub import STORM_GLYPH
 
 logger = logging.getLogger(__name__)
 
@@ -509,7 +510,7 @@ def _render_embed(
     from storm_date_helpers import format_event_date
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    emoji = "⚔️" if event_type == "DS" else "🛡️"
+    emoji = STORM_GLYPH[event_type]
     date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())

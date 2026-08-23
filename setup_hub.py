@@ -44,8 +44,15 @@ HUB_BTN_TRAIN = "🚂 Train"
 HUB_BTN_GROWTH = "📈 Growth"
 HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
 HUB_BTN_EVENTS = "📣 Events"
-HUB_BTN_DS = "⚔️ Desert Storm"
-HUB_BTN_CS = "🛡️ Canyon Storm"
+# The storm pair, split from its labels so the glyph can be imported on its
+# own. `notes/DESIGN.md` emoji rule 4 says feature emoji come from the
+# `HUB_BTN_*` constant rather than being retyped — but a welded
+# "glyph + label" string cannot be reused by the seven surfaces that need only
+# the mark, so they all hardcoded it, and two of them drifted to 🔥 / ⚡ before
+# anyone noticed. Import STORM_GLYPH; do not retype the emoji.
+STORM_GLYPH = {"DS": "⚔️", "CS": "🛡️"}
+HUB_BTN_DS = f"{STORM_GLYPH['DS']} Desert Storm"
+HUB_BTN_CS = f"{STORM_GLYPH['CS']} Canyon Storm"
 HUB_BTN_SHINY = "🌟 Shiny Tasks"
 HUB_BTN_MEMBERS = "👥 Member Sync"
 HUB_BTN_SURVEY = "📋 Survey"

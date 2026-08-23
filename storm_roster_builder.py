@@ -3070,7 +3070,7 @@ class _ZoneMemberEditView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="↩️ Edit cancelled. No changes made.",
+                content="↩️ Edit canceled. No changes made.",
                 view=None,
             )
         except discord.HTTPException:
@@ -3611,7 +3611,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="↩️ Auto-fill cancelled. Your edits are intact.",
+                content="↩️ Auto-fill canceled. Your edits are intact.",
                 view=self,
             )
         except discord.HTTPException:
@@ -3707,7 +3707,7 @@ class _ApprovePostPickerView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="↩️ Approve cancelled. Roster not posted.",
+                content="↩️ Approve canceled. Roster not posted.",
                 view=self,
             )
         except discord.HTTPException:

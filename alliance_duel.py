@@ -2062,7 +2062,7 @@ class WeekProjection:
         source = "picked call" if self.status == SOURCE_PICKED else "Known read"
         return (
             f"The {source} takes priority here and points the other way: the "
-            f"recorded numbers favour {favoured}. The per-day split is the "
+            f"recorded numbers favor {favoured}. The per-day split is the "
             "numbers' view, not the read's."
         )
 

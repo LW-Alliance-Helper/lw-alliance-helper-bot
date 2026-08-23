@@ -236,7 +236,7 @@ def test_it_never_tells_someone_to_record_squads_that_would_not_help(cd_db):
 
     anyway = _field(embed, hub.FIELD_ANYWAY)
     assert anyway is not None, "the collection ask is still worth making here"
-    assert "will not change this answer" in anyway
+    assert "won't change this answer" in anyway
     assert hub.CHAMPION_DUEL_HUB_CMD in anyway, "an ask with no exit is not an ask"
 
 
@@ -245,7 +245,7 @@ def test_your_own_placeholder_types_ask_for_squads_rather_than_ranking_nothing(c
     embed = _embed("Habitual", "Unseen")
 
     what_to_set = _field(embed, hub.FIELD_YOURS)
-    assert "I don't know which of your squads is which type" in what_to_set
+    assert "We don't have your squad types" in what_to_set
     # Every dead end carries its exit, and this one is a press away.
     assert hub.CHAMPION_DUEL_HUB_CMD in what_to_set
     assert _field(embed, hub.FIELD_OTHERS) is None
@@ -263,18 +263,19 @@ def test_an_unscouted_opponent_gets_a_refusal_rather_than_a_ranking(cd_db):
     embed = _embed("Unseen", "Asker")
 
     what_to_set = _field(embed, hub.FIELD_YOURS)
-    assert words.CANNOT_RECOMMEND in what_to_set
-    # Carrying the measurement, because "I cannot tell you" is a claim the
+    assert "no recommendation to give" in what_to_set
+    # Carrying the measurement, because "we cannot tell you" is a claim the
     # reader is entitled to check.
     assert "points" in what_to_set
-    assert "coin flip" in what_to_set
+    # And why, which only holds where their types really are missing.
+    assert words.CANNOT_RECOMMEND_WHY in what_to_set
     # Six rows within three points of each other is the same broken-looking
     # surface that six rows of <1% was.
     assert _field(embed, hub.FIELD_OTHERS) is None
     # And it does not go quiet: the ask names the press that fixes it.
     fix = _field(embed, hub.FIELD_FIX)
     assert fix is not None and hub.CHAMPION_DUEL_HUB_CMD in fix
-    assert "36 arrangements to 12" in fix
+    assert "Anyone who has seen their line-up screen can record it" in fix
 
 
 def test_the_refusal_does_not_repeat_what_the_section_above_it_just_said(cd_db):
@@ -291,7 +292,7 @@ def test_a_recorded_opponent_still_gets_a_recommendation(cd_db):
     them", so it must not swallow the cases that do have an answer."""
     _habit()
     what_to_set = _field(_embed("Habitual", "Asker"), hub.FIELD_YOURS)
-    assert words.CANNOT_RECOMMEND not in what_to_set
+    assert "no recommendation to give" not in what_to_set
     assert "Tank → Aircraft → Missile" in what_to_set
 
 
@@ -326,7 +327,11 @@ def test_the_footer_never_claims_a_line_up_nobody_recorded(cd_db):
     """ "We have seen their line-up" over "nobody has recorded their order" is
     the surface contradicting itself, which is why the footer says types."""
     embed = _embed("Unseen", "Asker")
-    assert "We have not seen which of this player's squads is which type" in embed.footer.text
+    assert embed.footer.text == words.INTEL_BASIS["unknown"]
+    # The whole point of the row: it speaks about squad types, never about a
+    # line-up. A footer claiming we have seen their line-up, above a section
+    # saying none is recorded, is the surface contradicting itself.
+    assert "line-up" not in embed.footer.text
 
 
 def test_a_favourite_nobody_has_watched_twice_is_not_a_favourite_they_move_off(cd_db):
@@ -400,13 +405,34 @@ def test_this_surface_carries_no_em_dashes(cd_db):
 def test_the_envelope_is_never_offered_as_a_better_prediction(cd_db):
     """Uniform weighting over every configuration is the wrong prior, and
     quoting it against the card would be a worse claim than the one it
-    criticises."""
+    criticises.
+
+    THE GUARD MOVED INTO THE LABEL. It used to be a note under the range
+    ("not a second prediction"), which was the copy defending a figure against
+    a misreading. Kevin's call, 2026-08-22: name the two numbers and the
+    misreading has nowhere to start. So what this test holds now is the label
+    and the shape of the value — one range, no second figure presented as an
+    answer."""
     _habit()
-    value = _field(_embed("Habitual", "Asker"), hub.FIELD_WORTH)
-    assert "not a second prediction" in value
+    embed = _embed("Habitual", "Asker")
+    assert hub.FIELD_WORTH == "Best and worst case"
+    value = _field(embed, hub.FIELD_WORTH)
+    # A floor and a ceiling, and nothing that reads as a rival to the card's
+    # own number.
+    assert value.startswith("Across every line-up the two of you could set")
+    assert len(re.findall(r"\d+(?:\.\d+)?%|[<>]\d+%", value)) == 2
 
 
 # ── the vocabulary guard ─────────────────────────────────────────────────────
+
+
+def test_nothing_seen_names_the_button_that_exists():
+    """`NOTHING_SEEN` spells the button label out rather than interpolating it,
+    because `champion_duel_hub` imports the wording module and not the other
+    way round. That is the drift this catches: the label was renamed from
+    "Record an order" on 2026-08-22 and the empty state has to be renamed with
+    it, or it sends a member looking for a button that is not there."""
+    assert hub.CD_BTN_ORDER in words.NOTHING_SEEN
 
 
 def test_no_two_grade_vocabularies_share_a_word():

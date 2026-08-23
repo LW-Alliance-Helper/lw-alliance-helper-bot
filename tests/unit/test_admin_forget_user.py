@@ -226,7 +226,7 @@ async def test_cancelling_leaves_everything_where_it_was(command, temp_db, cd_te
     await view.cancel.callback(press)
 
     assert len(config.get_storm_signups(GUILD, "DS", DATE)) == 1
-    assert "Cancelled" in press.response.edit_message.call_args.kwargs["content"]
+    assert "Canceled" in press.response.edit_message.call_args.kwargs["content"]
 
 
 @pytest.mark.asyncio

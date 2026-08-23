@@ -1314,7 +1314,7 @@ async def _run_delete_with_confirm(
             view.message = None
     await view.wait()
     if not view.confirmed:
-        await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)
+        await interaction.followup.send("✅ Delete canceled.", ephemeral=True)
         return
     ok = await asyncio.to_thread(
         ss.delete_preset,

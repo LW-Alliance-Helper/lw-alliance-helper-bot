@@ -332,7 +332,7 @@ class _WriteConfirmView(discord.ui.View):
         self.add_item(cancel)
 
     async def _cancel(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content="Cancelled. Nothing written.", view=None)
+        await interaction.response.edit_message(content="Canceled. Nothing written.", view=None)
 
     def _make(self, raw_value: str, label: str):
         async def _cb(interaction: discord.Interaction):

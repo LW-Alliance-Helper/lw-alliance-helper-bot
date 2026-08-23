@@ -1249,10 +1249,10 @@ async def run_log_flow(bot, channel, user, event_type):
         )
         if not await wait_for_view(picker, picker_msg):
             if cancel_event.is_set():
-                await channel.send("❌ Log cancelled.")
+                await channel.send("❌ Log canceled.")
             return
         if picker.cancelled:
-            await channel.send("❌ Log cancelled.")
+            await channel.send("❌ Log canceled.")
             return
         if picker.picked_date is not None:
             log_date = picker.picked_date
@@ -1263,7 +1263,7 @@ async def run_log_flow(bot, channel, user, event_type):
             )
             if raw_date is None:
                 if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
+                    await channel.send("❌ Log canceled.")
                 return
             if raw_date.lower() == "today":
                 log_date = date.today()
@@ -1322,7 +1322,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 msg = await channel.send(f"{header}\nPick one.", view=yn)
                 if not await wait_for_view(yn, msg):
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 answers[qkey] = "Yes" if yn.value else "No"
 
@@ -1343,7 +1343,7 @@ async def run_log_flow(bot, channel, user, event_type):
                     raw = await wait_for_msg(f"{header}{bound_hint}\nType a number.")
                     if raw is None:
                         if cancel_event.is_set():
-                            await channel.send("❌ Log cancelled.")
+                            await channel.send("❌ Log canceled.")
                         return
                     try:
                         n = float(raw) if "." in raw else int(raw)
@@ -1365,7 +1365,7 @@ async def run_log_flow(bot, channel, user, event_type):
                     break
                 if value is None:
                     await channel.send(
-                        "⚠️ Too many invalid attempts. Cancelling the log. "
+                        "⚠️ Too many invalid attempts. Canceling the log. "
                         f"run {log_hint} when you're ready to try again."
                     )
                     return
@@ -1389,7 +1389,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 )
                 if not await wait_for_view(view, prompt):
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 picked = sorted(view.selected)
                 if view.unrecognized:
@@ -1405,7 +1405,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 prompt = await channel.send(f"{header}\nPick one.", view=view)
                 if not await wait_for_view(view, prompt):
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 answers[qkey] = next(iter(view.selected), "")
 
@@ -1418,7 +1418,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 prompt = await channel.send(f"{header}\nPick any that apply.", view=view)
                 if not await wait_for_view(view, prompt):
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 answers[qkey] = ", ".join(sorted(view.selected))
 
@@ -1430,7 +1430,7 @@ async def run_log_flow(bot, channel, user, event_type):
                     raw = await wait_for_msg(f"{header} *(format `{fmt}`)*")
                     if raw is None:
                         if cancel_event.is_set():
-                            await channel.send("❌ Log cancelled.")
+                            await channel.send("❌ Log canceled.")
                         return
                     try:
                         from datetime import datetime as _dt
@@ -1442,7 +1442,7 @@ async def run_log_flow(bot, channel, user, event_type):
                         attempts -= 1
                         await channel.send(f"⚠️ `{raw}` doesn't match `{fmt}`. Please re-enter.")
                 if value is None:
-                    await channel.send("⚠️ Too many invalid attempts. Cancelling the log.")
+                    await channel.send("⚠️ Too many invalid attempts. Canceling the log.")
                     return
                 answers[qkey] = value
 
@@ -1503,7 +1503,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 )
                 if not await wait_for_view(view, prompt):
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 picked = view.selected_set
                 # Build per-member flags for every roster member: "yes"
@@ -1566,7 +1566,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 raw = await wait_for_msg(f"{header}\nType your answer (or `skip` for none).")
                 if raw is None:
                     if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
+                        await channel.send("❌ Log canceled.")
                     return
                 answers[qkey] = "" if raw.lower() == "skip" else raw
 

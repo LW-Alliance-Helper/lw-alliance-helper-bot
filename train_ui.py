@@ -562,6 +562,6 @@ class TrainActionView(discord.ui.View):
             await inter.followup.send("🗑️ Train schedule cleared.", ephemeral=True)
         else:
             await inter.followup.send(
-                "✅ Clear cancelled. Your train schedule is unchanged.",
+                "✅ Clear canceled. Your train schedule is unchanged.",
                 ephemeral=True,
             )

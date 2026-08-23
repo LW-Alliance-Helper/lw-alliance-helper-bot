@@ -87,7 +87,7 @@ CD_BTN_ADD = "➕ Add a player"
 # cannot is a lineup running two of the same type, which is about 4% of
 # players. `_TYPE_ORDER_OTHER` covers them instead.
 CD_BTN_SQUADS = "✏️ Record their squads"
-CD_BTN_ORDER = "➕ Record an order"
+CD_BTN_ORDER = "➕ Record a line-up"
 CD_BTN_GUIDE = "📖 Where to find these numbers"
 CD_BTN_EDITS = "📜 Recent edits"
 CD_BTN_REVERT = "⏪ Revert an edit"
@@ -287,8 +287,13 @@ def _parse_day(value: str, *, end_of_day: bool) -> str | None:
 def _describe(edit: dict) -> str:
     """One edit as a line. Shows the actor as a mention so an unfamiliar
     snowflake resolves to a person without a second lookup, and the server
-    alongside the name because two servers can field the same name."""
-    who = f"<@{edit['actor_discord_id']}>"
+    alongside the name because two servers can field the same name.
+
+    The actor can be gone: a data removal scrubs `actor_discord_id` and leaves
+    the edit. Formatted unconditionally, that printed a bare `<@>`, which is
+    not a mention and reads as a rendering bug. Falls back to the same
+    "(unknown)" this function already uses for a missing name."""
+    who = f"<@{edit['actor_discord_id']}>" if edit.get("actor_discord_id") else "(unknown)"
     when = (edit.get("created_at") or "")[:16].replace("T", " ")
     what = edit.get("field") or edit.get("target")
     slot = f" slot {edit['slot']}" if edit.get("slot") else ""
@@ -477,7 +482,7 @@ def prediction_caption(result: predict_lib.Prediction) -> str:
     return (
         f"🆚 **{a.name}** {words.probability(result.p_a)} · "
         f"**{b.name}** {words.probability(result.p_b)} "
-        f"— {words.CONFIDENCE_LABEL}: {result.confidence().capitalize()}"
+        f"({words.CONFIDENCE_LABEL}: {result.confidence().capitalize()})"
     )
 
 
@@ -638,7 +643,7 @@ class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
         except predict_lib.NotEnoughData as exc:
             slots = ", ".join(str(s) for s in exc.missing)
             await interaction.followup.send(
-                f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
+                f"⚠️ We don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to predict with.\n"
                 f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
                 f"**{CD_BTN_SQUADS}** to fill them in.",
@@ -673,12 +678,17 @@ def _intel_title(result) -> str:
 #: "Your recommended line-up" stays put and the body says there is no
 #: recommendation when there is not. Constants because two of them are
 #: referenced from the tests and one is referenced twice here.
+#:
+#: `FIELD_THEIRS` IS ALSO THE PLAYER CARD'S FIELD NAME. It used to say "Most
+#: common order" there and this on the intel surface, which was two names for
+#: one fact. Kevin's call, 2026-08-22: same wording in both places. Shared
+#: through the constant rather than typed twice, so they cannot drift again.
 FIELD_THEIRS = "Their typical line-up"
 FIELD_YOURS = "Your recommended line-up"
 FIELD_OTHERS = "Other line-ups & winning odds"
 FIELD_FIX = "What would fix this"
 FIELD_ANYWAY = "Worth recording anyway"
-FIELD_WORTH = "What the choice is worth"
+FIELD_WORTH = "Best and worst case"
 
 
 def _card_path(button: str) -> str:
@@ -772,11 +782,7 @@ def build_intel_embed(result) -> discord.Embed:
     elif result.needs_your_squads:
         embed.add_field(
             name=FIELD_YOURS,
-            value=(
-                words.CANNOT_RECOMMEND
-                + "\n"
-                + words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))
-            )[:1024],
+            value=words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))[:1024],
             inline=False,
         )
     elif result.recommended is not None and not result.choice_matters:
@@ -788,16 +794,15 @@ def build_intel_embed(result) -> discord.Embed:
         # completely and we cannot say which way, because every arrangement they
         # could field was averaged and your six came out level. The two must not
         # be confused: one says the choice does not matter, the other says the
-        # choice matters and I cannot call it.
+        # choice matters and we cannot call it.
         refusal = [
-            words.CANNOT_RECOMMEND,
             words.CANNOT_RECOMMEND_FLAT.format(measured=words.points(result.choice_spread)),
         ]
         # Only their squad types are named here. The other thing that could be
         # missing is a line-up, and the field above has already said so and
         # already named the press: `NOTHING_SEEN` ends with "Anyone who has
-        # faced them can add one from their card". Saying it twice in one embed
-        # reads as a surface that is not listening to itself.
+        # faced them can add one with ➕ Record a line-up". Saying it twice in
+        # one embed reads as a surface that is not listening to itself.
         if not result.their_types_known:
             refusal.append(words.CANNOT_RECOMMEND_WHY)
         embed.add_field(name=FIELD_YOURS, value="\n".join(refusal)[:1024], inline=False)
@@ -859,10 +864,16 @@ def build_intel_embed(result) -> discord.Embed:
             inline=False,
         )
 
-    # ── what the choice is worth ─────────────────────────────────────────────
+    # ── best and worst case ──────────────────────────────────────────────────
     # Suppressed where it is worth nothing: the range is then "<1% to <1%",
     # which is true, useless, and reads as a bug. The description already
     # carried that finding as a sentence.
+    #
+    # No note under it any more. The label used to read "What the choice is
+    # worth", which valued the range for the reader, and `ENVELOPE_NOTE` then
+    # spent two sentences defending the figure against a misreading. A label
+    # that just names the two numbers leaves the judgement where it belongs and
+    # gives the note nothing left to do. Kevin's call, 2026-08-22.
     if result.envelope is not None and not worth_little:
         envelope = result.envelope
         embed.add_field(
@@ -870,12 +881,12 @@ def build_intel_embed(result) -> discord.Embed:
             value=(
                 f"Across every line-up the two of you could set, this match runs "
                 f"from {words.probability(envelope.floor)} to "
-                f"{words.probability(envelope.ceiling)}.\n{words.ENVELOPE_NOTE}"
+                f"{words.probability(envelope.ceiling)}."
             )[:1024],
             inline=False,
         )
 
-    embed.set_footer(text=f"{words.intel_basis(result)} {words.THEY_READ_YOU}"[:2048])
+    embed.set_footer(text=words.intel_basis(result)[:2048])
     return embed
 
 
@@ -943,7 +954,7 @@ class _IntelModal(discord.ui.Modal, title="What to field against a player"):
         except predict_lib.NotEnoughData as exc:
             slots = ", ".join(str(s) for s in exc.missing)
             await interaction.followup.send(
-                f"⚠️ I don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
+                f"⚠️ We don't have a full line-up for **{exc.name}**. Slot(s) {slots} "
                 f"have no squad recorded, so there's nothing to work out.\n"
                 f"Run `{CHAMPION_DUEL_HUB_CMD}` → **{CD_BTN_FIND}** → "
                 f"**{CD_BTN_SQUADS}** to fill them in.",
@@ -1051,13 +1062,13 @@ def build_player_embed(
     if top_order:
         order = " → ".join(top_order["order"])
         embed.add_field(
-            name="Most common order",
+            name=FIELD_THEIRS,
             value=f"**{order}**\n{_order_share(top_order['seen'], top_order['total'])}",
             inline=False,
         )
     else:
         embed.add_field(
-            name="Most common order",
+            name=FIELD_THEIRS,
             value="No deploy orders recorded. A prediction will assume strongest first.",
             inline=False,
         )
@@ -2127,7 +2138,7 @@ async def _ask_for_type_order(interaction, player: dict) -> None:
     )
 
 
-# ── Record an order (Premium) ─────────────────────────────────────────────────
+# ── Record a line-up (Premium) ────────────────────────────────────────────────
 
 
 class _OrderSelectView(discord.ui.View):
@@ -2256,7 +2267,7 @@ GUIDE_SECTIONS = (
         "image": "guide_squad.png",
         "title": "Recording Player Squad Information",
         "body": (
-            "Enter this information for all 3 squads in the lineup.\n\n"
+            "Enter this information for all 3 squads in the line-up.\n\n"
             "1. This shows who is on each side of the battle. Enter their names "
             "(best to copy from in-game).\n"
             "2. Enter the Power listed for each squad.\n"
@@ -4080,7 +4091,7 @@ def build_group_embed(
         + {
             "results": "These are the final standings that we have recorded.",
             "seeds": "These are seed positions. No results are recorded yet.",
-            "mixed": "Rows marked *(seed)* are draw positions, not results.",
+            "mixed": "Rows marked *(seed)* are seed positions, not results.",
         }[basis]
     )
 
@@ -4172,10 +4183,8 @@ def build_hub_embed(
             f"{opener}"
             f"**{total}** players {scope} across **{_plural(len(servers), 'warzone')}**: "
             f"{listed}.\n\n"
-            f"You can predict a match or look up a player's information to see their "
-            f"squads and power (if we have it). If we don't have data from your "
-            f"warzone, or you can't find the player you're looking for, "
-            f"**{_btn_words(CD_BTN_ADD)}**."
+            f"Predict a match, or look up a player to see their squads and power. "
+            f"Missing someone? **{_btn_words(CD_BTN_ADD)}**."
         )[:4096]
     else:
         embed.description = (
@@ -4741,9 +4750,9 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     more = len(result.rows) - len(shown)
     tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
-        f"Over {result.trials:,} simulations of the round. The first column is "
-        f"the chance of finishing in the top **{result.advance}** and going "
-        f"through, the second is the chance of winning the group outright."
+        f"Over {result.trials:,} simulations of the round. The first column "
+        f"gives the odds of finishing in the top **{result.advance}** and going "
+        f"through, the second the odds of winning the group outright."
         + "\n\n"
         + "\n".join(lines)
         + tail

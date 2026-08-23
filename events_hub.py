@@ -870,7 +870,7 @@ async def _run_create_event_wizard(
             return
         name = name_raw.strip()
         if not name:
-            await channel.send("⚠️ Empty name — cancelled.")
+            await channel.send("⚠️ Empty name. Canceled.")
             wizard_registry.unregister(user.id, cancel_event)
             return
     short_key = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")

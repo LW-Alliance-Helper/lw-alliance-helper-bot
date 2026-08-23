@@ -668,7 +668,7 @@ class StormApprovalView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        await interaction.followup.send("❌ Draft cancelled.", ephemeral=True)
+        await interaction.followup.send("❌ Draft canceled.", ephemeral=True)
         self.stop()
 
 
@@ -833,7 +833,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str, current_zones: dict, 
             pass
 
         if reply.content.strip().lower() == "cancel":
-            await channel.send("❌ Draft cancelled.")
+            await channel.send("❌ Draft canceled.")
             return
 
         edited_zones, edited_subs, errors = parse_ds_template(reply.content)
@@ -1523,7 +1523,7 @@ class CSApprovalView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        await interaction.followup.send("❌ Draft cancelled.", ephemeral=True)
+        await interaction.followup.send("❌ Draft canceled.", ephemeral=True)
         self.stop()
 
 
@@ -1621,7 +1621,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             pass
 
         if reply.content.strip().lower() == "cancel":
-            await channel.send("❌ Draft cancelled.")
+            await channel.send("❌ Draft canceled.")
             return
 
         edited_zones, errors = parse_cs_template(reply.content)

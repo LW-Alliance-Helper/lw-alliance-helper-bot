@@ -107,7 +107,7 @@ class _ConfirmView(discord.ui.View):
         self.stop()
 
     async def _no(self, inter: discord.Interaction):
-        await inter.response.edit_message(content="Cancelled. No pairings changed.", view=None)
+        await inter.response.edit_message(content="Canceled. No pairings changed.", view=None)
         self.stop()
 
 

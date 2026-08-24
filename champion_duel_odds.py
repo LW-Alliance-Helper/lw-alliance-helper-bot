@@ -614,11 +614,26 @@ def bracket_odds(
     case; qualifier odds came out on 2026-08-21 and took that budget with them,
     so there is no longer a ceiling to fit under and this run sets it. At about
     seventy seconds cold, and pure Python holding the GIL throughout, that is
-    over a minute in which the bot serves nobody. What makes it acceptable is
-    that it is paid once per data change rather than per press: `_RUN_LOCK` admits
-    one run and `_CACHE` answers the rest, and the knockout field changes far
-    less often than people press. What would make it unnecessary is the
-    deferred fix, moving the simulation off this process (#511).
+    over a minute of one core inside a single-process bot.
+
+    WHAT THE LOCK AND THE CACHE BUY IS FREQUENCY, NOT DURATION, and it is worth
+    being exact about that because the note this replaced was not. `_RUN_LOCK`
+    admits one run and `_CACHE` answers every press until the field changes, so
+    a room full of people pressing costs one run rather than twenty. Neither
+    shortens the run itself, and it is the duration that the rest of the
+    process has to survive.
+
+    It survives it because the run is off the event loop: every caller reaches
+    this through `asyncio.to_thread` (`champion_duel_hub._on_odds`), so the
+    loop is slowed by GIL contention rather than blocked, and discord.py's
+    gateway heartbeat -- 60 s of silence before it force-closes, the library
+    default, which `bot.py` does not override -- keeps being answered on
+    5 ms switch intervals. That was a 5x margin at 60 trials and is not one
+    now, so it is written down here rather than left to be rediscovered: a
+    caller that ever runs this ON the loop disconnects the bot.
+
+    What would settle it rather than reason about it is the deferred fix,
+    moving the simulation off this process (#511).
 
     The noise that buys is worth stating rather than burying, because it is
     still larger than the group models'. The table above is what was measured:

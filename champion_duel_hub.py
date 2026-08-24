@@ -821,8 +821,9 @@ def build_intel_embed(result) -> discord.Embed:
         # Only their squad types are named here. The other thing that could be
         # missing is a line-up, and the field above has already said so and
         # already named the press: `NOTHING_SEEN` ends with "Anyone who has
-        # faced them can add one with ➕ Record a line-up". Saying it twice in
-        # one embed reads as a surface that is not listening to itself.
+        # faced them can add one with **Record a line-up**", the button named
+        # through `_btn_words`. Saying it twice in one embed reads as a surface
+        # that is not listening to itself.
         if not result.their_types_known:
             refusal.append(words.CANNOT_RECOMMEND_WHY)
         embed.add_field(name=FIELD_YOURS, value="\n".join(refusal)[:1024], inline=False)

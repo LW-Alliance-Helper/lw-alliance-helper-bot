@@ -281,9 +281,20 @@ def points(spread: float) -> str:
     A rounded zero says the choice provably cannot matter, which is a stronger
     claim than the measurement supports and the same overreach `probability()`
     exists to refuse at the other end of the scale.
+
+    THE FLOOR IS THE POINT OF THIS FUNCTION AND DOES NOT MOVE. The count is
+    pluralised on the rounded figure rather than always: a spread anywhere in
+    [1.0, 1.5) rounds to one and read "about 1 points", in both sentences this
+    feeds. That band is live -- the refusal it feeds only fires below a spread
+    of `intel.CHOICE_SPREAD`, ten points -- so it was a defect on the surface
+    rather than a theoretical one, and it survived the reword because the
+    reword moved the frame around this and left this alone.
     """
     scaled = spread * 100
-    return "under a point" if scaled < 1 else f"about {scaled:.0f} points"
+    if scaled < 1:
+        return "under a point"
+    whole = round(scaled)
+    return f"about {whole} point{'' if whole == 1 else 's'}"
 
 
 def rate(value: float) -> str | None:

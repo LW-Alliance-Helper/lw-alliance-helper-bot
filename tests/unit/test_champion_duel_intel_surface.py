@@ -425,6 +425,27 @@ def test_the_refusal_reads_as_english_under_a_point(cd_db):
     )
 
 
+def test_a_spread_of_one_point_is_one_point_and_not_one_points():
+    """The seam the reworded frame put a spotlight on. Anything in [1.0, 1.5)
+    rounds to one, and the count was pluralised unconditionally — so the
+    sentence the reword exists to make read correctly rendered "came out about
+    1 points apart" across a live band. The refusal only fires below a spread
+    of `CHOICE_SPREAD`, ten points, so one point is well inside it.
+
+    The floor is untouched: `points()` still refuses to round a spread to zero,
+    which is a different guard and the reason this function exists."""
+    assert words.points(0.0099) == "under a point"
+    for spread in (0.010, 0.012, 0.0149):
+        assert words.points(spread) == "about 1 point", spread
+    for spread in (0.015, 0.021):
+        assert words.points(spread) == "about 2 points", spread
+    # And in both sentences it feeds, not just the one that was reworded.
+    assert "moves by about 1 point." in words.order_barely_matters(0.012)
+    assert "came out about 1 point apart" in words.CANNOT_RECOMMEND_FLAT.format(
+        measured=words.points(0.012)
+    )
+
+
 def test_no_share_is_ever_rendered_as_always_or_never(cd_db):
     """`probability()` refuses to round a probability into a certainty. The
     other kind of number on this surface is a share of what has been recorded,

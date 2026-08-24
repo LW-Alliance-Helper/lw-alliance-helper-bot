@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 import champion_duel_db as db
@@ -721,8 +722,11 @@ async def test_a_blank_second_name_is_told_what_to_do_rather_than_raising(cd_db,
     told = _sent(interaction)
     assert told == hub._INTEL_NEEDS_BOTH
     assert "No registrant matches" not in told
-    # It says what to do, not which rule was broken.
-    assert "fill in both names" in told.lower()
+    # It names the field rather than the rule, and it stops there. It used to
+    # end "Open it again and fill in both names", which pointed at the hub
+    # message far up the channel -- the dead end the retry button replaced.
+    assert "both players" in told.lower()
+    assert "open it again" not in told.lower()
 
 
 async def test_a_blank_opponent_is_refused_on_the_same_terms(cd_db, monkeypatch):
@@ -754,3 +758,395 @@ async def test_a_mistyped_own_name_gets_the_did_you_mean_list(cd_db, monkeypatch
     told = _sent(interaction)
     assert "Did you mean" in told
     assert "Asker" in told
+
+
+# ── the way back in ──────────────────────────────────────────────────────────
+#
+# Four of the five ways `on_submit` can refuse used to end in an ephemeral
+# message and nothing to press, and the member's only route back was to scroll
+# up a busy channel to the hub message -- with everything they typed gone.
+#
+# Three of the four are covered here. The other two are refusals no edit can
+# fix, and they are asserted to stay buttonless: offering to reopen the form
+# would be promising something that would not happen.
+
+SPACED = "A Girl Has A Name"
+
+
+def _view(interaction):
+    """The view on the last followup, or None if it went out without one."""
+    return interaction.followup.send.call_args.kwargs.get("view")
+
+
+def _retry_buttons(interaction):
+    view = _view(interaction)
+    if view is None:
+        return []
+    return [b for b in view.children if getattr(b, "label", None) == hub.CD_BTN_INTEL_RETRY]
+
+
+def _replying():
+    """An interaction whose followup message can be edited afterwards.
+
+    `_interaction`'s `followup.send` is an `AsyncMock`, so it hands back a
+    plain `MagicMock` whose `edit` cannot be awaited. A refusal's message is
+    edited when a later submission retires its button, so these tests need one
+    that can be.
+    """
+    interaction = _interaction()
+    interaction.followup.send.return_value.edit = AsyncMock()
+    return interaction
+
+
+async def _submit(monkeypatch, **values):
+    """Fill the modal in, submit it, and hand back the interaction."""
+    values.setdefault("opponent_server", "")
+    values.setdefault("your_server", "")
+    modal = _modal(monkeypatch, **values)
+    interaction = _replying()
+    await modal.on_submit(interaction)
+    return interaction
+
+
+async def _resubmit(reopened, **values):
+    """Submit the modal the retry button actually opened.
+
+    Not a fresh `_IntelModal`: the point of these tests is the link back to
+    the offer it came in through, and only the modal the button built has one.
+    """
+    modal = reopened.response.send_modal.call_args.args[0]
+    for field in ("opponent", "opponent_server", "you", "your_server"):
+        getattr(modal, field)._value = values.get(field, "")
+    interaction = _replying()
+    await modal.on_submit(interaction)
+    return interaction
+
+
+def _press(interaction, user_id=1):
+    """Press the retry button and hand back the modal it opened."""
+    (button,) = _retry_buttons(interaction)
+    reopened = _interaction()
+    reopened.user.id = user_id
+    reopened.response.send_modal = AsyncMock()
+    return button, reopened
+
+
+@pytest.mark.parametrize(
+    "values, because",
+    [
+        (
+            {"opponent": "Habitual", "you": "   "},
+            "a name missing -- the payload guard",
+        ),
+        (
+            {"opponent": "Habitual", "you": "Askr"},
+            "a name wrong -- the did-you-mean",
+        ),
+        (
+            {"opponent": "Twinned", "you": "Asker"},
+            "a name on two warzones -- the ambiguity",
+        ),
+    ],
+)
+async def test_every_fixable_refusal_offers_one_way_back(cd_db, monkeypatch, values, because):
+    """The three states differ and the button does not. One label the member
+    learns once beats three they read separately, so all three paths send the
+    identical control -- and one, not a row of them."""
+    db.import_registrants(
+        [{"name": "Twinned", "group": "M", "rank": 7, "server": "1042", "thp": 200_000_000}],
+        stage="qualifiers",
+    )
+    db.import_registrants(
+        [{"name": "Twinned", "group": "M", "rank": 8, "server": "738", "thp": 210_000_000}],
+        stage="qualifiers",
+    )
+
+    interaction = await _submit(monkeypatch, **values)
+
+    view = _view(interaction)
+    assert isinstance(view, hub._IntelRetryView), because
+    assert len(view.children) == 1, "one control, not a row of them"
+    assert view.children[0].label == hub.CD_BTN_INTEL_RETRY
+    # An ephemeral that outlives its view leaves a button that does nothing.
+    assert view.timeout
+
+
+async def test_the_button_reopens_the_form_with_all_four_boxes_still_filled(cd_db, monkeypatch):
+    """The prefill is the whole point of the retry on a misspelling: the near
+    miss is sitting in the box, one character from being right, rather than
+    retyped from memory alongside the "Did you mean" that named it."""
+    interaction = await _submit(
+        monkeypatch,
+        opponent="Habitul",
+        opponent_server="738",
+        you="Asker",
+        your_server="1042",
+    )
+    assert "Did you mean" in _sent(interaction)
+
+    button, reopened = _press(interaction)
+    await button.callback(reopened)
+
+    modal = reopened.response.send_modal.call_args.args[0]
+    assert isinstance(modal, hub._IntelModal)
+    assert modal.opponent.default == "Habitul"
+    assert modal.opponent_server.default == "738"
+    assert modal.you.default == "Asker"
+    assert modal.your_server.default == "1042"
+
+
+async def test_a_prefill_cannot_reach_the_next_person_who_opens_the_form(cd_db, monkeypatch):
+    """`Modal._init_children` deepcopies each declared item onto the instance,
+    which is what makes setting a default on `self` safe. Asserted rather than
+    trusted, because the comment saying so is the kind of thing that gets
+    "cleaned up" by someone who assumes class attributes are shared."""
+    interaction = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    button, reopened = _press(interaction)
+    await button.callback(reopened)
+
+    assert hub._IntelModal().opponent.default is None
+    assert hub._IntelModal().you.default is None
+
+
+async def test_a_name_with_spaces_in_it_survives_the_round_trip(cd_db, monkeypatch):
+    """`normalize_name` strips whitespace entirely, so a name that only exists
+    with spaces in it is the one most likely to be quietly rewritten on the way
+    back into the box. It comes back exactly as it was typed."""
+    db.import_registrants(
+        [{"name": SPACED, "group": "M", "rank": 9, "server": "738", "thp": 250_000_000}],
+        stage="qualifiers",
+    )
+    _squads(SPACED, "observed")
+
+    # Misspelled on the last word only, so the name stays multi-word.
+    interaction = await _submit(monkeypatch, opponent="A Girl Has A Naem", you="Asker")
+    button, reopened = _press(interaction)
+    await button.callback(reopened)
+
+    assert reopened.response.send_modal.call_args.args[0].opponent.default == "A Girl Has A Naem"
+
+    # And the real spelling resolves rather than being lost to the stripping.
+    got = await hub._resolve(SPACED, "738")
+    assert not isinstance(got, str)
+    assert got["display_name"] == SPACED
+
+
+async def test_failing_twice_in_a_row_still_offers_the_way_out(cd_db, monkeypatch):
+    """The member must not be one further mistake from being stranded again,
+    and the second offer has to carry the second attempt's text rather than
+    the first's -- otherwise the retry hands back a correction already made."""
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    second = await _resubmit(reopened, opponent="Habitua", you="Asker")
+
+    assert len(_retry_buttons(second)) == 1
+    again, third = _press(second)
+    await again.callback(third)
+    assert third.response.send_modal.call_args.args[0].opponent.default == "Habitua"
+
+
+async def test_a_missing_engine_is_not_offered_a_form_to_edit(cd_db, monkeypatch):
+    """Nothing the member can type installs an engine, so a button offering to
+    reopen the form would be lying about what happens next."""
+    monkeypatch.setattr(intel_lib, "ENGINE_AVAILABLE", False)
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=True))
+    modal = hub._IntelModal()
+    for field in ("opponent", "you", "opponent_server", "your_server"):
+        getattr(modal, field)._value = "Habitual" if field in ("opponent", "you") else ""
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    assert _sent(interaction) == hub._ENGINE_MISSING
+    assert _retry_buttons(interaction) == []
+
+
+async def test_a_missing_engine_reached_through_the_lookup_is_not_offered_one_either(
+    cd_db, monkeypatch
+):
+    """`_resolve` returns `_ENGINE_MISSING` off `db.NAMES_AVAILABLE`, which is
+    a different flag from the one `on_submit` checks. They come from the same
+    package and in practice fail together, but a partial install reaches the
+    refusal through the lookup rather than through the guard, and the button
+    would be just as untrue there."""
+    monkeypatch.setattr(db, "NAMES_AVAILABLE", False)
+    interaction = await _submit(monkeypatch, opponent="Habitual", you="Asker")
+
+    assert _sent(interaction) == hub._ENGINE_MISSING
+    assert _retry_buttons(interaction) == []
+
+
+async def test_the_paywall_is_not_offered_a_form_to_edit(cd_db, monkeypatch):
+    """Same reason as the engine: editing the entry does not buy a
+    subscription. Asserted as "no retry button" rather than "no view", because
+    the upsell carries Discord's own premium button whenever a SKU is
+    configured."""
+    monkeypatch.setattr(intel_lib, "ENGINE_AVAILABLE", True)
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=False))
+    modal = hub._IntelModal()
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    assert _retry_buttons(interaction) == []
+
+
+async def test_a_success_carries_no_leftover_way_back(cd_db, monkeypatch):
+    """The retry rides on the refusal, not on the surface. A control offering
+    to re-edit an answer that arrived would be inviting a member to redo work
+    that worked."""
+    _habit()
+    interaction = await _submit(monkeypatch, opponent="Habitual", you="Asker")
+
+    assert interaction.followup.send.call_args.kwargs.get("embed") is not None
+    assert _retry_buttons(interaction) == []
+
+
+# ── and only one way back at a time ──────────────────────────────────────────
+
+
+async def test_a_superseded_offer_stops_offering(cd_db, monkeypatch):
+    """Two near-identical ephemeral messages sit one above the other by now,
+    and only the newer one holds what the member last typed. Left live, the
+    older button would hand back the older text -- silently undoing a
+    correction they had already made on the name that was not the problem."""
+    first = await _submit(monkeypatch, opponent="Habitul", you="Askr")
+    stale = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    await _resubmit(reopened, opponent="Habitual", you="Askr")
+
+    assert stale.children[0].disabled
+    assert stale.is_finished(), "and it is not still waiting on its timeout"
+    first.followup.send.return_value.edit.assert_awaited()
+
+
+async def test_an_answer_leaves_no_offer_behind_it(cd_db, monkeypatch):
+    """The refusal is resolved, so the control that existed to fix it is spent.
+    A live "Edit what I entered" above a delivered answer invites a member to
+    redo work that worked."""
+    _habit()
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    stale = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    answered = await _resubmit(reopened, opponent="Habitual", you="Asker")
+
+    assert answered.followup.send.call_args.kwargs.get("embed") is not None
+    assert stale.children[0].disabled
+    assert stale.is_finished()
+
+
+async def test_dismissing_the_form_without_submitting_leaves_the_way_back(cd_db, monkeypatch):
+    """Pressing the button and then closing the modal is one stray tap on a
+    phone, and Discord reports nothing back when it happens. Retiring the offer
+    on press rather than on submit would strand the member there -- the exact
+    dead end this whole view exists to end."""
+    interaction = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    offer = _view(interaction)
+    button, reopened = _press(interaction)
+
+    await button.callback(reopened)
+
+    assert not offer.children[0].disabled
+    assert not offer.is_finished()
+    interaction.followup.send.return_value.edit.assert_not_awaited()
+
+
+async def test_retiring_survives_a_message_that_has_gone(cd_db, monkeypatch):
+    """An ephemeral message can be dismissed or expire out from under us. The
+    button is dead either way once the view is stopped, so losing the edit
+    must not take the submission down with it."""
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    stale = _view(first)
+    stale.message.edit = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "Unknown Message")
+    )
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    second = await _resubmit(reopened, opponent="Habitua", you="Asker")
+
+    assert len(_retry_buttons(second)) == 1, "the new offer still went out"
+    assert stale.is_finished()
+
+
+async def test_the_hub_button_opens_a_form_with_nothing_to_retire(cd_db):
+    """`_IntelModal()` is still constructed bare at the hub, and every argument
+    the retry added is optional. A modal opened there has no offer behind it,
+    and retiring must be a no-op rather than an attribute error."""
+    modal = hub._IntelModal()
+
+    assert modal.origin is None
+    await modal._retire_origin()
+
+
+# ── and a refusal with nothing to press does not take the offer away ─────────
+#
+# `on_submit` can refuse six ways. Three send the member back a way in; the
+# other three cannot, because no edit to what they typed would change the
+# answer. On those three the offer above them is not stale -- it is the only
+# remaining copy of what they typed -- so retiring it would take their way back
+# and hand them nothing, which is the dead end this view exists to end rather
+# than a tidier version of it.
+
+
+async def test_a_paywall_reached_from_a_retry_leaves_the_way_back_alone(cd_db, monkeypatch):
+    """Entitlement is re-checked on submit rather than trusted off the button,
+    so a subscription that lapsed mid-flow lands here. The upsell has nothing
+    to press, and greying the offer above it would strand the member on a
+    refusal that editing cannot fix and give them no way to carry what they
+    typed anywhere else."""
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    offer = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=False))
+    await _resubmit(reopened, opponent="Habitual", you="Asker")
+
+    assert not offer.children[0].disabled
+    assert not offer.is_finished()
+
+
+async def test_an_opponent_with_no_squads_leaves_the_way_back_alone(cd_db, monkeypatch):
+    """The sixth refusal, and the one the brief did not count. A name that
+    resolves to a player nobody has recorded is a data gap, not a typo, so it
+    carries no retry -- and the offer above it still holds both names."""
+    db.import_registrants(
+        [{"name": "Blank", "group": "M", "rank": 10, "server": "738", "thp": 255_000_000}],
+        stage="qualifiers",
+    )
+    first = await _submit(monkeypatch, opponent="Blnk", you="Asker")
+    offer = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    refused = await _resubmit(reopened, opponent="Blank", you="Asker")
+
+    assert "full line-up" in _sent(refused)
+    assert _retry_buttons(refused) == [], "no way back on a gap editing cannot close"
+    assert not offer.children[0].disabled, "so the one above it has to stay"
+    assert not offer.is_finished()
+
+
+async def test_a_dropped_connection_does_not_cost_the_member_their_answer(cd_db, monkeypatch):
+    """Retiring the old button is cosmetic and it happens between the member
+    and their answer. A connection that goes while we ask must not raise out of
+    `on_submit` -- that would trade the whole submission for a greyed button,
+    and it is not an `HTTPException`, so catching only those would miss it."""
+    _habit()
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    stale = _view(first)
+    stale.message.edit = AsyncMock(side_effect=OSError("connection reset"))
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    answered = await _resubmit(reopened, opponent="Habitual", you="Asker")
+
+    assert answered.followup.send.call_args.kwargs.get("embed") is not None
+    assert stale.is_finished(), "and the button is dead regardless"

@@ -274,6 +274,20 @@ async def on_ready():
     except Exception as e:  # noqa: BLE001 - one feature must not block startup
         print(f"[CHAMPION_DUEL] Database init failed, feature degraded: {e}")
 
+    # Precomputed odds. Its own try/except rather than sharing the one above:
+    # every row in that table is derivable from the rows next to it, so a store
+    # that will not open costs recomputation on press -- which is what the bot
+    # did before it existed -- and must not take the rest of the feature down
+    # with it.
+    try:
+        import champion_duel_store
+
+        champion_duel_store.init_store()
+        bot._cd_store_ready = True
+    except Exception as e:  # noqa: BLE001 - degrades to computing on press
+        bot._cd_store_ready = False
+        print(f"[CHAMPION_DUEL] Odds store init failed, odds compute on press: {e}")
+
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
     # How much parallelism this container actually has, printed once.
@@ -520,6 +534,16 @@ async def on_ready():
         print("[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print("[INFO] Shiny tasks per-minute post loop started")
+        # Only against a store that opened. Started regardless, the loop would
+        # hit `no such table: odds_runs` every minute and capture it every
+        # minute -- and on this project every high-priority Sentry event
+        # auto-files a GitHub issue, so a table that failed to create would
+        # arrive as roughly 1,400 of them a day.
+        if getattr(bot, "_cd_store_ready", False):
+            champion_duel_odds_task.start()
+            print("[INFO] Champion Duel odds sweeper started")
+        else:
+            print("[CHAMPION_DUEL] Odds sweeper not started: the store is unavailable")
         try:
             from storm_signup_scheduler import start_storm_signup_scheduler
 
@@ -1207,6 +1231,80 @@ async def shiny_tasks_post_task():
 
 @shiny_tasks_post_task.before_loop
 async def before_shiny_tasks_post_task():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(minutes=1)
+async def champion_duel_odds_task():
+    """One Champion Duel group per minute, worked out before anybody asks.
+
+    WHY A TIMER AT ALL. An odds run is the most expensive thing this bot does --
+    60 to 90 seconds of pure Python for a knockout bracket -- and the surface
+    work moves it from a deliberate press three clicks deep to the default
+    state of the landing screen. Nobody should be sitting behind that, so the
+    work happens here and the press becomes a read.
+
+    ONE GROUP PER TICK, and that is the rate limit rather than an accident of
+    the interval. A whole grouping is 16 semifinal groups plus a bracket, about
+    six minutes of CPU; taken in one block that is six minutes of a busy
+    machine, and spread a group at a time it is half an hour of background work
+    nobody notices. #509 measured CPU at 1% of the hosting bill and memory at
+    83%, which is what makes this affordable at all.
+
+    THE STORE DECIDES WHAT IS DUE, not this loop. `store.due()` recomputes each
+    group's fingerprint from live rows, drops anything still inside its
+    five-minute quiet window, and returns what is left in last-viewed order.
+    There is no dirty flag to go wrong.
+
+    BOTH CALLS GO THROUGH `to_thread` because both touch SQLite, and the run
+    itself then goes on to a subprocess from there -- so the minute it takes is
+    a minute spent blocked on a pipe rather than holding the GIL against every
+    other guild. That is the whole point of the change this loop arrived with.
+    """
+    try:
+        import champion_duel_store as cd_store
+    except Exception:  # noqa: BLE001 - feature absent, nothing to sweep
+        return
+
+    try:
+        candidates = await asyncio.to_thread(cd_store.due)
+    except Exception as e:  # noqa: BLE001 - a bad tick must not stop the loop
+        # Reported ONCE per run of bad luck, not once a minute for as long as it
+        # lasts. Whatever breaks this call is almost always going to keep
+        # breaking it, and a per-minute capture turns one fault into a thousand
+        # issues a day.
+        print(f"[CHAMPION_DUEL] odds sweep could not list work: {e}")
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
+        return
+
+    bot._cd_sweep_failing = False
+
+    if not candidates:
+        return
+
+    top = candidates[0]
+    label = top["label"] or "the field"
+    try:
+        outcome = await asyncio.to_thread(cd_store.run_one, top)
+    except Exception as e:  # noqa: BLE001 - same, and the group stays due
+        # `run_one` swallows and records what the model raises, so anything
+        # arriving here is the sweep machinery itself and worth one report.
+        print(f"[CHAMPION_DUEL] odds sweep failed on {top['stage']} {label}: {e}")
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
+        return
+
+    print(
+        f"[CHAMPION_DUEL] odds sweep {outcome}: {top['stage']} {label} "
+        f"({len(candidates) - 1} still due)"
+    )
+
+
+@champion_duel_odds_task.before_loop
+async def before_champion_duel_odds_task():
     await bot.wait_until_ready()
 
 

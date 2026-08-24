@@ -61,7 +61,12 @@ are actually fielding, not just match variance.
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import threading
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 
 try:
@@ -121,7 +126,37 @@ STAGES_WITH_A_MODEL = ("semifinals",) + (("knockouts",) if KNOCKOUT_AVAILABLE el
 #: free and the matrix is the entire bill. See `bracket_odds` for the measured
 #: table behind these two, and for why the matrix moved from 60 to 250 when
 #: the surface went from two rungs to five.
-BRACKET_TRIALS = 20_000
+#: The sampler moved 20,000 -> 200,000 on 2026-08-24, and it is the cheapest
+#: accuracy this feature has ever bought: about five seconds on a sixty-second
+#: run, because the sampler is ~1% of the bill and the matrix is the other 99%.
+#:
+#: Measured effect on run-to-run drift, at MATRIX_TRIALS = 250:
+#:
+#:     rung        mean drift        worst        rows moving >= 1pp
+#:     Top 16    0.97 -> 0.60pp   1.84 -> 1.00pp     10/32 -> 0/32
+#:     Top 8     0.77 -> 0.61pp   2.59 -> 2.06pp      9/32 -> 8/32
+#:     Top 4     0.65 -> 0.56pp   3.11 -> 3.09pp      8/32 -> 9/32
+#:     Champion  0.46 -> 0.45pp   4.27 -> 4.16pp      4/32 -> 5/32
+#:
+#: IT FIXES TOP 16 OUTRIGHT AND DOES ESSENTIALLY NOTHING BELOW IT, and that is
+#: a diagnosis rather than a disappointment. Top 16 is one round of sampling;
+#: Champion means winning five in a row, so matrix error compounds through
+#: every round and cannot be sampled away. (Top 4 and Champion nudging the
+#: wrong way is five-seed noise -- read the mean column.)
+#:
+#: CORRECTION TO #511, which is load-bearing there. It records the sampler's
+#: noise as "~0.35pp at 20,000 trials" and treats it as a floor. Measured in
+#: isolation with the matrices held fixed it is 0.72pp mean and 1.56pp worst on
+#: Top 16 -- about twice what is recorded -- and it is not a floor at all. It
+#: was a five-second dial nobody had tried, because the sampler was filed under
+#: "free, therefore not worth touching".
+BRACKET_TRIALS = 200_000
+
+#: DO NOT RAISE THIS TO MATCH. The deeper rungs are matrix-bound, matrix noise
+#: falls as the square root of trials, and moving them meaningfully is 4x the
+#: run. Once a sweeper is paying for runs instead of a member waiting on one,
+#: that becomes affordable -- but it is a separate decision with its own
+#: measurement, not a rider on the sampler change.
 MATRIX_TRIALS = 250
 
 # One run at a time, and remember the last few answers.
@@ -144,8 +179,189 @@ MATRIX_TRIALS = 250
 #   edit to any player misses and re-runs, and nothing has to remember to
 #   invalidate it.
 _RUN_LOCK = threading.Lock()
-_CACHE: dict[str, "GroupOdds"] = {}
-_CACHE_MAX = 32
+
+#: Guards the cache dict and nothing else. Deliberately NOT `_RUN_LOCK`: that
+#: one is held for the whole simulation -- up to a minute and a half -- so a
+#: lookup taking it would put every warm press in the queue behind a cold run
+#: it does not need. This is held for the length of a dict operation.
+_CACHE_LOCK = threading.Lock()
+
+#: Least-recently-USED, and it used to be first-in-first-out. The difference is
+#: not academic: one grouping is 16 semifinal groups plus one bracket, so 17
+#: entries, and TWO LIVE GROUPINGS OVERFLOWED A CAP OF 32. Every overflow
+#: evicted in insertion order, which is reliably the entry about to be needed
+#: again, and each one turned a warm press back into a cold run.
+#:
+#: 144 is eight groupings with slack. A whole grouping's worth of entries
+#: measured 117 KB on 2026-08-24, so eight is under 1 MB against a ~474 MB
+#: baseline -- which is why the fix here is "raise it" rather than "tune it".
+_CACHE: "OrderedDict[str, GroupOdds | BracketOdds]" = OrderedDict()
+_CACHE_MAX = 144
+
+
+def _cache_get(key: str):
+    """Read an entry and mark it most-recently-used."""
+    with _CACHE_LOCK:
+        try:
+            value = _CACHE[key]
+        except KeyError:
+            return None
+        _CACHE.move_to_end(key)
+        return value
+
+
+def _cache_put(key: str, value) -> None:
+    """Store an entry, evicting least-recently-used until the cap holds."""
+    with _CACHE_LOCK:
+        _CACHE[key] = value
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)
+
+
+#: Whether the simulation runs in a throwaway subprocess. On by default; set
+#: CHAMPION_DUEL_ODDS_SUBPROCESS=0 to force every run back onto the calling
+#: thread, which is also what the fallback below does on its own when a pool
+#: cannot start.
+USE_SUBPROCESS = os.environ.get("CHAMPION_DUEL_ODDS_SUBPROCESS", "1") != "0"
+
+#: How long to wait on a child before abandoning it. See `_run_off_process`:
+#: this is a wedge-breaker, not a performance bound, and it sits far above any
+#: real run and at the point past which nobody is still waiting for an answer.
+JOB_TIMEOUT_SECONDS = 900
+
+
+def _simulate_group_job(stage: str, specs: list[dict], trials: int, seed: int, jitter: bool):
+    """The group simulation, as the child runs it. Module level so it pickles.
+
+    Returns the engine's own dict, keyed by SPEC NAME -- which is a row
+    position, not a display name. The mapping back to people stays in the
+    parent, because the child is never told who anybody is.
+    """
+    return _models()[stage]["module"].simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
+
+
+def _simulate_bracket_job(
+    specs: list[dict], trials: int, seed: int, matrix_trials: int, jitter: bool
+):
+    """The bracket simulation, as the child runs it.
+
+    `simulate_bracket` hands back the two 32x32 meeting matrices alongside the
+    result. They are dropped HERE rather than in the parent: otherwise they get
+    pickled back through a pipe on every run, and nothing has ever consumed
+    them.
+    """
+    scored, _matrices = knockout.simulate_bracket(
+        specs, trials=trials, seed=seed, matrix_trials=matrix_trials, jitter=jitter
+    )
+    return scored
+
+
+def _run_off_process(fn, *args):
+    """Run `fn(*args)` in a throwaway subprocess, or on this thread if it cannot.
+
+    THE ENTIRE POINT IS THE GIL, and the mechanism is worth being exact about.
+    The engine is stdlib-only by design, so a run is pure Python and holds the
+    GIL for its whole duration -- 60 to 90 seconds for a bracket. The event loop
+    survives that, because every caller reaches this through
+    `asyncio.to_thread`. Everything else behind that thread boundary does not: a
+    database read measured 1.1 ms idle against ~1,500 ms during a run, and all
+    274 of the bot's database reads live there. IN EVERY GUILD, because one
+    process serves all of them.
+
+    Moving the work to a child fixes that by arithmetic rather than by tuning.
+    The calling thread blocks on a pipe, and blocking on a pipe releases the
+    GIL. That is the whole trick.
+
+    SPAWN, NOT FORK. This process has threads, sockets and an open SQLite
+    handle, and a forked child inherits every one of them.
+
+    ONE JOB PER PROCESS, TORN DOWN AFTER IT. #509's finding that memory is 83%
+    of the hosting bill and CPU is 1% still holds, so a resident worker is the
+    wrong trade. Per-job spawning is cheap enough to obey that rule.
+
+    THE CHILD RE-IMPORTS THE MAIN MODULE, which under Railway is `bot.py`, so a
+    child costs 52 MB and 0.9 s rather than the 17 MB and 0.09 s this module
+    would cost alone. That is taken deliberately: it is transient, one child at
+    a time, against a ~474 MB baseline, and about $0.00002 per run. Verified
+    safe in the way that matters -- importing `bot.py` opens no SQLite
+    connections, and `bot.run()` is guarded by `if __name__ == "__main__"`, which
+    a spawned child does not satisfy (it imports the parent's main module as
+    `__mp_main__`). It does print two [INFO] lines per child, which show up in
+    the logs once per run.
+
+    IT IS NOT, HOWEVER, THREAD-FREE, and an earlier version of this comment said
+    it was. `sentry_sdk.init` runs at `bot.py` module scope whenever SENTRY_DSN
+    is set, so a production child builds a Sentry client with a transport thread
+    and an atexit flush before it does any work. Harmless in practice -- the job
+    is pure engine code, and an exception in it is pickled back to the parent and
+    raised there rather than captured in the child -- but it is real startup cost
+    per run, and it is the kind of claim that gets built on. Guarding that init
+    the same way `bot.run()` is guarded would remove it; that is a change to the
+    whole bot's error reporting and belongs to its own decision, not to this
+    one.
+    Buying the leaner child back means a worker module and a JSON protocol over
+    stdin/stdout instead of `ProcessPoolExecutor` -- real extra code for
+    something that is not costing anything. Revisit if the log noise or the
+    memory ever becomes a problem.
+
+    A HUNG CHILD IS NOT A DEAD ONE. `BrokenProcessPool` covers a child that
+    died; a child that simply never finishes raises nothing, and this is called
+    with `_RUN_LOCK` held -- so without a timeout one wedged process would stop
+    every odds press and every sweep in the bot, permanently and silently. The
+    in-thread path this replaced could not fail that way, so the timeout arrives
+    with the subprocess rather than being a general precaution. It is set far
+    above any real run (a bracket measured ~50 s, and the plan's worst case is
+    90 s) and below the point where an answer could still be delivered: Discord
+    drops an interaction token at 15 minutes, so a run still going at that point
+    has nobody left to hand it to.
+
+    WHAT FALLS BACK AND WHAT DOES NOT. A pool that cannot start, or a child that
+    dies, degrades to running on this thread: slow for everyone, which is what
+    the bot did before this change, rather than broken. An exception raised by
+    `fn` ITSELF is not a pool failure and propagates untouched -- retrying it
+    here would run the expensive thing twice to arrive at the same exception.
+    """
+    if not USE_SUBPROCESS:
+        return fn(*args)
+
+    timed_out = False
+    try:
+        executor = ProcessPoolExecutor(
+            max_workers=1, mp_context=multiprocessing.get_context("spawn")
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade rather than fail the press
+        print(f"[CHAMPION_DUEL] odds subprocess unavailable, running in-thread: {exc}")
+        return fn(*args)
+
+    try:
+        try:
+            future = executor.submit(fn, *args)
+        except Exception as exc:  # noqa: BLE001 - same degradation, at submit
+            print(f"[CHAMPION_DUEL] odds subprocess submit failed, running in-thread: {exc}")
+            return fn(*args)
+        try:
+            return future.result(timeout=JOB_TIMEOUT_SECONDS)
+        except BrokenProcessPool as exc:
+            print(f"[CHAMPION_DUEL] odds subprocess died, running in-thread: {exc}")
+            return fn(*args)
+        except TimeoutError:
+            # Deliberately NOT a fallback. We have already spent the timeout;
+            # spending another full run on this thread would hold the lock for
+            # longer still, and whatever is wrong with the child is not fixed by
+            # asking the parent to do the same work.
+            timed_out = True
+            print(
+                f"[CHAMPION_DUEL] odds subprocess still running after "
+                f"{JOB_TIMEOUT_SECONDS}s; abandoning it"
+            )
+            raise
+    finally:
+        # `wait=True` on a hung child would block here forever, which is the
+        # exact wedge the timeout exists to prevent. Let it go instead: the
+        # process is abandoned rather than reaped, and the next run gets a
+        # fresh one.
+        executor.shutdown(wait=not timed_out, cancel_futures=True)
 
 
 def _models():
@@ -187,6 +403,12 @@ class OddsRow:
     win_group: float
     points_mean: float
     points_sd: float
+    #: The engine's own key for this row, which is a ROW POSITION rather than a
+    #: name -- the specs are keyed by position so two members sharing a display
+    #: name stay two players. Carried out so a caller storing these can map them
+    #: back to registrant ids and re-render under whatever the names are later.
+    #: None on anything built before this was added.
+    key: str | None = None
 
 
 @dataclass
@@ -485,7 +707,7 @@ def group_advance_odds(
     # names are nowhere in them -- and a correction that changes only a spelling
     # would hit a warm entry and hand back the old names against the new group.
     key = json.dumps([stage, trials, seed, jitter, specs, display], sort_keys=True, default=str)
-    cached = _CACHE.get(key)
+    cached = _cache_get(key)
     if cached is not None:
         return cached
 
@@ -493,29 +715,29 @@ def group_advance_odds(
         # Re-checked inside the lock: several callers can queue on one cold
         # group, and without this each pays a full run in turn to arrive at the
         # answer the first one already has.
-        cached = _CACHE.get(key)
+        cached = _cache_get(key)
         if cached is not None:
             return cached
-        scored = model.simulate_group(specs, trials=trials, seed=seed, jitter=jitter)
+        # Off this process. The lock still admits one run at a time; what
+        # changed is that the run no longer holds the GIL of the process
+        # serving every other guild. See `_run_off_process`.
+        scored = _run_off_process(_simulate_group_job, stage, specs, trials, seed, jitter)
 
     rows = [
         OddsRow(
-            name=display[key],
+            name=display[key_],
             advance=vals["advance"],
             win_group=vals["win_group"],
             points_mean=vals["points_mean"],
             points_sd=vals["points_sd"],
+            key=key_,
         )
-        for key, vals in scored.items()
+        for key_, vals in scored.items()
     ]
     rows.sort(key=lambda r: r.advance, reverse=True)
     result = GroupOdds(rows=rows, trials=trials, advance=getattr(model, "ADVANCE", 2))
 
-    # Oldest out first. Insertion order is enough for a handful of groups and
-    # needs no timestamp to go stale.
-    if len(_CACHE) >= _CACHE_MAX:
-        del _CACHE[next(iter(_CACHE))]
-    _CACHE[key] = result
+    _cache_put(key, result)
     return result
 
 
@@ -538,6 +760,12 @@ class BracketRow:
     #: means in a bracket is an open product question and this join must not
     #: settle it by only computing one.
     reach: dict[str, float]
+    #: The engine's own key for this row, which is a ROW POSITION rather than a
+    #: name -- the specs are keyed by position so two members sharing a display
+    #: name stay two players. Carried out so a caller storing these can map them
+    #: back to registrant ids and re-render under whatever the names are later.
+    #: None on anything built before this was added.
+    key: str | None = None
 
     @property
     def champion(self) -> float:
@@ -599,13 +827,21 @@ def bracket_odds(
     not — and take a minute and a bit as the figure for the run itself.
 
     250 IS BOUGHT BY THE SMALL RUNGS, NOT BY THE ACCURACY IN THE ABSTRACT. The
-    error falls far more slowly than the cost, and most of what is left at 250
-    is the bracket sampler's own noise rather than the matrix's — at 20,000
-    trials that floor is about 0.35pp on its own. On the two-rung table that
+    error falls far more slowly than the cost, and most of what was left at 250
+    used to be the bracket sampler's own noise rather than the matrix's. On the two-rung table that
     argument carried and 60 was the default. The bracket surface now prints
     Top 4 and Champion, which sit in low single digits for most of a thirty-two
     field, and 60's worst-case 3.50pp is larger than the figure it would sit
     under. 250 takes that to 1.51pp. Signed off 2026-08-22.
+
+    THAT SENTENCE WAS TRUE AT 20,000 SAMPLER TRIALS AND IS NOT ANY MORE.
+    `BRACKET_TRIALS` moved to 200,000 on 2026-08-24 for about five seconds, and
+    the "0.35pp floor" it rested on -- taken from #511 -- was itself wrong:
+    measured in isolation the sampler contributed 0.72pp mean and 1.56pp worst
+    on Top 16, and it was a dial rather than a floor. See the table on
+    `BRACKET_TRIALS` for what turning it up bought and, more importantly, for
+    what it did not: the deeper rungs are matrix-bound and barely moved, so the
+    argument for 250 stands on exactly the rungs it always did.
 
     THE TABLE LOST A RUNG AFTER THAT AND THIS DID NOT MOVE WITH IT. 250 was
     signed off alongside five rungs; `podium` came off the table on 2026-08-23
@@ -695,24 +931,26 @@ def bracket_odds(
         sort_keys=True,
         default=str,
     )
-    cached = _CACHE.get(key)
+    cached = _cache_get(key)
     if cached is not None:
         return cached
 
     with _RUN_LOCK:
-        cached = _CACHE.get(key)
+        cached = _cache_get(key)
         if cached is not None:
             return cached
-        # Returns a tuple, unlike `simulate_group`. The matrices come back so a
-        # caller can reuse them; nothing here does, because the cache already
-        # makes the cost per data change rather than per press, and holding two
-        # 32x32 matrices per cached entry would grow this cache by more than
-        # the answers in it.
-        scored, _matrices = knockout.simulate_bracket(
-            specs, trials=trials, seed=seed, matrix_trials=matrix_trials, jitter=jitter
-        )
+        # Off this process, and the matrices never cross back. `simulate_bracket`
+        # returns them so a caller can reuse them; nothing here does, because the
+        # cache already makes the cost per data change rather than per press, and
+        # holding two 32x32 matrices per cached entry would grow this cache by
+        # more than the answers in it. `_simulate_bracket_job` drops them in the
+        # child, which now also keeps them off the pipe.
+        scored = _run_off_process(_simulate_bracket_job, specs, trials, seed, matrix_trials, jitter)
 
-    rows = [BracketRow(name=display[key_], reach=dict(reach)) for key_, reach in scored.items()]
+    rows = [
+        BracketRow(name=display[key_], reach=dict(reach), key=key_)
+        for key_, reach in scored.items()
+    ]
     # Sorted on the title first, because it is the one thing every player in a
     # bracket is unambiguously playing for -- any other lead key would be this
     # join answering "which round does advancing mean", which is a product
@@ -731,7 +969,5 @@ def bracket_odds(
     )
     result = BracketOdds(rows=rows, trials=trials, matrix_trials=matrix_trials, draw_known=False)
 
-    if len(_CACHE) >= _CACHE_MAX:
-        del _CACHE[next(iter(_CACHE))]
-    _CACHE[key] = result
+    _cache_put(key, result)
     return result

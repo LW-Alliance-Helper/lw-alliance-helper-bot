@@ -781,29 +781,29 @@ def build_intel_embed(result) -> discord.Embed:
             inline=False,
         )
     elif result.needs_your_squads:
-        # The counter order goes FIRST and the ask goes under it. It used to
-        # render only on the one-name path, and removing that path would have
-        # taken the bot's only statement of the counter triangle with it —
-        # `counter_types` needs nothing about you, which is the whole reason it
-        # survived where a recommendation could not, so a state that knows
-        # nothing about your squads is exactly where it still has something to
-        # say. The sentence is the one that shipped on the one-name path, less
-        # its "add your own name" tail, which the required field answers.
+        # ⚠️ OPEN QUESTION FOR KEVIN — the counter order has no home in this
+        # state, and this is where it used to have one.
         #
-        # Not added anywhere else: past this branch your own types are known,
-        # and the recommendation IS the counter wherever the two agree — the
-        # branch below says so in as many words rather than printing the order
-        # twice.
-        told = []
-        if result.counter_types:
-            told.append(
-                f"**{_order_text(result.counter_types)}** counters the line-up "
-                f"they show most often, slot for slot."
-            )
-        told.append(words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS)))
+        # `counter_types` is computed here and rendered nowhere. It needs
+        # nothing about you — the triangle does not care what you field — so it
+        # survived on the one-name path exactly where a recommendation could
+        # not, and the one-name path is what this change removed. Past this
+        # branch your own types are known and the recommendation IS the counter
+        # wherever the two agree, so this is the only state left with something
+        # unsaid.
+        #
+        # NOT RESTORED HERE, and the reason is copy rather than plumbing.
+        # Printing the counter above `NEEDS_YOUR_SQUADS` puts "**Tank →
+        # Aircraft → Missile**" directly over "every line-up you could set
+        # looks the same from here", under a heading that says "Your
+        # recommended line-up". The two are compatible in fact and contradict
+        # each other on screen, and the one-name sentence that reconciled them
+        # ("Add your own name to this to see what it is worth against your
+        # squads") is exactly the sentence the required field made nonsense of.
+        # Reconciling them needs a new sentence, and copy is Kevin's.
         embed.add_field(
             name=FIELD_YOURS,
-            value="\n".join(told)[:1024],
+            value=words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))[:1024],
             inline=False,
         )
     elif result.recommended is not None and not result.choice_matters:

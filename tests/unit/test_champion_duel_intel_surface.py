@@ -322,26 +322,25 @@ def test_a_recorded_opponent_still_gets_a_recommendation(cd_db):
     assert "Tank → Aircraft → Missile" in what_to_set
 
 
-def test_the_counter_order_survives_your_own_placeholder_squads(cd_db):
-    """It needs nothing about you, so the one state that knows nothing about
-    your squads is where it still has something to say.
+def test_the_counter_order_is_computed_and_deliberately_not_rendered_here(cd_db):
+    """The gap the one-name removal left, pinned so it stays a decision.
 
-    This rendered only on the one-name path, and removing that path would
-    otherwise have taken the bot's only statement of the counter triangle with
-    it — leaving `counter_types` computed and printed nowhere.
+    `counter_types` needs nothing about you, so this state — your own types
+    unknown — is the one place left where it has something unsaid. It is held
+    back because printing it over "every line-up you could set looks the same
+    from here" contradicts that sentence on screen, and reconciling the two
+    needs copy that is Kevin's to write.
+
+    Asserting on both halves so that restoring it is a deliberate edit to this
+    test rather than a silent change in what a member is shown.
     """
     _habit()
-    # "Unseen" has no squad types recorded, which is the push_to_bot default
-    # for most of the field rather than an edge case.
-    field = _field(_embed("Habitual", "Unseen"), hub.FIELD_YOURS)
+    result = intel_lib.intel(_player("Habitual"), _player("Unseen"))
+    assert result.counter_types == ("Tank", "Aircraft", "Missile")
 
-    assert "Tank → Aircraft → Missile" in field
-    assert "counters the line-up they show most often" in field
-    # And it still carries the ask, which is the thing that fixes the state.
+    field = _field(hub.build_intel_embed(result), hub.FIELD_YOURS)
     assert "We don't have your squad types" in field
-    assert hub.CHAMPION_DUEL_HUB_CMD in field
-    # The one-name tail goes: the field it pointed at is required now.
-    assert "Add your own name" not in field
+    assert "Tank → Aircraft → Missile" not in field
 
 
 def test_the_lead_is_always_there_now_that_both_sides_are(cd_db):

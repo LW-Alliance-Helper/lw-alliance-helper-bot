@@ -301,6 +301,42 @@ def test_a_round_is_named_in_exactly_one_place():
     assert set(db.STAGE_LABELS) == set(db.STAGES)
 
 
+def test_the_rounds_offered_to_a_reader_are_the_rounds_the_schema_has(cd_db):
+    """`STAGES` is the one list of rounds, and the round picker is driven off
+    it rather than off what we happen to hold.
+
+    The companion to `test_a_round_is_named_in_exactly_one_place`: that one
+    keeps a round from being *named* twice, this one keeps it from being
+    *listed* twice. A surface with its own list goes wrong in both directions.
+    A round in the schema and not in the picker is unreachable, which is what
+    this change fixes; a round in the picker and not in the schema is a value
+    nothing will store.
+
+    Order is asserted as well as membership. `STAGES` is documented as
+    load-bearing on order -- a player's furthest round is the last of these
+    they appear in -- and a picker that reorders them shows a history running
+    backwards.
+    """
+    import champion_duel_hub as hub
+
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    db.get_or_create_group(grouping["id"], "semifinals", "H")
+
+    view = hub._GroupView(
+        user_id=1,
+        groupings=[grouping],
+        grouping=grouping,
+        stages=db.recorded_stages(grouping["id"]),
+        stage="semifinals",
+        groups=[],
+        label="H",
+        members=[],
+        can_odds=True,
+    )
+
+    assert [option.value for option in view._stage_options()] == list(db.STAGES)
+
+
 # The Match Overview box for the 8/4 grouping, both halves, transcribed from
 # screenshots on 2026-08-15. The dates move with the start date; the durations
 # and the gaps between them do not, which is what makes one entered date enough

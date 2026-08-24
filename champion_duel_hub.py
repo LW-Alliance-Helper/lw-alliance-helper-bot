@@ -219,7 +219,9 @@ _ENGINE_MISSING = (
 # unable to act on what it was given, not a statement about what the record
 # holds. Names the field rather than the rule — "both names are required"
 # describes the form, "add your own name" is the thing to go and do.
-_INTEL_NEEDS_BOTH = "⚠️ I need both players for a head to head. Open it again and add your own name."
+_INTEL_NEEDS_BOTH = (
+    "⚠️ I need both players for a head to head. Open it again and fill in both names."
+)
 
 
 def _is_admin(user_id: int) -> bool:
@@ -779,9 +781,29 @@ def build_intel_embed(result) -> discord.Embed:
             inline=False,
         )
     elif result.needs_your_squads:
+        # The counter order goes FIRST and the ask goes under it. It used to
+        # render only on the one-name path, and removing that path would have
+        # taken the bot's only statement of the counter triangle with it —
+        # `counter_types` needs nothing about you, which is the whole reason it
+        # survived where a recommendation could not, so a state that knows
+        # nothing about your squads is exactly where it still has something to
+        # say. The sentence is the one that shipped on the one-name path, less
+        # its "add your own name" tail, which the required field answers.
+        #
+        # Not added anywhere else: past this branch your own types are known,
+        # and the recommendation IS the counter wherever the two agree — the
+        # branch below says so in as many words rather than printing the order
+        # twice.
+        told = []
+        if result.counter_types:
+            told.append(
+                f"**{_order_text(result.counter_types)}** counters the line-up "
+                f"they show most often, slot for slot."
+            )
+        told.append(words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS)))
         embed.add_field(
             name=FIELD_YOURS,
-            value=words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))[:1024],
+            value="\n".join(told)[:1024],
             inline=False,
         )
     elif result.recommended is not None and not result.choice_matters:
@@ -953,14 +975,19 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
             await _send_intel_upsell(interaction)
             return
 
-        # Discord enforces `required=True` on its side, so a blank second name
-        # cannot arrive from the client. Checked anyway: a modal submission is
+        # Discord enforces `required=True` on its side, so neither name can
+        # arrive blank from the client. Checked anyway: a modal submission is
         # an HTTP payload and the only thing standing between this handler and
         # a hand-rolled one is Discord's own validation. Without the check the
         # blank falls through to `_resolve`, which asks the roster for "" and
         # answers "No registrant matches ****" — a true sentence about a
         # question nobody asked.
-        if not self.you.value.strip():
+        #
+        # BOTH SIDES, not just the one that changed. `opponent` carries the same
+        # `required=True` and reaches the same roster query, and a guard that
+        # covered only the new field would be defending against the payload
+        # threat on one half of a two-half form.
+        if not self.opponent.value.strip() or not self.you.value.strip():
             await interaction.followup.send(_INTEL_NEEDS_BOTH, ephemeral=True)
             return
 

@@ -91,6 +91,27 @@ def _habit(name="Habitual", order=("Missile", "Tank", "Aircraft"), meetings=3):
             )
 
 
+def _moves_around(name="Switcher"):
+    """Six meetings, six different orders — a `none` read past `LEAN_SEEN`.
+
+    A player with no orders at all renders `NOTHING_SEEN` and never reaches
+    `READ_COPY["none"]`, so a test that means to cover the moves-around state
+    has to seed one rather than name an unscouted fixture.
+    """
+    orders = (
+        ("Missile", "Tank", "Aircraft"),
+        ("Tank", "Aircraft", "Missile"),
+        ("Aircraft", "Missile", "Tank"),
+        ("Tank", "Missile", "Aircraft"),
+        ("Aircraft", "Tank", "Missile"),
+        ("Missile", "Aircraft", "Tank"),
+    )
+    for i, order in enumerate(orders):
+        db.add_order(
+            _rid(name), list(order), actor=KEV, opponent=f"opp{i}", observed_at=f"2026-08-1{i}"
+        )
+
+
 def _player(name):
     return db.get_player(name, server="738", include_scouting=True)
 
@@ -301,6 +322,28 @@ def test_a_recorded_opponent_still_gets_a_recommendation(cd_db):
     assert "Tank → Aircraft → Missile" in what_to_set
 
 
+def test_the_counter_order_survives_your_own_placeholder_squads(cd_db):
+    """It needs nothing about you, so the one state that knows nothing about
+    your squads is where it still has something to say.
+
+    This rendered only on the one-name path, and removing that path would
+    otherwise have taken the bot's only statement of the counter triangle with
+    it — leaving `counter_types` computed and printed nowhere.
+    """
+    _habit()
+    # "Unseen" has no squad types recorded, which is the push_to_bot default
+    # for most of the field rather than an edge case.
+    field = _field(_embed("Habitual", "Unseen"), hub.FIELD_YOURS)
+
+    assert "Tank → Aircraft → Missile" in field
+    assert "counters the line-up they show most often" in field
+    # And it still carries the ask, which is the thing that fixes the state.
+    assert "We don't have your squad types" in field
+    assert hub.CHAMPION_DUEL_HUB_CMD in field
+    # The one-name tail goes: the field it pointed at is required now.
+    assert "Add your own name" not in field
+
+
 def test_the_lead_is_always_there_now_that_both_sides_are(cd_db):
     """The description used to be able to come out empty, because a one-name
     answer had no grid and so no grade to lead with. With both sides required
@@ -396,22 +439,7 @@ def test_a_player_who_really_does_move_around_is_still_told_about(cd_db):
     render site rather than in `grade_read`. Past `LEAN_SEEN` a `none` read is
     a finding — no repeat worth countering — and suppressing it there would
     throw away the useful half to fix the false one."""
-    orders = (
-        ("Missile", "Tank", "Aircraft"),
-        ("Tank", "Aircraft", "Missile"),
-        ("Aircraft", "Missile", "Tank"),
-        ("Tank", "Missile", "Aircraft"),
-        ("Aircraft", "Tank", "Missile"),
-        ("Missile", "Aircraft", "Tank"),
-    )
-    for i, order in enumerate(orders):
-        db.add_order(
-            _rid("Switcher"),
-            list(order),
-            actor=KEV,
-            opponent=f"opp{i}",
-            observed_at=f"2026-08-1{i}",
-        )
+    _moves_around("Switcher")
     result = intel_lib.intel(_player("Switcher"), _player("Asker"))
     assert result.read == intel_lib.NONE
     assert result.habit.total >= intel_lib.LEAN_SEEN
@@ -488,14 +516,18 @@ def test_this_surface_carries_no_em_dashes(cd_db):
     strings above the draft marker are workshopped and are the exception, which
     is why this asserts on the rendered embed rather than on the module."""
     _habit()
+    # Seeded, not merely named. Was ("Habitual", None) — the one-name render
+    # state, which no longer exists. A player who moves around takes its place
+    # so the count of states covered does not quietly drop by one, and it only
+    # covers anything if the orders exist: an unscouted fixture renders
+    # `NOTHING_SEEN` and never reaches `READ_COPY["none"]`, which is the string
+    # in this set most likely to acquire punctuation.
+    _moves_around("Switcher")
     for them, you in (
         ("Habitual", "Asker"),
         ("Unseen", "Asker"),
         ("Habitual", "Unseen"),
         ("Giant", "Asker"),
-        # Was ("Habitual", None) — the one-name render state, which no longer
-        # exists. A player who moves around takes its place so the count of
-        # states covered does not quietly drop by one.
         ("Switcher", "Asker"),
         ("Mixed", "Asker"),
     ):
@@ -691,7 +723,22 @@ async def test_a_blank_second_name_is_told_what_to_do_rather_than_raising(cd_db,
     assert told == hub._INTEL_NEEDS_BOTH
     assert "No registrant matches" not in told
     # It says what to do, not which rule was broken.
-    assert "add your own name" in told.lower()
+    assert "fill in both names" in told.lower()
+
+
+async def test_a_blank_opponent_is_refused_on_the_same_terms(cd_db, monkeypatch):
+    """The guard defends against a payload Discord did not send, and that
+    threat does not distinguish the two fields. Covering only the one that
+    changed would leave `opponent` reaching `_resolve("")` for the same
+    "No registrant matches ****" the guard exists to prevent."""
+    modal = _modal(monkeypatch, opponent="  ", you="Asker", opponent_server="", your_server="")
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    told = _sent(interaction)
+    assert told == hub._INTEL_NEEDS_BOTH
+    assert "No registrant matches" not in told
 
 
 async def test_a_mistyped_own_name_gets_the_did_you_mean_list(cd_db, monkeypatch):

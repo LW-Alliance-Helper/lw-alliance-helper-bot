@@ -276,6 +276,24 @@ async def on_ready():
 
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
+    # How much parallelism this container actually has, printed once.
+    #
+    # It decides what the most expensive thing the bot does costs everybody
+    # else. A Champion Duel knockout run is pure Python, so it holds the GIL
+    # and never releases it for us; the event loop keeps turning because the
+    # run is on `asyncio.to_thread`, but every `to_thread` database read behind
+    # it has to win the GIL back from a thread that is still running. On ONE
+    # core the scheduler forces that handover and a command slows by about a
+    # third; on sixteen the compute thread keeps winning the race and the same
+    # command slows by 30x. Same code, same run -- the only variable is this
+    # number, and nothing in production has ever reported it.
+    #
+    # `cpu_count` is the machine; `process_cpu_count` (3.13+) is what this
+    # process is actually allowed to use, which is the one that matters under
+    # a container's CPU limit and can be far smaller.
+    usable = getattr(os, "process_cpu_count", lambda: None)() or os.cpu_count()
+    print(f"[INFO] CPUs: {os.cpu_count()} on the machine, {usable} usable by this process")
+
     # Demo guild reset hook. Runs the seed against the configured demo guild
     # whenever SEED_DEMO_ON_BOOT=1 is set in the Railway env. Wipes user-added
     # events + extra surveys, then upserts the canonical demo config and

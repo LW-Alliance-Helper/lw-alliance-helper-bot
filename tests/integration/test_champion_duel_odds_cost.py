@@ -187,6 +187,24 @@ def test_the_qualifiers_are_untouched_by_a_knockout_import(loaded, grouping):
     assert db.get_groups("qualifiers", grouping["id"]) == []
 
 
+def test_a_whole_roster_relabelled_knockouts_is_refused(cd_db, grouping):
+    """The other half of the same bug, and the more damaging half.
+
+    `push_to_bot --stage knockouts` stamps the round onto the qualifier draw
+    without changing it, so the payload arrives as 1,600 players carrying
+    lettered qualifier groups. Every one of those labels is truthy, so a
+    permissive fix would place all 1,600 into a field of 32 -- loading the
+    round with the wrong people, which is worse than not loading it.
+
+    Refused whole rather than partly applied: a half-filled knockout field
+    would have to be found and unpicked by hand.
+    """
+    roster = [dict(_registrant(i), group=chr(ord("A") + i % 16)) for i in range(200)]
+    with pytest.raises(ValueError, match="field of 32"):
+        db.import_registrants(roster, stage="knockouts", grouping_id=grouping["id"])
+    assert db.recorded_stages(grouping["id"]) == [], "a refused import must place nobody"
+
+
 # ── 2. the field can be reached ──────────────────────────────────────────────
 
 

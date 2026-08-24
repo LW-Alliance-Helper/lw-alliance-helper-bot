@@ -2366,6 +2366,35 @@ def import_registrants(
     stage = _stage(stage) if stage else None
     if stage and grouping_id is None:
         grouping_id = _grouping_for_payload(rows, started_on=started_on)
+
+    def _in_round(row) -> bool:
+        """Whether this row is in `stage`.
+
+        A group letter says so for the lettered rounds, and that is the whole
+        test for them. **The knockouts are the one round whose real label is
+        falsy** -- a single field of 32 with a NULL label -- so a truthy test
+        alone read every entrant as "not in this round" and silently loaded no
+        field at all. Membership there is carried by the `group` KEY being
+        present, blank, rather than by its value.
+        """
+        if row.get("group"):
+            return True
+        return stage == "knockouts" and "group" in row
+
+    if stage == "knockouts":
+        # A whole-roster payload relabelled `knockouts` reaches here with 1,600
+        # truthy qualifier letters and would fill a field of 32 with all of
+        # them. `push_to_bot --stage knockouts` produces exactly that -- the
+        # flag stamps the round and does not change the draw -- so this refuses
+        # the import rather than corrupting the round it is loading.
+        entrants = sum(1 for row in rows if (row.get("name") or "").strip() and _in_round(row))
+        if entrants > GROUP_SIZE["knockouts"]:
+            raise ValueError(
+                f"the knockouts are a field of {GROUP_SIZE['knockouts']} and this payload "
+                f"places {entrants}. A knockout payload carries only the field, and each "
+                f"entrant's `group` is blank because the field is unlettered."
+            )
+
     inserted = updated = placed = 0
     for row in rows:
         name = (row.get("name") or "").strip()
@@ -2387,8 +2416,9 @@ def import_registrants(
         # No group for this round means not in it. A semifinal payload carries
         # the whole roster so scouting still resolves against every player, but
         # only the 128 advancers have a semifinal group, and writing the other
-        # 1472 an empty semifinal row would say they all qualified.
-        if stage and row.get("group"):
+        # 1472 an empty semifinal row would say they all qualified. See
+        # `_in_round` for the one round where a blank label means the opposite.
+        if stage and _in_round(row):
             set_stage(
                 player["id"],
                 stage,

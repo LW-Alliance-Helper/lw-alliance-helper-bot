@@ -1430,14 +1430,30 @@ async def admin_champion_duel_import_slash(
     if lines_prefix:
         lines.append(lines_prefix)
     if isinstance(payload.get("registrants"), list):
-        result = results["registrants"] = await asyncio.to_thread(
-            cd_db.import_registrants,
-            payload["registrants"],
-            stage=stage,
-            grouping_id=grouping_id,
-            started_on=(grouping or {}).get("started_on"),
-        )
-        lines.append(f"**{result['total']}** registrants ({result['inserted']} new)")
+        try:
+            result = results["registrants"] = await asyncio.to_thread(
+                cd_db.import_registrants,
+                payload["registrants"],
+                stage=stage,
+                grouping_id=grouping_id,
+                started_on=(grouping or {}).get("started_on"),
+            )
+        except ValueError as e:
+            # A payload that would fill the round with the wrong people. Refused
+            # whole rather than half-applied, and said in words -- unwrapped this
+            # reaches the operator as a failed interaction with nothing to act on.
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+        # `placed` is reported, not just `total`. This import can succeed at
+        # loading every player and still put none of them in the round, which
+        # is what a silent placement failure looks like from the outside: the
+        # registrant count reads normal and the field is simply not there.
+        placed = result.get("placed", 0)
+        line = f"**{result['total']}** registrants ({result['inserted']} new)"
+        if stage:
+            label = cd_db.STAGE_LABELS.get(stage, stage)
+            line += f", **{placed}** placed in the {label}"
+        lines.append(line)
     if isinstance(payload.get("squads"), list):
         result = results["squads"] = await asyncio.to_thread(
             cd_db.import_squads, payload["squads"], actor=actor

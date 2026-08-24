@@ -282,6 +282,15 @@ async def _measure(seconds: float, alongside=None) -> dict:
 
 @pytest.mark.slow
 @pytest.mark.timeout(600)
+@pytest.mark.skipif(
+    not os.environ.get("ODDS_COST_TEST"),
+    reason=(
+        "opt-in: a cold 250-trial run. CI runs tests/integration twice per PR "
+        "(once under FORCE_PREMIUM=1) and deselects only `sheets`, so leaving "
+        "this on would buy two cold brackets a PR on a slower runner. Enable "
+        "with ODDS_COST_TEST=1."
+    ),
+)
 async def test_an_odds_run_keeps_the_event_loop_responsive(loaded, grouping, monkeypatch):
     """The expensive press, with the rest of the bot measured underneath it.
 

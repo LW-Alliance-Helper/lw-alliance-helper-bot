@@ -244,14 +244,29 @@ def test_the_order_is_the_printed_figure_and_cannot_drift_from_it(scored):
 
 @bracket_test
 def test_every_rung_kevin_picked_is_printed_with_its_label(scored):
-    """Five rungs, not the placeholder two, and each label travels with its own
-    number — which is the whole reason a wrap is harmless here."""
+    """Four rungs, not the placeholder two and not the five that shipped for a
+    day, and each label travels with its own number — which is the whole reason
+    a wrap is harmless here."""
     embed = hub.build_bracket_embed(scored, None)
     ladder = [ln for ln in embed.description.split("\n") if " · " in ln][0]
     assert [cell.rsplit(" ", 1)[0] for cell in ladder.split(" · ")] == list(
         hub.BRACKET_RUNGS.values()
     )
-    assert list(hub.BRACKET_RUNGS) == ["last16", "last8", "last4", "podium", "champion"]
+    assert list(hub.BRACKET_RUNGS) == ["last16", "last8", "last4", "champion"]
+
+
+@bracket_test
+def test_the_podium_is_computed_and_deliberately_not_printed(scored):
+    """`podium` came off the table on 2026-08-23 and stayed in the join.
+
+    It duplicated its neighbours in both directions: within 2 to 6 points of
+    Top 4 at the head of the table, and `<1%` beside an already-`<1%` Champion
+    from the thirteenth row down. That is a display call and nothing more, so
+    the figure is still computed — a later surface asking "who finishes on the
+    podium" must not find the answer thrown away to save a column."""
+    assert "podium" not in hub.BRACKET_RUNGS
+    assert all("podium" in row.reach for row in scored.rows)
+    assert "Top 3" not in hub.build_bracket_embed(scored, None).description
 
 
 @bracket_test

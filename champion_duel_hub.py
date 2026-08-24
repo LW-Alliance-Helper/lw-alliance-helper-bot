@@ -4588,7 +4588,7 @@ async def _send_odds_upsell(interaction: discord.Interaction) -> None:
 
 
 #: Which rungs of the bracket the table shows, in order, and what each is
-#: called on screen. Kevin's five, 2026-08-23.
+#: called on screen. Kevin's four, 2026-08-23.
 #:
 #: `bracket_odds` computes every round, deliberately, because "what does
 #: advancing mean in a bracket" was an open product question. It is answered
@@ -4596,11 +4596,22 @@ async def _send_odds_upsell(interaction: discord.Interaction) -> None:
 #: change. The two-rung version it replaces was a placeholder picking two of
 #: seven to be the exact analogue of the group table beside it.
 #:
-#: TWO COMPUTED ROUNDS ARE DELIBERATELY NOT HERE. `last32` is the field
-#: itself, so reaching it is true of every row and it would print 100% for
-#: thirty-two players. `final` is dropped in favour of `podium`, which says
-#: more for the same width: losing a final still takes second, and the top
-#: three is what the game rewards.
+#: THREE COMPUTED ROUNDS ARE DELIBERATELY NOT HERE, and the third of them was
+#: cut on the rendered table rather than in the abstract.
+#:
+#:   `last32` is the field itself. Reaching it is true of every row, so it
+#:   would print 100% thirty-two times.
+#:
+#:   `final` loses to `podium` on the same width: losing a final still takes
+#:   second, and the top three is what the game rewards.
+#:
+#:   `podium` then lost to nothing at all. It shipped in the five-rung version
+#:   and came out on 2026-08-23 once there was a real field to read: over a
+#:   spread thirty-two it sits within 2 to 6 points of `last4` at the top of
+#:   the table, and from the thirteenth row down it is `<1%` beside a
+#:   `champion` that is already `<1%`. A rung that tracks its neighbour where
+#:   the numbers are large and duplicates the next one where they are small is
+#:   width spent on nothing, and the line is long enough to wrap without it.
 #:
 #: SAID AS REACHING A RUNG, NEVER AS GOING OUT IN ONE. Thirty of the thirty-two
 #: are eliminated somewhere, and a surface naming each exit is a scoreboard
@@ -4610,7 +4621,6 @@ BRACKET_RUNGS = {
     "last16": "Top 16",
     "last8": "Top 8",
     "last4": "Top 4",
-    "podium": "Top 3",
     "champion": "Champion",
 }
 
@@ -4627,7 +4637,7 @@ def _printed_rank(prob: float) -> float:
     floors a long tail into `<1%`, so a thousandth of a point can put one
     player above another and the reader then sees a lower rung climb underneath
     rungs that are visibly equal. That is the sorting bug the re-sort exists to
-    prevent, and at five rungs, most of them small, it is the common case
+    prevent, and with two of the four rungs small, it is the common case
     rather than an edge.
 
     Derived from `probability()` rather than from a second copy of its
@@ -4689,7 +4699,7 @@ def build_bracket_embed(result, grouping) -> discord.Embed:
     # does, and a `0%` tells a player a rung is arithmetically out of reach
     # when what it means is "under half a percent". That is the exact claim
     # `probability()` exists to refuse, and this is the surface where the
-    # refusal earns its keep -- five rungs deep, it is most of what is printed.
+    # refusal earns its keep -- four rungs deep, it is most of what is printed.
     blocks = [
         f"**{discord.utils.escape_markdown(row.name)}**\n"
         + " · ".join(

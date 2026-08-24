@@ -598,15 +598,22 @@ def bracket_odds(
     Read it for the shape — the cost is superlinear in trials and the error is
     not — and take a minute and a bit as the figure for the run itself.
 
-    250 IS BOUGHT BY THE FIFTH RUNG, NOT BY THE ACCURACY IN THE ABSTRACT. The
+    250 IS BOUGHT BY THE SMALL RUNGS, NOT BY THE ACCURACY IN THE ABSTRACT. The
     error falls far more slowly than the cost, and most of what is left at 250
     is the bracket sampler's own noise rather than the matrix's — at 20,000
     trials that floor is about 0.35pp on its own. On the two-rung table that
-    argument carried, and 60 was the default. The bracket surface now prints
-    Top 4, Top 3 and Champion, which sit in low single digits for most of a
-    thirty-two field, and 60's worst-case 3.50pp is larger than the figure it
-    would sit under. 250 takes that to 1.51pp. Signed off 2026-08-22, together
-    with the five rungs — the two are one decision and neither holds alone.
+    argument carried and 60 was the default. The bracket surface now prints
+    Top 4 and Champion, which sit in low single digits for most of a thirty-two
+    field, and 60's worst-case 3.50pp is larger than the figure it would sit
+    under. 250 takes that to 1.51pp. Signed off 2026-08-22.
+
+    THE TABLE LOST A RUNG AFTER THAT AND THIS DID NOT MOVE WITH IT. 250 was
+    signed off alongside five rungs; `podium` came off the table on 2026-08-23
+    and Top 3 was one of the small figures the number was bought for. Whether
+    four rungs need less is a real question and it is being costed separately
+    — deliberately not answered here by dropping the constant to whatever
+    happens to look sufficient, which would be retuning a calibrated number off
+    a change that was about width rather than about error.
 
     **This is now the most expensive thing the bot does, by a wide margin and
     with nothing above it to shelter under.** 60 used to be chosen to sit
@@ -640,8 +647,8 @@ def bracket_odds(
     at 250 a last-16 figure sits 0.56pp from the reference on average and
     1.51pp from it at worst. A surface rendering these to the nearest percent
     is still rendering a little finer than the number is measured, and the
-    rungs the five-rung table added are the small ones, where a point and a
-    half is proportionally the most.
+    rungs the table added past the placeholder two are the small ones, where a
+    point and a half is proportionally the most.
     """
     if not ENGINE_AVAILABLE or not KNOCKOUT_AVAILABLE:
         raise RuntimeError(

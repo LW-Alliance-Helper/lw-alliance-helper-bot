@@ -6,12 +6,16 @@ pin moves. The tests that do NOT skip are the ones that matter most before it
 does: that an engine without the module degrades to the two group rounds
 instead of losing all three.
 
-The expensive tests are marked. A cold bracket is about thirteen seconds — the
-matrices are 496 pairs simulated at two series lengths — so the ones that need
-a real run share a single module-scoped result rather than each paying for one.
+The expensive tests are marked. A cold bracket is a minute and a bit at the
+shipped `MATRIX_TRIALS` of 250 — the matrices are 496 pairs simulated at two
+series lengths — so the ones that need a real run share a single module-scoped
+result rather than each paying for one. That is past `pytest.ini`'s 30-second
+default, which is what `bracket_test` is for.
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -27,6 +31,25 @@ needs_knockout = pytest.mark.skipif(
     not odds.KNOCKOUT_AVAILABLE,
     reason="the installed champion-duel-engine has no knockout model (1.12.0+)",
 )
+
+
+def bracket_test(func):
+    """Skip without the model, and allow for the one cold run.
+
+    `pytest.ini` sets a 30-second default and the cold bracket is about sixty,
+    so a test that pays for the `scored` fixture needs the allowance — fixture
+    setup counts against the timeout of whichever test triggers it.
+
+    ON EVERY CONSUMER, NOT ON THE ONE THAT PAYS TODAY. `scored` is
+    module-scoped, so exactly one of these builds it and the rest get it free;
+    which one that is depends on the order they sit in the file, and a test
+    reordered into first place should not start timing out for it.
+
+    The refusals below are deliberately NOT decorated with this: they raise on
+    field size or missing power before anything is simulated, and they are the
+    tests that would stop being cheap without anyone noticing.
+    """
+    return needs_knockout(pytest.mark.timeout(240)(func))
 
 
 def _member(name: str, thp_m: float) -> dict:
@@ -134,7 +157,7 @@ def test_a_player_with_nothing_to_place_them_by_is_named():
 # ── the shape of the answer ─────────────────────────────────────────────────
 
 
-@needs_knockout
+@bracket_test
 def test_every_round_is_computed_not_just_the_one_rendered(scored):
     """Which round "advancing" means in a bracket is an open product question,
     and this join must not settle it by only computing one answer."""
@@ -151,7 +174,7 @@ def test_every_round_is_computed_not_just_the_one_rendered(scored):
         }
 
 
-@needs_knockout
+@bracket_test
 @pytest.mark.parametrize(
     "round_name,seats",
     [("last32", 32), ("last16", 16), ("last8", 8), ("last4", 4), ("final", 2), ("champion", 1)],
@@ -163,12 +186,12 @@ def test_each_round_hands_out_exactly_its_own_number_of_places(scored, round_nam
     assert sum(row.reach[round_name] for row in scored.rows) == pytest.approx(seats, abs=0.02)
 
 
-@needs_knockout
+@bracket_test
 def test_a_podium_is_three_places_and_counts_the_third_place_match(scored):
     assert sum(row.reach["podium"] for row in scored.rows) == pytest.approx(3, abs=0.02)
 
 
-@needs_knockout
+@bracket_test
 def test_nobody_reaches_a_later_round_more_often_than_an_earlier_one(scored):
     for row in scored.rows:
         reach = row.reach
@@ -182,30 +205,84 @@ def test_nobody_reaches_a_later_round_more_often_than_an_earlier_one(scored):
         ), row.name
 
 
-@needs_knockout
-def test_neither_printed_column_ever_goes_backwards(scored):
+@bracket_test
+def test_no_printed_rung_ever_goes_backwards(scored):
     """Most of a 32-field shares a title chance under half a percent, so what
-    orders the middle of this table is the other column — and a column that
+    orders the middle of this list is the rungs beneath it — and a figure that
     climbs as the eye goes down reads as a sorting bug whatever the numbers
-    underneath it are doing."""
+    underneath it are doing.
+
+    The guard is that every rung on screen is in the sort key, most significant
+    first, and that the key is the figure as PRINTED. Read the ladder back to
+    front and the list has to come out in descending order: no rung may climb
+    unless a more significant one visibly fell first. Nothing the reader cannot
+    see is allowed to order this list.
+
+    Sorting on the raw floats fails this. `probability()` floors a long tail
+    into `<1%`, so most of a thirty-two field ties on screen at the title while
+    differing in the fourth decimal, and Top 4 then climbs under two rungs the
+    reader can see are equal."""
+    ladders = _ladders(hub.build_bracket_embed(scored, None))
+    assert len(ladders) > 8, "the fixture should fill the list or this proves nothing"
+    keys = [tuple(reversed(ladder)) for ladder in ladders]
+    assert keys == sorted(keys, reverse=True)
+
+
+@bracket_test
+def test_the_order_is_the_printed_figure_and_cannot_drift_from_it(scored):
+    """`_printed_rank` is what keeps the visible order the real one, and it is
+    read off `probability()` rather than repeating its thresholds — so a change
+    to where the `<1%` floor or the `>99%` ceiling sits moves both together."""
+    for prob in (0.0, 0.0049, 0.005, 0.0051, 0.02, 0.125, 0.5, 0.9949, 0.995, 1.0):
+        text = hub.words.probability(prob)
+        rank = hub._printed_rank(prob)
+        assert (rank == 0.0) == (text == "<1%"), (prob, text, rank)
+        assert (rank == 100.0) == (text == ">99%"), (prob, text, rank)
+        if text not in ("<1%", ">99%"):
+            assert f"{rank:.0f}%" == text, (prob, text, rank)
+
+
+@bracket_test
+def test_every_rung_kevin_picked_is_printed_with_its_label(scored):
+    """Five rungs, not the placeholder two, and each label travels with its own
+    number — which is the whole reason a wrap is harmless here."""
     embed = hub.build_bracket_embed(scored, None)
-    rendered = [line for line in embed.description.split("\n") if line.startswith("`")]
-    assert len(rendered) > 8, "the fixture should fill the table or this proves nothing"
-
-    def columns(line):
-        left, right = line.split("`")[1], line.split("`")[3]
-        return tuple(
-            0.0 if "<" in cell else float(cell.strip().rstrip("%")) for cell in (left, right)
-        )
-
-    pairs = [columns(line) for line in rendered]
-    assert [p[1] for p in pairs] == sorted((p[1] for p in pairs), reverse=True)
-    for before, after in zip(pairs, pairs[1:]):
-        if before[1] == after[1]:
-            assert before[0] >= after[0], (before, after)
+    ladder = [ln for ln in embed.description.split("\n") if " · " in ln][0]
+    assert [cell.rsplit(" ", 1)[0] for cell in ladder.split(" · ")] == list(
+        hub.BRACKET_RUNGS.values()
+    )
+    assert list(hub.BRACKET_RUNGS) == ["last16", "last8", "last4", "podium", "champion"]
 
 
-@needs_knockout
+@bracket_test
+def test_the_whole_field_fits_the_description_cap(scored):
+    """Thirty-two players at two lines each, against Discord's 4,096. It fits
+    with room to spare, and a member who cannot find their own name on the
+    surface built for finding it has been given nothing."""
+    embed = hub.build_bracket_embed(scored, None)
+    assert len(embed.description) <= 4096
+    assert len(_ladders(embed)) == len(scored.rows)
+    assert "below them" not in embed.description
+
+
+@bracket_test
+def test_a_field_too_wide_to_fit_is_counted_rather_than_cut_silently(scored):
+    """The guard behind the line above. Names are member-supplied and an
+    over-long description is truncated by Discord mid-figure rather than by us,
+    so rows come off the bottom until it fits and the count is carried."""
+    import dataclasses
+
+    wide = dataclasses.replace(
+        scored, rows=[dataclasses.replace(r, name="W" * 200) for r in scored.rows]
+    )
+    embed = hub.build_bracket_embed(wide, None)
+    assert len(embed.description) <= 4096
+    dropped = len(wide.rows) - len(_ladders(embed))
+    assert dropped > 0
+    assert f"and **{dropped} players** below them." in embed.description
+
+
+@bracket_test
 def test_the_join_ranks_on_the_title_and_cascades_out_from_there(scored):
     """The canonical order, kept apart from the table's. A caller reading every
     round wants one defensible ranking; the table wants the columns it prints.
@@ -216,7 +293,7 @@ def test_the_join_ranks_on_the_title_and_cascades_out_from_there(scored):
     assert titles == sorted(titles, reverse=True)
 
 
-@needs_knockout
+@bracket_test
 def test_a_second_press_does_not_pay_for_the_matrices_again(scored):
     """Thirteen seconds of pure Python holds the GIL, so the bot serves nobody
     while it runs. The cache makes that a cost per data change rather than per
@@ -232,26 +309,86 @@ def test_a_second_press_does_not_pay_for_the_matrices_again(scored):
 # ── the table ───────────────────────────────────────────────────────────────
 
 
-@needs_knockout
-def test_no_player_is_told_the_title_is_out_of_reach(scored):
-    """`0%` in a field of thirty-two is not an edge case, it is most of the
-    table, and it makes a claim the simulation did not."""
+def _ladders(embed):
+    """Every rendered ladder, as tuples of numbers in printed order.
+
+    `probability()` prints two words rather than figures at the ends of the
+    scale, and both carry an order: `<1%` is below every printed figure and
+    `>99%` is above every one, so they map inside their own bands rather than
+    to 0 and 100.
+    """
+    out = []
+    for line in embed.description.split("\n"):
+        if " · " not in line:
+            continue
+        figures = []
+        for cell in line.split(" · "):
+            text = cell.rsplit(" ", 1)[1]
+            figures.append(
+                0.5 if text == "<1%" else 99.5 if text == ">99%" else float(text.rstrip("%"))
+            )
+        out.append(tuple(figures))
+    return out
+
+
+@bracket_test
+def test_no_player_is_told_a_rung_is_out_of_reach(scored):
+    """`0%` in a field of thirty-two is not an edge case, it is most of what
+    is printed once the ladder goes five rungs deep, and it makes a claim the
+    simulation did not.
+
+    Matched on a word boundary rather than by stripping the known figures out
+    first: every one of "40%" through "90%" ends in `0%`, so the old
+    subtract-the-cases spelling would have started passing by accident the
+    moment a third rung was printed."""
     description = hub.build_bracket_embed(scored, None).description
-    assert "0%" not in description.replace("10%", "").replace("20%", "").replace("30%", "")
+    assert re.search(r"\b0%", description) is None, description
     assert "<1%" in description
 
 
-@needs_knockout
-def test_the_table_says_the_draw_is_not_the_one_that_will_happen(scored):
+@bracket_test
+def test_the_table_says_the_seeding_is_not_the_one_that_will_happen(scored):
     """The single most misreadable thing on this surface: with no published
-    draw the model reshuffles every trial, so these are odds across the
-    brackets that could happen. A reader taking them for the real draw will be
-    badly wrong about one specific player."""
+    seeding the model reshuffles every trial, so these are odds across the
+    brackets that could happen. A reader taking them for the real bracket will
+    be badly wrong about one specific player."""
     footer = hub.build_bracket_embed(scored, None).footer.text
-    assert "redraws it" in footer or "redraw" in footer
+    assert "Seeding isn't set yet" in footer
+    assert "a different bracket" in footer
+    assert f"{scored.trials:,}" in footer
 
 
-@needs_knockout
+@bracket_test
+def test_the_bracket_surface_says_seeding_and_never_draw(scored):
+    """`_RECORDING_LABELS` calls it **Initial Seed** where a member records
+    one, so a footer calling the same thing "the draw" gives the bot two words
+    for one object — which is how somebody ends up believing they are two
+    objects."""
+    embed = hub.build_bracket_embed(scored, None)
+    text = f"{embed.description} {embed.footer.text}".lower()
+    assert "draw" not in text
+    assert hub._RECORDING_LABELS["draw"] == "Initial Seed"
+
+
+@bracket_test
+def test_the_explainer_says_what_the_surface_is_and_says_odds(scored):
+    """ "What are these? Where did these come from?" — the copy never said this
+    was a 32-player knockout bracket, so "Top 8" had nothing to attach to.
+
+    And it takes the same shape as the group explainer one button away, which
+    is "gives the odds of": people move between the two, and two surfaces
+    describing the same kind of number two different ways is a difference a
+    reader will try to find meaning in."""
+    embed = hub.build_bracket_embed(scored, None)
+    description = embed.description
+    assert "32 players, single elimination" in description
+    assert "gives the odds of" in description
+    text = f"{description} {embed.footer.text}"
+    assert "chance" not in text.lower()
+    assert "—" not in text
+
+
+@bracket_test
 def test_the_table_names_the_rounds_as_reaching_them_never_as_going_out(scored):
     """Thirty of the thirty-two are eliminated somewhere, and a surface naming
     each exit is a scoreboard nobody asked for."""
@@ -261,11 +398,12 @@ def test_the_table_names_the_rounds_as_reaching_them_never_as_going_out(scored):
         assert word not in text
 
 
-@needs_knockout
+@bracket_test
 def test_the_bracket_goes_through_its_own_builder_not_the_group_one(scored):
     """A group embed would print "the odds of finishing in the top 2 and going
     through" over a field of 32, which is a sentence about a round that is not
     being played."""
-    embed = hub.build_odds_embed(_field(), "knockouts", None, None)
-    assert "top" not in (embed.description or "").lower().split("second")[0]
-    assert "bracket" in (embed.description or "").lower()
+    description = hub.build_odds_embed(_field(), "knockouts", None, None).description or ""
+    assert description.startswith("The knockout bracket:")
+    assert "going through" not in description
+    assert "winning the group" not in description

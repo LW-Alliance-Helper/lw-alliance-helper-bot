@@ -119,21 +119,24 @@ STAGES_WITH_A_MODEL = ("semifinals",) + (("knockouts",) if KNOCKOUT_AVAILABLE el
 #: Bracket trials, and the pairwise-matrix trials underneath them. Separate
 #: numbers because they cost wildly different amounts: the bracket sampler is
 #: free and the matrix is the entire bill. See `bracket_odds` for the measured
-#: table behind these two.
+#: table behind these two, and for why the matrix moved from 60 to 250 when
+#: the surface went from two rungs to five.
 BRACKET_TRIALS = 20_000
-MATRIX_TRIALS = 60
+MATRIX_TRIALS = 250
 
 # One run at a time, and remember the last few answers.
 #
-# The most expensive thing this bot does is a knockout bracket: about thirteen
-# seconds of pure Python. Pure Python holds the GIL, so that is thirteen
-# seconds in which the bot serves nobody, not just the alliance that pressed
-# it. A semi-final group is nearer three. Both come through here, and two cheap
-# things bound them without moving the simulation off this process, which is
-# the real fix and deliberately not this change:
+# The most expensive thing this bot does is a knockout bracket: a minute and a
+# bit of pure Python at `MATRIX_TRIALS` 250, measured at 63.5 s and 72.7 s on
+# the two machines it has been timed on, up from roughly a quarter of that at
+# 60. Pure Python holds the GIL, so that is a minute in which the bot serves
+# nobody, not just the alliance that pressed it. A semi-final group is nearer
+# three seconds. Both come through here, and two cheap things bound them
+# without moving the simulation off this process, which is the real fix and
+# deliberately not this change:
 #
-#   The LOCK stops presses stacking. Without it three people pressing inside a
-#   minute cost forty-two seconds of dead bot rather than fourteen.
+#   The LOCK stops presses stacking. Without it three people pressing inside
+#   the same minute cost three minutes of dead bot rather than one.
 #
 #   The CACHE makes the cost per data change rather than per press. The inputs
 #   are a whole recorded group and the model is seeded, so scoring one twice is
@@ -579,7 +582,7 @@ def bracket_odds(
     itself is free — 20,000 trials over the matrices measured 0.44 seconds. All
     of the cost is `meeting_matrix`, which is 496 pairs simulated twice, once
     at Bo3 and once at Bo5, because a player's path runs through both series
-    lengths. Measured on this machine:
+    lengths. Measured 2026-08-20:
 
         matrix trials   both matrices   error against a 600-trial reference
                  60         13.0 s      last-16 mean 0.89pp, worst 3.50pp
@@ -588,26 +591,42 @@ def bracket_odds(
                 250         63.5 s      mean 0.56pp, worst 1.51pp
                 600        133.0 s      (the reference)
 
-    The error falls far more slowly than the cost, because most of what is left
-    at 250 is the bracket sampler's own noise rather than the matrix's — at
-    20,000 trials that floor is about 0.35pp on its own. So 60 buys nearly all
-    of the accuracy 250 does, at a fifth of the time.
+    Re-measured on 2026-08-23 on a different machine, over the same 32-field:
+    19.5 s at 60 and 72.7 s at 250. The table above is kept as it was rather
+    than overwritten with those, because the errors in its right-hand column
+    were measured on that machine too and only the timings would be moving.
+    Read it for the shape — the cost is superlinear in trials and the error is
+    not — and take a minute and a bit as the figure for the run itself.
 
-    **60 makes this the most expensive thing the bot does, and that is now a
-    ceiling rather than a match.** It used to be chosen to sit inside the
-    qualifier run's fourteen seconds, which was the existing worst case;
-    qualifier odds came out on 2026-08-21 and took that budget with them. At
-    thirteen seconds this bracket is the worst case now, with nothing above it
-    to shelter under, and pure Python holds the GIL, so those are thirteen
-    seconds in which the bot serves nobody. Raising this number raises that
-    directly. The fix is the one already deferred: move the simulation off this
-    process. The value has not moved; only what justifies it has.
+    250 IS BOUGHT BY THE FIFTH RUNG, NOT BY THE ACCURACY IN THE ABSTRACT. The
+    error falls far more slowly than the cost, and most of what is left at 250
+    is the bracket sampler's own noise rather than the matrix's — at 20,000
+    trials that floor is about 0.35pp on its own. On the two-rung table that
+    argument carried, and 60 was the default. The bracket surface now prints
+    Top 4, Top 3 and Champion, which sit in low single digits for most of a
+    thirty-two field, and 60's worst-case 3.50pp is larger than the figure it
+    would sit under. 250 takes that to 1.51pp. Signed off 2026-08-22, together
+    with the five rungs — the two are one decision and neither holds alone.
+
+    **This is now the most expensive thing the bot does, by a wide margin and
+    with nothing above it to shelter under.** 60 used to be chosen to sit
+    inside the qualifier run's fourteen seconds, which was the existing worst
+    case; qualifier odds came out on 2026-08-21 and took that budget with them,
+    so there is no longer a ceiling to fit under and this run sets it. At about
+    seventy seconds cold, and pure Python holding the GIL throughout, that is
+    over a minute in which the bot serves nobody. What makes it acceptable is
+    that it is paid once per data change rather than per press: `_RUN_LOCK` admits
+    one run and `_CACHE` answers the rest, and the knockout field changes far
+    less often than people press. What would make it unnecessary is the
+    deferred fix, moving the simulation off this process (#511).
 
     The noise that buys is worth stating rather than burying, because it is
-    larger than the group models': repeat runs at different seeds move a
-    last-16 figure by about 1pp typically and up to 4pp at worst. A surface
-    rendering these to the nearest percent is rendering finer than the number
-    is measured.
+    still larger than the group models'. The table above is what was measured:
+    at 250 a last-16 figure sits 0.56pp from the reference on average and
+    1.51pp from it at worst. A surface rendering these to the nearest percent
+    is still rendering a little finer than the number is measured, and the
+    rungs the five-rung table added are the small ones, where a point and a
+    half is proportionally the most.
     """
     if not ENGINE_AVAILABLE or not KNOCKOUT_AVAILABLE:
         raise RuntimeError(

@@ -4586,110 +4586,154 @@ async def _send_odds_upsell(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
 
 
-#: Which two rounds the bracket table puts in its columns.
-#:
-#: ⚠️ PLACEHOLDER PRESENTATION — NOT SIGNED OFF (2026-08-20).
+#: Which rungs of the bracket the table shows, in order, and what each is
+#: called on screen. Kevin's five, 2026-08-23.
 #:
 #: `bracket_odds` computes every round, deliberately, because "what does
-#: advancing mean in a bracket" is an open product question (Kevin's list, and
-#: it is not a code question). This constant is the one place that question is
-#: currently answered, so changing the answer is this line.
+#: advancing mean in a bracket" was an open product question. It is answered
+#: now, and this constant is where the answer lives: display only, no engine
+#: change. The two-rung version it replaces was a placeholder picking two of
+#: seven to be the exact analogue of the group table beside it.
 #:
-#: The default is `last8` and `champion`, chosen to be the exact analogue of
-#: the group table beside it rather than because it is obviously right:
+#: TWO COMPUTED ROUNDS ARE DELIBERATELY NOT HERE. `last32` is the field
+#: itself, so reaching it is true of every row and it would print 100% for
+#: thirty-two players. `final` is dropped in favour of `podium`, which says
+#: more for the same width: losing a final still takes second, and the top
+#: three is what the game rewards.
 #:
-#:   semifinal group   top 2 of 8      = a 25% base rate, and winning the group
-#:   knockout bracket  the last 8      = a 25% base rate, and winning the title
-#:
-#: `last16` was the other candidate and reads worse: reaching it is winning one
-#: match, which is the head-to-head number a member can already get from
-#: `Predict a match`, so the column would sell back something free.
-#:
-#: The alternatives worth weighing, all already computed:
-#:   - `last8` + `champion`  (this one) — parallel with the group table
-#:   - `podium` + `champion` — the two outcomes the game itself rewards
-#:   - every round as its own column — the most honest and the least readable
-#:   - "how far they get", one modal round per player — reads as a prediction
-#:     of the outcome rather than a distribution, which is the misreading the
-#:     whole surface exists to avoid
-BRACKET_COLUMNS = ("last8", "champion")
-
-#: What each round is called in copy. Said as *reaching* a round, never as
-#: going out in one: thirty of the thirty-two are eliminated somewhere, and a
-#: table naming each exit is a scoreboard nobody asked for (`notes/UX.md`).
-BRACKET_ROUND_WORDS = {
-    "last32": "the field of 32",
-    "last16": "the last 16",
-    "last8": "the last 8",
-    "last4": "the last 4",
-    "final": "the final",
-    "champion": "the title",
-    "podium": "a podium finish",
+#: SAID AS REACHING A RUNG, NEVER AS GOING OUT IN ONE. Thirty of the thirty-two
+#: are eliminated somewhere, and a surface naming each exit is a scoreboard
+#: nobody asked for (`notes/UX.md`). `champion` is the one rung that is not a
+#: reach, which is why the explainer names it apart from the rest.
+BRACKET_RUNGS = {
+    "last16": "Top 16",
+    "last8": "Top 8",
+    "last4": "Top 4",
+    "podium": "Top 3",
+    "champion": "Champion",
 }
+
+#: Most significant rung first, for the sort. Every rung on screen is in the
+#: key, so nothing orders this table that the reader cannot see.
+_BRACKET_SORT = tuple(BRACKET_RUNGS)[::-1]
+
+
+def _printed_rank(prob: float) -> float:
+    """Where a figure sits in the printed order, read off the printed figure.
+
+    Ordering the bracket on the raw floats orders it on differences the
+    surface does not show: `probability()` rounds to the nearest percent and
+    floors a long tail into `<1%`, so a thousandth of a point can put one
+    player above another and the reader then sees a lower rung climb underneath
+    rungs that are visibly equal. That is the sorting bug the re-sort exists to
+    prevent, and at five rungs, most of them small, it is the common case
+    rather than an edge.
+
+    Derived from `probability()` rather than from a second copy of its
+    thresholds, so the ordering cannot drift away from the rendering.
+    """
+    text = words.probability(prob)
+    if text == "<1%":
+        return 0.0
+    if text == ">99%":
+        return 100.0
+    return float(text.rstrip("%"))
 
 
 def build_bracket_embed(result, grouping) -> discord.Embed:
-    """How far each of the 32 gets, as a table.
+    """How far each of the 32 gets, one ladder per player.
 
     Kept apart from `build_odds_embed` rather than branched inside it, because
     almost none of that function survives the change of round: there is no
     group letter, no points to rank on, no "top N and through", and the footer
     it sets would be actively wrong here. What the two share is the refusals,
     and those are `NotEnoughData` either way.
+
+    STACKED RATHER THAN ALIGNED, AND THAT IS FORCED. An embed holds roughly 40
+    monospace columns. Five figures at four characters, plus their separators,
+    plus a name that can carry an alliance tag, comes to about 43 -- so the
+    aligned five-column table does not fit, rather than fitting badly. A fenced
+    block does not rescue it either: Discord code blocks wrap and do not
+    scroll (the scrollable ones existed and were removed), so the row would
+    come back with its alignment destroyed, which is worse than never having
+    aligned it.
+
+    Kevin's pick, 2026-08-23. Every label travels with its own number, so a
+    wrap costs nothing, and the name stays bold on its own line because what
+    this surface is read for is finding yourself in a field of thirty-two.
     """
     embed = discord.Embed(
         title=f"🔮 {db.STAGE_LABELS['knockouts']}",
         color=discord.Color.blurple(),
     )
-    first, second = BRACKET_COLUMNS
-    # Re-sorted on the columns this table actually shows, rather than taken in
-    # the join's order. `bracket_odds` ranks on the title and then cascades out
-    # through every round, which is the right canonical order for a caller that
-    # wants all of them — but two thirds of a 32-field share a title chance
-    # under half a percent, and among those the join's next key is a round this
-    # table does not print. The visible result is a column that goes backwards
-    # under a column that does not, which reads as a sorting bug. Ordering by
-    # what is on screen costs nothing and cannot do that.
+    # Re-sorted on what this table actually shows, rather than taken in the
+    # join's order. `bracket_odds` ranks on the title and then cascades out
+    # through every round, which is the right canonical order for a caller
+    # that wants all of them -- but it cascades through rounds this table does
+    # not print, and the visible result is a figure that climbs as the eye
+    # goes down, which reads as a sorting bug.
+    #
+    # On the PRINTED figures, through `_printed_rank`, and that part is not
+    # cosmetic: two thirds of a thirty-two field share a title chance under
+    # half a percent, so ordering on the floats would order most of this list
+    # by a difference nothing on screen shows. Where every printed figure ties,
+    # `sorted` is stable and the join's own ranking decides it, invisibly.
     shown = sorted(
         result.rows,
-        key=lambda row: (row.reach.get(second, 0.0), row.reach.get(first, 0.0)),
+        key=lambda row: tuple(_printed_rank(row.reach.get(rung, 0.0)) for rung in _BRACKET_SORT),
         reverse=True,
-    )[:_ODDS_SHOWN]
+    )
     # Through `probability()`, not `:.0%`. In a group of eight a bottom row
-    # rounds to 0% occasionally; in a field of thirty-two most of the table
-    # does, and a column of `0%` tells twenty players the title is arithmetically
-    # out of reach when what it means is "under half a percent". That is the
-    # exact claim `probability()` exists to refuse, and this is the surface
-    # where the refusal earns its keep.
-    lines = [
-        f"`{words.probability(row.reach.get(first, 0)):>4}` "
-        f"`{words.probability(row.reach.get(second, 0)):>4}`  "
-        f"**{discord.utils.escape_markdown(row.name)}**"
+    # rounds to 0% occasionally; in a field of thirty-two most of the ladder
+    # does, and a `0%` tells a player a rung is arithmetically out of reach
+    # when what it means is "under half a percent". That is the exact claim
+    # `probability()` exists to refuse, and this is the surface where the
+    # refusal earns its keep -- five rungs deep, it is most of what is printed.
+    blocks = [
+        f"**{discord.utils.escape_markdown(row.name)}**\n"
+        + " · ".join(
+            f"{label} {words.probability(row.reach.get(rung, 0))}"
+            for rung, label in BRACKET_RUNGS.items()
+        )
         for row in shown
     ]
-    more = len(result.rows) - len(shown)
-    tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
-    embed.description = (
-        f"Over {result.trials:,} simulations of the bracket. The first column "
-        f"is the chance of reaching **{BRACKET_ROUND_WORDS[first]}**, the "
-        f"second is the chance of taking **{BRACKET_ROUND_WORDS[second]}**."
-        + "\n\n"
-        + "\n".join(lines)
-        + tail
-    )[:4096]
+    lead = (
+        f"The knockout bracket: {_plural(len(result.rows), 'player')}, single "
+        f"elimination. Each figure gives the odds of reaching that far, and "
+        f"**{BRACKET_RUNGS['champion']}** the odds of winning it."
+    )
+    # The whole field rather than `_ODDS_SHOWN`: the bracket IS the thirty-two,
+    # and a member looking for their own name is the reason this is read at
+    # all. Two lines each measures about 2,700 characters against the
+    # 4,096-character cap, so it fits -- but a field of long names would not,
+    # and Discord truncates an over-long description mid-figure. So rows come
+    # off the bottom until it fits and the count goes in the tail, which is
+    # what the group table already does with a hundred-player qualifier group.
+    kept = list(blocks)
+    while True:
+        more = len(result.rows) - len(kept)
+        tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
+        description = lead + ("\n\n" + "\n".join(kept) if kept else "") + tail
+        if len(description) <= 4096 or not kept:
+            break
+        kept.pop()
+    embed.description = description[:4096]
 
     # The one thing this surface has to say that the group one does not. A
-    # bracket answer depends on who a player meets, and nobody knows that yet
-    # -- so the draw is reshuffled every trial and these are averages over the
-    # draws that could happen, not the draw anyone will get. A reader who takes
-    # them for the second thing will be badly wrong about one specific player,
-    # which is exactly the failure a footer can prevent and a table cannot.
+    # bracket answer depends on who a player meets, and nobody knows that yet,
+    # so the seeding is redrawn every trial and these are averages over the
+    # brackets that could happen rather than the one anybody will get. A reader
+    # who takes them for the second thing will be badly wrong about one
+    # specific player, which is exactly the failure a footer can prevent and a
+    # table cannot.
+    #
+    # "SEEDING", NEVER "THE DRAW". `_RECORDING_LABELS` already calls it
+    # **Initial Seed** on the recording surface, and two words for one thing is
+    # how a member ends up thinking they are two things.
     embed.set_footer(
         text=(
-            "The draw is not published yet, so every simulation redraws it — "
-            "these are odds across the brackets that could happen, not the one "
-            "that will. Squads we have not seen are sampled, so they carry that "
-            "uncertainty too."
+            f"Seeding isn't set yet, so each of {result.trials:,} simulations "
+            f"runs a different bracket. Squads we haven't seen are sampled."
         )
     )
     return embed

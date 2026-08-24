@@ -155,6 +155,19 @@ CD_BTN_ODDS = "🔮 Odds of advancing"
 # unreadable there — which is what retired 📇. 🏹 carried the placeholder and
 # is now free again.
 CD_BTN_INTEL = "🎯 Head to head"
+# The way back into the form after it refuses. Member voice, and deliberately
+# so: it pairs with "Use what I entered" on the squads button, which `UX.md`
+# names as one of the two things a voice sweep must never touch.
+#
+# ✏️ is the catalog's "edit, change" and the thing about to happen is an edit.
+# ↩️ was considered and is wrong -- its catalogued sense is cancelling a step
+# that has not happened, where this reopens one that has.
+#
+# ONE LABEL ON ALL THREE REFUSALS, and that is Kevin's call rather than an
+# economy. A name missing, a name wrong and a name on two warzones are three
+# states, but the button does the identical thing in each, and one label a
+# member learns once beats three they read separately.
+CD_BTN_INTEL_RETRY = "✏️ Edit what I entered"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
 CD_BTN_LINE_NEW = "➕ Add as a new player"
@@ -215,13 +228,15 @@ _ENGINE_MISSING = (
 )
 
 
-# ⚠️ COPY AWAITING SIGN-OFF (2026-08-23). "I", not "we": this is the bot
-# unable to act on what it was given, not a statement about what the record
-# holds. Names the field rather than the rule — "both names are required"
-# describes the form, "add your own name" is the thing to go and do.
-_INTEL_NEEDS_BOTH = (
-    "⚠️ I need both players for a head to head. Open it again and fill in both names."
-)
+# Signed off by Kevin 2026-08-24. "I", not "we": this is the bot unable to act
+# on what it was given, not a statement about what the record holds.
+#
+# IT USED TO CARRY A SECOND SENTENCE — "Open it again and fill in both names" —
+# and losing it is the point rather than a trim. "Open it again" meant scrolling
+# back up a busy channel to the hub message, which is the dead end this refusal
+# now hands a button out of. The button carries the action; the sentence would
+# be naming a worse route to the same place.
+_INTEL_NEEDS_BOTH = "⚠️ I need both players for a head to head."
 
 
 def _is_admin(user_id: int) -> bool:
@@ -912,10 +927,10 @@ def build_intel_embed(result) -> discord.Embed:
     return embed
 
 
-# ⚠️ TITLE AWAITING SIGN-OFF (2026-08-23). It was "What to field against a
-# player", which described the one-sided surface. Shipped as the button's own
-# words so pressing the button and reading the modal agree; the variants
-# considered are in the PR. Copy is Kevin's.
+# Signed off by Kevin 2026-08-24. It was "What to field against a player",
+# which described the one-sided surface. Shipped as the button's own words so
+# pressing the button and reading the modal agree; the variants considered are
+# in the PR. Copy is Kevin's.
 class _IntelModal(discord.ui.Modal, title="Head to head"):
     """Two named players, both required.
 
@@ -959,6 +974,40 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         label="Your server", required=False, max_length=10, placeholder="e.g. 1042"
     )
 
+    def __init__(
+        self,
+        *,
+        opponent: str | None = None,
+        opponent_server: str | None = None,
+        you: str | None = None,
+        your_server: str | None = None,
+    ):
+        """Optionally pre-filled, for the way back in after a refusal.
+
+        Every argument is optional and the hub's own button passes none, so
+        `_IntelModal()` keeps working unchanged.
+
+        SAFE TO SET ON SELF, and this is the thing that gets "cleaned up" by
+        someone who assumes a class attribute is shared: `Modal._init_children`
+        deepcopies each declared item onto the instance, so a default set here
+        cannot reach the next person who opens the modal. Verified against the
+        installed library rather than taken on trust -- `discord/ui/modal.py`,
+        `item = deepcopy(item)`. `_AddPlayerModal` in this file does the same
+        for the same reason.
+        """
+        super().__init__()
+        for field, value in (
+            (self.opponent, opponent),
+            (self.opponent_server, opponent_server),
+            (self.you, you),
+            (self.your_server, your_server),
+        ):
+            if value:
+                # Truncated off the field's own cap rather than a retyped
+                # number, so widening a field cannot silently keep truncating
+                # short. Discord rejects a default longer than `max_length`.
+                field.default = value[: field.max_length]
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -988,17 +1037,17 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         # covered only the new field would be defending against the payload
         # threat on one half of a two-half form.
         if not self.opponent.value.strip() or not self.you.value.strip():
-            await interaction.followup.send(_INTEL_NEEDS_BOTH, ephemeral=True)
+            await self._refuse(interaction, _INTEL_NEEDS_BOTH)
             return
 
         them = await _resolve(self.opponent.value, self.opponent_server.value or None)
         if isinstance(them, str):
-            await interaction.followup.send(them, ephemeral=True)
+            await self._refuse(interaction, them)
             return
 
         you = await _resolve(self.you.value, self.your_server.value or None)
         if isinstance(you, str):
-            await interaction.followup.send(you, ephemeral=True)
+            await self._refuse(interaction, you)
             return
 
         try:
@@ -1015,6 +1064,104 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
             return
 
         await interaction.followup.send(embed=build_intel_embed(result), ephemeral=True)
+
+    async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
+        """Say what is wrong, and hand back the form with what was typed in it.
+
+        Without this the member's only route back is to scroll up a busy
+        channel to the hub message they pressed the button on, and everything
+        they typed is gone. On a misspelling the prefill is the whole point:
+        the near-miss name is sitting in the box with `_suggestion_line`'s
+        "Did you mean" beside it, one character from being right.
+
+        A BUTTON RATHER THAN THE FORM ITSELF, and that is the only shape
+        available rather than a preference. Discord will not accept a modal as
+        the response to a modal submission; a component interaction can send
+        one, so the reply has to carry a button and the button opens the form.
+
+        `_ENGINE_MISSING` is excluded, because `_resolve` returns it when
+        `db.NAMES_AVAILABLE` is false, and a retry button on it would be lying
+        about what happens next -- nothing the member can type installs an
+        engine. The two flags come from the same package and in practice fail
+        together, but `on_submit`'s own engine check reads
+        `intel_lib.ENGINE_AVAILABLE` while this path reads
+        `db.NAMES_AVAILABLE`, so a partial install is a real way to arrive here
+        with it.
+        """
+        if message == _ENGINE_MISSING:
+            await interaction.followup.send(message, ephemeral=True)
+            return
+        view = _IntelRetryView(
+            user_id=interaction.user.id,
+            opponent=self.opponent.value,
+            opponent_server=self.opponent_server.value,
+            you=self.you.value,
+            your_server=self.your_server.value,
+        )
+        # `wait=True` so the view holds its own message and can retire it on
+        # timeout. Without it `self.message` is None and the button stays
+        # live-looking on a dead view.
+        view.message = await interaction.followup.send(
+            message, view=view, ephemeral=True, wait=True
+        )
+
+
+class _IntelRetryView(discord.ui.View):
+    """Reopen the head-to-head form with what was typed still in it.
+
+    The message this rides on is ephemeral and so already private to the one
+    member, which makes `interaction_check` unreachable rather than wrong. It
+    is here because every other view in this file carries it -- `_MissView`,
+    `_DisagreementView`, `_RetryGroupingView` -- and a single view that quietly
+    opts out reads as a considered exemption to whoever finds it next.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        opponent: str | None,
+        opponent_server: str | None,
+        you: str | None,
+        your_server: str | None,
+    ):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+        self.opponent = opponent
+        self.opponent_server = opponent_server
+        self.you = you
+        self.your_server = your_server
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(label=CD_BTN_INTEL_RETRY[:80], style=discord.ButtonStyle.primary)
+        button.callback = self._on_retry
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_retry(self, inter: discord.Interaction):
+        # The button is left live rather than disabled on press, matching
+        # `_RetryGroupingView`. Dismissing a modal without submitting is one
+        # stray tap on a phone, and a button that spent itself on that tap
+        # would strand the member in the exact dead end this view exists to
+        # end. A second refusal sends a fresh view carrying the newer text.
+        await inter.response.send_modal(
+            _IntelModal(
+                opponent=self.opponent,
+                opponent_server=self.opponent_server,
+                you=self.you,
+                your_server=self.your_server,
+            )
+        )
 
 
 async def _send_intel_upsell(interaction: discord.Interaction) -> None:

@@ -1083,3 +1083,70 @@ async def test_the_hub_button_opens_a_form_with_nothing_to_retire(cd_db):
 
     assert modal.origin is None
     await modal._retire_origin()
+
+
+# ── and a refusal with nothing to press does not take the offer away ─────────
+#
+# `on_submit` can refuse six ways. Three send the member back a way in; the
+# other three cannot, because no edit to what they typed would change the
+# answer. On those three the offer above them is not stale -- it is the only
+# remaining copy of what they typed -- so retiring it would take their way back
+# and hand them nothing, which is the dead end this view exists to end rather
+# than a tidier version of it.
+
+
+async def test_a_paywall_reached_from_a_retry_leaves_the_way_back_alone(cd_db, monkeypatch):
+    """Entitlement is re-checked on submit rather than trusted off the button,
+    so a subscription that lapsed mid-flow lands here. The upsell has nothing
+    to press, and greying the offer above it would strand the member on a
+    refusal that editing cannot fix and give them no way to carry what they
+    typed anywhere else."""
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    offer = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=False))
+    await _resubmit(reopened, opponent="Habitual", you="Asker")
+
+    assert not offer.children[0].disabled
+    assert not offer.is_finished()
+
+
+async def test_an_opponent_with_no_squads_leaves_the_way_back_alone(cd_db, monkeypatch):
+    """The sixth refusal, and the one the brief did not count. A name that
+    resolves to a player nobody has recorded is a data gap, not a typo, so it
+    carries no retry -- and the offer above it still holds both names."""
+    db.import_registrants(
+        [{"name": "Blank", "group": "M", "rank": 10, "server": "738", "thp": 255_000_000}],
+        stage="qualifiers",
+    )
+    first = await _submit(monkeypatch, opponent="Blnk", you="Asker")
+    offer = _view(first)
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    refused = await _resubmit(reopened, opponent="Blank", you="Asker")
+
+    assert "full line-up" in _sent(refused)
+    assert _retry_buttons(refused) == [], "no way back on a gap editing cannot close"
+    assert not offer.children[0].disabled, "so the one above it has to stay"
+    assert not offer.is_finished()
+
+
+async def test_a_dropped_connection_does_not_cost_the_member_their_answer(cd_db, monkeypatch):
+    """Retiring the old button is cosmetic and it happens between the member
+    and their answer. A connection that goes while we ask must not raise out of
+    `on_submit` -- that would trade the whole submission for a greyed button,
+    and it is not an `HTTPException`, so catching only those would miss it."""
+    _habit()
+    first = await _submit(monkeypatch, opponent="Habitul", you="Asker")
+    stale = _view(first)
+    stale.message.edit = AsyncMock(side_effect=OSError("connection reset"))
+    button, reopened = _press(first)
+    await button.callback(reopened)
+
+    answered = await _resubmit(reopened, opponent="Habitual", you="Asker")
+
+    assert answered.followup.send.call_args.kwargs.get("embed") is not None
+    assert stale.is_finished(), "and the button is dead regardless"

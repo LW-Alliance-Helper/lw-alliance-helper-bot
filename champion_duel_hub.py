@@ -1016,21 +1016,6 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # The offer this arrived through is spent, whatever happens next.
-        #
-        # RETIRED ON SUBMIT RATHER THAN ON PRESS, and the difference is the
-        # whole point of doing it here. Left live, an older refusal keeps a
-        # button that reopens the form holding the older text -- so a member
-        # who fixed one name, failed on the other, and then reached back for
-        # the wrong message would silently lose the correction they had
-        # already made. Retiring it on press instead would strand anyone who
-        # dismissed the modal without submitting, which is one stray tap on a
-        # phone and is the exact dead end this whole view exists to end.
-        #
-        # Whatever comes next carries its own way back, or is a refusal that
-        # deliberately has none.
-        await self._retire_origin()
-
         if not intel_lib.ENGINE_AVAILABLE:
             await interaction.followup.send(_ENGINE_MISSING, ephemeral=True)
             return
@@ -1084,9 +1069,32 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
             return
 
         await interaction.followup.send(embed=build_intel_embed(result), ephemeral=True)
+        # Answered. The control that existed to fix the question is spent, and
+        # left live it would invite the member to redo work that worked.
+        await self._retire_origin()
 
     async def _retire_origin(self) -> None:
-        """Grey out the offer this modal was opened from, if there was one."""
+        """Grey out the offer this modal was opened from, if there was one.
+
+        ONLY WHERE SOMETHING REPLACES IT -- a newer offer, or the answer the
+        member was after. Two live offers is the failure this exists to stop:
+        the older one hands back the older text, so a member who fixed one
+        name, failed on the other, and then reached back for the wrong of two
+        near-identical ephemeral messages would silently lose the correction
+        they had already made.
+
+        THE BUTTONLESS REFUSALS DELIBERATELY DO NOT CALL THIS. A missing
+        engine, the paywall and an opponent with no squads on file all end in
+        a message with nothing to press, and on those paths the offer above is
+        not stale -- it holds the member's only remaining copy of what they
+        typed. Greying it there would take their way back and give them
+        nothing in exchange, which is the dead end the whole view exists to
+        end rather than a tidier version of it.
+
+        On submit rather than on press, either way. A button that spent itself
+        the moment it was pressed would strand anyone who dismissed the modal
+        without submitting, and that is one stray tap on a phone.
+        """
         if self.origin is not None:
             await self.origin.retire()
 
@@ -1123,6 +1131,10 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
             you=self.you.value,
             your_server=self.your_server.value,
         )
+        # Superseded by the offer about to go out, which carries what was just
+        # typed. Retired before rather than after, so there is never a moment
+        # with two live buttons holding two different answers.
+        await self._retire_origin()
         # The view holds its own message so it can retire the button -- on
         # timeout, and when a later submission supersedes this offer. Without
         # it `self.message` is None and the button stays live-looking on a
@@ -1197,9 +1209,16 @@ class _IntelRetryView(discord.ui.View):
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
-                # Deleted, expired or beyond our reach. The view is stopped
-                # either way, so the button is dead even where it still draws.
+            except Exception:
+                # Deleted, expired, or the connection went while we asked.
+                # Deliberately everything, not just `HTTPException`: this is a
+                # cosmetic edit standing between the member and their answer,
+                # and a dropped connection here would otherwise raise straight
+                # out of `on_submit` after the defer and cost them the whole
+                # submission over a greyed button. The view is stopped either
+                # way, so the button is already dead wherever it still draws.
+                # `wizard_registry.expire_view_message` swallows the same for
+                # the same reason.
                 pass
 
     async def _on_retry(self, inter: discord.Interaction):

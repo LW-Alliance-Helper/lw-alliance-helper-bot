@@ -288,7 +288,7 @@ class RoleSelectStep(discord.ui.View):
         if self._current_role is not None:
             role = self._current_role
             keep_btn = discord.ui.Button(
-                label=f"✅ Keep current: @{role.name}"[:80],
+                label=f"Keep current: @{role.name}"[:80],
                 style=discord.ButtonStyle.success,
                 row=0,
             )
@@ -494,7 +494,7 @@ class ChannelSelectStep(discord.ui.View):
         else:
             display = f"#{ch.name}"
         keep_btn = discord.ui.Button(
-            label=f"✅ Keep current: {display}"[:80],
+            label=f"Keep current: {display}"[:80],
             style=discord.ButtonStyle.success,
             row=row,
         )
@@ -844,7 +844,7 @@ class ModalLaunchView(discord.ui.View):
 
         if current_value:
             keep_btn = discord.ui.Button(
-                label=f"✅ Keep current: {self._current_display}"[:80],
+                label=f"Keep current: {self._current_display}"[:80],
                 style=discord.ButtonStyle.success,
                 row=0,
             )
@@ -901,14 +901,14 @@ async def ask_keep_or_change(
         layout **✅ Use default: {default}** / **✏️ Define my own**.
         The keep button returns ``default``.
       * Saved value matches the hardcoded default: two-button layout
-        **✅ Keep current: {current}** / **✏️ Define my own**. Labels
+        **Keep current: {current}** / **✏️ Define my own**. Labels
         as "Keep current" rather than "Use default" so leadership
         running the wizard a second time sees what's actually saved
         (the values are identical anyway, but the wording makes the
         Keep-current intent obvious — fixes the
         "is Use default going to wipe my settings?" anxiety).
       * Saved value differs from default: three-button layout
-        **✅ Keep current: {current}** / **↩️ Use default: {default}**
+        **Keep current: {current}** / **↩️ Use default: {default}**
         / **✏️ Define my own**. Lets leadership revert to the
         hardcoded baseline in one click instead of typing it manually.
 
@@ -931,9 +931,7 @@ async def ask_keep_or_change(
             # whether anything is saved and whether it matches default.
             # Decorator-based buttons can't be conditionally added.
             keep_label = (
-                f"✅ Keep current: {current}"[:80]
-                if has_saved
-                else f"✅ Use default: {default}"[:80]
+                f"Keep current: {current}"[:80] if has_saved else f"✅ Use default: {default}"[:80]
             )
             keep_btn = discord.ui.Button(label=keep_label, style=discord.ButtonStyle.success)
 
@@ -1827,7 +1825,7 @@ class TimezoneSelectView(discord.ui.View):
         if current and current in TIMEZONE_LABELS:
             keep_label = TIMEZONE_LABELS[current]
             keep_btn = discord.ui.Button(
-                label=f"✅ Keep current: {keep_label}"[:80],
+                label=f"Keep current: {keep_label}"[:80],
                 style=discord.ButtonStyle.success,
                 row=0,
             )
@@ -2319,7 +2317,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     modal = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
     # Truncate long sheet ids for the Keep-current button label —
     # full ids are ~44 chars and overflow Discord's 80-char cap once
-    # the "✅ Keep current: " prefix is added.
+    # the "Keep current: " prefix is added.
     sheet_display = (
         f"{cfg.spreadsheet_id[:25]}…"
         if cfg.spreadsheet_id and len(cfg.spreadsheet_id) > 25
@@ -3172,7 +3170,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                         DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
                     )
                     keep_btn = discord.ui.Button(
-                        label=f"✅ Keep current: {saved_disp_short}"[:80],
+                        label=f"Keep current: {saved_disp_short}"[:80],
                         style=discord.ButtonStyle.success,
                         row=0,
                     )
@@ -3320,7 +3318,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             else:
                 self.remove_item(self.keep_btn)
 
-        @discord.ui.button(label="✅ Keep current values", style=discord.ButtonStyle.success)
+        @discord.ui.button(label="Keep current values", style=discord.ButtonStyle.success)
         async def keep_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "keep"
             for item in self.children:
@@ -3421,7 +3419,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             else:
                 self.remove_item(self.keep_btn)
 
-        @discord.ui.button(label="✅ Keep current labels", style=discord.ButtonStyle.success)
+        @discord.ui.button(label="Keep current labels", style=discord.ButtonStyle.success)
         async def keep_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "keep"
             for item in self.children:
@@ -3782,7 +3780,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 keep_added = False
                 if current and current in tone_list:
                     keep_btn = discord.ui.Button(
-                        label=f"✅ Keep current: {current}"[:80],
+                        label=f"Keep current: {current}"[:80],
                         style=discord.ButtonStyle.success,
                         row=0,
                     )
@@ -4106,7 +4104,7 @@ class _WeekdaySelectView(discord.ui.View):
 
         if current is not None and 0 <= int(current) <= 6:
             keep = discord.ui.Button(
-                label=f"✅ Keep current: {tr.WEEKDAY_NAMES[int(current)]}",
+                label=f"Keep current: {tr.WEEKDAY_NAMES[int(current)]}",
                 style=discord.ButtonStyle.success,
                 row=0,
             )
@@ -4369,7 +4367,7 @@ async def _run_train_rotation_step(
                     pass
                 self.stop()
 
-            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.secondary)
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.secondary)
             async def _keep(self, inter: discord.Interaction, _btn: discord.ui.Button):
                 self.choice = "keep"
                 for c in self.children:
@@ -4620,7 +4618,7 @@ async def _run_train_rotation_step(
             self.cancelled = False
             self.modal_out = None
             if saved_custom:
-                keep = discord.ui.Button(label="✅ Keep current", style=discord.ButtonStyle.success)
+                keep = discord.ui.Button(label="Keep current", style=discord.ButtonStyle.success)
 
                 async def _keep(inter: discord.Interaction):
                     self.choice = "keep"
@@ -5169,7 +5167,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 self.modal_out = None
                 if saved_custom:
                     keep = discord.ui.Button(
-                        label="✅ Keep current", style=discord.ButtonStyle.success
+                        label="Keep current", style=discord.ButtonStyle.success
                     )
 
                     async def _keep(inter: discord.Interaction):
@@ -6235,7 +6233,7 @@ async def run_survey_setup(
                 # send-handlers in tests broadcast view overrides.
                 self.intro_choice = None
 
-            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
             async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.intro_choice = "keep"
                 for item in self.children:
@@ -7220,7 +7218,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # Surface the saved value on the Keep current button so the
         # officer can see what would be preserved without reading the
         # prompt — mirrors the convention used by `ask_keep_or_change`.
-        team_view.keep_current.label = f"✅ Keep current: {_team_blurb[saved_teams]}"[:80]
+        team_view.keep_current.label = f"Keep current: {_team_blurb[saved_teams]}"[:80]
     else:
         # Hide Keep current on fresh setup — there's no current value to keep.
         team_view.remove_item(team_view.keep_current)
@@ -7309,7 +7307,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             # officer can see what would be preserved without reading
             # back through the prompt — matches the convention used by
             # `ask_keep_or_change` elsewhere in the wizard.
-            view.keep_current.label = f"✅ Keep current: {slot_labels[saved_idx - 1]}"[:80]
+            view.keep_current.label = f"Keep current: {slot_labels[saved_idx - 1]}"[:80]
         await channel.send(slot_prompt, view=view)
         await wait_view_or_cancel(view, cancel_event)
         if view.cancelled:
@@ -7409,7 +7407,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
             # Re-entry only — only added when saved_is_custom.
             @discord.ui.button(
-                label="✅ Keep current custom template", style=discord.ButtonStyle.success
+                label="Keep current custom template", style=discord.ButtonStyle.success
             )
             async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.outcome = "keep"
@@ -7560,9 +7558,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             shared_view.remove_item(shared_view.keep_current)
         else:
             shared_view.keep_current.label = (
-                "✅ Keep current: One shared template"
+                "Keep current: One shared template"
                 if saved_share_mode == "shared"
-                else "✅ Keep current: Separate templates"
+                else "Keep current: Separate templates"
             )
         prompt_lines = [
             "**Step 6 of 9: Mail Template**",
@@ -8672,9 +8670,9 @@ async def _ask_signup_schedule(
             # day name when a poll day was configured, "Skip
             # auto-scheduling" when the alliance opted out previously.
             if 0 <= current <= 6 and current in poll_options:
-                keep_label = f"✅ Keep current: {_DOW_NAMES[current]}"
+                keep_label = f"Keep current: {_DOW_NAMES[current]}"
             else:
-                keep_label = "✅ Keep current: Skip auto-scheduling"
+                keep_label = "Keep current: Skip auto-scheduling"
             keep_btn = discord.ui.Button(
                 label=keep_label[:80],
                 style=discord.ButtonStyle.success,
@@ -8847,8 +8845,8 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
         self,
         *,
         current_value: bool,
-        keep_label_yes: str = "✅ Keep current: Yes",
-        keep_label_no: str = "✅ Keep current: No",
+        keep_label_yes: str = "Keep current: Yes",
+        keep_label_no: str = "Keep current: No",
         flip_label_yes: str = "↩️ Switch to: Yes",
         flip_label_no: str = "↩️ Switch to: No",
     ):
@@ -9375,7 +9373,7 @@ async def _run_structured_flow_setup_step(
                 self.stop()
 
             @discord.ui.button(
-                label="✅ Keep current",
+                label="Keep current",
                 style=discord.ButtonStyle.success,
             )
             async def keep_current(
@@ -9427,7 +9425,7 @@ async def _run_structured_flow_setup_step(
         if has_custom:
             picker.remove_item(picker.use_default)
             picker.keep_current.label = (
-                f"✅ Keep current: {effective_tab} · {saved_letter} · matched by {effective_match}"[
+                f"Keep current: {effective_tab} · {saved_letter} · matched by {effective_match}"[
                     :80
                 ]
             )
@@ -9670,8 +9668,8 @@ async def _run_structured_flow_setup_step(
             current_yn = bool(current_structured.get("power_refresh_dm_enabled"))
             gate = _KeepOrFlipYesNoGate(
                 current_value=current_yn,
-                keep_label_yes="✅ Keep current: Yes",
-                keep_label_no="✅ Keep current: No",
+                keep_label_yes="Keep current: Yes",
+                keep_label_no="Keep current: No",
                 flip_label_yes="↩️ Switch to: Yes",
                 flip_label_no="↩️ Switch to: No",
             )
@@ -9730,8 +9728,8 @@ async def _run_structured_flow_setup_step(
             if prior_stale:
                 gate = _KeepOrFlipYesNoGate(
                     current_value=True,
-                    keep_label_yes="✅ Keep current: Yes",
-                    keep_label_no="✅ Keep current: No",
+                    keep_label_yes="Keep current: Yes",
+                    keep_label_no="Keep current: No",
                     flip_label_yes="↩️ Switch to: Yes",
                     flip_label_no="↩️ Switch to: No",
                 )
@@ -9814,7 +9812,7 @@ async def _run_structured_flow_setup_step(
                         self.modal: _StaleDaysModal | None = None
 
                     @discord.ui.button(
-                        label=f"✅ Keep current: {effective_days} days",
+                        label=f"Keep current: {effective_days} days",
                         style=discord.ButtonStyle.success,
                     )
                     async def keep(
@@ -10031,7 +10029,7 @@ async def _run_structured_flow_setup_step(
                             self.modal: _LastUpdatedSourceModal | None = None
 
                         @discord.ui.button(
-                            label="✅ Keep current",
+                            label="Keep current",
                             style=discord.ButtonStyle.success,
                         )
                         async def keep(
@@ -10085,9 +10083,7 @@ async def _run_structured_flow_setup_step(
                             else f"✏️ Set source: {pdef_tab}"
                         )
                     else:
-                        lu_picker.keep.label = f"✅ Keep: {lu_effective_tab} · {lu_effective_col}"[
-                            :80
-                        ]
+                        lu_picker.keep.label = f"Keep: {lu_effective_tab} · {lu_effective_col}"[:80]
 
                     await channel.send(
                         "**Last-Updated Source (💎 Premium)**\n"
@@ -10194,7 +10190,7 @@ async def _run_structured_flow_setup_step(
                     self.outcome: str | None = None
 
                 @discord.ui.button(
-                    label="✅ Keep current custom template",
+                    label="Keep current custom template",
                     style=discord.ButtonStyle.success,
                 )
                 async def keep(

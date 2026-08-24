@@ -269,9 +269,7 @@ class _SheetStepView(discord.ui.View):
 
         # Keep current goes first + green (the repo-wide keep/change convention).
         if default_id and default_tab:
-            keep = discord.ui.Button(
-                label="✅ Keep current sheet", style=discord.ButtonStyle.success
-            )
+            keep = discord.ui.Button(label="Keep current sheet", style=discord.ButtonStyle.success)
             keep.callback = self._keep
             self.add_item(keep)
         enter = discord.ui.Button(label="✏️ Enter sheet", style=discord.ButtonStyle.primary)
@@ -406,7 +404,7 @@ class _ModeStepView(discord.ui.View):
         r = 0
         if current.get("setup_mode") and current.get("alliance_sheet_id"):
             keep = discord.ui.Button(
-                label="✅ Keep current sheets & setup", style=discord.ButtonStyle.success, row=0
+                label="Keep current sheets & setup", style=discord.ButtonStyle.success, row=0
             )
             keep.callback = self._keep_current
             self.add_item(keep)
@@ -1089,7 +1087,7 @@ class _ChannelStepView(discord.ui.View):
         # Keep current goes first + green (the repo-wide keep/change convention).
         if current_id:
             keep = discord.ui.Button(
-                label="✅ Keep current channel", style=discord.ButtonStyle.success
+                label="Keep current channel", style=discord.ButtonStyle.success
             )
             keep.callback = self._make_keep(current_id)
             self.add_item(keep)

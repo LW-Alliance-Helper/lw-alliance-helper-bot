@@ -6568,13 +6568,13 @@ async def run_survey_setup(
                     )
                     type_options = [
                         discord.SelectOption(
-                            label="Text — member types their answer", value="text"
+                            label="🔤 Text — member types their answer", value="text"
                         ),
                         discord.SelectOption(
-                            label="Dropdown — member selects from a list", value="dropdown"
+                            label="🔽 Dropdown — member selects from a list", value="dropdown"
                         ),
                         discord.SelectOption(
-                            label="Numeric — number, with shorthand support", value="numeric"
+                            label="🔢 Numeric — number, with shorthand support", value="numeric"
                         ),
                     ]
                     if is_premium_for_q:
@@ -7950,9 +7950,9 @@ _PARTICIPATION_PREMIUM_TYPES = [
     "derived_count",
 ]
 _PARTICIPATION_TYPE_LABELS = {
-    "text": "Text: short typed answer",
-    "yes_no": "Yes / No",
-    "numeric": "Numeric: number with optional min/max",
+    "text": "🔤 Text: short typed answer",
+    "yes_no": "☑️ Yes / No",
+    "numeric": "🔢 Numeric: number with optional min/max",
     "roster_names": "Roster names: pick or type member names",
     "roster_multi_select": "Roster multi-select: pick members from a dropdown",
     "single_select": "💎 Single-select dropdown",

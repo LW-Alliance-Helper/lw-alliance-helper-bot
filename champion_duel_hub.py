@@ -981,11 +981,15 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         opponent_server: str | None = None,
         you: str | None = None,
         your_server: str | None = None,
+        origin: "_IntelRetryView | None" = None,
     ):
         """Optionally pre-filled, for the way back in after a refusal.
 
         Every argument is optional and the hub's own button passes none, so
         `_IntelModal()` keeps working unchanged.
+
+        `origin` is the offer this was opened from, kept so that submitting
+        can retire it. See `on_submit`.
 
         SAFE TO SET ON SELF, and this is the thing that gets "cleaned up" by
         someone who assumes a class attribute is shared: `Modal._init_children`
@@ -996,6 +1000,7 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         for the same reason.
         """
         super().__init__()
+        self.origin = origin
         for field, value in (
             (self.opponent, opponent),
             (self.opponent_server, opponent_server),
@@ -1010,6 +1015,21 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # The offer this arrived through is spent, whatever happens next.
+        #
+        # RETIRED ON SUBMIT RATHER THAN ON PRESS, and the difference is the
+        # whole point of doing it here. Left live, an older refusal keeps a
+        # button that reopens the form holding the older text -- so a member
+        # who fixed one name, failed on the other, and then reached back for
+        # the wrong message would silently lose the correction they had
+        # already made. Retiring it on press instead would strand anyone who
+        # dismissed the modal without submitting, which is one stray tap on a
+        # phone and is the exact dead end this whole view exists to end.
+        #
+        # Whatever comes next carries its own way back, or is a refusal that
+        # deliberately has none.
+        await self._retire_origin()
 
         if not intel_lib.ENGINE_AVAILABLE:
             await interaction.followup.send(_ENGINE_MISSING, ephemeral=True)
@@ -1065,6 +1085,11 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
 
         await interaction.followup.send(embed=build_intel_embed(result), ephemeral=True)
 
+    async def _retire_origin(self) -> None:
+        """Grey out the offer this modal was opened from, if there was one."""
+        if self.origin is not None:
+            await self.origin.retire()
+
     async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
         """Say what is wrong, and hand back the form with what was typed in it.
 
@@ -1098,9 +1123,17 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
             you=self.you.value,
             your_server=self.your_server.value,
         )
-        # `wait=True` so the view holds its own message and can retire it on
-        # timeout. Without it `self.message` is None and the button stays
-        # live-looking on a dead view.
+        # The view holds its own message so it can retire the button -- on
+        # timeout, and when a later submission supersedes this offer. Without
+        # it `self.message` is None and the button stays live-looking on a
+        # dead view.
+        #
+        # `wait=True` is explicit rather than load-bearing: `Webhook.send`
+        # already forces it for an application webhook, which an interaction
+        # followup is (`discord/webhook/async_.py`, `if application_webhook:
+        # wait = True`). Stated because the neighbouring `_DisagreementView`
+        # carries a comment claiming the flag is what makes the return value
+        # arrive, and it is not.
         view.message = await interaction.followup.send(
             message, view=view, ephemeral=True, wait=True
         )
@@ -1148,18 +1181,40 @@ class _IntelRetryView(discord.ui.View):
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
+    async def retire(self) -> None:
+        """Grey the button out. A later submission has superseded this offer.
+
+        Disabled rather than removed: two near-identical ephemeral messages sit
+        one above the other by this point, and a greyed control says which of
+        them is the stale one where a vanished control would just leave the
+        member looking for it.
+        """
+        if self.is_finished():
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                # Deleted, expired or beyond our reach. The view is stopped
+                # either way, so the button is dead even where it still draws.
+                pass
+
     async def _on_retry(self, inter: discord.Interaction):
-        # The button is left live rather than disabled on press, matching
-        # `_RetryGroupingView`. Dismissing a modal without submitting is one
-        # stray tap on a phone, and a button that spent itself on that tap
-        # would strand the member in the exact dead end this view exists to
-        # end. A second refusal sends a fresh view carrying the newer text.
+        # Deliberately does NOT retire this view. Dismissing a modal without
+        # submitting is one stray tap on a phone, and a button that spent
+        # itself on that tap would strand the member in the exact dead end
+        # this view exists to end. `_IntelModal.on_submit` retires it instead,
+        # once the member has actually submitted something.
         await inter.response.send_modal(
             _IntelModal(
                 opponent=self.opponent,
                 opponent_server=self.opponent_server,
                 you=self.you,
                 your_server=self.your_server,
+                origin=self,
             )
         )
 

@@ -199,7 +199,7 @@ def test_nobody_watching_reads_differently_from_them_moving_around(cd_db):
     """Two different findings. One is about the player and one is about us, and
     only the second has something the reader can do about it."""
     seen_nothing = _field(_embed("Unseen", "Asker"), hub.FIELD_THEIRS)
-    assert seen_nothing == words.NOTHING_SEEN
+    assert seen_nothing == words.NOTHING_SEEN.format(button=hub._btn_words(hub.CD_BTN_ORDER))
     assert "Anyone who has faced them can add one" in seen_nothing
 
 
@@ -353,6 +353,99 @@ def test_a_favourite_nobody_has_watched_twice_is_not_a_favourite_they_move_off(c
     assert words.READ_COPY["lean"] in field
 
 
+def test_one_sighting_is_not_reported_as_a_player_who_changes_it_often(cd_db):
+    """`grade_read` returns `none` for two reasons and the copy speaks to one.
+
+    Under `LEAN_SEEN` the grade means "nobody has watched them enough to tell",
+    and `READ_COPY["none"]` says "they change it often", which is a claim about
+    the player. Off a single sighting the field read *"The only line-up on
+    record for this player. They change it often."* — the second sentence
+    contradicting the first.
+
+    Kevin, 2026-08-23: print nothing. Not a hedged verdict, which would still
+    be read as a verdict. The line-up and what the record holds, and stop."""
+    db.add_order(
+        _rid("Habitual"),
+        ["Missile", "Tank", "Aircraft"],
+        actor=KEV,
+        opponent="opp0",
+        observed_at="2026-08-10",
+    )
+    result = intel_lib.intel(_player("Habitual"), _player("Asker"))
+    assert result.read == intel_lib.NONE
+    field = _field(hub.build_intel_embed(result), hub.FIELD_THEIRS)
+    # What we hold, still said.
+    assert "The only line-up on record for this player." in field
+    assert "Missile → Tank → Aircraft" in field
+    # And no verdict on top of it, in any wording.
+    assert words.READ_COPY["none"] not in field
+    assert "change it often" not in field
+
+
+def test_a_player_who_really_does_move_around_is_still_told_about(cd_db):
+    """The other half of the same branch, and the reason the fix is at the
+    render site rather than in `grade_read`. Past `LEAN_SEEN` a `none` read is
+    a finding — no repeat worth countering — and suppressing it there would
+    throw away the useful half to fix the false one."""
+    orders = (
+        ("Missile", "Tank", "Aircraft"),
+        ("Tank", "Aircraft", "Missile"),
+        ("Aircraft", "Missile", "Tank"),
+        ("Tank", "Missile", "Aircraft"),
+        ("Aircraft", "Tank", "Missile"),
+        ("Missile", "Aircraft", "Tank"),
+    )
+    for i, order in enumerate(orders):
+        db.add_order(
+            _rid("Switcher"),
+            list(order),
+            actor=KEV,
+            opponent=f"opp{i}",
+            observed_at=f"2026-08-1{i}",
+        )
+    result = intel_lib.intel(_player("Switcher"), _player("Asker"))
+    assert result.read == intel_lib.NONE
+    assert result.habit.total >= intel_lib.LEAN_SEEN
+    assert words.READ_COPY["none"] in _field(hub.build_intel_embed(result), hub.FIELD_THEIRS)
+
+
+def test_the_refusal_reads_as_english_under_a_point(cd_db):
+    """`points()` floors at "under a point" rather than rounding a spread to
+    zero, which the old frame rendered as "came out within under a point of
+    each other". The frame bends to the formatter; the floor stays."""
+    for spread in (0.004, 0.031):
+        rendered = words.CANNOT_RECOMMEND_FLAT.format(measured=words.points(spread))
+        assert "within under" not in rendered
+        assert "of each other" not in rendered
+    assert "came out under a point apart" in words.CANNOT_RECOMMEND_FLAT.format(
+        measured=words.points(0.004)
+    )
+    assert "came out about 3 points apart" in words.CANNOT_RECOMMEND_FLAT.format(
+        measured=words.points(0.031)
+    )
+
+
+def test_a_spread_of_one_point_is_one_point_and_not_one_points():
+    """The seam the reworded frame put a spotlight on. Anything in [1.0, 1.5)
+    rounds to one, and the count was pluralised unconditionally — so the
+    sentence the reword exists to make read correctly rendered "came out about
+    1 points apart" across a live band. The refusal only fires below a spread
+    of `CHOICE_SPREAD`, ten points, so one point is well inside it.
+
+    The floor is untouched: `points()` still refuses to round a spread to zero,
+    which is a different guard and the reason this function exists."""
+    assert words.points(0.0099) == "under a point"
+    for spread in (0.010, 0.012, 0.0149):
+        assert words.points(spread) == "about 1 point", spread
+    for spread in (0.015, 0.021):
+        assert words.points(spread) == "about 2 points", spread
+    # And in both sentences it feeds, not just the one that was reworded.
+    assert "moves by about 1 point." in words.order_barely_matters(0.012)
+    assert "came out about 1 point apart" in words.CANNOT_RECOMMEND_FLAT.format(
+        measured=words.points(0.012)
+    )
+
+
 def test_no_share_is_ever_rendered_as_always_or_never(cd_db):
     """`probability()` refuses to round a probability into a certainty. The
     other kind of number on this surface is a share of what has been recorded,
@@ -426,13 +519,17 @@ def test_the_envelope_is_never_offered_as_a_better_prediction(cd_db):
 # ── the vocabulary guard ─────────────────────────────────────────────────────
 
 
-def test_nothing_seen_names_the_button_that_exists():
-    """`NOTHING_SEEN` spells the button label out rather than interpolating it,
-    because `champion_duel_hub` imports the wording module and not the other
-    way round. That is the drift this catches: the label was renamed from
-    "Record an order" on 2026-08-22 and the empty state has to be renamed with
-    it, or it sends a member looking for a button that is not there."""
-    assert hub.CD_BTN_ORDER in words.NOTHING_SEEN
+def test_nothing_seen_names_the_button_that_exists(cd_db):
+    """The empty state has to name a button that is on the grid, or it sends a
+    member looking for one that is not there. Taking `{button}` from the label
+    rather than retyping it is what keeps that true through a rename.
+
+    And it comes through `_btn_words`, so the near-black U+2795 never reaches
+    the sentence: typed in, it renders as a gap and the reader is told to press
+    "** Record a line-up**"."""
+    rendered = _field(_embed("Unseen", "Asker"), hub.FIELD_THEIRS)
+    assert hub._btn_words(hub.CD_BTN_ORDER) in rendered
+    assert "➕" not in rendered
 
 
 def test_no_two_grade_vocabularies_share_a_word():
@@ -471,7 +568,11 @@ def test_the_intel_grades_only_select_a_sentence(cd_db):
         embed = hub.build_intel_embed(result)
         assert words.WORTH_COPY[result.worth] in embed.description
         field = _field(embed, hub.FIELD_THEIRS)
-        expected = words.read_line(result.read) if result.habit else words.NOTHING_SEEN
+        expected = (
+            words.read_line(result.read)
+            if result.habit
+            else words.NOTHING_SEEN.format(button=hub._btn_words(hub.CD_BTN_ORDER))
+        )
         assert expected in field
 
 

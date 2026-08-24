@@ -196,13 +196,15 @@ READ_COPY = {
 #: "nobody has watched them" is a finding about us, and it is the one with
 #: something the reader can do about it.
 #:
-#: NAMES THE BUTTON, SO IT IS COUPLED TO `CD_BTN_ORDER`. Spelled out rather
-#: than interpolated, because `champion_duel_hub` imports this module and not
-#: the other way round. `test_nothing_seen_names_the_button_that_exists` is
-#: what keeps the two from drifting.
+#: NAMES THE BUTTON, SO IT TAKES `{button}` RATHER THAN SPELLING IT. The label
+#: leads with U+2795 HEAVY PLUS SIGN, which Discord renders near-black on an
+#: embed: typed into the sentence it vanishes mid-line, leaving "add one with
+#: ** Record a line-up**". The hub fills this from `CD_BTN_ORDER` through
+#: `_btn_words`, the same shape `NEEDS_YOUR_SQUADS` uses for `{path}`, which is
+#: also what stops the label and the empty state drifting apart on a rename.
 NOTHING_SEEN = (
     "No line-up recorded for this player yet. Anyone who has faced them can "
-    "add one with **➕ Record a line-up**."
+    "add one with **{button}**."
 )
 
 #: What the answer is built on, said once at the bottom in the reader's words
@@ -233,9 +235,14 @@ INTEL_BASIS = {
 #: their squads recorded" would be false in the branch where their squads ARE
 #: recorded and the six still come out level, which happens. The second half
 #: fires only under `if not result.their_types_known`.
+#:
+#: "APART", NOT "WITHIN ... OF EACH OTHER". `points()` floors at "under a
+#: point", and the older frame rendered that as "came out within under a point
+#: of each other". This one reads both ways round — "came out under a point
+#: apart" and "came out about 3 points apart" — which is the frame bending to
+#: the formatter rather than the floor being rounded away to suit the frame.
 CANNOT_RECOMMEND_FLAT = (
-    "All six line-ups came out within {measured} of each other, so there is "
-    "no recommendation to give."
+    "All six line-ups came out {measured} apart, so there is no recommendation to give."
 )
 
 #: And what is missing, only where it is actually missing. Only their squad
@@ -274,9 +281,20 @@ def points(spread: float) -> str:
     A rounded zero says the choice provably cannot matter, which is a stronger
     claim than the measurement supports and the same overreach `probability()`
     exists to refuse at the other end of the scale.
+
+    THE FLOOR IS THE POINT OF THIS FUNCTION AND DOES NOT MOVE. The count is
+    pluralised on the rounded figure rather than always: a spread anywhere in
+    [1.0, 1.5) rounds to one and read "about 1 points", in both sentences this
+    feeds. That band is live -- the refusal it feeds only fires below a spread
+    of `intel.CHOICE_SPREAD`, ten points -- so it was a defect on the surface
+    rather than a theoretical one, and it survived the reword because the
+    reword moved the frame around this and left this alone.
     """
     scaled = spread * 100
-    return "under a point" if scaled < 1 else f"about {scaled:.0f} points"
+    if scaled < 1:
+        return "under a point"
+    whole = round(scaled)
+    return f"about {whole} point{'' if whole == 1 else 's'}"
 
 
 def rate(value: float) -> str | None:

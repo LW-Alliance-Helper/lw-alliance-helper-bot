@@ -626,21 +626,37 @@ def bracket_odds(
     WHAT THE LOCK AND THE CACHE BUY IS FREQUENCY, NOT DURATION, and it is worth
     being exact about that because the note this replaced was not. `_RUN_LOCK`
     admits one run and `_CACHE` answers every press until the field changes, so
-    a room full of people pressing costs one run rather than twenty. Neither
-    shortens the run itself, and it is the duration that the rest of the
-    process has to survive.
+    a room full of people pressing ONE field costs one run rather than twenty
+    -- that is what the re-check inside the lock is for, here and at
+    `group_advance_odds`. Neither shortens the run itself, and it is the
+    duration that the rest of the process has to survive.
 
-    It survives it because the run is off the event loop: every caller reaches
-    this through `asyncio.to_thread` (`champion_duel_hub._on_odds`), so the
-    loop is slowed by GIL contention rather than blocked, and discord.py's
-    gateway heartbeat -- 60 s of silence before it force-closes, the library
-    default, which `bot.py` does not override -- keeps being answered on
-    5 ms switch intervals. That was a 5x margin at 60 trials and is not one
-    now, so it is written down here rather than left to be rediscovered: a
-    caller that ever runs this ON the loop disconnects the bot.
+    The event loop survives it. Every caller reaches this through
+    `asyncio.to_thread` (`champion_duel_hub._on_odds`), so the loop is slowed
+    by GIL contention rather than blocked, and discord.py's gateway heartbeat
+    -- 60 s of silence before it force-closes, the library default, which
+    `bot.py` does not override -- keeps being answered on 5 ms switch
+    intervals. That was a 5x margin at 60 trials and is not one now, so it is
+    written down rather than left to be rediscovered: a caller that ever runs
+    this ON the loop disconnects the bot.
 
-    What would settle it rather than reason about it is the deferred fix,
-    moving the simulation off this process (#511).
+    WHAT IS NOT COVERED BY ANY OF THAT IS THE QUEUE BEHIND THE LOCK, and this
+    is the part the four-rung change put a number on. `_RUN_LOCK` is one lock
+    for the whole process and both models take it, so DISTINCT cold fields do
+    not share a run: they serialize. Two alliances pressing on two different
+    knockout fields is two minutes for the second one, and a semi-final group
+    -- three seconds of work -- waits behind a bracket for the whole minute.
+    Each waiting press also holds a thread of the default `to_thread`
+    executor, so the queue is not free to the rest of the bot either. Far
+    enough down a queue and `followup.send` outlives Discord's 15-minute
+    interaction token, which is a spinner that never resolves rather than an
+    error anybody can act on.
+
+    Nothing here is a reason to move the constant, which is signed off, and
+    four rungs are being costed on their own. It is written down because the
+    argument for 250 was made against the event loop alone, and this is the
+    limit that binds first. What would settle it rather than reason about it
+    is the deferred fix, moving the simulation off this process (#511).
 
     The noise that buys is worth stating rather than burying, because it is
     still larger than the group models'. The table above is what was measured:

@@ -127,49 +127,34 @@ CD_BTN_GROUP = "🏅 Your group"
 # view share a mark because they share a meaning.
 CD_BTN_PLACE = "🏅 Set their group"
 CD_BTN_ODDS = "🔮 Odds of advancing"
-# ⚠️ PLACEHOLDER NAME — NOT SIGNED OFF (2026-08-20).
+# Named 2026-08-23, Kevin. The surface takes two players and both are now
+# required, so it is a head-to-head in fact and the label says so. It stopped
+# being "Counter a player" for the reason the placeholder was always at risk
+# of: that phrasing made a family with `🔍 Find a player` and `➕ Add a player`,
+# and the family was the problem rather than the point — three labels of the
+# same shape, two of which sound like looking somebody up. "Head to head" names
+# the one thing this control does that neither of the others can, which is put
+# two named players against each other.
 #
-# The feature is decided and the name is not (Kevin, 2026-08-19: Premium, its
-# own surface, and *not* called "scout", because "scout" describes reading back
-# what we hold and that is what `CD_BTN_FIND` already does; this thing is a
-# recommendation). Built behind one constant so settling the name is this line
-# and nothing else — no literal of it exists anywhere but here.
+# Earlier candidates, kept because the reasoning outlived them: "What to field
+# against them", "Plan against a player", "Read an opponent". All three describe
+# advice given to one caller about one opponent, which is the shape the surface
+# had when the second name was optional.
 #
-# The label. Candidates, all of which describe the control rather than promise
-# an outcome, per `UX.md`:
+# 🎯 was the obvious glyph from the start and was ruled out only because
+# three other senses held it — `events_hub`'s Pick a preset,
+# `storm_roster_builder`'s Auto-fill and `transfer_setup`'s "Is one of specific
+# values". All three cleared in the 2026-08-23 consolidation (#525): they took
+# 📋, ✨ and 🔽. The glyph is unused anywhere else in the bot, it is legible at
+# button size, and taking aim at one named opponent is what it means.
 #
-#     🏹 Counter a player          <- placeholder in force
-#     🏹 What to field against them
-#     🏹 Plan against a player
-#     🏹 Read an opponent
-#
-# "Counter a player" is the placeholder because it makes a family with
-# `🔍 Find a player` and `➕ Add a player` — same shape, same grammar, four
-# words apart in meaning — and "counter" is the game's own word for the type
-# triangle the whole surface turns on.
-#
-# The emoji, which had fewer options than it looks. ⚔️ is Desert Storm's
-# feature glyph (rules 3 and 4). 🔍 is Find and is the exact confusion this
-# feature has to avoid. 🔮 is the odds. 📋 is transfer_setup's Decisions. 🗡️
-# collides with ⚔️ at button size, and ♟️ is unreadable there — which is what
-# retired 📇.
-#
-# 🎯 was the obvious choice and was ruled out only because three other senses
-# held it. **All three cleared in the 2026-08-23 consolidation pass**:
-# `events_hub`'s Pick a preset took 📋, `storm_roster_builder`'s Auto-fill took
-# ✨, and `transfer_setup`'s "Is one of specific values" took 🔽 with the rest
-# of the Transfers filter set. 🎯 is now unused anywhere in the bot, so the
-# only reason it was rejected no longer holds, and taking aim at one named
-# opponent is what it means. Kevin's call, still open.
-#
-# The label is stale too: `notes/HANDOFF_glyph_system.md` records the name as
-# settled — "the second field becomes required and it is **Head to head**" —
-# and this constant still says "Counter a player".
-#
-# 🏹 remains the placeholder. It is unused anywhere else in the bot, legible at
-# button size, and names the action rather than a mood (rule 2). Whichever wins
-# needs a `DESIGN.md` catalog entry when the name is settled.
-CD_BTN_INTEL = "🏹 Counter a player"
+# The alternatives it beat, and why each was unavailable rather than merely
+# worse: ⚔️ is Desert Storm's feature glyph (rules 3 and 4), 🔍 is Find and is
+# the exact confusion this feature has to avoid, 🔮 is the odds, 📋 is
+# transfer_setup's Decisions, 🗡️ collides with ⚔️ at button size, and ♟️ is
+# unreadable there — which is what retired 📇. 🏹 carried the placeholder and
+# is now free again.
+CD_BTN_INTEL = "🎯 Head to head"
 CD_BTN_RECORD = "📥 Record a group"
 CD_BTN_SAVE_GROUP = "✅ Save group"
 CD_BTN_LINE_NEW = "➕ Add as a new player"
@@ -227,6 +212,15 @@ _ENGINE_MISSING = (
     "⚠️ The Champion Duel engine isn't installed on this bot, so predictions and "
     "player look-ups are unavailable. If you're the bot operator, check that "
     "`CD_ENGINE_TOKEN` is set and the last deploy installed `champion-duel-engine`."
+)
+
+
+# ⚠️ COPY AWAITING SIGN-OFF (2026-08-23). "I", not "we": this is the bot
+# unable to act on what it was given, not a statement about what the record
+# holds. Names the field rather than the rule — "both names are required"
+# describes the form, "add your own name" is the thing to go and do.
+_INTEL_NEEDS_BOTH = (
+    "⚠️ I need both players for a head to head. Open it again and fill in both names."
 )
 
 
@@ -734,10 +728,13 @@ def build_intel_embed(result) -> discord.Embed:
     # should then not spend four fields ranking line-ups.
     worth_little = result.worth == intel_lib.WORTH_SETTLED
 
+    # `worth` is always a grade and every grade has a sentence, so the lead is
+    # never empty. The gap in front of it is the part that can be absent: THP is
+    # a recorded column and either player can be missing it.
     lead = words.worth_line(result.worth)
     if result.gap is not None:
         lead = f"Total Hero Power gap **{result.gap:.1%}**. {lead}"
-    embed.description = lead or None
+    embed.description = lead
 
     # ── what they do ─────────────────────────────────────────────────────────
     if result.habit:
@@ -771,23 +768,7 @@ def build_intel_embed(result) -> discord.Embed:
         )
 
     # ── what to set ──────────────────────────────────────────────────────────
-    if result.you is None:
-        # Asked about one player, so there is no grid and no number — but the
-        # counter triangle does not need one. Withholding the answer because
-        # the caller did not name themselves would refuse a question we can
-        # fully answer.
-        if result.counter_types:
-            embed.add_field(
-                name=FIELD_YOURS,
-                value=(
-                    f"**{_order_text(result.counter_types)}** counters the line-up "
-                    f"they show most often, slot for slot.\n"
-                    f"Add your own name to this to see what it is worth against "
-                    f"your squads."
-                )[:1024],
-                inline=False,
-            )
-    elif worth_little:
+    if worth_little:
         # One sentence and stop. Ranking six line-ups that are all the same
         # number to the nearest point makes the reader work to arrive at what
         # the sentence already told them, and six rows of "<1%" reads as a
@@ -800,6 +781,26 @@ def build_intel_embed(result) -> discord.Embed:
             inline=False,
         )
     elif result.needs_your_squads:
+        # ⚠️ OPEN QUESTION FOR KEVIN — the counter order has no home in this
+        # state, and this is where it used to have one.
+        #
+        # `counter_types` is computed here and rendered nowhere. It needs
+        # nothing about you — the triangle does not care what you field — so it
+        # survived on the one-name path exactly where a recommendation could
+        # not, and the one-name path is what this change removed. Past this
+        # branch your own types are known and the recommendation IS the counter
+        # wherever the two agree, so this is the only state left with something
+        # unsaid.
+        #
+        # NOT RESTORED HERE, and the reason is copy rather than plumbing.
+        # Printing the counter above `NEEDS_YOUR_SQUADS` puts "**Tank →
+        # Aircraft → Missile**" directly over "every line-up you could set
+        # looks the same from here", under a heading that says "Your
+        # recommended line-up". The two are compatible in fact and contradict
+        # each other on screen, and the one-name sentence that reconciled them
+        # ("Add your own name to this to see what it is worth against your
+        # squads") is exactly the sentence the required field made nonsense of.
+        # Reconciling them needs a new sentence, and copy is Kevin's.
         embed.add_field(
             name=FIELD_YOURS,
             value=words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS))[:1024],
@@ -895,7 +896,7 @@ def build_intel_embed(result) -> discord.Embed:
     # spent two sentences defending the figure against a misreading. A label
     # that just names the two numbers leaves the judgement where it belongs and
     # gives the note nothing left to do. Kevin's call, 2026-08-22.
-    if result.envelope is not None and not worth_little:
+    if not worth_little:
         envelope = result.envelope
         embed.add_field(
             name=FIELD_WORTH,
@@ -911,21 +912,35 @@ def build_intel_embed(result) -> discord.Embed:
     return embed
 
 
-class _IntelModal(discord.ui.Modal, title="What to field against a player"):
-    """Them, and optionally you.
+# ⚠️ TITLE AWAITING SIGN-OFF (2026-08-23). It was "What to field against a
+# player", which described the one-sided surface. Shipped as the button's own
+# words so pressing the button and reading the modal agree; the variants
+# considered are in the PR. Copy is Kevin's.
+class _IntelModal(discord.ui.Modal, title="Head to head"):
+    """Two named players, both required.
 
-    Two shapes of answer come out of one modal rather than two controls,
-    because they are the same question asked with more or less information.
-    Their name alone gets the habit and the counter to it, which needs nothing
-    about you — the counter triangle does not care what you field. Adding your
-    own name gets the grid: what your squads make of theirs, what they can do
-    about it, and the range.
+    What comes back is one matchup: their observed habit, the counter to it,
+    what your squads make of theirs, what they can do about that, and the range
+    the match runs over.
 
-    Your side is optional rather than required for a reason that is not
-    politeness: a member has to know their own registrant name to fill it in,
-    and the Discord-user-to-registrant link that would spare them is
-    deliberately post-MVP. Requiring it would make the whole surface unreachable
-    for anyone who does not know how their name is spelled in the roster.
+    BOTH NAMES ARE REQUIRED AND THAT IS A REVERSAL, not an oversight corrected.
+    Your side was optional, and the argument for it was good enough to survive
+    two reviews: a member has to know their own registrant name to fill it in,
+    the Discord-user-to-registrant link that would spare them is post-MVP
+    (#488), and the one-name answer was a real answer because the counter
+    triangle does not care what you field.
+
+    Kevin overruled it on 2026-08-22, and the reason is what the control is for
+    rather than what it can do: with the second name optional this was a lookup
+    that sometimes did more, and the bot already has a lookup in
+    `🔍 Find a player`. Two required names make it the one surface that puts a
+    member against a named opponent.
+
+    The cost is real and it is carried here rather than argued away. A member
+    who does not know how their name is spelled in the roster cannot reach this
+    at all. What that buys is that mistyping it is recoverable: both sides go
+    through `_resolve`, so a near miss comes back as "Did you mean" rather than
+    as a dead end, and a name on two servers is asked about rather than guessed.
     """
 
     opponent = discord.ui.TextInput(label="Which player?", max_length=64)
@@ -933,10 +948,12 @@ class _IntelModal(discord.ui.Modal, title="What to field against a player"):
         label="Their server", required=False, max_length=10, placeholder="e.g. 738"
     )
     you = discord.ui.TextInput(
-        label="Your name (optional)",
-        required=False,
+        label="Your name",
         max_length=64,
-        placeholder="Add yours for what to set against them",
+        # The placeholder does the work the "(optional)" used to: the one way
+        # this field fails is a member who does not know their roster spelling,
+        # so it says which spelling is wanted rather than why to fill it in.
+        placeholder="As it's spelled in the roster",
     )
     your_server = discord.ui.TextInput(
         label="Your server", required=False, max_length=10, placeholder="e.g. 1042"
@@ -958,17 +975,31 @@ class _IntelModal(discord.ui.Modal, title="What to field against a player"):
             await _send_intel_upsell(interaction)
             return
 
+        # Discord enforces `required=True` on its side, so neither name can
+        # arrive blank from the client. Checked anyway: a modal submission is
+        # an HTTP payload and the only thing standing between this handler and
+        # a hand-rolled one is Discord's own validation. Without the check the
+        # blank falls through to `_resolve`, which asks the roster for "" and
+        # answers "No registrant matches ****" — a true sentence about a
+        # question nobody asked.
+        #
+        # BOTH SIDES, not just the one that changed. `opponent` carries the same
+        # `required=True` and reaches the same roster query, and a guard that
+        # covered only the new field would be defending against the payload
+        # threat on one half of a two-half form.
+        if not self.opponent.value.strip() or not self.you.value.strip():
+            await interaction.followup.send(_INTEL_NEEDS_BOTH, ephemeral=True)
+            return
+
         them = await _resolve(self.opponent.value, self.opponent_server.value or None)
         if isinstance(them, str):
             await interaction.followup.send(them, ephemeral=True)
             return
 
-        you = None
-        if self.you.value.strip():
-            you = await _resolve(self.you.value, self.your_server.value or None)
-            if isinstance(you, str):
-                await interaction.followup.send(you, ephemeral=True)
-                return
+        you = await _resolve(self.you.value, self.your_server.value or None)
+        if isinstance(you, str):
+            await interaction.followup.send(you, ephemeral=True)
+            return
 
         try:
             result = await asyncio.to_thread(intel_lib.intel, them, you)

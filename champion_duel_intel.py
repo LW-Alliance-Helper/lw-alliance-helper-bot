@@ -502,12 +502,16 @@ class Intel:
     """The whole answer, in the order a surface should render it."""
 
     them: predict_lib.SideInput
-    you: predict_lib.SideInput | None
-    #: Total Hero Power gap as a share of the larger player, and the grade that
-    #: follows from it. `None` where either side has no THP on file, in which
-    #: case a surface must not grade the worth at all rather than guessing.
+    you: predict_lib.SideInput
+    #: Total Hero Power gap as a share of the larger player. `None` where either
+    #: side has no THP on file, in which case a surface states no gap rather
+    #: than guessing one. STILL REACHABLE with both players required: THP is a
+    #: recorded column and either of them can be missing it.
     gap: float | None
-    worth: str | None
+    #: How much the deployment choice is worth, graded off the envelope. Always
+    #: present: `worth()` is total over the spread, and the spread now always
+    #: exists because there is always a grid.
+    worth: str
     habit: Habit | None
     read: str
     #: How many of each side's three squad *types* are recorded rather than
@@ -534,6 +538,9 @@ class Intel:
     their_best_reply: tuple[str, ...] | None = None
     p_if_they_hold: float | None = None
     p_if_they_switch: float | None = None
+    #: Optional only so it can follow the fields that carry defaults. Every
+    #: result has one — both sides are required, so there is always a grid to
+    #: take a floor and a ceiling off.
     envelope: Envelope | None = None
 
     @property
@@ -551,7 +558,7 @@ class Intel:
     @property
     def needs_your_squads(self) -> bool:
         """A recommendation is reachable but for one thing you can record."""
-        return self.you is not None and not self.your_types_known
+        return not self.your_types_known
 
     @property
     def choice_spread(self) -> float | None:
@@ -600,15 +607,23 @@ def _grid(you: predict_lib.SideInput, them: predict_lib.SideInput, yours, theirs
     ]
 
 
-def intel(them: dict, you: dict | None = None, *, best_of: int = 1) -> Intel:
+def intel(them: dict, you: dict, *, best_of: int = 1) -> Intel:
     """What they do, what to set against it, and what the choice is worth.
 
-    `them` is required and `you` is not, which is the shape of the question
-    people actually ask. With one player you get the observed habit and the
-    counter to the order they most often show — the simulator prototype's whole
-    output, and it needs nothing about you because the counter triangle does
-    not. With both you also get the grid: what your squads make of theirs, what
-    they can do about it, and the envelope.
+    TWO NAMED PLAYERS, BOTH REQUIRED. You get their observed habit, the counter
+    to the order they most often show, the grid of what your squads make of
+    theirs, what they can do about it, and the envelope.
+
+    `you` USED TO BE OPTIONAL AND THE REVERSAL WAS DELIBERATE (Kevin,
+    2026-08-22). One name returned the habit and the counter triangle and
+    nothing else, which was a real answer — the triangle does not care what you
+    field — but it made the surface two features wearing one control, and the
+    one-name half was the half that already existed as `🔍 Find a player`. The
+    cost of the reversal is recorded where it lands: a member has to know their
+    own registrant name to reach this at all, because the Discord-user-to-
+    registrant link that would spare them is post-MVP (#488). That cost was
+    accepted on the condition that mistyping it is recoverable, which is why
+    both sides resolve through the same did-you-mean path.
 
     `best_of` is 1 and should stay 1. The unit of a deployment decision is a
     MATCH: a meeting is three of them and you redeploy in between, so pricing
@@ -618,6 +633,13 @@ def intel(them: dict, you: dict | None = None, *, best_of: int = 1) -> Intel:
     """
     if not ENGINE_AVAILABLE:
         raise RuntimeError("champion-duel-engine is not installed")
+    # Raised rather than branched on. `you` is positional and required, so this
+    # catches only an explicit `None` — which every caller written against the
+    # old signature would pass. Without it the first thing to touch `you` is
+    # `build_side`, and the failure arrives as an AttributeError several frames
+    # down that says nothing about which of the two players was missing.
+    if you is None:
+        raise ValueError("intel() needs both players; `you` was None")
 
     them_side = predict_lib.build_side(them)
     habit = read_habit(them)
@@ -629,18 +651,6 @@ def intel(them: dict, you: dict | None = None, *, best_of: int = 1) -> Intel:
     counter_types = None
     if habit and read != NONE and their_types_known:
         counter_types = tuple(counter[t] for t in habit.top)
-
-    if you is None:
-        return Intel(
-            them=them_side,
-            you=None,
-            gap=None,
-            worth=None,
-            habit=habit,
-            read=read,
-            their_types_recorded=len(their_recorded),
-            counter_types=counter_types,
-        )
 
     you_side = predict_lib.build_side(you)
     your_recorded = _recorded_types(you)

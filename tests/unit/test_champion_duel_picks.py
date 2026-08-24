@@ -109,17 +109,20 @@ def test_rebuilding_the_same_evening_replaces_the_card_rather_than_adding_one(cd
     assert again["created_by"] == "111"
 
 
-def test_a_player_from_outside_the_group_is_refused_by_name(cd_db):
+def test_a_player_from_outside_the_group_is_refused(cd_db):
     """Meetings are picked out of a group we hold, never typed. A pair from
-    outside it would put two names on a card headed by a group neither is in."""
+    outside it would put two names on a card headed by a group neither is in.
+
+    What the refusal says is asserted further down, with the rest of what
+    `/code-review` caught.
+    """
     group = _group(NAMES[:4])
     _group(("Stranger", "Passerby"), stage="semifinals", label="N")
     inside = _ids("Ravenshade")[0]
     outside = _ids("Stranger")[0]
 
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(ValueError, match="not in this group"):
         db.set_slate(group["id"], "2026-08-25", [(inside, outside)], actor=ACTOR)
-    assert str(outside) in str(caught.value)
 
 
 def test_the_same_pair_the_other_way_round_is_the_same_meeting(cd_db):
@@ -455,3 +458,83 @@ def test_the_caption_is_free_of_em_dashes(cd_db):
     the card image is workshopped and exempt; this is not."""
     for template in (picks.CAPTION_ROW, picks.CAPTION_ROW_UNPREDICTED, picks.CAPTION_TRUNCATED):
         assert "—" not in template
+
+
+# ── What /code-review caught ──────────────────────────────────────────────────
+
+
+def test_forgetting_one_author_leaves_the_others_attribution(cd_db):
+    """A card one person built and another edited holds two different people.
+
+    The removal predicate matches a row where EITHER column is the person being
+    removed, so a flat clear of both columns takes the second person's name off
+    a card as a side effect of removing the first. This is the only entry in
+    the removal spec whose two halves can name different people.
+    """
+    group = _group()
+    a, b = _ids("Ravenshade", "NightOwl")
+    db.set_slate(group["id"], "2026-08-25", [(a, b)], actor=ACTOR)
+    db.set_slate(group["id"], "2026-08-25", [(a, b)], actor=OTHER)
+
+    db.purge_user_data("111", apply=True)
+    slate = db.get_slate(group["id"], "2026-08-25")
+    assert slate["created_by"] is None
+    assert slate["updated_by"] == "222", "the editor lost their name to somebody else's removal"
+
+
+def test_a_player_outside_the_group_is_refused_by_name_not_by_id(cd_db):
+    """The realistic way this happens is a dropdown drawn before somebody was
+    moved out of the group, and a refusal naming a surrogate id is not
+    something the person holding that dropdown can act on."""
+    group = _group(NAMES[:4])
+    _group(("Stranger", "Passerby"), label="N")
+    inside = _ids("Ravenshade")[0]
+    outside = _ids("Stranger")[0]
+
+    with pytest.raises(ValueError, match="Stranger is not in this group"):
+        db.set_slate(group["id"], "2026-08-25", [(inside, outside)], actor=ACTOR)
+
+
+def test_a_registrant_that_no_longer_exists_falls_back_to_its_id(cd_db):
+    """There is genuinely no name left to give, and the id is still enough to
+    tell two refusals apart in a log."""
+    group = _group()
+    (inside,) = _ids("Ravenshade")
+    with pytest.raises(ValueError, match="registrant 9999 is not in this group"):
+        db.set_slate(group["id"], "2026-08-25", [(inside, 9999)], actor=ACTOR)
+
+
+def test_a_day_outside_the_round_is_left_off_rather_than_counted(cd_db):
+    """A slate outlives its grouping, which is the normal state of last
+    season's data. `Day 38` on a four-day round is worse than no day at all."""
+    group = _group(started_on="2026-08-11")
+    inside = picks.assemble(db.get_group(group["id"]), "2026-08-25", [])
+    after = picks.assemble(db.get_group(group["id"]), "2026-09-20", [])
+    before = picks.assemble(db.get_group(group["id"]), "2026-08-01", [])
+
+    assert inside.day_number() == 2
+    assert after.day_number() is None
+    assert before.day_number() is None
+    assert after.subject() == "Group M · Semi-finals"
+
+
+def test_a_preview_refuses_the_same_oversized_card_the_save_would(cd_db):
+    """Otherwise an eighteen-meeting preview renders a card the person is then
+    told they cannot keep, which is the disagreement between preview and save
+    that `assemble` exists to prevent."""
+    group = _group()
+    a, b = _ids("Ravenshade", "NightOwl")
+    with pytest.raises(ValueError, match=str(db.MAX_PICKS)):
+        picks.assemble(db.get_group(group["id"]), "2026-08-25", [(a, b)] * (db.MAX_PICKS + 1))
+
+
+def test_a_name_with_markdown_in_it_reads_the_same_in_both_places(cd_db):
+    """The caption bolds names and the card draws them plain, so an unescaped
+    asterisk puts one player under two different names in one message."""
+    group = _group(("Rav**en", "NightOwl"))
+    a, b = _ids("Rav**en", "NightOwl")
+    db.set_slate(group["id"], "2026-08-25", [(a, b)], actor=ACTOR)
+    slate = picks.build(group["id"], "2026-08-25")
+
+    assert slate.picks[0].a_label == "Rav**en", "the label itself is what the card draws"
+    assert "**Rav\\*\\*en**" in picks.caption(slate)

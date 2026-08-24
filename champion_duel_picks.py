@@ -179,16 +179,24 @@ class Slate:
         grouping has no start date, which is every grouping until somebody
         enters one -- and a missing day is left off the card rather than
         guessed at.
+
+        **None outside the round's own window too.** `phase_window` gives both
+        ends and both are load-bearing: a semifinal card dated a month past the
+        semifinals would otherwise read `Day 38` on a round that is four days
+        long, which is a worse thing to print than nothing. That happens
+        whenever a slate outlives its grouping, which is the normal state of
+        last season's data.
         """
-        first, _end = db.phase_window(self.group.get("grouping_id"), self.stage)
+        first, end = db.phase_window(self.group.get("grouping_id"), self.stage)
         if first is None:
             return None
         try:
             played = date.fromisoformat(self.play_on)
         except ValueError:  # pragma: no cover - `play_on` is validated on write
             return None
-        day = (played - first).days + 1
-        return day if day >= 1 else None
+        if played < first or played >= end:
+            return None
+        return (played - first).days + 1
 
     def subject(self) -> str:
         """What this card is of, in the words the rest of the feature uses.
@@ -273,6 +281,14 @@ def assemble(group: dict, play_on: str, pairs, *, updated_at=None, updated_by=No
         raise RuntimeError("champion-duel-engine is not installed")
     from champion_duel_engine import constants
 
+    pairs = list(pairs)
+    # The same cap `set_slate` enforces, so a preview refuses exactly where the
+    # save would. Without it an eighteen-meeting preview renders a card the
+    # person is then told they cannot keep, which is the disagreement between
+    # preview and save this function exists to prevent.
+    if len(pairs) > db.MAX_PICKS:
+        raise ValueError(f"a card carries at most {db.MAX_PICKS} meetings, not {len(pairs)}")
+
     slate = Slate(
         group=group,
         play_on=play_on,
@@ -353,24 +369,35 @@ def caption(slate: Slate) -> str:
     Clamped to Discord's message ceiling by dropping whole rows off the end and
     saying so. A caption that silently stops mid-row would read as a card with
     fewer meetings on it than it has.
+
+    **Names are escaped.** They are bolded here and drawn plain on the card, so
+    a player called `Rav**en` would otherwise appear under two different names
+    in one message: Discord eats the asterisks in the caption and the card
+    keeps them. `discord.utils.escape_markdown` is the same call the hub makes
+    at every other site that bolds a player. Imported inside the function
+    because this module has no other reason to know about Discord, and a
+    caller that only wants a slate should not pay for the library.
     """
+    from discord.utils import escape_markdown
+
     from champion_duel_wording import probability
 
     head = f"{PICKS_TITLE}: {slate.subject()}"
     lines = [head]
     dropped = False
     for pick in slate.picks:
+        a, b = escape_markdown(pick.a_label), escape_markdown(pick.b_label)
         if pick.predicted:
             line = CAPTION_ROW.format(
                 i=pick.position,
-                a=pick.a_label,
-                b=pick.b_label,
+                a=a,
+                b=b,
                 p_a=probability(pick.p_a),
                 p_b=probability(pick.p_b),
                 confidence=pick.confidence().capitalize(),
             )
         else:
-            line = CAPTION_ROW_UNPREDICTED.format(i=pick.position, a=pick.a_label, b=pick.b_label)
+            line = CAPTION_ROW_UNPREDICTED.format(i=pick.position, a=a, b=b)
         # +1 for the newline this line would add, and room for the notice that
         # replaces whatever does not fit.
         room = CAPTION_LIMIT - len("\n".join(lines)) - len(CAPTION_TRUNCATED) - 2

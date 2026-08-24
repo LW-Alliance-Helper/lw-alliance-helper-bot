@@ -2222,6 +2222,23 @@ def get_group(group_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def _registrant_name(registrant_id: int) -> str:
+    """A registrant's display name for a refusal, or the id when there is none.
+
+    The realistic way a pick names somebody outside the group is a dropdown
+    that was drawn before they were moved out of it, and in that case the
+    player still exists and naming them is the whole difference between a
+    refusal somebody can act on and one they cannot. An id survives as the
+    fallback for a registrant that has since been deleted outright, where
+    there is genuinely no name left to give.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT display_name FROM registrants WHERE id = ?", (int(registrant_id),)
+        ).fetchone()
+    return (row["display_name"] if row else None) or f"registrant {registrant_id}"
+
+
 def set_slate(group_id: int, play_on, meetings, *, actor=None) -> dict:
     """Replace the meetings on one group's card for one day.
 
@@ -2259,7 +2276,7 @@ def set_slate(group_id: int, play_on, meetings, *, actor=None) -> dict:
             raise ValueError("a meeting needs two different players")
         for side in (a, b):
             if side not in members:
-                raise ValueError(f"registrant {side} is not in this group")
+                raise ValueError(f"{_registrant_name(side)} is not in this group")
         key = frozenset((a, b))
         if key in seen:
             names = " and ".join(members[s]["display_name"] for s in (a, b))
@@ -4199,9 +4216,17 @@ _REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
     # two entries would count that card twice in the preview. The meetings
     # themselves survive: they are a fixture the group played, not a fact about
     # whoever wrote them down.
+    #
+    # **Each column is cleared only where it is THEIRS.** The predicate matches
+    # a row where either column is this person, but a card one person built and
+    # another edited holds two different people -- and a flat
+    # `created_by = NULL, updated_by = NULL` would take the second person's
+    # attribution off it as a side effect of removing the first. This is the
+    # one entry in this table where the two halves can name different people.
     (
         "pick_slates",
-        "created_by = NULL, updated_by = NULL",
+        "created_by = CASE WHEN created_by = :sid THEN NULL ELSE created_by END, "
+        "updated_by = CASE WHEN updated_by = :sid THEN NULL ELSE updated_by END",
         "created_by = :sid OR updated_by = :sid",
     ),
 )

@@ -740,6 +740,8 @@ def test_a_short_group_gets_neither_a_filter_nor_a_pager(cd_db):
 
     assert _picker(view, "Which alliance?") is None
     assert not [i for i in view.children if "Page " in (getattr(i, "label", None) or "")]
+    # Eight of eight, so nothing to add either.
+    assert not [i for i in view.children if hub.CD_BTN_RECORD in (getattr(i, "label", None) or "")]
 
 
 def test_the_filter_appears_where_the_list_is_actually_long(cd_db):
@@ -921,3 +923,121 @@ def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
     assert {"Which Champion Duel?", "Which round?", "Which alliance?", "Page 1 / 2"} <= busiest
     assert ("Which group?" in busiest) is False
     assert (hub.CD_BTN_ODDS in busiest) == odds_lib.KNOCKOUT_AVAILABLE
+    # A complete field, so no record button. Two of the 32 missing is what puts
+    # five on one row: a three-button pager, the odds and the door.
+    assert hub.CD_BTN_RECORD not in busiest
+
+    db.set_placement(field["id"], db.upsert_registrant("K033", server="738")["id"], rank=33)
+    short = [m for m in db.get_group_members(field["id"]) if m["display_name"] != "K001"][:30]
+    fullest = grid(
+        hub._GroupView(
+            user_id=1,
+            groupings=[grouping, other],
+            grouping=grouping,
+            stages=db.recorded_stages(grouping["id"]),
+            stage="knockouts",
+            groups=db.get_groups("knockouts", grouping["id"]),
+            label=None,
+            members=short,
+            can_odds=True,
+        )
+    )
+    assert hub.CD_BTN_RECORD in fullest
+
+
+def test_a_filter_never_outlives_the_control_that_undoes_it(cd_db):
+    """Found by `/code-review`, and it needed both halves of the surface to see.
+
+    Filter a hundred-player qualifier group to one alliance, then move to a
+    round holding eight. The eight are too few for the select to render, so the
+    filter would have been narrowing the list with nothing on screen saying so
+    and no way back to the whole group.
+    """
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+    semi = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    for i in range(1, 9):
+        reg = db.upsert_registrant(f"S{i}", server="738", alliance="OGV" if i < 3 else "Kite")
+        db.set_placement(semi["id"], reg["id"], rank=i)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D", alliance="OGV")
+    assert view.alliance == "OGV"
+
+    view.stage = "semifinals"
+    view.label = "H"
+    view.members = db.get_group_members(semi["id"])
+    view._build()
+
+    assert _picker(view, "Which alliance?") is None
+    assert view.alliance is None
+    assert "**S8**" in view._embed().description
+
+
+def test_a_filter_on_an_alliance_that_left_the_group_clears_itself(cd_db):
+    """The other way the same trap opens: the control renders, but on an
+    alliance nobody in the new list carries, so every row is filtered out."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+    other, replacements = _hundred(cd_db, ["Wren"] * 50 + ["Kite"] * 50)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D", alliance="OGV")
+    view.members = replacements
+    view._build()
+
+    assert view.alliance is None
+    assert _picker(view, "Which alliance?") is not None
+
+
+def test_an_incomplete_group_offers_the_door_its_own_words_name(cd_db):
+    """Found by `/code-review`. The completeness field says "anyone can add the
+    rest with Record a group" and the button was on the empty state only, so
+    the sentence pointed at a control on the hub message the reader had already
+    scrolled past."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 40)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+    embed = view._embed()
+
+    assert "Not the whole group" in [f.name for f in embed.fields]
+    assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
+
+
+def test_the_door_and_the_sentence_agree_about_a_complete_group(cd_db):
+    """The negative half, and the one that would break silently: a hundred of a
+    hundred says nothing and offers nothing."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+    embed = view._embed()
+
+    assert "Not the whole group" not in [f.name for f in embed.fields]
+    assert not [i for i in view.children if hub.CD_BTN_RECORD in (getattr(i, "label", None) or "")]
+
+
+def test_only_one_control_is_the_recommended_one(cd_db):
+    """`notes/DESIGN.md`: at most one primary per view. The odds and the door
+    can now share a row, so this is reachable rather than theoretical."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 8)])
+    members = db.get_group_members(group["id"])
+
+    view = _view_of(grouping, stage="semifinals", members=members, label="H")
+
+    primaries = [
+        getattr(i, "label", None)
+        for i in view.children
+        if getattr(i, "style", None) is discord.ButtonStyle.primary
+    ]
+    assert primaries == [hub.CD_BTN_ODDS]
+    assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
+
+
+def test_the_empty_round_makes_recording_the_recommended_one(cd_db):
+    """Where there is nothing else to do, the door is the recommendation."""
+    grouping, _group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="knockouts", members=[])
+
+    primaries = [
+        getattr(i, "label", None)
+        for i in view.children
+        if getattr(i, "style", None) is discord.ButtonStyle.primary
+    ]
+    assert primaries == [hub.CD_BTN_RECORD]

@@ -4922,8 +4922,19 @@ class _GroupView(discord.ui.View):
         # is long enough to need one. A semifinal group is eight players from
         # eight alliances and a filter over it costs a row to save nobody a
         # scroll; a qualifier group is a hundred and the filter is the surface.
+        #
+        # **A filter with no control to undo it is a trap**, and this is the one
+        # place that can see both halves. Filter a hundred-player qualifier
+        # group to one alliance, then move to the semi-finals: the new list is
+        # eight, so the select does not render, and the filter would still be
+        # narrowing it with nothing on screen to say so or turn it off. Keeping
+        # the rule here rather than in `_reload` is what stops the two copies
+        # disagreeing, which is exactly how that state was reachable.
         alliances = _alliance_counts(self.members)
-        if len(self.members) > GROUP_PAGE_SIZE and len(alliances) > 1:
+        offer_filter = len(self.members) > GROUP_PAGE_SIZE and len(alliances) > 1
+        if not offer_filter or self.alliance not in {name for name, _ in alliances}:
+            self.alliance = None
+        if offer_filter:
             self.add_item(
                 self._select(
                     "Which alliance?", self._alliance_options(alliances), row, self._on_alliance
@@ -4968,20 +4979,28 @@ class _GroupView(discord.ui.View):
             )
             odds.callback = self._on_odds
             self.add_item(odds)
-        elif not self.members:
-            # The door at the gap, and the third place this feature puts one
-            # (`notes/PROPOSAL_champion_duel_ia.md`, principle 3). Naming the
-            # button in the embed's prose was the whole offer until now, and
-            # prose naming a control two surfaces away is a worse dead end than
-            # none: the button is on the hub message the reader scrolled past.
-            #
-            # It cannot collide with the odds button above it. That one needs
-            # members and this one needs none, so the branch is exclusive by
-            # construction rather than by row arithmetic.
+
+        # The door at the gap, and the third place this feature puts one
+        # (`notes/PROPOSAL_champion_duel_ia.md`, principle 3). Naming the button
+        # in the embed's prose was the whole offer until now, and prose naming a
+        # control two surfaces away is a worse dead end than none: the button it
+        # names is on the hub message the reader scrolled past.
+        #
+        # **Offered wherever the embed names it**, which is both gaps rather
+        # than one: a round we hold nothing for, and a group short of what the
+        # round holds. `build_group_embed` decides the second from the same
+        # comparison, so the sentence and the button cannot disagree about
+        # whether there is anything to add.
+        #
+        # Primary only on the empty round, where recording is the only thing
+        # left to do. Beside a group with players in it the odds are the
+        # recommended action and `notes/DESIGN.md` allows one primary per view.
+        expected = db.GROUP_SIZE.get(self.stage)
+        if not self.members or (expected and len(self.members) != expected):
             record = discord.ui.Button(
                 label=(CD_BTN_RECORD if self.can_write else f"🔒 {CD_BTN_RECORD}")[:80],
                 style=discord.ButtonStyle.primary
-                if self.can_write
+                if self.can_write and not self.members
                 else discord.ButtonStyle.secondary,
                 disabled=not self.can_write,
                 row=row,
@@ -5111,10 +5130,10 @@ class _GroupView(discord.ui.View):
         point of the change, so snapping off it would put the reader back where
         they started and read as a broken control.
 
-        The alliance filter survives if the new list still has that alliance in
-        it, which is the same rule the letter already follows. The page does
-        not survive anything: a slice of a list is meaningless once the list
-        changes underneath it.
+        The alliance filter survives whatever `_build` will still offer a
+        control for, which is decided there rather than here. The page does not
+        survive anything: a slice of a list is meaningless once the list changes
+        underneath it.
         """
         self.stages = await asyncio.to_thread(db.recorded_stages, self.grouping["id"])
         if resolve_stage:
@@ -5128,8 +5147,10 @@ class _GroupView(discord.ui.View):
         self.members = await asyncio.to_thread(
             _read_group, self.grouping["id"], self.stage, self.label, self.stages
         )
-        if self.alliance and self.alliance not in {n for n, _ in _alliance_counts(self.members)}:
-            self.alliance = None
+        # The filter is not cleared here. `_build` drops it whenever it would
+        # not also render the control that undoes it, which is a rule only that
+        # method can apply, and a second copy of it here is how a filter came to
+        # outlive its own select.
         self.page = 0
         await self._rerender(inter)
 

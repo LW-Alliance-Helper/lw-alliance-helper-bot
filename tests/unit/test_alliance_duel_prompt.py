@@ -42,7 +42,13 @@ GUILD_ID = 4242
 CHANNEL_ID = 777
 LEAGUE = ad.LeagueKey("S35", "Diamond", "12 - 2")
 NEXT_LEAGUE = ad.LeagueKey("S36", "Diamond", "12 - 2")
-MONDAY = _dt.date(2026, 8, 10)  # week 1 of the league under test
+# Anchored to the current duel week, not pinned: the code under test resolves
+# the live week against the real clock, so an absolute Monday quietly stops
+# being live — this one did, on Monday 2026-08-17. Server time rather than
+# `date.today()`: the two disagree for a couple of hours around every UTC-2
+# rollover, and on the Sunday/Monday one that disagreement is a whole week,
+# because `week_monday` sends Sunday back rather than forward.
+MONDAY = ad.week_monday(ad.server_today())  # week 1 of the league under test
 OWN_TAG, OWN_WZ = "US", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 ET = ZoneInfo("America/New_York")
@@ -158,7 +164,7 @@ def test_sundays_prompt_still_resolves_to_the_week_that_is_ending():
     """Saturday's date belongs to the week that started six days earlier, so a
     Sunday prompt logs against that week rather than opening the next one."""
     _, day = ad.completed_duel_day(_dt.datetime(2026, 8, 16, 9, 0, tzinfo=ET))
-    live = ad.resolve_live_week(_rows(), today=_dt.date(2026, 8, 15))
+    live = ad.resolve_live_week(_rows(), today=MONDAY + _dt.timedelta(days=5))
     assert (live.week, day) == (1, 6)
 
 
@@ -356,7 +362,7 @@ def _post_patches(rows, channel, *, premium_ok=True):
     )
 
 
-async def _post(rows, channel, day=1, day_date=_dt.date(2026, 8, 10), **cfg_over):
+async def _post(rows, channel, day=1, day_date=MONDAY, **cfg_over):
     patches = _post_patches(rows, channel, premium_ok=cfg_over.pop("premium_ok", True))
     with patches[0], patches[1], patches[2], patches[3] as recorded:
         posted = await ad_cog.post_score_prompt(
@@ -413,12 +419,13 @@ async def test_a_broken_channel_is_a_silent_skip_here_and_a_notice_elsewhere():
 
 async def test_the_post_is_recorded_so_its_buttons_survive_a_restart():
     channel = _Channel()
-    _, recorded = await _post(_rows(), channel, day=2, day_date=_dt.date(2026, 8, 11))
+    day_2 = MONDAY + _dt.timedelta(days=1)
+    _, recorded = await _post(_rows(), channel, day=2, day_date=day_2)
     args = recorded.call_args.args
     assert args[0] == GUILD_ID
     assert args[2] == 90210  # message id
     assert args[3] == LEAGUE  # the league, so a later click cannot cross into another
-    assert args[4:] == (1, 2, "2026-08-11")
+    assert args[4:] == (1, 2, day_2.isoformat())
 
 
 # ── Stale prompts ─────────────────────────────────────────────────────────────

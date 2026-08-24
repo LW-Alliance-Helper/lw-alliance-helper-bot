@@ -31,7 +31,13 @@ import config_health
 
 LEAGUE = ad.LeagueKey("S35", "Diamond", "12 - 2")
 OLD_LEAGUE = ad.LeagueKey("S34", "Gold", "9 - 1")
-MONDAY = _dt.date(2026, 8, 10)
+# Anchored to the current duel week, not pinned: the code under test resolves
+# the live week against the real clock, so an absolute Monday quietly stops
+# being live — this one did, on Monday 2026-08-17. Server time rather than
+# `date.today()`: the two disagree for a couple of hours around every UTC-2
+# rollover, and on the Sunday/Monday one that disagreement is a whole week,
+# because `week_monday` sends Sunday back rather than forward.
+MONDAY = ad.week_monday(ad.server_today())
 OWN_TAG, OWN_WZ = "US", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 THEM = ad.AllianceKey.of("A02", OWN_WZ)

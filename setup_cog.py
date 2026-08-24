@@ -199,6 +199,29 @@ def _parse_month_day(raw: str, *, today=None) -> str | None:
     return this_year.isoformat()
 
 
+def _locked_types_note(*type_names: str) -> str:
+    """Free-tier note naming the Premium answer types a picker leaves out.
+
+    Appended to a question-type prompt when the guild is on the free tier.
+    `DESIGN.md`'s Premium rule wants the free tier to see the shape of the
+    paid product, and a select cannot show it the way a button does:
+    `SelectOption` has no `disabled` parameter, so a shown option is a
+    selectable one. Naming the types in the prompt is how that rule is
+    honored on a select without making anything new pickable.
+
+    🔒 rather than 💎: the State catalog separates them, and prose
+    telling an officer they cannot have something yet is the locked case.
+    This is a tier note on a prompt — the same shape as the growth
+    wizard's frequency step — not an inline gate, so
+    `messages.PREMIUM_LOCKED_INLINE` does not apply: nothing is refused
+    here, because nothing was offered.
+
+    Callers pass two or more names; both pickers gate at least two types.
+    """
+    names = ", ".join(type_names[:-1]) + f" and {type_names[-1]}"
+    return f"\n*🔒 More answer types are 💎 Premium: {names}. Run `/upgrade` to unlock them.*"
+
+
 # ── Step views ─────────────────────────────────────────────────────────────────
 
 
@@ -6580,11 +6603,11 @@ async def run_survey_setup(
                     if is_premium_for_q:
                         type_options += [
                             discord.SelectOption(
-                                label="💎 Multi-select — pick multiple options",
+                                label="Multi-select — pick multiple options",
                                 value="multi_select",
                             ),
                             discord.SelectOption(
-                                label="💎 Date — formatted date entry", value="date"
+                                label="📅 Date — formatted date entry", value="date"
                             ),
                         ]
                     _type_pretty = {
@@ -6624,6 +6647,8 @@ async def run_survey_setup(
                         f"**{q_num} — Answer Type**\n"
                         "Pick how members answer this question." + type_extra
                     )
+                    if not is_premium_for_q:
+                        type_prompt += _locked_types_note("Multi-select", "📅 Date")
                     await channel.send(type_prompt, view=type_view)
                     await wait_view_or_cancel(type_view, cancel_event)
                     if type_view.cancelled:
@@ -7955,10 +7980,21 @@ _PARTICIPATION_TYPE_LABELS = {
     "numeric": "🔢 Numeric: number with optional min/max",
     "roster_names": "Roster names: pick or type member names",
     "roster_multi_select": "Roster multi-select: pick members from a dropdown",
-    "single_select": "💎 Single-select dropdown",
-    "multi_select": "💎 Multi-select dropdown",
-    "date": "💎 Date (formatted entry)",
-    "derived_count": "💎 Derived count: bot counts past events per member",
+    "single_select": "🔽 Single-select dropdown",
+    "multi_select": "Multi-select dropdown",
+    "date": "📅 Date (formatted entry)",
+    "derived_count": "✨ Derived count: bot counts past events per member",
+}
+
+# Short forms of the Premium labels above, for the free-tier note on the
+# type prompt. The full labels carry a trailing description that reads as
+# clutter in a sentence; the mark has to match, and
+# `test_participation_premium_short_names_keep_their_mark` asserts it does.
+_PARTICIPATION_PREMIUM_TYPE_SHORT = {
+    "single_select": "🔽 Single-select",
+    "multi_select": "Multi-select",
+    "date": "📅 Date",
+    "derived_count": "✨ Derived count",
 }
 
 # #244: question types that produce *per-member* data (one flag per
@@ -10607,7 +10643,12 @@ async def _build_participation_question(
 
     type_view = _TypeView()
     type_extra = f"\n*Existing type:* `{existing.get('type')}`" if existing else ""
-    await channel.send(f"**Question: Answer Type**{type_extra}", view=type_view)
+    type_prompt = f"**Question: Answer Type**{type_extra}"
+    if not is_premium_flag:
+        type_prompt += _locked_types_note(
+            *(_PARTICIPATION_PREMIUM_TYPE_SHORT[t] for t in _PARTICIPATION_PREMIUM_TYPES)
+        )
+    await channel.send(type_prompt, view=type_view)
     await wait_view_or_cancel(type_view, cancel_event)
     if type_view.cancelled:
         return

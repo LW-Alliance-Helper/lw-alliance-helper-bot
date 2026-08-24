@@ -10,6 +10,7 @@ quietly start talking again.
 from __future__ import annotations
 
 import re
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,6 +18,7 @@ import champion_duel_db as db
 import champion_duel_hub as hub
 import champion_duel_intel as intel_lib
 import champion_duel_wording as words
+import premium
 
 KEV = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
 TYPES = ("Tank", "Missile", "Aircraft")
@@ -93,8 +95,11 @@ def _player(name):
     return db.get_player(name, server="738", include_scouting=True)
 
 
-def _embed(them, you=None):
-    return hub.build_intel_embed(intel_lib.intel(_player(them), _player(you) if you else None))
+def _embed(them, you="Asker"):
+    """Both sides, always. `you` defaults to a player rather than to `None`:
+    the surface has no one-name shape any more, and a helper that could still
+    build one would be the only place in the suite that could."""
+    return hub.build_intel_embed(intel_lib.intel(_player(them), _player(you)))
 
 
 def _field(embed, name):
@@ -296,15 +301,19 @@ def test_a_recorded_opponent_still_gets_a_recommendation(cd_db):
     assert "Tank → Aircraft → Missile" in what_to_set
 
 
-def test_one_name_still_answers_the_question_it_can(cd_db):
-    """The counter triangle does not need to know what you field, so refusing
-    here would decline a question we can fully answer."""
+def test_the_lead_is_always_there_now_that_both_sides_are(cd_db):
+    """The description used to be able to come out empty, because a one-name
+    answer had no grid and so no grade to lead with. With both sides required
+    there is always a grid, so `worth` is always a grade and every grade has a
+    sentence — which is what makes the `or None` fallback under it dead."""
     _habit()
-    embed = _embed("Habitual")
+    embed = _embed("Habitual", "Asker")
 
-    assert "Tank → Aircraft → Missile" in _field(embed, hub.FIELD_YOURS)
-    assert _field(embed, hub.FIELD_WORTH) is None
-    assert embed.description is None
+    assert embed.description
+    assert any(
+        embed.description.startswith(line) or line in embed.description
+        for line in words.WORTH_COPY.values()
+    )
 
 
 def test_no_probability_is_ever_rounded_into_a_certainty(cd_db):
@@ -484,7 +493,10 @@ def test_this_surface_carries_no_em_dashes(cd_db):
         ("Unseen", "Asker"),
         ("Habitual", "Unseen"),
         ("Giant", "Asker"),
-        ("Habitual", None),
+        # Was ("Habitual", None) — the one-name render state, which no longer
+        # exists. A player who moves around takes its place so the count of
+        # states covered does not quietly drop by one.
+        ("Switcher", "Asker"),
         ("Mixed", "Asker"),
     ):
         embed = _embed(them, you)
@@ -620,3 +632,79 @@ def test_full_coverage_needs_no_qualifier(cd_db):
     field = _field(_embed("Habitual"), hub.FIELD_THEIRS)
     assert "in our 3 recorded meetings" in field
     assert "we can only tell for" not in field
+
+
+# ── the modal ──────────────────────────────────────────────────────────────
+
+
+def _interaction():
+    interaction = MagicMock()
+    interaction.user.id = 1
+    interaction.guild_id = 999
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+def _sent(interaction):
+    """The text of the last followup, whether positional or keyword."""
+    call = interaction.followup.send.call_args
+    return call.args[0] if call.args else call.kwargs.get("content", "")
+
+
+def _modal(monkeypatch, **values):
+    """The modal filled in, with the engine present and the paywall open."""
+    monkeypatch.setattr(intel_lib, "ENGINE_AVAILABLE", True)
+    monkeypatch.setattr(premium, "feature_gate", AsyncMock(return_value=True))
+    modal = hub._IntelModal()
+    for field, value in values.items():
+        getattr(modal, field)._value = value
+    return modal
+
+
+def test_the_second_name_is_required_on_the_control(cd_db):
+    """Discord enforces this client-side and it is the first thing a member
+    meets, so the flag itself is worth asserting."""
+    modal = hub._IntelModal()
+    assert modal.you.required
+    assert modal.opponent.required
+    # Read off the component payload rather than `.label`, which discord.py
+    # deprecated in favour of `discord.ui.Label`.
+    assert "optional" not in str(modal.you.to_component_dict()).lower()
+    # The two servers stay optional together. Requiring one and not the other
+    # would read as a difference between the sides that does not exist.
+    assert not modal.opponent_server.required
+    assert not modal.your_server.required
+
+
+async def test_a_blank_second_name_is_told_what_to_do_rather_than_raising(cd_db, monkeypatch):
+    """Discord will not send this and the handler is not entitled to assume
+    Discord is the only thing that can. Without the check the blank reaches
+    `_resolve`, which asks the roster for "" and answers "No registrant
+    matches" — a true sentence about a question nobody asked."""
+    modal = _modal(monkeypatch, opponent="Habitual", you="   ", opponent_server="", your_server="")
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    told = _sent(interaction)
+    assert told == hub._INTEL_NEEDS_BOTH
+    assert "No registrant matches" not in told
+    # It says what to do, not which rule was broken.
+    assert "add your own name" in told.lower()
+
+
+async def test_a_mistyped_own_name_gets_the_did_you_mean_list(cd_db, monkeypatch):
+    """The cost of requiring the second name is that a member has to know their
+    own roster spelling, and that cost was accepted on the condition that
+    getting it wrong is recoverable. Your side resolves through the same
+    `_resolve` as theirs, so a near miss suggests rather than dead-ends."""
+    _habit()
+    modal = _modal(monkeypatch, opponent="Habitual", you="Askr", opponent_server="", your_server="")
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    told = _sent(interaction)
+    assert "Did you mean" in told
+    assert "Asker" in told

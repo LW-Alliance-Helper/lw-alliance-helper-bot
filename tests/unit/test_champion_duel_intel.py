@@ -313,23 +313,22 @@ def test_a_placeholder_line_up_names_no_best_reply(cd_db):
     assert result.p_if_they_switch is None
 
 
-def test_one_name_answers_without_needing_you_at_all(cd_db):
-    """The counter triangle does not need to know what you field, so the
-    single-player answer survives with no second side."""
-    _squads("AlphaOne", source="observed")
-    for i, opponent in enumerate(("X", "Y", "Z")):
-        _orders(
-            "AlphaOne",
-            [("Missile", "Tank", "Aircraft")] * 2,
-            opponent=opponent,
-            observed_at=f"2026-08-1{i}",
-        )
+def test_the_second_player_is_required_rather_than_defaulted(cd_db):
+    """The one-name shape is gone and it has to fail loudly.
 
-    result = intel_lib.intel(_player("AlphaOne"))
-    assert result.you is None
-    assert result.counter_types == ("Tank", "Aircraft", "Missile")
-    assert result.envelope is None
-    assert result.gap is None and result.worth is None
+    `you` used to default to `None` and return a partial answer. Leaving the
+    default in place with the branch removed would have turned a reachable
+    state into an AttributeError inside `build_side`, several frames from
+    anything that names a player — so the signature refuses it and an explicit
+    `None` is told what happened.
+    """
+    _squads("AlphaOne", source="observed")
+
+    with pytest.raises(TypeError):
+        intel_lib.intel(_player("AlphaOne"))
+
+    with pytest.raises(ValueError, match="both players"):
+        intel_lib.intel(_player("AlphaOne"), None)
 
 
 def test_a_missing_thp_costs_the_gap_but_not_the_grade(cd_db):

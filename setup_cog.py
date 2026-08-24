@@ -199,6 +199,17 @@ def _parse_month_day(raw: str, *, today=None) -> str | None:
     return this_year.isoformat()
 
 
+# The Survey picker's Premium answer types, as `{value: (label, short)}`.
+# The option and the free-tier note that names it read from one entry, so a
+# re-marked type cannot end up advertised under its old glyph. The Desert /
+# Canyon Storm participation picker keeps the same pairing in
+# `_PARTICIPATION_TYPE_LABELS` / `_PARTICIPATION_PREMIUM_TYPE_SHORT`.
+_SURVEY_PREMIUM_TYPES = {
+    "multi_select": ("Multi-select — pick multiple options", "Multi-select"),
+    "date": ("📅 Date — formatted date entry", "📅 Date"),
+}
+
+
 def _locked_types_note(*type_names: str) -> str:
     """Free-tier note naming the Premium answer types a picker leaves out.
 
@@ -216,10 +227,18 @@ def _locked_types_note(*type_names: str) -> str:
     `messages.PREMIUM_LOCKED_INLINE` does not apply: nothing is refused
     here, because nothing was offered.
 
-    Callers pass two or more names; both pickers gate at least two types.
+    Both pickers gate at least two types today. One is handled anyway,
+    because the alternative is a note reading "types are Premium:  and X".
     """
-    names = ", ".join(type_names[:-1]) + f" and {type_names[-1]}"
-    return f"\n*🔒 More answer types are 💎 Premium: {names}. Run `/upgrade` to unlock them.*"
+    if not type_names:
+        raise ValueError("a tier note has to name at least one type")
+    if len(type_names) == 1:
+        lead, names, obj = "One more answer type is", type_names[0], "it"
+    else:
+        lead = "More answer types are"
+        names = ", ".join(type_names[:-1]) + f" and {type_names[-1]}"
+        obj = "them"
+    return f"\n*🔒 {lead} 💎 Premium: {names}. Run `/upgrade` to unlock {obj}.*"
 
 
 # ── Step views ─────────────────────────────────────────────────────────────────
@@ -6602,13 +6621,8 @@ async def run_survey_setup(
                     ]
                     if is_premium_for_q:
                         type_options += [
-                            discord.SelectOption(
-                                label="Multi-select — pick multiple options",
-                                value="multi_select",
-                            ),
-                            discord.SelectOption(
-                                label="📅 Date — formatted date entry", value="date"
-                            ),
+                            discord.SelectOption(label=label, value=value)
+                            for value, (label, _short) in _SURVEY_PREMIUM_TYPES.items()
                         ]
                     _type_pretty = {
                         "text": "Text",
@@ -6648,7 +6662,9 @@ async def run_survey_setup(
                         "Pick how members answer this question." + type_extra
                     )
                     if not is_premium_for_q:
-                        type_prompt += _locked_types_note("Multi-select", "📅 Date")
+                        type_prompt += _locked_types_note(
+                            *(short for _label, short in _SURVEY_PREMIUM_TYPES.values())
+                        )
                     await channel.send(type_prompt, view=type_view)
                     await wait_view_or_cancel(type_view, cancel_event)
                     if type_view.cancelled:

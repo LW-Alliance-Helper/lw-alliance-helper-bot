@@ -78,3 +78,31 @@ def test_locked_types_note_names_every_type_once():
 def test_locked_types_note_joins_more_than_two_with_commas():
     note = setup_cog._locked_types_note("A", "B", "C")
     assert "A, B and C" in note
+
+
+def test_locked_types_note_reads_as_singular_for_one_type():
+    note = setup_cog._locked_types_note("📅 Date")
+    assert "One more answer type is 💎 Premium: 📅 Date." in note
+    assert "unlock it." in note
+    assert " and " not in note
+
+
+def test_locked_types_note_rejects_an_empty_list():
+    import pytest
+
+    with pytest.raises(ValueError):
+        setup_cog._locked_types_note()
+
+
+# ── The Survey picker's Premium types ────────────────────────────────────────
+
+
+def test_survey_premium_short_names_keep_their_mark():
+    """Same drift guard as the participation picker."""
+    for value, (label, short) in setup_cog._SURVEY_PREMIUM_TYPES.items():
+        assert label.startswith(short), f"{value}: {short!r} is not the head of {label!r}"
+        assert "💎" not in label
+
+
+def test_survey_premium_types_are_the_two_gated_ones():
+    assert set(setup_cog._SURVEY_PREMIUM_TYPES) == {"multi_select", "date"}

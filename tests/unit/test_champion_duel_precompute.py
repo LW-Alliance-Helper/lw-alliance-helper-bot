@@ -176,7 +176,7 @@ class _FakeFuture:
     def __init__(self, exc):
         self._exc = exc
 
-    def result(self):
+    def result(self, timeout=None):
         raise self._exc
 
 
@@ -194,11 +194,13 @@ class _FakePool:
     def __init__(self, *a, **k):
         pass
 
+    shutdowns: list = []
+
     def submit(self, fn, *args):
         return _FakeFuture(type(self).raises)
 
-    def shutdown(self, wait=True):
-        pass
+    def shutdown(self, wait=True, cancel_futures=False):
+        type(self).shutdowns.append({"wait": wait, "cancel_futures": cancel_futures})
 
 
 def test_the_expensive_thing_is_not_run_twice_to_reach_the_same_exception(monkeypatch):
@@ -621,3 +623,129 @@ def test_the_sweeper_stands_aside_for_somebody_who_is_actually_asking(group):
 
     assert store.lookup(group["group_id"], _members(group), stage="semifinals").state == "missing"
     assert store.due(now=_later()), "a deferred group must stay due"
+
+
+def test_a_child_that_hangs_is_abandoned_rather_than_waited_on(monkeypatch, capsys):
+    """The wedge the timeout exists to prevent, including the one in the cleanup.
+
+    `_run_off_process` is called with `_RUN_LOCK` held, so a child that never
+    finishes would stop every odds press and every sweep in the bot. Waiting on
+    it in the `finally` would do the same thing a line later, which is why the
+    shutdown stops waiting once the job has timed out.
+    """
+    _FakePool.raises = TimeoutError("still going")
+    _FakePool.shutdowns = []
+    monkeypatch.setattr(odds, "ProcessPoolExecutor", _FakePool)
+    monkeypatch.setattr(odds, "USE_SUBPROCESS", True)
+
+    with pytest.raises(TimeoutError):
+        odds._run_off_process(lambda: "never reached")
+
+    assert _FakePool.shutdowns == [{"wait": False, "cancel_futures": True}], (
+        "a timed-out child was waited on during cleanup, which wedges the caller anyway"
+    )
+    assert "abandoning it" in capsys.readouterr().out
+
+
+def test_a_group_that_fails_every_time_lets_the_queue_move_on(cd_db, monkeypatch):
+    """A deterministic failure is not a reason to stop sweeping everything else.
+
+    The loop always takes the head of the queue, so a group that raises the same
+    way every minute starves every group behind it. A knockout field on an engine
+    with no bracket model is the real case: `bracket_odds` raises RuntimeError
+    rather than NotEnoughData, and "knockouts" sorts ahead of "semifinals".
+    """
+    grouping = db.ensure_grouping(WARZONES, "2026-08-04")
+    for i in range(8):
+        row = db.upsert_registrant(
+            name=f"F{i}", server=WARZONES[i], alliance="OGV", thp=400_000_000
+        )
+        db.set_stage(row["id"], "semifinals", grp="A", grouping_id=grouping["id"])
+
+    def always_breaks(*a, **k):
+        raise RuntimeError("the engine is not installed")
+
+    monkeypatch.setattr(store, "compute", always_breaks)
+
+    due = store.due(now=_later())
+    assert len(due) == 1
+    assert store.run_one(due[0]) == "failed"
+
+    assert store.due(now=_later()) == [], (
+        "the failing group is still at the head of the queue and will be retried "
+        "every minute forever"
+    )
+
+
+def test_a_group_nobody_has_computed_can_still_record_a_reader(group):
+    """Otherwise the group being pressed right now sorts last.
+
+    `due()` works in last-viewed order. If only a group with a stored answer
+    could carry a view stamp, then the one thing a member is actually waiting on
+    -- a group with nothing stored -- would sort behind every stale-but-computed
+    group in the tournament.
+    """
+    held = store.lookup(group["group_id"], _members(group), stage="semifinals")
+    assert held.state == "missing"
+
+    with db._get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_viewed_at FROM odds_runs WHERE group_id = ?", (group["group_id"],)
+        ).fetchone()
+
+    assert row is not None and row["last_viewed_at"], (
+        "a group with nothing stored could not record that somebody was waiting on it"
+    )
+    assert store.due(now=_later()), "and the marker must not make it look computed"
+
+
+def test_rows_without_a_registrant_id_are_refused_by_name(group):
+    """`get_group_members` carries `registrant_id` and no `id`.
+
+    Passing those rows used to reach a `sorted()` over `(None, dict)` pairs and
+    raise TypeError -- which inside `due()` took down the whole tick rather than
+    the one group.
+    """
+    wrong = db.get_group_members(group["group_id"])
+    assert "id" not in wrong[0]
+
+    with pytest.raises(store.NoModel):
+        store.fingerprint(wrong, stage="semifinals")
+
+
+def test_a_round_the_engine_cannot_model_is_never_queued(cd_db, monkeypatch):
+    """An engine before 1.12.0 has no bracket, and its field must not be swept."""
+    grouping = db.ensure_grouping(WARZONES, "2026-08-04")
+    for i in range(32):
+        row = db.upsert_registrant(
+            name=f"K{i:02d}", server=WARZONES[i % 16], alliance="OGV", thp=400_000_000
+        )
+        db.set_stage(row["id"], "knockouts", grp=None, grouping_id=grouping["id"])
+
+    assert store.due(now=_later()), "with a knockout model it is due"
+
+    monkeypatch.setattr(odds, "STAGES_WITH_A_MODEL", ("semifinals",))
+    assert store.due(now=_later()) == [], (
+        "a round with no model was queued anyway; it would be fingerprinted and "
+        "then failed once a minute forever"
+    )
+
+
+def test_the_sweep_does_not_grow_with_every_tournament_ever_played(cd_db):
+    """Each tick fingerprints every group it can see, so the scan has to be bounded."""
+    for n in range(4):
+        grouping = db.ensure_grouping(
+            [str(700 + n * 16 + i) for i in range(16)], f"2026-0{n + 1}-04"
+        )
+        for i in range(8):
+            row = db.upsert_registrant(
+                name=f"G{n}_{i}", server=str(700 + n * 16 + i), alliance="OGV", thp=400_000_000
+            )
+            db.set_stage(row["id"], "semifinals", grp="A", grouping_id=grouping["id"])
+
+    groupings = {g["grouping_id"] for g in store._all_groups()}
+
+    assert len(groupings) == store.GROUPINGS_SWEPT, (
+        f"the sweep looks at {len(groupings)} groupings; it should stop at "
+        f"{store.GROUPINGS_SWEPT} and not grow with the bot's history"
+    )

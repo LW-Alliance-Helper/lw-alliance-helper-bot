@@ -225,6 +225,11 @@ def _cache_put(key: str, value) -> None:
 #: cannot start.
 USE_SUBPROCESS = os.environ.get("CHAMPION_DUEL_ODDS_SUBPROCESS", "1") != "0"
 
+#: How long to wait on a child before abandoning it. See `_run_off_process`:
+#: this is a wedge-breaker, not a performance bound, and it sits far above any
+#: real run and at the point past which nobody is still waiting for an answer.
+JOB_TIMEOUT_SECONDS = 900
+
 
 def _simulate_group_job(stage: str, specs: list[dict], trials: int, seed: int, jitter: bool):
     """The group simulation, as the child runs it. Module level so it pickles.
@@ -279,13 +284,37 @@ def _run_off_process(fn, *args):
     child costs 52 MB and 0.9 s rather than the 17 MB and 0.09 s this module
     would cost alone. That is taken deliberately: it is transient, one child at
     a time, against a ~474 MB baseline, and about $0.00002 per run. Verified
-    safe -- importing `bot.py` opens no SQLite connections and starts no
-    threads, and `bot.run()` is guarded by `if __name__ == "__main__"`. It does
-    print two [INFO] lines per child, which show up in the logs once per run.
+    safe in the way that matters -- importing `bot.py` opens no SQLite
+    connections, and `bot.run()` is guarded by `if __name__ == "__main__"`, which
+    a spawned child does not satisfy (it imports the parent's main module as
+    `__mp_main__`). It does print two [INFO] lines per child, which show up in
+    the logs once per run.
+
+    IT IS NOT, HOWEVER, THREAD-FREE, and an earlier version of this comment said
+    it was. `sentry_sdk.init` runs at `bot.py` module scope whenever SENTRY_DSN
+    is set, so a production child builds a Sentry client with a transport thread
+    and an atexit flush before it does any work. Harmless in practice -- the job
+    is pure engine code, and an exception in it is pickled back to the parent and
+    raised there rather than captured in the child -- but it is real startup cost
+    per run, and it is the kind of claim that gets built on. Guarding that init
+    the same way `bot.run()` is guarded would remove it; that is a change to the
+    whole bot's error reporting and belongs to its own decision, not to this
+    one.
     Buying the leaner child back means a worker module and a JSON protocol over
     stdin/stdout instead of `ProcessPoolExecutor` -- real extra code for
     something that is not costing anything. Revisit if the log noise or the
     memory ever becomes a problem.
+
+    A HUNG CHILD IS NOT A DEAD ONE. `BrokenProcessPool` covers a child that
+    died; a child that simply never finishes raises nothing, and this is called
+    with `_RUN_LOCK` held -- so without a timeout one wedged process would stop
+    every odds press and every sweep in the bot, permanently and silently. The
+    in-thread path this replaced could not fail that way, so the timeout arrives
+    with the subprocess rather than being a general precaution. It is set far
+    above any real run (a bracket measured ~50 s, and the plan's worst case is
+    90 s) and below the point where an answer could still be delivered: Discord
+    drops an interaction token at 15 minutes, so a run still going at that point
+    has nobody left to hand it to.
 
     WHAT FALLS BACK AND WHAT DOES NOT. A pool that cannot start, or a child that
     dies, degrades to running on this thread: slow for everyone, which is what
@@ -296,6 +325,7 @@ def _run_off_process(fn, *args):
     if not USE_SUBPROCESS:
         return fn(*args)
 
+    timed_out = False
     try:
         executor = ProcessPoolExecutor(
             max_workers=1, mp_context=multiprocessing.get_context("spawn")
@@ -311,12 +341,27 @@ def _run_off_process(fn, *args):
             print(f"[CHAMPION_DUEL] odds subprocess submit failed, running in-thread: {exc}")
             return fn(*args)
         try:
-            return future.result()
+            return future.result(timeout=JOB_TIMEOUT_SECONDS)
         except BrokenProcessPool as exc:
             print(f"[CHAMPION_DUEL] odds subprocess died, running in-thread: {exc}")
             return fn(*args)
+        except TimeoutError:
+            # Deliberately NOT a fallback. We have already spent the timeout;
+            # spending another full run on this thread would hold the lock for
+            # longer still, and whatever is wrong with the child is not fixed by
+            # asking the parent to do the same work.
+            timed_out = True
+            print(
+                f"[CHAMPION_DUEL] odds subprocess still running after "
+                f"{JOB_TIMEOUT_SECONDS}s; abandoning it"
+            )
+            raise
     finally:
-        executor.shutdown(wait=True)
+        # `wait=True` on a hung child would block here forever, which is the
+        # exact wedge the timeout exists to prevent. Let it go instead: the
+        # process is abandoned rather than reaped, and the next run gets a
+        # fresh one.
+        executor.shutdown(wait=not timed_out, cancel_futures=True)
 
 
 def _models():
@@ -782,13 +827,21 @@ def bracket_odds(
     not — and take a minute and a bit as the figure for the run itself.
 
     250 IS BOUGHT BY THE SMALL RUNGS, NOT BY THE ACCURACY IN THE ABSTRACT. The
-    error falls far more slowly than the cost, and most of what is left at 250
-    is the bracket sampler's own noise rather than the matrix's — at 20,000
-    trials that floor is about 0.35pp on its own. On the two-rung table that
+    error falls far more slowly than the cost, and most of what was left at 250
+    used to be the bracket sampler's own noise rather than the matrix's. On the two-rung table that
     argument carried and 60 was the default. The bracket surface now prints
     Top 4 and Champion, which sit in low single digits for most of a thirty-two
     field, and 60's worst-case 3.50pp is larger than the figure it would sit
     under. 250 takes that to 1.51pp. Signed off 2026-08-22.
+
+    THAT SENTENCE WAS TRUE AT 20,000 SAMPLER TRIALS AND IS NOT ANY MORE.
+    `BRACKET_TRIALS` moved to 200,000 on 2026-08-24 for about five seconds, and
+    the "0.35pp floor" it rested on -- taken from #511 -- was itself wrong:
+    measured in isolation the sampler contributed 0.72pp mean and 1.56pp worst
+    on Top 16, and it was a dial rather than a floor. See the table on
+    `BRACKET_TRIALS` for what turning it up bought and, more importantly, for
+    what it did not: the deeper rungs are matrix-bound and barely moved, so the
+    argument for 250 stands on exactly the rungs it always did.
 
     THE TABLE LOST A RUNG AFTER THAT AND THIS DID NOT MOVE WITH IT. 250 was
     signed off alongside five rungs; `podium` came off the table on 2026-08-23

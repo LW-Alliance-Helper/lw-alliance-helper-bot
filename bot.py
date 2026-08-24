@@ -283,7 +283,9 @@ async def on_ready():
         import champion_duel_store
 
         champion_duel_store.init_store()
+        bot._cd_store_ready = True
     except Exception as e:  # noqa: BLE001 - degrades to computing on press
+        bot._cd_store_ready = False
         print(f"[CHAMPION_DUEL] Odds store init failed, odds compute on press: {e}")
 
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
@@ -532,8 +534,16 @@ async def on_ready():
         print("[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print("[INFO] Shiny tasks per-minute post loop started")
-        champion_duel_odds_task.start()
-        print("[INFO] Champion Duel odds sweeper started")
+        # Only against a store that opened. Started regardless, the loop would
+        # hit `no such table: odds_runs` every minute and capture it every
+        # minute -- and on this project every high-priority Sentry event
+        # auto-files a GitHub issue, so a table that failed to create would
+        # arrive as roughly 1,400 of them a day.
+        if getattr(bot, "_cd_store_ready", False):
+            champion_duel_odds_task.start()
+            print("[INFO] Champion Duel odds sweeper started")
+        else:
+            print("[CHAMPION_DUEL] Odds sweeper not started: the store is unavailable")
         try:
             from storm_signup_scheduler import start_storm_signup_scheduler
 
@@ -1259,9 +1269,17 @@ async def champion_duel_odds_task():
     try:
         candidates = await asyncio.to_thread(cd_store.due)
     except Exception as e:  # noqa: BLE001 - a bad tick must not stop the loop
+        # Reported ONCE per run of bad luck, not once a minute for as long as it
+        # lasts. Whatever breaks this call is almost always going to keep
+        # breaking it, and a per-minute capture turns one fault into a thousand
+        # issues a day.
         print(f"[CHAMPION_DUEL] odds sweep could not list work: {e}")
-        sentry_sdk.capture_exception(e)
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
         return
+
+    bot._cd_sweep_failing = False
 
     if not candidates:
         return
@@ -1271,8 +1289,12 @@ async def champion_duel_odds_task():
     try:
         outcome = await asyncio.to_thread(cd_store.run_one, top)
     except Exception as e:  # noqa: BLE001 - same, and the group stays due
+        # `run_one` swallows and records what the model raises, so anything
+        # arriving here is the sweep machinery itself and worth one report.
         print(f"[CHAMPION_DUEL] odds sweep failed on {top['stage']} {label}: {e}")
-        sentry_sdk.capture_exception(e)
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
         return
 
     print(

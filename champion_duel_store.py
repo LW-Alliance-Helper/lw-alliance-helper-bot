@@ -68,13 +68,21 @@ PAYLOAD_SCHEMA = 1
 #: waits on the sweeper.
 QUIET_MINUTES = 5
 
-#: Rounds with a model AND a sweeper. The qualifiers are absent from both and
-#: that is a product decision rather than a cost one (2026-08-24): a qualifier
-#: group is 100 players, the model needs a power for every one of them, and
-#: precompute makes runs cheap rather than data complete. What that round gets
-#: instead is the neighbours view, which needs no simulation at all and lands in
-#: the IA work, not here.
-SWEPT_STAGES = ("semifinals", "knockouts")
+
+#: Rounds this sweeper will do, which is every round that HAS a model rather
+#: than a list kept in step with one by hand. Read at call time, because
+#: `STAGES_WITH_A_MODEL` is itself built from what the pinned engine can do: the
+#: knockouts arrived in 1.12.0, and an older pin must not have its bracket
+#: queued, fingerprinted and then failed once a minute forever.
+#:
+#: The qualifiers have no model and so are absent automatically. That is a
+#: product decision as well as a cost one (2026-08-24): a qualifier group is 100
+#: players, the model needs a power for every one of them, and precompute makes
+#: runs cheap rather than data complete. What that round gets instead is the
+#: neighbours view, which needs no simulation at all and lands in the IA work,
+#: not here.
+def swept_stages() -> tuple:
+    return tuple(odds.STAGES_WITH_A_MODEL)
 
 
 class NoModel(Exception):
@@ -183,6 +191,8 @@ def _trial_counts(stage: str) -> dict:
     so a constant could move and warm answers computed under the old one would
     keep being served.
     """
+    if stage not in odds.STAGES_WITH_A_MODEL:
+        raise NoModel(f"there is no model for the {stage} round")
     if stage == "knockouts":
         return {"trials": odds.BRACKET_TRIALS, "matrix_trials": odds.MATRIX_TRIALS}
     config = odds._models().get(stage)
@@ -212,8 +222,21 @@ def fingerprint(members: list[dict], *, stage: str, seed: int = 42, jitter: bool
     # and a person, and it is why the pairing happens here rather than being
     # reconstructed later.
     ids = [m.get("id") for m in members]
+    if any(i is None for i in ids):
+        # `get_group_scouting` sets `id` to the registrant id; `get_group_members`
+        # does not set it at all, and carries `registrant_id` instead. Passing the
+        # second is a mistake worth naming, because without this the sort below
+        # falls through to comparing two dicts and raises `TypeError` -- which in
+        # `due()` takes down the whole tick rather than the one group.
+        raise NoModel("these rows carry no registrant id; use get_group_scouting")
     paired = sorted(
-        (ids[int(spec["name"])], {k: v for k, v in spec.items() if k != "name"}) for spec in specs
+        (
+            (ids[int(spec["name"])], {k: v for k, v in spec.items() if k != "name"})
+            for spec in specs
+        ),
+        # Explicitly on the id. Without a key, two rows with equal ids would make
+        # Python compare the spec dicts beside them, which raises.
+        key=lambda pair: pair[0],
     )
     material = {
         "schema": PAYLOAD_SCHEMA,
@@ -327,10 +350,25 @@ def lookup(group_id: int, members: list[dict], *, stage: str, mark_viewed: bool 
 
     with db._get_conn() as conn:
         row = conn.execute("SELECT * FROM odds_runs WHERE group_id = ?", (group_id,)).fetchone()
-        if mark_viewed and row is not None:
+        if mark_viewed:
+            # Inserted when there is no row yet, not just updated. A group nobody
+            # has computed is exactly the one somebody is most likely to be
+            # waiting on, and if only computed groups could record a reader then
+            # `due()` would sort the group being pressed right now BEHIND every
+            # stale-but-computed group in the tournament -- the precise inversion
+            # of what sweeping in last-viewed order is for.
+            #
+            # The marker carries an empty fingerprint and member set, which match
+            # nothing, so it reads as `missing` and is due on the next tick.
             conn.execute(
-                "UPDATE odds_runs SET last_viewed_at = ? WHERE group_id = ?",
-                (db._now(), group_id),
+                """
+                INSERT INTO odds_runs
+                    (group_id, stage, fingerprint, member_ids, payload, computed_at,
+                     last_viewed_at)
+                VALUES (?, ?, '', '', NULL, ?, ?)
+                ON CONFLICT(group_id) DO UPDATE SET last_viewed_at = excluded.last_viewed_at
+                """,
+                (group_id, stage, db._now(), db._now()),
             )
 
     if row is None:
@@ -432,6 +470,14 @@ def store_refusal(group_id: int, members: list[dict], reason: str, *, stage: str
 # ── the sweeper ──────────────────────────────────────────────────────────────
 
 
+#: How many groupings back the sweeper looks. Two, because two can be live at
+#: once -- one event finishing as the next is drawn -- and past that a grouping
+#: is history nobody is pressing. Every tick fingerprints every group it can
+#: see, so this is what stops the scan growing with the number of Champion Duels
+#: the bot has ever recorded.
+GROUPINGS_SWEPT = 2
+
+
 def _all_groups() -> list[dict]:
     """Every group in a round that has a model, newest grouping first.
 
@@ -440,14 +486,28 @@ def _all_groups() -> list[dict]:
     field of 32, the most expensive thing in the tournament and the single row
     this sweeper most needs to see.
     """
-    marks = ",".join("?" for _ in SWEPT_STAGES)
+    stages = swept_stages()
+    if not stages:
+        return []
+    marks = ",".join("?" for _ in stages)
     with db._get_conn() as conn:
+        recent = [
+            r["grouping_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT grouping_id FROM groups ORDER BY grouping_id DESC LIMIT ?",
+                (GROUPINGS_SWEPT,),
+            ).fetchall()
+        ]
+        if not recent:
+            return []
+        gmarks = ",".join("?" for _ in recent)
         return [
             dict(r)
             for r in conn.execute(
-                f"SELECT id, grouping_id, stage, label FROM groups WHERE stage IN ({marks}) "
+                f"SELECT id, grouping_id, stage, label FROM groups "
+                f"WHERE stage IN ({marks}) AND grouping_id IN ({gmarks}) "
                 "ORDER BY grouping_id DESC, stage, label",
-                SWEPT_STAGES,
+                (*stages, *recent),
             ).fetchall()
         ]
 
@@ -592,7 +652,16 @@ def run_one(candidate: dict) -> str:
         store_refusal(group_id, members, str(exc), stage=stage)
         return "refused"
     except Exception as exc:  # noqa: BLE001 - one group must not stop the sweep
+        # WRITTEN DOWN, not just logged, and this is the difference between one
+        # bad group and a dead sweeper. The loop above always takes the head of
+        # the queue, so a group that fails deterministically -- a knockout field
+        # on an engine with no bracket model raises RuntimeError rather than
+        # NotEnoughData, and sorts first -- would be retried every minute
+        # forever and the sixteen groups behind it would never be reached.
+        # Recording it against the fingerprint keeps it out of the queue for
+        # exactly as long as the data that failed is still the data we hold.
         print(f"[CHAMPION_DUEL] odds sweep failed for group {group_id}: {exc}")
+        store_refusal(group_id, members, f"{type(exc).__name__}: {exc}", stage=stage)
         return "failed"
     store(group_id, members, result, stage=stage, run_seconds=time.perf_counter() - t0)
     return "stored"

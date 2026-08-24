@@ -682,7 +682,7 @@ def _picks_row(canvas, draw, pick, top: int, name_size: int, fonts) -> None:
 
     for side, box_key in (("a", "name_a"), ("b", "name_b")):
         box = _at(row[box_key], top)
-        label = getattr(pick, f"{side}_label") or "(unknown)"
+        label = getattr(pick, f"{side}_label") or picks_lib.CARD_UNKNOWN
         # One size for the card, but the font itself is chosen per name: these
         # names carry Korean and Arabic, and a Latin face renders those as
         # empty boxes.
@@ -766,7 +766,11 @@ def render_slate(slate) -> bytes:
 
     name_size = _shared_name_size(
         draw,
-        [getattr(p, f"{s}_label") or "(unknown)" for p in slate.picks for s in ("a", "b")],
+        [
+            getattr(p, f"{s}_label") or picks_lib.CARD_UNKNOWN
+            for p in slate.picks
+            for s in ("a", "b")
+        ],
         row["name_a"]["w"] - 16,
     )
     fonts = {

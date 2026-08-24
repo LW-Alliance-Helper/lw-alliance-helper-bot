@@ -103,6 +103,13 @@ CARD_NO_PREDICTION = "Squads not recorded"
 #: screen: the multipliers there are the game's, these numbers are ours.
 CARD_FOOTER = "Our prediction for each meeting. Not the game's odds."
 
+#: A side with no name at all, which is a meeting picked against somebody who
+#: is not in the group. `set_slate` refuses that, so it is only reachable from
+#: a preview -- but it is set on the label rather than at each surface, so the
+#: card and the caption cannot say two different things about the same gap.
+#: The VS card's `_name` already reads this way for the same reason.
+CARD_UNKNOWN = "(unknown)"
+
 #: The caption's row lines. `{i}` is the row's place on the card, so a reader
 #: can say "number four" and be understood.
 CAPTION_ROW = "{i}. **{a}** {p_a} · **{b}** {p_b} ({confidence})"
@@ -263,7 +270,13 @@ def _label_sides(picks: list[Pick]) -> None:
             name = getattr(pick, f"{side}_name")
             server = getattr(pick, f"{side}_server")
             ambiguous = len(seen.get(name, ())) > 1
-            setattr(pick, f"{side}_label", f"{name} #{server}" if ambiguous and server else name)
+            if not name:
+                label = CARD_UNKNOWN
+            elif ambiguous and server:
+                label = f"{name} #{server}"
+            else:
+                label = name
+            setattr(pick, f"{side}_label", label)
 
 
 def assemble(group: dict, play_on: str, pairs, *, updated_at=None, updated_by=None) -> Slate:

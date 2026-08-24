@@ -538,3 +538,15 @@ def test_a_name_with_markdown_in_it_reads_the_same_in_both_places(cd_db):
 
     assert slate.picks[0].a_label == "Rav**en", "the label itself is what the card draws"
     assert "**Rav\\*\\*en**" in picks.caption(slate)
+
+
+def test_a_side_with_no_name_says_so_the_same_way_on_both_surfaces(cd_db):
+    """Only reachable from a preview, since `set_slate` refuses a player who is
+    not in the group. Set on the label rather than at each surface, so the card
+    and the caption cannot describe the same gap two different ways."""
+    group = _group()
+    (a,) = _ids("Ravenshade")
+    slate = picks.assemble(db.get_group(group["id"]), "2026-08-25", [(a, 9999)])
+
+    assert slate.picks[0].b_label == picks.CARD_UNKNOWN
+    assert picks.CARD_UNKNOWN in picks.caption(slate)

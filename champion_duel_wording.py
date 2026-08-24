@@ -196,13 +196,15 @@ READ_COPY = {
 #: "nobody has watched them" is a finding about us, and it is the one with
 #: something the reader can do about it.
 #:
-#: NAMES THE BUTTON, SO IT IS COUPLED TO `CD_BTN_ORDER`. Spelled out rather
-#: than interpolated, because `champion_duel_hub` imports this module and not
-#: the other way round. `test_nothing_seen_names_the_button_that_exists` is
-#: what keeps the two from drifting.
+#: NAMES THE BUTTON, SO IT TAKES `{button}` RATHER THAN SPELLING IT. The label
+#: leads with U+2795 HEAVY PLUS SIGN, which Discord renders near-black on an
+#: embed: typed into the sentence it vanishes mid-line, leaving "add one with
+#: ** Record a line-up**". The hub fills this from `CD_BTN_ORDER` through
+#: `_btn_words`, the same shape `NEEDS_YOUR_SQUADS` uses for `{path}`, which is
+#: also what stops the label and the empty state drifting apart on a rename.
 NOTHING_SEEN = (
     "No line-up recorded for this player yet. Anyone who has faced them can "
-    "add one with **➕ Record a line-up**."
+    "add one with **{button}**."
 )
 
 #: What the answer is built on, said once at the bottom in the reader's words
@@ -233,9 +235,14 @@ INTEL_BASIS = {
 #: their squads recorded" would be false in the branch where their squads ARE
 #: recorded and the six still come out level, which happens. The second half
 #: fires only under `if not result.their_types_known`.
+#:
+#: "APART", NOT "WITHIN ... OF EACH OTHER". `points()` floors at "under a
+#: point", and the older frame rendered that as "came out within under a point
+#: of each other". This one reads both ways round — "came out under a point
+#: apart" and "came out about 3 points apart" — which is the frame bending to
+#: the formatter rather than the floor being rounded away to suit the frame.
 CANNOT_RECOMMEND_FLAT = (
-    "All six line-ups came out within {measured} of each other, so there is "
-    "no recommendation to give."
+    "All six line-ups came out {measured} apart, so there is no recommendation to give."
 )
 
 #: And what is missing, only where it is actually missing. Only their squad

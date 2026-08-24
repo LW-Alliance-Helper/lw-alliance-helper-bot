@@ -741,23 +741,34 @@ def build_intel_embed(result) -> discord.Embed:
 
     # ── what they do ─────────────────────────────────────────────────────────
     if result.habit:
+        # `grade_read` returns `none` for two different reasons and the copy
+        # only speaks to one of them: they genuinely move around, or nobody has
+        # watched them enough to tell. Under `LEAN_SEEN` it is the second, and
+        # "they change it often" is then a claim about the player that the
+        # record does not support — printed, in the thinnest case, directly
+        # under "the only line-up on record for this player".
+        #
+        # Kevin, 2026-08-23: print nothing. Not a softer verdict, because a
+        # hedged verdict is still read as a verdict. The field shows the
+        # line-up and what the record holds, and stops.
+        told = words.habit_line(result.habit)
+        if result.habit.total >= intel_lib.LEAN_SEEN:
+            told = f"{told} {words.read_line(result.read)}"
         embed.add_field(
             name=FIELD_THEIRS,
             # The line-up on its own line, unbolded, against the bolded
             # recommendation below it: their observed thing is plain and the
             # reader's action is emphasised. Then one paragraph of what the
             # record says and what it is worth. Kevin's layout, 2026-08-20.
-            value=(
-                _order_text(result.habit.top)
-                + "\n"
-                + words.habit_line(result.habit)
-                + " "
-                + words.read_line(result.read)
-            )[:1024],
+            value=(_order_text(result.habit.top) + "\n" + told)[:1024],
             inline=False,
         )
     else:
-        embed.add_field(name=FIELD_THEIRS, value=words.NOTHING_SEEN[:1024], inline=False)
+        embed.add_field(
+            name=FIELD_THEIRS,
+            value=words.NOTHING_SEEN.format(button=_btn_words(CD_BTN_ORDER))[:1024],
+            inline=False,
+        )
 
     # ── what to set ──────────────────────────────────────────────────────────
     if result.you is None:

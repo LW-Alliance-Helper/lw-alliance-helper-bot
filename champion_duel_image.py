@@ -1,4 +1,10 @@
-"""The Champion Duel prediction, rendered on the designed VS card.
+"""The Champion Duel prediction cards.
+
+**Two cards live here.** `render` draws one matchup on the designed VS card and
+is what the rest of this docstring is about. `render_slate` draws a whole day's
+picks as a list of matchups, and it works differently in one important way: its
+height is not fixed, so it has no static template and paints its own bands
+instead. Its own section at the foot of this file carries the reasoning.
 
 The embed carries the same numbers. This exists because an embed is not what
 gets forwarded into an alliance chat, and sharing is how a prediction earns the
@@ -39,6 +45,7 @@ import os
 
 from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter
 
+import champion_duel_picks as picks_lib
 import champion_duel_predict as predict_lib
 import champion_duel_wording as words
 from storm_renderer import _font_for_text
@@ -54,6 +61,13 @@ with open(_LAYOUT_PATH, encoding="utf-8") as _fh:
 # The layout names its own background, so swapping the artwork is still one
 # file edit even when the new one is a different format.
 _TEMPLATE_PATH = os.path.join(_ASSETS, LAYOUT["static_template"])
+
+# The day's picks card has its own layout and NO static template, because its
+# height is not fixed -- see `render_slate`.
+_PICKS_LAYOUT_PATH = os.path.join(_ASSETS, "lw_alliance_helper_picks_layout.json")
+
+with open(_PICKS_LAYOUT_PATH, encoding="utf-8") as _fh:
+    PICKS = json.load(_fh)
 
 # The template's own pixels. Text is drawn at this size and never on a scaled
 # copy: shrinking the artwork first would put every coordinate in the layout
@@ -276,18 +290,25 @@ def _side(draw, boxes: dict, side, prob: float, pct_size: int, status_size: int,
 
 
 def _odds_bar(canvas, p_a: float) -> None:
-    """One bar, split where the odds split.
+    """The VS card's bar, over the empty track the template supplies.
 
     The two sides each state a percentage; this is what makes the *gap* legible
     at a glance, which is the thing a reader actually wants and the thing two
     separate numbers are worst at conveying.
-
-    The template supplies an empty track and nothing else — the whole fill is
-    computed here. The divider is clamped a radius in from each end so a
-    lopsided prediction still reads as a bar with rounded caps rather than as
-    a shape with one corner cut off.
     """
-    track = LAYOUT["dynamic_progress_track"]
+    _split_bar(canvas, LAYOUT["dynamic_progress_track"], p_a)
+
+
+def _split_bar(canvas, track: dict, p_a: float) -> None:
+    """One bar, split where the odds split, over any track a layout names.
+
+    The whole fill is computed rather than drawn in the artwork, which is what
+    lets one routine serve both cards: the VS card's single full-width track
+    and the picks card's seventeen short ones differ only in the box. The
+    divider is clamped a radius in from each end so a lopsided prediction still
+    reads as a bar with rounded caps rather than as a shape with one corner cut
+    off.
+    """
     x, y, w, h, radius = (track[k] for k in ("x", "y", "w", "h", "radius"))
     s = _BAR_SCALE
     bw, bh = w * s, h * s
@@ -483,4 +504,296 @@ def render(result: predict_lib.Prediction, *, subtitle: str | None = None) -> by
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="WEBP", quality=95, method=6)
+    return buf.getvalue()
+
+
+# ── The day's picks ───────────────────────────────────────────────────────────
+#
+# A second card, and a different kind of one. The VS card composites a finished
+# template; this one draws its own bands, because **a slate's height is not
+# fixed**: a card carries five to seventeen meetings and grows with them, so
+# there is no single image the artwork could arrive as. What it can arrive as is
+# three bands — a header, one row, a footer — which `bands` in the layout names
+# and `_band_art` composites the moment the files exist. Until then the bands
+# are painted from `palette`, in the VS card's own colours so the two read as
+# one product.
+#
+# Everything else follows the VS card deliberately: the same fonts through
+# `storm_renderer`, the same `words.probability` refusal to round a certainty
+# into existence, the same positional blue-left / red-right, and the same bar
+# routine over a track the layout names.
+
+
+def _picks_colour(key: str) -> tuple:
+    return ImageColor.getrgb(PICKS["palette"][key])
+
+
+def picks_height(rows: int) -> int:
+    """How tall a card with `rows` meetings comes out.
+
+    Public because the layout tests assert against it and a surface sizing an
+    upload wants it without rendering first.
+    """
+    return PICKS["header"]["h"] + rows * PICKS["row"]["pitch"] + PICKS["footer"]["h"]
+
+
+def _vertical_gradient(w: int, h: int, top: tuple, bottom: tuple):
+    """One column of colour, stretched.
+
+    Cheaper than filling per pixel, and the same trick `_split_bar` uses along
+    the other axis.
+    """
+    column = bytearray()
+    for py in range(h):
+        t = py / max(h - 1, 1)
+        column.extend(round(c0 + (c1 - c0) * t) for c0, c1 in zip(top, bottom))
+    return Image.frombytes("RGB", (1, h), bytes(column)).resize((w, h)).convert("RGBA")
+
+
+def _band_art(key: str, w: int, h: int):
+    """The finished artwork for one band, or None while there is none.
+
+    A named file that is not on disk is treated as absent rather than raised
+    on, which is the opposite of the VS card's rule about its template. The
+    difference is what the failure costs: that card cannot be drawn at all
+    without its background, where this one is drawn either way and a missing
+    band is a card that looks plainer than intended.
+    """
+    name = (PICKS.get("bands") or {}).get(key)
+    if not name:
+        return None
+    path = os.path.join(_ASSETS, name)
+    if not os.path.isfile(path):
+        return None
+    return Image.open(path).convert("RGBA").resize((w, h), Image.LANCZOS)
+
+
+def _plate(box: dict, fill: tuple, border: tuple):
+    """One row's plate, drawn once and pasted per row.
+
+    Every row is the same shape, so the 4x supersample that keeps a 12px corner
+    from stepping is paid once for the card rather than once for each of
+    seventeen rows.
+    """
+    s = _BAR_SCALE
+    w, h = box["w"], box["h"]
+    layer = Image.new("RGBA", (w * s, h * s), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle(
+        [0, 0, w * s - 1, h * s - 1],
+        radius=box["radius"] * s,
+        fill=fill + (255,),
+        outline=border + (255,),
+        width=s,
+    )
+    return layer.resize((w, h), Image.LANCZOS)
+
+
+def _at(box: dict, dy: int) -> dict:
+    """A row box moved onto the row it is being drawn for.
+
+    Row boxes are stored once, with `y` measured from the top of the row band
+    rather than from the top of the card. There is only one row shape, and a
+    layout that repeated it seventeen times would be seventeen places for a
+    revision to half-land.
+    """
+    return {**box, "y": box["y"] + dy}
+
+
+def _shared_name_size(draw, labels, max_w: int) -> int:
+    """One font size for every name on the card.
+
+    The same reasoning as `_shared_pct_font`, over a longer list: names are
+    read down two columns, and one set larger than its neighbours because it
+    happens to be shorter reads as emphasis rather than as length.
+
+    **Each label is measured in the font it will actually be drawn in**, which
+    is not the same file for all of them: `_font_for_text` picks by script, and
+    Champion Duel names routinely carry Korean and Arabic. Measuring them all
+    against one Latin font sizes the card off a width the CJK face does not
+    have -- and, worse, invites a caller to reuse that font object for every
+    row, which draws those names as empty boxes. That is what the first version
+    of this did.
+    """
+    for size in range(30, 18, -1):
+        if all(
+            draw.textlength(label, font=_font_for_text(label, size, bold=True)) <= max_w
+            for label in labels
+        ):
+            return size
+    return 19
+
+
+def _picks_header(canvas, draw, slate, width: int) -> None:
+    """Title, what the card is of, the column heading, and the badge."""
+    header = PICKS["header"]
+    art = _band_art("header", width, header["h"])
+    if art is not None:
+        canvas.alpha_composite(art, (0, 0))
+
+    box = header["event_title"]
+    title = picks_lib.CARD_TITLE
+    _text(draw, box, title, _font_for_text(title, 34, bold=True), TEXT, align=box["align"])
+
+    box = header["round_metadata"]
+    subject = slate.subject()
+    font = _fit(draw, subject, box["w"] - 24, start=26, minimum=17, bold=True)
+    _text(
+        draw,
+        box,
+        _ellipsized(draw, subject, "", font, box["w"] - 24),
+        font,
+        MUTED,
+        align=box["align"],
+    )
+
+    # Two lines rather than one, because the column is as wide as a word and a
+    # bare "CONFIDENCE" over a card of paired probabilities reads as confidence
+    # in one of the players.
+    box = header["confidence_heading"]
+    heading_font = _font_for_text("H", 15, bold=True)
+    for i, line in enumerate(picks_lib.CARD_CONFIDENCE_HEADING):
+        _text(
+            draw,
+            _at(box, i * box["line_height"]),
+            line,
+            heading_font,
+            MUTED,
+            align=box["align"],
+        )
+
+    rule = header["rule"]
+    draw.rectangle(
+        [rule["x"], rule["y"], rule["x"] + rule["w"] - 1, rule["y"] + rule["h"] - 1],
+        fill=_picks_colour("rule"),
+    )
+    _logo(canvas, header["logo_badge"])
+
+
+def _picks_row(canvas, draw, pick, top: int, name_size: int, fonts) -> None:
+    """One meeting.
+
+    A row we cannot predict keeps both names and says so across the middle
+    instead of carrying two percentages and a bar. It is the most useful row on
+    the card — it names two players nobody has scouted, to the alliance about
+    to read it — so it is drawn rather than dropped.
+    """
+    row = PICKS["row"]
+    _text(draw, _at(row["index"], top), str(pick.position), fonts["index"], MUTED)
+
+    for side, box_key in (("a", "name_a"), ("b", "name_b")):
+        box = _at(row[box_key], top)
+        label = getattr(pick, f"{side}_label") or "(unknown)"
+        # One size for the card, but the font itself is chosen per name: these
+        # names carry Korean and Arabic, and a Latin face renders those as
+        # empty boxes.
+        font = _font_for_text(label, name_size, bold=True)
+        _text(
+            draw,
+            box,
+            _ellipsized(draw, label, "", font, box["w"] - 16),
+            font,
+            TEXT,
+            align=box["align"],
+        )
+
+    if not pick.predicted:
+        box = _at(row["no_prediction"], top)
+        _text(draw, box, picks_lib.CARD_NO_PREDICTION, fonts["absent"], MUTED, align=box["align"])
+        return
+
+    for prob, box_key in ((pick.p_a, "probability_a"), (pick.p_b, "probability_b")):
+        box = _at(row[box_key], top)
+        text = words.probability(prob)
+        _text(draw, box, text, _font_for_text(text, 26, bold=True), TEXT, align=box["align"])
+
+    _split_bar(canvas, _at(row["track"], top), pick.p_a)
+
+    box = _at(row["confidence"], top)
+    level = pick.confidence().capitalize()
+    _text(draw, box, level, fonts["confidence"], MUTED, align=box["align"])
+
+
+def _picks_footer(canvas, draw, top: int, width: int) -> None:
+    """The one line between this card and the game's own betting market."""
+    footer = PICKS["footer"]
+    art = _band_art("footer", width, footer["h"])
+    if art is not None:
+        canvas.alpha_composite(art, (0, top))
+
+    box = _at(footer["summary"], top)
+    text = picks_lib.CARD_FOOTER
+    font = _fit(draw, text, box["w"] - 32, start=21, minimum=15)
+    _text(
+        draw,
+        box,
+        _ellipsized(draw, text, "", font, box["w"] - 32),
+        font,
+        MUTED,
+        align=box["align"],
+    )
+
+
+def render_slate(slate) -> bytes:
+    """The day's picks as a WebP image.
+
+    **The canvas grows with the slate**, which is the one structural difference
+    from `render`. Five meetings and seventeen meetings are the same card at
+    two heights, so the header and footer are bands rather than regions of a
+    fixed picture and the row band repeats. Nothing is scaled: as on the VS
+    card, every coordinate is drawn at the size the layout states.
+
+    **WebP, but LOSSLESS where the VS card is q=95.** The two settings are
+    right for two different pictures. That card is mostly a photographic neon
+    background, where lossy WebP is four fifths smaller at an error nothing on
+    the artwork shows. This one is flat colour and type, which is the worst
+    case for lossy ringing and the best case for lossless: measured on a
+    seventeen-row card, lossless is **79 KB against 132 KB at q=95** and exact
+    rather than approximate. It costs about half a second more to encode, and
+    the bytes are read far more often than they are written.
+    """
+    if not slate.picks:
+        raise ValueError("a picks card needs at least one meeting")
+
+    width = PICKS["canvas"]["width"]
+    height = picks_height(len(slate.picks))
+    canvas = _vertical_gradient(
+        width, height, _picks_colour("background_top"), _picks_colour("background_bottom")
+    )
+    draw = ImageDraw.Draw(canvas)
+    row = PICKS["row"]
+
+    _picks_header(canvas, draw, slate, width)
+
+    name_size = _shared_name_size(
+        draw,
+        [getattr(p, f"{s}_label") or "(unknown)" for p in slate.picks for s in ("a", "b")],
+        row["name_a"]["w"] - 16,
+    )
+    fonts = {
+        "index": _font_for_text("1", 22, bold=True),
+        "confidence": _font_for_text("H", 19),
+        "absent": _font_for_text("H", 20),
+    }
+    plates = (
+        _plate(row["plate"], _picks_colour("row_plate"), _picks_colour("row_border")),
+        _plate(row["plate"], _picks_colour("row_plate_alt"), _picks_colour("row_border")),
+    )
+    band = _band_art("row", width, row["pitch"])
+
+    top = PICKS["header"]["h"]
+    for i, pick in enumerate(slate.picks):
+        y = top + i * row["pitch"]
+        if band is not None:
+            canvas.alpha_composite(band, (0, y))
+        else:
+            canvas.alpha_composite(plates[i % 2], (row["plate"]["x"], y + row["plate"]["y"]))
+        _picks_row(canvas, draw, pick, y, name_size, fonts)
+
+    _picks_footer(canvas, draw, top + len(slate.picks) * row["pitch"], width)
+
+    buf = io.BytesIO()
+    # `method=4` rather than 6: at lossless the two produce the same picture
+    # and 6 is the slower search. It is 4 here and 6 on the VS card because
+    # only one of them is paying that search for a smaller file.
+    canvas.convert("RGB").save(buf, format="WEBP", lossless=True, method=4)
     return buf.getvalue()

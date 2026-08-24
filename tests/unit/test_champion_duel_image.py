@@ -1,4 +1,4 @@
-"""The prediction card.
+"""The prediction cards.
 
 A render is hard to assert on pixel by pixel and not worth it. What these
 cover is the part that can be *wrong* rather than ugly: that the card shows the
@@ -7,11 +7,17 @@ probability up into a certainty, that a name in a non-Latin script or a missing
 asset doesn't take the render down, and — since the card became a compositor
 over a designed template — that the layout it is placed against still describes
 the artwork it is placed on.
+
+**Two cards.** The VS card is above; the day's picks card is in its own section
+at the foot of this file. It has no artwork to drift from, so what is checked
+instead is that its boxes do not drift into each other and that the strings it
+draws are the ones it means to.
 """
 
 from __future__ import annotations
 
 import io
+import itertools
 
 import pytest
 from PIL import Image, ImageChops, ImageDraw
@@ -19,6 +25,7 @@ from storm_renderer import _font_for_text
 
 import champion_duel_db as db
 import champion_duel_image as img
+import champion_duel_picks as picks_lib
 import champion_duel_predict as cdp
 import champion_duel_wording as words
 
@@ -411,3 +418,335 @@ def test_the_odds_bar_is_drawn_and_splits_where_the_odds_split(cd_db):
     ]
     assert max(blue) < track["x"] + track["w"] - 1, "the fill ran to the very end of the track"
     assert max(blue) > track["x"] + track["w"] * 0.9, "a >99% prediction did not fill the bar"
+
+
+# ── The day's picks card ──────────────────────────────────────────────────────
+#
+# A different kind of card and so a different kind of test. The VS card is
+# checked against artwork these tests cannot see into; this one draws its own
+# bands, so what can go wrong is the geometry itself (two columns written into
+# the same pixels) and what the card SAYS. Both are asserted directly: the
+# layout by comparing its boxes against each other, and the copy by recording
+# what `_text` was asked to draw.
+
+
+def _slate_group(names, *, scouted=None, label="M", stage="semifinals"):
+    """A group of invented players, most of them scouted."""
+    scouted = len(names) if scouted is None else scouted
+    db.import_registrants(
+        [
+            {"name": name, "group": label, "rank": i + 1, "server": "738", "thp": 90_000_000}
+            for i, name in enumerate(names)
+        ],
+        stage=stage,
+    )
+    group = db.get_or_create_group(db.default_grouping_id(), stage, label)
+    for i, name in enumerate(names):
+        rid = db.resolve_registrant(name, server="738")["id"]
+        db.set_placement(group["id"], rid, seed_rank=i + 1)
+        if i < scouted:
+            powers = (34_000_000 - i * 900_000, 31_000_000 - i * 700_000, 27_000_000 - i * 500_000)
+            for slot, (squad_type, power) in enumerate(
+                zip(("Tank", "Missile", "Aircraft"), powers), start=1
+            ):
+                db.set_squad(
+                    rid, slot, squad_type=squad_type, power=power, actor=ACTOR, source="observed"
+                )
+    return group
+
+
+def _slate(names, pairs, *, scouted=None, day="2026-08-25", **kwargs):
+    group = _slate_group(names, scouted=scouted, **kwargs)
+    ids = [db.resolve_registrant(n, server="738")["id"] for n in names]
+    db.set_slate(group["id"], day, [(ids[a], ids[b]) for a, b in pairs], actor=ACTOR)
+    return picks_lib.build(group["id"], day)
+
+
+def _drawn(monkeypatch, slate):
+    """Every string the card was asked to draw, and where.
+
+    Recording the call rather than reading pixels back is the only way to
+    assert on seventeen rows of copy, and it is the seam the render actually
+    has: `_text` is where a string becomes ink.
+    """
+    seen = []
+    original = img._text
+
+    def spy(draw, box, text, font, fill, **kwargs):
+        seen.append(text)
+        return original(draw, box, text, font, fill, **kwargs)
+
+    monkeypatch.setattr(img, "_text", spy)
+    img.render_slate(slate)
+    return seen
+
+
+# ── The card grows with the slate ─────────────────────────────────────────────
+
+
+def test_the_canvas_grows_with_the_row_count(cd_db):
+    """The one structural difference from the VS card: there is no fixed
+    template, because five meetings and seventeen are the same card at two
+    heights."""
+    names = ("Ravenshade", "NightOwl", "Ironclad", "Vesper", "Kestrel", "Basalt")
+    five = _slate(names, [(0, 1), (2, 3), (4, 5), (0, 2), (1, 3)])
+    fifteen = _slate(names, list(itertools.combinations(range(6), 2))[:15], day="2026-08-26")
+
+    small = Image.open(io.BytesIO(img.render_slate(five)))
+    large = Image.open(io.BytesIO(img.render_slate(fifteen)))
+
+    assert small.size == (img.PICKS["canvas"]["width"], img.picks_height(5))
+    assert large.size == (img.PICKS["canvas"]["width"], img.picks_height(15))
+    assert large.height - small.height == 10 * img.PICKS["row"]["pitch"]
+
+
+def test_the_card_is_webp_like_the_other_one(cd_db):
+    slate = _slate(("Ravenshade", "NightOwl"), [(0, 1)])
+    assert Image.open(io.BytesIO(img.render_slate(slate))).format == "WEBP"
+
+
+def test_a_card_with_no_meetings_is_refused(cd_db):
+    """An empty card is not a smaller card. Nothing upstream should produce
+    one, and drawing a header over a footer would hide that it did."""
+    group = _slate_group(("Ravenshade", "NightOwl"))
+    empty = picks_lib.assemble(db.get_group(group["id"]), "2026-08-25", [])
+    with pytest.raises(ValueError):
+        img.render_slate(empty)
+
+
+# ── What the card says ────────────────────────────────────────────────────────
+
+
+def test_the_card_carries_both_names_the_odds_and_how_much_they_are_worth(cd_db, monkeypatch):
+    slate = _slate(("Ravenshade", "NightOwl"), [(0, 1)])
+    drawn = _drawn(monkeypatch, slate)
+
+    assert "Ravenshade" in drawn and "NightOwl" in drawn
+    assert words.probability(slate.picks[0].p_a) in drawn
+    assert words.probability(slate.picks[0].p_b) in drawn
+    assert slate.picks[0].confidence().capitalize() in drawn
+    assert slate.subject() in drawn
+    assert picks_lib.CARD_FOOTER in drawn
+    assert list(picks_lib.CARD_CONFIDENCE_HEADING) == [
+        line for line in drawn if line in picks_lib.CARD_CONFIDENCE_HEADING
+    ]
+
+
+def test_a_row_nobody_can_predict_keeps_both_names(cd_db, monkeypatch):
+    """It is the most useful row on the card: two players nobody has scouted,
+    named to the alliance about to read it. A dropped row hides the gap and a
+    row without names cannot be acted on."""
+    slate = _slate(("Ravenshade", "NightOwl", "Kestrel", "Basalt"), [(0, 1), (2, 3)], scouted=2)
+    drawn = _drawn(monkeypatch, slate)
+
+    assert "Kestrel" in drawn and "Basalt" in drawn
+    assert picks_lib.CARD_NO_PREDICTION in drawn
+    # And no probability is invented for it: only the one predicted row
+    # contributes percentages.
+    assert len([text for text in drawn if text.endswith("%")]) == 2
+
+
+def test_the_card_never_rounds_a_probability_into_a_certainty(cd_db, monkeypatch):
+    """The same refusal the VS card makes, on a surface that makes it up to
+    seventeen times. The engine clears 0.999 on a 35% power edge, so this is
+    the common case for a lopsided pairing rather than an edge case."""
+    slate = _slate(("Goliath", "Pebble"), [(0, 1)], scouted=2)
+    rid = db.resolve_registrant("Pebble", server="738")["id"]
+    with db._get_conn() as conn:
+        conn.execute("UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (rid,))
+    slate = picks_lib.build(slate.group["id"], "2026-08-25")
+
+    drawn = _drawn(monkeypatch, slate)
+    assert ">99%" in drawn
+    assert "100%" not in drawn
+
+
+def test_every_name_is_measured_and_drawn_in_a_font_that_has_its_script(cd_db, monkeypatch):
+    """Champion Duel names routinely carry Korean and Arabic, and
+    `_font_for_text` picks the file by script.
+
+    The first version of this card sized every name against one Latin font and
+    then reused that font object for all of them, which drew a Hangul name as a
+    row of empty boxes. Asserting that each label reaches `_font_for_text` is
+    what catches that: under the defect the only string it ever saw was a
+    placeholder.
+    """
+    names = ("그림자늑대", "Ravenshade", "منتقم", "NightOwl")
+    slate = _slate(names, [(0, 1), (2, 3)])
+
+    asked = []
+    original = img._font_for_text
+    monkeypatch.setattr(
+        img,
+        "_font_for_text",
+        lambda text, size, **kwargs: (asked.append(text), original(text, size, **kwargs))[1],
+    )
+    img.render_slate(slate)
+
+    for name in names:
+        assert name in asked, f"{name} was never sized in its own font"
+
+
+# ── The layout describes the card ─────────────────────────────────────────────
+#
+# The equivalent of the VS card's "does the layout still describe the artwork"
+# block. There is no artwork to drift from here, so what is checked instead is
+# that the boxes do not drift into each other -- which is exactly how the
+# column heading first came to be drawn underneath the badge.
+
+
+def _rects(band: dict, skip=()):
+    for name, box in band.items():
+        if name in skip or not isinstance(box, dict) or "x" not in box:
+            continue
+        yield name, box
+
+
+def _overlap(one: dict, two: dict) -> bool:
+    return (
+        one["x"] < two["x"] + two["w"]
+        and two["x"] < one["x"] + one["w"]
+        and one["y"] < two["y"] + two["h"]
+        and two["y"] < one["y"] + one["h"]
+    )
+
+
+def test_nothing_in_the_header_is_drawn_over_anything_else():
+    """The badge is square and as wide as the confidence column, so those two
+    are the pair that collides. It did."""
+    header = dict(img.PICKS["header"])
+    heading = header.pop("confidence_heading")
+    boxes = list(_rects(header))
+    # The heading is two stacked lines, so it is checked as the pair it draws.
+    for i, line in enumerate(picks_lib.CARD_CONFIDENCE_HEADING):
+        boxes.append((f"confidence_heading[{i}]", img._at(heading, i * heading["line_height"])))
+
+    for i, (name, box) in enumerate(boxes):
+        for other_name, other in boxes[i + 1 :]:
+            assert not _overlap(box, other), f"{name} overlaps {other_name}"
+
+
+def test_no_two_columns_of_a_row_are_drawn_into_the_same_pixels():
+    """`no_prediction` and `plate` are left out: one replaces the middle three
+    columns and the other sits behind all of them, so both overlap on purpose.
+    """
+    boxes = list(_rects(img.PICKS["row"], skip=("no_prediction", "plate")))
+    for i, (name, box) in enumerate(boxes):
+        for other_name, other in boxes[i + 1 :]:
+            assert not _overlap(box, other), f"{name} overlaps {other_name}"
+
+
+def test_the_refusal_covers_the_columns_it_replaces_and_no_others():
+    """It stands in for both probabilities and the track. Reaching a name
+    column would put it over a name that is still being drawn."""
+    row = img.PICKS["row"]
+    absent = row["no_prediction"]
+    for name in ("probability_a", "track", "probability_b"):
+        assert _overlap(absent, row[name]), f"the refusal does not cover {name}"
+    for name in ("index", "name_a", "name_b", "confidence"):
+        assert not _overlap(absent, row[name]), f"the refusal runs into {name}"
+
+
+def test_every_box_is_inside_the_band_it_belongs_to():
+    width = img.PICKS["canvas"]["width"]
+    bands = (
+        ("header", img.PICKS["header"], img.PICKS["header"]["h"]),
+        ("row", img.PICKS["row"], img.PICKS["row"]["pitch"]),
+        ("footer", img.PICKS["footer"], img.PICKS["footer"]["h"]),
+    )
+    for band_name, band, height in bands:
+        for name, box in _rects(band):
+            assert 0 <= box["x"] and box["x"] + box["w"] <= width, f"{band_name}.{name} runs off"
+            assert 0 <= box["y"] and box["y"] + box["h"] <= height, (
+                f"{band_name}.{name} runs out of its band"
+            )
+
+
+def test_the_rows_leave_a_gap_between_their_plates():
+    """A pitch equal to the plate height would butt every row against the next
+    and the card would read as one block rather than as a list."""
+    row = img.PICKS["row"]
+    assert row["pitch"] > row["plate"]["y"] + row["plate"]["h"]
+
+
+# ── The bar ───────────────────────────────────────────────────────────────────
+
+
+def test_each_row_gets_its_own_bar_split_where_that_meeting_splits(cd_db):
+    """The same routine the VS card uses, over a track the layout names. It is
+    worth sampling here too: a card of seventeen bars all drawn at one split
+    would still look finished."""
+    slate = _slate(("Goliath", "Pebble", "Ravenshade", "NightOwl"), [(0, 1), (2, 3)], scouted=4)
+    ids = {
+        n: db.resolve_registrant(n, server="738")["id"]
+        for n in ("Pebble", "Ravenshade", "NightOwl")
+    }
+    with db._get_conn() as conn:
+        # One meeting as lopsided as the engine gets, one as level as it gets,
+        # so a single bar drawn twice cannot pass both checks below.
+        conn.execute(
+            "UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (ids["Pebble"],)
+        )
+        conn.execute(
+            "UPDATE squads SET power = (SELECT power FROM squads o WHERE o.registrant_id = ? "
+            "AND o.slot = squads.slot) WHERE registrant_id = ?",
+            (ids["Ravenshade"], ids["NightOwl"]),
+        )
+    slate = picks_lib.build(slate.group["id"], "2026-08-25")
+    card = Image.open(io.BytesIO(img.render_slate(slate))).convert("RGB")
+
+    row = img.PICKS["row"]
+    track = row["track"]
+    for i, pick in enumerate(slate.picks):
+        top = img.PICKS["header"]["h"] + i * row["pitch"] + track["y"]
+        mid = top + track["h"] // 2
+        left = card.getpixel((track["x"] + track["radius"], mid))
+        right = card.getpixel((track["x"] + track["w"] - track["radius"], mid))
+        assert left[2] > left[0], f"row {i + 1} does not start blue"
+        assert right[0] > right[2], f"row {i + 1} does not end red"
+
+        blue = [
+            x
+            for x in range(track["x"], track["x"] + track["w"])
+            if card.getpixel((x, mid))[2] > card.getpixel((x, mid))[0]
+        ]
+        share = (max(blue) - track["x"]) / track["w"]
+        assert share == pytest.approx(pick.p_a, abs=0.12), f"row {i + 1} splits at the wrong place"
+
+    # The two rows are genuinely different meetings, and by more than the
+    # tolerance above, so a bar drawn once and pasted everywhere fails the
+    # check rather than passing it twice.
+    assert abs(slate.picks[0].p_a - slate.picks[1].p_a) > 0.4
+
+
+# ── The artwork seam ──────────────────────────────────────────────────────────
+
+
+def test_finished_artwork_is_composited_the_moment_the_files_exist(cd_db, monkeypatch, tmp_path):
+    """The card draws its own bands only because there is no artwork yet. When
+    it arrives it arrives as three bands, and this is the seam it lands on --
+    built and covered now, so it is a file drop later rather than a rewrite.
+    """
+    monkeypatch.setattr(img, "_ASSETS", str(tmp_path))
+    width = img.PICKS["canvas"]["width"]
+    Image.new("RGBA", (width, img.PICKS["row"]["pitch"]), (0, 200, 0, 255)).save(
+        tmp_path / "row.png"
+    )
+    monkeypatch.setitem(img.PICKS["bands"], "row", "row.png")
+
+    slate = _slate(("Ravenshade", "NightOwl"), [(0, 1)])
+    card = Image.open(io.BytesIO(img.render_slate(slate))).convert("RGB")
+
+    # A pixel inside the row band and clear of every column's text.
+    y = img.PICKS["header"]["h"] + 4
+    assert card.getpixel((img.PICKS["row"]["plate"]["x"] + 4, y))[1] > 150
+
+
+def test_a_named_band_that_is_not_on_disk_is_drawn_instead_of_raised_on(cd_db, monkeypatch):
+    """The opposite of the VS card's rule about its template, and for a
+    reason: that card cannot exist without its background, where this one is
+    drawn either way and a missing band only costs it some polish.
+    """
+    monkeypatch.setitem(img.PICKS["bands"], "header", "not_delivered_yet.webp")
+    slate = _slate(("Ravenshade", "NightOwl"), [(0, 1)])
+    assert img.render_slate(slate)

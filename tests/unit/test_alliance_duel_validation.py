@@ -448,15 +448,27 @@ def test_a_part_filled_bracket_is_not_reported_as_wrong():
     assert 9 not in _rules(ad.validate(_full_league(12)))
 
 
-def test_a_seventeenth_alliance_with_no_seed_is_named():
+def test_a_seventeenth_alliance_is_reported_once():
     # The failure this exists for: one tag entered two ways (a capital i and a
     # lowercase L read alike), which reaches the sheet through Discord with no
     # Seed, and which rule 5 skips precisely because it has no Seed.
     rows = _full_league() + [_row(1, 99)]
     findings = [f for f in ad.validate(rows) if f.rule == 9]
-    assert [f.alliance for f in findings] == [_key(99)]
-    assert "17 alliances" in findings[0].message
+    assert len(findings) == 1
+    assert "16 alliances and you have entered 17" in findings[0].message
     assert findings[0].severity == ad.SEVERITY_ERROR
+
+
+def test_the_oversized_league_finding_names_nobody():
+    """The bot can rank which row looks likeliest to be the extra. It cannot
+    know, and pointing at one would be an opinion about which of the alliance's
+    own entries is wrong (`UX.md` principle 6). The reader does the picking."""
+    rows = _full_league() + [_row(1, 99)]
+    findings = [f for f in ad.validate(rows) if f.rule == 9]
+    assert findings[0].alliance is None
+    assert findings[0].row_number is None
+    for tag in ("AL99", "AL00"):
+        assert tag not in findings[0].message
 
 
 def test_the_seedless_intruder_is_invisible_to_the_seed_rule():
@@ -486,7 +498,8 @@ def test_one_league_being_oversized_does_not_flag_another():
     rows = _full_league() + [_row(1, 99)]
     rows += [ad.AllianceWeek(league=other, week=1, alliance=_key(i), seed=i + 1) for i in range(4)]
     findings = [f for f in ad.validate(rows) if f.rule == 9]
-    assert {f.alliance for f in findings} == {_key(99)}
+    assert len(findings) == 1
+    assert "entered 17" in findings[0].message
 
 
 # ── Reading a typed-in bracket ────────────────────────────────────────────────
@@ -573,3 +586,60 @@ def test_own_alliance_mode_asks_for_one_line():
     parse = ad.parse_bracket("AL00 1234", expect=1)
     assert parse.ok
     assert parse.entries[0].seed == 1
+
+
+# ── Power, gift level and members on the bracket lines ────────────────────────
+
+
+def test_a_line_carries_power_gift_and_members_in_that_order():
+    parse = ad.parse_bracket("AL00 1234 26853240157 25 100\n" + _bracket_text(15, start=1))
+    assert parse.ok, parse.problems
+    first = parse.entries[0]
+    assert (first.power, first.gift_level, first.members) == (26853240157, 25, 100)
+
+
+def test_the_trailing_fields_may_simply_stop():
+    parse = ad.parse_bracket(
+        "AL00 1234\nAL01 1234 30b\nAL02 1234 30b 25\n" + _bracket_text(13, start=3)
+    )
+    assert parse.ok, parse.problems
+    a, b, c = parse.entries[:3]
+    assert (a.power, a.gift_level, a.members) == (None, None, None)
+    assert (b.power, b.gift_level, b.members) == (30_000_000_000, None, None)
+    assert (c.power, c.gift_level, c.members) == (30_000_000_000, 25, None)
+
+
+def test_power_on_a_bracket_line_reads_like_power_everywhere_else():
+    # `301` is 301M by the survey convention, and a full in-game figure is
+    # already raw. Same parser, so the two conventions cannot drift apart.
+    parse = ad.parse_bracket("AL00 1234 301\nAL01 1234 26853240157\n" + _bracket_text(14, start=2))
+    assert parse.ok, parse.problems
+    assert parse.entries[0].power == 301_000_000
+    assert parse.entries[1].power == 26853240157
+
+
+def test_an_unreadable_extra_names_the_line_and_the_field():
+    parse = ad.parse_bracket("AL00 1234 26.8b twenty-five\n" + _bracket_text(15, start=1))
+    assert not parse.ok
+    assert parse.problems == ("Line 1: I could not read `twenty-five` as gift level.",)
+
+
+def test_a_sixth_field_is_refused_rather_than_ignored():
+    parse = ad.parse_bracket("AL00 1234 26.8b 25 100 extra\n" + _bracket_text(15, start=1))
+    assert not parse.ok
+    assert "Line 1" in parse.problems[0]
+
+
+def test_a_numeric_tag_is_not_mistaken_for_a_seed_number():
+    # `1 714 26.8b` is an alliance whose tag is "1", not line 1 of a numbered
+    # paste. A tag carries at least one non-digit, which is what tells them apart.
+    parse = ad.parse_bracket("1 714 26853240157\n" + _bracket_text(15, start=1))
+    assert parse.ok, parse.problems
+    assert parse.entries[0].alliance == ad.AllianceKey.of("1", "714")
+    assert parse.entries[0].power == 26853240157
+
+
+def test_a_numbered_line_still_reads_when_it_carries_the_extras():
+    parse = ad.parse_bracket("1 AL00 1234 26.8b 25 100\n" + _bracket_text(15, start=1))
+    assert parse.ok, parse.problems
+    assert parse.entries[0].members == 100

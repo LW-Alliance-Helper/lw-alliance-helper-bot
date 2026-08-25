@@ -33,6 +33,7 @@ import alliance_duel_setup as ad_setup
 import config
 import config_health
 import messages
+from wizard_registry import expire_view_message
 
 logger = logging.getLogger(__name__)
 
@@ -688,71 +689,164 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
     in game would be the bot making this longer than it is.
     """
 
-    def __init__(self, state):
+    def __init__(self, state, *, defaults: dict | None = None):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
+        d = defaults or {}
 
         self.season = discord.ui.TextInput(
-            label="Season", placeholder="S36", max_length=12, required=True
+            label="Season",
+            placeholder="S36",
+            max_length=12,
+            required=True,
+            default=d.get("season"),
         )
         self.tier = discord.ui.TextInput(
-            label="Tier", placeholder="Diamond", max_length=24, required=False
+            label="Tier",
+            placeholder="Diamond",
+            max_length=24,
+            required=False,
+            default=d.get("tier"),
         )
         self.group = discord.ui.TextInput(
-            label="Group", placeholder="12 - 1", max_length=24, required=False
+            label="Group",
+            placeholder="12 - 1",
+            max_length=24,
+            required=False,
+            default=d.get("group"),
         )
+        # Optional, and the default is this week. The League screen shows a
+        # countdown rather than a start date, so the officer would otherwise be
+        # counting backwards off a timer to fill in a field, and a league is
+        # nearly always set up in the week it opens.
         self.week_date = discord.ui.TextInput(
-            label="Monday of week 1", placeholder="2026-08-24", max_length=24, required=True
+            label="Week 1 date",
+            placeholder="Leave blank for this week, or 8/24, Aug 24, 2026-08-24",
+            max_length=24,
+            required=False,
+            default=d.get("week_date"),
         )
         if state.full_bracket:
             self.bracket = discord.ui.TextInput(
                 label="The bracket, in League order",
                 style=discord.TextStyle.paragraph,
-                placeholder="kTZ 714\nIMI 685\nRudi 716\n(one alliance per line, all 16)",
-                max_length=1200,
+                # Discord caps a placeholder at 100 characters, so the shape is
+                # shown rather than described: the labelled example line says
+                # the order, and the tail says what is optional.
+                placeholder=(
+                    "kTZ 714 26.8b 25 100  (tag warzone power gift members)\n"
+                    "IMI 685\nAll 16, one per line."
+                ),
+                max_length=1800,
                 required=True,
+                default=d.get("bracket"),
             )
         else:
             self.bracket = discord.ui.TextInput(
-                label="Your seed", placeholder="9", max_length=4, required=True
+                label="Your seed",
+                placeholder="9",
+                max_length=4,
+                required=True,
+                default=d.get("bracket"),
             )
         for item in (self.season, self.tier, self.group, self.week_date, self.bracket):
             self.add_item(item)
+
+    def _typed(self) -> dict:
+        """What was entered, so a refusal can hand it straight back."""
+        return {
+            "season": self.season.value,
+            "tier": self.tier.value,
+            "group": self.group.value,
+            "week_date": self.week_date.value,
+            "bracket": self.bracket.value,
+        }
+
+    async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
+        """Say what is wrong and hand back what was typed.
+
+        A validation failure costs one step, not the whole flow (`UX.md`).
+        Without the retry button, "try again" would mean retyping sixteen lines
+        off a phone screen to fix one of them.
+        """
+        view = _RetryNewLeagueView(self.state, interaction.user.id, self._typed())
+        await interaction.followup.send(message, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         league = ad.LeagueKey.of(self.season.value, self.tier.value, self.group.value)
         if league is None:
-            await interaction.followup.send(
-                "⚠️ A league needs a season, the one on the League screen. Run `/vs` and "
-                f"click **{VS_BTN_NEW_LEAGUE}** to try again.",
-                ephemeral=True,
+            await self._refuse(
+                interaction,
+                "⚠️ A league needs a season, the one on the League screen.",
             )
             return
 
-        week_date = ad.parse_week_date(self.week_date.value)
-        if week_date is None:
-            await interaction.followup.send(
-                "⚠️ I could not read that date. Write it as `2026-08-24`. Run `/vs` and "
-                f"click **{VS_BTN_NEW_LEAGUE}** to try again.",
-                ephemeral=True,
-            )
-            return
+        raw_date = (self.week_date.value or "").strip()
+        if raw_date:
+            week_date = ad.parse_week_date(raw_date)
+            if week_date is None:
+                await self._refuse(
+                    interaction,
+                    messages.DATE_PARSE_REJECT.format(
+                        raw=raw_date[:24], examples=_WEEK_DATE_EXAMPLES
+                    ),
+                )
+                return
+        else:
+            week_date = ad.server_today()
         week_date = ad.week_monday(week_date)
 
         state = self.state
         parse = _parse_new_league_bracket(state, self.bracket.value)
         if not parse.ok:
-            await interaction.followup.send(
+            await self._refuse(
+                interaction,
                 "⚠️ I did not write anything. Fix these and try again:\n"
                 + "\n".join(f"• {p}" for p in parse.problems[:8]),
-                ephemeral=True,
             )
             return
 
         ok, message = await start_new_league(state, league, week_date, parse.entries)
-        await interaction.followup.send(("✅ " if ok else "⚠️ ") + message, ephemeral=True)
+        if not ok:
+            await self._refuse(interaction, f"⚠️ {message}")
+            return
+        await interaction.followup.send(f"✅ {message}", ephemeral=True)
+
+
+#: Past-leaning, because a league being entered is one that has already opened.
+_WEEK_DATE_EXAMPLES = "`8/24`, `Aug 24`, or `2026-08-24`"
+
+VS_BTN_RETRY_NEW_LEAGUE = "✏️ Edit and try again"
+
+
+class _RetryNewLeagueView(discord.ui.View):
+    """Reopen the new-league modal with what was typed still in it."""
+
+    def __init__(self, state, user_id: int, defaults: dict):
+        super().__init__(timeout=600)
+        self.state = state
+        self.user_id = user_id
+        self.defaults = defaults
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(label=VS_BTN_RETRY_NEW_LEAGUE, style=discord.ButtonStyle.primary)
+        button.callback = self._retry
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint="`/vs`")
+
+    async def _retry(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(NewLeagueModal(self.state, defaults=self.defaults))
 
 
 def _parse_new_league_bracket(state, text) -> ad.BracketParse:
@@ -824,12 +918,18 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
             f"can track only that one: set it in {ad_setup.VS_SETUP_NAV}."
         )
 
-    display = {e.alliance: e for e in entries}
+    # Whatever came in on the bracket lines rides onto the rows here. A field
+    # left off a line stays None, which `row_values` omits from the write, so
+    # the skeleton keeps its "leave whatever is there" behaviour.
+    typed = {e.alliance: e for e in entries}
     for row in rows:
-        entry = display.get(row.alliance)
+        entry = typed.get(row.alliance)
         if entry is not None:
             row.tag_display = entry.tag_display
             row.warzone_display = entry.warzone_display
+            row.power = entry.power
+            row.gift_level = entry.gift_level
+            row.members = entry.members
 
     problem = await save_rows(state, rows)
     if problem:
@@ -843,10 +943,24 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
 
     added = len(rows) - len(existing & {r.alliance for r in rows})
     noun = "row" if added == 1 else "rows"
-    return True, (
-        f"Started **{league}** with {added} {noun} for week 1. Fill in power, members "
-        f"and gift level from the League screen, then record each day as it lands."
-    )
+
+    # What is still missing decides the next sentence. An officer who typed
+    # power, gift level and members on every line has nothing left to do here,
+    # and telling them to go and enter it would read as a failed write.
+    short = [r for r in rows if not (r.power and r.members and r.gift_level)]
+    if not short:
+        nudge = "Record each day as it lands."
+    elif len(short) == len(rows):
+        nudge = (
+            "Add power, gift level and members from the League screen so matchups "
+            "can be projected, then record each day as it lands."
+        )
+    else:
+        nudge = (
+            f"{len(short)} of them still need power, gift level or members before their "
+            f"matchups can be projected. Record each day as it lands."
+        )
+    return True, f"Started **{league}** with {added} {noun} for week 1. {nudge}"
 
 
 __all__ = [

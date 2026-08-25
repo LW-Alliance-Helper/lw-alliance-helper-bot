@@ -502,3 +502,134 @@ async def test_a_sunday_start_date_lands_on_the_week_it_opens(_captured):
     monday = ad.week_monday(MONDAY)
     await entry.start_new_league(state, LEAGUE, monday, _entries())
     assert {r.week_date for r in _captured} == {monday}
+
+
+async def test_the_bracket_lines_carry_power_gift_and_members_onto_the_rows(_captured):
+    state = _state([])
+    entries = (
+        ad.BracketEntry(
+            alliance=OWN,
+            seed=1,
+            tag_display=OWN_TAG,
+            warzone_display=OWN_WZ,
+            power=26853240157,
+            gift_level=25,
+            members=100,
+        ),
+    ) + _entries()[1:]
+    await entry.start_new_league(state, LEAGUE, MONDAY, entries)
+    mine = next(r for r in _captured if r.alliance == OWN)
+    assert (mine.power, mine.gift_level, mine.members) == (26853240157, 25, 100)
+
+
+async def test_a_line_without_the_extras_leaves_them_unset(_captured):
+    # None is what `row_values` omits, which is what keeps the skeleton's
+    # "leave whatever is there" behaviour on a re-run.
+    state = _state([])
+    await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert all(r.power is None and r.members is None for r in _captured)
+
+
+async def test_the_acknowledgement_stops_asking_once_nothing_is_missing(_captured):
+    state = _state([])
+    full = tuple(
+        ad.BracketEntry(
+            alliance=e.alliance,
+            seed=e.seed,
+            tag_display=e.tag_display,
+            warzone_display=e.warzone_display,
+            power=30_000_000_000,
+            gift_level=25,
+            members=100,
+        )
+        for e in _entries()
+    )
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, full)
+    assert ok
+    assert "Record each day as it lands." in message
+    assert "still need" not in message
+    assert "Add power" not in message
+
+
+async def test_a_part_filled_bracket_says_how_many_are_short(_captured):
+    state = _state([])
+    entries = list(_entries())
+    entries[0] = ad.BracketEntry(
+        alliance=entries[0].alliance,
+        seed=1,
+        tag_display=OWN_TAG,
+        warzone_display=OWN_WZ,
+        power=30_000_000_000,
+        gift_level=25,
+        members=100,
+    )
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, tuple(entries))
+    assert ok
+    assert f"{ad.BRACKET_SIZE - 1} of them still need" in message
+
+
+def test_a_refusal_hands_back_a_retry_rather_than_a_command_to_re_run():
+    """UX.md: a validation failure costs one step, not the whole flow. Without
+    the button, "try again" means retyping sixteen lines to fix one of them."""
+    source = inspect.getsource(entry.NewLeagueModal)
+    assert "_RetryNewLeagueView" in source
+    assert "Run `/vs`" not in source, "a refusal must not send them back to the command"
+
+    view = entry._RetryNewLeagueView(_state([]), 1, {"season": "S36"})
+    assert [b.label for b in view.children] == [entry.VS_BTN_RETRY_NEW_LEAGUE]
+
+
+def test_the_retry_modal_still_holds_what_was_typed():
+    typed = {
+        "season": "S36",
+        "tier": "Diamond",
+        "group": "12 - 1",
+        "week_date": "8/24",
+        "bracket": "kTZ 714",
+    }
+    modal = entry.NewLeagueModal(_state([]), defaults=typed)
+    assert modal.season.default == "S36"
+    assert modal.bracket.default == "kTZ 714"
+
+
+def test_the_week_1_date_is_optional_and_defaults_to_this_week():
+    # The League screen shows a countdown, not a start date, so the officer
+    # would be counting backwards off a timer to fill this in.
+    modal = entry.NewLeagueModal(_state([]))
+    assert modal.week_date.required is False
+
+
+def test_the_date_field_does_not_dictate_one_format():
+    modal = entry.NewLeagueModal(_state([]))
+    for shape in ("8/24", "Aug 24", "2026-08-24"):
+        assert shape in modal.week_date.placeholder
+        assert ad.parse_week_date(shape) is not None
+
+
+def test_every_modal_field_fits_what_discord_will_accept():
+    """Discord rejects an oversized label or placeholder at send time, not at
+    construction, so a too-long one ships green and fails in front of a user.
+    Limits: label 45, placeholder 100."""
+    import discord
+
+    modals = [
+        obj
+        for obj in vars(entry).values()
+        if inspect.isclass(obj) and issubclass(obj, discord.ui.Modal)
+    ]
+    built = [
+        entry.NewLeagueModal(_state([])),
+        entry.NewLeagueModal(_state([], tracking_mode=ad.MODE_OWN_ALLIANCE)),
+    ]
+    for modal in modals:
+        for item in getattr(modal, "__discord_ui_modal_children__", []) or []:
+            built.append(item)
+    fields = []
+    for m in built:
+        fields.extend(getattr(m, "children", [m]))
+    assert fields
+    for field in fields:
+        label = getattr(field, "label", "") or ""
+        placeholder = getattr(field, "placeholder", "") or ""
+        assert len(label) <= 45, f"{label!r} is {len(label)} characters"
+        assert len(placeholder) <= 100, f"{placeholder!r} is {len(placeholder)} characters"

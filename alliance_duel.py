@@ -2746,49 +2746,28 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
     it simply pairs the wrong sixteen.
 
     Rule 5 misses that case too: a row written through Discord carries no Seed,
-    and rule 5 skips seedless rows. So the seedless alliances are named first
-    here, being both the likely intruder and the actionable list. When every
-    alliance does carry a seed, seventeen of them cannot hold sixteen distinct
-    seeds and rule 5 reports the collision, so this rule states the count once
-    and leaves the naming to it.
+    and rule 5 skips seedless rows. So this is the only check that sees it.
+
+    **It reports the count and names nobody.** The bot can rank which row looks
+    likeliest to be the extra (a seedless one, usually), but it cannot know,
+    and pointing at a row would be the bot having an opinion about which of the
+    alliance's own entries is the wrong one (`UX.md` principle 6). One finding
+    per league, and the reader does the picking.
     """
-    first_row: dict[AllianceKey, AllianceWeek] = {}
-    for row in rows:
-        if row.league == league:
-            first_row.setdefault(row.alliance, row)
-
-    if len(first_row) <= BRACKET_SIZE:
+    alliances = {row.alliance for row in rows if row.league == league}
+    if len(alliances) <= BRACKET_SIZE:
         return []
-
-    unseeded = [(a, r) for a, r in first_row.items() if r.seed is None]
-    if not unseeded:
-        return [
-            Finding(
-                rule=9,
-                severity=SEVERITY_ERROR,
-                message=(
-                    f"This league has {len(first_row)} alliances in it, and a bracket "
-                    f"holds {BRACKET_SIZE}."
-                ),
-                column=COL_TAG,
-            )
-        ]
 
     return [
         Finding(
             rule=9,
             severity=SEVERITY_ERROR,
             message=(
-                f"This league has {len(first_row)} alliances in it, and a bracket holds "
-                f"{BRACKET_SIZE}. {row.tag_display or alliance.tag.upper()} has no seed, so "
-                f"it is the likeliest extra. Check its tag against the League screen: two "
-                f"spellings of one tag read as two alliances."
+                f"An Alliance Duel (VS) League has {BRACKET_SIZE} alliances and you have "
+                f"entered {len(alliances)}. Please review and remove the extra alliance."
             ),
-            row_number=row.row_number,
             column=COL_TAG,
-            alliance=alliance,
         )
-        for alliance, row in unseeded
     ]
 
 
@@ -2953,12 +2932,22 @@ _BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
 
 @dataclass(frozen=True)
 class BracketEntry:
-    """One line of a typed-in bracket: an alliance and the seed it holds."""
+    """One line of a typed-in bracket: an alliance, its seed, and what is known.
+
+    The three prediction inputs ride along optionally. Whoever is reading the
+    League screen to type the bracket has every alliance's profile a tap away
+    on that same screen, and making them come back through "Add or edit
+    alliance" sixteen more times to enter what they were already looking at is
+    the kind of second trip the sheet path does not ask for.
+    """
 
     alliance: AllianceKey
     seed: int
     tag_display: str
     warzone_display: str
+    power: int | None = None
+    gift_level: int | None = None
+    members: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2983,6 +2972,16 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
     paste that arrived out of order is exactly the mistake worth catching here,
     and silently honouring the number would hide it.
 
+    **Power, gift level and members ride along, optionally**, in that order
+    after the warzone. They are on the same League screen as the tags, so
+    taking them here saves fifteen more trips through "Add or edit alliance".
+    Trailing fields may simply stop: a line is a tag and a warzone, then as
+    many of the three as the reader had.
+
+    Power keeps the survey convention (a bare ``301`` means 301M, and anything
+    at or above a million is read as already-raw), because these are the same
+    numbers :func:`parse_power` reads everywhere else.
+
     Problems are collected rather than raised, and each names the line it came
     from, because the caller renders them into a reply where "line 7" is the
     only route back to the typo.
@@ -2993,11 +2992,16 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
     entries: list[BracketEntry] = []
     problems: list[str] = []
     seen: dict[AllianceKey, int] = {}
+    shape = "a tag and a warzone, then power, gift level and members if you have them"
 
     for index, line in enumerate(lines, start=1):
         parts = [p for p in _BRACKET_SPLIT.split(line.replace("[", " ").replace("]", " ")) if p]
-        seed = index
-        if len(parts) >= 3 and parts[0].isdigit():
+
+        # A leading seed number is allowed but never trusted. It is told apart
+        # from a power figure by what follows it: a tag carries at least one
+        # non-digit, so `1 kTZ 714` is a numbered line and `1 714 26.8b` is an
+        # alliance whose tag happens to be "1".
+        if len(parts) >= 3 and parts[0].isdigit() and not parts[1].isdigit():
             stated = int(parts[0])
             if stated != index:
                 problems.append(
@@ -3006,13 +3010,14 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
                 )
                 continue
             parts = parts[1:]
-        if len(parts) != 2:
-            problems.append(f"Line {index} (`{line}`) needs a tag and a warzone, and nothing else.")
+
+        if not 2 <= len(parts) <= 5:
+            problems.append(f"Line {index} (`{line}`) needs {shape}.")
             continue
 
         alliance = AllianceKey.of(parts[0], parts[1])
         if alliance is None:
-            problems.append(f"Line {index} (`{line}`) needs a tag and a warzone, and nothing else.")
+            problems.append(f"Line {index} (`{line}`) needs {shape}.")
             continue
         if alliance in seen:
             problems.append(
@@ -3021,13 +3026,30 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
             )
             continue
 
+        extras = parts[2:]
+        values: list[int | None] = [None, None, None]
+        readers = (parse_power, parse_int, parse_int)
+        labels = ("power", "gift level", "members")
+        bad = None
+        for slot, raw in enumerate(extras):
+            values[slot] = readers[slot](raw)
+            if values[slot] is None:
+                bad = f"Line {index}: I could not read `{raw}` as {labels[slot]}."
+                break
+        if bad:
+            problems.append(bad)
+            continue
+
         seen[alliance] = index
         entries.append(
             BracketEntry(
                 alliance=alliance,
-                seed=seed,
+                seed=index,
                 tag_display=parts[0].strip("[]#").upper(),
                 warzone_display=parts[1],
+                power=values[0],
+                gift_level=values[1],
+                members=values[2],
             )
         )
 

@@ -5724,7 +5724,7 @@ def _current_row(player: dict) -> dict | None:
 
 
 def _alliance_odds(players: list[dict]) -> dict[int, dict]:
-    """Stored odds for each group these players sit in, keyed by group id.
+    """The stored answers this listing can actually show, keyed by group id.
 
     ONE LOOKUP PER GROUP, NOT PER PLAYER. An alliance with four players in one
     semi-final group is one `get_group_scouting` and one store SELECT, and the
@@ -5736,6 +5736,14 @@ def _alliance_odds(players: list[dict]) -> dict[int, dict]:
     `get_group_scouting` over one is four queries and a profile read for an
     answer that round would never have. `STAGES_WITH_A_MODEL` is read rather
     than a list kept in step with it by hand.
+
+    **WHAT COMES BACK IS SHOWABLE, and an absent key is the whole answer for
+    everything else.** A `missing` row means the store holds nothing for that
+    group or holds an answer computed against a different set of people, and
+    the second is wrong rather than old; a `stale` one is showable only under
+    its own timestamp. Deciding both here rather than in the renderer is what
+    stops a row and its caveat disagreeing about which groups are showable --
+    which is how a stale figure once reached the screen with nothing dating it.
     """
     wanted: dict[int, str] = {}
     for player in players:
@@ -5756,11 +5764,21 @@ def _alliance_odds(players: list[dict]) -> dict[int, dict]:
             # whole listing is a broken one.
             print(f"[CHAMPION_DUEL] alliance odds lookup failed for group {group_id}: {exc}")
             continue
+        if not stored.showable:
+            continue
+        # A TIMESTAMP WE CANNOT READ COSTS THE ANSWER, NOT THE LINE. The caveat
+        # is the CONDITION on showing a stale figure rather than a decoration
+        # over it -- `build_odds_embed` set that rule and `_standing_worked_out`
+        # follows it. Found by `/code-review`.
+        if stored.state == "stale" and _as_of_line(stored.computed_at) is None:
+            continue
         out[group_id] = {"stored": stored, "members": members, "stage": stage}
     return out
 
 
-def read_alliance(user_id: int, grouping: dict | None, *, with_odds: bool = True) -> dict:
+def read_alliance(
+    user_id: int, grouping: dict | None, *, warzone=None, with_odds: bool = True
+) -> dict:
     """Everything `📇 Your alliance` renders, in one blocking read.
 
     Returns a dict whose `state` is one of:
@@ -5768,14 +5786,23 @@ def read_alliance(user_id: int, grouping: dict | None, *, with_odds: bool = True
       unclaimed  -- nobody has told us which account this is, so there is no
                     alliance to resolve.
       no_tag     -- they hold a claim, on an account carrying no alliance tag.
+      elsewhere  -- their own account's warzone is not in this guild's Champion
+                    Duel, so this listing is not about the event they are in.
       held       -- the tag, and every account carrying it in this Champion
-                    Duel. `players` may still be empty.
+                    Duel.
 
-    **`with_odds=False` skips the store entirely**, which is what the reads
-    path wants: it picks players out of the roster and re-reads each group's
-    scouting for itself. Reading odds there would be a `get_group_scouting` and
-    a store SELECT per group for an answer nothing renders -- the same waste
-    `read_standing` took off the hub landing.
+    `warzone` is the guild's own number, carried through rather than looked up
+    so the `elsewhere` note can name which Champion Duel the reader is standing
+    in. Exactly what `read_standing` takes, for exactly that reason.
+
+    **`with_odds=False` SKIPS THE STORE ENTIRELY**, and two callers want it.
+    The reads path picks players out of the roster and re-reads each group's
+    scouting for itself. And a guild without the odds entitlement renders none
+    of them, so reading them would be a `get_group_scouting` per group for an
+    answer the embed throws away -- and worse than waste, because
+    `store_lib.lookup` stamps `last_viewed_at`, which is what orders the
+    sweeper. A free guild paging this listing would push its own groups to the
+    front of a queue whose output it cannot be shown.
     """
     claimed = db.get_claimed_registrant(user_id)
     if claimed is None:
@@ -5786,12 +5813,25 @@ def read_alliance(user_id: int, grouping: dict | None, *, with_odds: bool = True
         return {"state": "no_tag", "player": claimed, "alliance": None, "players": []}
 
     players = db.get_alliance_members(tag, (grouping or {}).get("id"))
+    # `elsewhere` IS THE STATE AN EMPTY LISTING WOULD OTHERWISE LIE ABOUT, and
+    # `/code-review` is what found it. This read is scoped by the grouping's
+    # own warzones, so the reader's account is in its own result whenever it is
+    # in this Champion Duel -- which makes an empty list *only* reachable when
+    # the reader themselves is somewhere else. Without this branch the surface
+    # answered that with "we do not hold anyone from OGV yet" over a door
+    # marked `📥 Record a group`: a claim about their alliance drawn from a
+    # fact about them, and the wrong thing to press either way.
+    #
+    # Same answer `read_standing` gives, in the same words, and it is not a
+    # prompt for the same reason: the listing still renders, and the note only
+    # says which Champion Duel it is about.
     out = {
-        "state": "held",
+        "state": "held" if _in_this_champion_duel(claimed, grouping) else "elsewhere",
         "player": claimed,
         "alliance": tag,
         "players": players,
         "grouping": grouping,
+        "warzone": str(warzone).strip() if warzone else None,
         "odds": {},
     }
     if with_odds and players:
@@ -5809,13 +5849,25 @@ def _alliance_row(player: dict, odds: dict, *, can_odds: bool) -> str:
     **The paid half is the tail of the line and nothing else moves.** Where
     there are no odds to add the row is the free half and is complete on its
     own, so a leader can see who is where without paying for anything.
+
+    **THE NUMBER IS WHICHEVER WE HOLD, AND A SEED SAYS SO.** `seed_rank` and
+    `rank` are different facts about the same player, and between the draw and
+    the standings every group has the first and none of the second -- which is
+    the window this surface is most interesting in. Reading only `rank` printed
+    `-` for a whole alliance there. Marked per row rather than in a header,
+    which is `_member_line`'s rule for a mixed group and is the general case
+    here: this listing spans groups and rounds, so no header could be true for
+    everybody at once. Found by `/code-review`.
     """
-    rank = player.get("rank")
-    position = f"`{rank}`" if rank is not None else "`-`"
+    row = _current_row(player) or {}
+    rank, seed = row.get("rank"), row.get("seed_rank")
+    shown = rank if rank is not None else seed
+    position = f"`{shown}`" if shown is not None else "`-`"
     name = discord.utils.escape_markdown(player.get("display_name") or "?")
     bits = [f"{position} **{name}**"]
-    row = _current_row(player)
-    if row and row.get("grp"):
+    if rank is None and seed is not None:
+        bits[0] += " *(seed)*"
+    if row.get("grp"):
         bits.append(f"Group {row['grp']}")
 
     if not can_odds or not row or not row.get("group_id"):
@@ -5883,6 +5935,36 @@ def _alliance_showable(odds: dict, *, can_odds: bool) -> bool:
     return bool(can_odds) and any(held["stored"].showable for held in (odds or {}).values())
 
 
+#: One embed field's value, which is Discord's cap rather than a chosen one.
+FIELD_LIMIT = 1024
+
+
+def _add_listing(embed: discord.Embed, name: str, lines: list[str]) -> None:
+    """Rows into as many fields as they need, and never into a clamp.
+
+    **A PAGE OF TWENTY DOES NOT FIT ONE FIELD.** A field value stops at 1,024
+    characters and a row carrying a rank, a name, a group and two probabilities
+    runs to about ninety, so twenty of them is roughly 1,800 -- and the clamp
+    every other call site in this file uses would have dropped the tail of the
+    list while the footer went on counting them. That is the silent cut this
+    feature refuses to make anywhere else. Found by `/code-review`.
+
+    Continuations carry a zero-width space for a name, which is Discord's own
+    way of running a field on with no second heading, and the same thing the
+    stale caveat below uses.
+    """
+    chunk: list[str] = []
+    used = 0
+    for line in lines:
+        if chunk and used + len(line) + 1 > FIELD_LIMIT:
+            embed.add_field(name=(name or "​")[:256], value="\n".join(chunk), inline=False)
+            name, chunk, used = "​", [], 0
+        chunk.append(line)
+        used += len(line) + 1
+    if chunk:
+        embed.add_field(name=(name or "​")[:256], value="\n".join(chunk)[:FIELD_LIMIT], inline=False)
+
+
 def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> discord.Embed:
     """`📇 Your alliance`: where all of my people are, and how far they get.
 
@@ -5923,20 +6005,31 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
     glyph = CD_BTN_ALLIANCE.split(" ", 1)[0]
     embed = discord.Embed(title=f"{glyph} {tag}"[:256], color=discord.Color.blurple())
 
+    # Which Champion Duel this listing is about, where that is not the one the
+    # reader's own account is in. Not a prompt and not a guess about why: the
+    # same note `🏅 Your standing` carries, off the same constant.
+    elsewhere = (
+        _elsewhere_note(player, state.get("warzone")) if state.get("state") == "elsewhere" else None
+    )
+
     players = state.get("players") or []
     if not players:
-        embed.description = _ALLIANCE_NOBODY.format(
+        # Reachable only from `elsewhere`, since this read is scoped by the
+        # grouping's own warzones and so contains the reader whenever they are
+        # in it. The note leads, because "we hold nobody from OGV" on its own
+        # would be a claim about their alliance drawn from a fact about them.
+        body = _ALLIANCE_NOBODY.format(
             alliance=tag,
             add=_btn_words(CD_BTN_ADD),
             record=_btn_words(CD_BTN_RECORD),
-        )[:4096]
+        )
+        embed.description = (f"{elsewhere}\n\n{body}" if elsewhere else body)[:4096]
         return embed
 
     started = _short_date((state.get("grouping") or {}).get("started_on"))
     opener = f"This Champion Duel started {started}. " if started else ""
-    embed.description = (opener + _ALLIANCE_HELD.format(count=_plural(len(players), "account")))[
-        :4096
-    ]
+    held = opener + _ALLIANCE_HELD.format(count=_plural(len(players), "account"))
+    embed.description = (f"{held}\n{elsewhere}" if elsewhere else held)[:4096]
 
     pages = max(1, -(-len(players) // GROUP_PAGE_SIZE))
     page = max(0, min(page, pages - 1))
@@ -5951,20 +6044,24 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
     for stage, group in itertools.groupby(rows, key=lambda p: p.get("stage")):
         listed = list(group)
         if stage is None:
+            _add_listing(
+                embed,
+                _ALLIANCE_UNPLACED,
+                [_alliance_row(p, odds, can_odds=False) for p in listed],
+            )
+            # ITS OWN FIELD, NOT A TAIL ON THE ROWS. Appended to the listing it
+            # was the first thing a 1,024-character clamp cut, and it is the
+            # only exit this state has. Found by `/code-review`.
             embed.add_field(
-                name=_ALLIANCE_UNPLACED,
-                value=(
-                    "\n".join(_alliance_row(p, odds, can_odds=False) for p in listed)
-                    + "\n\n"
-                    + _ALLIANCE_UNPLACED_BODY.format(record=_btn_words(CD_BTN_RECORD))
-                )[:1024],
+                name="​",
+                value=_ALLIANCE_UNPLACED_BODY.format(record=_btn_words(CD_BTN_RECORD))[:1024],
                 inline=False,
             )
             continue
-        embed.add_field(
-            name=db.STAGE_LABELS.get(stage, str(stage).title())[:256],
-            value="\n".join(_alliance_row(p, odds, can_odds=can_odds) for p in listed)[:1024],
-            inline=False,
+        _add_listing(
+            embed,
+            db.STAGE_LABELS.get(stage, str(stage).title()),
+            [_alliance_row(p, odds, can_odds=can_odds) for p in listed],
         )
 
     as_of = _alliance_as_of(odds) if can_odds else None
@@ -6040,23 +6137,41 @@ def _read_block(read, player_name: str) -> str:
     worth_little = result.worth == intel_lib.WORTH_SETTLED
     lines: list[str] = []
 
-    # The headline figure. Only ever the recommendation's own mean: where there
-    # is no recommendation there is no single number that is not a claim, and
-    # the range says so instead.
-    if result.recommended is not None and result.choice_matters and not worth_little:
+    # THE HEADLINE FIGURE, AND WHEN THERE IS HONESTLY ONE.
+    #
+    # A single number is quotable in two states and only two. Either there is a
+    # recommendation to price it against, or the range has collapsed to a point
+    # -- which is what `worth_little` means: the power gap decides the match and
+    # every line-up either of them could set gives the same answer.
+    #
+    # `build_intel_embed` SUPPRESSES ITS RANGE IN THAT SECOND STATE and an
+    # earlier draft of this printed it, which `/code-review` caught: at a large
+    # gap the envelope is "<1% to <1%", which is true, useless, and reads as a
+    # broken surface. So `worth_little` takes the figure, and the range is left
+    # for the state it was written for -- the choice matters and we cannot call
+    # it, where floor and ceiling are genuinely far apart.
+    #
+    # `Envelope.mean` is never any of these. Weighting every configuration
+    # equally is the wrong prior, and `champion_duel_intel` says quoting it as
+    # an estimate "would be a worse claim than the one it criticises".
+    floor = words.probability(result.envelope.floor)
+    ceiling = words.probability(result.envelope.ceiling)
+    if result.recommended is not None and (worth_little or result.choice_matters):
         lines.append(
             _READ_ODDS.format(
                 odds=words.probability(result.recommended.mean),
                 player=discord.utils.escape_markdown(player_name),
             )
         )
-    else:
+    elif floor == ceiling:
+        # No recommendation, and every configuration lands on one figure
+        # anyway. The range IS the number, so printing it twice with "from"
+        # and "to" around it would be the same defect wearing the other shape.
         lines.append(
-            _READ_RANGE.format(
-                floor=words.probability(result.envelope.floor),
-                ceiling=words.probability(result.envelope.ceiling),
-            )
+            _READ_ODDS.format(odds=floor, player=discord.utils.escape_markdown(player_name))
         )
+    else:
+        lines.append(_READ_RANGE.format(floor=floor, ceiling=ceiling))
 
     # What they do. Observed, never modelled.
     if result.habit:
@@ -6326,10 +6441,11 @@ class _AllianceView(discord.ui.View):
     def _build(self):
         """The exit that fits the state, and every state has one.
 
-        `UX.md` principle 3. The three dead ends here are different gaps and
-        take different doors: nobody claimed is the claim flow, a claimed
-        account with no tag is `➕ Add a player` re-entering the same name with
-        one, and a tag we hold nobody for is `📥 Record a group`.
+        `UX.md` principle 3. The dead ends here are different gaps and take
+        different doors: nobody claimed is the claim flow, a claimed account
+        with no tag is `➕ Add a player` re-entering the same name with one, an
+        account in a different Champion Duel is the claim again, and a tag we
+        hold nobody for is `📥 Record a group`.
         """
         self.clear_items()
         state = self.state.get("state")
@@ -6384,14 +6500,23 @@ class _AllianceView(discord.ui.View):
             reads.callback = self._on_reads
             self.add_item(reads)
 
-        # The door at the gap, and it is the same door the group listing puts
-        # there. An alliance we hold nobody for is the widest gap this feature
-        # has, so recording is the only thing left to do on that screen.
+        # THE DOOR AT THE GAP, AND WHICH GAP IT IS DEPENDS ON THE READER. An
+        # empty listing is only reachable when the reader's own account is in a
+        # different Champion Duel, so what fixes it is moving their claim and
+        # not recording somebody else's group -- and `/code-review` found the
+        # surface offering the second. Recording still helps a leader who is
+        # here and holds nobody, so it rides along rather than being replaced.
         if not players:
+            if state == "elsewhere":
+                claim = discord.ui.Button(
+                    label=CD_BTN_WHO_AM_I[:80], style=discord.ButtonStyle.primary, row=row
+                )
+                claim.callback = self._on_who_am_i
+                self.add_item(claim)
             record = discord.ui.Button(
                 label=(CD_BTN_RECORD if self.can_write else f"🔒 {CD_BTN_RECORD}")[:80],
                 style=discord.ButtonStyle.primary
-                if self.can_write
+                if self.can_write and state != "elsewhere"
                 else discord.ButtonStyle.secondary,
                 disabled=not self.can_write,
                 row=row,
@@ -6420,7 +6545,13 @@ class _AllianceView(discord.ui.View):
 
     async def _turn(self, inter: discord.Interaction, page: int):
         await inter.response.defer()
-        self.state = await asyncio.to_thread(read_alliance, inter.user.id, self.grouping)
+        self.state = await asyncio.to_thread(
+            read_alliance,
+            inter.user.id,
+            self.grouping,
+            warzone=self.warzone,
+            with_odds=self.can_odds,
+        )
         self.page = page
         self._build()
         await inter.edit_original_response(
@@ -7851,7 +7982,18 @@ class ChampionDuelHubView(discord.ui.View):
             inter.guild_id
             and await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter)
         )
-        state = await asyncio.to_thread(read_alliance, inter.user.id, self.grouping)
+        # `with_odds` follows the entitlement. A free guild renders none of
+        # them, so reading them would be a `get_group_scouting` per group for
+        # an answer the embed drops -- and `store_lib.lookup` stamps
+        # `last_viewed_at`, so it would also push groups whose answer nobody
+        # here can be shown to the front of the sweeper's queue.
+        state = await asyncio.to_thread(
+            read_alliance,
+            inter.user.id,
+            self.grouping,
+            warzone=self.warzone,
+            with_odds=can_odds,
+        )
         view = _AllianceView(
             user_id=inter.user.id,
             grouping=self.grouping,

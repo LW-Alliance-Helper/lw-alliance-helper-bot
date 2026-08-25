@@ -3228,6 +3228,22 @@ def get_roster(
 _FURTHEST_FIRST = {stage: -index for index, stage in enumerate(STAGES)}
 
 
+def _standing_position(player: dict) -> int:
+    """Where a player sorts inside their round: their result, or their seed.
+
+    **Both columns, and `rank` first.** A group is recorded twice over its life
+    -- once at the draw and once at the standings -- so between those two
+    moments every row carries a `seed_rank` and no `rank`. Sorting on `rank`
+    alone put a whole alliance in alphabetical order there, which is the window
+    the listing is most read in. Found by `/code-review`.
+    """
+    row = (player.get("stages") or {}).get(player.get("stage")) or {}
+    for key in ("rank", "seed_rank"):
+        if row.get(key) is not None:
+            return row[key]
+    return 9999
+
+
 def get_alliance_members(alliance, grouping_id) -> list[dict]:
     """Every account carrying this alliance tag in one Champion Duel.
 
@@ -3293,7 +3309,7 @@ def get_alliance_members(alliance, grouping_id) -> list[dict]:
             # reason #519 recorded: the knockouts carry no letter at all, so
             # every survivor has `grp` None and a letter sort inverts them.
             _FURTHEST_FIRST.get(p.get("stage"), 1),
-            p.get("rank") or 9999,
+            _standing_position(p),
             p["display_name"],
         )
     )

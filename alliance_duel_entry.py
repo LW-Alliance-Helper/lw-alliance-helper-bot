@@ -655,14 +655,212 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
     )
 
 
+# ── A new league ──────────────────────────────────────────────────────────────
+
+VS_BTN_NEW_LEAGUE = "➕ Start a new league"
+
+
+def pending_new_league(state) -> bool:
+    """Whether pressing the button would actually start something.
+
+    Two moments, and only two: nothing recorded yet, or the league on the sheet
+    has all four weeks decided. In between, the rows already exist and
+    :data:`VS_BTN_NEXT_WEEK` is the control that moves them on, so this one
+    stays off the hub rather than sitting there inviting a second bracket into
+    a league still being played.
+
+    Deliberately exclusive with :func:`pending_next_week`, which declines at
+    week 4 because there is no week 5. The two never contend for the same slot
+    on the button row.
+    """
+    if state.league is None:
+        return True
+    return ad.is_league_complete(state.league_rows(), state.league)
+
+
+class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
+    """League identity off the start screen, and the bracket in seed order.
+
+    The fields are built in ``__init__`` rather than declared on the class
+    because the last one changes shape with the tracking mode: a full bracket
+    wants all sixteen alliances, and an own-alliance sheet wants a seed and
+    nothing else. One modal, because a two-step wizard for what is one screen
+    in game would be the bot making this longer than it is.
+    """
+
+    def __init__(self, state):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+
+        self.season = discord.ui.TextInput(
+            label="Season", placeholder="S36", max_length=12, required=True
+        )
+        self.tier = discord.ui.TextInput(
+            label="Tier", placeholder="Diamond", max_length=24, required=False
+        )
+        self.group = discord.ui.TextInput(
+            label="Group", placeholder="12 - 1", max_length=24, required=False
+        )
+        self.week_date = discord.ui.TextInput(
+            label="Monday of week 1", placeholder="2026-08-24", max_length=24, required=True
+        )
+        if state.full_bracket:
+            self.bracket = discord.ui.TextInput(
+                label="The bracket, in League order",
+                style=discord.TextStyle.paragraph,
+                placeholder="kTZ 714\nIMI 685\nRudi 716\n(one alliance per line, all 16)",
+                max_length=1200,
+                required=True,
+            )
+        else:
+            self.bracket = discord.ui.TextInput(
+                label="Your seed", placeholder="9", max_length=4, required=True
+            )
+        for item in (self.season, self.tier, self.group, self.week_date, self.bracket):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        league = ad.LeagueKey.of(self.season.value, self.tier.value, self.group.value)
+        if league is None:
+            await interaction.followup.send(
+                "⚠️ A league needs a season, the one on the League screen. Run `/vs` and "
+                f"click **{VS_BTN_NEW_LEAGUE}** to try again.",
+                ephemeral=True,
+            )
+            return
+
+        week_date = ad.parse_week_date(self.week_date.value)
+        if week_date is None:
+            await interaction.followup.send(
+                "⚠️ I could not read that date. Write it as `2026-08-24`. Run `/vs` and "
+                f"click **{VS_BTN_NEW_LEAGUE}** to try again.",
+                ephemeral=True,
+            )
+            return
+        week_date = ad.week_monday(week_date)
+
+        state = self.state
+        parse = _parse_new_league_bracket(state, self.bracket.value)
+        if not parse.ok:
+            await interaction.followup.send(
+                "⚠️ I did not write anything. Fix these and try again:\n"
+                + "\n".join(f"• {p}" for p in parse.problems[:8]),
+                ephemeral=True,
+            )
+            return
+
+        ok, message = await start_new_league(state, league, week_date, parse.entries)
+        await interaction.followup.send(("✅ " if ok else "⚠️ ") + message, ephemeral=True)
+
+
+def _parse_new_league_bracket(state, text) -> ad.BracketParse:
+    """Read the modal's last field, whichever shape the tracking mode gave it.
+
+    Own-alliance mode types a seed rather than a roster, so the alliance comes
+    from the configured identity and the field supplies only where it sits in
+    the bracket. The result is the same shape either way, which is what keeps
+    :func:`start_new_league` free of the mode question.
+    """
+    if state.full_bracket:
+        return ad.parse_bracket(text)
+
+    if state.own is None:
+        return ad.BracketParse(
+            problems=(
+                "I do not know which alliance is yours yet. Run `/setup` and open the "
+                "Alliance Duel (VS) section to set it.",
+            )
+        )
+    seed = ad.parse_int(text)
+    if seed is None or not 1 <= seed <= ad.BRACKET_SIZE:
+        return ad.BracketParse(problems=(f"A seed is a number from 1 to {ad.BRACKET_SIZE}.",))
+
+    row = next((r for r in state.rows if r.alliance == state.own and r.tag_display), None)
+    return ad.BracketParse(
+        entries=(
+            ad.BracketEntry(
+                alliance=state.own,
+                seed=seed,
+                tag_display=(row.tag_display if row else state.own.tag.upper()),
+                warzone_display=(row.warzone_display if row else state.own.warzone),
+            ),
+        )
+    )
+
+
+async def start_new_league(state, league, week_date, entries) -> tuple[bool, str]:
+    """Write week 1's rows for `league`, stamped and seeded, ready to fill.
+
+    The League screen shows all sixteen alliances and their seeds the moment a
+    league opens, so this is one sitting: the bot writes the rows and the
+    officer fills power, members and gift level straight off that same screen.
+
+    Week 1's pairings are **not** written. They follow from the seeds, so
+    :func:`compute_week_pairing` derives them on every read, and writing them
+    would spend sixteen cells restating what the seeds already say. Weeks 2 to
+    4 are different and do get a written prediction, because there the
+    officer's correction is the signal that the pairing algorithm needs a look.
+    """
+    if state.own is not None and state.full_bracket:
+        if not any(e.alliance == state.own for e in entries):
+            return False, (
+                f"**{state.display_name(state.own)}** is not in that bracket. Your own "
+                "alliance has to be one of the sixteen."
+            )
+
+    existing = {r.alliance for r in state.rows if r.league == league}
+    rows = ad.skeleton_rows(
+        league,
+        1,
+        week_date,
+        [(e.alliance, e.seed) for e in entries],
+        tracking_mode=state.tracking_mode,
+        own_alliance=state.own,
+    )
+    if not rows:
+        return False, (
+            "I had nothing to write. In own-alliance mode I need to know which alliance "
+            "is yours: run `/setup` and open the Alliance Duel (VS) section."
+        )
+
+    display = {e.alliance: e for e in entries}
+    for row in rows:
+        entry = display.get(row.alliance)
+        if entry is not None:
+            row.tag_display = entry.tag_display
+            row.warzone_display = entry.warzone_display
+
+    problem = await save_rows(state, rows)
+    if problem:
+        return False, problem
+
+    # The league the rest of the hub reads comes from the loaded snapshot, and
+    # the rows just written are the only ones in it. Without this the officer
+    # would save a bracket and land back on a hub that still says there is no
+    # league, which reads as a failed write.
+    state.league = league
+
+    added = len(rows) - len(existing & {r.alliance for r in rows})
+    noun = "row" if added == 1 else "rows"
+    return True, (
+        f"Started **{league}** with {added} {noun} for week 1. Fill in power, members "
+        f"and gift level from the League screen, then record each day as it lands."
+    )
+
+
 __all__ = [
     "AllianceModal",
     "KnownModal",
+    "NewLeagueModal",
     "ScoreModal",
     "ScoutActionsView",
     "generate_next_week",
+    "pending_new_league",
     "pending_next_week",
     "save_rows",
+    "start_new_league",
     "target_day",
 ]
 

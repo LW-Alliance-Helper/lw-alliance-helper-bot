@@ -601,6 +601,23 @@ class VSHubView(discord.ui.View):
             advance.callback = self._next_week
             self.add_item(advance)
 
+        # Same slot, same rule, and the two can never both apply: advancing
+        # needs a week to advance from, and starting a league needs there to be
+        # no live one. With nothing recorded at all this is the only control on
+        # the hub that does anything, so it is `primary` in that state.
+        elif ad_entry.pending_new_league(state):
+            fresh = discord.ui.Button(
+                label=ad_entry.VS_BTN_NEW_LEAGUE,
+                style=(
+                    discord.ButtonStyle.primary
+                    if state.league is None
+                    else discord.ButtonStyle.secondary
+                ),
+                row=1,
+            )
+            fresh.callback = self._new_league
+            self.add_item(fresh)
+
         setup = discord.ui.Button(label=VS_BTN_SETUP, style=discord.ButtonStyle.secondary, row=1)
         setup.callback = self._setup
         self.add_item(setup)
@@ -706,6 +723,9 @@ class VSHubView(discord.ui.View):
             self.state, self.next_week, bot=interaction.client
         )
         await interaction.followup.send(f"{'✅' if ok else '⚠️'} {detail}", ephemeral=True)
+
+    async def _new_league(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ad_entry.NewLeagueModal(self.state))
 
     async def _setup(self, interaction: discord.Interaction):
         from alliance_duel_wizard import run_vs_setup

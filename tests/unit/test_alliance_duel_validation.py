@@ -427,3 +427,149 @@ def test_blank_rows_omit_a_date_that_is_not_known():
     header = list(ad.SHEET_COLUMNS)
     line = ad.blank_bracket_values(header, LEAGUE, 1, None)
     assert line[header.index(ad.COL_WEEK_DATE)] == ""
+
+
+# ── Rule 9: a bracket holds sixteen, never more ───────────────────────────────
+
+
+def _full_league(seeded=ad.BRACKET_SIZE):
+    """Week 1 rows for a complete bracket, seeds 1..16."""
+    return [_row(1, i, i + 1) for i in range(seeded)]
+
+
+def test_a_full_bracket_of_sixteen_raises_no_roster_finding():
+    assert 9 not in _rules(ad.validate(_full_league()))
+
+
+def test_a_part_filled_bracket_is_not_reported_as_wrong():
+    # Twelve typed so far is what entry looks like halfway through, and the
+    # bracket and path surfaces already say the roster is short. Nagging here
+    # would make "Check my sheet" argue with work in progress.
+    assert 9 not in _rules(ad.validate(_full_league(12)))
+
+
+def test_a_seventeenth_alliance_with_no_seed_is_named():
+    # The failure this exists for: one tag entered two ways (a capital i and a
+    # lowercase L read alike), which reaches the sheet through Discord with no
+    # Seed, and which rule 5 skips precisely because it has no Seed.
+    rows = _full_league() + [_row(1, 99)]
+    findings = [f for f in ad.validate(rows) if f.rule == 9]
+    assert [f.alliance for f in findings] == [_key(99)]
+    assert "17 alliances" in findings[0].message
+    assert findings[0].severity == ad.SEVERITY_ERROR
+
+
+def test_the_seedless_intruder_is_invisible_to_the_seed_rule():
+    # Standing proof of why rule 9 had to exist rather than rule 5 being widened.
+    rows = _full_league() + [_row(1, 99)]
+    assert 5 not in _rules(ad.validate(rows))
+
+
+def test_a_seventeenth_seeded_alliance_reports_the_count_once():
+    # Seventeen alliances cannot hold sixteen distinct seeds, so rule 5 names
+    # the collision and rule 9 only has to state the count.
+    rows = _full_league() + [_row(1, 99, 4)]
+    findings = [f for f in ad.validate(rows) if f.rule == 9]
+    assert len(findings) == 1
+    assert findings[0].alliance is None
+    assert 5 in _rules(ad.validate(rows))
+
+
+def test_the_roster_rule_does_not_run_in_own_alliance_mode():
+    rows = _full_league() + [_row(1, 99)]
+    findings = ad.validate(rows, tracking_mode=ad.MODE_OWN_ALLIANCE)
+    assert 9 not in _rules(findings)
+
+
+def test_one_league_being_oversized_does_not_flag_another():
+    other = ad.LeagueKey("S36", "Diamond", "12 - 1")
+    rows = _full_league() + [_row(1, 99)]
+    rows += [ad.AllianceWeek(league=other, week=1, alliance=_key(i), seed=i + 1) for i in range(4)]
+    findings = [f for f in ad.validate(rows) if f.rule == 9]
+    assert {f.alliance for f in findings} == {_key(99)}
+
+
+# ── Reading a typed-in bracket ────────────────────────────────────────────────
+
+
+def _bracket_text(n=ad.BRACKET_SIZE, start=0):
+    return "\n".join(f"AL{i:02d} 1234" for i in range(start, start + n))
+
+
+def test_a_pasted_bracket_takes_its_seeds_from_line_order():
+    parse = ad.parse_bracket(_bracket_text())
+    assert parse.ok
+    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+    assert parse.entries[0].alliance == _key(0)
+
+
+def test_the_shapes_an_officer_actually_pastes_all_read():
+    parse = ad.parse_bracket(
+        "[kTZ] 714\nIMI,685\nRudi\t716\n" + "\n".join(f"AL{i:02d} 1234" for i in range(13))
+    )
+    assert parse.ok, parse.problems
+    assert [e.tag_display for e in parse.entries[:3]] == ["KTZ", "IMI", "RUDI"]
+
+
+def test_blank_lines_between_alliances_are_not_seeds():
+    parse = ad.parse_bracket("\n\n".join(f"AL{i:02d} 1234" for i in range(ad.BRACKET_SIZE)))
+    assert parse.ok
+    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+
+
+def test_a_stated_seed_is_checked_against_its_position_not_trusted():
+    # A paste that arrived out of order is the mistake worth catching; honouring
+    # the number would hide it behind a bracket that looks fine.
+    parse = ad.parse_bracket("1 AL00 1234\n3 AL01 1234\n" + _bracket_text(14, start=2))
+    assert not parse.ok
+    assert parse.problems == (
+        "Line 2 is numbered 3. Lines are read in seed order, so this "
+        "one is seed 2. Reorder them or drop the numbers.",
+    )
+
+
+def test_a_stated_seed_that_agrees_with_its_position_is_accepted():
+    text = "\n".join(f"{i + 1} AL{i:02d} 1234" for i in range(ad.BRACKET_SIZE))
+    parse = ad.parse_bracket(text)
+    assert parse.ok, parse.problems
+    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+
+
+def test_a_line_missing_its_warzone_names_the_line():
+    parse = ad.parse_bracket("AL00\n" + _bracket_text(15))
+    assert not parse.ok
+    assert "Line 1" in parse.problems[0]
+
+
+def test_the_same_alliance_twice_names_both_lines():
+    parse = ad.parse_bracket("AL00 1234\nAL00 1234\n" + _bracket_text(14, start=1))
+    assert not parse.ok
+    assert len(parse.problems) == 1
+    assert "Line 2 repeats" in parse.problems[0]
+    assert "line 1" in parse.problems[0]
+
+
+def test_one_tag_in_two_warzones_is_two_alliances():
+    # Tags are not unique across warzones, so this is legitimate, not a repeat.
+    parse = ad.parse_bracket("AL00 1234\nAL00 5678\n" + _bracket_text(14, start=1))
+    assert parse.ok, parse.problems
+
+
+def test_a_short_bracket_is_counted_not_guessed_at():
+    parse = ad.parse_bracket(_bracket_text(15))
+    assert not parse.ok
+    assert "15 alliances" in parse.problems[0]
+
+
+def test_typos_are_reported_ahead_of_the_count_they_cause():
+    # Fifteen good lines and one bad one is one mistake, and reporting it as
+    # two ("...and the bracket is short") sends the reader looking for a
+    # second problem that was never there.
+    parse = ad.parse_bracket("AL00\n" + _bracket_text(15))
+    assert len(parse.problems) == 1
+
+
+def test_own_alliance_mode_asks_for_one_line():
+    parse = ad.parse_bracket("AL00 1234", expect=1)
+    assert parse.ok
+    assert parse.entries[0].seed == 1

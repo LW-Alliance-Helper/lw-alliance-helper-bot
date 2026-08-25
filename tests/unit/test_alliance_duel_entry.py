@@ -382,3 +382,123 @@ def test_entry_copy_carries_no_em_dashes_and_no_internals():
     for text in strings:
         assert "—" not in text
         assert "guild" not in text.lower()
+
+
+# ── Starting a new league ─────────────────────────────────────────────────────
+
+
+def _entries(tags=None):
+    tags = tags or ([OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)])
+    return tuple(
+        ad.BracketEntry(alliance=_key(t), seed=i, tag_display=t, warzone_display=OWN_WZ)
+        for i, t in enumerate(tags, start=1)
+    )
+
+
+@pytest.fixture
+def _captured(monkeypatch):
+    """Swallow the write and hand back what would have been written."""
+    written = []
+
+    async def _fake(state, rows):
+        written.extend(rows)
+        return ""
+
+    monkeypatch.setattr(entry, "save_rows", _fake)
+    return written
+
+
+def test_the_button_offers_itself_when_nothing_is_recorded():
+    assert entry.pending_new_league(_state([])) is True
+
+
+def test_the_button_stays_away_mid_league():
+    # The rows exist and "Start next week's rows" is the control that moves
+    # them on. A second bracket does not belong in a league being played.
+    assert entry.pending_new_league(_state(_bracket())) is False
+
+
+def test_the_button_returns_once_the_league_is_played_out():
+    rows = []
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        _play_week(rows, week, lambda m: m.a)
+    assert entry.pending_new_league(_state(rows)) is True
+
+
+def test_starting_and_advancing_never_want_the_same_slot():
+    """They share a place on the button row, so one has to be off whenever the
+    other is on. Advancing declines at week 4 (there is no week 5), which is
+    exactly where starting a league becomes available again."""
+    rows = []
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+        for played in range(1, week + 1):
+            _play_week(rows, played, lambda m: m.a)
+        state = _state(rows)
+        assert not (
+            entry.pending_next_week(state) is not None and entry.pending_new_league(state)
+        ), f"both offered after week {week}"
+
+
+async def test_a_new_league_is_written_stamped_and_seeded(_captured):
+    state = _state([])
+    league = ad.LeagueKey("S36", "Diamond", "12 - 1")
+    ok, message = await entry.start_new_league(state, league, MONDAY, _entries())
+
+    assert ok, message
+    assert len(_captured) == ad.BRACKET_SIZE
+    assert {r.league for r in _captured} == {league}
+    assert {r.week for r in _captured} == {1}
+    assert {r.week_date for r in _captured} == {MONDAY}
+    assert sorted(r.seed for r in _captured) == list(range(1, ad.BRACKET_SIZE + 1))
+
+
+async def test_week_1_opponents_are_left_for_the_seeds_to_say(_captured):
+    # Sixteen cells restating what the seeds already imply. `compute_week_pairing`
+    # derives them on every read, so writing them would buy nothing and could
+    # disagree with itself.
+    state = _state([])
+    await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert all(r.opponent is None for r in _captured)
+    pairing = ad.compute_week_pairing(_captured, 1)
+    assert isinstance(pairing, ad.WeekPairing)
+    assert len(pairing.matches) == ad.BRACKET_SIZE // 2
+
+
+async def test_a_bracket_without_your_own_alliance_is_refused(_captured):
+    # Rule 6 would report this every time "Check my sheet" ran. Better to catch
+    # it at the point of entry, while the League screen is still open.
+    state = _state([])
+    others = [f"A{i:02d}" for i in range(1, ad.BRACKET_SIZE + 1)]
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, _entries(others))
+    assert not ok
+    assert "not in that bracket" in message
+    assert _captured == []
+
+
+async def test_the_hub_sees_the_league_it_just_wrote(_captured):
+    # The hub reads the sheet once per invocation, so without this the officer
+    # saves a bracket and lands back on a hub still saying there is no league.
+    state = _state([])
+    assert state.league is None
+    league = ad.LeagueKey("S36", "Diamond", "12 - 1")
+    await entry.start_new_league(state, league, MONDAY, _entries())
+    assert state.league == league
+
+
+async def test_own_alliance_mode_writes_only_your_row(_captured):
+    state = _state([], tracking_mode=ad.MODE_OWN_ALLIANCE)
+    ok, _ = await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert ok
+    assert [r.alliance for r in _captured] == [OWN]
+
+
+async def test_a_sunday_start_date_lands_on_the_week_it_opens(_captured):
+    """`week_monday` sends Sunday back rather than forward, so an officer who
+    types the Sunday before would otherwise stamp the week that just ended."""
+    state = _state([])
+    monday = ad.week_monday(MONDAY)
+    await entry.start_new_league(state, LEAGUE, monday, _entries())
+    assert {r.week_date for r in _captured} == {monday}

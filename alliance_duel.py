@@ -2730,6 +2730,68 @@ def _check_seeds(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Findin
     return out
 
 
+def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Finding]:
+    """Rule 9 (full bracket only): a league holds sixteen alliances, never more.
+
+    **Only ever fires on too many**, never on too few. A part-filled sheet is
+    the normal state during entry, and the bracket and path surfaces already
+    say so through :class:`BracketIncomplete`. Repeating it here would turn
+    "Check my sheet" into a nag about work in progress.
+
+    Too many is a different thing: sixteen is the shape of the competition, so
+    a seventeenth alliance is always a mistake. The one that matters in
+    practice is a **near-duplicate tag** (`KTI` typed once as a capital i and
+    once as a lowercase L), which :func:`compute_week_pairing` cannot see,
+    because seventeen alliances still clears its ``< BRACKET_SIZE`` guard and
+    it simply pairs the wrong sixteen.
+
+    Rule 5 misses that case too: a row written through Discord carries no Seed,
+    and rule 5 skips seedless rows. So the seedless alliances are named first
+    here, being both the likely intruder and the actionable list. When every
+    alliance does carry a seed, seventeen of them cannot hold sixteen distinct
+    seeds and rule 5 reports the collision, so this rule states the count once
+    and leaves the naming to it.
+    """
+    first_row: dict[AllianceKey, AllianceWeek] = {}
+    for row in rows:
+        if row.league == league:
+            first_row.setdefault(row.alliance, row)
+
+    if len(first_row) <= BRACKET_SIZE:
+        return []
+
+    unseeded = [(a, r) for a, r in first_row.items() if r.seed is None]
+    if not unseeded:
+        return [
+            Finding(
+                rule=9,
+                severity=SEVERITY_ERROR,
+                message=(
+                    f"This league has {len(first_row)} alliances in it, and a bracket "
+                    f"holds {BRACKET_SIZE}."
+                ),
+                column=COL_TAG,
+            )
+        ]
+
+    return [
+        Finding(
+            rule=9,
+            severity=SEVERITY_ERROR,
+            message=(
+                f"This league has {len(first_row)} alliances in it, and a bracket holds "
+                f"{BRACKET_SIZE}. {row.tag_display or alliance.tag.upper()} has no seed, so "
+                f"it is the likeliest extra. Check its tag against the League screen: two "
+                f"spellings of one tag read as two alliances."
+            ),
+            row_number=row.row_number,
+            column=COL_TAG,
+            alliance=alliance,
+        )
+        for alliance, row in unseeded
+    ]
+
+
 def _check_own_alliance_present(
     rows: Sequence[AllianceWeek], league: LeagueKey, own: AllianceKey
 ) -> list[Finding]:
@@ -2872,12 +2934,113 @@ def validate(
     if full_bracket:
         for league in {r.league for r in rows}:
             out += _check_seeds(rows, league)
+            out += _check_roster_size(rows, league)
             if own_alliance is not None:
                 out += _check_own_alliance_present(rows, league, own_alliance)
 
     out += _check_day_score_magnitude(rows)
 
     return sorted(out, key=lambda f: (f.rule, f.row_number or 0, f.column))
+
+
+# ── Reading a typed-in bracket ────────────────────────────────────────────────
+
+#: What a bracket line may be separated by. Officers copy from several places
+#: and the game renders a tag in brackets, so `[kTZ] 714`, `kTZ,714` and
+#: `kTZ 714` all arrive rather than being retyped into one shape.
+_BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
+
+
+@dataclass(frozen=True)
+class BracketEntry:
+    """One line of a typed-in bracket: an alliance and the seed it holds."""
+
+    alliance: AllianceKey
+    seed: int
+    tag_display: str
+    warzone_display: str
+
+
+@dataclass(frozen=True)
+class BracketParse:
+    """The outcome of reading a pasted bracket, problems and all."""
+
+    entries: tuple[BracketEntry, ...] = ()
+    problems: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
+    """Read a pasted bracket into seeded alliances.
+
+    **Line order is the seed.** The League screen lists all sixteen in ranking
+    order at league start, and reading straight down it is the entire reason
+    setup is one sitting. A line may state its own seed as a leading number
+    instead, which is *checked* against its position rather than trusted: a
+    paste that arrived out of order is exactly the mistake worth catching here,
+    and silently honouring the number would hide it.
+
+    Problems are collected rather than raised, and each names the line it came
+    from, because the caller renders them into a reply where "line 7" is the
+    only route back to the typo.
+    """
+    lines = [ln.strip() for ln in str(text or "").splitlines()]
+    lines = [ln for ln in lines if ln]
+
+    entries: list[BracketEntry] = []
+    problems: list[str] = []
+    seen: dict[AllianceKey, int] = {}
+
+    for index, line in enumerate(lines, start=1):
+        parts = [p for p in _BRACKET_SPLIT.split(line.replace("[", " ").replace("]", " ")) if p]
+        seed = index
+        if len(parts) >= 3 and parts[0].isdigit():
+            stated = int(parts[0])
+            if stated != index:
+                problems.append(
+                    f"Line {index} is numbered {stated}. Lines are read in seed order, "
+                    f"so this one is seed {index}. Reorder them or drop the numbers."
+                )
+                continue
+            parts = parts[1:]
+        if len(parts) != 2:
+            problems.append(f"Line {index} (`{line}`) needs a tag and a warzone, and nothing else.")
+            continue
+
+        alliance = AllianceKey.of(parts[0], parts[1])
+        if alliance is None:
+            problems.append(f"Line {index} (`{line}`) needs a tag and a warzone, and nothing else.")
+            continue
+        if alliance in seen:
+            problems.append(
+                f"Line {index} repeats {parts[0].upper()} in warzone {parts[1]}, "
+                f"already on line {seen[alliance]}."
+            )
+            continue
+
+        seen[alliance] = index
+        entries.append(
+            BracketEntry(
+                alliance=alliance,
+                seed=seed,
+                tag_display=parts[0].strip("[]#").upper(),
+                warzone_display=parts[1],
+            )
+        )
+
+    # Count is checked last so a sheet full of typos reports the typos, not a
+    # count that is only wrong because of them.
+    if not problems and len(entries) != expect:
+        problems.append(
+            f"That is {len(entries)} alliances. A League bracket holds {expect}."
+            if expect == BRACKET_SIZE
+            else f"That is {len(entries)} alliances, and I need {expect}."
+        )
+
+    return BracketParse(tuple(entries), tuple(problems))
 
 
 # ── Skeleton rows ─────────────────────────────────────────────────────────────

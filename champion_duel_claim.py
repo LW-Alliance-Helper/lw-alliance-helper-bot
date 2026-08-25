@@ -38,6 +38,17 @@ paid is what we worked out*.
 *and* irreversible. Claiming, moving a claim and releasing one are all undone
 by pressing the other button, so each is a single press with an acknowledgement
 that says what changed.
+
+**One route in today, and half of this module is groundwork.** The plan puts
+every surface change out of this session's scope, so the only production entry
+point is `add_claim_button` on the player card: somebody who has just looked
+themselves up is already staring at their own row. `ClaimModal` is the other
+half of the flow, for a caller who has *not* found their row, and **nothing
+constructs it yet** -- it is what the hub's landing calls once `🏅 Your
+standing` exists. `db.get_claimed_registrant` and `db.claims_for` are the
+read side of the same deal and have no callers either. All three are tested
+and none is dead by accident; a session wiring the landing should reach for
+them rather than write a second version.
 """
 
 from __future__ import annotations
@@ -130,9 +141,14 @@ CLAIM_TAKEN = (
 #: reads as one setting going on and off rather than as two features.
 CLAIM_RELEASED = "✅ We no longer have you as **{player}**."
 
-#: ⚠️ NOT SIGNED OFF. The release button pressed when there is nothing to
-#: release, which a stale message can still do.
+#: ⚠️ NOT SIGNED OFF. The release button pressed when there is nothing at all
+#: to release, which a stale message can still do.
 CLAIM_NOTHING_TO_RELEASE = "ℹ️ We don't have you as anyone right now."
+
+#: ⚠️ NOT SIGNED OFF. The release button on a card that has gone stale: they
+#: still hold an account, just not this one. Reports and changes nothing,
+#: because the alternatives are both worse than a no-op. See `add_claim_button`.
+CLAIM_NOT_YOURS = "ℹ️ We don't have you as **{player}**."
 
 
 def _hub():
@@ -242,10 +258,15 @@ async def claim(interaction: discord.Interaction, player: dict) -> None:
             ephemeral=True,
         )
         return
-    except LookupError:
+    except db.NoSuchRegistrant:
         # The row went away between the card being drawn and the button being
         # pressed. Rare, and the honest thing to say is that we no longer have
         # them, which is the same miss `🔍 Find a player` reports.
+        #
+        # Caught by its own class rather than by `LookupError`: `KeyError` and
+        # `IndexError` are `LookupError` too, and a bug anywhere under this
+        # call would otherwise tell a member we lost a player who is still
+        # there and send them off to re-add somebody we already hold.
         await interaction.followup.send(
             f"⚠️ We no longer have **{label}**.",
             ephemeral=True,
@@ -340,6 +361,23 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
     is the point: hiding it would leave a person who really did take over that
     account with nothing to press and nothing to read, where the refusal names
     the route to support.
+
+    **A press never does something its own label did not describe.** This card
+    lives ten minutes and a claim can move inside that window, in another
+    message, so the label can be stale by the time it is pressed. Releasing is
+    keyed on the caller rather than on what is on screen, so a stale release
+    button acting on the caller's *current* claim would give up an account this
+    card never mentioned. Re-claiming this one instead is no better: the button
+    says "not me any more" and would be making a claim.
+
+    So the two halves are handled differently:
+
+    - **Drawn as the claim**, `claim` covers every state the press can land in,
+      including the one where they claimed this account somewhere else in the
+      meantime, and it says which.
+    - **Drawn as the release**, the claim is re-read and the press releases
+      only if it still points here. If it has moved, `CLAIM_NOT_YOURS` says so
+      and nothing changes, which is the only outcome the label supports.
     """
     mine = bool(claim_row) and claim_row["discord_user_id"] == str(user_id)
     label = CLAIM_RELEASE_BTN if mine else CLAIM_BTN
@@ -347,10 +385,15 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
 
     async def _pressed(inter: discord.Interaction):
         await inter.response.defer(ephemeral=True, thinking=True)
-        if mine:
-            await release(inter)
-        else:
+        if not mine:
             await claim(inter, player)
+            return
+        current = await asyncio.to_thread(db.get_claim, player["id"])
+        if current and current["discord_user_id"] == str(inter.user.id):
+            await release(inter)
+            return
+        hub = _hub()
+        await inter.followup.send(CLAIM_NOT_YOURS.format(player=hub._label(player)), ephemeral=True)
 
     button.callback = _pressed
     view.add_item(button)

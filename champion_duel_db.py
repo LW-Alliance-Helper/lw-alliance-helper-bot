@@ -2242,6 +2242,18 @@ class ClaimRefused(Exception):
         self.holder = holder
 
 
+class NoSuchRegistrant(LookupError):
+    """The account a claim names is not in the database.
+
+    A `LookupError` subclass so `except LookupError` still catches it, and
+    named so a caller can catch *this* rather than every `LookupError` the
+    call stack can raise. `KeyError` and `IndexError` are both `LookupError`
+    too, and a surface that catches the base class ends up telling a member
+    "we no longer have them" about a bug that has nothing to do with the
+    record. Same reason `AmbiguousPlayer` is a class rather than a bare raise.
+    """
+
+
 def get_registrant(registrant_id) -> dict | None:
     """One registrant by id, or None.
 
@@ -2270,12 +2282,19 @@ def get_claim(registrant_id: int) -> dict | None:
         return _claim_row(conn, "registrant_id = ?", (int(registrant_id),))
 
 
-def get_claimed_registrant(discord_user_id) -> dict | None:
+def get_claimed_registrant(discord_user_id, grouping_id=None) -> dict | None:
     """The registrant this Discord account says it plays, with the claim on it.
 
     Returns the registrant row plus a `claim` key, because every caller that
     wants one wants the other: the standing surface needs the player, and the
     claim carries when they said so.
+
+    **Shaped like `get_player`, not like a bare row.** `attach_stages` is
+    called for the same reason it is there, so `stages`, `grp` and `rank` are
+    present and a caller can treat this like any other player in this file.
+    Scouting is the one difference: use `get_player(..., include_scouting=True)`
+    where squads and orders are wanted, since a standing does not need them and
+    they are three more queries.
     """
     sid = str(discord_user_id).strip()
     if not sid:
@@ -2290,8 +2309,9 @@ def get_claimed_registrant(discord_user_id) -> dict | None:
         if row is None:  # pragma: no cover - the cascade makes this unreachable
             return None
         player = dict(row)
-        player["claim"] = claim
-        return player
+    attach_stages(player, grouping_id)
+    player["claim"] = claim
+    return player
 
 
 def claims_for(registrant_ids) -> dict[int, dict]:
@@ -2327,67 +2347,94 @@ def claim_registrant(registrant_id: int, discord_user_id, *, discord_name=None, 
     `changed` is False when they already held this one, so a second press
     reads as "you already have this" rather than inventing a change.
 
-    Raises `ClaimRefused` when somebody else holds it, and `LookupError` when
-    the registrant does not exist -- two different problems with two different
-    exits, per `UX.md`.
+    Raises `ClaimRefused` when somebody else holds it, and `NoSuchRegistrant`
+    when the account does not exist -- two different problems with two
+    different exits, per `UX.md`.
 
     **Moving is an update, not a delete and an insert.** The row keeps its
     `created_at`, so "claimed since" survives a warzone transfer, and no window
     exists in which the person holds nothing.
+
+    **The decision is read-then-write, so it is retried once.** Reads outside a
+    transaction see whatever was true a moment ago: two people pressing on one
+    free account, or one person double-pressing, both read "nobody holds this"
+    and both reach the INSERT. The loser hits a UNIQUE and would surface as a
+    raw `IntegrityError` -- which the surface does not catch, so the member
+    would be left on a spinner instead of reading the refusal this whole
+    feature is built on. One retry is enough by construction: the winner's row
+    exists by then, so the second pass takes a decided branch (already yours,
+    a move, or refused) rather than racing again.
     """
     sid = str(discord_user_id).strip()
     if not sid:
         raise ValueError("a claim needs a Discord user id")
     registrant_id = int(registrant_id)
+
+    for final in (False, True):
+        try:
+            with _get_conn() as conn:
+                return _claim_once(
+                    conn,
+                    registrant_id,
+                    sid,
+                    discord_name=discord_name,
+                    guild_id=guild_id,
+                )
+        except sqlite3.IntegrityError:
+            if final:
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _claim_once(conn, registrant_id: int, sid: str, *, discord_name, guild_id):
+    """One pass at claiming, inside one connection. See `claim_registrant`."""
     now = _now()
+    exists = conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone()
+    if exists is None:
+        raise NoSuchRegistrant(f"no registrant with id {registrant_id}")
 
-    with _get_conn() as conn:
-        exists = conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone()
-        if exists is None:
-            raise LookupError(f"no registrant with id {registrant_id}")
+    held = _claim_row(conn, "registrant_id = ?", (registrant_id,))
+    if held and held["discord_user_id"] != sid:
+        raise ClaimRefused(registrant_id, held)
 
-        held = _claim_row(conn, "registrant_id = ?", (registrant_id,))
-        if held and held["discord_user_id"] != sid:
-            raise ClaimRefused(registrant_id, held)
-
-        mine = _claim_row(conn, "discord_user_id = ?", (sid,))
-        if mine and mine["registrant_id"] == registrant_id:
-            # Their own account, pressed twice. The display name is still worth
-            # refreshing: people rename on Discord and the audit trail should
-            # follow them rather than freeze at whatever it was the first time.
-            conn.execute(
-                "UPDATE registrant_claims SET discord_name = ?, guild_id = ?, updated_at = ? "
-                "WHERE id = ?",
-                (_text(discord_name), _text(guild_id), now, mine["id"]),
-            )
-            return {
-                "claim": _claim_row(conn, "id = ?", (mine["id"],)),
-                "moved_from": None,
-                "changed": False,
-            }
-
-        if mine:
-            moved_from = mine["registrant_id"]
-            conn.execute(
-                "UPDATE registrant_claims SET registrant_id = ?, discord_name = ?, "
-                "guild_id = ?, updated_at = ? WHERE id = ?",
-                (registrant_id, _text(discord_name), _text(guild_id), now, mine["id"]),
-            )
-            claim_id = mine["id"]
-        else:
-            moved_from = None
-            claim_id = conn.execute(
-                "INSERT INTO registrant_claims "
-                "(registrant_id, discord_user_id, discord_name, guild_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (registrant_id, sid, _text(discord_name), _text(guild_id), now, now),
-            ).lastrowid
-
+    mine = _claim_row(conn, "discord_user_id = ?", (sid,))
+    if mine and mine["registrant_id"] == registrant_id:
+        # Their own account, pressed twice. The display name is still worth
+        # refreshing: people rename on Discord and the audit trail should
+        # follow them rather than freeze at whatever it was the first time.
+        conn.execute(
+            "UPDATE registrant_claims SET discord_name = ?, guild_id = ?, updated_at = ? "
+            "WHERE id = ?",
+            (_text(discord_name), _text(guild_id), now, mine["id"]),
+        )
         return {
-            "claim": _claim_row(conn, "id = ?", (claim_id,)),
-            "moved_from": moved_from,
-            "changed": True,
+            "claim": _claim_row(conn, "id = ?", (mine["id"],)),
+            "moved_from": None,
+            "changed": False,
         }
+
+    if mine:
+        moved_from = mine["registrant_id"]
+        conn.execute(
+            "UPDATE registrant_claims SET registrant_id = ?, discord_name = ?, "
+            "guild_id = ?, updated_at = ? WHERE id = ?",
+            (registrant_id, _text(discord_name), _text(guild_id), now, mine["id"]),
+        )
+        claim_id = mine["id"]
+    else:
+        moved_from = None
+        claim_id = conn.execute(
+            "INSERT INTO registrant_claims "
+            "(registrant_id, discord_user_id, discord_name, guild_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (registrant_id, sid, _text(discord_name), _text(guild_id), now, now),
+        ).lastrowid
+
+    return {
+        "claim": _claim_row(conn, "id = ?", (claim_id,)),
+        "moved_from": moved_from,
+        "changed": True,
+    }
 
 
 def release_claim(discord_user_id) -> dict | None:

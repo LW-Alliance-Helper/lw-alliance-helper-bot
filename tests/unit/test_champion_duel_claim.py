@@ -566,3 +566,134 @@ def test_a_name_with_no_warzone_still_cannot_duplicate(cd_db):
     assert first["id"] == second["id"]
     with db._get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM registrants").fetchone()[0] == 1
+
+
+# ── Two presses at once ───────────────────────────────────────────────────────
+#
+# The decision is read-then-write across three SELECTs and one write, and the
+# reads are outside a transaction. Two presses landing together both read
+# "nobody holds this" and both reach the INSERT, so the loser hits a UNIQUE.
+# It must come back as the refusal this feature is built on, never as a raw
+# IntegrityError: `champion_duel_claim.claim` catches ClaimRefused and
+# NoSuchRegistrant, so anything else leaves the member on a spinner forever.
+
+
+def _race(monkeypatch, interloper):
+    """Make the first pass lose: somebody else's claim lands, then the write
+    fails the way SQLite would fail it."""
+    real = db._claim_once
+    state = {"first": True}
+
+    def _wrapper(conn, registrant_id, sid, **kwargs):
+        if state["first"]:
+            state["first"] = False
+            interloper()
+            raise sqlite3.IntegrityError("UNIQUE constraint failed")
+        return real(conn, registrant_id, sid, **kwargs)
+
+    monkeypatch.setattr(db, "_claim_once", _wrapper)
+
+
+def test_a_lost_race_comes_back_as_the_refusal_not_a_crash(cd_db, monkeypatch):
+    kestrel = _player("Kestrel")
+    _race(monkeypatch, lambda: db.claim_registrant(kestrel["id"], SAM))
+
+    with pytest.raises(db.ClaimRefused):
+        db.claim_registrant(kestrel["id"], ALEX)
+
+    assert db.get_claim(kestrel["id"])["discord_user_id"] == SAM
+
+
+def test_racing_against_yourself_settles_as_no_change(cd_db, monkeypatch):
+    """A double press. The second pass sees the first one's row and reports
+    what is true rather than inventing a change."""
+    kestrel = _player("Kestrel")
+    _race(monkeypatch, lambda: db.claim_registrant(kestrel["id"], ALEX))
+
+    result = db.claim_registrant(kestrel["id"], ALEX)
+
+    assert result["changed"] is False
+    with db._get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM registrant_claims").fetchone()[0] == 1
+
+
+def test_a_second_failure_is_not_swallowed(cd_db, monkeypatch):
+    """One retry, not a loop. A UNIQUE that survives a settled read is a bug
+    and has to reach Sentry rather than be absorbed."""
+    kestrel = _player("Kestrel")
+
+    def _always_fails(*args, **kwargs):
+        raise sqlite3.IntegrityError("UNIQUE constraint failed")
+
+    monkeypatch.setattr(db, "_claim_once", _always_fails)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.claim_registrant(kestrel["id"], ALEX)
+
+
+def test_a_missing_account_raises_its_own_class(cd_db):
+    """`KeyError` and `IndexError` are `LookupError` too, so the surface has to
+    be able to catch this exact condition rather than the base class."""
+    assert issubclass(db.NoSuchRegistrant, LookupError)
+    with pytest.raises(db.NoSuchRegistrant):
+        db.claim_registrant(9999, ALEX)
+
+
+# ── A card that has gone stale ────────────────────────────────────────────────
+
+
+def test_a_stale_release_button_does_not_give_up_a_different_account(cd_db):
+    """The card lives ten minutes. Releasing is keyed on the caller, so acting
+    on their current claim would surrender an account this card never named."""
+    kestrel = _player("Kestrel")
+    harrier = _player("Harrier")
+    db.claim_registrant(kestrel["id"], ALEX)
+    view = hub.PlayerActionsView(
+        player=kestrel, user_id=int(ALEX), can_write=True, claim=db.get_claim(kestrel["id"])
+    )
+    button = next(i for i in view.children if i.label == claim_lib.CLAIM_RELEASE_BTN)
+
+    # Meanwhile, in another message, they move to a different account.
+    db.claim_registrant(harrier["id"], ALEX)
+    interaction = _interaction()
+    asyncio.run(button.callback(interaction))
+
+    assert _sent(interaction) == claim_lib.CLAIM_NOT_YOURS.format(player="Kestrel (#738)")
+    # And nothing moved: they still hold Harrier, and Kestrel is still free.
+    assert db.get_claimed_registrant(ALEX)["display_name"] == "Harrier"
+    assert db.get_claim(kestrel["id"]) is None
+
+
+def test_a_stale_claim_button_reports_rather_than_releasing(cd_db):
+    """The mirror image: drawn while the account was free, pressed after they
+    took it. A button saying "this is me" must never hand it back."""
+    kestrel = _player("Kestrel")
+    view = hub.PlayerActionsView(player=kestrel, user_id=int(ALEX), can_write=True, claim=None)
+    button = next(i for i in view.children if i.label == claim_lib.CLAIM_BTN)
+
+    db.claim_registrant(kestrel["id"], ALEX)
+    interaction = _interaction()
+    asyncio.run(button.callback(interaction))
+
+    assert _sent(interaction) == claim_lib.CLAIM_ALREADY_YOURS.format(player="Kestrel (#738)")
+    assert db.get_claim(kestrel["id"])["discord_user_id"] == ALEX
+
+
+# ── The read side session 2 and 4 build on ────────────────────────────────────
+
+
+def test_the_claimed_account_carries_its_rounds_like_any_other_player(cd_db):
+    """Shaped like `get_player`, not like a bare row. A standing surface reads
+    `stages` and `grp`, and a shape that looks like a player everywhere else in
+    the file must not be the one that is missing them."""
+    db.import_registrants(
+        [{"name": "Kestrel", "group": "M", "rank": 4, "server": "738"}],
+        stage="qualifiers",
+    )
+    kestrel = db.resolve_registrant("Kestrel", server="738")
+    db.claim_registrant(kestrel["id"], ALEX)
+
+    mine = db.get_claimed_registrant(ALEX)
+
+    assert "stages" in mine
+    assert mine["stages"]["qualifiers"]["grp"] == "M"

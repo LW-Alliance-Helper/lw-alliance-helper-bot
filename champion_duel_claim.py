@@ -62,19 +62,24 @@ from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL
 
 # ── Copy ──────────────────────────────────────────────────────────────────────
 #
-# ⚠️ NOT SIGNED OFF. Every string below is a placeholder standing in for
-# wording Kevin has not seen. The variants weighed for each are enumerated in
-# the pull request body, which is where a choice can be made in one pass; they
-# are deliberately not left only in a session report, because that has twice
-# cost this project the reasoning behind a string and forced the work again.
+# Signed off by Kevin 2026-08-25, in full. The reasoning for each string is
+# kept below because it outlives the choice; the variants weighed against each
+# are spent, and the pull request body is where they stay.
 #
-# They are written to the rules that are already settled, so a sign-off is a
-# choice between wordings rather than a correction: US English, sentence case,
-# no em dashes, and the voice split where **"I" acts and "we" holds** -- the
-# bot says "I" when it cannot act on what it was given, and "we" when the
-# statement is about what the record contains.
+# The rules they are written to: US English, sentence case, no em dashes, and
+# the voice split where **"I" acts and "we" holds** -- the bot says "I" when it
+# cannot act on what it was given, and "we" when the statement is about what
+# the record contains.
+#
+# THE SIGN-OFF TOOK THE ACKNOWLEDGEMENTS OFF "WE" AND ONTO "YOUR". Every one
+# of them used to be a sentence about the record ("we have you as **X**"); they
+# now say whose the account is ("**X** is your account"). That is not the voice
+# split breaking, it is the split not reaching this far: a claim is the one
+# fact in this feature that is about the reader rather than about the data, and
+# the second person says so in fewer words. `CLAIM_NEEDS_BOTH`, which really is
+# the bot unable to act on what it was handed, still says "I".
 
-#: ⚠️ NOT SIGNED OFF. The button on a player card that says this row is you.
+#: The button on a player card that says this row is you.
 #:
 #: 🔗 is the catalog's *"a link between two things, and breaking one"*, which
 #: is this control word for word: a claim links a Discord account to a recorded
@@ -84,50 +89,71 @@ from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL
 #: **Not the word "claim".** Last War already uses Claim for collecting a
 #: reward, and `notes/UX.md` says inherited game vocabulary gets disambiguated
 #: rather than borrowed.
-CLAIM_BTN = "🔗 This is me"
+#:
+#: **THE BUTTON AND THE ACKNOWLEDGEMENTS SHARE THEIR WORDS.** "This is my
+#: account" here, "**X** is your account" in every reply below: pressing the
+#: control and reading what comes back say the same thing, which is the rule
+#: Kevin set on the head to head modal. A sweep that reworded one of them and
+#: not the other would be breaking something deliberate.
+CLAIM_BTN = "🔗 This is my account"
 
-#: ⚠️ NOT SIGNED OFF. The other half of the pair, shown in its place once the
-#: account is already theirs. Decided with `CLAIM_BTN` rather than after it
-#: (`notes/DESIGN.md` emoji rule 6), which is why they share a glyph.
-CLAIM_RELEASE_BTN = "🔗 Not me any more"
+#: The other half of the pair, shown in its place once the account is already
+#: theirs. Decided with `CLAIM_BTN` rather than after it (`notes/DESIGN.md`
+#: emoji rule 6), which is why they share a glyph, and worded with it: this is
+#: the claim button negated, not a second sentence about the same idea.
+CLAIM_RELEASE_BTN = "🔗 This is no longer my account"
 
-#: ⚠️ NOT SIGNED OFF. The modal that asks somebody who they are, for the paths
-#: that reach claiming without a player already on screen. Phrased as a
-#: question to match the family already on this feature: "Which group are they
-#: in?", "Which warzone is this player on?".
-CLAIM_MODAL_TITLE = "Which player are you?"
+#: The modal that asks somebody who they are, for the paths that reach claiming
+#: without a player already on screen.
+#:
+#: IT USED TO BE A QUESTION, "Which player are you?", to match the family
+#: already on this feature: "Which group are they in?", "Which warzone is this
+#: player on?". The sign-off went the other way. A modal title is the heading
+#: over its fields, both of these fields already open with "Your", and the
+#: question was asking what the two of them then ask again.
+CLAIM_MODAL_TITLE = "Your account"
 CLAIM_FIELD_NAME = "Your in-game name"
 CLAIM_FIELD_SERVER = "Your warzone"
 
-#: ⚠️ NOT SIGNED OFF. Both halves are required. "I", because this is the bot
-#: unable to act on what it was handed, not a statement about the record.
+#: Both halves are required. "I", because this is the bot unable to act on what
+#: it was handed, not a statement about the record.
 #:
 #: One sentence, deliberately. `_INTEL_NEEDS_BOTH` carried a second sentence
 #: and Kevin cut it when he signed that string off, and his standing note on
 #: the stale-odds line was *"keep it even more simple than what you're
-#: proposing here"*. The longer form, which explains that identity is the two
-#: together because two warzones can field one name, is the variant in the pull
-#: request rather than the default.
+#: proposing here"*. The longer form explained that identity is the two
+#: together because two warzones can field one name, and it lost for the same
+#: reason: somebody who left a box empty does not need the theory.
 CLAIM_NEEDS_BOTH = "⚠️ I need your in-game name and your warzone."
 
-#: ⚠️ NOT SIGNED OFF. The acknowledgement. "We", because it is what the record
-#: now holds, and it matches the phrasing the bot already uses for a fact about
-#: somebody ("we have you as a Starter").
-CLAIM_DONE = "✅ We have you as **{player}**."
+#: The acknowledgement, in the words of the button that produced it.
+#:
+#: IT USED TO SAY "We have you as **{player}**", which matched the phrasing the
+#: bot already uses for a fact about somebody ("we have you as a Starter"). The
+#: sign-off turned it around. The subject of this sentence is the account, and
+#: what the reader is checking is whose it is.
+CLAIM_DONE = "✅ **{player}** is your account."
 
-#: ⚠️ NOT SIGNED OFF. A claim moving off one account and onto another, which is
-#: the single mechanism behind all three kinds of account change: a warzone
-#: transfer, an alliance move, and buying a stronger account. The second
-#: sentence is not decoration. It tells the person the account they left is now
-#: free, which is the consequence they would otherwise have to guess at.
-CLAIM_MOVED = "✅ We have you as **{player}** now. **{previous}** is free for whoever plays it."
+#: A claim moving off one account and onto another, which is the single
+#: mechanism behind all three kinds of account change: a warzone transfer, an
+#: alliance move, and buying a stronger account.
+#:
+#: IT USED TO CARRY A SECOND SENTENCE, "**{previous}** is free for whoever
+#: plays it", and the argument for it was that the account they left going free
+#: is a consequence they would otherwise have to guess at. Kevin cut it, and
+#: "now" carries what is left: one word is the whole difference from
+#: `CLAIM_DONE`, and it says a claim moved without spending a sentence on the
+#: account it moved off. Releasing the old one is still what the code does; it
+#: is only the telling that went.
+CLAIM_MOVED = "✅ **{player}** is your account now."
 
-#: ⚠️ NOT SIGNED OFF. Pressed twice. Says what is already true rather than
-#: inventing a change, and the release button on the same message is the exit.
-CLAIM_ALREADY_YOURS = "ℹ️ We already have you as **{player}**."
+#: Pressed twice. Says what is already true rather than inventing a change, and
+#: the release button on the same message is the exit. "already" is the whole
+#: difference from `CLAIM_DONE`: three outcomes, one sentence.
+CLAIM_ALREADY_YOURS = "ℹ️ **{player}** is already your account."
 
-#: ⚠️ NOT SIGNED OFF. The refusal, and Kevin's call that it points at support
-#: in the community server. Condition first, then the fix (`notes/UX.md`).
+#: The refusal, and Kevin's call that it points at support in the community
+#: server. Condition first, then the fix (`notes/UX.md`).
 #:
 #: **It never names the holder.** Who claimed an account is for support to
 #: look up, and printing it would hand out an identity to anybody willing to
@@ -137,18 +163,31 @@ CLAIM_TAKEN = (
     "is yours, reach out in the {community} and we will look into it."
 )
 
-#: ⚠️ NOT SIGNED OFF. Releasing. Mirrors `CLAIM_DONE` on purpose, so the pair
-#: reads as one setting going on and off rather than as two features.
-CLAIM_RELEASED = "✅ We no longer have you as **{player}**."
+#: Releasing. Mirrors `CLAIM_DONE` on purpose, so the pair reads as one setting
+#: going on and off rather than as two features, and it mirrors
+#: `CLAIM_RELEASE_BTN` exactly the way the claim half does.
+CLAIM_RELEASED = "✅ **{player}** is no longer your account."
 
-#: ⚠️ NOT SIGNED OFF. The release button pressed when there is nothing at all
-#: to release, which a stale message can still do.
-CLAIM_NOTHING_TO_RELEASE = "ℹ️ We don't have you as anyone right now."
-
-#: ⚠️ NOT SIGNED OFF. The release button on a card that has gone stale: they
-#: still hold an account, just not this one. Reports and changes nothing,
-#: because the alternatives are both worse than a no-op. See `add_claim_button`.
-CLAIM_NOT_YOURS = "ℹ️ We don't have you as **{player}**."
+#: The release pressed when it cannot release anything: either they hold no
+#: claim at all, which a stale message can still ask for, or they hold a
+#: different account than the card they pressed it on.
+#:
+#: THEY USED TO BE TWO STRINGS, `CLAIM_NOTHING_TO_RELEASE` and
+#: `CLAIM_NOT_YOURS`, the second naming the account on the card. `/code-review`
+#: found that second state and it is real. Kevin chose one sentence for both,
+#: because from where the reader sits they are the same news: the button they
+#: pressed does not apply to them, and nothing they can see has changed.
+#:
+#: **THE TWO BRANCHES STAY IN THE CODE.** They are different states and a
+#: session that needs to tell them apart must still be able to. Only the
+#: surface is the same. See `release` and `add_claim_button`.
+#:
+#: What that costs, recorded rather than argued: in the second state the
+#: sentence is not literally true of them. They are linked, to an account this
+#: card is not showing, and it takes another look at their own row to see it.
+#: The state is rare, nothing changes underneath them either way, and Kevin
+#: chose one sentence across both knowing the second one exists.
+CLAIM_NOT_LINKED = "ℹ️ You're not linked to an account right now."
 
 
 def _hub():
@@ -227,7 +266,10 @@ async def release(interaction: discord.Interaction) -> None:
     hub = _hub()
     released = await asyncio.to_thread(db.release_claim, str(interaction.user.id))
     if released is None:
-        await interaction.followup.send(CLAIM_NOTHING_TO_RELEASE, ephemeral=True)
+        # They hold nothing. The other half of `CLAIM_NOT_LINKED` is in
+        # `add_claim_button`, where they hold a different account than the one
+        # on the card; the two states read the same and stay apart in code.
+        await interaction.followup.send(CLAIM_NOT_LINKED, ephemeral=True)
         return
     player = await asyncio.to_thread(db.get_registrant, released["registrant_id"])
     name = hub._label(player) if player else "that account"
@@ -276,11 +318,10 @@ async def claim(interaction: discord.Interaction, player: dict) -> None:
     if not result["changed"]:
         message = CLAIM_ALREADY_YOURS.format(player=label)
     elif result["moved_from"]:
-        previous = await asyncio.to_thread(db.get_registrant, result["moved_from"])
-        message = CLAIM_MOVED.format(
-            player=label,
-            previous=hub._label(previous) if previous else "your previous account",
-        )
+        # The account they left is free either way. `CLAIM_MOVED` stopped
+        # naming it when Kevin cut its second sentence, which is why nothing
+        # here reads `moved_from` beyond knowing that there was one.
+        message = CLAIM_MOVED.format(player=label)
     else:
         message = CLAIM_DONE.format(player=label)
 
@@ -354,8 +395,8 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
 
     Which half of the pair renders is decided by who holds the account, not by
     what the press turns out to do. `notes/DESIGN.md` requires the label to say
-    what the control does, and "This is me" on a row that is already yours
-    would be describing a press that cannot happen.
+    what the control does, and "This is my account" on a row that is already
+    yours would be describing a press that cannot happen.
 
     An account held by **somebody else** still offers `CLAIM_BTN`. The refusal
     is the point: hiding it would leave a person who really did take over that
@@ -368,7 +409,7 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
     keyed on the caller rather than on what is on screen, so a stale release
     button acting on the caller's *current* claim would give up an account this
     card never mentioned. Re-claiming this one instead is no better: the button
-    says "not me any more" and would be making a claim.
+    says "this is no longer my account" and would be making a claim.
 
     So the two halves are handled differently:
 
@@ -376,8 +417,8 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
       including the one where they claimed this account somewhere else in the
       meantime, and it says which.
     - **Drawn as the release**, the claim is re-read and the press releases
-      only if it still points here. If it has moved, `CLAIM_NOT_YOURS` says so
-      and nothing changes, which is the only outcome the label supports.
+      only if it still points here. If it has moved, `CLAIM_NOT_LINKED` says
+      so and nothing changes, which is the only outcome the label supports.
     """
     mine = bool(claim_row) and claim_row["discord_user_id"] == str(user_id)
     label = CLAIM_RELEASE_BTN if mine else CLAIM_BTN
@@ -392,8 +433,7 @@ def add_claim_button(view: discord.ui.View, *, player: dict, claim_row: dict | N
         if current and current["discord_user_id"] == str(inter.user.id):
             await release(inter)
             return
-        hub = _hub()
-        await inter.followup.send(CLAIM_NOT_YOURS.format(player=hub._label(player)), ephemeral=True)
+        await inter.followup.send(CLAIM_NOT_LINKED, ephemeral=True)
 
     button.callback = _pressed
     view.add_item(button)

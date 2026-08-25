@@ -355,8 +355,9 @@ def test_a_player_card_offers_the_claim(cd_db):
 
 
 def test_your_own_row_offers_the_release_instead(cd_db):
-    """`notes/DESIGN.md`: the label says what the control does. "This is me" on
-    a row that is already yours describes a press that cannot happen."""
+    """`notes/DESIGN.md`: the label says what the control does. "This is my
+    account" on a row that is already yours describes a press that cannot
+    happen."""
     kestrel = _player("Kestrel")
     db.claim_registrant(kestrel["id"], ALEX)
 
@@ -422,13 +423,18 @@ def test_pressing_the_release_gives_the_account_up(cd_db):
 
 
 def test_releasing_a_claim_that_is_already_gone_says_so(cd_db):
-    """A stale message can still be pressed after the claim moved elsewhere."""
+    """A stale message can still be pressed after the claim moved elsewhere.
+
+    One of the two states behind `CLAIM_NOT_LINKED`, which Kevin collapsed into
+    a single sentence on 2026-08-25. The other is
+    `test_a_stale_release_button_does_not_give_up_a_different_account`: the two
+    read the same to whoever pressed the button and are still two branches."""
     kestrel = _player("Kestrel")
     interaction = _interaction()
 
     asyncio.run(claim_lib.release(interaction))
 
-    assert _sent(interaction) == claim_lib.CLAIM_NOTHING_TO_RELEASE
+    assert _sent(interaction) == claim_lib.CLAIM_NOT_LINKED
     assert db.get_claim(kestrel["id"]) is None
 
 
@@ -449,7 +455,11 @@ def test_the_refusal_points_at_support_and_names_no_holder(cd_db):
     assert hub.COMMUNITY_SERVER_URL in [b.url for b in _view(interaction).children if b.url]
 
 
-def test_a_moved_claim_says_the_old_account_is_free(cd_db):
+def test_a_moved_claim_frees_the_old_account_without_naming_it(cd_db):
+    """`CLAIM_MOVED` carried a second sentence saying the account they left is
+    free, and Kevin cut it on 2026-08-25. The release itself is not copy and
+    still happens, so the assertion is on the record rather than on the
+    wording: what went is the telling."""
     old = _player("Kestrel", server="738")
     new = _player("Harrier", server="1500")
     db.claim_registrant(old["id"], ALEX)
@@ -457,9 +467,9 @@ def test_a_moved_claim_says_the_old_account_is_free(cd_db):
 
     asyncio.run(claim_lib.claim(interaction, new))
 
-    message = _sent(interaction)
-    assert "Harrier" in message
-    assert "Kestrel" in message
+    assert _sent(interaction) == claim_lib.CLAIM_MOVED.format(player="Harrier (#1500)")
+    assert db.get_claim(old["id"]) is None
+    assert db.get_claim(new["id"])["discord_user_id"] == ALEX
 
 
 def test_claiming_your_own_row_twice_reports_no_change(cd_db):
@@ -482,6 +492,25 @@ def test_a_row_that_vanished_between_the_card_and_the_press(cd_db):
 
     assert "Kestrel" in _sent(interaction)
     assert db.get_claimed_registrant(ALEX) is None
+
+
+# ── The words the control and the reply share ─────────────────────────────────
+
+
+def test_the_button_and_its_acknowledgements_say_the_same_thing():
+    """Signed off 2026-08-25 as a pair, which is the rule Kevin set on the head
+    to head modal: pressing the control and reading what comes back use the
+    same words. Rewording one of them means rewording the other."""
+    assert claim_lib.CLAIM_BTN.endswith("This is my account")
+    for acknowledgement in (
+        claim_lib.CLAIM_DONE,
+        claim_lib.CLAIM_MOVED,
+        claim_lib.CLAIM_ALREADY_YOURS,
+    ):
+        assert "your account" in acknowledgement
+
+    assert claim_lib.CLAIM_RELEASE_BTN.endswith("This is no longer my account")
+    assert "is no longer your account" in claim_lib.CLAIM_RELEASED
 
 
 # ── Picking yourself out by name ──────────────────────────────────────────────
@@ -658,7 +687,7 @@ def test_a_stale_release_button_does_not_give_up_a_different_account(cd_db):
     interaction = _interaction()
     asyncio.run(button.callback(interaction))
 
-    assert _sent(interaction) == claim_lib.CLAIM_NOT_YOURS.format(player="Kestrel (#738)")
+    assert _sent(interaction) == claim_lib.CLAIM_NOT_LINKED
     # And nothing moved: they still hold Harrier, and Kestrel is still free.
     assert db.get_claimed_registrant(ALEX)["display_name"] == "Harrier"
     assert db.get_claim(kestrel["id"]) is None
@@ -666,7 +695,7 @@ def test_a_stale_release_button_does_not_give_up_a_different_account(cd_db):
 
 def test_a_stale_claim_button_reports_rather_than_releasing(cd_db):
     """The mirror image: drawn while the account was free, pressed after they
-    took it. A button saying "this is me" must never hand it back."""
+    took it. A button saying "this is my account" must never hand it back."""
     kestrel = _player("Kestrel")
     view = hub.PlayerActionsView(player=kestrel, user_id=int(ALEX), can_write=True, claim=None)
     button = next(i for i in view.children if i.label == claim_lib.CLAIM_BTN)

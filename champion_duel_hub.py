@@ -110,6 +110,13 @@ CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
 # none of the scanning work an emoji is on a label to do.
 # 👥 was the obvious choice and is Member Sync's, which rule 3 puts out of reach.
 CD_BTN_GROUP = "🏅 Your group"
+# 🏅 is the catalog's *"one player's standing in a round: their rank, and the
+# group it is a rank within"*, which is this surface word for word. It is the
+# same glyph `CD_BTN_GROUP` carries, and that is deliberate rather than a
+# collision: the plan retires `🏅 Your group` in session 6 and splits it into
+# this and `📇 Your alliance`, so the two share a mark for exactly as long as
+# the old one survives.
+CD_BTN_STANDING = "🏅 Your standing"
 # Deliberately not "prediction". The game runs its own prediction, and it is a
 # betting market on individual matches (Kevin, 2026-08-16). This answers a
 # question that one does not: whether you get out of your group.
@@ -319,6 +326,24 @@ _ENGINE_MISSING = (
 # to a date past some age is a code change, not a copy one.
 _ODDS_AS_OF = "Updated {when}."
 
+#: What a group answer is and is not, under every surface that shows one.
+#:
+#: LIFTED OUT OF `build_odds_embed` RATHER THAN COPIED. `🏅 Your standing`
+#: shows one row of the same answer and needs the same caveat, and a second
+#: literal saying it in slightly different words is how the two drift -- which
+#: is the drift `_ODDS_AS_OF` already caught once on this feature.
+_ODDS_BASIS = (
+    "Ranked on points across all 21 matches, not matches won. Squads "
+    "we have not seen are sampled, so these carry that uncertainty."
+)
+
+#: The same, for the bracket, which is averaged over seedings rather than run
+#: against the one anybody will get.
+_BRACKET_BASIS = (
+    "Seeding isn't set yet, so each of {trials:,} simulations runs a "
+    "different bracket. Squads we haven't seen are sampled."
+)
+
 
 # Signed off by Kevin 2026-08-24. "I", not "we": this is the bot unable to act
 # on what it was given, not a statement about what the record holds.
@@ -329,6 +354,191 @@ _ODDS_AS_OF = "Updated {when}."
 # now hands a button out of. The button carries the action; the sentence would
 # be naming a worse route to the same place.
 _INTEL_NEEDS_BOTH = "⚠️ I need both players for a head to head."
+
+
+# ── `🏅 Your standing` ───────────────────────────────────────────
+#
+# SIGNED OFF by Kevin, 2026-08-25, over two rounds on a page rendering each
+# string on the surface it sits on. Two verdict strings and the reward-band
+# sentence were struck rather than reworded: see `_standing_worked_out`.
+#
+# Written to the standing rules: US English, sentence case, no em dashes, and
+# the voice split where **"I" acts and "we" holds**. The claim flow next door
+# is the one place that split does not reach -- a claim is a fact about the
+# reader rather than about the record, so `champion_duel_claim` says "your" --
+# and this block is on the other side of that line. It is describing what we
+# hold, so it holds.
+#
+# EVERY STRING THAT NAMES THE CLAIM FLOW IMPORTS ITS CONSTANT instead of
+# repeating the words. `champion_duel_claim` owns that copy, it is signed off,
+# and a second copy here is how the two drift.
+
+#: The landing when nobody has told us which player the reader is.
+#:
+#: **It does not say "claim".** Last War uses Claim for collecting a reward and
+#: `UX.md` disambiguates inherited game vocabulary rather than borrowing it,
+#: which is the same call `CLAIM_BTN` made.
+#:
+#: Two sentences: what is missing, then what fixing it buys. `UX.md` principle
+#: 3 puts the exit on the message, and `_StandingClaimView` carries it.
+_STANDING_UNCLAIMED = (
+    "We do not know which of these players is you.\n\n"
+    "Tell us once and this opens on your own round every time."
+)
+
+#: The control that opens `champion_duel_claim.ClaimModal` from a surface with
+#: no player on it.
+#:
+#: NOT `CLAIM_BTN`. That one is "This is my account" and it lives on a card
+#: already showing one row, where "this" has something to point at. Here there
+#: is no row on screen yet, so the same words would be pointing at nothing and
+#: `UX.md`'s label rule (the label describes the control) would be broken by
+#: reusing them. The glyph is shared because the meaning is: 🔗 is the
+#: catalog's link between two things.
+CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
+
+#: The round we hold nothing for. Not an error: a Champion Duel that has not
+#: reached its semifinals has no group to stand in, and saying so plainly is
+#: the honest state rather than an empty table.
+_STANDING_NO_ROUND = "We have not recorded a round for you yet. You can add it with **{record}**."
+
+#: The free half's heading. Kevin's, 2026-08-25, over "What we recorded".
+#:
+#: **Both headings open on the reader rather than on us.** "What we recorded"
+#: and "What we worked out" describe the bot's two activities, which is the
+#: same failure the whole information architecture rethink started from --
+#: a surface describing itself to somebody who came to it about themselves.
+#: "Your" is the word that puts them back at the front of it.
+_STANDING_RECORDED = "Your information"
+
+#: The paid half's heading, and the other half of that pair.
+#:
+#: **It names the thing rather than the act.** `🔮 Odds of advancing` is
+#: already the feature's word for this, and a reader who presses that button
+#: elsewhere should land on a field carrying the same noun.
+_STANDING_WORKED_OUT = "Your odds"
+
+#: Nobody has read a number off a screen for them yet.
+_STANDING_NOTHING_RECORDED = "Nothing recorded yet."
+
+#: When the numbers above were read. `<t:N:R>` renders per viewer, which a UTC
+#: stamp cannot, and this feature is read across sixteen warzones.
+#:
+#: **"Updated", not "Read".** Kevin, 2026-08-25: *"Saying Read implies you're
+#: telling the user when they last read this page or info."* It also lands it
+#: on the same word as `_ODDS_AS_OF`, which is deliberate rather than a
+#: coincidence: one surface, one word for when a number was taken.
+#:
+#: **`-# ` is Discord's subtext**, and it is here because Kevin asked for this
+#: line smaller than the figures above it -- it is provenance, not a reading.
+#: It has to start a line, which is why `_standing_recorded` joins it on a
+#: blank line rather than mid-paragraph. The two sites the bot already had
+#: (`ChampionDuelShareView.share`, `survey.py`) are both message content;
+#: this is the first inside an embed field.
+_STANDING_READ_AT = "-# Updated {when}."
+
+#: The round has no model, which today is the qualifiers and only them.
+#:
+#: **It says which round rather than "this round".** A reader who has just
+#: switched the picker to the qualifiers needs to know it is the round and not
+#: the bot, and `STAGES_WITH_A_MODEL` is a fact about rounds.
+_STANDING_NO_MODEL = (
+    "We do not model the **{round}**, so there is no projection for it. "
+    "Your rank and kill score above are what the round is scored on."
+)
+
+# THE VERDICT AND THE REWARD BAND ARE GONE, and this note is here so nobody
+# rebuilds them. `_STANDING_IN_IT`, `_STANDING_LONG_SHOT` and `_STANDING_BAND`
+# told the reader whether they were still in it and which reward band their
+# projected finish landed in. Kevin struck all three on 2026-08-25:
+#
+#   *"People can see on their own about the wins getting rewards -- this goes
+#   back to us telling someone about the game when they play and already know
+#   this. It's more about seeing how I stack up against the competition in the
+#   duel itself."*
+#
+# The numbers left standing -- getting through, winning the group, projected
+# finish -- already say where the reader sits, and nothing replaces the
+# sentences. The rule is wider than this surface: the bot does not narrate the
+# game back at somebody playing it. `PROPOSAL_champion_duel_ia.md` carries the
+# correction against the bullet these were built on.
+#
+# The band values themselves were the one thing about them anybody had
+# verified, so they are recorded in `notes/DESIGN_champion_duel_api.md` rather
+# than lost with `_RANKING_BANDS`.
+
+#: The store holds nothing for this group, or holds an answer computed against
+#: a different set of people. Both are `missing`, and neither is showable.
+#:
+#: **UX.md principle 2, never fail silently.** An earlier draft rendered no
+#: paid field at all in this state, which on a paying alliance is the half they
+#: are paying for quietly absent with nothing said.
+#:
+#: **IT PROMISES NOTHING.** The obvious second half, "so we are working it out",
+#: is false in two states `champion_duel_store` documents: `GROUPINGS_SWEPT` is
+#: 2, so a group in an older Champion Duel is never picked up at all, and while
+#: somebody is recording a group every write resets the debounce `due()`
+#: measures. `_ODDS_AS_OF` was written to the same rule for the same reason.
+#:
+#: **THE NAVIGATION CAME OUT**, 2026-08-25, and it was Kevin who spotted why:
+#: it said *"Run `/champion_duel` -> Your group -> 🔮 Odds of advancing"*,
+#: and `PLAN_champion_duel_ia.md` session 6 retires `🏅 Your group` and
+#: moves `🔮 Odds of advancing` onto THIS surface. The line would send
+#: the reader where they already are.
+#:
+#: WARNING: it is a dead end until session 6 lands. The reasoning for dropping
+#: it -- the press is on this embed already -- is true of the surface session 6
+#: builds and not of the one shipping here: `_StandingClaimView` carries one
+#: button and it is the claim. Kevin's call, made knowing the redesign; do not
+#: re-add a route to a control that is about to move.
+_STANDING_NOT_WORKED_OUT = "We do not have a projection for your group yet."
+
+#: The upsell, on the embed rather than on the disabled button, which cannot
+#: carry a reason. It names what the model adds over the free half sitting
+#: directly above it, because a reader can already see their own rank.
+#:
+#: Kevin's, 2026-08-25, and much shorter than the three-sentence version it
+#: replaces. **It says "Premium" rather than interpolating
+#: `premium.PREMIUM_BRAND`**, which is the house form elsewhere
+#: (`premium.py:610`, `:631`) and would render "💎 LW Alliance Helper
+#: Premium" here. Shipped as the words he approved; flagged in the pull
+#: request rather than decided here.
+_STANDING_LOCKED = "Your odds, projected finish placement, and more included in Premium."
+
+#: The reader's account is in a different Champion Duel from the one their
+#: guild is in. See `read_standing` for why this is a note rather than a prompt.
+#:
+#: WARNING: THE COMMUNITY SERVER CANNOT REACH THIS STATE, and this comment said
+#: it could until 2026-08-25. Kevin asked, and the source disagreed with it.
+#:
+#: The mechanism is `read_standing`'s `if mine or not grouping`: a guild with no
+#: Champion Duel resolved takes that branch, sets `here = True`, and never
+#: reaches the comparison at all. `_in_this_champion_duel` has a `not grouping`
+#: guard that looks like the reason and is not -- it is unreachable, since its
+#: one call site is inside that `if`'s `else`. Worth being exact about, because
+#: a comment naming the wrong line is the thing this correction is fixing.
+#:
+#: The real trigger is a guild that DOES have a Champion Duel, where the claimed
+#: account's warzone is not in it -- somebody who switched warzone and stayed in
+#: their old alliance's Discord, which is the case this answer exists for.
+#:
+#: **IT DOES NOT SAY THEY SWITCHED WARZONE.** It states which Champion Duel the
+#: standing above is about, and stops. The reader knows whether they moved;
+#: guessing for them is the noisy proxy this whole surface avoids, and the
+#: control that fixes it is on the message either way.
+#:
+#: **It names THIS SERVER'S warzone, not the player's.** Kevin's sentence, and
+#: his framing: the reader knows their own number, and the thing they cannot
+#: see is which event the Discord they are standing in belongs to.
+_STANDING_ELSEWHERE = (
+    "**{player}** is not in the same Champion Duel as this Discord server's warzone"
+)
+
+#: The warzone `_STANDING_ELSEWHERE` names, when we have it. Its own constant
+#: rather than an optional field in the one above, because the number really is
+#: optional and `"({warzone})".format(warzone=None)` prints "(None)" rather
+#: than nothing. Dropped whole when the guild's warzone is unavailable.
+_STANDING_ELSEWHERE_WARZONE = " ({warzone})"
 
 
 def _is_admin(user_id: int) -> bool:
@@ -4664,12 +4874,552 @@ def build_group_embed(
     return embed
 
 
+# ── `🏅 Your standing` ────────────────────────────────────────
+#
+# The surface that puts a "you" in this feature. Everything else here resolves
+# off the guild's warzone and a group picker and knows nothing about the
+# caller; this reads their claim and opens on them.
+#
+# NOTHING NEW IS COMPUTED HERE, and that is a hard rule rather than a
+# preference. A knockout bracket is sixty to ninety seconds of Python holding
+# the GIL of the process serving every guild, and this surface is the hub's
+# LANDING -- so a compute-on-open path would make that the bot's default state
+# in every guild that runs `/champion_duel`. The odds come out of
+# `champion_duel_store` or they do not come at all, which is the one place this
+# differs from `🔮 Odds of advancing`: that surface is a press, and a press
+# may pay.
+
+
+# `_RANKING_BANDS`, `_band_for` and `_STANDING_IN_IT_AT` were deleted on
+# 2026-08-25 with the two sentences that were their only readers. The reward
+# bands themselves ARE verified -- Kevin checked them against the game before
+# they went -- so they live in `notes/DESIGN_champion_duel_api.md` now, which is
+# the one place the knowledge survives the code. Do not re-derive them here.
+
+
+def _same_warzone(a, b) -> bool:
+    """Two warzone numbers, compared the way the game means them.
+
+    `db.parse_warzones` canonicalizes through `str(int(...))`, so a grouping
+    holds `738`; `db._server` only strips whitespace and a leading `#`, so a
+    registrant added from a modal can hold `0738`. Comparing the two as strings
+    puts that player permanently outside their own Champion Duel.
+
+    Falls back to a string compare on anything non-numeric, because a warzone
+    is free text on a self-reported player and must not raise here.
+    """
+    a, b = (str(a or "").strip(), str(b or "").strip())
+    if not a or not b:
+        return False
+    try:
+        return int(a) == int(b)
+    except ValueError:
+        return a == b
+
+
+def _in_this_champion_duel(player: dict, grouping: dict | None) -> bool:
+    """Whether this account is in the Champion Duel the reader's guild is in."""
+    if not grouping:
+        return True
+    return any(_same_warzone(player.get("server"), w) for w in (grouping.get("warzones") or []))
+
+
+def _my_odds_row(result, members, registrant_id):
+    """One player's row out of a whole group's answer, or None.
+
+    **Matched on the row POSITION, never on the display name.** `OddsRow.key`
+    is the index into `members` that produced the answer, which is what lets
+    two players sharing a name stay two players -- the property `_specs` keys
+    its specs by position to preserve, and the reason `key` exists at all.
+
+    Returns None rather than raising on anything that does not line up. This is
+    an accelerator on a landing surface, so a keyless row costs the personal
+    line and must not cost the hub.
+    """
+    for row in getattr(result, "rows", None) or []:
+        key = getattr(row, "key", None)
+        if key is None:
+            continue
+        try:
+            member = members[int(key)]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if member.get("id") == registrant_id:
+            return row
+    return None
+
+
+def _read_at_line(when) -> str | None:
+    """`_STANDING_READ_AT` over a stored timestamp, in the reader's own terms.
+
+    The same `<t:N:R>` treatment `_as_of_line` gives the odds, and for the same
+    reason: this feature is read across sixteen warzones in as many time zones,
+    and a UTC string is a puzzle in fifteen of them.
+    """
+    if not when:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(when))
+    except (TypeError, ValueError):  # pragma: no cover - a hand-edited row
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return _STANDING_READ_AT.format(when=f"<t:{int(stamp.timestamp())}:R>")
+
+
+def read_standing(
+    user_id: int, grouping: dict | None, *, warzone=None, with_odds: bool = True
+) -> dict:
+    """Everything `🏅 Your standing` renders, in one blocking read.
+
+    Returns a dict whose `state` is one of:
+
+      unclaimed  -- nobody has told us which player this is.
+      elsewhere  -- they hold a claim, on an account whose warzone is not in
+                    this guild's Champion Duel.
+      held       -- theirs, and in this Champion Duel.
+
+    **`elsewhere` IS THE WARZONE-SWITCH ANSWER**, and it is worth recording why
+    it is this rather than the guild-change detector the plan floated.
+
+    A guild change was always a proxy: people join the community server, or a
+    second alliance's, without moving warzone, so a detector keyed on it fires
+    often and mostly wrongly -- and `registrant_claims.guild_id` is overwritten
+    on every claim, so the comparison would have to happen inside the write
+    path to see anything at all. This asks the question that proxy was standing
+    in for, directly, off two reads that were already happening: is the account
+    you claimed in the Champion Duel you are looking at? A transfer moves
+    warzone and alliance together, so somebody who switched sees this the first
+    time they open the hub, and somebody who merely joined another Discord
+    server never does.
+
+    It is also the quieter of the two options the plan set out, because it is
+    not a detector at all. The update is permanently reachable from the surface
+    the reader already opens, and this state is that route being pointed out at
+    the one moment it is the answer.
+
+    **Nothing here computes odds.** `store_lib.lookup` is a SELECT, and a
+    `missing` answer stays missing.
+
+    `warzone` is the guild's own number, carried through rather than looked up
+    so `_STANDING_ELSEWHERE` can name which Champion Duel the reader is
+    standing in. `_grouping_state` has already resolved it by the time either
+    caller gets here, and it is the number the grouping was resolved FROM, so
+    re-reading it would be a second answer to a settled question. Optional: a
+    caller without one gets the sentence without its parenthetical.
+
+    `with_odds` is False for the landing, which renders a name, a round and a
+    rank and uses none of the rest. Reading it anyway cost every
+    `/champion_duel` in every guild a `get_group_scouting` -- four queries over
+    up to thirty-two registrants -- plus a store SELECT, a JSON parse and a
+    full `fingerprint()` rebuild with the SHA-256 under it, for an answer that
+    was then dropped on the floor. The press re-reads from scratch regardless.
+    """
+    # UNSCOPED, DELIBERATELY. Passing the guild's grouping here scopes
+    # `attach_stages` to it, so a reader whose account is in a different
+    # Champion Duel gets an empty `stages` and is told we have no round for
+    # them -- when we have their whole round and it is simply somewhere else. A
+    # claim points at one account and an account plays one grouping, so the
+    # unscoped read is the account's own rounds and there is nothing to
+    # disambiguate.
+    claimed = db.get_claimed_registrant(user_id)
+    if claimed is None:
+        return {"state": "unclaimed", "player": None}
+
+    # `elsewhere` IS NOT A PROMPT, and an earlier version of this made it one:
+    # it returned early and invited the reader to move their claim. That fires
+    # in the community server, and in any second alliance's server, because a
+    # claim is one per Discord account and every guild resolves its own
+    # Champion Duel -- which is exactly the noisy-proxy failure the guild-change
+    # detector was rejected for, rebuilt one level up.
+    #
+    # So the standing renders either way and this only decides whether a note
+    # rides along saying which Champion Duel it is about. The update is on the
+    # message regardless (`_StandingClaimView`), which is the "permanently
+    # reachable" half of the answer and does not depend on guessing.
+    # WHICH ROUND, and the unscoped read above is exactly why this has to be
+    # decided rather than taken. `attach_stages` reports the furthest round in
+    # STAGES order across every grouping the account appears in, and a warzone
+    # is drawn into a new grouping every event -- so a player who reached the
+    # semifinals last time and is in a qualifier group now would have last
+    # event's group, rank, kill score and stored odds rendered as their current
+    # standing. `find_grouping_by_warzone` picking the newest is what makes the
+    # older one reachable at all, and `build_finished_embed` invites people to
+    # start the next one.
+    #
+    # So the caller's own Champion Duel wins when the account is in it, and the
+    # account's own furthest round is the fallback for when it is not.
+    stages = claimed.get("stages") or {}
+    mine = [st for st, r in stages.items() if grouping and r.get("grouping_id") == grouping["id"]]
+    if mine or not grouping:
+        stage = mine[-1] if mine else claimed.get("stage")
+        here = True
+    else:
+        # No round of theirs in this Champion Duel. Either they are in it and
+        # nobody has recorded a round yet, which is a held standing with
+        # nothing in it, or their account is somewhere else entirely.
+        stage = claimed.get("stage")
+        here = _in_this_champion_duel(claimed, grouping)
+    row = stages.get(stage) if stage else None
+
+    out = {
+        "state": "held" if here else "elsewhere",
+        "player": claimed,
+        "stage": stage,
+        "row": row,
+        "warzone": str(warzone).strip() if warzone else None,
+    }
+    if (
+        not with_odds
+        or not row
+        or not row.get("group_id")
+        or stage not in odds_lib.STAGES_WITH_A_MODEL
+    ):
+        return out
+
+    members = db.get_group_scouting(row["group_id"])
+    out["members"] = members
+    try:
+        # STAMPED, because everything that reaches here is a press. `due()`
+        # orders the sweeper most-recently-viewed first, and a member opening
+        # their own standing is the same signal about the same group that
+        # pressing `🔮 Odds of advancing` is. An earlier version pinned this
+        # False to keep the LANDING from stamping, which it did -- and also
+        # left a member whose group has no stored answer able to press this
+        # every day and never once join the queue. The landing does not read
+        # odds at all now (`with_odds`), so the flag has nothing left to
+        # protect.
+        out["stored"] = store_lib.lookup(row["group_id"], members, stage=stage)
+    except Exception as exc:  # noqa: BLE001 - a bad store must not break the hub
+        # The same degradation `_stored_odds` takes, for the same reason, and
+        # it matters more here: this is the landing, so a store fault would be
+        # every guild's `/champion_duel` rather than one press.
+        print(f"[CHAMPION_DUEL] standing odds lookup failed for group {row['group_id']}: {exc}")
+    return out
+
+
+def _projected_place(result, row) -> int:
+    """Where a player is projected to finish, as a position in their group.
+
+    ON POINTS, WHICH IS WHAT THE ROUND IS RANKED ON. An earlier version counted
+    off the printed advance probability and it was wrong twice over:
+    `words.probability` floors a long tail into `<1%` and caps the top into
+    `>99%`, so in a lopsided group of eight three players share a rung and all
+    three are told they finish 1st; and even unsaturated it rounds to a whole
+    percent, which is a coarser sort than the `points_mean` printed in the very
+    next clause of the same sentence.
+
+    `_printed_rank` exists for the opposite job -- ordering a table BY the
+    figures it displays, so a reader cannot see two equal numbers in the wrong
+    order. Nothing here displays `advance` as the basis of the finish, so there
+    is no such contradiction to avoid.
+    """
+    rows = getattr(result, "rows", None) or []
+    return sum(1 for other in rows if other.points_mean > row.points_mean) + 1
+
+
+def _standing_recorded(player: dict, stage: str | None, row: dict | None) -> str:
+    """The free half: what somebody read off a screen, and when.
+
+    Rank AND kill score, because the round is scored on the score and ranked on
+    it in turn. A rank with no score behind it is the conclusion without the
+    number it was drawn from, and the score is the thing a player can still
+    move.
+    """
+    bits = []
+    if player.get("thp"):
+        bits.append(f"Total Hero Power **{player['thp']:,.0f}**")
+    if player.get("alliance"):
+        bits.append(f"Alliance **{discord.utils.escape_markdown(player['alliance'])}**")
+    if stage and row:
+        where = f"**{db.STAGE_LABELS.get(stage, stage.title())}**"
+        if row.get("grp"):
+            where += f", Group **{row['grp']}**"
+        bits.append(where)
+        if row.get("rank"):
+            bits.append(f"Rank **{row['rank']:,}**")
+        if row.get("score") is not None:
+            bits.append(f"Kill score **{row['score']:,}**")
+    if not bits:
+        return _STANDING_NOTHING_RECORDED
+    # ONLY OVER A ROW THAT HOLDS A READING. `group_members.updated_at` is
+    # stamped by `set_placement` on a bare membership write and on a draw, so
+    # it moves when somebody records who is in a group and nothing about how
+    # they are doing. "Read 3 minutes ago" over a blank rank is the surface
+    # claiming a measurement nobody took.
+    measured = bool(row and (row.get("rank") or row.get("score") is not None))
+    read_at = _read_at_line(row.get("updated_at")) if measured else None
+    return "\n".join(bits) + (f"\n\n{read_at}" if read_at else "")
+
+
+def _standing_worked_out(state: dict) -> str | None:
+    """The paid half, or None when there is nothing stored to say it with.
+
+    Returning None is a real outcome rather than a failure, and the caller
+    renders nothing instead of a caveat: a `missing` answer means the store
+    holds nothing for this group OR holds one computed against a different set
+    of people, and in a group of eight one swapped rival moves every row. An
+    answer about somebody else's group is wrong rather than old.
+    """
+    stage, stored = state.get("stage"), state.get("stored")
+    members, player = state.get("members") or [], state["player"]
+    if stored is None or not stored.showable:
+        return None
+    result = stored.odds
+    # The two rounds store different shapes and only one of them is a group.
+    # Checked rather than assumed for the reason `build_odds_embed` checks it:
+    # this is reachable from a public surface, and being wrong is an
+    # `AttributeError` behind a deferred interaction.
+    expected = odds_lib.BracketOdds if stage == "knockouts" else odds_lib.GroupOdds
+    if not isinstance(result, expected):
+        return None
+    row = _my_odds_row(result, members, player["id"])
+    if row is None:
+        return None
+
+    as_of = _as_of_line(stored.computed_at) if stored.state == "stale" else None
+    if as_of is None and stored.state == "stale":
+        # The caveat is the CONDITION on showing a stale answer rather than a
+        # decoration over it, which is the rule `build_odds_embed` set. A
+        # timestamp we cannot read costs the answer, not the line.
+        return None
+
+    if stage == "knockouts":
+        ladder = "\n".join(
+            f"`{words.probability(row.reach.get(rung, 0.0)):>4}`  {label}"
+            for rung, label in BRACKET_RUNGS.items()
+        )
+        lines = [ladder]
+    else:
+        # THE NUMBERS AND NOTHING ELSE. A verdict sentence and a reward-band
+        # sentence used to close this block; Kevin struck both on 2026-08-25
+        # because they narrate the game back at somebody already playing it.
+        # The three figures are the whole answer to "how do I compare to the
+        # field", which is the question this surface exists for.
+        place = _projected_place(result, row)
+        lines = [
+            f"`{words.probability(row.advance):>4}`  Through to the next round",
+            f"`{words.probability(row.win_group):>4}`  Winning the group outright",
+            "",
+            f"Projected finish **{place}** of **{len(result.rows)}**, "
+            f"on **{row.points_mean:,.0f}** points.",
+        ]
+
+    return ((as_of + "\n\n") if as_of else "") + "\n".join(lines)
+
+
+def build_standing_embed(state: dict, *, can_odds: bool) -> discord.Embed:
+    """`🏅 Your standing`: where the reader stands, and how far they get.
+
+    Free is what we recorded, paid is what we worked out, and the two are
+    separate fields rather than one blended block so the line between them is
+    visible rather than asserted.
+
+    **The paid half renders locked and disabled rather than hidden**
+    (`UX.md` principle 5). A free alliance should be able to see the shape of
+    what it would be buying, and this is the one surface in Champion Duel where
+    that shape is about them.
+
+    IT TAKES NO `grouping`. It carried one briefly and never read it, which
+    reads as intent that was not finished: the obvious use would be for
+    `_STANDING_ELSEWHERE` to name the Champion Duel this server is in, and
+    `build_player_embed` already declines to do that for a reason that holds
+    here too. Every draw in a season starts on the same day, so a start date
+    would print the reader's own event's name while asserting it is a different
+    one, and the thing that actually separates two groupings is their list of
+    Participating Warzones, which is a list rather than a label.
+    """
+    player = state["player"]
+    alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
+    embed = discord.Embed(
+        title=f"{CD_BTN_STANDING}"[:256],
+        description=f"**{discord.utils.escape_markdown(f'{alliance}{_label(player)}')}**",
+        color=discord.Color.blurple(),
+    )
+    if state.get("state") == "elsewhere":
+        embed.description += f"\n{_elsewhere_note(player, state.get('warzone'))}"
+    embed.add_field(
+        name=_STANDING_RECORDED,
+        value=_standing_recorded(player, state.get("stage"), state.get("row"))[:1024],
+        inline=False,
+    )
+
+    if not state.get("row"):
+        embed.add_field(
+            name=_STANDING_WORKED_OUT,
+            value=_STANDING_NO_ROUND.format(record=_btn_words(CD_BTN_RECORD))[:1024],
+            inline=False,
+        )
+        return embed
+
+    stage = state.get("stage")
+    # THE QUALIFIERS, NAMED RATHER THAN INFERRED. This used to read
+    # `stage not in STAGES_WITH_A_MODEL`, which is a different question: that
+    # tuple drops `knockouts` when `KNOCKOUT_AVAILABLE` is False, so a deploy
+    # whose engine pin lags told a player still in the bracket that we do not
+    # model the Knockout Stage -- permanent-sounding, wrong, and followed by a
+    # sentence about kill score that a 32-bracket is not ranked on.
+    #
+    # The qualifiers are the real case and they are a decision rather than a
+    # gap: their odds came out of the bot on 2026-08-21 while recording a
+    # qualifier group deliberately stayed.
+    if stage == "qualifiers":
+        embed.add_field(
+            name=_STANDING_WORKED_OUT,
+            value=_STANDING_NO_MODEL.format(round=db.STAGE_LABELS.get(stage, str(stage).title()))[
+                :1024
+            ],
+            inline=False,
+        )
+        return embed
+
+    if stage not in odds_lib.STAGES_WITH_A_MODEL:
+        # A round that HAS a model, on a deploy that cannot run it. An operator
+        # problem, said in the operator's words, which is what `_ENGINE_MISSING`
+        # is for -- and never dressed up as a property of the round.
+        embed.add_field(name=_STANDING_WORKED_OUT, value=_ENGINE_MISSING[:1024], inline=False)
+        return embed
+
+    if not can_odds:
+        embed.add_field(
+            name=f"🔒 {_STANDING_WORKED_OUT}",
+            value=_STANDING_LOCKED[:1024],
+            inline=False,
+        )
+        return embed
+
+    worked_out = _standing_worked_out(state)
+    if not worked_out:
+        # Nothing stored, or something stored against a different set of
+        # people. Said out loud rather than left as an absent field.
+        embed.add_field(
+            name=_STANDING_WORKED_OUT,
+            value=_STANDING_NOT_WORKED_OUT[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(name=_STANDING_WORKED_OUT, value=worked_out[:1024], inline=False)
+        # The same caveat the surface these numbers came from carries, off the
+        # same constant. One row of an answer is still that answer.
+        embed.set_footer(
+            text=(
+                _BRACKET_BASIS.format(trials=state["stored"].odds.trials)
+                if stage == "knockouts"
+                else _ODDS_BASIS
+            )
+        )
+    return embed
+
+
+class _StandingClaimView(discord.ui.View):
+    """The exit from a landing that does not know who is reading it.
+
+    `UX.md` principle 3 -- every dead end carries its exit -- and this is the
+    dead end the whole information architecture rethink started from: Kevin
+    opened the hub, found eight buttons and no content, and had nowhere to go.
+
+    It opens `champion_duel_claim.ClaimModal`, which is the half of the claim
+    flow built for a caller with no row on screen. A miss inside that modal
+    lands on `_MissView` and its `➕ Add a player`, which is the third of
+    the plan's three states -- not in our data at all, add yourself right here.
+    """
+
+    def __init__(self, *, user_id: int, can_write: bool, grouping: dict | None = None):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+        self.can_write = can_write
+        self.grouping = grouping
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(label=CD_BTN_WHO_AM_I[:80], style=discord.ButtonStyle.primary)
+        button.callback = self._on_press
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_press(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
+        )
+
+
+def standing_opener(standing: dict | None) -> str:
+    """The hub's first line, about the reader rather than about the roster.
+
+    This is the whole point of the information architecture rethink. The hub
+    opened on eight buttons and a player count, which is the feature describing
+    itself; it now opens on the person, and the counts move below them.
+
+    Returns "" for a caller that did not read a standing -- a DM, or a guild
+    with no Champion Duel resolved -- so the hub falls back to exactly what it
+    said before rather than to a gap where a name should be.
+    """
+    if not standing:
+        return ""
+    if standing.get("state") == "unclaimed":
+        return _STANDING_UNCLAIMED
+
+    player = standing.get("player") or {}
+    alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
+    line = f"**{discord.utils.escape_markdown(f'{alliance}{_label(player)}')}**"
+    row, stage = standing.get("row"), standing.get("stage")
+    if stage and row:
+        bits = [db.STAGE_LABELS.get(stage, stage.title())]
+        if row.get("grp"):
+            bits.append(f"Group {row['grp']}")
+        if row.get("rank"):
+            bits.append(f"Rank {row['rank']:,}")
+        line += " \u00b7 " + " \u00b7 ".join(bits)
+    # The standing renders either way and the note says which Champion Duel it
+    # is about. It is not a prompt; see `read_standing`.
+    return line + (
+        "\n" + _elsewhere_note(player, standing.get("warzone"))
+        if standing.get("state") == "elsewhere"
+        else ""
+    )
+
+
+def _elsewhere_note(player: dict, warzone=None) -> str:
+    """`_STANDING_ELSEWHERE`, filled in with THIS SERVER'S warzone.
+
+    `display_name`, not `_label`: the label already carries a warzone as
+    `(#1500)`, and that one is the player's -- printing it beside the guild's
+    is two numbers in one sentence meaning opposite things.
+
+    The warzone is passed in rather than read. `read_standing` takes the one
+    the hub already resolved its grouping from, so this costs no query, and
+    the superseded route is `db.get_guild_warzone`, which resolves the guild
+    rather than the Champion Duel and would be a second answer to a question
+    already answered upstream.
+
+    Falls back to the sentence alone when there is no warzone to name, which
+    an empty `({warzone})` would otherwise render as a hole in the copy.
+    """
+    line = _STANDING_ELSEWHERE.format(
+        player=discord.utils.escape_markdown(str(player.get("display_name") or "?")),
+    )
+    number = str(warzone or "").strip()
+    if number:
+        line += _STANDING_ELSEWHERE_WARZONE.format(warzone=discord.utils.escape_markdown(number))
+    return line + "."
+
+
 def build_hub_embed(
     *,
     servers: list[dict],
     can_write: bool,
     grouping: dict | None = None,
     warzone: str | None = None,
+    standing: dict | None = None,
 ) -> discord.Embed:
     """The hub's own state: what data is loaded, and what this caller can do.
 
@@ -4689,7 +5439,12 @@ def build_hub_embed(
     total = sum(s["registrants"] for s in servers)
     mine = f" on warzone **{warzone}**" if warzone else ""
     calendar = phase_line(grouping)
-    opener = f"{calendar}\n\n" if calendar else ""
+    # The person, then the calendar, then the roster. `standing_opener` returns
+    # "" for a caller with no standing read, which is what keeps the DM and
+    # no-grouping paths on exactly the text they had before.
+    who = standing_opener(standing)
+    opener = "\n\n".join(bit for bit in (who, calendar) if bit)
+    opener = f"{opener}\n\n" if opener else ""
 
     if grouping and not total:
         # Scoped, and holding nothing. Worth saying plainly rather than falling
@@ -5549,12 +6304,7 @@ def build_bracket_embed(result, grouping, *, as_of: str | None = None) -> discor
     # "SEEDING", NEVER "THE DRAW". `_RECORDING_LABELS` already calls it
     # **Initial Seed** on the recording surface, and two words for one thing is
     # how a member ends up thinking they are two things.
-    embed.set_footer(
-        text=(
-            f"Seeding isn't set yet, so each of {result.trials:,} simulations "
-            f"runs a different bracket. Squads we haven't seen are sampled."
-        )
-    )
+    embed.set_footer(text=_BRACKET_BASIS.format(trials=result.trials))
     return embed
 
 
@@ -5701,12 +6451,7 @@ def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord
     # odds came out on 2026-08-21, so the count is stated rather than looked up.
     # The knockouts never reached here: they return above, through
     # `build_bracket_embed`.
-    embed.set_footer(
-        text=(
-            "Ranked on points across all 21 matches, not matches won. Squads "
-            "we have not seen are sampled, so these carry that uncertainty."
-        )
-    )
+    embed.set_footer(text=_ODDS_BASIS)
     return embed
 
 
@@ -5790,12 +6535,18 @@ class ChampionDuelHubView(discord.ui.View):
         warzone: str | None = None,
         grouping: dict | None = None,
         can_intel: bool = False,
+        standing: dict | None = None,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.is_admin = is_admin
         self.can_write = can_write
         self.engine_ok = engine_ok
+        # Read once on the way in, so `_build_buttons` -- which is not async --
+        # can decide which half of the identity pair to draw. The standing
+        # surface re-reads before it renders, so this decides the label and
+        # nothing else, which is the same deal `can_intel` has.
+        self.standing = standing
         # Defaults False so a caller that forgets it renders the padlock rather
         # than handing out the paid surface. The gate is re-checked inside the
         # modal anyway; this only decides how the button is drawn.
@@ -5822,6 +6573,26 @@ class ChampionDuelHubView(discord.ui.View):
         self.add_item(button)
 
     def _build_buttons(self):
+        # FIRST, AND FIRST ON PURPOSE. `PROPOSAL_champion_duel_ia.md` principle
+        # 1 is identity first: the hub opens on the person, and the control
+        # that answers "where do I stand" is what the reader's eye should land
+        # on before the three that ask them who they are interested in.
+        #
+        # Which half is drawn is decided by whether we know the reader, exactly
+        # as `champion_duel_claim.add_claim_button` decides its pair -- a label
+        # that says what the control does cannot say "your standing" to
+        # somebody we cannot pick out of a hundred rows.
+        #
+        # Absent entirely without a grouping, for the same reason `Your group`
+        # and `Record a group` are: with no Champion Duel resolved there is no
+        # round to stand in, and the caller is being asked for their warzone
+        # instead.
+        if self.grouping:
+            if (self.standing or {}).get("state") in ("held", "elsewhere"):
+                self._add(CD_BTN_STANDING, discord.ButtonStyle.primary, 0, self._on_standing)
+            else:
+                self._add(CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, 0, self._on_who_am_i)
+
         # Row 0 — the three ways in. Two of them lead to a player, and the
         # write actions live on that player's card rather than here: asking
         # "who?" once beats asking it again in every flow.
@@ -5903,6 +6674,57 @@ class ChampionDuelHubView(discord.ui.View):
             self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 2, self._on_export)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
+
+    async def _on_standing(self, inter: discord.Interaction):
+        """Where the reader stands, and how far they get.
+
+        RE-READ RATHER THAN RENDERED OFF `self.standing`. This view lives
+        fifteen minutes and a claim can move inside that window from another
+        message -- `ClaimResultView` carries a release button that does exactly
+        that. Rendering the captured copy would show somebody the standing of
+        an account they gave up while it was on screen.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        standing = await asyncio.to_thread(
+            read_standing, inter.user.id, self.grouping, warzone=self.warzone
+        )
+        if standing["state"] == "unclaimed":
+            # They released the claim while this hub was open. The invite is
+            # the honest surface, and it is the same one the landing would have
+            # drawn had it been built a moment later.
+            view = _StandingClaimView(
+                user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
+            )
+            await inter.followup.send(standing_opener(standing), view=view, ephemeral=True)
+            view.message = await inter.original_response()
+            return
+        # Re-resolved rather than read off `self`, the same way the odds press
+        # does it: this view outlives the five minute entitlement cache, so a
+        # subscription that lapsed while the hub sat on screen would otherwise
+        # be served the paid half by a button that was enabled at build time.
+        can_odds = bool(
+            inter.guild_id
+            and await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter)
+        )
+        # THE UPDATE IS ON EVERY STANDING, not only on the one that looks like
+        # it needs it. This is the half of the warzone-switch answer that does
+        # not depend on noticing anything: whoever opens their own standing can
+        # point it at a different account from right here, and claiming a new
+        # one moves the claim (`CLAIM_MOVED`). Nothing has to be detected.
+        view = _StandingClaimView(
+            user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
+        )
+        await inter.followup.send(
+            embed=build_standing_embed(standing, can_odds=can_odds),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await inter.original_response()
+
+    async def _on_who_am_i(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
+        )
 
     async def _on_predict(self, inter: discord.Interaction):
         await inter.response.send_modal(_PredictModal())
@@ -6064,6 +6886,23 @@ async def _open_hub(
         view.message = await interaction.original_response()
         return
 
+    # The person, read once and handed to both halves of the surface. Only
+    # inside a guild with a Champion Duel resolved: without a grouping there is
+    # no round to stand in, and in a DM there is nothing to scope it to, so
+    # both fall through to exactly the hub they had before.
+    #
+    # ONE READ, NOT TWO. The embed and the button grid disagree if they ask
+    # separately, and the disagreement they can reach is the one that matters:
+    # a landing that says we do not know who you are, over a button that says
+    # `Your standing`.
+    standing = (
+        await asyncio.to_thread(
+            read_standing, interaction.user.id, grouping, warzone=warzone, with_odds=False
+        )
+        if grouping
+        else None
+    )
+
     view = ChampionDuelHubView(
         user_id=interaction.user.id,
         is_admin=_is_admin(interaction.user.id),
@@ -6072,11 +6911,16 @@ async def _open_hub(
         warzone=warzone,
         grouping=grouping,
         can_intel=can_intel,
+        standing=standing,
     )
     await interaction.followup.send(
         content=note,
         embed=build_hub_embed(
-            servers=servers, can_write=can_write, grouping=grouping, warzone=warzone
+            servers=servers,
+            can_write=can_write,
+            grouping=grouping,
+            warzone=warzone,
+            standing=standing,
         ),
         view=view,
         ephemeral=True,

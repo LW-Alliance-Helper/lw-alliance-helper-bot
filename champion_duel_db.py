@@ -551,6 +551,52 @@ def init_db() -> None:
                 FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
             )
         """)
+        # Which Discord account plays which recorded account, right now.
+        #
+        # **A registrant is an account, not a person.** Accounts change hands:
+        # people move into a stronger one, buy one, or transfer warzone, and
+        # the in-game name travels with the account rather than with whoever is
+        # playing it. So this is a present-tense statement -- "I play this
+        # account right now" -- and it moves when the person moves it. There is
+        # no history of past holders and no transfer detection, because the
+        # account somebody left may now be somebody else's and its recorded
+        # habits would be the previous player's.
+        #
+        # **Both directions are one-to-one, and both are NOT NULL so the
+        # constraints actually bite.** SQLite treats NULLs in a UNIQUE as
+        # distinct, so a nullable column here would enforce nothing -- the same
+        # trap `registrants.UNIQUE (player_key, server)` has for a NULL server,
+        # which `upsert_registrant` has to close in Python with `server IS ?`.
+        #
+        # - `UNIQUE (registrant_id)` is the refusal: a second person cannot
+        #   claim an account somebody already holds.
+        # - `UNIQUE (discord_user_id)` is what makes "move your claim" a single
+        #   row being repointed rather than a second claim appearing. It also
+        #   matches Map Manager, whose `users.discord_user_id` carries a unique
+        #   index and whose user row holds one `game_name` / `server_number`
+        #   pair -- so one Discord account means one game account on both sides,
+        #   and the two do not diverge into two ideas of who a user is.
+        #
+        # `guild_id` is audit only and is never read to resolve anything. The
+        # bot is in many alliance servers plus the community one, so which
+        # server somebody happened to press the button in says nothing durable
+        # about them -- and **leaving a Discord server does not release a
+        # claim**, because leaving one server says nothing about whether they
+        # still play. Same split as `edits.actor_discord_id`.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS registrant_claims (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                registrant_id   INTEGER NOT NULL,
+                discord_user_id TEXT    NOT NULL,
+                discord_name    TEXT,
+                guild_id        TEXT,
+                created_at      TEXT    NOT NULL,
+                updated_at      TEXT    NOT NULL,
+                UNIQUE (registrant_id),
+                UNIQUE (discord_user_id),
+                FOREIGN KEY (registrant_id) REFERENCES registrants(id) ON DELETE CASCADE
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS order_history (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2163,6 +2209,204 @@ def stage_for_display(registrant_id: int, grouping_id=None) -> dict | None:
     if stage is None:
         return None
     return stages.get(stage)
+
+
+# ── Who plays this account ────────────────────────────────────────────────────
+#
+# There is no "you" anywhere else in Champion Duel: every surface resolves off
+# the guild's warzone and a group picker, and none of them knows which of the
+# hundred rows on screen is the person reading. A claim is the link that
+# supplies it, and it is trust-based -- nothing verifies that the caller really
+# is that player, exactly as Map Manager's own claiming does not. In-game names
+# are unique within a warzone, which is what makes relying on people to claim
+# only themselves reasonable rather than naive.
+#
+# `purge_user_data` DELETES a claim rather than scrubbing it. Every other
+# Discord id in this file is attribution on a reading somebody contributed, and
+# a reading outlives its author; a claim is nothing but the person, so a
+# scrubbed claim would be an account held by nobody and unclaimable forever.
+
+
+class ClaimRefused(Exception):
+    """Somebody else already plays this account.
+
+    Carries the holder so the surface can say the account is claimed without
+    having to look it up again. **The holder's Discord id never reaches a
+    member**: who they are is for support to see, and naming them on a refusal
+    would hand out an identity to anyone willing to guess a name.
+    """
+
+    def __init__(self, registrant_id: int, holder: dict):
+        super().__init__(f"registrant {registrant_id} is already claimed")
+        self.registrant_id = registrant_id
+        self.holder = holder
+
+
+def get_registrant(registrant_id) -> dict | None:
+    """One registrant by id, or None.
+
+    Everything else in this file resolves a player by (name, server), because
+    that is what a member types. A claim already holds the id, and re-resolving
+    by name would reintroduce the ambiguity the id exists to have settled.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM registrants WHERE id = ?", (int(registrant_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _claim_row(conn, where: str, params: tuple) -> dict | None:
+    row = conn.execute(
+        f"SELECT * FROM registrant_claims WHERE {where}",  # noqa: S608
+        params,
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_claim(registrant_id: int) -> dict | None:
+    """Who plays this account, or None if nobody has said."""
+    with _get_conn() as conn:
+        return _claim_row(conn, "registrant_id = ?", (int(registrant_id),))
+
+
+def get_claimed_registrant(discord_user_id) -> dict | None:
+    """The registrant this Discord account says it plays, with the claim on it.
+
+    Returns the registrant row plus a `claim` key, because every caller that
+    wants one wants the other: the standing surface needs the player, and the
+    claim carries when they said so.
+    """
+    sid = str(discord_user_id).strip()
+    if not sid:
+        return None
+    with _get_conn() as conn:
+        claim = _claim_row(conn, "discord_user_id = ?", (sid,))
+        if claim is None:
+            return None
+        row = conn.execute(
+            "SELECT * FROM registrants WHERE id = ?", (claim["registrant_id"],)
+        ).fetchone()
+        if row is None:  # pragma: no cover - the cascade makes this unreachable
+            return None
+        player = dict(row)
+        player["claim"] = claim
+        return player
+
+
+def claims_for(registrant_ids) -> dict[int, dict]:
+    """Claims for many registrants at once, keyed by registrant id.
+
+    One query rather than one per row: the alliance and group listings render
+    up to a hundred players and a per-row lookup there is a hundred round trips
+    for a marker beside one name.
+    """
+    ids = [int(i) for i in registrant_ids]
+    if not ids:
+        return {}
+    out: dict[int, dict] = {}
+    with _get_conn() as conn:
+        # Chunked under SQLite's variable limit, which is 999 on older builds.
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            for row in conn.execute(
+                f"SELECT * FROM registrant_claims WHERE registrant_id IN ({marks})",  # noqa: S608
+                chunk,
+            ).fetchall():
+                out[row["registrant_id"]] = dict(row)
+    return out
+
+
+def claim_registrant(registrant_id: int, discord_user_id, *, discord_name=None, guild_id=None):
+    """Say that this Discord account plays this recorded account.
+
+    Returns `{"claim": row, "moved_from": registrant_id | None, "changed":
+    bool}`. `moved_from` is the account they held a moment ago, which is the
+    one fact the acknowledgement needs and cannot recover afterwards.
+    `changed` is False when they already held this one, so a second press
+    reads as "you already have this" rather than inventing a change.
+
+    Raises `ClaimRefused` when somebody else holds it, and `LookupError` when
+    the registrant does not exist -- two different problems with two different
+    exits, per `UX.md`.
+
+    **Moving is an update, not a delete and an insert.** The row keeps its
+    `created_at`, so "claimed since" survives a warzone transfer, and no window
+    exists in which the person holds nothing.
+    """
+    sid = str(discord_user_id).strip()
+    if not sid:
+        raise ValueError("a claim needs a Discord user id")
+    registrant_id = int(registrant_id)
+    now = _now()
+
+    with _get_conn() as conn:
+        exists = conn.execute("SELECT 1 FROM registrants WHERE id = ?", (registrant_id,)).fetchone()
+        if exists is None:
+            raise LookupError(f"no registrant with id {registrant_id}")
+
+        held = _claim_row(conn, "registrant_id = ?", (registrant_id,))
+        if held and held["discord_user_id"] != sid:
+            raise ClaimRefused(registrant_id, held)
+
+        mine = _claim_row(conn, "discord_user_id = ?", (sid,))
+        if mine and mine["registrant_id"] == registrant_id:
+            # Their own account, pressed twice. The display name is still worth
+            # refreshing: people rename on Discord and the audit trail should
+            # follow them rather than freeze at whatever it was the first time.
+            conn.execute(
+                "UPDATE registrant_claims SET discord_name = ?, guild_id = ?, updated_at = ? "
+                "WHERE id = ?",
+                (_text(discord_name), _text(guild_id), now, mine["id"]),
+            )
+            return {
+                "claim": _claim_row(conn, "id = ?", (mine["id"],)),
+                "moved_from": None,
+                "changed": False,
+            }
+
+        if mine:
+            moved_from = mine["registrant_id"]
+            conn.execute(
+                "UPDATE registrant_claims SET registrant_id = ?, discord_name = ?, "
+                "guild_id = ?, updated_at = ? WHERE id = ?",
+                (registrant_id, _text(discord_name), _text(guild_id), now, mine["id"]),
+            )
+            claim_id = mine["id"]
+        else:
+            moved_from = None
+            claim_id = conn.execute(
+                "INSERT INTO registrant_claims "
+                "(registrant_id, discord_user_id, discord_name, guild_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (registrant_id, sid, _text(discord_name), _text(guild_id), now, now),
+            ).lastrowid
+
+        return {
+            "claim": _claim_row(conn, "id = ?", (claim_id,)),
+            "moved_from": moved_from,
+            "changed": True,
+        }
+
+
+def release_claim(discord_user_id) -> dict | None:
+    """Give up whatever this Discord account currently claims.
+
+    Returns the claim that was released, or None if there was nothing to
+    release. The account goes back to unclaimed and anybody can take it, which
+    is the whole point: accounts change hands and the person who left is the
+    one who knows it.
+    """
+    sid = str(discord_user_id).strip()
+    if not sid:
+        return None
+    with _get_conn() as conn:
+        mine = _claim_row(conn, "discord_user_id = ?", (sid,))
+        if mine is None:
+            return None
+        conn.execute("DELETE FROM registrant_claims WHERE id = ?", (mine["id"],))
+        return mine
 
 
 # ── The day's picks ───────────────────────────────────────────────────────────
@@ -4184,6 +4428,17 @@ def consume_auth_code(code: str) -> dict | None:
 _REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("sessions", "discord_user_id = :sid"),
     ("auth_codes", "discord_user_id = :sid"),
+    # A DELETE rather than a scrub, and it is the one row in this file where
+    # that is true of something a member created. Every other Discord id here
+    # is attribution on a reading, and the reading outlives its author. A claim
+    # has nothing left once the person is taken out of it: a scrubbed claim
+    # would hold the account against nobody, and `UNIQUE (registrant_id)` would
+    # then make it unclaimable by anyone, forever.
+    #
+    # **The player record is untouched**, per the #499 decision. Removing the
+    # person removes the link, never the account they were playing -- that
+    # account is in a tournament other alliances contributed readings on.
+    ("registrant_claims", "discord_user_id = :sid"),
 )
 
 _REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (

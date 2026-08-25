@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 
 import discord
 
+import champion_duel_claim as claim_lib
 import champion_duel_db as db
 import champion_duel_image
 import champion_duel_intel as intel_lib
@@ -1544,7 +1545,13 @@ class PlayerActionsView(discord.ui.View):
     """
 
     def __init__(
-        self, *, player: dict, user_id: int, can_write: bool, grouping: dict | None = None
+        self,
+        *,
+        player: dict,
+        user_id: int,
+        can_write: bool,
+        grouping: dict | None = None,
+        claim: dict | None = None,
     ):
         super().__init__(timeout=600)
         self.player = player
@@ -1569,6 +1576,15 @@ class PlayerActionsView(discord.ui.View):
             )
             button.callback = callback
             self.add_item(button)
+
+        # The one control here that is not a contribution, so it is never
+        # locked: a claim says who the reader is, not what they saw.
+        #
+        # This is the point of need for it. Somebody who has just looked
+        # themselves up is already staring at their own row, which is the whole
+        # of "pick yourself out and we remember" -- and the claim is what gives
+        # every other Champion Duel surface a "you" to open on.
+        claim_lib.add_claim_button(self, player=player, claim_row=claim, user_id=user_id)
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -1625,12 +1641,19 @@ async def send_player_card(
     against players on other warzones before any draw, and scoping the look-up
     would take that away.
     """
-    top = await asyncio.to_thread(db.most_common_order, player["id"])
+    # Both reads at once. The claim decides which half of the claim pair the
+    # card renders, and a label that says what the control does has to know
+    # before the view is built rather than when it is pressed.
+    top, claim = await asyncio.gather(
+        asyncio.to_thread(db.most_common_order, player["id"]),
+        asyncio.to_thread(db.get_claim, player["id"]),
+    )
     view = PlayerActionsView(
         player=player,
         user_id=interaction.user.id,
         can_write=can_write,
         grouping=grouping,
+        claim=claim,
     )
     await interaction.followup.send(
         content=note,

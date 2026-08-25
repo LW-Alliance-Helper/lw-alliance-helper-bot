@@ -36,6 +36,19 @@ import champion_duel_hub as hub
 import champion_duel_odds as odds
 import champion_duel_store as store
 
+
+def _as_of_words() -> str:
+    """The stale caveat's leading words, read off the constant rather than typed.
+
+    Keyed to `_ODDS_AS_OF` on purpose. These assertions existed as literals and
+    a signed-off copy change walked straight through them: the text moved and
+    the "not in" assertions kept passing against a string the surface no longer
+    produces, which is a test that cannot fail. Kevin owns this copy and it will
+    move again.
+    """
+    return hub._ODDS_AS_OF.split("{")[0].strip()
+
+
 WARZONES = [str(700 + i) for i in range(16)]
 
 
@@ -782,7 +795,7 @@ def test_a_fresh_answer_carries_no_timestamp_and_no_caveat(group):
     embed = hub.build_odds_embed(_members(group), "semifinals", "A", group["grouping"], stored=held)
 
     assert "<t:" not in embed.description
-    assert "worked these out" not in embed.description
+    assert _as_of_words() not in embed.description
 
 
 def test_a_stale_answer_is_shown_and_says_when_it_was_worked_out(group):
@@ -800,7 +813,7 @@ def test_a_stale_answer_is_shown_and_says_when_it_was_worked_out(group):
     # Discord's own relative stamp, so sixteen warzones each read it in their
     # own terms rather than in the bot's UTC.
     assert "<t:" in embed.description and ":R>" in embed.description
-    assert embed.description.startswith("We worked these out ")
+    assert embed.description.startswith(_as_of_words())
 
 
 def test_an_answer_about_a_different_field_is_never_rendered(group, monkeypatch):
@@ -880,7 +893,7 @@ def test_a_stale_answer_we_cannot_date_is_computed_rather_than_shown_bare(group,
     )
 
     assert ran == [1], "a stale answer was shown with nothing saying it was stale"
-    assert "worked these out" not in embed.description
+    assert _as_of_words() not in embed.description
 
 
 def test_an_answer_worked_out_here_and_now_never_carries_the_stale_line(group, monkeypatch):
@@ -897,7 +910,7 @@ def test_an_answer_worked_out_here_and_now_never_carries_the_stale_line(group, m
         stored=store.Stored(state="missing"),
     )
 
-    assert "worked these out" not in embed.description
+    assert _as_of_words() not in embed.description
 
 
 def test_a_surface_with_no_store_behind_it_still_answers(group, monkeypatch):
@@ -910,7 +923,7 @@ def test_a_surface_with_no_store_behind_it_still_answers(group, monkeypatch):
     embed = hub.build_odds_embed(members, "semifinals", "A", group["grouping"])
 
     assert "**P00**" in embed.description
-    assert "worked these out" not in embed.description
+    assert _as_of_words() not in embed.description
 
 
 def test_a_store_that_raises_costs_the_fast_path_and_not_the_answer(group, capsys, monkeypatch):

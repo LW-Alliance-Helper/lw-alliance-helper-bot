@@ -281,21 +281,28 @@ _ENGINE_MISSING = (
     "`CD_ENGINE_TOKEN` is set and the last deploy installed `champion-duel-engine`."
 )
 
-# ⚠️ NOT SIGNED OFF. Kevin owns copy; the variants are in the PR body rather
-# than in a session report, which is where the last two batches lost theirs.
+# Signed off by Kevin 2026-08-25, and he asked for it shorter than every
+# variant that was offered: "This should say 'Updated 3 hours ago' or 'Update
+# 18 Aug'. Keep it even more simple than what you're proposing here."
+#
+# THE ARGUMENT THIS DECISION OVERRULED IS KEPT, because it is the reason
+# somebody will want to lengthen it again. The review reasoned that "Last
+# updated ..." names a mechanism rather than saying what the reader needs to
+# know. Kevin weighed that and chose plainness anyway. Do not reinstate the
+# longer form.
 #
 # The caveat over a STALE stored answer, and the only state that carries one.
 # A `fresh` answer is exactly what a run right now would produce, so it shows
 # with no timestamp and nothing hedged; a `missing` one is never shown at all.
 #
-# IT DELIBERATELY DOES NOT SAY WHAT CHANGED. `stale` is a fingerprint
-# mismatch, and a squad recorded, a hero power corrected, a trial count raised
-# and a new engine pin all reach it identically -- so "new data has arrived"
-# would be false on half of them.
+# IT DELIBERATELY DOES NOT SAY WHAT CHANGED, and that survives the shortening.
+# `stale` is a fingerprint mismatch, and a squad recorded, a hero power
+# corrected, a trial count raised and a new engine pin all reach it
+# identically -- so "new data has arrived" would be false on half of them.
 #
-# AND IT DELIBERATELY PROMISES NOTHING. The obvious second half -- "so we are
-# working out new ones" -- is false in two states this surface can reach, and
-# both were checked in `champion_duel_store` rather than assumed:
+# AND IT PROMISES NOTHING. The obvious second half -- "so we are working out
+# new ones" -- is false in two states this surface can reach, both checked in
+# `champion_duel_store` rather than assumed:
 #
 #   * `GROUPINGS_SWEPT` is 2, so a group in any older Champion Duel is never
 #     picked up. The round picker reaches those, and a deploy that moves the
@@ -304,11 +311,12 @@ _ENGINE_MISSING = (
 #   * While somebody is recording a group, each write resets the debounce
 #     `due()` measures, so nothing is worked out until they stop.
 #
-# What is true in every state is the half that is left: these were worked out
-# then, and something they depend on has moved since.
-#
-# "we", not "I": this is what the record holds (`notes/UX.md`).
-_ODDS_AS_OF = "We worked these out {when}. Something has changed since."
+# `{when}` is Discord's own relative stamp `<t:N:R>`, so each reader sees the
+# age in their own terms. NOTE FOR ANYONE REVISITING THIS: Discord picks that
+# wording, not us, so a week-old answer reads "Updated 7 days ago" rather than
+# "Updated 18 Aug". Kevin was told that and took the relative form. Switching
+# to a date past some age is a code change, not a copy one.
+_ODDS_AS_OF = "Updated {when}."
 
 
 # Signed off by Kevin 2026-08-24. "I", not "we": this is the bot unable to act

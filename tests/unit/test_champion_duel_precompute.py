@@ -26,13 +26,28 @@ from __future__ import annotations
 import ast
 import io
 import json
+import pathlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import champion_duel_db as db
+import champion_duel_hub as hub
 import champion_duel_odds as odds
 import champion_duel_store as store
+
+
+def _as_of_words() -> str:
+    """The stale caveat's leading words, read off the constant rather than typed.
+
+    Keyed to `_ODDS_AS_OF` on purpose. These assertions existed as literals and
+    a signed-off copy change walked straight through them: the text moved and
+    the "not in" assertions kept passing against a string the surface no longer
+    produces, which is a test that cannot fail. Kevin owns this copy and it will
+    move again.
+    """
+    return hub._ODDS_AS_OF.split("{")[0].strip()
+
 
 WARZONES = [str(700 + i) for i in range(16)]
 
@@ -729,6 +744,219 @@ def test_a_round_the_engine_cannot_model_is_never_queued(cd_db, monkeypatch):
         "a round with no model was queued anyway; it would be fingerprinted and "
         "then failed once a minute forever"
     )
+
+
+# ── the press ────────────────────────────────────────────────────────────────
+#
+# `champion_duel_store` landed with nothing reading it. These are the surface
+# half: what `🔮 Odds of advancing` does with each of the three states, and what
+# it does when the store itself is broken.
+#
+# The states are covered above at the `lookup` level. What is covered here is
+# that the SURFACE honours them -- which is a separate thing to get wrong, and
+# the expensive direction is showing an answer that should not have been shown.
+
+
+def _stored(members, *, state, computed_at="2026-08-24T09:00:00+00:00"):
+    """A `Stored` built by hand, so the surface can be put in a state `lookup`
+    would not hand it.
+
+    The one that matters is `missing` WITH an answer attached. `lookup` never
+    returns that, so a surface gating on `stored.odds` instead of on
+    `Stored.showable` passes every test that goes through the real read -- and
+    then renders somebody else's group the first time a rival is swapped.
+    """
+    return store.Stored(state=state, odds=_fake_odds(members), computed_at=computed_at)
+
+
+def test_an_answer_we_already_hold_is_not_worked_out_again(group, monkeypatch):
+    """The whole point of the store, at the surface. A press is a SELECT."""
+    members = _members(group)
+    store.store(group["group_id"], members, _fake_odds(members), stage="semifinals")
+    held = store.lookup(group["group_id"], _members(group), stage="semifinals")
+    assert held.state == "fresh"
+
+    def never(*a, **k):
+        raise AssertionError("the engine ran for an answer that was already on the table")
+
+    monkeypatch.setattr(odds, "group_advance_odds", never)
+    embed = hub.build_odds_embed(_members(group), "semifinals", "A", group["grouping"], stored=held)
+
+    assert "**P00**" in embed.description
+
+
+def test_a_fresh_answer_carries_no_timestamp_and_no_caveat(group):
+    """Fresh is bit for bit what a run right now would produce. Saying "as of"
+    over it would tell the reader to distrust a number that is exactly true."""
+    members = _members(group)
+    store.store(group["group_id"], members, _fake_odds(members), stage="semifinals")
+    held = store.lookup(group["group_id"], _members(group), stage="semifinals")
+
+    embed = hub.build_odds_embed(_members(group), "semifinals", "A", group["grouping"], stored=held)
+
+    assert "<t:" not in embed.description
+    assert _as_of_words() not in embed.description
+
+
+def test_a_stale_answer_is_shown_and_says_when_it_was_worked_out(group):
+    """The same eight people, something they depend on changed. Showable, and
+    only ever with the line over it."""
+    members = _members(group)
+    store.store(group["group_id"], members, _fake_odds(members), stage="semifinals")
+    db.set_registrant_thp(group["ids"][0], 999_000_000)
+    held = store.lookup(group["group_id"], _members(group), stage="semifinals")
+    assert held.state == "stale"
+
+    embed = hub.build_odds_embed(_members(group), "semifinals", "A", group["grouping"], stored=held)
+
+    assert "**P00**" in embed.description, "a stale answer about the right group is showable"
+    # Discord's own relative stamp, so sixteen warzones each read it in their
+    # own terms rather than in the bot's UTC.
+    assert "<t:" in embed.description and ":R>" in embed.description
+    assert embed.description.startswith(_as_of_words())
+
+
+def test_an_answer_about_a_different_field_is_never_rendered(group, monkeypatch):
+    """`missing` is not a weaker stale. One swapped rival moves every row, so
+    that answer is wrong rather than old and the surface must pay for a new one.
+
+    Gated on `Stored.showable` rather than on `stored.odds`, which is why this
+    hands the surface a state `lookup` will not produce.
+    """
+    members = _members(group)
+    ran = []
+
+    def spy(rows, *, stage=None, **k):
+        ran.append(stage)
+        return _fake_odds(rows)
+
+    monkeypatch.setattr(odds, "group_advance_odds", spy)
+    hub.build_odds_embed(
+        members,
+        "semifinals",
+        "A",
+        group["grouping"],
+        stored=_stored(members, state="missing"),
+    )
+
+    assert ran == ["semifinals"], (
+        "an answer marked missing was rendered instead of recomputed; in a group "
+        "of eight that is somebody else's field on screen"
+    )
+
+
+def test_a_group_answer_is_never_rendered_as_a_bracket(group, monkeypatch):
+    """The two rounds hold different shapes and only one has a `reach` per row.
+
+    A group payload reaching the bracket builder is an `AttributeError` behind
+    an interaction that has already been deferred, which the member reads as
+    the press doing nothing at all. It falls back to computing instead.
+    """
+    members = _members(group)
+    ran = []
+
+    def spy(rows, **k):
+        ran.append("bracket")
+        return odds.BracketOdds(rows=[])
+
+    monkeypatch.setattr(odds, "bracket_odds", spy)
+    hub.build_odds_embed(
+        members,
+        "knockouts",
+        None,
+        group["grouping"],
+        stored=_stored(members, state="fresh"),
+    )
+
+    assert ran == ["bracket"]
+
+
+def test_a_stale_answer_we_cannot_date_is_computed_rather_than_shown_bare(group, monkeypatch):
+    """The caveat is the condition on showing a stale answer, not a decoration.
+
+    A `computed_at` nothing can parse is a hand-edited row on the volume. Left
+    to drop only the line, it produces the one state the store and the surface
+    both say must never exist: old numbers rendered exactly like current ones.
+    """
+    members = _members(group)
+    ran = []
+    monkeypatch.setattr(
+        odds, "group_advance_odds", lambda rows, **k: (ran.append(1), _fake_odds(rows))[1]
+    )
+
+    embed = hub.build_odds_embed(
+        members,
+        "semifinals",
+        "A",
+        group["grouping"],
+        stored=_stored(members, state="stale", computed_at="not a date"),
+    )
+
+    assert ran == [1], "a stale answer was shown with nothing saying it was stale"
+    assert _as_of_words() not in embed.description
+
+
+def test_an_answer_worked_out_here_and_now_never_carries_the_stale_line(group, monkeypatch):
+    """The caveat travels with the stored answer or not at all. A computed one
+    is current by definition, and the line over it would be false."""
+    members = _members(group)
+    monkeypatch.setattr(odds, "group_advance_odds", lambda rows, **k: _fake_odds(rows))
+
+    embed = hub.build_odds_embed(
+        members,
+        "semifinals",
+        "A",
+        group["grouping"],
+        stored=store.Stored(state="missing"),
+    )
+
+    assert _as_of_words() not in embed.description
+
+
+def test_a_surface_with_no_store_behind_it_still_answers(group, monkeypatch):
+    """Every caller that predates the store passes nothing, and must be
+    unchanged. The store makes a slow surface sometimes fast, never the other
+    way round."""
+    members = _members(group)
+    monkeypatch.setattr(odds, "group_advance_odds", lambda rows, **k: _fake_odds(rows))
+
+    embed = hub.build_odds_embed(members, "semifinals", "A", group["grouping"])
+
+    assert "**P00**" in embed.description
+    assert _as_of_words() not in embed.description
+
+
+def test_a_store_that_raises_costs_the_fast_path_and_not_the_answer(group, capsys, monkeypatch):
+    """A locked table, a half-migrated column, an unreadable row. Any of them
+    is sixty seconds of the member's time, not a press that fails."""
+
+    def boom(*a, **k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(store, "lookup", boom)
+
+    assert hub._stored_odds(group["group_id"], _members(group), "semifinals") is None
+    assert "stored odds lookup failed" in capsys.readouterr().out
+
+
+def test_the_press_reads_the_store_at_all(group):
+    """The wiring itself, asserted on the source.
+
+    `champion_duel_store` shipped in #533 with nothing reading it, and the
+    failure mode of this whole change is that it silently goes back to that:
+    every test above passes `stored=` by hand, and none of them would notice
+    the press quietly not looking anything up.
+    """
+    source = pathlib.Path(hub.__file__).read_text(encoding="utf-8")
+    press = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_odds"
+    )
+    body = ast.get_source_segment(source, press)
+
+    assert "_stored_odds" in body, "the odds press stopped reading the store"
+    assert "stored=" in body, "the press looked the answer up and then did not pass it on"
 
 
 def test_the_sweep_does_not_grow_with_every_tournament_ever_played(cd_db):

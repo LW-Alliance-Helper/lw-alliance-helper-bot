@@ -422,3 +422,97 @@ def test_the_bracket_goes_through_its_own_builder_not_the_group_one(scored):
     assert description.startswith("The knockout bracket:")
     assert "going through" not in description
     assert "winning the group" not in description
+
+
+# ── the stale caveat over a stored bracket ───────────────────────────────────
+#
+# No engine, deliberately. What is under test is the FITTING, not the model, so
+# the rows are built by hand and this runs on any pin.
+
+
+#: The real line, at the length it actually renders. Built from the constant
+#: rather than copied, so it stays honest when Kevin settles the wording.
+_AS_OF = hub._ODDS_AS_OF.format(when="<t:1787040000:R>")
+
+
+def _wide_bracket(name_length: int) -> odds.BracketOdds:
+    """A thirty-two field whose names are as long as the caller wants.
+
+    A real field renders at about 2,200 characters against the 4,096 cap, so
+    nothing about the fitting loop is exercised by one -- which is exactly how
+    a caveat prepended to a finished description would pass every test in this
+    file and then truncate a live bracket the first time somebody's alliance
+    tag ran long.
+    """
+    return odds.BracketOdds(
+        rows=[
+            odds.BracketRow(
+                name=f"P{i:02d}" + "x" * max(0, name_length - 3),
+                reach={rung: 0.5 for rung in hub.BRACKET_RUNGS},
+            )
+            for i in range(32)
+        ],
+        trials=200_000,
+        matrix_trials=250,
+    )
+
+
+def _bracket_the_caveat_tips_over() -> odds.BracketOdds:
+    """A 32-field sized so all of it fits WITHOUT the caveat and not WITH it.
+
+    Sized by search rather than by a number in the test, because the number
+    depends on the length of copy nobody has signed off yet. Outside that
+    window the test would pass against a prepend-and-truncate as well, which
+    is the thing it exists to rule out.
+    """
+    for length in range(40, 140):
+        field = _wide_bracket(length)
+        plain = hub.build_bracket_embed(field, None).description
+        if "below them" in plain:
+            break
+        if len(plain) + len(_AS_OF) + 2 > 4096:
+            return field
+    raise AssertionError(
+        "no name length puts a 32-field in the window where the caveat is what "
+        "tips it over the cap; the fitting loop or the rungs must have changed"
+    )
+
+
+def test_every_one_of_the_32_is_accounted_for_under_the_stale_line():
+    """The caveat is counted before rows are dropped, not written over them.
+
+    A bracket is read for one thing -- finding your own name in a field of
+    thirty-two -- so a row that is neither printed nor counted is the failure
+    that matters. `build_bracket_embed` drops whole rows off the bottom until
+    the description fits and says how many went; a line prepended to the
+    finished string instead would push it past 4,096 and Discord would take the
+    tail, which is the sentence saying anybody was left out at all.
+    """
+    field = _bracket_the_caveat_tips_over()
+
+    description = hub.build_bracket_embed(field, None, as_of=_AS_OF).description
+
+    assert description.startswith(_AS_OF)
+    assert len(description) <= 4096
+    printed = sum(1 for row in field.rows if f"**{row.name}**" in description)
+    # Both halves of a row, not just the name. A truncation lands mid-ladder
+    # and leaves the name above it standing, so counting names alone would call
+    # a player present who has no figures under them.
+    ladders = len(re.findall(r"Top 16 \d+% . Top 8 \d+% . Top 4 \d+% . Champion \d+%", description))
+    assert ladders == printed, (
+        f"{printed} names are printed and {ladders} of them have a full ladder; "
+        "somebody's figures were cut in half"
+    )
+    counted = re.search(r"and \*\*(\d+) players?\*\* below them\.", description)
+    assert printed + (int(counted.group(1)) if counted else 0) == 32, (
+        "the table lost players: they were neither printed nor counted, which "
+        "means the description was truncated rather than fitted"
+    )
+
+
+def test_a_bracket_with_nothing_to_caveat_reads_exactly_as_it_did():
+    """The common case is a fresh answer, and it must be untouched."""
+    field = _wide_bracket(12)
+    assert hub.build_bracket_embed(field, None, as_of=None).description == (
+        hub.build_bracket_embed(field, None).description
+    )

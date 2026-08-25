@@ -12,7 +12,7 @@ import asyncio
 import csv
 import io
 from datetime import date
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -2426,21 +2426,99 @@ def test_the_hub_says_so_when_it_does_not_know_who_is_reading(standing_db):
     assert hub._STANDING_UNCLAIMED in embed.description
 
 
-def test_a_claim_somewhere_else_is_offered_the_move_rather_than_a_blank(standing_db):
-    """The warzone-switch answer, and the only surface that reports it.
+def _elsewhere(name="Faraway", server="1500", *, rank=4):
+    """A claimed account in a Champion Duel that is not this server's.
 
-    A transfer moves warzone and alliance together, so the account somebody
-    claimed last season is in a different Champion Duel from the one their
-    guild now resolves to. Nothing else in this feature notices.
+    Given its own grouping and a real round, because that is the case that
+    matters: the reader has a standing, and it is simply somewhere else.
     """
-    other = db.upsert_registrant(name="Moved", server="1500", thp=400_000_000)
-    db.claim_registrant(other["id"], str(ADMIN_ID), discord_name="Kevin", guild_id="999")
+    other_grouping = db.ensure_grouping([server, "1501"], "2026-08-04")
+    row = db.upsert_registrant(name=name, server=server, alliance="OGV", thp=400_000_000)
+    db.set_stage(row["id"], "semifinals", grp="B", grouping_id=other_grouping["id"])
+    group = db.get_or_create_group(other_grouping["id"], "semifinals", "B")
+    db.set_placement(group["id"], row["id"], rank=rank, score=30_000_000)
+    db.claim_registrant(row["id"], str(ADMIN_ID), discord_name="Kevin", guild_id="999")
+    return row
 
+
+def test_an_account_in_another_champion_duel_still_gets_its_standing(standing_db):
+    """The reader has a round. It is simply not this server's."""
+    _elsewhere()
     state = _standing_of(standing_db)
+
     assert state["state"] == "elsewhere"
+    assert state["stage"] == "semifinals", (
+        "scoping the read to the guild's grouping blanked a round we hold in full"
+    )
+    assert state["row"]["rank"] == 4
+
     opener = hub.standing_opener(state)
-    assert "Moved" in opener and "1500" in opener
-    assert hub._STANDING_ELSEWHERE.split("{")[0].strip() in opener
+    assert "Faraway" in opener and "Rank 4" in opener
+    assert hub._STANDING_ELSEWHERE.split("**")[-1].strip() in opener
+
+
+def test_the_note_about_another_champion_duel_is_not_a_prompt(standing_db):
+    """The failure the guild-change detector was rejected for, one level up.
+
+    A claim is one per Discord account and every guild resolves its own
+    Champion Duel, so the community server and any second alliance's server
+    reach this state routinely. Telling those readers to move a correct claim
+    is the noisy proxy this surface exists to avoid.
+    """
+    _elsewhere()
+    state = _standing_of(standing_db)
+    note = hub._elsewhere_note(state["player"])
+
+    for word in ("switch", "moved", "transfer", "update your", "tell us"):
+        assert word not in note.lower(), f"the note presumes a warzone switch: {word!r}"
+
+    view = hub.ChampionDuelHubView(
+        user_id=ADMIN_ID,
+        is_admin=False,
+        can_write=True,
+        engine_ok=True,
+        grouping=standing_db["grouping"],
+        standing=state,
+    )
+    assert hub.CD_BTN_STANDING in _labels(view), (
+        "a reader with a standing elsewhere was sent back to the claim invite"
+    )
+
+
+def test_the_way_to_change_accounts_rides_on_every_standing(standing_db):
+    """The warzone-switch answer, and it detects nothing.
+
+    Claiming a new account moves the claim, so one permanently reachable
+    control is the whole update path.
+    """
+    _claim(standing_db)
+    view = hub.ChampionDuelHubView(
+        user_id=ADMIN_ID,
+        is_admin=False,
+        can_write=True,
+        engine_ok=True,
+        grouping=standing_db["grouping"],
+        standing=_standing_of(standing_db),
+    )
+    interaction = _interaction()
+    with patch("premium.feature_gate", new=AsyncMock(return_value=False)):
+        asyncio.run(view._on_standing(interaction))
+
+    sent = interaction.followup.send.call_args.kwargs
+    assert hub.CD_BTN_WHO_AM_I in _labels(sent["view"]), (
+        "a standing with no way to point it at a different account"
+    )
+
+
+def test_a_warzone_written_with_a_leading_zero_is_still_the_same_warzone(standing_db):
+    """`parse_warzones` canonicalizes through int; `_server` does not."""
+    row = db.upsert_registrant(name="Padded", server="0" + STANDING_WARZONES[0], thp=400_000_000)
+    db.set_stage(row["id"], "semifinals", grp="A", grouping_id=standing_db["grouping"]["id"])
+    db.claim_registrant(row["id"], str(ADMIN_ID), discord_name="Kevin", guild_id="999")
+
+    assert _standing_of(standing_db)["state"] == "held", (
+        "a leading zero put a player permanently outside their own Champion Duel"
+    )
 
 
 def test_the_landing_is_untouched_for_a_caller_with_no_champion_duel():
@@ -2818,3 +2896,54 @@ def test_a_claimed_account_with_no_round_recorded_says_so(standing_db):
     )
     embed = hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
     assert hub._STANDING_NO_ROUND.split("{")[0].strip() in _field(embed, hub._STANDING_WORKED_OUT)
+
+
+def test_a_projected_finish_separates_players_the_printed_odds_cannot(standing_db):
+    """`words.probability` caps at `>99%`, so three leaders shared one rung.
+
+    Fails against the first version of `_projected_place`, which counted off
+    the printed advance probability: all three of these are `>99%` and all
+    three were told they finish 1st of 8.
+    """
+    _claim(standing_db, which=2)
+    members = _remember(standing_db, advance=[0.999, 0.998, 0.997, 0.4, 0.3, 0.2, 0.1, 0.05])
+    state = _standing_of(standing_db)
+    result = state["stored"].odds
+
+    places = [hub._projected_place(result, r) for r in result.rows]
+    assert len(set(places)) == len(places), (
+        f"players the model separates share a projected finish: {sorted(places)}"
+    )
+
+    mine = hub._my_odds_row(result, members, state["player"]["id"])
+    assert hub._projected_place(result, mine) == 3
+
+
+def test_a_round_the_engine_cannot_run_is_not_reported_as_having_no_model(standing_db, monkeypatch):
+    """`STAGES_WITH_A_MODEL` drops the knockouts on a lagging engine pin.
+
+    Reading absence from that tuple as "this round has no model" turns an
+    operator problem into a permanent-sounding claim about the round, with a
+    second sentence about kill score that a 32-bracket is not ranked on.
+    """
+    _claim(standing_db)
+    state = _standing_of(standing_db)
+    monkeypatch.setattr(odds_lib, "STAGES_WITH_A_MODEL", ())
+
+    embed = hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
+    worked = _field(embed, hub._STANDING_WORKED_OUT)
+    assert worked == hub._ENGINE_MISSING
+    assert hub._STANDING_NO_MODEL.split("{")[0].strip() not in worked
+
+
+def test_nothing_claims_a_reading_nobody_took(standing_db):
+    """`set_placement` stamps `updated_at` on a bare membership write too."""
+    rid = _claim(standing_db)
+    db.set_placement(standing_db["group_id"], rid)  # membership only, no rank, no score
+    embed = hub.build_standing_embed(
+        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=False
+    )
+    recorded = _field(embed, hub._STANDING_RECORDED)
+    assert hub._STANDING_READ_AT.split("{")[0].strip() not in recorded, (
+        "the surface says when a rank was read, over a row that holds no rank"
+    )

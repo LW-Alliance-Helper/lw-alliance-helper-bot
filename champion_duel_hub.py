@@ -487,13 +487,18 @@ _STANDING_LOCKED = (
     "rounds, and where that finish lands. Run `/upgrade` to unlock it."
 )
 
-#: The reader holds a claim on an account in a different Champion Duel from the
-#: one their guild resolves to. The single discovery surface for a warzone
-#: switch; see the module note on `_standing_state`.
+#: The reader's account is in a different Champion Duel from the one their
+#: guild is in. See `read_standing` for why this is a note rather than a
+#: prompt: a claim is one per Discord account and every guild resolves its own
+#: Champion Duel, so this is true and unremarkable in the community server.
+#:
+#: **IT DOES NOT SAY THEY SWITCHED WARZONE.** It states which Champion Duel the
+#: standing above is about, and stops. The reader knows whether they moved;
+#: guessing for them is the noisy proxy this whole surface avoids, and the
+#: control that fixes it is on the message either way.
 _STANDING_ELSEWHERE = (
-    "The account we have as yours, **{player}**, is on warzone **{server}**, "
-    "which is not in the Champion Duel this server is in.\n\n"
-    "If you have switched warzone, tell us the new account and we will move it."
+    "**{player}** is on warzone **{server}**, which is not in the Champion Duel "
+    "this server is in. The round above is theirs, not this server's."
 )
 
 
@@ -4884,6 +4889,33 @@ _RANKING_BANDS = {
 _STANDING_IN_IT_AT = 0.10
 
 
+def _same_warzone(a, b) -> bool:
+    """Two warzone numbers, compared the way the game means them.
+
+    `db.parse_warzones` canonicalizes through `str(int(...))`, so a grouping
+    holds `738`; `db._server` only strips whitespace and a leading `#`, so a
+    registrant added from a modal can hold `0738`. Comparing the two as strings
+    puts that player permanently outside their own Champion Duel.
+
+    Falls back to a string compare on anything non-numeric, because a warzone
+    is free text on a self-reported player and must not raise here.
+    """
+    a, b = (str(a or "").strip(), str(b or "").strip())
+    if not a or not b:
+        return False
+    try:
+        return int(a) == int(b)
+    except ValueError:
+        return a == b
+
+
+def _in_this_champion_duel(player: dict, grouping: dict | None) -> bool:
+    """Whether this account is in the Champion Duel the reader's guild is in."""
+    if not grouping:
+        return True
+    return any(_same_warzone(player.get("server"), w) for w in (grouping.get("warzones") or []))
+
+
 def _band_for(stage: str, place) -> str | None:
     """Which reward band a finishing position lands in, or None.
 
@@ -4981,20 +5013,38 @@ def read_standing(user_id: int, grouping: dict | None) -> dict:
     **Nothing here computes odds.** `store_lib.lookup` is a SELECT, and a
     `missing` answer stays missing.
     """
-    claimed = db.get_claimed_registrant(user_id, grouping["id"] if grouping else None)
+    # UNSCOPED, DELIBERATELY. Passing the guild's grouping here scopes
+    # `attach_stages` to it, so a reader whose account is in a different
+    # Champion Duel gets an empty `stages` and is told we have no round for
+    # them -- when we have their whole round and it is simply somewhere else. A
+    # claim points at one account and an account plays one grouping, so the
+    # unscoped read is the account's own rounds and there is nothing to
+    # disambiguate.
+    claimed = db.get_claimed_registrant(user_id)
     if claimed is None:
         return {"state": "unclaimed", "player": None}
 
-    # Warzone rather than grouping id. `attach_stages` reports a round only if
-    # the player is in one we hold, so a claimed account with no round recorded
-    # yet would read as "not in this Champion Duel" on a grouping test and be
-    # invited to move a claim that is perfectly correct.
-    if grouping and (claimed.get("server") or "") not in (grouping.get("warzones") or []):
-        return {"state": "elsewhere", "player": claimed}
+    # `elsewhere` IS NOT A PROMPT, and an earlier version of this made it one:
+    # it returned early and invited the reader to move their claim. That fires
+    # in the community server, and in any second alliance's server, because a
+    # claim is one per Discord account and every guild resolves its own
+    # Champion Duel -- which is exactly the noisy-proxy failure the guild-change
+    # detector was rejected for, rebuilt one level up.
+    #
+    # So the standing renders either way and this only decides whether a note
+    # rides along saying which Champion Duel it is about. The update is on the
+    # message regardless (`_StandingClaimView`), which is the "permanently
+    # reachable" half of the answer and does not depend on guessing.
+    here = _in_this_champion_duel(claimed, grouping)
 
     stage = claimed.get("stage")
     row = (claimed.get("stages") or {}).get(stage) if stage else None
-    out = {"state": "held", "player": claimed, "stage": stage, "row": row}
+    out = {
+        "state": "held" if here else "elsewhere",
+        "player": claimed,
+        "stage": stage,
+        "row": row,
+    }
     if not row or not row.get("group_id") or stage not in odds_lib.STAGES_WITH_A_MODEL:
         return out
 
@@ -5016,18 +5066,24 @@ def read_standing(user_id: int, grouping: dict | None) -> dict:
     return out
 
 
-def _projected_place(result, row) -> int | None:
+def _projected_place(result, row) -> int:
     """Where a player is projected to finish, as a position in their group.
 
-    Counted off the printed odds rather than off the raw points mean, for the
-    reason `_printed_rank` exists: the surface shows rounded figures, and a
-    thousandth of a point separating two players puts one above the other in a
-    way the reader cannot see. A tie counts as the better position, which is
-    the generous reading of a number that is a mean rather than a result.
+    ON POINTS, WHICH IS WHAT THE ROUND IS RANKED ON. An earlier version counted
+    off the printed advance probability and it was wrong twice over:
+    `words.probability` floors a long tail into `<1%` and caps the top into
+    `>99%`, so in a lopsided group of eight three players share a rung and all
+    three are told they finish 1st; and even unsaturated it rounds to a whole
+    percent, which is a coarser sort than the `points_mean` printed in the very
+    next clause of the same sentence.
+
+    `_printed_rank` exists for the opposite job -- ordering a table BY the
+    figures it displays, so a reader cannot see two equal numbers in the wrong
+    order. Nothing here displays `advance` as the basis of the finish, so there
+    is no such contradiction to avoid.
     """
     rows = getattr(result, "rows", None) or []
-    mine = _printed_rank(row.advance)
-    return sum(1 for other in rows if _printed_rank(other.advance) > mine) + 1
+    return sum(1 for other in rows if other.points_mean > row.points_mean) + 1
 
 
 def _standing_recorded(player: dict, stage: str | None, row: dict | None) -> str:
@@ -5054,7 +5110,13 @@ def _standing_recorded(player: dict, stage: str | None, row: dict | None) -> str
             bits.append(f"Kill score **{row['score']:,}**")
     if not bits:
         return _STANDING_NOTHING_RECORDED
-    read_at = _read_at_line(row.get("updated_at")) if row else None
+    # ONLY OVER A ROW THAT HOLDS A READING. `group_members.updated_at` is
+    # stamped by `set_placement` on a bare membership write and on a draw, so
+    # it moves when somebody records who is in a group and nothing about how
+    # they are doing. "Read 3 minutes ago" over a blank rank is the surface
+    # claiming a measurement nobody took.
+    measured = bool(row and (row.get("rank") or row.get("score") is not None))
+    read_at = _read_at_line(row.get("updated_at")) if measured else None
     return "\n".join(bits) + (f"\n\n{read_at}" if read_at else "")
 
 
@@ -5138,6 +5200,8 @@ def build_standing_embed(state: dict, *, grouping: dict | None, can_odds: bool) 
         description=f"**{discord.utils.escape_markdown(f'{alliance}{_label(player)}')}**",
         color=discord.Color.blurple(),
     )
+    if state.get("state") == "elsewhere":
+        embed.description += f"\n{_elsewhere_note(player)}"
     embed.add_field(
         name=_STANDING_RECORDED,
         value=_standing_recorded(player, state.get("stage"), state.get("row"))[:1024],
@@ -5153,10 +5217,17 @@ def build_standing_embed(state: dict, *, grouping: dict | None, can_odds: bool) 
         return embed
 
     stage = state.get("stage")
-    if stage not in odds_lib.STAGES_WITH_A_MODEL:
-        # The qualifiers, and only them. Their odds came out of the bot on
-        # 2026-08-21 and recording a qualifier group deliberately did not, so
-        # this state is permanent rather than a gap waiting to be filled.
+    # THE QUALIFIERS, NAMED RATHER THAN INFERRED. This used to read
+    # `stage not in STAGES_WITH_A_MODEL`, which is a different question: that
+    # tuple drops `knockouts` when `KNOCKOUT_AVAILABLE` is False, so a deploy
+    # whose engine pin lags told a player still in the bracket that we do not
+    # model the Knockout Stage -- permanent-sounding, wrong, and followed by a
+    # sentence about kill score that a 32-bracket is not ranked on.
+    #
+    # The qualifiers are the real case and they are a decision rather than a
+    # gap: their odds came out of the bot on 2026-08-21 while recording a
+    # qualifier group deliberately stayed.
+    if stage == "qualifiers":
         embed.add_field(
             name=_STANDING_WORKED_OUT,
             value=_STANDING_NO_MODEL.format(round=db.STAGE_LABELS.get(stage, str(stage).title()))[
@@ -5164,6 +5235,13 @@ def build_standing_embed(state: dict, *, grouping: dict | None, can_odds: bool) 
             ],
             inline=False,
         )
+        return embed
+
+    if stage not in odds_lib.STAGES_WITH_A_MODEL:
+        # A round that HAS a model, on a deploy that cannot run it. An operator
+        # problem, said in the operator's words, which is what `_ENGINE_MISSING`
+        # is for -- and never dressed up as a property of the round.
+        embed.add_field(name=_STANDING_WORKED_OUT, value=_ENGINE_MISSING[:1024], inline=False)
         return embed
 
     if not can_odds:
@@ -5255,18 +5333,10 @@ def standing_opener(standing: dict | None) -> str:
     """
     if not standing:
         return ""
-    state = standing.get("state")
-    if state == "unclaimed":
+    if standing.get("state") == "unclaimed":
         return _STANDING_UNCLAIMED
-    player = standing.get("player") or {}
-    if state == "elsewhere":
-        # `display_name`, not `_label`: the label carries the warzone as
-        # `(#1500)` and the sentence names it again two words later.
-        return _STANDING_ELSEWHERE.format(
-            player=discord.utils.escape_markdown(str(player.get("display_name") or "?")),
-            server=discord.utils.escape_markdown(str(player.get("server") or "?")),
-        )
 
+    player = standing.get("player") or {}
     alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
     line = f"**{discord.utils.escape_markdown(f'{alliance}{_label(player)}')}**"
     row, stage = standing.get("row"), standing.get("stage")
@@ -5277,7 +5347,21 @@ def standing_opener(standing: dict | None) -> str:
         if row.get("rank"):
             bits.append(f"Rank {row['rank']:,}")
         line += " \u00b7 " + " \u00b7 ".join(bits)
-    return line
+    # The standing renders either way and the note says which Champion Duel it
+    # is about. It is not a prompt; see `read_standing`.
+    return line + ("\n" + _elsewhere_note(player) if standing.get("state") == "elsewhere" else "")
+
+
+def _elsewhere_note(player: dict) -> str:
+    """`_STANDING_ELSEWHERE`, filled in.
+
+    `display_name`, not `_label`: the label carries the warzone as `(#1500)`
+    and the sentence names it again three words later.
+    """
+    return _STANDING_ELSEWHERE.format(
+        player=discord.utils.escape_markdown(str(player.get("display_name") or "?")),
+        server=discord.utils.escape_markdown(str(player.get("server") or "?")),
+    )
 
 
 def build_hub_embed(
@@ -6455,7 +6539,7 @@ class ChampionDuelHubView(discord.ui.View):
         # round to stand in, and the caller is being asked for their warzone
         # instead.
         if self.grouping:
-            if (self.standing or {}).get("state") == "held":
+            if (self.standing or {}).get("state") in ("held", "elsewhere"):
                 self._add(CD_BTN_STANDING, discord.ButtonStyle.primary, 0, self._on_standing)
             else:
                 self._add(CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, 0, self._on_who_am_i)
@@ -6553,10 +6637,10 @@ class ChampionDuelHubView(discord.ui.View):
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         standing = await asyncio.to_thread(read_standing, inter.user.id, self.grouping)
-        if standing["state"] != "held":
-            # They released or moved the claim while this hub was open. The
-            # invite is the honest surface, and it is the same one the landing
-            # would have drawn had it been built a moment later.
+        if standing["state"] == "unclaimed":
+            # They released the claim while this hub was open. The invite is
+            # the honest surface, and it is the same one the landing would have
+            # drawn had it been built a moment later.
             view = _StandingClaimView(
                 user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
             )
@@ -6571,10 +6655,20 @@ class ChampionDuelHubView(discord.ui.View):
             inter.guild_id
             and await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter)
         )
+        # THE UPDATE IS ON EVERY STANDING, not only on the one that looks like
+        # it needs it. This is the half of the warzone-switch answer that does
+        # not depend on noticing anything: whoever opens their own standing can
+        # point it at a different account from right here, and claiming a new
+        # one moves the claim (`CLAIM_MOVED`). Nothing has to be detected.
+        view = _StandingClaimView(
+            user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
+        )
         await inter.followup.send(
             embed=build_standing_embed(standing, grouping=self.grouping, can_odds=can_odds),
+            view=view,
             ephemeral=True,
         )
+        view.message = await inter.original_response()
 
     async def _on_who_am_i(self, inter: discord.Interaction):
         await inter.response.send_modal(

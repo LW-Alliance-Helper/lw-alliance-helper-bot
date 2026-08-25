@@ -2457,6 +2457,32 @@ def test_an_account_in_another_champion_duel_still_gets_its_standing(standing_db
     assert hub._STANDING_ELSEWHERE.split("**")[-1].strip() in opener
 
 
+def test_the_elsewhere_note_names_this_servers_warzone_and_not_the_players(standing_db):
+    """Kevin's sentence, 2026-08-25, and the number in it is the guild's.
+
+    The reader knows their own warzone -- `_label` prints it three words
+    earlier. What they cannot see is which Champion Duel the Discord they are
+    standing in belongs to, so that is the number the sentence names.
+    """
+    _elsewhere()
+    state = hub.read_standing(ADMIN_ID, standing_db["grouping"], warzone=STANDING_WARZONES[0])
+
+    assert state["state"] == "elsewhere"
+    note = hub._elsewhere_note(state["player"], state["warzone"])
+    assert f"({STANDING_WARZONES[0]})" in note, "the note did not name this server's warzone"
+    assert "742" not in note, "the note named the player's own warzone instead"
+    assert note.endswith(".")
+
+
+def test_the_elsewhere_note_drops_the_parenthetical_rather_than_printing_an_empty_one():
+    """A caller with no warzone -- a DM, or a guild that never resolved one."""
+    player = {"display_name": "Faraway", "server": "742"}
+    assert hub._elsewhere_note(player, None) == (
+        hub._STANDING_ELSEWHERE.format(player="Faraway") + "."
+    )
+    assert "()" not in hub._elsewhere_note(player, "")
+
+
 def test_last_events_round_is_not_rendered_as_this_events_standing(standing_db):
     """A warzone is drawn into a new grouping every event.
 
@@ -2660,6 +2686,9 @@ def test_the_free_half_carries_the_rank_the_score_and_when_they_were_read(standi
     assert "41,200,000" in recorded
     assert "<t:" in recorded, "nothing says when these were read"
     assert hub._STANDING_READ_AT.split("{")[0].strip() in recorded
+    # `-# ` is Discord's subtext and only renders at the start of a line, which
+    # is the whole point of asking for this line smaller than the ones above.
+    assert "\n-# Updated" in recorded, "the timestamp lost its subtext marker"
 
 
 def test_the_kill_score_reward_tiers_never_appear(standing_db):
@@ -2708,13 +2737,24 @@ def test_a_missing_stored_answer_shows_no_odds_at_all(standing_db):
 
 
 def test_a_missing_answer_is_said_out_loud_rather_than_left_blank(standing_db):
-    """`UX.md` principle 2. A paying alliance must not lose the paid half in silence."""
+    """`UX.md` principle 2. A paying alliance must not lose the paid half in silence.
+
+    THIS TEST USED TO ASSERT AN EXIT TOO, and that assertion came out on
+    2026-08-25 rather than being made to pass. `_STANDING_NOT_WORKED_OUT` named
+    the route to `🔮 Odds of advancing`; Kevin dropped the navigation because
+    `PLAN_champion_duel_ia.md` session 6 moves that control onto this very
+    surface, so the sentence was about to start pointing at itself.
+
+    Until session 6 lands the field is a statement with no exit on the message,
+    which is a real gap and is recorded as one on the pull request. It is not
+    guarded here, because a test asserting the gap would have to be deleted
+    again the moment the gap closes.
+    """
     _claim(standing_db)
     embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=True)
     worked = _field(embed, hub._STANDING_WORKED_OUT)
     assert worked is not None, "the paid half vanished with nothing said"
     assert hub._STANDING_NOT_WORKED_OUT.split("{")[0].strip() in worked
-    assert hub._btn_words(hub.CD_BTN_ODDS) in worked, "no exit to the one control that computes"
     assert embed.footer.text is None, "a caveat was rendered over an answer that is not there"
 
 
@@ -2829,58 +2869,30 @@ def test_the_standing_reads_the_readers_row_and_not_the_favorites(standing_db):
     assert "Projected finish **7**" in worked
 
 
-# ── the verdict ──────────────────────────────────────────────────────────────
+# ── the verdict, and why there is not one ────────────────────────────
 
 
-def test_the_verdict_is_a_verdict_on_both_sides_of_the_cut(standing_db):
-    """The plan's line: still in it, or not, and if not what is still reachable."""
+def test_the_worked_out_half_states_the_numbers_and_passes_no_judgement(standing_db):
+    """Kevin struck the verdict and the reward band on 2026-08-25.
+
+    Four tests stood here: two on the verdict either side of a 10% cut, and two
+    on `_band_for`. All four went with the constants. This one replaces them,
+    because a deletion nobody guards is a deletion somebody rebuilds -- and the
+    rule is wider than the strings, so it is asserted against the rendered
+    field rather than against any one of them.
+    """
     _claim(standing_db, which=0)
     _remember(standing_db)
-    strong = _field(
+    worked = _field(
         hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
         hub._STANDING_WORKED_OUT,
     )
-    assert hub._STANDING_IN_IT.split("{")[0].strip() in strong
-
-    db.release_claim(str(ADMIN_ID))
-    _claim(standing_db, which=7)
-    _remember(standing_db, advance=[0.9, 0.8, 0.5, 0.4, 0.3, 0.2, 0.1, 0.01])
-    weak = _field(
-        hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
-        hub._STANDING_WORKED_OUT,
-    )
-    assert hub._STANDING_LONG_SHOT in weak
-
-
-def test_the_long_shot_verdict_never_says_a_player_cannot_get_through():
-    """`UX.md` principle 6, and an alliance that rarely gets one through."""
-    text = hub._STANDING_LONG_SHOT.lower()
-    for phrase in ("out of it", "cannot", "can't", "no chance", "eliminated", "impossible"):
-        assert phrase not in text, f"the verdict grades the reader: {phrase!r}"
-
-
-@pytest.mark.parametrize(
-    "stage,place,band",
-    [
-        ("semifinals", 1, "1st"),
-        ("semifinals", 2, "2nd"),
-        ("semifinals", 5, "3rd to 8th"),
-        ("qualifiers", 1, "1st"),
-        ("qualifiers", 3, "2nd to 3rd"),
-        ("qualifiers", 11, "11th to 20th"),
-        ("qualifiers", 51, None),
-        ("knockouts", 1, None),
-        ("semifinals", None, None),
-    ],
-)
-def test_a_projected_finish_lands_in_a_band(stage, place, band):
-    assert hub._band_for(stage, place) == band
-
-
-def test_a_fractional_finish_rounds_down_rather_than_promising_the_better_band():
-    """A projected finish is a mean. 2.5 is 3rd, not 2nd."""
-    assert hub._band_for("semifinals", 2.5) == "3rd to 8th"
-    assert hub._band_for("semifinals", 2.49) == "2nd"
+    assert "Through to the next round" in worked
+    assert "Projected finish" in worked
+    for narration in ("in the running", "long shot", "band", "reward", "wins still pay"):
+        assert narration not in worked.lower(), (
+            f"the bot is narrating the game back at the player: {narration!r}"
+        )
 
 
 # ── staleness ────────────────────────────────────────────────────────────────

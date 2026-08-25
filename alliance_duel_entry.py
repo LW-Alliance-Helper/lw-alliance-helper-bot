@@ -769,8 +769,7 @@ def _parse_new_league_bracket(state, text) -> ad.BracketParse:
     if state.own is None:
         return ad.BracketParse(
             problems=(
-                "I do not know which alliance is yours yet. Run `/setup` and open the "
-                "Alliance Duel (VS) section to set it.",
+                f"I do not know which alliance is yours yet. Set it in {ad_setup.VS_SETUP_NAV}.",
             )
         )
     seed = ad.parse_int(text)
@@ -821,8 +820,8 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
     )
     if not rows:
         return False, (
-            "I had nothing to write. In own-alliance mode I need to know which alliance "
-            "is yours: run `/setup` and open the Alliance Duel (VS) section."
+            "I had nothing to write. I need to know which alliance is yours before I "
+            f"can track only that one: set it in {ad_setup.VS_SETUP_NAV}."
         )
 
     display = {e.alliance: e for e in entries}

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import discord
 import pytest
 
 import champion_duel_db as db
@@ -221,8 +222,14 @@ def test_the_rounds_are_offered_in_playing_order_not_alphabetical(cd_db):
     assert db.recorded_stages(grouping["id"]) == list(db.STAGES)
 
 
-def test_a_round_we_hold_nothing_for_is_not_offered(cd_db):
-    """The picker lists what exists, not what the calendar says should."""
+def test_a_round_we_hold_nothing_for_is_not_reported_as_recorded(cd_db):
+    """`recorded_stages` answers what our record holds, and that is all it has
+    ever answered.
+
+    It used to be the picker's option list too, which is what made a missing
+    round and a missing picker the same screen. The picker is off `db.STAGES`
+    now and this reading is unchanged: what it returns is the marks, not the
+    options."""
     grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
     db.get_or_create_group(grouping["id"], "semifinals", "H")
 
@@ -335,7 +342,9 @@ def test_the_odds_are_the_one_gated_thing_and_it_locks_rather_than_hides(cd_db):
 
     locked = _odds_view(grouping, members, can_odds=False)
 
-    button = next(b for b in locked.children if hub.CD_BTN_ODDS in (b.label or ""))
+    button = next(
+        b for b in locked.children if hub.CD_BTN_ODDS in (getattr(b, "label", None) or "")
+    )
     assert button.disabled is True
     assert button.label.startswith("🔒")
 
@@ -494,3 +503,541 @@ def test_the_label_does_not_claim_they_are_being_registered(cd_db):
     an outcome the control does not have."""
     assert "register" not in hub.CD_BTN_PLACE.lower()
     assert "group" in hub.CD_BTN_PLACE.lower()
+
+
+# ── the round picker ─────────────────────────────────────────────────────────
+
+
+def _picker(view, placeholder):
+    """The select with this placeholder, or None. Buttons have no placeholder
+    and a `getattr` default would evaluate one on them, so this is explicit."""
+    for item in view.children:
+        if isinstance(item, discord.ui.Select) and item.placeholder == placeholder:
+            return item
+    return None
+
+
+def _view_of(grouping, *, stage, members, groups=(), label=None, stages=None, **kwargs):
+    return hub._GroupView(
+        user_id=1,
+        groupings=[grouping],
+        grouping=grouping,
+        stages=list(db.recorded_stages(grouping["id"]) if stages is None else stages),
+        stage=stage,
+        groups=list(groups),
+        label=label,
+        members=list(members),
+        can_odds=True,
+        **kwargs,
+    )
+
+
+def test_every_round_the_game_plays_is_offered(cd_db):
+    """The complaint that started this. Holding one round hid the picker
+    entirely, so "no other round exists" and "the picker is missing" were the
+    same screen and a member could not tell which they were looking at."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+    members = db.get_group_members(group["id"])
+
+    view = _view_of(grouping, stage="semifinals", members=members, label="H")
+
+    assert db.recorded_stages(grouping["id"]) == ["semifinals"]
+    picker = _picker(view, "Which round?")
+    assert picker is not None
+    assert [o.value for o in picker.options] == list(db.STAGES)
+
+
+def test_the_rounds_are_offered_in_the_order_they_are_played(cd_db):
+    """Alphabetical would put the knockouts first, which is backwards for a
+    history and wrong for a calendar."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
+
+    labels = [o.label for o in _picker(view, "Which round?").options]
+    assert labels == [db.STAGE_LABELS[s] for s in db.STAGES]
+
+
+def test_a_round_we_hold_nothing_for_is_marked_rather_than_hidden(cd_db):
+    """The mark is text on the description line, not a color: `DESIGN.md` rule
+    9 says a glyph has to work by shape, and this has to work for a screen
+    reader too."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
+
+    marks = {o.value: o.description for o in _picker(view, "Which round?").options}
+    assert marks["semifinals"] is None
+    assert marks["qualifiers"] == hub._STAGE_NOT_HELD
+    assert marks["knockouts"] == hub._STAGE_NOT_HELD
+
+
+def test_the_round_being_read_is_the_one_showing_as_chosen(cd_db):
+    """A picker that offers three rounds and marks none of them as current
+    leaves the reader guessing which one the list below it is."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
+
+    chosen = [o.value for o in _picker(view, "Which round?").options if o.default]
+    assert chosen == ["semifinals"]
+
+
+def test_opening_a_round_we_hold_nothing_for_does_not_record_it(cd_db):
+    """**Reading must not write.**
+
+    `get_or_create_group` inserts, and the picker now reaches rounds nobody has
+    recorded. Calling it on one would create the `groups` row that makes
+    `recorded_stages` report the round as held, so the round would stop
+    offering the contribution door it exists to offer, closed by somebody
+    looking at it and with nothing to undo it.
+    """
+    grouping, _group = _group_of(cd_db, [("Alpha", 1, None)])
+    recorded = db.recorded_stages(grouping["id"])
+
+    assert hub._read_group(grouping["id"], "knockouts", None, recorded) == []
+    assert db.recorded_stages(grouping["id"]) == recorded
+
+
+def test_a_round_we_do_hold_still_reads_its_members(cd_db):
+    """The negative half. Without it the guard above passes on a function that
+    returns nothing for everything."""
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None), ("Beta", 2, None)])
+    recorded = db.recorded_stages(grouping["id"])
+
+    rows = hub._read_group(grouping["id"], "semifinals", "H", recorded)
+
+    assert [r["display_name"] for r in rows] == ["Alpha", "Beta"]
+
+
+def test_an_empty_round_says_so_and_offers_to_record_it(cd_db):
+    """Kevin's own words for what the picker should do: a quick click to
+    Knockouts shows we have nothing and prompts them to add it.
+
+    The button matters as much as the sentence. Naming a control in prose was
+    the whole offer before, and the control it named is on the hub message the
+    reader scrolled past to get here.
+    """
+    grouping, group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="knockouts", members=[])
+    embed = view._embed()
+
+    assert "this round" in embed.description
+    assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
+    assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
+
+
+def test_an_empty_lettered_group_is_not_told_the_round_is_missing(cd_db):
+    """Two shapes of nothing. A group we hold nobody for sits inside a round we
+    do hold, and the reader picked that letter to get here."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    db.get_or_create_group(grouping["id"], "semifinals", "H")
+
+    embed = hub.build_group_embed(members=[], stage="semifinals", label="H", grouping=grouping)
+
+    assert "this group" in embed.description
+    assert "this round" not in embed.description
+
+
+def test_a_champion_duel_we_hold_nothing_for_opens_rather_than_refusing(cd_db):
+    """It used to answer "no rounds are recorded" and stop, which put the
+    flattest dead end in the feature exactly where the contribution was most
+    wanted: an alliance that has just entered its Participating Warzones holds
+    nothing by definition."""
+    assert hub._opening_stage([], None) == db.STAGES[0]
+    assert hub._opening_stage([], "semifinals") == "semifinals"
+    assert hub._opening_stage(["qualifiers"], "semifinals") == "qualifiers"
+    assert hub._opening_stage(["qualifiers", "semifinals"], "semifinals") == "semifinals"
+
+
+# ── filtered lists ───────────────────────────────────────────────────────────
+
+
+def _hundred(cd_db_unused, tags):
+    """A qualifier group of len(tags) players, one per alliance tag. `None` is a
+    player we hold no tag for."""
+    grouping = db.create_grouping(["738"], started_so_today_is("qualifiers"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    for i, tag in enumerate(tags, start=1):
+        reg = db.upsert_registrant(f"P{i:03d}", server="738", alliance=tag)
+        db.set_placement(group["id"], reg["id"], rank=i)
+    return grouping, db.get_group_members(group["id"])
+
+
+def test_a_long_list_comes_back_a_page_at_a_time(cd_db):
+    grouping, members = _hundred(cd_db, ["Kite"] * 50 + ["Wren"] * 50)
+
+    first = hub.build_group_embed(members=members, stage="qualifiers", label="D", grouping=grouping)
+    second = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, page=1
+    )
+
+    assert "**P001**" in first.description and "**P020**" in first.description
+    assert "**P021**" not in first.description
+    assert "**P021**" in second.description and "**P001**" not in second.description
+    assert first.footer.text == "Showing 1 to 20 of 100 players."
+
+
+def test_a_page_past_the_end_lands_on_the_last_one(cd_db):
+    """The page can fall off the end when a filter changes under it, so the
+    clamp is load-bearing rather than defensive."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 30)
+
+    embed = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, page=99
+    )
+
+    assert embed.footer.text == "Showing 21 to 30 of 30 players."
+
+
+def test_the_filter_narrows_the_list_to_one_alliance(cd_db):
+    """The 100 rows were never too long, they were unfiltered. Every one of
+    them is in the reader's round and almost none is anybody they know."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 90 + ["OGV"] * 10)
+
+    embed = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, alliance="OGV"
+    )
+
+    assert "**P091**" in embed.description
+    assert "**P001**" not in embed.description
+    assert embed.footer.text == "Showing 10 players. Filtered from 100."
+
+
+def test_the_filter_does_not_change_what_the_round_is_missing(cd_db):
+    """Completeness is measured against what the round holds. Measuring it
+    against a filtered count would report a gap the filter invented."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 90 + ["OGV"] * 10)
+
+    embed = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, alliance="OGV"
+    )
+
+    assert not [f for f in embed.fields if f.name == "Not the whole group"]
+
+
+def test_a_filtered_group_that_is_short_still_says_so(cd_db):
+    """The other half of the same rule, and the one that would break silently:
+    ten of a hundred filtered to ten must not read as a complete group."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 30 + ["OGV"] * 10)
+
+    embed = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, alliance="OGV"
+    )
+
+    field = next(f for f in embed.fields if f.name == "Not the whole group")
+    assert "40 players" in field.value and "100" in field.value
+
+
+def test_a_short_group_gets_neither_a_filter_nor_a_pager(cd_db):
+    """A semifinal group is eight players from up to eight alliances. A filter
+    over it costs a row and saves nobody a scroll."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 9)])
+    members = db.get_group_members(group["id"])
+
+    view = _view_of(grouping, stage="semifinals", members=members, label="H")
+
+    assert _picker(view, "Which alliance?") is None
+    assert not [i for i in view.children if "Page " in (getattr(i, "label", None) or "")]
+    # Eight of eight, so nothing to add either.
+    assert not [i for i in view.children if hub.CD_BTN_RECORD in (getattr(i, "label", None) or "")]
+
+
+def test_the_filter_appears_where_the_list_is_actually_long(cd_db):
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+
+    picker = _picker(view, "Which alliance?")
+    assert picker is not None
+    assert [o.value for o in picker.options] == [hub._FILTER_ALL, "Kite", "OGV"]
+    assert [o.description for o in picker.options] == [
+        "100 players",
+        "60 players",
+        "40 players",
+    ]
+
+
+def test_the_alliances_are_offered_biggest_first(cd_db):
+    """Which is what makes the cut below safe: what a 24-option select drops is
+    the one- and two-player tail."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 21 + ["OGV"] * 60 + ["Wren"] * 19)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+
+    assert [o.value for o in _picker(view, "Which alliance?").options][1:] == [
+        "OGV",
+        "Kite",
+        "Wren",
+    ]
+
+
+def test_a_filter_that_cannot_list_every_alliance_says_how_many_it_dropped(cd_db):
+    """A hundred players from sixteen warzones carry more alliances than a
+    select holds. Dropping the tail silently reads as "your alliance is not in
+    this group", which for a two-player alliance is exactly wrong."""
+    tags = [f"A{i:02d}" for i in range(30)] * 2 + ["Big"] * 40
+    grouping, members = _hundred(cd_db, tags)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+
+    options = _picker(view, "Which alliance?").options
+    assert len(options) == hub._ALLIANCES_SHOWN + 1
+    assert "7 smaller alliances not listed" in options[0].description
+
+
+def test_a_filter_set_on_an_alliance_the_cut_dropped_still_shows_as_chosen(cd_db):
+    """Otherwise the select reads as unfiltered over a list that is filtered."""
+    tags = [f"A{i:02d}" for i in range(30)] * 2 + ["Big"] * 40
+    grouping, members = _hundred(cd_db, tags)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D", alliance="A29")
+
+    options = _picker(view, "Which alliance?").options
+    assert [o.value for o in options if o.default] == ["A29"]
+    assert len(options) == hub._ALLIANCES_SHOWN + 1
+
+
+def test_players_we_hold_no_alliance_for_are_reachable_only_unfiltered(cd_db):
+    """A blank tag is a gap in the record, not a group somebody is in. They are
+    counted by nobody and are in the unfiltered list, which is where the person
+    who could fill the gap will find them."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 25 + [None] * 5)
+
+    assert hub._alliance_counts(members) == [("Kite", 25)]
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+    assert _picker(view, "Which alliance?") is None
+
+    everyone = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, page=1
+    )
+    assert "**P030**" in everyone.description
+
+
+def test_a_filter_matching_nobody_says_so_rather_than_showing_an_empty_list(cd_db):
+    """Unreachable through the view, which builds its options out of the
+    alliances present. Written because the parameter is public."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 30)
+
+    embed = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, alliance="Nobody"
+    )
+
+    assert "**Nobody**" in embed.description
+    assert "**P001**" not in embed.description
+
+
+def test_the_seed_or_result_sentence_does_not_change_between_pages(cd_db):
+    """`_rank_basis` reads the whole group, not the page. A header that rewords
+    between page two and page three is the failure `UX.md` names for field
+    names that move when the data thins."""
+    grouping = db.create_grouping(["738"], started_so_today_is("qualifiers"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    for i in range(1, 31):
+        reg = db.upsert_registrant(f"P{i:03d}", server="738", alliance="Kite")
+        db.set_placement(group["id"], reg["id"], seed_rank=i, rank=i if i <= 20 else None)
+    members = db.get_group_members(group["id"])
+
+    first = hub.build_group_embed(members=members, stage="qualifiers", label="D", grouping=grouping)
+    second = hub.build_group_embed(
+        members=members, stage="qualifiers", label="D", grouping=grouping, page=1
+    )
+
+    opening = first.description.split("\n\n")[0]
+    assert opening == second.description.split("\n\n")[0]
+    assert "Rows marked" in opening
+
+
+def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
+    """Five rows and twenty-five components is the hard limit, and the round
+    picker now takes a row it used to hand back.
+
+    Two shapes reach the ceiling from different directions and neither has a
+    spare row, so both are pinned rather than reasoned about.
+
+    A qualifier group is the widest: two Champion Duels, a round, several
+    letters, an alliance filter and a three-button pager, which is exactly five
+    rows. It carries no odds button, because the qualifiers stopped offering
+    one on 2026-08-21 -- a qualifier group is a hundred players and no path
+    delivers a power for all hundred.
+
+    The knockouts are the busiest row: one field of 32, so no letters, and a
+    model, so the odds button lands beside the pager. That is four buttons on
+    one row against a limit of five.
+
+    The record button cannot join either. It renders only where the group holds
+    nobody, and an empty group has no alliances to filter and no second page.
+    """
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+    other = db.create_grouping(["744"], started_so_today_is("qualifiers"), origin="member")
+    for letter in ("A", "B", "C"):
+        db.get_or_create_group(grouping["id"], "qualifiers", letter)
+
+    def grid(view):
+        rows = [item.row for item in view.children]
+        assert max(rows) <= 4, rows
+        assert len(view.children) <= 25
+        assert all(rows.count(r) <= 5 for r in set(rows)), rows
+        return {getattr(i, "placeholder", None) or getattr(i, "label", None) for i in view.children}
+
+    widest = grid(
+        hub._GroupView(
+            user_id=1,
+            groupings=[grouping, other],
+            grouping=grouping,
+            stages=db.recorded_stages(grouping["id"]),
+            stage="qualifiers",
+            groups=db.get_groups("qualifiers", grouping["id"]),
+            label="D",
+            members=members,
+            can_odds=True,
+        )
+    )
+    assert {
+        "Which Champion Duel?",
+        "Which round?",
+        "Which group?",
+        "Which alliance?",
+        "Page 1 / 5",
+    } <= widest
+
+    field = db.get_or_create_group(grouping["id"], "knockouts", None)
+    for i, tag in enumerate(["Kite"] * 20 + ["OGV"] * 12, start=1):
+        reg = db.upsert_registrant(f"K{i:03d}", server="738", alliance=tag)
+        db.set_placement(field["id"], reg["id"], rank=i)
+
+    busiest = grid(
+        hub._GroupView(
+            user_id=1,
+            groupings=[grouping, other],
+            grouping=grouping,
+            stages=db.recorded_stages(grouping["id"]),
+            stage="knockouts",
+            groups=db.get_groups("knockouts", grouping["id"]),
+            label=None,
+            members=db.get_group_members(field["id"]),
+            can_odds=True,
+        )
+    )
+    assert {"Which Champion Duel?", "Which round?", "Which alliance?", "Page 1 / 2"} <= busiest
+    assert ("Which group?" in busiest) is False
+    assert (hub.CD_BTN_ODDS in busiest) == odds_lib.KNOCKOUT_AVAILABLE
+    # A complete field, so no record button. Two of the 32 missing is what puts
+    # five on one row: a three-button pager, the odds and the door.
+    assert hub.CD_BTN_RECORD not in busiest
+
+    db.set_placement(field["id"], db.upsert_registrant("K033", server="738")["id"], rank=33)
+    short = [m for m in db.get_group_members(field["id"]) if m["display_name"] != "K001"][:30]
+    fullest = grid(
+        hub._GroupView(
+            user_id=1,
+            groupings=[grouping, other],
+            grouping=grouping,
+            stages=db.recorded_stages(grouping["id"]),
+            stage="knockouts",
+            groups=db.get_groups("knockouts", grouping["id"]),
+            label=None,
+            members=short,
+            can_odds=True,
+        )
+    )
+    assert hub.CD_BTN_RECORD in fullest
+
+
+def test_a_filter_never_outlives_the_control_that_undoes_it(cd_db):
+    """Found by `/code-review`, and it needed both halves of the surface to see.
+
+    Filter a hundred-player qualifier group to one alliance, then move to a
+    round holding eight. The eight are too few for the select to render, so the
+    filter would have been narrowing the list with nothing on screen saying so
+    and no way back to the whole group.
+    """
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+    semi = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    for i in range(1, 9):
+        reg = db.upsert_registrant(f"S{i}", server="738", alliance="OGV" if i < 3 else "Kite")
+        db.set_placement(semi["id"], reg["id"], rank=i)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D", alliance="OGV")
+    assert view.alliance == "OGV"
+
+    view.stage = "semifinals"
+    view.label = "H"
+    view.members = db.get_group_members(semi["id"])
+    view._build()
+
+    assert _picker(view, "Which alliance?") is None
+    assert view.alliance is None
+    assert "**S8**" in view._embed().description
+
+
+def test_a_filter_on_an_alliance_that_left_the_group_clears_itself(cd_db):
+    """The other way the same trap opens: the control renders, but on an
+    alliance nobody in the new list carries, so every row is filtered out."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+    other, replacements = _hundred(cd_db, ["Wren"] * 50 + ["Kite"] * 50)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D", alliance="OGV")
+    view.members = replacements
+    view._build()
+
+    assert view.alliance is None
+    assert _picker(view, "Which alliance?") is not None
+
+
+def test_an_incomplete_group_offers_the_door_its_own_words_name(cd_db):
+    """Found by `/code-review`. The completeness field says "anyone can add the
+    rest with Record a group" and the button was on the empty state only, so
+    the sentence pointed at a control on the hub message the reader had already
+    scrolled past."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 40)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+    embed = view._embed()
+
+    assert "Not the whole group" in [f.name for f in embed.fields]
+    assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
+
+
+def test_the_door_and_the_sentence_agree_about_a_complete_group(cd_db):
+    """The negative half, and the one that would break silently: a hundred of a
+    hundred says nothing and offers nothing."""
+    grouping, members = _hundred(cd_db, ["Kite"] * 60 + ["OGV"] * 40)
+
+    view = _view_of(grouping, stage="qualifiers", members=members, label="D")
+    embed = view._embed()
+
+    assert "Not the whole group" not in [f.name for f in embed.fields]
+    assert not [i for i in view.children if hub.CD_BTN_RECORD in (getattr(i, "label", None) or "")]
+
+
+def test_only_one_control_is_the_recommended_one(cd_db):
+    """`notes/DESIGN.md`: at most one primary per view. The odds and the door
+    can now share a row, so this is reachable rather than theoretical."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, None) for i in range(1, 8)])
+    members = db.get_group_members(group["id"])
+
+    view = _view_of(grouping, stage="semifinals", members=members, label="H")
+
+    primaries = [
+        getattr(i, "label", None)
+        for i in view.children
+        if getattr(i, "style", None) is discord.ButtonStyle.primary
+    ]
+    assert primaries == [hub.CD_BTN_ODDS]
+    assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
+
+
+def test_the_empty_round_makes_recording_the_recommended_one(cd_db):
+    """Where there is nothing else to do, the door is the recommendation."""
+    grouping, _group = _group_of(cd_db, [("Alpha", 1, None)])
+
+    view = _view_of(grouping, stage="knockouts", members=[])
+
+    primaries = [
+        getattr(i, "label", None)
+        for i in view.children
+        if getattr(i, "style", None) is discord.ButtonStyle.primary
+    ]
+    assert primaries == [hub.CD_BTN_RECORD]

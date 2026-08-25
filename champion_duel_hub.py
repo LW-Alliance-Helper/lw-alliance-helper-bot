@@ -199,6 +199,63 @@ _SERVERS_SHOWN = 30
 #: just past the line that decides the round.
 _ODDS_SHOWN = 12
 
+#: Rows of a player listing on one page. Kevin's number, 2026-08-24, and it is
+#: the rule for any long listing in this feature rather than for one surface.
+#:
+#: **Filtering is the fix and this is the fallback**, in that order, and the
+#: order is the whole finding. The complaint about a 100-player qualifier group
+#: was never that a hundred rows are too many to scroll: it was that all
+#: hundred are strangers. Paging an unfiltered hundred hands the reader five
+#: screens of strangers instead of one, so the filter comes first and this
+#: catches whatever survives it.
+GROUP_PAGE_SIZE = 20
+
+#: Named alliances offered in the group filter, at most. A select holds 25
+#: options and the unfiltered entry takes one of them.
+#:
+#: A hundred players drawn from sixteen warzones can easily carry more than
+#: twenty-four alliances, so this cut is real rather than theoretical. Ordered
+#: biggest first so what it drops is the one- and two-player tail, and the
+#: unfiltered option says how many were dropped: a filter that silently omits
+#: alliances reads as "your alliance is not in this group".
+_ALLIANCES_SHOWN = 24
+
+#: The unfiltered option's value. A sentinel rather than an empty string, which
+#: Discord will not carry as a select value.
+_FILTER_ALL = "__all__"
+
+# ⚠️ NOT SIGNED OFF. Both of these are placeholders and Kevin owns copy.
+#
+# `_STAGE_NOT_HELD` is the description under a round we hold nothing for. It
+# has to say the record is empty without saying the round is, because the two
+# were indistinguishable and that is the bug being fixed. "we", not "I": this
+# is what the record holds (`notes/UX.md`).
+#
+#   Considered:  "Nothing recorded yet"        <- shipped behind this constant
+#                "We have nothing for this round"
+#                "No players recorded"          (wrong: a round can hold a
+#                                                group row and no players, and
+#                                                this line cannot see which)
+#                "Not recorded yet"             (reads as a round that has not
+#                                                happened, which is the exact
+#                                                confusion this fixes)
+#                "Tap to add"                   (an instruction on a line that
+#                                                has room for a fact, and wrong
+#                                                on desktop)
+#
+# `_FILTER_ALL_LABEL` is the way back to the unfiltered list. Bare, like every
+# other option in its set: they differ by which alliance, which is a parameter
+# rather than a kind (`notes/DESIGN.md` rule 7).
+#
+#   Considered:  "Everyone"                    <- shipped behind this constant
+#                "Everyone in this group"       (the group is already the title)
+#                "All alliances"                (excludes the players we hold no
+#                                                alliance for, who are in it)
+#                "No filter"                    (names the control, not the
+#                                                content)
+_STAGE_NOT_HELD = "Nothing recorded yet"
+_FILTER_ALL_LABEL = "Everyone"
+
 #: Troop levels the game has. Only 10 and 11 are measured; the rest carry the
 #: same step down, which `champion_duel_engine.scoring.MEASURED_LEVELS` will
 #: confirm. Levels only separate players in a mixed-level group: where everyone
@@ -4254,6 +4311,63 @@ def phase_line(grouping: dict | None) -> str:
     return line + "."
 
 
+def _alliance_counts(members: list[dict]) -> list[tuple[str, int]]:
+    """Which alliances are in this group, biggest first.
+
+    Alliance rather than warzone, which is the standing rule for every summary
+    in this feature: a warzone carries several alliances and a reader belongs
+    to one of them, so warzone 738 answers a question nobody in it asked.
+
+    Players we hold no alliance tag for are counted by nobody and are reachable
+    only through the unfiltered list. That is the honest treatment: a blank tag
+    is a gap in the record, not a group somebody is in.
+    """
+    counts: dict[str, int] = {}
+    for member in members:
+        alliance = (member.get("alliance") or "").strip()
+        if alliance:
+            counts[alliance] = counts.get(alliance, 0) + 1
+    return sorted(counts.items(), key=lambda pair: (-pair[1], pair[0].lower()))
+
+
+def _by_alliance(members: list[dict], alliance: str | None) -> list[dict]:
+    """The rows a filter leaves. No filter leaves all of them."""
+    if not alliance:
+        return list(members)
+    return [m for m in members if (m.get("alliance") or "").strip() == alliance]
+
+
+def _read_group(grouping_id, stage: str, label, recorded: list[str]) -> list[dict]:
+    """Everyone in one group, and nobody at all for a round we do not hold.
+
+    **Reading must not write.** `get_or_create_group` inserts, and the round
+    picker now reaches rounds nobody has recorded, so calling it on one would
+    create the `groups` row that makes `recorded_stages` report that round as
+    held. The round would then stop offering the contribution door it exists to
+    offer, having been closed by somebody looking at it. `recorded` is what the
+    caller already read, so this costs no extra query.
+    """
+    if stage not in recorded:
+        return []
+    group = db.get_or_create_group(grouping_id, stage, label)
+    return db.get_group_members(group["id"])
+
+
+def _opening_stage(recorded: list[str], running: str | None) -> str:
+    """Which round a surface opens on.
+
+    The round being played where we hold it, then the last round we hold, then
+    the first round of all. **Never None**: the picker offers every round the
+    game plays now, so there is always a round to be looking at, including for
+    a Champion Duel nobody has recorded anything for.
+    """
+    if running in recorded:
+        return running
+    if recorded:
+        return recorded[-1]
+    return running or db.STAGES[0]
+
+
 def _group_title(stage: str, label: str | None) -> str:
     """What the game calls this group, in the game's own words.
 
@@ -4318,6 +4432,29 @@ def _member_line(member: dict, basis: str, stage: str) -> str:
     return " · ".join(bits)
 
 
+def _listing_footer(*, first: int, last: int, shown: int, held: int, filtered: bool):
+    """Which slice of the list is on screen, and nothing else.
+
+    ⚠️ NOT SIGNED OFF. Variants are in the PR.
+
+    Silent on the common case: a group that fits on one page with no filter on
+    it has a listing that is self-evidently whole, and saying so is a line the
+    reader has to read to learn nothing.
+
+    Says nothing about which alliance either. The select above carries that,
+    with the chosen option showing as its own default, and repeating it here
+    would be the surface saying one thing twice while the completeness field
+    says a third thing about the same list.
+    """
+    if not filtered and shown <= GROUP_PAGE_SIZE:
+        return None
+    if last - first + 1 == shown:
+        text = f"Showing {_plural(shown, 'player')}."
+    else:
+        text = f"Showing {first} to {last} of {_plural(shown, 'player')}."
+    return f"{text} Filtered from {held}." if filtered else text
+
+
 def build_group_embed(
     *,
     members: list[dict],
@@ -4329,6 +4466,12 @@ def build_group_embed(
     # omitting the view's would hand out the odds. The failure modes are not
     # the same size and the constructors do not need the same rule.
     can_odds: bool = True,
+    # The listing controls, both presentation. `members` is always the whole
+    # group: completeness is measured against what the round holds, and a
+    # filtered count measured against it would report a gap the alliance filter
+    # invented. So the filter is applied here rather than by the caller.
+    alliance: str | None = None,
+    page: int = 0,
 ) -> discord.Embed:
     """One group, with whatever standing we hold for it.
 
@@ -4336,6 +4479,14 @@ def build_group_embed(
     question a member actually came with, which is who am I facing, and saying
     so is better than withholding seven names until somebody supplies the
     eighth.
+
+    **A qualifier group is a hundred players and the fix for that is the
+    filter, not the page.** All hundred are in the reader's round and almost
+    none of them are anybody they know, so `alliance` narrows the list to
+    people they have a reason to read and `page` catches whatever is still
+    long. Three separate facts about the same list, each stated exactly once:
+    the select says which alliance, the footer says which slice, and the
+    completeness field says what the round holds that we do not.
     """
     embed = discord.Embed(
         title=f"{_group_title(stage, label)}",
@@ -4352,13 +4503,35 @@ def build_group_embed(
     opener = f"This Champion Duel started {started}. " if started else ""
 
     if not members:
-        embed.description = (
-            f"{opener}We do not have anyone recorded for this group.\n\n"
-            f"Anyone can paste the standings in with "
-            f"**{_btn_words(CD_BTN_RECORD)}**."
-        )[:4096]
+        # ⚠️ THE SECOND BRANCH IS NOT SIGNED OFF. Variants are in the PR.
+        #
+        # Two shapes of nothing, and they are not the same gap. A lettered
+        # group we hold nobody for is one group inside a round we do hold, and
+        # the reader got there by picking that letter. No letter and nobody is
+        # the whole round missing, which is the state the picker now makes
+        # reachable: it offers every round the game plays, so a member can open
+        # one nobody has ever recorded and has to be told that is what they are
+        # looking at rather than left to read it as a broken screen.
+        #
+        # Both end on the same door, and the door is a live button on the view
+        # as well as a name in the sentence.
+        if label is None:
+            embed.description = (
+                f"{opener}We do not have anything recorded for this round yet.\n\n"
+                f"Anyone can add it with **{_btn_words(CD_BTN_RECORD)}**."
+            )[:4096]
+        else:
+            embed.description = (
+                f"{opener}We do not have anyone recorded for this group.\n\n"
+                f"Anyone can paste the standings in with "
+                f"**{_btn_words(CD_BTN_RECORD)}**."
+            )[:4096]
         return embed
 
+    # Off the whole group rather than the page, so this sentence stays true
+    # while the reader moves through the list. A header that rewords between
+    # page two and page three is the same failure `UX.md` names for a field name
+    # that moves when the data thins.
     header = (
         opener
         + {
@@ -4368,8 +4541,36 @@ def build_group_embed(
         }[basis]
     )
 
-    lines = [_member_line(m, basis, stage) for m in members]
+    shown = _by_alliance(members, alliance)
+    if not shown:
+        # ⚠️ NOT SIGNED OFF. Unreachable through the view, which builds its
+        # options out of the alliances actually present, and written anyway:
+        # the parameter is public and a caller that passes a name nobody in the
+        # group carries gets an answer rather than a blank list under a header
+        # promising standings.
+        embed.description = (
+            f"{opener}We do not have anyone from "
+            f"**{discord.utils.escape_markdown(alliance or '')}** in this group."
+        )[:4096]
+        return embed
+
+    pages = max(1, -(-len(shown) // GROUP_PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    start = page * GROUP_PAGE_SIZE
+    rows = shown[start : start + GROUP_PAGE_SIZE]
+
+    lines = [_member_line(m, basis, stage) for m in rows]
     embed.description = f"{header}\n\n" + "\n".join(lines)[: 4096 - len(header) - 2]
+
+    listing = _listing_footer(
+        first=start + 1,
+        last=start + len(rows),
+        shown=len(shown),
+        held=len(members),
+        filtered=bool(alliance),
+    )
+    if listing:
+        embed.set_footer(text=listing[:2048])
 
     # Completeness is stated, never inferred away. Eight names against a
     # 100-player qualifier group is the normal case rather than a truncation,
@@ -4605,15 +4806,28 @@ class ChampionDuelFinishedView(discord.ui.View):
 class _GroupView(discord.ui.View):
     """One group, plus every way of getting to a different one.
 
-    Three selects rather than a sequence of steps. A member who has been
-    knocked out, or whose Champion Duel has finished, is looking backwards
-    rather than forwards, and making them re-enter the flow to change one axis
-    is the wrong shape for that. All three are on screen at once and any of
-    them re-reads the group.
+    Selects rather than a sequence of steps. A member who has been knocked out,
+    or whose Champion Duel has finished, is looking backwards rather than
+    forwards, and making them re-enter the flow to change one axis is the wrong
+    shape for that. They are all on screen at once and any of them re-reads the
+    group.
 
-    Each select is present only when it has something to choose between, so
-    the common live case -- one Champion Duel, the round that is running, one
-    group recorded -- renders as the odds button alone.
+    **The round picker is the exception, and it is always here.** The others
+    are present only when they have something to choose between, which is right
+    for them: a Champion Duel nobody else shares and a round with one group
+    recorded are both facts about the reader's own tournament. A round is not.
+    The game plays three of them, so hiding the picker when we hold one made
+    "no other round exists" and "the picker is missing" the same screen, which
+    is what made this surface unreadable rather than merely long. It now offers
+    all three, marks the ones we hold nothing for, and lets a member open one:
+    what they find there is the door to recording it.
+
+    `stages` stays what it always was, **the rounds we hold**, and drives the
+    marks rather than the options.
+
+    Two more axes, both presentation and neither touching the database:
+    `alliance` narrows a hundred strangers to the people a reader knows, and
+    `page` catches whatever is still long at twenty.
     """
 
     def __init__(
@@ -4628,10 +4842,22 @@ class _GroupView(discord.ui.View):
         label: str | None,
         members: list[dict],
         can_odds: bool,
+        # Defaulted where `can_odds` is required, and for the same reason that
+        # one is not: forgetting this renders a padlock on a contribution door,
+        # which is a worse surface but not a giveaway. Nothing sets it False
+        # today -- read the padlock branch as the shape a later gate reuses,
+        # exactly as the module docstring says.
+        can_write: bool = True,
+        # Only a parsing prior for the record modal, which uses it to decide
+        # which number on a pasted line is the warzone. Not a filter.
+        warzone: str | None = None,
+        alliance: str | None = None,
+        page: int = 0,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.can_odds = can_odds
+        self.can_write = can_write
         self.groupings = groupings
         self.grouping = grouping
         self.stages = stages
@@ -4639,6 +4865,9 @@ class _GroupView(discord.ui.View):
         self.groups = groups
         self.label = label
         self.members = members
+        self.warzone = warzone
+        self.alliance = alliance
+        self.page = page
         self.message: discord.Message | None = None
         self._build()
 
@@ -4664,23 +4893,12 @@ class _GroupView(discord.ui.View):
                 )
             )
             row += 1
-        if len(self.stages) > 1:
-            self.add_item(
-                self._select(
-                    "Which round?",
-                    [
-                        discord.SelectOption(
-                            label=db.STAGE_LABELS.get(s, s),
-                            value=s,
-                            default=s == self.stage,
-                        )
-                        for s in self.stages
-                    ],
-                    row,
-                    self._on_stage,
-                )
-            )
-            row += 1
+        # Always, and always all three. `db.STAGES` rather than `self.stages`:
+        # the rounds the game plays are a fact about the game, and the rounds we
+        # hold are a fact about our record. Driving the picker off the second
+        # made the two indistinguishable.
+        self.add_item(self._select("Which round?", self._stage_options(), row, self._on_stage))
+        row += 1
         if len(self.groups) > 1:
             self.add_item(
                 self._select(
@@ -4699,6 +4917,43 @@ class _GroupView(discord.ui.View):
                 )
             )
             row += 1
+
+        # The filter comes before the page, and it only appears where the list
+        # is long enough to need one. A semifinal group is eight players from
+        # eight alliances and a filter over it costs a row to save nobody a
+        # scroll; a qualifier group is a hundred and the filter is the surface.
+        #
+        # **A filter with no control to undo it is a trap**, and this is the one
+        # place that can see both halves. Filter a hundred-player qualifier
+        # group to one alliance, then move to the semi-finals: the new list is
+        # eight, so the select does not render, and the filter would still be
+        # narrowing it with nothing on screen to say so or turn it off. Keeping
+        # the rule here rather than in `_reload` is what stops the two copies
+        # disagreeing, which is exactly how that state was reachable.
+        alliances = _alliance_counts(self.members)
+        offer_filter = len(self.members) > GROUP_PAGE_SIZE and len(alliances) > 1
+        if not offer_filter or self.alliance not in {name for name, _ in alliances}:
+            self.alliance = None
+        if offer_filter:
+            self.add_item(
+                self._select(
+                    "Which alliance?", self._alliance_options(alliances), row, self._on_alliance
+                )
+            )
+            row += 1
+
+        shown = _by_alliance(self.members, self.alliance)
+        pages = max(1, -(-len(shown) // GROUP_PAGE_SIZE))
+        # Clamped here rather than by the callbacks, because the page can also
+        # fall off the end when the filter changes under it.
+        self.page = max(0, min(self.page, pages - 1))
+        if pages > 1:
+            # Bare, and the labels are `storm_log.py`'s to the character. This
+            # is the bot's pagination and a second wording of it would be a
+            # second thing to learn (`notes/DESIGN.md`, emoji rule 7).
+            self._pager("◀ Prev", row, self._on_prev, self.page == 0)
+            self._pager(f"Page {self.page + 1} / {pages}", row, None, True)
+            self._pager("Next ▶", row, self._on_next, self.page >= pages - 1)
 
         # Wherever there is a model. The qualifiers and the semi-finals are
         # separate models with separate constants and the engine is explicit
@@ -4725,10 +4980,114 @@ class _GroupView(discord.ui.View):
             odds.callback = self._on_odds
             self.add_item(odds)
 
+        # The door at the gap, and the third place this feature puts one
+        # (`notes/PROPOSAL_champion_duel_ia.md`, principle 3). Naming the button
+        # in the embed's prose was the whole offer until now, and prose naming a
+        # control two surfaces away is a worse dead end than none: the button it
+        # names is on the hub message the reader scrolled past.
+        #
+        # **Offered wherever the embed names it**, which is both gaps rather
+        # than one: a round we hold nothing for, and a group short of what the
+        # round holds. `build_group_embed` decides the second from the same
+        # comparison, so the sentence and the button cannot disagree about
+        # whether there is anything to add.
+        #
+        # Primary only on the empty round, where recording is the only thing
+        # left to do. Beside a group with players in it the odds are the
+        # recommended action and `notes/DESIGN.md` allows one primary per view.
+        expected = db.GROUP_SIZE.get(self.stage)
+        if not self.members or (expected and len(self.members) != expected):
+            record = discord.ui.Button(
+                label=(CD_BTN_RECORD if self.can_write else f"🔒 {CD_BTN_RECORD}")[:80],
+                style=discord.ButtonStyle.primary
+                if self.can_write and not self.members
+                else discord.ButtonStyle.secondary,
+                disabled=not self.can_write,
+                row=row,
+            )
+            record.callback = self._on_record
+            self.add_item(record)
+
+    def _stage_options(self) -> list[discord.SelectOption]:
+        """Every round the game plays, with the ones we hold nothing for marked.
+
+        ⚠️ `_STAGE_NOT_HELD` IS NOT SIGNED OFF. Variants are in the PR.
+
+        Bare labels. The three differ by which round, which is a parameter
+        rather than a kind, and `notes/DESIGN.md` rule 7 sends a set like that
+        bare rather than giving it three glyphs the eye cannot sort. The mark
+        goes on the description line, which is text and not colour, so it
+        survives rule 9 and a screen reader.
+        """
+        return [
+            discord.SelectOption(
+                label=db.STAGE_LABELS.get(stage, stage),
+                value=stage,
+                description=None if stage in self.stages else _STAGE_NOT_HELD,
+                default=stage == self.stage,
+            )
+            for stage in db.STAGES
+        ]
+
+    def _alliance_options(self, alliances: list[tuple[str, int]]) -> list[discord.SelectOption]:
+        """The alliances in this group, plus the way back to all of them.
+
+        ⚠️ `_FILTER_ALL_LABEL` AND THE CUT LINE ARE NOT SIGNED OFF.
+
+        The cut is stated on the unfiltered option rather than in the embed,
+        which is where somebody who cannot find their own alliance is looking.
+        A filter that silently drops the tail reads as "your alliance is not in
+        this group", which for a two-player alliance is exactly wrong.
+        """
+        named = [name for name, _ in alliances[:_ALLIANCES_SHOWN]]
+        # A filter set from an earlier read can name an alliance the cut has
+        # since dropped. Carrying it keeps the select showing what the list is
+        # actually filtered to, instead of an unfiltered-looking placeholder
+        # over twelve rows of one alliance.
+        if self.alliance and self.alliance not in named:
+            named = [self.alliance] + named[: _ALLIANCES_SHOWN - 1]
+        dropped = len({name for name, _ in alliances} - set(named))
+
+        counts = dict(alliances)
+        everyone = _plural(len(self.members), "player")
+        options = [
+            discord.SelectOption(
+                label=_FILTER_ALL_LABEL,
+                value=_FILTER_ALL,
+                description=(
+                    f"{everyone}. {_plural(dropped, 'smaller alliance')} not listed."
+                    if dropped
+                    else everyone
+                )[:100],
+                default=self.alliance is None,
+            )
+        ]
+        options += [
+            discord.SelectOption(
+                label=name[:100],
+                value=name[:100],
+                description=_plural(counts.get(name, 0), "player"),
+                default=name == self.alliance,
+            )
+            for name in named
+        ]
+        return options
+
     def _select(self, placeholder, options, row, callback):
         select = discord.ui.Select(placeholder=placeholder, options=options, row=row)
         select.callback = callback
         return select
+
+    def _pager(self, label, row, callback, disabled):
+        button = discord.ui.Button(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            row=row,
+            disabled=disabled,
+        )
+        if callback is not None:
+            button.callback = callback
+        self.add_item(button)
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -4743,43 +5102,69 @@ class _GroupView(discord.ui.View):
 
     # ── moving between groups ────────────────────────────────────────────────
 
-    async def _reload(self, inter: discord.Interaction):
-        """Re-read whichever group the three selects now point at.
+    def _embed(self) -> discord.Embed:
+        """One place the embed is built, so the two ways in cannot drift."""
+        return build_group_embed(
+            members=self.members,
+            stage=self.stage,
+            label=self.label,
+            grouping=self.grouping,
+            can_odds=self.can_odds,
+            alliance=self.alliance,
+            page=self.page,
+        )
 
-        Every axis is re-resolved rather than patched, because changing one
-        invalidates the ones below it: a different Champion Duel has its own
-        rounds, and a different round has its own letters. Carrying the old
-        letter across would show a group from the wrong round or none at all.
+    async def _reload(self, inter: discord.Interaction, *, resolve_stage: bool = False):
+        """Re-read whichever group the selects now point at.
+
+        Every axis below the one that moved is re-resolved rather than patched,
+        because changing one invalidates the ones under it: a different Champion
+        Duel has its own rounds, and a different round has its own letters.
+        Carrying the old letter across would show a group from the wrong round
+        or none at all.
+
+        **The round is re-resolved only when the Champion Duel changed.** It
+        used to be re-resolved on every reload, which was right while the picker
+        only offered rounds we hold: an unheld round could not be picked, so
+        snapping off one was housekeeping. It can be picked now, and that is the
+        point of the change, so snapping off it would put the reader back where
+        they started and read as a broken control.
+
+        The alliance filter survives whatever `_build` will still offer a
+        control for, which is decided there rather than here. The page does not
+        survive anything: a slice of a list is meaningless once the list changes
+        underneath it.
         """
         self.stages = await asyncio.to_thread(db.recorded_stages, self.grouping["id"])
-        if self.stage not in self.stages:
-            self.stage = self.stages[-1] if self.stages else self.stage
+        if resolve_stage:
+            running = await asyncio.to_thread(db.current_stage, self.grouping["id"])
+            self.stage = _opening_stage(self.stages, running)
         self.groups = await asyncio.to_thread(db.get_groups, self.stage, self.grouping["id"])
         labels = [str(g["group"]) for g in self.groups]
         if str(self.label) not in labels:
             self.label = labels[0] if labels else None
 
-        group = await asyncio.to_thread(
-            db.get_or_create_group, self.grouping["id"], self.stage, self.label
+        self.members = await asyncio.to_thread(
+            _read_group, self.grouping["id"], self.stage, self.label, self.stages
         )
-        self.members = await asyncio.to_thread(db.get_group_members, group["id"])
+        # The filter is not cleared here. `_build` drops it whenever it would
+        # not also render the control that undoes it, which is a rule only that
+        # method can apply, and a second copy of it here is how a filter came to
+        # outlive its own select.
+        self.page = 0
+        await self._rerender(inter)
+
+    async def _rerender(self, inter: discord.Interaction):
+        """Redraw from what is already in hand. No query, and no round trip to
+        the database for a control that only decides which rows are on screen."""
         self._build()
-        await inter.edit_original_response(
-            embed=build_group_embed(
-                members=self.members,
-                stage=self.stage,
-                label=self.label,
-                grouping=self.grouping,
-                can_odds=self.can_odds,
-            ),
-            view=self,
-        )
+        await inter.edit_original_response(embed=self._embed(), view=self)
 
     async def _on_grouping(self, inter: discord.Interaction):
         await inter.response.defer()
         chosen = inter.data["values"][0]
         self.grouping = next((g for g in self.groupings if str(g["id"]) == chosen), self.grouping)
-        await self._reload(inter)
+        await self._reload(inter, resolve_stage=True)
 
     async def _on_stage(self, inter: discord.Interaction):
         await inter.response.defer()
@@ -4790,6 +5175,41 @@ class _GroupView(discord.ui.View):
         await inter.response.defer()
         self.label = inter.data["values"][0]
         await self._reload(inter)
+
+    async def _on_alliance(self, inter: discord.Interaction):
+        await inter.response.defer()
+        chosen = inter.data["values"][0]
+        self.alliance = None if chosen == _FILTER_ALL else chosen
+        self.page = 0
+        await self._rerender(inter)
+
+    async def _on_prev(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.page -= 1
+        await self._rerender(inter)
+
+    async def _on_next(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.page += 1
+        await self._rerender(inter)
+
+    async def _on_record(self, inter: discord.Interaction):
+        """The empty round's way out, opened on the round they are looking at.
+
+        Everything the modal needs is already on this view, so this is the one
+        button here that reaches the database not at all. It must also stay the
+        first response to its own interaction: Discord will not open a modal
+        after a defer.
+        """
+        await inter.response.send_modal(
+            _RecordGroupModal(
+                can_write=self.can_write,
+                grouping=self.grouping,
+                stage=self.stage,
+                groupings=self.groupings,
+                warzone=self.warzone,
+            )
+        )
 
     # ── odds ─────────────────────────────────────────────────────────────────
 
@@ -5101,7 +5521,12 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
 
 
 async def send_group_view(
-    interaction: discord.Interaction, *, grouping: dict | None, warzone: str | None, user_id: int
+    interaction: discord.Interaction,
+    *,
+    grouping: dict | None,
+    warzone: str | None,
+    user_id: int,
+    can_write: bool = True,
 ) -> None:
     """Open the caller's group, with the history reachable from it.
 
@@ -5110,6 +5535,12 @@ async def send_group_view(
     else is one select away, because a member who is out, or whose Champion
     Duel has finished, is looking backwards and there is no live round to show
     them.
+
+    **It opens on a Champion Duel we hold nothing for as well.** It used to
+    refuse one, which put the flattest dead end in the feature exactly where the
+    contribution was most wanted: an alliance that has just set its Participating
+    Warzones holds nothing by definition, and being told so with no way to fix
+    it is the state this whole surface is being rebuilt out of.
     """
     if not grouping:
         await interaction.followup.send(
@@ -5124,20 +5555,11 @@ async def send_group_view(
         groupings = [grouping] + list(groupings)
 
     stages = await asyncio.to_thread(db.recorded_stages, grouping["id"])
-    if not stages:
-        await interaction.followup.send(
-            f"No rounds are recorded for {_grouping_name(grouping)} yet.",
-            ephemeral=True,
-        )
-        return
-
     running = await asyncio.to_thread(db.current_stage, grouping["id"])
-    stage = running if running in stages else stages[-1]
+    stage = _opening_stage(stages, running)
     groups = await asyncio.to_thread(db.get_groups, stage, grouping["id"])
     label = str(groups[0]["group"]) if groups else None
-
-    group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, label)
-    members = await asyncio.to_thread(db.get_group_members, group["id"])
+    members = await asyncio.to_thread(_read_group, grouping["id"], stage, label, stages)
 
     # The only gated thing in Champion Duel. Everything else on this surface,
     # and every way of contributing to it, is free.
@@ -5158,14 +5580,10 @@ async def send_group_view(
         label=label,
         members=members,
         can_odds=can_odds,
+        can_write=can_write,
+        warzone=warzone,
     )
-    await interaction.followup.send(
-        embed=build_group_embed(
-            members=members, stage=stage, label=label, grouping=grouping, can_odds=can_odds
-        ),
-        view=view,
-        ephemeral=True,
-    )
+    await interaction.followup.send(embed=view._embed(), view=view, ephemeral=True)
     view.message = await interaction.original_response()
 
 
@@ -5347,7 +5765,11 @@ class ChampionDuelHubView(discord.ui.View):
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         await send_group_view(
-            inter, grouping=self.grouping, warzone=self.warzone, user_id=self.user_id
+            inter,
+            grouping=self.grouping,
+            warzone=self.warzone,
+            user_id=self.user_id,
+            can_write=self.can_write,
         )
 
     async def _on_guide(self, inter: discord.Interaction):

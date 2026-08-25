@@ -158,7 +158,7 @@ def _problem_reason(kind: str, tab: str, tabs_hint: str = "") -> str:
         )
     if kind == NO_ACCESS:
         return (
-            "I don't have permission to open that spreadsheet any more. Its sharing settings "
+            "I don't have permission to open that spreadsheet anymore. Its sharing settings "
             "were most likely changed."
         )
     return "I couldn't read that spreadsheet."

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+import champion_duel_claim as claim_lib
 import champion_duel_db as db
 import champion_duel_hub as hub
 
@@ -153,18 +154,29 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
     # at a time and sat beside this one under the same glyph, which `DESIGN.md`
     # forbids across a choice set: two identical glyphs give the eye nothing to
     # navigate by, which is worse than bare.
-    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_ORDER]
+    #
+    # The claim is last and is not one of these: it says who the reader is
+    # rather than what they saw, which is why it is never locked below.
+    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_ORDER, claim_lib.CLAIM_BTN]
     assert not hasattr(hub, "_SquadModal")
 
 
 def test_the_player_card_locks_its_actions_on_the_free_tier():
+    """Every *write* on the card, and only those.
+
+    The claim control is on this view and is deliberately outside the rule:
+    contributing is a reading somebody made, where a claim is a fact about the
+    reader, so locking it would gate somebody out of their own record.
+    """
     view = hub.PlayerActionsView(
         player={"id": 1, "display_name": "AlphaOne", "server": "738"},
         user_id=OUTSIDER_ID,
         can_write=False,
     )
-    assert all(b.disabled for b in view.children)
-    assert all(b.label.startswith("🔒") for b in view.children)
+    writes = [b for b in view.children if b.label != claim_lib.CLAIM_BTN]
+    assert writes, "the card lost its write actions"
+    assert all(b.disabled for b in writes)
+    assert all(b.label.startswith("🔒") for b in writes)
 
 
 async def test_adding_a_player_marks_them_self_reported(cd_db):

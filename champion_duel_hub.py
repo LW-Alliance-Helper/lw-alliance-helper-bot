@@ -224,37 +224,33 @@ _ALLIANCES_SHOWN = 24
 #: Discord will not carry as a select value.
 _FILTER_ALL = "__all__"
 
-# ⚠️ NOT SIGNED OFF. Both of these are placeholders and Kevin owns copy.
+# Signed off by Kevin, 2026-08-24, each shown on the Discord surface it sits on
+# rather than put to him as a list. The variants are spent; the reasoning is
+# not, so it stays.
 #
 # `_STAGE_NOT_HELD` is the description under a round we hold nothing for. It
 # has to say the record is empty without saying the round is, because the two
 # were indistinguishable and that is the bug being fixed. "we", not "I": this
-# is what the record holds (`notes/UX.md`).
-#
-#   Considered:  "Nothing recorded yet"        <- shipped behind this constant
-#                "We have nothing for this round"
-#                "No players recorded"          (wrong: a round can hold a
-#                                                group row and no players, and
-#                                                this line cannot see which)
-#                "Not recorded yet"             (reads as a round that has not
-#                                                happened, which is the exact
-#                                                confusion this fixes)
-#                "Tap to add"                   (an instruction on a line that
-#                                                has room for a fact, and wrong
-#                                                on desktop)
+# is what the record holds (`notes/UX.md`). Taken as it shipped.
 #
 # `_FILTER_ALL_LABEL` is the way back to the unfiltered list. Bare, like every
 # other option in its set: they differ by which alliance, which is a parameter
 # rather than a kind (`notes/DESIGN.md` rule 7).
 #
-#   Considered:  "Everyone"                    <- shipped behind this constant
-#                "Everyone in this group"       (the group is already the title)
-#                "All alliances"                (excludes the players we hold no
-#                                                alliance for, who are in it)
-#                "No filter"                    (names the control, not the
-#                                                content)
+# It shipped as "Everyone". Kevin: *"if this is truly the Alliance filter, then
+# it should say 'All Alliances' and not 'Everyone'."* Sentence case, so the
+# second word is lowercase: an alliance is not a proper noun here
+# (`notes/DESIGN.md`, *Labels*).
+#
+# ONE CONSEQUENCE, RECORDED RATHER THAN FIXED. Players we hold no `[TAG]` for
+# are in this list and are not an alliance, so the label names the option after
+# most of what it contains rather than all of it. That objection was put to him
+# beside the wording and he chose the wording anyway. Do not re-open it, and do
+# not "fix" it by dropping those players from the option: this is the way back
+# to the whole list, and a whole list with people missing is the one thing it
+# cannot be.
 _STAGE_NOT_HELD = "Nothing recorded yet"
-_FILTER_ALL_LABEL = "Everyone"
+_FILTER_ALL_LABEL = "All alliances"
 
 #: Troop levels the game has. Only 10 and 11 are measured; the rest carry the
 #: same step down, which `champion_duel_engine.scoring.MEASURED_LEVELS` will
@@ -4435,7 +4431,7 @@ def _member_line(member: dict, basis: str, stage: str) -> str:
 def _listing_footer(*, first: int, last: int, shown: int, held: int, filtered: bool):
     """Which slice of the list is on screen, and nothing else.
 
-    ⚠️ NOT SIGNED OFF. Variants are in the PR.
+    Both forms signed off by Kevin, 2026-08-24, unchanged.
 
     Silent on the common case: a group that fits on one page with no filter on
     it has a listing that is self-evidently whole, and saying so is a line the
@@ -4503,7 +4499,10 @@ def build_group_embed(
     opener = f"This Champion Duel started {started}. " if started else ""
 
     if not members:
-        # ⚠️ THE SECOND BRANCH IS NOT SIGNED OFF. Variants are in the PR.
+        # The second branch was signed off by Kevin, 2026-08-24, with one word
+        # moved: "Anyone can add it" became "You can add it". The invitation is
+        # to the person reading it rather than to a room, and the button under
+        # it is live for them.
         #
         # Two shapes of nothing, and they are not the same gap. A lettered
         # group we hold nobody for is one group inside a round we do hold, and
@@ -4518,7 +4517,7 @@ def build_group_embed(
         if label is None:
             embed.description = (
                 f"{opener}We do not have anything recorded for this round yet.\n\n"
-                f"Anyone can add it with **{_btn_words(CD_BTN_RECORD)}**."
+                f"You can add it with **{_btn_words(CD_BTN_RECORD)}**."
             )[:4096]
         else:
             embed.description = (
@@ -5011,8 +5010,6 @@ class _GroupView(discord.ui.View):
     def _stage_options(self) -> list[discord.SelectOption]:
         """Every round the game plays, with the ones we hold nothing for marked.
 
-        ⚠️ `_STAGE_NOT_HELD` IS NOT SIGNED OFF. Variants are in the PR.
-
         Bare labels. The three differ by which round, which is a parameter
         rather than a kind, and `notes/DESIGN.md` rule 7 sends a set like that
         bare rather than giving it three glyphs the eye cannot sort. The mark
@@ -5032,7 +5029,8 @@ class _GroupView(discord.ui.View):
     def _alliance_options(self, alliances: list[tuple[str, int]]) -> list[discord.SelectOption]:
         """The alliances in this group, plus the way back to all of them.
 
-        ⚠️ `_FILTER_ALL_LABEL` AND THE CUT LINE ARE NOT SIGNED OFF.
+        The cut line under the unfiltered option was signed off by Kevin,
+        2026-08-24, unchanged: it is a count rather than a voice decision.
 
         The cut is stated on the unfiltered option rather than in the embed,
         which is where somebody who cannot find their own alliance is looking.

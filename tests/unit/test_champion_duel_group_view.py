@@ -572,6 +572,43 @@ def test_a_round_we_hold_nothing_for_is_marked_rather_than_hidden(cd_db):
     assert marks["knockouts"] == hub._STAGE_NOT_HELD
 
 
+def test_an_empty_round_invites_the_person_reading_it(cd_db):
+    """Kevin's call, 2026-08-24: "You can add it", not "Anyone can add it".
+
+    The picker offers every round the game plays, so a member can open one
+    nobody has ever recorded. What they find there is the only invitation this
+    feature makes, and it is made to them rather than announced to a room. The
+    button under it is live for them, which is what makes the second person
+    plural the wrong one.
+    """
+    grouping, _group = _group_of(cd_db, [])
+
+    embed = hub.build_group_embed(members=[], stage="knockouts", label=None, grouping=grouping)
+
+    assert "You can add it" in embed.description
+    assert "Anyone" not in embed.description
+    assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
+
+
+def test_the_alliance_filter_offers_a_way_back_to_the_whole_list(cd_db):
+    """`All alliances`, signed off 2026-08-24 over "Everyone".
+
+    Pinned because the sentence case is the half that gets "corrected": it is
+    `notes/DESIGN.md`'s Labels rule, not a typo, and Kevin's own words for it
+    were Title Case.
+    """
+    rows = [(f"P{i}", i, None) for i in range(1, 30)]
+    grouping, group = _group_of(cd_db, rows)
+    for i, member in enumerate(db.get_group_members(group["id"])):
+        db.upsert_registrant(member["display_name"], server="738", alliance="OGV" if i else "Kite")
+
+    view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
+
+    unfiltered = _picker(view, "Which alliance?").options[0]
+    assert unfiltered.label == "All alliances"
+    assert unfiltered.value == hub._FILTER_ALL
+
+
 def test_the_round_being_read_is_the_one_showing_as_chosen(cd_db):
     """A picker that offers three rounds and marks none of them as current
     leaves the reader guessing which one the list below it is."""

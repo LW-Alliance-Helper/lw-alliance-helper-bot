@@ -289,7 +289,25 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
     )
 
     rows = state.league_rows(week)
-    pairing = ad.compute_week_pairing(rows, week)
+
+    # `compute_week_pairing` weighs every prior week's result, so it takes the
+    # whole league and not one week of it. Handed a single week it sees no
+    # confirmed results at all, scores everyone zero, and falls back to seed
+    # order, which reproduces week 1's matchups for every week of the league.
+    league_rows = state.league_rows()
+    if _prior_week_decided(league_rows, week):
+        pairing = ad.compute_week_pairing(league_rows, week)
+    else:
+        # The same guard `next_week_rows` holds: with the previous week
+        # unrecorded the pairing is not merely unknown, it is confidently wrong.
+        pairing = ad.BracketIncomplete(
+            reason="undecided",
+            detail=(
+                f"Week {week - 1}'s results decide who plays who in week {week}. "
+                f"Record them and this fills in."
+            ),
+            found=0,
+        )
     if isinstance(pairing, ad.BracketIncomplete):
         matches = _matches_from_recorded_opponents(rows)
         if not matches:
@@ -314,6 +332,19 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
         )
     embed.description += "\n\n" + "\n".join(lines)[:3800]
     return embed
+
+
+def _prior_week_decided(league_rows, week: int) -> bool:
+    """Whether `week`'s pairing can be worked out at all.
+
+    Week 1 follows from the seeds and needs nothing. Every later week is a
+    reshuffle of the week before it, so an unrecorded predecessor makes the
+    computed pairing meaningless rather than approximate.
+    """
+    if week <= 1:
+        return True
+    played = [r for r in league_rows if r.week == week - 1]
+    return bool(played) and all(r.week_outcome is not None for r in played)
 
 
 def _matches_from_recorded_opponents(rows) -> list[ad.Match]:

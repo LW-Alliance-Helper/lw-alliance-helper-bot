@@ -24,6 +24,7 @@ or the next button click renders the value the user just replaced.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 
 import discord
@@ -715,16 +716,16 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             required=False,
             default=d.get("group"),
         )
-        # Optional, and the default is this week. The League screen shows a
-        # countdown rather than a start date, so the officer would otherwise be
-        # counting backwards off a timer to fill in a field, and a league is
-        # nearly always set up in the week it opens.
-        self.week_date = discord.ui.TextInput(
-            label="Week 1 date",
-            placeholder="Leave blank for this week, or 8/24, Aug 24, 2026-08-24",
-            max_length=24,
+        # A week number rather than a date. The League screen shows a countdown
+        # and a Week 1-4 column header, so which week it is on is something the
+        # officer can read; the Monday that week 1 began is something they would
+        # have to work out. The bot counts back instead.
+        self.week_now = discord.ui.TextInput(
+            label="Which week is the League on now?",
+            placeholder="1, 2, 3 or 4. Blank means week 1.",
+            max_length=2,
             required=False,
-            default=d.get("week_date"),
+            default=d.get("week_now"),
         )
         if state.full_bracket:
             self.bracket = discord.ui.TextInput(
@@ -749,7 +750,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 required=True,
                 default=d.get("bracket"),
             )
-        for item in (self.season, self.tier, self.group, self.week_date, self.bracket):
+        for item in (self.season, self.tier, self.group, self.week_now, self.bracket):
             self.add_item(item)
 
     def _typed(self) -> dict:
@@ -758,7 +759,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             "season": self.season.value,
             "tier": self.tier.value,
             "group": self.group.value,
-            "week_date": self.week_date.value,
+            "week_now": self.week_now.value,
             "bracket": self.bracket.value,
         }
 
@@ -784,20 +785,20 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
             return
 
-        raw_date = (self.week_date.value or "").strip()
-        if raw_date:
-            week_date = ad.parse_week_date(raw_date)
-            if week_date is None:
-                await self._refuse(
-                    interaction,
-                    messages.DATE_PARSE_REJECT.format(
-                        raw=raw_date[:24], examples=_WEEK_DATE_EXAMPLES
-                    ),
-                )
-                return
-        else:
-            week_date = ad.server_today()
-        week_date = ad.week_monday(week_date)
+        raw_week = (self.week_now.value or "").strip()
+        week_now = ad.parse_int(raw_week) if raw_week else 1
+        if week_now is None or not 1 <= week_now <= ad.LEAGUE_WEEKS:
+            await self._refuse(
+                interaction,
+                f"⚠️ A League runs {ad.LEAGUE_WEEKS} weeks, so that one is a number from 1 "
+                f"to {ad.LEAGUE_WEEKS}. Leave it blank if the League has just opened.",
+            )
+            return
+
+        # Count back from this week to the Monday week 1 began on. Server time,
+        # never guild-local: a guild in UTC+10 sees Monday locally while it is
+        # still Sunday on the game server, and `week_monday` sends Sunday back.
+        week_date = ad.week_monday(ad.server_today()) - _dt.timedelta(weeks=week_now - 1)
 
         state = self.state
         parse = _parse_new_league_bracket(state, self.bracket.value)
@@ -809,15 +810,14 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
             return
 
-        ok, message = await start_new_league(state, league, week_date, parse.entries)
+        ok, message = await start_new_league(
+            state, league, week_date, parse.entries, upto_week=week_now
+        )
         if not ok:
             await self._refuse(interaction, f"⚠️ {message}")
             return
         await interaction.followup.send(f"✅ {message}", ephemeral=True)
 
-
-#: Past-leaning, because a league being entered is one that has already opened.
-_WEEK_DATE_EXAMPLES = "`8/24`, `Aug 24`, or `2026-08-24`"
 
 VS_BTN_RETRY_NEW_LEAGUE = "✏️ Edit and try again"
 
@@ -883,18 +883,27 @@ def _parse_new_league_bracket(state, text) -> ad.BracketParse:
     )
 
 
-async def start_new_league(state, league, week_date, entries) -> tuple[bool, str]:
-    """Write week 1's rows for `league`, stamped and seeded, ready to fill.
+async def start_new_league(
+    state, league, week_date, entries, *, upto_week: int = 1
+) -> tuple[bool, str]:
+    """Write rows for `league` from week 1 up to `upto_week`, ready to fill.
 
     The League screen shows all sixteen alliances and their seeds the moment a
     league opens, so this is one sitting: the bot writes the rows and the
     officer fills power, members and gift level straight off that same screen.
 
-    Week 1's pairings are **not** written. They follow from the seeds, so
-    :func:`compute_week_pairing` derives them on every read, and writing them
-    would spend sixteen cells restating what the seeds already say. Weeks 2 to
-    4 are different and do get a written prediction, because there the
-    officer's correction is the signal that the pairing algorithm needs a look.
+    **Every week up to the current one, not just week 1.** An alliance that
+    finds this feature in week 3 would otherwise get a set of rows dated a
+    fortnight ago, no row covering today, and a hub that reports itself as
+    between leagues, which is the exact opposite of what they just asked for.
+    The intervening weeks come out blank and seeded, which is also what makes
+    backfilling the results off the League screen a matter of typing outcomes.
+
+    Pairings are **not** written for any of them. Week 1's follow from the
+    seeds, and later weeks' cannot be known until the preceding week is
+    recorded, so a written guess there would be a confident lie rather than a
+    prediction worth correcting. `next_week_rows` still writes one for week
+    N+1 once week N is decided, which is when it means something.
     """
     if state.own is not None and state.full_bracket:
         if not any(e.alliance == state.own for e in entries):
@@ -903,15 +912,17 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
                 "alliance has to be one of the sixteen."
             )
 
-    existing = {r.alliance for r in state.rows if r.league == league}
-    rows = ad.skeleton_rows(
-        league,
-        1,
-        week_date,
-        [(e.alliance, e.seed) for e in entries],
-        tracking_mode=state.tracking_mode,
-        own_alliance=state.own,
-    )
+    existing = {(r.league, r.week, r.alliance) for r in state.rows}
+    rows = []
+    for week in range(1, max(1, min(upto_week, ad.LEAGUE_WEEKS)) + 1):
+        rows += ad.skeleton_rows(
+            league,
+            week,
+            week_date + _dt.timedelta(weeks=week - 1),
+            [(e.alliance, e.seed) for e in entries],
+            tracking_mode=state.tracking_mode,
+            own_alliance=state.own,
+        )
     if not rows:
         return False, (
             "I had nothing to write. I need to know which alliance is yours before I "
@@ -941,16 +952,17 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
     # league, which reads as a failed write.
     state.league = league
 
-    added = len(rows) - len(existing & {r.alliance for r in rows})
+    added = len([r for r in rows if (r.league, r.week, r.alliance) not in existing])
     noun = "row" if added == 1 else "rows"
+    weeks = sorted({r.week for r in rows})
+    span = f"week {weeks[0]}" if len(weeks) == 1 else f"weeks {weeks[0]} to {weeks[-1]}"
 
-    # What is still missing decides the next sentence. An officer who typed
-    # power, gift level and members on every line has nothing left to do here,
-    # and telling them to go and enter it would read as a failed write.
-    short = [r for r in rows if not (r.power and r.members and r.gift_level)]
+    # Counted per alliance, not per row: the same alliance appears once a week,
+    # and "48 of them still need power" would be three times the truth.
+    short = [e for e in entries if not (e.power and e.members and e.gift_level)]
     if not short:
         nudge = "Record each day as it lands."
-    elif len(short) == len(rows):
+    elif len(short) == len(entries):
         nudge = (
             "Add power, gift level and members from the League screen so matchups "
             "can be projected, then record each day as it lands."
@@ -960,7 +972,7 @@ async def start_new_league(state, league, week_date, entries) -> tuple[bool, str
             f"{len(short)} of them still need power, gift level or members before their "
             f"matchups can be projected. Record each day as it lands."
         )
-    return True, f"Started **{league}** with {added} {noun} for week 1. {nudge}"
+    return True, f"Started **{league}** with {added} {noun} for {span}. {nudge}"
 
 
 __all__ = [

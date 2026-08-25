@@ -592,18 +592,13 @@ def test_the_retry_modal_still_holds_what_was_typed():
     assert modal.bracket.default == "kTZ 714"
 
 
-def test_the_week_1_date_is_optional_and_defaults_to_this_week():
-    # The League screen shows a countdown, not a start date, so the officer
-    # would be counting backwards off a timer to fill this in.
+def test_the_league_week_is_asked_for_instead_of_a_date():
+    """The League screen shows a countdown and a Week 1-4 header. Which week it
+    is on is readable; the Monday week 1 began on has to be worked out."""
     modal = entry.NewLeagueModal(_state([]))
-    assert modal.week_date.required is False
-
-
-def test_the_date_field_does_not_dictate_one_format():
-    modal = entry.NewLeagueModal(_state([]))
-    for shape in ("8/24", "Aug 24", "2026-08-24"):
-        assert shape in modal.week_date.placeholder
-        assert ad.parse_week_date(shape) is not None
+    assert modal.week_now.required is False
+    assert "1, 2, 3 or 4" in modal.week_now.placeholder
+    assert not hasattr(modal, "week_date")
 
 
 def test_every_modal_field_fits_what_discord_will_accept():
@@ -633,3 +628,91 @@ def test_every_modal_field_fits_what_discord_will_accept():
         placeholder = getattr(field, "placeholder", "") or ""
         assert len(label) <= 45, f"{label!r} is {len(label)} characters"
         assert len(placeholder) <= 100, f"{placeholder!r} is {len(placeholder)} characters"
+
+
+async def test_a_mid_league_setup_writes_every_week_up_to_this_one(_captured):
+    # An alliance that finds the feature in week 3 would otherwise get rows
+    # dated a fortnight ago, nothing covering today, and a hub reporting itself
+    # as between leagues.
+    state = _state([])
+    week_1_monday = MONDAY - _dt.timedelta(weeks=2)
+    ok, message = await entry.start_new_league(
+        state, LEAGUE, week_1_monday, _entries(), upto_week=3
+    )
+    assert ok, message
+    assert sorted({r.week for r in _captured}) == [1, 2, 3]
+    assert len(_captured) == ad.BRACKET_SIZE * 3
+    assert "weeks 1 to 3" in message
+
+
+async def test_each_generated_week_carries_its_own_monday(_captured):
+    state = _state([])
+    week_1_monday = MONDAY - _dt.timedelta(weeks=2)
+    await entry.start_new_league(state, LEAGUE, week_1_monday, _entries(), upto_week=3)
+    by_week = {r.week: r.week_date for r in _captured}
+    assert by_week[1] == week_1_monday
+    assert by_week[2] == week_1_monday + _dt.timedelta(weeks=1)
+    assert by_week[3] == week_1_monday + _dt.timedelta(weeks=2)
+
+
+async def test_a_mid_league_setup_leaves_the_hub_on_a_live_week(_captured):
+    # The point of writing the intervening weeks at all.
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    live = ad.resolve_live_week(_captured)
+    assert live is not None
+    assert live.week == 3
+
+
+async def test_no_week_carries_a_pairing_it_could_not_know(_captured):
+    # Week 1's follows from the seeds. A later week's cannot be known until the
+    # week before it is recorded, so a written guess would be a confident lie.
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    assert all(r.opponent is None for r in _captured)
+
+
+async def test_the_alliances_short_of_data_are_counted_once_not_once_a_week(_captured):
+    state = _state([])
+    ok, message = await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    assert ok
+    # 16 alliances across 3 weeks is 48 rows, but only 16 things to go and find.
+    assert f"{ad.BRACKET_SIZE * 3} of them" not in message
+    assert "Add power, gift level and members" in message
+
+
+def test_the_week_view_pairs_from_the_whole_league_not_one_week():
+    """`compute_week_pairing` weighs every prior result, so handing it a single
+    week scores everyone zero and reproduces week 1's seed order for every week
+    of the league."""
+    rows = _bracket(week=1)
+    _play_week(rows, 1, lambda m: m.b)
+    rows += ad.next_week_rows(rows, 1)
+    state = _state(rows)
+
+    truth = ad.compute_week_pairing(rows, 2)
+    assert isinstance(truth, ad.WeekPairing)
+    real = state.display_name(truth.match_for(OWN).other(OWN))
+    seed_order = state.display_name(_key("A02"))
+    assert real != seed_order, "fixture is not exercising a reshuffle"
+
+    # The line naming your own matchup, not the tag appearing anywhere in a
+    # list of eight. The stale version put the seed-order opponent here.
+    own_line = next(
+        ln for ln in _text(hub.week_embed(state, 2)).splitlines() if state.display_name(OWN) in ln
+    )
+    assert real in own_line
+    assert seed_order not in own_line
+
+
+def test_a_week_whose_predecessor_is_unrecorded_says_so_rather_than_guessing():
+    rows = _bracket(week=1) + _bracket(week=2)
+    state = _state(rows)
+    text = _text(hub.week_embed(state, 2))
+    assert "Week 1's results decide who plays who in week 2" in text

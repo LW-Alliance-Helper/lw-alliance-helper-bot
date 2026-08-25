@@ -54,6 +54,7 @@ import champion_duel_image
 import champion_duel_intel as intel_lib
 import champion_duel_odds as odds_lib
 import champion_duel_predict as predict_lib
+import champion_duel_store as store_lib
 import champion_duel_wording as words
 import premium
 from api.champion_duel_auth import admin_ids
@@ -279,6 +280,35 @@ _ENGINE_MISSING = (
     "player look-ups are unavailable. If you're the bot operator, check that "
     "`CD_ENGINE_TOKEN` is set and the last deploy installed `champion-duel-engine`."
 )
+
+# ⚠️ NOT SIGNED OFF. Kevin owns copy; the variants are in the PR body rather
+# than in a session report, which is where the last two batches lost theirs.
+#
+# The caveat over a STALE stored answer, and the only state that carries one.
+# A `fresh` answer is exactly what a run right now would produce, so it shows
+# with no timestamp and nothing hedged; a `missing` one is never shown at all.
+#
+# IT DELIBERATELY DOES NOT SAY WHAT CHANGED. `stale` is a fingerprint
+# mismatch, and a squad recorded, a hero power corrected, a trial count raised
+# and a new engine pin all reach it identically -- so "new data has arrived"
+# would be false on half of them.
+#
+# AND IT DELIBERATELY PROMISES NOTHING. The obvious second half -- "so we are
+# working out new ones" -- is false in two states this surface can reach, and
+# both were checked in `champion_duel_store` rather than assumed:
+#
+#   * `GROUPINGS_SWEPT` is 2, so a group in any older Champion Duel is never
+#     picked up. The round picker reaches those, and a deploy that moves the
+#     engine pin marks every stored answer in them stale at once. There the
+#     promise would never come true at all.
+#   * While somebody is recording a group, each write resets the debounce
+#     `due()` measures, so nothing is worked out until they stop.
+#
+# What is true in every state is the half that is left: these were worked out
+# then, and something they depend on has moved since.
+#
+# "we", not "I": this is what the record holds (`notes/UX.md`).
+_ODDS_AS_OF = "We worked these out {when}. Something has changed since."
 
 
 # Signed off by Kevin 2026-08-24. "I", not "we": this is the bot unable to act
@@ -5218,6 +5248,12 @@ class _GroupView(discord.ui.View):
         is a Total Hero Power or any single squad power. Neither is
         individually required. The engine fills what is missing from the shape
         fit and samples what nobody has measured.
+
+        A PRESS IS A READ WHEREVER IT CAN BE. The sweeper works these out in
+        the background a group at a time, so the common case is that the answer
+        is already sitting in the store and this press costs a SELECT. Where it
+        is not, the press pays for it exactly as it always did -- the store
+        makes a slow surface sometimes fast, and never the other way round.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         # Re-resolved, not read off `self`. The flag was captured when the view
@@ -5235,12 +5271,44 @@ class _GroupView(discord.ui.View):
             db.get_or_create_group, self.grouping["id"], self.stage, self.label
         )
         scouted = await asyncio.to_thread(db.get_group_scouting, group["id"])
+        # The lookup is also the stamp. `last_viewed_at` is what `due()` orders
+        # on, most recent first, so a press that has to fall through and
+        # compute puts this group at the head of the sweeper's queue -- and the
+        # next reader gets it off the table. A press is the strongest signal
+        # this feature has about which of a tournament's seventeen groups
+        # anybody actually cares about, and it costs one row to record.
+        stored = await asyncio.to_thread(_stored_odds, group["id"], scouted, self.stage)
         await inter.followup.send(
             embed=await asyncio.to_thread(
-                build_odds_embed, scouted, self.stage, self.label, self.grouping
+                build_odds_embed,
+                scouted,
+                self.stage,
+                self.label,
+                self.grouping,
+                stored=stored,
             ),
             ephemeral=True,
         )
+
+
+def _stored_odds(group_id: int, members: list[dict], stage: str):
+    """What the store already holds for this group, or nothing at all.
+
+    NEVER RAISES, and that is the whole reason it exists. This surface answered
+    presses for weeks before there was a store, and it still can: everything in
+    here is an accelerator in front of a working path, so a table that is
+    locked, half-migrated or holding a row nobody can parse must cost a member
+    sixty seconds rather than the answer.
+
+    Printed rather than reported. `champion_duel_store` degrades the same way
+    on an unreadable row, and a store that is broken is broken on every press
+    in every guild -- which is a thousand Sentry issues a day for one fault.
+    """
+    try:
+        return store_lib.lookup(group_id, members, stage=stage)
+    except Exception as exc:  # noqa: BLE001 - a bad store must not break a press
+        print(f"[CHAMPION_DUEL] stored odds lookup failed for group {group_id}: {exc}")
+        return None
 
 
 async def _send_odds_upsell(interaction: discord.Interaction) -> None:
@@ -5321,8 +5389,42 @@ def _printed_rank(prob: float) -> float:
     return float(text.rstrip("%"))
 
 
-def build_bracket_embed(result, grouping) -> discord.Embed:
+def _as_of_line(computed_at) -> str | None:
+    """`_ODDS_AS_OF`, timed the way each reader's own client will read it.
+
+    `<t:N:R>` renders per viewer -- "3 hours ago" -- which a UTC stamp out of
+    the store cannot, and this surface is read across sixteen warzones in as
+    many time zones.
+
+    THAT IS ALSO WHY THE LINE IS NOT IN THE FOOTER, where the rest of this
+    surface's caveats live. Discord formats timestamp markup in a description
+    and a field value and NOT in footer text, so the footer would print the
+    markup at the reader.
+
+    Returns None on anything unparseable, and the caller treats that as a
+    reason to compute rather than as a caveat it can go without. A row
+    hand-edited on the volume is the case that reaches this.
+    """
+    if not computed_at:
+        return None
+    try:
+        when = datetime.fromisoformat(str(computed_at))
+    except (TypeError, ValueError):  # pragma: no cover - a hand-edited row
+        return None
+    # `db._now()` writes an aware UTC string. A naive one can only come from a
+    # hand edit, and reading it as UTC is the assumption that matches the
+    # column rather than the machine the bot happens to be running on.
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return _ODDS_AS_OF.format(when=f"<t:{int(when.timestamp())}:R>")
+
+
+def build_bracket_embed(result, grouping, *, as_of: str | None = None) -> discord.Embed:
     """How far each of the 32 gets, one ladder per player.
+
+    `as_of` is the stale caveat when `result` came out of the store rather than
+    off the engine. `build_odds_embed` decides that and hands the line down;
+    nothing here works out whether an answer is old.
 
     Kept apart from `build_odds_embed` rather than branched inside it, because
     almost none of that function survives the change of round: there is no
@@ -5378,7 +5480,12 @@ def build_bracket_embed(result, grouping) -> discord.Embed:
         )
         for row in shown
     ]
-    lead = (
+    # The stale caveat goes INSIDE the lead rather than being prepended to the
+    # finished description, so the fitting loop below counts it. Prepended
+    # afterwards it would push a full field back over 4,096 and Discord would
+    # cut the last row mid-figure -- which is the exact failure that loop
+    # exists to prevent.
+    lead = (f"{as_of}\n\n" if as_of else "") + (
         f"The knockout bracket: {_plural(len(result.rows), 'player')}, single "
         f"elimination. Each figure gives the odds of reaching that far, and "
         f"**{BRACKET_RUNGS['champion']}** the odds of winning it."
@@ -5420,7 +5527,7 @@ def build_bracket_embed(result, grouping) -> discord.Embed:
     return embed
 
 
-def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
+def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord.Embed:
     """The odds, or the reason there are none.
 
     The model refuses a group that is not exactly eight, and refuses a player
@@ -5431,14 +5538,63 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
 
     Everything past THP is optional. The engine samples squads it has not been
     given, so a group nobody has scouted still gets odds, just wider ones.
+
+    `stored` is a `champion_duel_store.Stored`, and the three states it carries
+    are three different surfaces:
+
+      fresh   -- served, with no timestamp and nothing hedged. It is bit for
+                 bit what a run right now would produce.
+      stale   -- served, and only ever with `_ODDS_AS_OF` over it.
+      missing -- computed. NOT a weaker stale: it also means a DIFFERENT SET OF
+                 PEOPLE, and in a group of eight one swapped rival moves every
+                 row, so that answer is wrong rather than old.
+
+    Omitting it computes, which is what every caller did before the store
+    existed and is what the tests that predate it still do.
+
+    A STORED REFUSAL IS DELIBERATELY NOT READ. `lookup` can hand back the
+    reason a group could not be modelled, and re-deriving it costs nothing:
+    both odds functions refuse before they simulate anything. Taking the stored
+    string would trade the branch-specific copy below -- which names either the
+    missing players or the missing powers -- for one sentence that cannot tell
+    the reader which job they have.
     """
     embed = discord.Embed(
         title=f"🔮 {_group_title(stage, label)}",
         color=discord.Color.blurple(),
     )
+    # Before the store is consulted, and that is the order on purpose. A bot
+    # with no engine says so rather than quietly serving whatever the table
+    # still holds from the last deploy that had one.
     if not odds_lib.ENGINE_AVAILABLE:
         embed.description = _ENGINE_MISSING
         return embed
+
+    held = stored.odds if stored is not None and stored.showable else None
+    # The two rounds hold different shapes, and only one of them has a `reach`
+    # on every row. Nothing reachable stores the wrong one -- a group row's
+    # stage does not change under it, and a field of 32 and a group of 8 are a
+    # different member set anyway -- but this is a public entry point, and
+    # being wrong here is an `AttributeError` behind an interaction that has
+    # already been deferred. Checked rather than assumed, and it costs a fall
+    # back to computing.
+    if held is not None and not isinstance(
+        held, odds_lib.BracketOdds if stage == "knockouts" else odds_lib.GroupOdds
+    ):
+        held = None
+    # Tied to `held` rather than to the state alone, so the caveat can only
+    # ever travel with the answer it is about. A freshly computed answer must
+    # never carry one.
+    as_of = None
+    if held is not None and stored.state == "stale":
+        as_of = _as_of_line(stored.computed_at)
+        if as_of is None:
+            # THE CAVEAT IS THE CONDITION ON SHOWING A STALE ANSWER, not a
+            # decoration over it, so a `computed_at` we cannot read costs the
+            # stored answer rather than the line. Without this the one state
+            # both docstrings say must never happen -- old numbers rendered
+            # exactly like current ones -- is what a bad timestamp produces.
+            held = None
 
     try:
         # The knockouts are a bracket rather than a group, so they take the
@@ -5447,8 +5603,12 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
         # and no "top N", so there is no row type both could fill without one
         # of them inventing a column.
         if stage == "knockouts":
-            return build_bracket_embed(odds_lib.bracket_odds(scouted), grouping)
-        result = odds_lib.group_advance_odds(scouted, stage=stage)
+            return build_bracket_embed(
+                held if held is not None else odds_lib.bracket_odds(scouted),
+                grouping,
+                as_of=as_of,
+            )
+        result = held if held is not None else odds_lib.group_advance_odds(scouted, stage=stage)
     except odds_lib.NotEnoughData as exc:
         if exc.missing_thp:
             named = ", ".join(
@@ -5495,7 +5655,8 @@ def build_odds_embed(scouted, stage, label, grouping) -> discord.Embed:
     more = len(result.rows) - len(shown)
     tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
-        f"Over {result.trials:,} simulations of the round. The first column "
+        (f"{as_of}\n\n" if as_of else "")
+        + f"Over {result.trials:,} simulations of the round. The first column "
         f"gives the odds of finishing in the top **{result.advance}** and going "
         f"through, the second the odds of winning the group outright."
         + "\n\n"

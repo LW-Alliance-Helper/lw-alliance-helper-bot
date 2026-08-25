@@ -509,12 +509,18 @@ _STANDING_LOCKED = "Your odds, projected finish placement, and more included in 
 #: guild is in. See `read_standing` for why this is a note rather than a prompt.
 #:
 #: WARNING: THE COMMUNITY SERVER CANNOT REACH THIS STATE, and this comment said
-#: it could until 2026-08-25. Kevin asked, and the source disagreed with it:
-#: `_in_this_champion_duel` returns True when a guild has no grouping, so a
-#: guild with no Champion Duel of its own never lands here. The real trigger is
-#: a guild that DOES have one, where the claimed account's warzone is not in it
-#: -- somebody who switched warzone and stayed in their old alliance's Discord,
-#: which is the case the warzone-switch answer exists for.
+#: it could until 2026-08-25. Kevin asked, and the source disagreed with it.
+#:
+#: The mechanism is `read_standing`'s `if mine or not grouping`: a guild with no
+#: Champion Duel resolved takes that branch, sets `here = True`, and never
+#: reaches the comparison at all. `_in_this_champion_duel` has a `not grouping`
+#: guard that looks like the reason and is not -- it is unreachable, since its
+#: one call site is inside that `if`'s `else`. Worth being exact about, because
+#: a comment naming the wrong line is the thing this correction is fixing.
+#:
+#: The real trigger is a guild that DOES have a Champion Duel, where the claimed
+#: account's warzone is not in it -- somebody who switched warzone and stayed in
+#: their old alliance's Discord, which is the case this answer exists for.
 #:
 #: **IT DOES NOT SAY THEY SWITCHED WARZONE.** It states which Champion Duel the
 #: standing above is about, and stops. The reader knows whether they moved;

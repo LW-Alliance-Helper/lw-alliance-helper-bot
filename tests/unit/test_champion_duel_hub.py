@@ -2457,6 +2457,49 @@ def test_an_account_in_another_champion_duel_still_gets_its_standing(standing_db
     assert hub._STANDING_ELSEWHERE.split("**")[-1].strip() in opener
 
 
+def test_last_events_round_is_not_rendered_as_this_events_standing(standing_db):
+    """A warzone is drawn into a new grouping every event.
+
+    `attach_stages` reports the furthest round in STAGES order across every
+    grouping the account is in, so a player who reached the semifinals last
+    event and is in a qualifier group now had last event's group, rank, kill
+    score and stored odds rendered as their current standing, with no note
+    saying so. Fails against the first version of `read_standing`.
+    """
+    warzone = STANDING_WARZONES[4]
+    # A grouping over warzones this one does not hold, so `ensure_grouping`
+    # creates a second rather than merging: it matches on ANY shared warzone.
+    last = db.ensure_grouping(["1600", "1601"], "2026-06-01")
+    assert last["id"] != standing_db["grouping"]["id"]
+    row = db.upsert_registrant(name="Veteran", server=warzone, alliance="OGV", thp=400_000_000)
+
+    # Last event: the semifinals, which is the furthest round they ever reached.
+    db.set_stage(row["id"], "semifinals", grp="C", grouping_id=last["id"])
+    old_group = db.get_or_create_group(last["id"], "semifinals", "C")
+    db.set_placement(old_group["id"], row["id"], rank=1, score=99_000_000)
+
+    # This event: only the qualifiers so far.
+    db.set_stage(
+        row["id"], "qualifiers", grp="D", grouping_id=standing_db["grouping"]["id"], rank=52
+    )
+    this_group = db.get_or_create_group(standing_db["grouping"]["id"], "qualifiers", "D")
+    db.set_placement(this_group["id"], row["id"], rank=52, score=21_000_000)
+
+    db.claim_registrant(row["id"], str(ADMIN_ID), discord_name="Kevin", guild_id="999")
+    state = _standing_of(standing_db)
+
+    assert state["state"] == "held"
+    assert state["stage"] == "qualifiers", (
+        f"last event's {state['stage']} was rendered as this event's standing"
+    )
+    assert state["row"]["rank"] == 52
+    assert state["row"]["grouping_id"] == standing_db["grouping"]["id"]
+
+    recorded = _field(hub.build_standing_embed(state, can_odds=False), hub._STANDING_RECORDED)
+    assert "99,000,000" not in recorded, "last event's kill score is on this event's standing"
+    assert "21,000,000" in recorded
+
+
 def test_the_note_about_another_champion_duel_is_not_a_prompt(standing_db):
     """The failure the guild-change detector was rejected for, one level up.
 
@@ -2611,9 +2654,7 @@ def test_the_free_half_carries_the_rank_the_score_and_when_they_were_read(standi
     # finished and only the placement write carries it.
     db.set_placement(standing_db["group_id"], rid, rank=3, score=41_200_000)
 
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=False
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=False)
     recorded = _field(embed, hub._STANDING_RECORDED)
     assert "Rank **3**" in recorded
     assert "41,200,000" in recorded
@@ -2625,9 +2666,7 @@ def test_the_kill_score_reward_tiers_never_appear(standing_db):
     """Kevin's, twice in the plan: they are participation, not a ladder."""
     _claim(standing_db)
     _remember(standing_db)
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=True)
     rendered = (embed.description or "") + " ".join(f.value for f in embed.fields)
     assert "4M" not in rendered and "4,000,000" not in rendered
 
@@ -2639,9 +2678,7 @@ def test_the_paid_half_renders_locked_rather_than_hidden(standing_db):
     """`UX.md` principle 5: the free tier sees the shape of the paid product."""
     _claim(standing_db)
     _remember(standing_db)
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=False
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=False)
     locked = [f for f in embed.fields if f.name.startswith("🔒")]
     assert locked, f"the paid half vanished on the free tier: {[f.name for f in embed.fields]}"
     assert hub._STANDING_WORKED_OUT in locked[0].name
@@ -2650,18 +2687,15 @@ def test_the_paid_half_renders_locked_rather_than_hidden(standing_db):
 
 def test_the_qualifiers_say_they_have_no_model(standing_db):
     """Qualifier odds came out of the bot on 2026-08-21. Recording did not."""
-    rid = _claim(standing_db)
-    db.set_stage(rid, "qualifiers", grp="D", grouping_id=standing_db["grouping"]["id"], rank=14)
-    state = hub.read_standing(ADMIN_ID, standing_db["grouping"])
-    # `attach_stages` reports the furthest round, so the semifinal row has to go
-    # for the qualifiers to be the one on screen.
-    assert state["stage"] in ("qualifiers", "semifinals")
-
-    embed = hub.build_standing_embed(
-        {**state, "stage": "qualifiers", "row": state["player"]["stages"]["qualifiers"]},
-        grouping=standing_db["grouping"],
-        can_odds=True,
+    row = db.upsert_registrant(name="OnlyQuals", server=STANDING_WARZONES[3], thp=300_000_000)
+    db.set_stage(
+        row["id"], "qualifiers", grp="D", grouping_id=standing_db["grouping"]["id"], rank=14
     )
+    db.claim_registrant(row["id"], str(ADMIN_ID), discord_name="Kevin", guild_id="999")
+
+    state = _standing_of(standing_db)
+    assert state["stage"] == "qualifiers"
+    embed = hub.build_standing_embed(state, can_odds=True)
     assert hub._STANDING_NO_MODEL.split("{")[0].strip() in _field(embed, hub._STANDING_WORKED_OUT)
 
 
@@ -2676,9 +2710,7 @@ def test_a_missing_stored_answer_shows_no_odds_at_all(standing_db):
 def test_a_missing_answer_is_said_out_loud_rather_than_left_blank(standing_db):
     """`UX.md` principle 2. A paying alliance must not lose the paid half in silence."""
     _claim(standing_db)
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=True)
     worked = _field(embed, hub._STANDING_WORKED_OUT)
     assert worked is not None, "the paid half vanished with nothing said"
     assert hub._STANDING_NOT_WORKED_OUT.split("{")[0].strip() in worked
@@ -2690,9 +2722,7 @@ def test_the_standing_and_the_odds_surface_share_one_caveat(standing_db):
     """Two literals saying the same thing in slightly different words is how copy drifts."""
     _claim(standing_db)
     _remember(standing_db)
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=True)
     assert embed.footer.text == hub._ODDS_BASIS
 
 
@@ -2707,26 +2737,51 @@ def test_nothing_is_computed_when_a_standing_is_opened(standing_db, monkeypatch)
 
     _claim(standing_db)
     state = _standing_of(standing_db)
-    hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
+    hub.build_standing_embed(state, can_odds=True)
+
+
+def _viewed_at(standing_db):
+    with db._get_conn() as conn:
+        found = conn.execute(
+            "SELECT last_viewed_at FROM odds_runs WHERE group_id = ?",
+            (standing_db["group_id"],),
+        ).fetchone()
+    return found["last_viewed_at"] if found else None
 
 
 def test_opening_the_hub_does_not_jump_the_sweeper_queue(standing_db):
-    """`due()` orders most-recently-viewed first, and a landing is not a press."""
+    """`due()` orders most-recently-viewed first, and a landing is not a press.
+
+    The landing renders a name, a round and a rank. It does not read odds at
+    all, so it cannot stamp -- and it does not pay for a scouting read and a
+    fingerprint rebuild on every `/champion_duel` in every guild either.
+    """
     _claim(standing_db)
     _remember(standing_db)
+    before = _viewed_at(standing_db)
 
-    def _viewed():
-        with db._get_conn() as conn:
-            return conn.execute(
-                "SELECT last_viewed_at FROM odds_runs WHERE group_id = ?",
-                (standing_db["group_id"],),
-            ).fetchone()["last_viewed_at"]
+    landing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
 
-    before = _viewed()
-    _standing_of(standing_db)
-    assert _viewed() == before, (
+    assert "stored" not in landing and "members" not in landing, (
+        "the landing paid for an answer it does not render"
+    )
+    assert _viewed_at(standing_db) == before, (
         "opening the hub stamped last_viewed_at, which puts this group at the "
         "head of the sweeper's queue on a surface nobody pressed"
+    )
+
+
+def test_opening_your_own_standing_does_join_the_sweeper_queue(standing_db):
+    """A press is a press. Without this, a group with no stored answer never queues."""
+    _claim(standing_db)
+    _remember(standing_db)
+    with db._get_conn() as conn:
+        conn.execute("UPDATE odds_runs SET last_viewed_at = NULL")
+
+    _standing_of(standing_db)
+    assert _viewed_at(standing_db) is not None, (
+        "pressing `Your standing` never records a view, so this group stays "
+        "behind every group somebody pressed the odds on"
     )
 
 
@@ -2768,9 +2823,7 @@ def test_the_standing_reads_the_readers_row_and_not_the_favorites(standing_db):
     """A group answer is sorted strongest first; the reader is rarely first."""
     _claim(standing_db, which=6)
     _remember(standing_db)
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=True)
     worked = _field(embed, hub._STANDING_WORKED_OUT)
     assert "90%" not in worked, "the favorite's odds were rendered as the reader's"
     assert "Projected finish **7**" in worked
@@ -2784,9 +2837,7 @@ def test_the_verdict_is_a_verdict_on_both_sides_of_the_cut(standing_db):
     _claim(standing_db, which=0)
     _remember(standing_db)
     strong = _field(
-        hub.build_standing_embed(
-            _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-        ),
+        hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
         hub._STANDING_WORKED_OUT,
     )
     assert hub._STANDING_IN_IT.split("{")[0].strip() in strong
@@ -2795,9 +2846,7 @@ def test_the_verdict_is_a_verdict_on_both_sides_of_the_cut(standing_db):
     _claim(standing_db, which=7)
     _remember(standing_db, advance=[0.9, 0.8, 0.5, 0.4, 0.3, 0.2, 0.1, 0.01])
     weak = _field(
-        hub.build_standing_embed(
-            _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=True
-        ),
+        hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
         hub._STANDING_WORKED_OUT,
     )
     assert hub._STANDING_LONG_SHOT in weak
@@ -2881,7 +2930,7 @@ def test_a_store_that_raises_costs_the_odds_and_not_the_hub(standing_db, monkeyp
     state = _standing_of(standing_db)
     assert state["state"] == "held"
     assert state.get("stored") is None
-    hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
+    hub.build_standing_embed(state, can_odds=True)
 
 
 def test_a_claimed_account_with_no_round_recorded_says_so(standing_db):
@@ -2894,7 +2943,7 @@ def test_a_claimed_account_with_no_round_recorded_says_so(standing_db):
         "a claimed account with no round yet was mistaken for a claim on another "
         "Champion Duel and invited to move"
     )
-    embed = hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
+    embed = hub.build_standing_embed(state, can_odds=True)
     assert hub._STANDING_NO_ROUND.split("{")[0].strip() in _field(embed, hub._STANDING_WORKED_OUT)
 
 
@@ -2930,7 +2979,7 @@ def test_a_round_the_engine_cannot_run_is_not_reported_as_having_no_model(standi
     state = _standing_of(standing_db)
     monkeypatch.setattr(odds_lib, "STAGES_WITH_A_MODEL", ())
 
-    embed = hub.build_standing_embed(state, grouping=standing_db["grouping"], can_odds=True)
+    embed = hub.build_standing_embed(state, can_odds=True)
     worked = _field(embed, hub._STANDING_WORKED_OUT)
     assert worked == hub._ENGINE_MISSING
     assert hub._STANDING_NO_MODEL.split("{")[0].strip() not in worked
@@ -2940,9 +2989,7 @@ def test_nothing_claims_a_reading_nobody_took(standing_db):
     """`set_placement` stamps `updated_at` on a bare membership write too."""
     rid = _claim(standing_db)
     db.set_placement(standing_db["group_id"], rid)  # membership only, no rank, no score
-    embed = hub.build_standing_embed(
-        _standing_of(standing_db), grouping=standing_db["grouping"], can_odds=False
-    )
+    embed = hub.build_standing_embed(_standing_of(standing_db), can_odds=False)
     recorded = _field(embed, hub._STANDING_RECORDED)
     assert hub._STANDING_READ_AT.split("{")[0].strip() not in recorded, (
         "the surface says when a rank was read, over a row that holds no rank"

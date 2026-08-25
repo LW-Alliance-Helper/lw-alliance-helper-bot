@@ -4981,7 +4981,7 @@ def _read_at_line(when) -> str | None:
     return _STANDING_READ_AT.format(when=f"<t:{int(stamp.timestamp())}:R>")
 
 
-def read_standing(user_id: int, grouping: dict | None) -> dict:
+def read_standing(user_id: int, grouping: dict | None, *, with_odds: bool = True) -> dict:
     """Everything `🏅 Your standing` renders, in one blocking read.
 
     Returns a dict whose `state` is one of:
@@ -5012,6 +5012,13 @@ def read_standing(user_id: int, grouping: dict | None) -> dict:
 
     **Nothing here computes odds.** `store_lib.lookup` is a SELECT, and a
     `missing` answer stays missing.
+
+    `with_odds` is False for the landing, which renders a name, a round and a
+    rank and uses none of the rest. Reading it anyway cost every
+    `/champion_duel` in every guild a `get_group_scouting` -- four queries over
+    up to thirty-two registrants -- plus a store SELECT, a JSON parse and a
+    full `fingerprint()` rebuild with the SHA-256 under it, for an answer that
+    was then dropped on the floor. The press re-reads from scratch regardless.
     """
     # UNSCOPED, DELIBERATELY. Passing the guild's grouping here scopes
     # `attach_stages` to it, so a reader whose account is in a different
@@ -5035,29 +5042,58 @@ def read_standing(user_id: int, grouping: dict | None) -> dict:
     # rides along saying which Champion Duel it is about. The update is on the
     # message regardless (`_StandingClaimView`), which is the "permanently
     # reachable" half of the answer and does not depend on guessing.
-    here = _in_this_champion_duel(claimed, grouping)
+    # WHICH ROUND, and the unscoped read above is exactly why this has to be
+    # decided rather than taken. `attach_stages` reports the furthest round in
+    # STAGES order across every grouping the account appears in, and a warzone
+    # is drawn into a new grouping every event -- so a player who reached the
+    # semifinals last time and is in a qualifier group now would have last
+    # event's group, rank, kill score and stored odds rendered as their current
+    # standing. `find_grouping_by_warzone` picking the newest is what makes the
+    # older one reachable at all, and `build_finished_embed` invites people to
+    # start the next one.
+    #
+    # So the caller's own Champion Duel wins when the account is in it, and the
+    # account's own furthest round is the fallback for when it is not.
+    stages = claimed.get("stages") or {}
+    mine = [st for st, r in stages.items() if grouping and r.get("grouping_id") == grouping["id"]]
+    if mine or not grouping:
+        stage = mine[-1] if mine else claimed.get("stage")
+        here = True
+    else:
+        # No round of theirs in this Champion Duel. Either they are in it and
+        # nobody has recorded a round yet, which is a held standing with
+        # nothing in it, or their account is somewhere else entirely.
+        stage = claimed.get("stage")
+        here = _in_this_champion_duel(claimed, grouping)
+    row = stages.get(stage) if stage else None
 
-    stage = claimed.get("stage")
-    row = (claimed.get("stages") or {}).get(stage) if stage else None
     out = {
         "state": "held" if here else "elsewhere",
         "player": claimed,
         "stage": stage,
         "row": row,
     }
-    if not row or not row.get("group_id") or stage not in odds_lib.STAGES_WITH_A_MODEL:
+    if (
+        not with_odds
+        or not row
+        or not row.get("group_id")
+        or stage not in odds_lib.STAGES_WITH_A_MODEL
+    ):
         return out
 
     members = db.get_group_scouting(row["group_id"])
     out["members"] = members
     try:
-        # `mark_viewed` is False, and that is the difference between this and
-        # the odds press. `due()` orders the sweeper most-recently-viewed
-        # first, so a landing that stamped every open would put whichever group
-        # the last caller of `/champion_duel` belongs to at the head of the
-        # queue, on a surface nobody pressed anything on. A press is a signal
-        # about which group somebody cares about; opening the hub is not.
-        out["stored"] = store_lib.lookup(row["group_id"], members, stage=stage, mark_viewed=False)
+        # STAMPED, because everything that reaches here is a press. `due()`
+        # orders the sweeper most-recently-viewed first, and a member opening
+        # their own standing is the same signal about the same group that
+        # pressing `🔮 Odds of advancing` is. An earlier version pinned this
+        # False to keep the LANDING from stamping, which it did -- and also
+        # left a member whose group has no stored answer able to press this
+        # every day and never once join the queue. The landing does not read
+        # odds at all now (`with_odds`), so the flag has nothing left to
+        # protect.
+        out["stored"] = store_lib.lookup(row["group_id"], members, stage=stage)
     except Exception as exc:  # noqa: BLE001 - a bad store must not break the hub
         # The same degradation `_stored_odds` takes, for the same reason, and
         # it matters more here: this is the landing, so a store fault would be
@@ -5181,7 +5217,7 @@ def _standing_worked_out(state: dict) -> str | None:
     return ((as_of + "\n\n") if as_of else "") + "\n".join(lines)
 
 
-def build_standing_embed(state: dict, *, grouping: dict | None, can_odds: bool) -> discord.Embed:
+def build_standing_embed(state: dict, *, can_odds: bool) -> discord.Embed:
     """`🏅 Your standing`: where the reader stands, and how far they get.
 
     Free is what we recorded, paid is what we worked out, and the two are
@@ -5192,6 +5228,15 @@ def build_standing_embed(state: dict, *, grouping: dict | None, can_odds: bool) 
     (`UX.md` principle 5). A free alliance should be able to see the shape of
     what it would be buying, and this is the one surface in Champion Duel where
     that shape is about them.
+
+    IT TAKES NO `grouping`. It carried one briefly and never read it, which
+    reads as intent that was not finished: the obvious use would be for
+    `_STANDING_ELSEWHERE` to name the Champion Duel this server is in, and
+    `build_player_embed` already declines to do that for a reason that holds
+    here too. Every draw in a season starts on the same day, so a start date
+    would print the reader's own event's name while asserting it is a different
+    one, and the thing that actually separates two groupings is their list of
+    Participating Warzones, which is a list rather than a label.
     """
     player = state["player"]
     alliance = f"[{player['alliance']}] " if player.get("alliance") else ""
@@ -6664,7 +6709,7 @@ class ChampionDuelHubView(discord.ui.View):
             user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
         )
         await inter.followup.send(
-            embed=build_standing_embed(standing, grouping=self.grouping, can_odds=can_odds),
+            embed=build_standing_embed(standing, can_odds=can_odds),
             view=view,
             ephemeral=True,
         )
@@ -6845,7 +6890,9 @@ async def _open_hub(
     # a landing that says we do not know who you are, over a button that says
     # `Your standing`.
     standing = (
-        await asyncio.to_thread(read_standing, interaction.user.id, grouping) if grouping else None
+        await asyncio.to_thread(read_standing, interaction.user.id, grouping, with_odds=False)
+        if grouping
+        else None
     )
 
     view = ChampionDuelHubView(

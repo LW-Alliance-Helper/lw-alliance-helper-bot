@@ -305,10 +305,18 @@ def _from_payload(payload: dict, members: list[dict]):
     stranger.
     """
     names = {m.get("id"): (m.get("display_name") or "?") for m in members}
+    # The row POSITION each registrant sits at in `members`, which is what
+    # `OddsRow.key` and `BracketRow.key` mean off the engine (`_specs` keys the
+    # specs `str(i)`). Rebuilding without it left every stored row keyless, so
+    # a caller could re-render the group and could NOT find one named player in
+    # it -- which is the whole reason `key` was added to those dataclasses.
+    # Names cannot stand in: two members of a group can share a display name,
+    # and keying by position is precisely what stops that collapsing them.
+    at = {m.get("id"): str(i) for i, m in enumerate(members)}
 
     if payload.get("kind") == "bracket":
         rows = [
-            odds.BracketRow(name=names[r["id"]], reach=dict(r["reach"]))
+            odds.BracketRow(name=names[r["id"]], reach=dict(r["reach"]), key=at[r["id"]])
             for r in payload["rows"]
             if r["id"] in names
         ]
@@ -326,6 +334,7 @@ def _from_payload(payload: dict, members: list[dict]):
             win_group=r["win_group"],
             points_mean=r["points_mean"],
             points_sd=r["points_sd"],
+            key=at[r["id"]],
         )
         for r in payload["rows"]
         if r["id"] in names

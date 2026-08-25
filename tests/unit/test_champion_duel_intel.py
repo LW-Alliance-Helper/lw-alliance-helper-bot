@@ -17,6 +17,7 @@ import pytest
 
 import champion_duel_db as db
 import champion_duel_intel as intel_lib
+import champion_duel_predict as predict_lib
 
 KEV = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
 TYPES = ("Tank", "Missile", "Aircraft")
@@ -429,3 +430,98 @@ def test_no_options_is_no_spread_rather_than_a_spread_of_zero(cd_db):
     assert result.options == []
     assert result.choice_spread is None
     assert result.choice_matters is False
+
+
+# ── One player against their whole group ─────────────────────────────────────
+#
+# `reads_for` is the loop `📇 Your alliance` runs to hand a player their own
+# page. What is tested here is what it does with the cases that do NOT produce
+# an answer, because a loop that dropped them would be deciding what the record
+# says on the surface's behalf.
+
+
+def test_a_read_is_produced_for_every_opponent_in_the_order_given(cd_db):
+    """One row per opponent, and the caller's order is the group's order -- so
+    a leader reading this beside the group listing sees the same people in the
+    same places."""
+    _squads("AlphaOne")
+    _squads("BetaTwo")
+    _squads("Giant")
+
+    reads = intel_lib.reads_for(_player("AlphaOne"), [_player("Giant"), _player("BetaTwo")])
+
+    assert [r.them["display_name"] for r in reads] == ["Giant", "BetaTwo"]
+    assert all(r.intel is not None for r in reads)
+    assert all(r.missing == [] for r in reads)
+
+
+def test_an_opponent_with_no_squads_is_a_row_rather_than_a_gap(cd_db):
+    """`NoPower` has no squads at all, so there is no line-up to put on the
+    field. The row stays, carrying which slots stopped it: a list quietly six
+    long in one group and seven in another tells a leader nothing."""
+    _squads("AlphaOne")
+    _squads("BetaTwo")
+
+    reads = intel_lib.reads_for(_player("AlphaOne"), [_player("NoPower"), _player("BetaTwo")])
+
+    assert len(reads) == 2
+    assert reads[0].intel is None
+    assert reads[0].missing == [1, 2, 3]
+    assert reads[1].intel is not None
+
+
+def test_a_player_we_cannot_build_stops_the_whole_read_rather_than_each_row(cd_db):
+    """Every opponent would fail identically and for the same reason, so seven
+    identical refusals would be one fact printed seven times. It is raised, and
+    it is `predict`'s own exception -- the one both hub intel call sites already
+    catch."""
+    _squads("BetaTwo")
+    _squads("Giant")
+
+    with pytest.raises(predict_lib.NotEnoughData) as caught:
+        intel_lib.reads_for(_player("NoPower"), [_player("BetaTwo"), _player("Giant")])
+
+    assert caught.value.name == "NoPower"
+    assert caught.value.missing == [1, 2, 3]
+
+
+def test_no_opponents_is_an_empty_read_rather_than_a_refusal(cd_db):
+    """A group of one is a group we hold one player for, which is the normal
+    state of a round somebody has half recorded."""
+    _squads("AlphaOne")
+
+    assert intel_lib.reads_for(_player("AlphaOne"), []) == []
+
+
+def test_a_read_is_priced_per_match_and_not_per_meeting(cd_db):
+    """`best_of` is 1 and should stay 1. A meeting is three matches with a
+    redeploy between them, so pricing the advice at Bo3 would charge a decision
+    to a series the player gets to remake twice -- and `series_win_prob`
+    amplifies a favourite by 8.4pp against a measured 0.4pp, which the
+    simulator scored as worse on both Brier and log loss over 310 results.
+    """
+    _squads("AlphaOne")
+    _squads("Giant")
+
+    one = intel_lib.reads_for(_player("AlphaOne"), [_player("Giant")])[0]
+    three = intel_lib.reads_for(_player("AlphaOne"), [_player("Giant")], best_of=3)[0]
+
+    assert one.intel.envelope.mean != three.intel.envelope.mean
+    default = intel_lib.reads_for(_player("AlphaOne"), [_player("Giant")])[0]
+    assert default.intel.envelope.mean == one.intel.envelope.mean
+
+
+def test_a_read_is_the_same_answer_the_head_to_head_surface_gives(cd_db):
+    """The batch must not become a second model. `🎯 Head to head` and a page
+    handed to a player about the same two people have to agree, or the member
+    who checks one against the other has found a bug that is really a fork."""
+    _squads("AlphaOne")
+    _squads("BetaTwo")
+    _orders("BetaTwo", [TYPES] * 6, opponent="someone", observed_at="2026-08-18")
+
+    batched = intel_lib.reads_for(_player("AlphaOne"), [_player("BetaTwo")])[0].intel
+    direct = intel_lib.intel(_player("BetaTwo"), _player("AlphaOne"))
+
+    assert batched.recommended == direct.recommended
+    assert batched.envelope == direct.envelope
+    assert batched.read == direct.read

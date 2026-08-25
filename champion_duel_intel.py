@@ -730,3 +730,72 @@ def intel(them: dict, you: dict, *, best_of: int = 1) -> Intel:
         result.p_if_they_hold = result.recommended.mean
 
     return result
+
+
+# ── One player against their whole group ─────────────────────────────────────
+
+
+@dataclass
+class Read:
+    """One player's read against one named opponent, or why there is none.
+
+    `intel` is None exactly when THEIR side could not be built into a line-up,
+    and `missing` then carries the slots that stopped it. That is a fact about
+    what we hold on that opponent rather than a failure of the read, and it is
+    kept as a row instead of being dropped: a leader handing this to a player
+    needs to see that one of their seven meetings is unanswerable and which
+    box would fix it, not a list quietly seven long in some groups and six in
+    others.
+    """
+
+    them: dict
+    intel: Intel | None = None
+    missing: list[int] = field(default_factory=list)
+
+
+def reads_for(you: dict, opponents: list[dict], *, best_of: int = 1) -> list[Read]:
+    """One player's read against every opponent given, in the order given.
+
+    THIS IS THE "HAND IT OUT" HALF OF `📇 Your alliance`, and the reason it is
+    here rather than in the surface is that "which of these could not be read"
+    is a finding about our data. A surface that filtered them out would be
+    deciding what the record says.
+
+    **Raises `champion_duel_predict.NotEnoughData` when YOUR OWN side cannot be
+    built.** Every opponent would then fail identically and for the same
+    reason, so seven identical refusals would be one fact printed seven times.
+    The caller says it once and names the player. That is the exception both
+    hub intel call sites already catch, and it is deliberately not this
+    module's own same-shaped `NotEnoughData`, which nothing raises.
+
+    **`best_of` is 1 and should stay 1**, for the reason `intel()` states: a
+    meeting is three matches and the player redeploys between them, so pricing
+    the advice at Bo3 charges a decision to a series they get to remake twice.
+    It is also what stops this reaching `series_win_prob`, which amplifies a
+    favourite by 8.4pp against a measured 0.4pp and makes both Brier and log
+    loss worse on 310 real results (`champion-duel-simulator`,
+    `semifinal_data/FINDING_matchup_model_stage.md`).
+
+    COST, MEASURED RATHER THAN ASSUMED, because the caller multiplies it by a
+    whole alliance. An unscouted pair is a 1,296-cell grid at about 57 ms; a
+    pair we hold both line-ups for is 36 cells at about 2.4 ms. So the worst
+    case for one player against a full semi-final group of seven is about
+    450 ms, and that worst case is the common one -- roughly 97% of the roster
+    carries placeholder types. The caller is responsible for bounding how many
+    players it asks for; this bounds nothing itself.
+    """
+    if not ENGINE_AVAILABLE:
+        raise RuntimeError("champion-duel-engine is not installed")
+    # Built once, and thrown away. It is here for its exception: without it the
+    # first thing to fail is the first opponent's `intel()` call, which raises
+    # `NotEnoughData` naming YOU -- so the caller would report a gap in your
+    # squads as though it were a gap in theirs.
+    predict_lib.build_side(you)
+
+    out: list[Read] = []
+    for them in opponents:
+        try:
+            out.append(Read(them=them, intel=intel(them, you, best_of=best_of)))
+        except predict_lib.NotEnoughData as exc:
+            out.append(Read(them=them, missing=list(exc.missing)))
+    return out

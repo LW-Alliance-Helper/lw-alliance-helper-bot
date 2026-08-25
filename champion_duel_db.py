@@ -207,6 +207,27 @@ GROUPING_SIZE = 16
 # full at 6. Knockouts are one field of 32 rather than lettered groups.
 GROUP_SIZE = {"qualifiers": 100, "semifinals": 8, "knockouts": 32}
 
+# Rounds where every member of a group meets every other one, so the rest of the
+# group IS somebody's opponent list and nothing has to be scheduled to know it.
+#
+# **Only the semi-finals**, and the two rounds left out are left out for
+# different reasons rather than by oversight:
+#
+#   * The **qualifiers** are 100 players. They do not all meet, and nothing in
+#     the schema says which of them do -- `order_history.opponent` is a meeting
+#     already played rather than one still to come.
+#   * The **knockouts** are one field of 32 played as a bracket. Two players
+#     meet only if both survive to the same rung, so "everyone else in the
+#     round" is not an opponent list at all, and the pairings are an entry
+#     surface this feature does not have yet
+#     (`PROPOSAL_champion_duel_ia.md`, *the batch entry flow*).
+#
+# A semi-final group is 8 players meeting every other once -- 28 meetings
+# scheduled 2/2/2/1 across four days -- so the seven names beside somebody are
+# exactly the seven they play, and that is a fact about the format rather than
+# about our record.
+ROUND_ROBIN_STAGES = ("semifinals",)
+
 # The lettered groups inside a round. Sixteen either way: the qualifiers split
 # 1,600 players into groups of 100, and the semifinals split the 128 advancers
 # into groups of 8. Knockouts are one field of 32 and carry no letter at all.
@@ -253,6 +274,52 @@ def _server(value) -> str | None:
     if value is None:
         return None
     s = str(value).strip().lstrip("#")
+    return s or None
+
+
+def warzone_key(value) -> str | None:
+    """A warzone number as a comparison key, the way the game means them.
+
+    `parse_warzones` canonicalizes a grouping's warzones through
+    `str(int(...))`, so `grouping_warzones` holds `738`; `_server` only strips
+    whitespace and a leading `#`, so a registrant added through a modal can
+    hold `0738`. Comparing those two as strings puts that player permanently
+    outside their own Champion Duel, which is a bug that never announces
+    itself -- the row is simply absent from every entity-scoped read.
+
+    Falls back to the stripped string on anything non-numeric, because a
+    warzone is free text on a self-reported player and must never raise here.
+
+    **Public, and `champion_duel_hub._same_warzone` is built on it.** Two
+    copies of this normalisation is exactly how one surface starts disagreeing
+    with another about whether somebody is in this Champion Duel.
+    """
+    s = _server(value)
+    if s is None:
+        return None
+    try:
+        return str(int(s))
+    except ValueError:
+        return s
+
+
+def alliance_tag(value) -> str | None:
+    """An alliance tag as this feature compares them: trimmed, case kept.
+
+    **ONE MEANING OF "SAME ALLIANCE"**, and it lives here rather than in the
+    surfaces. `champion_duel_hub._by_alliance` narrows one group's listing and
+    `get_alliance_members` reads across a whole Champion Duel; if those two
+    answered "same alliance?" differently, a leader would see twelve players in
+    one view and eleven in the other with no way to tell which was wrong.
+
+    **Case is kept rather than folded.** The tag is what the game printed and
+    somebody read off a screen, not a name we own, and folding case would merge
+    two tags the game itself keeps apart. It also matches the comparison
+    `_by_alliance` has shipped since #536, so nothing already on screen moves.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
     return s or None
 
 
@@ -3152,6 +3219,84 @@ def get_roster(
                     by_id[r["registrant_id"]].append(dict(r))
             for p in players:
                 p["squads"] = by_id.get(p["id"], [])
+    return players
+
+
+#: Furthest round first, for a listing that leads on how far somebody got.
+#: Built off `STAGES` rather than typed out, so a fourth round reaches this by
+#: being added there once.
+_FURTHEST_FIRST = {stage: -index for index, stage in enumerate(STAGES)}
+
+
+def get_alliance_members(alliance, grouping_id) -> list[dict]:
+    """Every account carrying this alliance tag in one Champion Duel.
+
+    **The entity comes first and it spans every group.** Kevin, 2026-08-24:
+    *"If I'm looking for my alliance, I want to see everyone no matter what
+    group they're in ... I would never go group first."* So this is not
+    `get_roster(group=...)` with a filter bolted on -- the alliance filter that
+    shipped in #536 sits inside one group and answers *who from my alliance is
+    in this group*, which is a different question and does not answer this one.
+
+    **Scoped by warzone, not by group membership.** An account in the alliance
+    that nobody has placed in a round yet is still one of the leader's people,
+    and a read that started from `group_members` would drop exactly the players
+    a leader most needs to notice are missing. The grouping's Participating
+    Warzones are what say which accounts are in this Champion Duel at all.
+
+    That scoping is also what makes a three-letter tag safe to match on: tags
+    are not unique across the game, and two warzones outside this event can
+    easily carry another `[OGV]`.
+
+    Rows come back shaped like every other player in this file -- `stages`,
+    `stage`, `grp`, `rank` filled by `attach_stages` against this grouping --
+    and sorted **furthest round first**, then by rank inside it, then by name.
+    Accounts in no round of it sort last: they are held, they are simply not
+    placed, and burying them under the qualifiers is what makes that readable
+    rather than alarming.
+    """
+    tag = alliance_tag(alliance)
+    grouping = get_grouping(grouping_id)
+    if not tag or not grouping:
+        return []
+    zones = {key for key in (warzone_key(w) for w in grouping.get("warzones") or []) if key}
+    if not zones:
+        # A grouping with no warzones recorded cannot say who is in it, and
+        # answering with every `[OGV]` in the database would be a listing of
+        # other people's tournaments.
+        return []
+
+    # **Both comparisons happen in Python, through the two helpers above**, and
+    # the SQL narrows rather than decides. `TRIM()` in SQLite strips spaces and
+    # `str.strip()` strips every kind of whitespace, so a tag carrying a tab
+    # would be matched by one and not the other -- and a WHERE clause that
+    # disagrees with `alliance_tag` is the drift those helpers exist to stop.
+    # The scan is cheaper than the unfiltered `get_roster` this file already
+    # runs, and `attach_stages` -- the part that costs a query per row -- only
+    # sees what survives both filters.
+    with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute("SELECT * FROM registrants WHERE alliance IS NOT NULL").fetchall()
+        ]
+    players = [
+        p
+        for p in rows
+        if alliance_tag(p.get("alliance")) == tag and warzone_key(p.get("server")) in zones
+    ]
+    for player in players:
+        attach_stages(player, grouping_id)
+    players.sort(
+        key=lambda p: (
+            # `+1` puts an unplaced account after the qualifiers, which sit at
+            # 0. Keyed on the round rather than on the group letter for the
+            # reason #519 recorded: the knockouts carry no letter at all, so
+            # every survivor has `grp` None and a letter sort inverts them.
+            _FURTHEST_FIRST.get(p.get("stage"), 1),
+            p.get("rank") or 9999,
+            p["display_name"],
+        )
+    )
     return players
 
 

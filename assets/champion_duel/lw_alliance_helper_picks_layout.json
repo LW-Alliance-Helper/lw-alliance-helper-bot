@@ -1,0 +1,139 @@
+{
+  "note": "The day's picks card. Unlike the VS card this one has NO static template, because its height is not fixed: a slate carries five to seventeen rows and the canvas grows with them. So the artwork, when it arrives, cannot be one flat image either -- it has to arrive as three bands (header, one row, footer), which `bands` below names and the renderer composites. Until then the renderer draws the bands itself from `palette`. Every box is still read from this file rather than hard-coded, so a design revision stays a file swap.",
+  "canvas": {
+    "width": 1400,
+    "margin": 40
+  },
+  "bands": {
+    "header": null,
+    "row": null,
+    "footer": null,
+    "note": "Filenames beside this one, when Kevin's artwork lands. A band is drawn at the canvas width and its own band height; the row band repeats once per row. A band left null is drawn from `palette` instead."
+  },
+  "palette": {
+    "background_top": "#0b0b1a",
+    "background_bottom": "#010007",
+    "row_plate": "#0d0d1c",
+    "row_plate_alt": "#12121f",
+    "row_border": "#2a2a44",
+    "rule": "#e29a18"
+  },
+  "header": {
+    "h": 158,
+    "event_title": {
+      "x": 40,
+      "y": 26,
+      "w": 460,
+      "h": 46,
+      "align": "left"
+    },
+    "round_metadata": {
+      "x": 520,
+      "y": 26,
+      "w": 560,
+      "h": 46,
+      "align": "center"
+    },
+    "confidence_heading": {
+      "x": 1200,
+      "y": 100,
+      "w": 160,
+      "h": 20,
+      "line_height": 22,
+      "align": "right",
+      "note": "Two stacked lines, and they sit BELOW the badge rather than beside it: the badge is square and as wide as this column, so the two would overlap. Kept clear of the rule below them as well."
+    },
+    "logo_badge": {
+      "x": 1284,
+      "y": 16,
+      "w": 76,
+      "h": 76,
+      "radius": 14,
+      "align": "center",
+      "note": "Square, right edge on the content margin (x1360), matching the VS card's convention of standing the mark on the background rather than in a frame."
+    },
+    "rule": {
+      "x": 40,
+      "y": 150,
+      "w": 1320,
+      "h": 2
+    }
+  },
+  "row": {
+    "pitch": 74,
+    "plate": {
+      "x": 40,
+      "y": 2,
+      "w": 1320,
+      "h": 64,
+      "radius": 12
+    },
+    "index": {
+      "x": 40,
+      "y": 2,
+      "w": 52,
+      "h": 64,
+      "align": "center"
+    },
+    "name_a": {
+      "x": 124,
+      "y": 2,
+      "w": 320,
+      "h": 64,
+      "align": "right"
+    },
+    "probability_a": {
+      "x": 456,
+      "y": 2,
+      "w": 88,
+      "h": 64,
+      "align": "right"
+    },
+    "track": {
+      "x": 556,
+      "y": 24,
+      "w": 200,
+      "h": 20,
+      "radius": 10
+    },
+    "probability_b": {
+      "x": 768,
+      "y": 2,
+      "w": 88,
+      "h": 64,
+      "align": "left"
+    },
+    "name_b": {
+      "x": 868,
+      "y": 2,
+      "w": 320,
+      "h": 64,
+      "align": "left"
+    },
+    "confidence": {
+      "x": 1200,
+      "y": 2,
+      "w": 160,
+      "h": 64,
+      "align": "right"
+    },
+    "no_prediction": {
+      "x": 456,
+      "y": 2,
+      "w": 400,
+      "h": 64,
+      "align": "center",
+      "note": "Spans both probabilities and the track. A row nobody can predict keeps its two names and says so across the middle."
+    }
+  },
+  "footer": {
+    "h": 92,
+    "summary": {
+      "x": 40,
+      "y": 26,
+      "w": 1320,
+      "h": 40,
+      "align": "center"
+    }
+  }
+}

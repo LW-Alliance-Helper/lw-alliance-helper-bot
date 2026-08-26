@@ -57,12 +57,12 @@ def _cfg(**kw):
     return base
 
 
-def _row(tag, week=1, seed=None, league=LEAGUE, week_date=MONDAY, **kw):
+def _row(tag, week=1, ranking=None, league=LEAGUE, week_date=MONDAY, **kw):
     return ad.AllianceWeek(
         league=league,
         week=week,
         alliance=_key(tag),
-        seed=seed,
+        ranking=ranking,
         week_date=week_date,
         tag_display=tag,
         **kw,
@@ -70,11 +70,11 @@ def _row(tag, week=1, seed=None, league=LEAGUE, week_date=MONDAY, **kw):
 
 
 def _bracket_rows(week=1, **per_alliance):
-    """Sixteen seeded alliances for one week, own alliance at seed 1."""
+    """Sixteen ranked alliances for one week, own alliance at ranking 1."""
     tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
     rows = []
-    for seed, tag in enumerate(tags, start=1):
-        rows.append(_row(tag, week=week, seed=seed, **per_alliance.get(tag, {})))
+    for ranking, tag in enumerate(tags, start=1):
+        rows.append(_row(tag, week=week, ranking=ranking, **per_alliance.get(tag, {})))
     return rows
 
 
@@ -206,7 +206,7 @@ def test_the_bracket_renders_a_blank_cell_as_unknown_never_as_zero():
     assert "means not entered" in text
 
 
-def test_the_bracket_is_ordered_by_seed_like_the_in_game_screen():
+def test_the_bracket_is_ordered_by_ranking_like_the_in_game_screen():
     rows = _bracket_rows()
     text = _text(hub.bracket_embed(_state(rows), 1))
     positions = [text.index(f"[{tag}]") for tag in (OWN_TAG, "A02", "A03")]
@@ -264,7 +264,7 @@ def test_a_projected_matchup_names_the_evidence_it_rests_on():
 def test_own_alliance_mode_still_shows_the_matchup_it_recorded():
     """No bracket to pair, but the guild typed who they faced. Refusing to
     show that would be the tracker arguing with a deliberate choice (#448)."""
-    rows = [_row(OWN_TAG, seed=1, opponent=_key("A02")), _row("A02", seed=2)]
+    rows = [_row(OWN_TAG, ranking=1, opponent=_key("A02")), _row("A02", ranking=2)]
     state = _state(rows, tracking_mode=ad.MODE_OWN_ALLIANCE)
     text = _text(hub.week_embed(state, 1))
     assert "[US]" in text and "[A02]" in text
@@ -315,7 +315,7 @@ def test_the_profile_says_how_old_its_numbers_are():
 def test_power_trajectory_is_reported_as_an_observation():
     rows = _bracket_rows(**{"A02": {"power": 200_000_000, "members": 60, "gift_level": 10}})
     rows.append(
-        _row("A02", week=2, seed=2, week_date=MONDAY + _dt.timedelta(days=28), power=260_000_000)
+        _row("A02", week=2, ranking=2, week_date=MONDAY + _dt.timedelta(days=28), power=260_000_000)
     )
     embed = ad_ui.scout_embed(_state(rows), _key("A02"))
     recorded = next(f.value for f in embed.fields if f.name == "Recorded")
@@ -330,8 +330,8 @@ def test_power_trajectory_is_reported_as_an_observation():
 
 def test_head_to_head_recovers_meetings_from_either_side_of_the_pairing():
     rows = [
-        _row(OWN_TAG, seed=1, opponent=_key("A02"), week_outcome="W", week_score=8),
-        _row("A02", seed=2),  # their row never got its Opponent filled in
+        _row(OWN_TAG, ranking=1, opponent=_key("A02"), week_outcome="W", week_score=8),
+        _row("A02", ranking=2),  # their row never got its Opponent filled in
     ]
     history = ad.head_to_head(rows, OWN, _key("A02"))
     assert len(history.meetings) == 1
@@ -340,7 +340,7 @@ def test_head_to_head_recovers_meetings_from_either_side_of_the_pairing():
 
 
 def test_head_to_head_never_counts_an_unrecorded_week_as_a_loss():
-    rows = [_row(OWN_TAG, seed=1, opponent=_key("A02"))]
+    rows = [_row(OWN_TAG, ranking=1, opponent=_key("A02"))]
     history = ad.head_to_head(rows, OWN, _key("A02"))
     assert history.record == "0-0"
     assert history.unrecorded == 1
@@ -398,8 +398,8 @@ def test_the_history_block_keeps_the_tier_on_every_meeting():
             week_outcome="L",
             week_score=4,
         ),
-        _row(OWN_TAG, seed=1, opponent=_key("A02"), week_outcome="W", week_score=9),
-        _row("A02", seed=2),
+        _row(OWN_TAG, ranking=1, opponent=_key("A02"), week_outcome="W", week_score=9),
+        _row("A02", ranking=2),
     ]
     embed = ad_ui.scout_embed(_state(rows), _key("A02"))
     block = next(f.value for f in embed.fields if f.name == "Head to head")
@@ -421,8 +421,8 @@ def test_tier_movement_is_only_claimed_when_something_actually_moved():
             opponent=_key("A02"),
             week_outcome="L",
         ),
-        _row(OWN_TAG, seed=1, opponent=_key("A02"), week_outcome="W"),
-        _row("A02", seed=2),
+        _row(OWN_TAG, ranking=1, opponent=_key("A02"), week_outcome="W"),
+        _row("A02", ranking=2),
     ]
     block = _history_block(rows)
     assert "promoted" not in block and "relegated" not in block
@@ -437,8 +437,8 @@ def test_a_promotion_since_the_last_meeting_is_called_out():
             opponent=_key("A02"),
             week_outcome="L",
         ),
-        _row(OWN_TAG, seed=1),
-        _row("A02", seed=2),
+        _row(OWN_TAG, ranking=1),
+        _row("A02", ranking=2),
     ]
     block = _history_block(rows)
     assert "were in **Gold**" in block

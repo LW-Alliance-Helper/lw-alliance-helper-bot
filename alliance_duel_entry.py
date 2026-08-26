@@ -128,7 +128,7 @@ def _row_for_write(state, alliance: ad.AllianceKey, week: int) -> ad.AllianceWee
             week=existing.week,
             alliance=existing.alliance,
             week_date=existing.week_date,
-            seed=existing.seed,
+            ranking=existing.ranking,
             tag_display=existing.tag_display,
             warzone_display=existing.warzone_display,
         )
@@ -627,7 +627,7 @@ def pending_next_week(state) -> int | None:
 async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
     """Write next week's rows, carried forward with predicted opponents.
 
-    Season, tier, group, seed, tag and warzone come forward, so the only thing
+    Season, tier, group, ranking, tag and warzone come forward, so the only thing
     left to type is what actually happened. The **predicted** opponent is
     written rather than left blank: if the game paired differently and the
     officer corrects it, that correction is itself the signal that the pairing
@@ -681,11 +681,11 @@ def pending_new_league(state) -> bool:
 
 
 class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
-    """League identity off the start screen, and the bracket in seed order.
+    """League identity off the start screen, and the bracket in ranking order.
 
     The fields are built in ``__init__`` rather than declared on the class
     because the last one changes shape with the tracking mode: a full bracket
-    wants all sixteen alliances, and an own-alliance sheet wants a seed and
+    wants all sixteen alliances, and an own-alliance sheet wants a ranking and
     nothing else. One modal, because a two-step wizard for what is one screen
     in game would be the bot making this longer than it is.
     """
@@ -744,7 +744,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
         else:
             self.bracket = discord.ui.TextInput(
-                label="Your seed",
+                label="Your ranking",
                 placeholder="9",
                 max_length=4,
                 required=True,
@@ -852,7 +852,7 @@ class _RetryNewLeagueView(discord.ui.View):
 def _parse_new_league_bracket(state, text) -> ad.BracketParse:
     """Read the modal's last field, whichever shape the tracking mode gave it.
 
-    Own-alliance mode types a seed rather than a roster, so the alliance comes
+    Own-alliance mode types a ranking rather than a roster, so the alliance comes
     from the configured identity and the field supplies only where it sits in
     the bracket. The result is the same shape either way, which is what keeps
     :func:`start_new_league` free of the mode question.
@@ -866,16 +866,16 @@ def _parse_new_league_bracket(state, text) -> ad.BracketParse:
                 f"I do not know which alliance is yours yet. Set it in {ad_setup.VS_SETUP_NAV}.",
             )
         )
-    seed = ad.parse_int(text)
-    if seed is None or not 1 <= seed <= ad.BRACKET_SIZE:
-        return ad.BracketParse(problems=(f"A seed is a number from 1 to {ad.BRACKET_SIZE}.",))
+    ranking = ad.parse_int(text)
+    if ranking is None or not 1 <= ranking <= ad.BRACKET_SIZE:
+        return ad.BracketParse(problems=(f"A ranking is a number from 1 to {ad.BRACKET_SIZE}.",))
 
     row = next((r for r in state.rows if r.alliance == state.own and r.tag_display), None)
     return ad.BracketParse(
         entries=(
             ad.BracketEntry(
                 alliance=state.own,
-                seed=seed,
+                ranking=ranking,
                 tag_display=(row.tag_display if row else state.own.tag.upper()),
                 warzone_display=(row.warzone_display if row else state.own.warzone),
             ),
@@ -888,7 +888,7 @@ async def start_new_league(
 ) -> tuple[bool, str]:
     """Write rows for `league` from week 1 up to `upto_week`, ready to fill.
 
-    The League screen shows all sixteen alliances and their seeds the moment a
+    The League screen shows all sixteen alliances and their rankings the moment a
     league opens, so this is one sitting: the bot writes the rows and the
     officer fills power, members and gift level straight off that same screen.
 
@@ -896,11 +896,11 @@ async def start_new_league(
     finds this feature in week 3 would otherwise get a set of rows dated a
     fortnight ago, no row covering today, and a hub that reports itself as
     between leagues, which is the exact opposite of what they just asked for.
-    The intervening weeks come out blank and seeded, which is also what makes
+    The intervening weeks come out blank and ranked, which is also what makes
     backfilling the results off the League screen a matter of typing outcomes.
 
     Pairings are **not** written for any of them. Week 1's follow from the
-    seeds, and later weeks' cannot be known until the preceding week is
+    rankings, and later weeks' cannot be known until the preceding week is
     recorded, so a written guess there would be a confident lie rather than a
     prediction worth correcting. `next_week_rows` still writes one for week
     N+1 once week N is decided, which is when it means something.
@@ -919,7 +919,7 @@ async def start_new_league(
             league,
             week,
             week_date + _dt.timedelta(weeks=week - 1),
-            [(e.alliance, e.seed) for e in entries],
+            [(e.alliance, e.ranking) for e in entries],
             tracking_mode=state.tracking_mode,
             own_alliance=state.own,
         )

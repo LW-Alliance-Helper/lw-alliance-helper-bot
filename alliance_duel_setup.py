@@ -172,7 +172,7 @@ def mode_label(tracking_mode: str) -> str:
 def ensure_tab(spreadsheet, tab_name: str = "Alliance Duel (VS)"):
     """Return the VS worksheet, creating it with headers if it is absent.
 
-    Header seeding goes through `config.get_or_create_worksheet` so the tab
+    Creating the header row goes through `config.get_or_create_worksheet` so the tab
     matches every other bot-created tab. Columns resolve by name afterwards,
     so a user who reorders or inserts columns keeps working.
     """
@@ -245,7 +245,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
             "Straight off the in-game League screen.\n"
             f"**{ad.COL_SEASON}** `S35` · **{ad.COL_TIER}** `Diamond` · "
             f"**{ad.COL_GROUP}** `12 - 2`\n"
-            f"**{ad.COL_SEED}** `1` to `16`, fixed for the whole league.\n"
+            f"**{ad.COL_RANKING}** `1` to `16`, fixed for the whole league.\n"
             f"**{ad.COL_TAG}** and **{ad.COL_WARZONE}** identify an alliance."
         ),
         inline=False,
@@ -482,7 +482,7 @@ def validation_report_embed(
             embed.set_footer(
                 text=(
                     "Tracking just your alliance, so bracket checks "
-                    "(reciprocal opponents, seeds) were skipped."
+                    "(reciprocal opponents, rankings) were skipped."
                 )
             )
         return embed
@@ -523,7 +523,7 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
 
     States plainly what the rows will and will not contain. They carry the
     league identity and week, and nothing else: the bot has no way to know who
-    the other alliances are, so tag, warzone and seed still come off the
+    the other alliances are, so tag, warzone and ranking still come off the
     in-game League screen. Saying so here stops the offer reading as though
     the bot is about to fill the bracket in for them.
     """
@@ -535,7 +535,7 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
             f"You're now tracking your whole League bracket, but **{league}** has "
             f"{total} row{'s' if total != 1 else ''} missing across {weeks}.\n\n"
             "I can add them as blank rows, already stamped with the season, tier, "
-            "group, week and date. You fill in the tag, warzone and seed for each "
+            "group, week and date. You fill in the tag, warzone and ranking for each "
             "from the in-game League screen."
         ),
         color=discord.Color.blurple(),

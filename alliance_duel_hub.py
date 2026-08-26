@@ -236,7 +236,7 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     Raw, not derived: this is the "what have we actually typed in" view, and a
     blank cell renders as unknown rather than as a zero or an estimate. Sorted
-    by seed, because that is the order the in-game League screen shows and the
+    by ranking, because that is the order the in-game League screen shows and the
     order someone copying off it will be reading in.
     """
     league = state.league
@@ -251,7 +251,7 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     rows = sorted(
         state.league_rows(week),
-        key=lambda r: (r.seed if r.seed is not None else ad.BRACKET_SIZE + 1, r.alliance),
+        key=lambda r: (r.ranking if r.ranking is not None else ad.BRACKET_SIZE + 1, r.alliance),
     )
     if not rows:
         embed.description += "\n\n*No rows recorded for this week yet.*"
@@ -259,13 +259,13 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     lines = []
     for row in rows:
-        seed = f"`{row.seed:>2}`" if row.seed is not None else "` ?`"
+        ranking = f"`{row.ranking:>2}`" if row.ranking is not None else "` ?`"
         power = f"{row.power / 1_000_000:,.0f}M" if row.power else NOT_ENTERED
         members = str(row.members) if row.members is not None else NOT_ENTERED
         gift = str(row.gift_level) if row.gift_level is not None else NOT_ENTERED
         mine = " ⬅️" if row.alliance == state.own else ""
         lines.append(
-            f"{seed} **{state.display_name(row.alliance)}** · {power} · "
+            f"{ranking} **{state.display_name(row.alliance)}** · {power} · "
             f"{members} members · gift {gift}{mine}"
         )
     embed.description += "\n\n" + "\n".join(lines)[:3800]
@@ -292,7 +292,7 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
 
     # `compute_week_pairing` weighs every prior week's result, so it takes the
     # whole league and not one week of it. Handed a single week it sees no
-    # confirmed results at all, scores everyone zero, and falls back to seed
+    # confirmed results at all, scores everyone zero, and falls back to ranking
     # order, which reproduces week 1's matchups for every week of the league.
     league_rows = state.league_rows()
     if _prior_week_decided(league_rows, week):
@@ -337,7 +337,7 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
 def _prior_week_decided(league_rows, week: int) -> bool:
     """Whether `week`'s pairing can be worked out at all.
 
-    Week 1 follows from the seeds and needs nothing. Every later week is a
+    Week 1 follows from the rankings and needs nothing. Every later week is a
     reshuffle of the week before it, so an unrecorded predecessor makes the
     computed pairing meaningless rather than approximate.
     """
@@ -438,7 +438,7 @@ def path_embed(state: HubState) -> discord.Embed:
 
     embed.description = (
         f"**{state.league.season} · {state.league.tier} {state.league.group}**\n"
-        f"Week 1 pairs off the seeds, and each later week follows from the results "
+        f"Week 1 pairs off the rankings, and each later week follows from the results "
         f"before it."
     )
 

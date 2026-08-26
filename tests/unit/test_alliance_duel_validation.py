@@ -23,9 +23,9 @@ def _key(i: int) -> ad.AllianceKey:
     return ad.AllianceKey.of(f"AL{i:02d}", "1234")
 
 
-def _row(week: int, i: int, seed: int | None = None, **kw) -> ad.AllianceWeek:
+def _row(week: int, i: int, ranking: int | None = None, **kw) -> ad.AllianceWeek:
     kw.setdefault("row_number", 100 + i)
-    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), seed=seed, **kw)
+    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), ranking=ranking, **kw)
 
 
 def _rules(findings) -> list[int]:
@@ -182,7 +182,7 @@ def test_rule_8_leaves_an_ordinary_bad_day_alone():
 
 def _own_alliance_sheet():
     """What an own-alliance tracker's sheet actually looks like: your rows and
-    the opponent you faced, no bracket, no seeds."""
+    the opponent you faced, no bracket, no rankings."""
     return [
         ad.AllianceWeek(
             league=LEAGUE,
@@ -221,7 +221,7 @@ def test_rule_4_flags_a_one_sided_opponent_reference():
     assert any("disagree" in f.message or "no row of their own" in f.message for f in findings)
 
 
-def test_rule_5_flags_duplicate_and_out_of_range_seeds():
+def test_rule_5_flags_duplicate_and_out_of_range_rankings():
     rows = [_row(1, 0, 3), _row(1, 1, 3), _row(1, 2, 99)]
     findings = [f for f in ad.validate(rows) if f.rule == 5]
     messages = " ".join(f.message for f in findings)
@@ -293,7 +293,7 @@ def test_skeleton_writes_the_whole_bracket_in_full_mode():
     rows = ad.skeleton_rows(LEAGUE, 1, MONDAY, _bracket_entries())
     assert len(rows) == ad.BRACKET_SIZE
     assert all(r.league == LEAGUE and r.week == 1 and r.week_date == MONDAY for r in rows)
-    assert sorted(r.seed for r in rows) == list(range(1, ad.BRACKET_SIZE + 1))
+    assert sorted(r.ranking for r in rows) == list(range(1, ad.BRACKET_SIZE + 1))
 
 
 def test_skeleton_writes_only_your_rows_in_own_alliance_mode():
@@ -325,11 +325,11 @@ def test_skeleton_rows_upsert_without_clobbering():
     assert plan.updates == ()
 
 
-# ── Week 1 pairing from seeds ─────────────────────────────────────────────────
+# ── Week 1 pairing from rankings ─────────────────────────────────────────────────
 
 
 def test_week_one_pairs_one_two_three_four():
-    pairing = ad.week_one_pairing_from_seeds(_bracket_entries())
+    pairing = ad.week_one_pairing_from_rankings(_bracket_entries())
     assert pairing[_key(0)] == _key(1)
     assert pairing[_key(2)] == _key(3)
     assert pairing[_key(14)] == _key(15)
@@ -340,17 +340,17 @@ def test_week_one_pairing_agrees_with_compute_week_pairing():
     # Same answer as the real algorithm, which is what lets setup pre-fill
     # Opponent before any result exists.
     entries = _bracket_entries()
-    from_seeds = ad.week_one_pairing_from_seeds(entries)
+    from_rankings = ad.week_one_pairing_from_rankings(entries)
     computed = ad.compute_week_pairing(
-        [ad.AllianceWeek(league=LEAGUE, week=1, alliance=k, seed=s) for k, s in entries], 1
+        [ad.AllianceWeek(league=LEAGUE, week=1, alliance=k, ranking=s) for k, s in entries], 1
     )
     for match in computed.matches:
-        assert from_seeds[match.a] == match.b
+        assert from_rankings[match.a] == match.b
 
 
-def test_week_one_pairing_skips_unseeded_alliances():
+def test_week_one_pairing_skips_unranked_alliances():
     entries = [(_key(0), 1), (_key(1), None), (_key(2), 2)]
-    pairing = ad.week_one_pairing_from_seeds(entries)
+    pairing = ad.week_one_pairing_from_rankings(entries)
     assert pairing == {_key(0): _key(2), _key(2): _key(0)}
 
 
@@ -412,7 +412,7 @@ def test_blank_rows_stamp_the_league_but_never_invent_an_alliance():
     # in-game bracket screen.
     assert line[header.index(ad.COL_TAG)] == ""
     assert line[header.index(ad.COL_WARZONE)] == ""
-    assert line[header.index(ad.COL_SEED)] == ""
+    assert line[header.index(ad.COL_RANKING)] == ""
 
 
 def test_blank_rows_follow_a_reordered_header():
@@ -432,9 +432,9 @@ def test_blank_rows_omit_a_date_that_is_not_known():
 # ── Rule 9: a bracket holds sixteen, never more ───────────────────────────────
 
 
-def _full_league(seeded=ad.BRACKET_SIZE):
-    """Week 1 rows for a complete bracket, seeds 1..16."""
-    return [_row(1, i, i + 1) for i in range(seeded)]
+def _full_league(ranked=ad.BRACKET_SIZE):
+    """Week 1 rows for a complete bracket, rankings 1..16."""
+    return [_row(1, i, i + 1) for i in range(ranked)]
 
 
 def test_a_full_bracket_of_sixteen_raises_no_roster_finding():
@@ -451,7 +451,7 @@ def test_a_part_filled_bracket_is_not_reported_as_wrong():
 def test_a_seventeenth_alliance_is_reported_once():
     # The failure this exists for: one tag entered two ways (a capital i and a
     # lowercase L read alike), which reaches the sheet through Discord with no
-    # Seed, and which rule 5 skips precisely because it has no Seed.
+    # Ranking, and which rule 5 skips precisely because it has no Ranking.
     rows = _full_league() + [_row(1, 99)]
     findings = [f for f in ad.validate(rows) if f.rule == 9]
     assert len(findings) == 1
@@ -471,14 +471,14 @@ def test_the_oversized_league_finding_names_nobody():
         assert tag not in findings[0].message
 
 
-def test_the_seedless_intruder_is_invisible_to_the_seed_rule():
+def test_the_unranked_intruder_is_invisible_to_the_ranking_rule():
     # Standing proof of why rule 9 had to exist rather than rule 5 being widened.
     rows = _full_league() + [_row(1, 99)]
     assert 5 not in _rules(ad.validate(rows))
 
 
-def test_a_seventeenth_seeded_alliance_reports_the_count_once():
-    # Seventeen alliances cannot hold sixteen distinct seeds, so rule 5 names
+def test_a_seventeenth_ranked_alliance_reports_the_count_once():
+    # Seventeen alliances cannot hold sixteen distinct rankings, so rule 5 names
     # the collision and rule 9 only has to state the count.
     rows = _full_league() + [_row(1, 99, 4)]
     findings = [f for f in ad.validate(rows) if f.rule == 9]
@@ -496,7 +496,9 @@ def test_the_roster_rule_does_not_run_in_own_alliance_mode():
 def test_one_league_being_oversized_does_not_flag_another():
     other = ad.LeagueKey("S36", "Diamond", "12 - 1")
     rows = _full_league() + [_row(1, 99)]
-    rows += [ad.AllianceWeek(league=other, week=1, alliance=_key(i), seed=i + 1) for i in range(4)]
+    rows += [
+        ad.AllianceWeek(league=other, week=1, alliance=_key(i), ranking=i + 1) for i in range(4)
+    ]
     findings = [f for f in ad.validate(rows) if f.rule == 9]
     assert len(findings) == 1
     assert "entered 17" in findings[0].message
@@ -509,10 +511,10 @@ def _bracket_text(n=ad.BRACKET_SIZE, start=0):
     return "\n".join(f"AL{i:02d} 1234" for i in range(start, start + n))
 
 
-def test_a_pasted_bracket_takes_its_seeds_from_line_order():
+def test_a_pasted_bracket_takes_its_rankings_from_line_order():
     parse = ad.parse_bracket(_bracket_text())
     assert parse.ok
-    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+    assert [e.ranking for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
     assert parse.entries[0].alliance == _key(0)
 
 
@@ -524,28 +526,28 @@ def test_the_shapes_an_officer_actually_pastes_all_read():
     assert [e.tag_display for e in parse.entries[:3]] == ["KTZ", "IMI", "RUDI"]
 
 
-def test_blank_lines_between_alliances_are_not_seeds():
+def test_blank_lines_between_alliances_are_not_rankings():
     parse = ad.parse_bracket("\n\n".join(f"AL{i:02d} 1234" for i in range(ad.BRACKET_SIZE)))
     assert parse.ok
-    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+    assert [e.ranking for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
 
 
-def test_a_stated_seed_is_checked_against_its_position_not_trusted():
+def test_a_stated_ranking_is_checked_against_its_position_not_trusted():
     # A paste that arrived out of order is the mistake worth catching; honouring
     # the number would hide it behind a bracket that looks fine.
     parse = ad.parse_bracket("1 AL00 1234\n3 AL01 1234\n" + _bracket_text(14, start=2))
     assert not parse.ok
     assert parse.problems == (
-        "Line 2 is numbered 3. Lines are read in seed order, so this "
-        "one is seed 2. Reorder them or drop the numbers.",
+        "Line 2 is numbered 3. Lines are read in ranking order, so this "
+        "one is ranking 2. Reorder them or drop the numbers.",
     )
 
 
-def test_a_stated_seed_that_agrees_with_its_position_is_accepted():
+def test_a_stated_ranking_that_agrees_with_its_position_is_accepted():
     text = "\n".join(f"{i + 1} AL{i:02d} 1234" for i in range(ad.BRACKET_SIZE))
     parse = ad.parse_bracket(text)
     assert parse.ok, parse.problems
-    assert [e.seed for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
+    assert [e.ranking for e in parse.entries] == list(range(1, ad.BRACKET_SIZE + 1))
 
 
 def test_a_line_missing_its_warzone_names_the_line():
@@ -585,7 +587,7 @@ def test_typos_are_reported_ahead_of_the_count_they_cause():
 def test_own_alliance_mode_asks_for_one_line():
     parse = ad.parse_bracket("AL00 1234", expect=1)
     assert parse.ok
-    assert parse.entries[0].seed == 1
+    assert parse.entries[0].ranking == 1
 
 
 # ── Power, gift level and members on the bracket lines ────────────────────────
@@ -630,7 +632,7 @@ def test_a_sixth_field_is_refused_rather_than_ignored():
     assert "Line 1" in parse.problems[0]
 
 
-def test_a_numeric_tag_is_not_mistaken_for_a_seed_number():
+def test_a_numeric_tag_is_not_mistaken_for_a_ranking_number():
     # `1 714 26.8b` is an alliance whose tag is "1", not line 1 of a numbered
     # paste. A tag carries at least one non-digit, which is what tells them apart.
     parse = ad.parse_bracket("1 714 26853240157\n" + _bracket_text(15, start=1))

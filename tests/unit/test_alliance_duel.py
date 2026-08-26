@@ -26,8 +26,8 @@ def _key(i: int) -> ad.AllianceKey:
     return ad.AllianceKey.of(f"AL{i:02d}", "1234")
 
 
-def _row(week: int, i: int, seed: int | None = None, **kw) -> ad.AllianceWeek:
-    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), seed=seed, **kw)
+def _row(week: int, i: int, ranking: int | None = None, **kw) -> ad.AllianceWeek:
+    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), ranking=ranking, **kw)
 
 
 # ── Fixed game constants ──────────────────────────────────────────────────────
@@ -351,7 +351,7 @@ def test_plan_upsert_never_writes_a_column_the_caller_has_nothing_for():
     # than being written as blanks over whatever the user might have there.
     assert appended[headers.index(ad.COL_POWER)] == ""
     assert appended[headers.index(ad.COL_NOTES)] == ""
-    assert appended[headers.index(ad.COL_SEED)] == "1"
+    assert appended[headers.index(ad.COL_RANKING)] == "1"
 
 
 def test_plan_upsert_appends_each_new_key_once():
@@ -409,11 +409,11 @@ def test_build_profile_takes_the_latest_non_blank_value():
 
 
 def _full_bracket(weeks=1):
-    """Sixteen seeded alliances with skeleton rows for `weeks` weeks."""
+    """Sixteen ranked alliances with skeleton rows for `weeks` weeks."""
     return [_row(w, i, i + 1) for w in range(1, weeks + 1) for i in range(ad.BRACKET_SIZE)]
 
 
-def test_week_one_pairs_straight_off_the_seeds():
+def test_week_one_pairs_straight_off_the_rankings():
     pairing = ad.compute_week_pairing(_full_bracket(), 1)
     assert isinstance(pairing, ad.WeekPairing)
     assert [(m.a, m.b) for m in pairing.matches] == [
@@ -658,30 +658,30 @@ def test_projection_reports_an_incomplete_bracket_rather_than_raising():
     assert result.reason == "roster_size"
 
 
-def test_projection_requires_unique_seeds_one_to_sixteen():
+def test_projection_requires_unique_rankings_one_to_sixteen():
     rows = _full_bracket()
-    rows[0].seed = 2  # duplicate
+    rows[0].ranking = 2  # duplicate
     result = ad.project_own_path(_key(1), rows)
     assert isinstance(result, ad.BracketIncomplete)
-    assert result.reason == "missing_seeds"
+    assert result.reason == "missing_rankings"
 
     rows = _full_bracket()
-    rows[5].seed = None
+    rows[5].ranking = None
     result = ad.project_own_path(_key(1), rows)
     assert isinstance(result, ad.BracketIncomplete)
-    assert result.reason == "missing_seeds"
+    assert result.reason == "missing_rankings"
 
 
 # ── The cross-check ───────────────────────────────────────────────────────────
 
 
 def _simulate_league(rng: random.Random) -> list[ad.AllianceWeek]:
-    """A fully-resolved randomized league: seeds shuffled, winners random."""
-    seeds = list(range(1, ad.BRACKET_SIZE + 1))
-    rng.shuffle(seeds)
+    """A fully-resolved randomized league: rankings shuffled, winners random."""
+    rankings = list(range(1, ad.BRACKET_SIZE + 1))
+    rng.shuffle(rankings)
     rows: list[ad.AllianceWeek] = []
     for week in range(1, ad.LEAGUE_WEEKS + 1):
-        rows += [_row(week, i, seeds[i]) for i in range(ad.BRACKET_SIZE)]
+        rows += [_row(week, i, rankings[i]) for i in range(ad.BRACKET_SIZE)]
         _play_out(rows, week, winner_of=lambda m: rng.choice([m.a, m.b]))
     return rows
 

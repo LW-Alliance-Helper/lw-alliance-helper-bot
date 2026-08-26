@@ -239,21 +239,21 @@ def _scout_options(state) -> list[discord.SelectOption]:
     """Alliances worth offering, most useful first.
 
     Ordered by how much the reader is likely to want them: this week's opponent
-    first, then the rest of the bracket by seed. Someone opening Scout mid-week
+    first, then the rest of the bracket by ranking. Someone opening Scout mid-week
     is usually asking about the alliance they are currently playing.
     """
     rows = state.league_rows()
-    seeds: dict[ad.AllianceKey, int] = {}
+    rankings: dict[ad.AllianceKey, int] = {}
     for row in rows:
-        if row.seed is not None:
-            seeds.setdefault(row.alliance, row.seed)
+        if row.ranking is not None:
+            rankings.setdefault(row.alliance, row.ranking)
 
     opponent = state.own_match(state.week)
     alliances = sorted(
         {r.alliance for r in rows},
         key=lambda a: (
             0 if a == opponent else (1 if a != state.own else 2),
-            seeds.get(a, ad.BRACKET_SIZE + 1),
+            rankings.get(a, ad.BRACKET_SIZE + 1),
             a,
         ),
     )
@@ -266,8 +266,8 @@ def _scout_options(state) -> list[discord.SelectOption]:
         elif alliance == state.own:
             description = "Your alliance"
         else:
-            seed = seeds.get(alliance)
-            description = f"Seed {seed}" if seed else "No seed recorded"
+            ranking = rankings.get(alliance)
+            description = f"Ranking {ranking}" if ranking else "No ranking recorded"
         options.append(
             discord.SelectOption(
                 label=label,

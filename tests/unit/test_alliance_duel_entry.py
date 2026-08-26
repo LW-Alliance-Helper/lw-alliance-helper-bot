@@ -37,12 +37,12 @@ def _key(tag: str) -> ad.AllianceKey:
     return ad.AllianceKey.of(tag, OWN_WZ)
 
 
-def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
+def _row(tag, week=1, ranking=None, week_date=MONDAY, **kw):
     return ad.AllianceWeek(
         league=LEAGUE,
         week=week,
         alliance=_key(tag),
-        seed=seed,
+        ranking=ranking,
         week_date=week_date,
         tag_display=tag,
         **kw,
@@ -52,8 +52,8 @@ def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
 def _bracket(week=1, **per_alliance):
     tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
     return [
-        _row(tag, week=week, seed=seed, **per_alliance.get(tag, {}))
-        for seed, tag in enumerate(tags, start=1)
+        _row(tag, week=week, ranking=ranking, **per_alliance.get(tag, {}))
+        for ranking, tag in enumerate(tags, start=1)
     ]
 
 
@@ -171,10 +171,10 @@ def test_next_week_rows_carry_identity_forward_and_predict_the_opponent():
     generated = ad.next_week_rows(rows, 1)
     assert len(generated) == ad.BRACKET_SIZE
     assert {r.week for r in generated} == {2}
-    # Season, tier, group, seed, tag and warzone all come forward, so the only
+    # Season, tier, group, ranking, tag and warzone all come forward, so the only
     # thing left to type is what actually happened.
     assert all(r.league == LEAGUE for r in generated)
-    assert sorted(r.seed for r in generated) == list(range(1, ad.BRACKET_SIZE + 1))
+    assert sorted(r.ranking for r in generated) == list(range(1, ad.BRACKET_SIZE + 1))
     assert all(r.tag_display for r in generated)
     # The predicted pairing is written rather than left blank: a correction is
     # the signal that the pairing algorithm needs a look.
@@ -300,7 +300,7 @@ def test_row_for_write_carries_identity_without_dragging_stale_values():
     rows = _bracket(**{OWN_TAG: {"power": 400_000_000, "members": 92}})
     row = entry._row_for_write(_state(rows), OWN, 1)
     assert row.alliance == OWN
-    assert row.seed == 1
+    assert row.ranking == 1
     assert row.week_date == MONDAY
     assert row.power is None
     assert row.members is None
@@ -390,7 +390,7 @@ def test_entry_copy_carries_no_em_dashes_and_no_internals():
 def _entries(tags=None):
     tags = tags or ([OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)])
     return tuple(
-        ad.BracketEntry(alliance=_key(t), seed=i, tag_display=t, warzone_display=OWN_WZ)
+        ad.BracketEntry(alliance=_key(t), ranking=i, tag_display=t, warzone_display=OWN_WZ)
         for i, t in enumerate(tags, start=1)
     )
 
@@ -442,7 +442,7 @@ def test_starting_and_advancing_never_want_the_same_slot():
         ), f"both offered after week {week}"
 
 
-async def test_a_new_league_is_written_stamped_and_seeded(_captured):
+async def test_a_new_league_is_written_stamped_and_ranked(_captured):
     state = _state([])
     league = ad.LeagueKey("S36", "Diamond", "12 - 1")
     ok, message = await entry.start_new_league(state, league, MONDAY, _entries())
@@ -452,11 +452,11 @@ async def test_a_new_league_is_written_stamped_and_seeded(_captured):
     assert {r.league for r in _captured} == {league}
     assert {r.week for r in _captured} == {1}
     assert {r.week_date for r in _captured} == {MONDAY}
-    assert sorted(r.seed for r in _captured) == list(range(1, ad.BRACKET_SIZE + 1))
+    assert sorted(r.ranking for r in _captured) == list(range(1, ad.BRACKET_SIZE + 1))
 
 
-async def test_week_1_opponents_are_left_for_the_seeds_to_say(_captured):
-    # Sixteen cells restating what the seeds already imply. `compute_week_pairing`
+async def test_week_1_opponents_are_left_for_the_rankings_to_say(_captured):
+    # Sixteen cells restating what the rankings already imply. `compute_week_pairing`
     # derives them on every read, so writing them would buy nothing and could
     # disagree with itself.
     state = _state([])
@@ -509,7 +509,7 @@ async def test_the_bracket_lines_carry_power_gift_and_members_onto_the_rows(_cap
     entries = (
         ad.BracketEntry(
             alliance=OWN,
-            seed=1,
+            ranking=1,
             tag_display=OWN_TAG,
             warzone_display=OWN_WZ,
             power=26853240157,
@@ -535,7 +535,7 @@ async def test_the_acknowledgement_stops_asking_once_nothing_is_missing(_capture
     full = tuple(
         ad.BracketEntry(
             alliance=e.alliance,
-            seed=e.seed,
+            ranking=e.ranking,
             tag_display=e.tag_display,
             warzone_display=e.warzone_display,
             power=30_000_000_000,
@@ -556,7 +556,7 @@ async def test_a_part_filled_bracket_says_how_many_are_short(_captured):
     entries = list(_entries())
     entries[0] = ad.BracketEntry(
         alliance=entries[0].alliance,
-        seed=1,
+        ranking=1,
         tag_display=OWN_TAG,
         warzone_display=OWN_WZ,
         power=30_000_000_000,
@@ -667,7 +667,7 @@ async def test_a_mid_league_setup_leaves_the_hub_on_a_live_week(_captured):
 
 
 async def test_no_week_carries_a_pairing_it_could_not_know(_captured):
-    # Week 1's follows from the seeds. A later week's cannot be known until the
+    # Week 1's follows from the rankings. A later week's cannot be known until the
     # week before it is recorded, so a written guess would be a confident lie.
     state = _state([])
     await entry.start_new_league(
@@ -689,7 +689,7 @@ async def test_the_alliances_short_of_data_are_counted_once_not_once_a_week(_cap
 
 def test_the_week_view_pairs_from_the_whole_league_not_one_week():
     """`compute_week_pairing` weighs every prior result, so handing it a single
-    week scores everyone zero and reproduces week 1's seed order for every week
+    week scores everyone zero and reproduces week 1's ranking order for every week
     of the league."""
     rows = _bracket(week=1)
     _play_week(rows, 1, lambda m: m.b)
@@ -699,16 +699,16 @@ def test_the_week_view_pairs_from_the_whole_league_not_one_week():
     truth = ad.compute_week_pairing(rows, 2)
     assert isinstance(truth, ad.WeekPairing)
     real = state.display_name(truth.match_for(OWN).other(OWN))
-    seed_order = state.display_name(_key("A02"))
-    assert real != seed_order, "fixture is not exercising a reshuffle"
+    ranking_order = state.display_name(_key("A02"))
+    assert real != ranking_order, "fixture is not exercising a reshuffle"
 
     # The line naming your own matchup, not the tag appearing anywhere in a
-    # list of eight. The stale version put the seed-order opponent here.
+    # list of eight. The stale version put the ranking-order opponent here.
     own_line = next(
         ln for ln in _text(hub.week_embed(state, 2)).splitlines() if state.display_name(OWN) in ln
     )
     assert real in own_line
-    assert seed_order not in own_line
+    assert ranking_order not in own_line
 
 
 def test_a_week_whose_predecessor_is_unrecorded_says_so_rather_than_guessing():

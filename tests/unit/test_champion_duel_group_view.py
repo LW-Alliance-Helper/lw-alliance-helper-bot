@@ -1921,3 +1921,45 @@ def test_the_alliance_control_is_absent_without_a_champion_duel(cd_db):
     )
 
     assert hub.CD_BTN_ALLIANCE not in [getattr(i, "label", None) for i in view.children]
+
+
+def test_an_edit_is_acknowledged_as_an_update_not_as_a_refused_duplicate(cd_db):
+    """Found by `/code-review`. The add flow's note fires on every edit — the
+    member's own row always matches `find_registrants` — so it told somebody
+    the write was declined when it landed."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Selfedit", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=21), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    note = modal._note(state["player"], existing=True)
+
+    assert note == hub._EDIT_ME_DONE.format(player=hub._label(state["player"]))
+    assert "duplicate" not in note
+
+
+def test_an_edit_that_lands_on_a_new_account_says_so_rather_than_orphaning_it(cd_db):
+    """A registrant is keyed on (name, warzone) and cannot be renamed, and both
+    are editable boxes. A member whose in-game name changed creates a second
+    account and their claim stays on the first, so anything they entered lands
+    on a row nobody holds. Found by `/code-review`."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=22), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    renamed = db.upsert_registrant("Newname", server="738", alliance="ZZQ", thp=1)
+    note = modal._note(renamed, existing=False)
+
+    assert hub._label(renamed) in note
+    assert hub._label(state["player"]) in note, "the account they still hold is named"
+    assert db.get_claimed_registrant(22)["id"] == held["id"], "the claim did not follow"
+
+
+def test_the_add_flow_keeps_its_own_two_notes(cd_db):
+    """The edit path is the branch, not the replacement."""
+    modal = hub._AddPlayerModal(True)
+    player = db.upsert_registrant("Freshadd", server="738")
+
+    assert "Added" in modal._note(player, existing=False)
+    assert "duplicate" in modal._note(player, existing=True)

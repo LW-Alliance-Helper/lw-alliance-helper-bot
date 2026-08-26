@@ -465,6 +465,31 @@ CD_BTN_EDIT_ME = "✏️ Edit my information"
 #: buttons that open them, which are `🔗 This is my account` and this.
 _EDIT_ME_TITLE = "Your information"
 
+#: ⚠️ NOT SIGNED OFF, on the same terms as the two above. Variants in the pull
+#: request body.
+#:
+#: **The add flow's own note is wrong here and `/code-review` found it.** It
+#: says *"was already here. Opening them instead of adding a duplicate"*, which
+#: fires on every edit -- the member's own row always matches -- and tells
+#: somebody the write was declined when it landed.
+_EDIT_ME_DONE = "✅ Updated **{player}**."
+
+#: ⚠️ NOT SIGNED OFF, and it reports a real outcome rather than refusing one.
+#:
+#: **A registrant is keyed on (name, warzone) and cannot be renamed.** Both are
+#: editable boxes on this modal, so a member whose in-game name changed types
+#: the new one and `upsert_registrant` INSERTs a second account -- their claim
+#: stays on the first, and anything they just entered lands on a row nobody
+#: holds. Silently is how that becomes an orphan nobody can trace.
+#:
+#: **It names no exit and does not need to.** The card this rides on carries
+#: the claim pair already, so `🔗 This is my account` is on screen underneath
+#: for somebody who really has moved.
+_EDIT_ME_NEW = (
+    "ℹ️ **{player}** is a new account, because the name or warzone changed. "
+    "**{held}** is still your account."
+)
+
 #: The round we hold nothing for. Not an error: a Champion Duel that has not
 #: reached its semifinals has no group to stand in, and saying so plainly is
 #: the honest state rather than an empty table.
@@ -2602,8 +2627,29 @@ def _edit_me_modal(player: dict, *, can_write: bool, grouping: dict | None):
         thp=player.get("thp"),
         troop_level=player.get("troop_level"),
         grouping=grouping,
-        title=_EDIT_ME_TITLE,
+        editing=player,
     )
+
+
+async def _open_edit_me(inter: discord.Interaction, *, can_write: bool, grouping: dict | None):
+    """`✏️ Edit my information`, opened on the claim as it stands right now.
+
+    READ BEFORE RESPONDING, not after. A modal has to be the first response to
+    an interaction so this cannot defer first, and one indexed SQLite read is
+    well inside the three seconds -- `_on_record` takes the same route for the
+    same reason.
+
+    **Fresh rather than off the view.** Both views that carry this button live
+    ten and fifteen minutes, and a claim can move from another message inside
+    that window -- `ClaimResultView` has a release button that does exactly
+    that. A snapshot taken when the message was sent would prefill an account
+    the reader gave up, and then write to it. Found by `/code-review`.
+    """
+    player = await asyncio.to_thread(db.get_claimed_registrant, inter.user.id)
+    if player is None:
+        await inter.response.send_message(claim_lib.CLAIM_NOT_LINKED, ephemeral=True)
+        return
+    await inter.response.send_modal(_edit_me_modal(player, can_write=can_write, grouping=grouping))
 
 
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
@@ -2631,11 +2677,16 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         alliance: str | None = None,
         thp=None,
         troop_level=None,
-        title: str | None = None,
+        editing: dict | None = None,
     ):
-        super().__init__(**({"title": title[:45]} if title else {}))
+        # `editing` is the registrant this was opened on, and it carries the
+        # whole difference between the two flows: the title, the
+        # acknowledgement, and whether landing on a different account is the
+        # point or an accident. None is the add flow, which is the default.
+        super().__init__(**({"title": _EDIT_ME_TITLE[:45]} if editing else {}))
         self.can_write = can_write
         self.grouping = grouping
+        self.editing = editing
         # Safe to set on self: `Modal._init_children` deepcopies each declared
         # item onto the instance, so a default here cannot leak to the next
         # person who opens this modal.
@@ -2694,6 +2745,27 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         ),
     )
 
+    def _note(self, player: dict, *, existing: bool) -> str:
+        """What just happened, in the terms of the flow that opened this.
+
+        The add flow's two notes are about a player the caller may not have
+        held; the edit flow's are about the caller's own row, where "already
+        here" is the normal case rather than the interesting one.
+        """
+        if self.editing is None:
+            return (
+                f"ℹ️ **{_label(player)}** was already here. "
+                "Opening them instead of adding a duplicate."
+                if existing
+                else f"✅ Added **{_label(player)}**."
+            )
+        if player.get("id") != self.editing.get("id"):
+            return _EDIT_ME_NEW.format(
+                player=discord.utils.escape_markdown(_label(player)),
+                held=discord.utils.escape_markdown(_label(self.editing)),
+            )
+        return _EDIT_ME_DONE.format(player=discord.utils.escape_markdown(_label(player)))
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -2746,11 +2818,7 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         # also lets somebody who only knows a name stop after one screen.
         aside = ""
 
-        note = (
-            f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
-            if existing
-            else f"✅ Added **{_label(player)}**."
-        )
+        note = self._note(player, existing=bool(existing))
         await send_player_card(
             interaction,
             player,
@@ -5751,6 +5819,9 @@ class _StandingClaimView(discord.ui.View):
         self.user_id = user_id
         self.can_write = can_write
         self.grouping = grouping
+        # WHETHER THE BUTTON IS THERE, not what it opens on. `_open_edit_me`
+        # re-reads the claim when it is pressed, so this is only the question
+        # of whether there was a "my" when the message was built.
         self.player = player
         self.message: discord.Message | None = None
 
@@ -5790,9 +5861,7 @@ class _StandingClaimView(discord.ui.View):
         )
 
     async def _on_edit_me(self, inter: discord.Interaction):
-        await inter.response.send_modal(
-            _edit_me_modal(self.player, can_write=self.can_write, grouping=self.grouping)
-        )
+        await _open_edit_me(inter, can_write=self.can_write, grouping=self.grouping)
 
 
 def standing_opener(standing: dict | None) -> str:
@@ -6616,7 +6685,7 @@ class _AllianceView(discord.ui.View):
 
         `UX.md` principle 3. The dead ends here are different gaps and take
         different doors: nobody claimed is the claim flow, a claimed account
-        with no tag is `➕ Add a player` re-entering the same name with one, an
+        with no tag is `✏️ Edit my information` opened on their own row, an
         account in a different Champion Duel is the claim again, and a tag we
         hold nobody for is `📥 Record a group`.
         """
@@ -6753,13 +6822,7 @@ class _AllianceView(discord.ui.View):
         )
 
     async def _on_edit_me(self, inter: discord.Interaction):
-        await inter.response.send_modal(
-            _edit_me_modal(
-                self.state.get("player") or {},
-                can_write=self.can_write,
-                grouping=self.grouping,
-            )
-        )
+        await _open_edit_me(inter, can_write=self.can_write, grouping=self.grouping)
 
     async def _on_record(self, inter: discord.Interaction):
         # Read before responding, not after: a modal has to be the first
@@ -8139,10 +8202,8 @@ class ChampionDuelHubView(discord.ui.View):
         # point it at a different account from right here, and claiming a new
         # one moves the claim (`CLAIM_MOVED`). Nothing has to be detected.
         #
-        # The player rides along so `CD_BTN_EDIT_ME` has a row to open on. It
-        # comes off the read above rather than off `self`, for the same reason
-        # the standing itself does: a claim can move while this hub is on
-        # screen, and the modal would prefill an account they gave up.
+        # The player rides along so `CD_BTN_EDIT_ME` is offered at all; the
+        # modal it opens re-reads the claim when it is pressed.
         view = _StandingClaimView(
             user_id=inter.user.id,
             can_write=self.can_write,

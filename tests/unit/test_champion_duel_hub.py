@@ -3050,3 +3050,48 @@ def test_the_edit_control_locks_rather_than_hides_where_the_reader_cannot_write(
     assert len(edit) == 1
     assert edit[0].disabled
     assert edit[0].label.startswith("🔒")
+
+
+async def test_the_edit_control_reads_the_claim_when_it_is_pressed(standing_db):
+    """Found by `/code-review`. Both views carrying this button live ten and
+    fifteen minutes, and `ClaimResultView` can release a claim from another
+    message inside that window. A snapshot taken when the message was sent
+    would prefill an account the reader gave up, and then write to it.
+    """
+    first = _claim(standing_db, which=3)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=db.get_claimed_registrant(ADMIN_ID),
+    )
+
+    moved = _claim(standing_db, which=6)
+    inter = _interaction()
+    await view._on_edit_me(inter)
+
+    assert moved != first
+    opened = inter.response.send_modal.await_args.args[0]
+    assert opened.name.default == db.get_registrant(moved)["display_name"]
+    inter.response.send_message.assert_not_awaited()
+
+
+async def test_the_edit_control_refuses_where_the_claim_has_gone(standing_db):
+    """Released while the hub sat on screen. The refusal is the claim module's
+    own, not a second wording of it."""
+    rid = _claim(standing_db)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=db.get_claimed_registrant(ADMIN_ID),
+    )
+
+    db.release_claim(str(ADMIN_ID))
+    inter = _interaction()
+    await view._on_edit_me(inter)
+
+    assert rid
+    inter.response.send_modal.assert_not_awaited()
+    inter.response.send_message.assert_awaited_once()
+    assert inter.response.send_message.await_args.args[0] == claim_lib.CLAIM_NOT_LINKED

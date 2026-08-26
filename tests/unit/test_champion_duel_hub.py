@@ -219,7 +219,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     rounds = next(
         f.value
         for f in hub.build_player_embed(player, None, grouping=mine).fields
-        if f.name == "Rounds"
+        if f.name == hub.FIELD_STAGES
     )
     assert "Group D (not your Champion Duel)" in rounds
 
@@ -227,7 +227,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     theirs_view = next(
         f.value
         for f in hub.build_player_embed(player, None, grouping=theirs).fields
-        if f.name == "Rounds"
+        if f.name == hub.FIELD_STAGES
     )
     assert "Group D" in theirs_view and "different Champion Duel" not in theirs_view
 
@@ -1268,8 +1268,8 @@ def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
     assert embed.title.startswith("[DxL] ")
     assert "738" in embed.title
     names = [f.name for f in embed.fields]
-    assert names.index("Squads") < names.index("Rounds")
-    assert "Group" in next(f.value for f in embed.fields if f.name == "Rounds")
+    assert names.index("Squads") < names.index(hub.FIELD_STAGES)
+    assert "Group" in next(f.value for f in embed.fields if f.name == hub.FIELD_STAGES)
 
 
 # ── Record a line-up ──────────────────────────────────────────────────────────
@@ -2132,7 +2132,7 @@ def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
 
     embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
 
-    rounds = next(f.value for f in embed.fields if f.name == "Rounds")
+    rounds = next(f.value for f in embed.fields if f.name == hub.FIELD_STAGES)
     assert "**Knockout Stage** · Made it to Top 16" in rounds
     assert "Rank 11" not in rounds, "the placement replaces the bare rank, not sits beside it"
 
@@ -2887,7 +2887,7 @@ def test_the_worked_out_half_states_the_numbers_and_passes_no_judgement(standing
         hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
         hub._STANDING_WORKED_OUT,
     )
-    assert "Through to the next round" in worked
+    assert hub._STANDING_THROUGH in worked
     assert "Projected finish" in worked
     for narration in ("in the running", "long shot", "band", "reward", "wins still pay"):
         assert narration not in worked.lower(), (

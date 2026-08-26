@@ -456,7 +456,7 @@ def test_the_card_shows_every_round_a_player_has_reached(cd_db):
 
     embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
 
-    rounds = next(f.value for f in embed.fields if f.name == "Rounds")
+    rounds = next(f.value for f in embed.fields if f.name == hub.FIELD_STAGES)
     assert "**Qualifiers** · Group M · Rank 1" in rounds
     # A draw is not a result, so a round nobody has played carries no rank.
     assert "**Semi-finals** · Group D" in rounds

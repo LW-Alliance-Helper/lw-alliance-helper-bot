@@ -356,6 +356,20 @@ _ODDS_BASIS = (
     "we have not seen are sampled, so these carry that uncertainty."
 )
 
+#: What the odds table was computed over, and what its two columns mean.
+#:
+#: **Two constants rather than one sentence**, and the split is where the
+#: fields are: a test can assert the trial count line without knowing how many
+#: get out of a group, and the column line without knowing the trial count.
+#: They were f-strings inside `build_odds_embed` until the 2026-08-26 sweep
+#: moved *round* to *stage* and the test guarding them carried its own copy of
+#: the words -- the `_ODDS_AS_OF` failure, one surface along.
+_ODDS_OVER = "Over {trials:,} simulations of the stage."
+_ODDS_COLUMNS = (
+    "The first column gives the odds of finishing in the top **{advance}** and "
+    "going through, the second the odds of winning the group outright."
+)
+
 #: The same, for the bracket, which is averaged over seedings rather than run
 #: against the one anybody will get.
 _BRACKET_BASIS = (
@@ -402,7 +416,7 @@ _INTEL_NEEDS_BOTH = "⚠️ I need both players for a head to head."
 #: 3 puts the exit on the message, and `_StandingClaimView` carries it.
 _STANDING_UNCLAIMED = (
     "We do not know which of these players is you.\n\n"
-    "Tell us once and this opens on your own round every time."
+    "Tell us once and this opens on your own stage every time."
 )
 
 #: The control that opens `champion_duel_claim.ClaimModal` from a surface with
@@ -419,7 +433,7 @@ CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
 #: The round we hold nothing for. Not an error: a Champion Duel that has not
 #: reached its semifinals has no group to stand in, and saying so plainly is
 #: the honest state rather than an empty table.
-_STANDING_NO_ROUND = "We have not recorded a round for you yet. You can add it with **{record}**."
+_STANDING_NO_ROUND = "We have not recorded a stage for you yet. You can add it with **{record}**."
 
 #: The free half's heading. Kevin's, 2026-08-25, over "What we recorded".
 #:
@@ -456,14 +470,17 @@ _STANDING_NOTHING_RECORDED = "Nothing recorded yet."
 #: this is the first inside an embed field.
 _STANDING_READ_AT = "-# Updated {when}."
 
-#: The round has no model, which today is the qualifiers and only them.
+#: The stage has no model, which today is the qualifiers and only them.
 #:
-#: **It says which round rather than "this round".** A reader who has just
-#: switched the picker to the qualifiers needs to know it is the round and not
-#: the bot, and `STAGES_WITH_A_MODEL` is a fact about rounds.
+#: **It names the stage rather than saying "this stage".** A reader who has
+#: just switched the picker to the qualifiers needs to know it is the stage and
+#: not the bot, and `STAGES_WITH_A_MODEL` is a fact about stages.
+#:
+#: The `{round}` field keeps its name. The 2026-08-26 sweep moved the copy and
+#: left every identifier alone, so it collides with nothing else in flight.
 _STANDING_NO_MODEL = (
     "We do not model the **{round}**, so there is no projection for it. "
-    "Your rank and kill score above are what the round is scored on."
+    "Your rank and kill score above are what the stage is scored on."
 )
 
 # THE VERDICT AND THE REWARD BAND ARE GONE, and this note is here so nobody
@@ -511,6 +528,14 @@ _STANDING_NO_MODEL = (
 #: button and it is the claim. Kevin's call, made knowing the redesign; do not
 #: re-add a route to a control that is about to move.
 _STANDING_NOT_WORKED_OUT = "We do not have a projection for your group yet."
+
+#: The first of the two figures `🏅 Your standing` opens on.
+#:
+#: **Getting out of your group is getting to the next stage**, which is the
+#: word the game uses for the qualifiers, the semi-finals and the knockouts.
+#: It said *round* until 2026-08-26 and one test carried the words rather than
+#: reading them, so the sweep made it a constant on the way past.
+_STANDING_THROUGH = "Through to the next stage"
 
 #: The upsell, on the embed rather than on the disabled button, which cannot
 #: carry a reason. It names what the model adds over the free half sitting
@@ -635,12 +660,12 @@ _ALLIANCE_HELD = "{count} on file."
 #: **Last, and named for the gap rather than for the people.** These are held
 #: accounts nobody has placed, so the fact is about our record; a name like
 #: "Not playing" would be a claim about the player that nothing supports.
-_ALLIANCE_UNPLACED = "No round recorded"
+_ALLIANCE_UNPLACED = "No stage recorded"
 
 #: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD, on the same terms as the heading above
 #: it. What the unplaced accounts need, said once under them rather than once
 #: per row.
-_ALLIANCE_UNPLACED_BODY = "We hold these accounts but no round for them. **{record}** places them."
+_ALLIANCE_UNPLACED_BODY = "We hold these accounts but no stage for them. **{record}** places them."
 
 #: The Premium half, named for the thing rather than the act,
 #: the same way `_STANDING_WORKED_OUT` is.
@@ -683,7 +708,7 @@ CD_BTN_READS = "🎯 Head to head for everyone"
 #: something they had already found.
 _READS_ROUND_ONLY = (
     "Head to head covers the **{round}**, where everyone in a group plays "
-    "everyone else. We cannot say who meets who in the other rounds."
+    "everyone else. We cannot say who meets who in the other stages."
 )
 
 #: The read's own opening line: which group it is about, and how many
@@ -1285,6 +1310,20 @@ FIELD_OTHERS = "Other line-ups & winning odds"
 FIELD_FIX = "What would fix this"
 FIELD_ANYWAY = "Worth recording anyway"
 FIELD_WORTH = "Best and worst case"
+#: The player card's list of where they have got to.
+#:
+#: A constant because the 2026-08-26 sweep moved it and five tests named the
+#: old words, which is the `_ODDS_AS_OF` failure waiting to happen again.
+FIELD_STAGES = "Stages"
+
+#: The question every stage picker asks, on the record modal and on the group
+#: view's own select.
+#:
+#: **The one picker question that is a constant, and only because it moved.**
+#: Its siblings -- `Which group?`, `Which Champion Duel?`, `Which alliance?` --
+#: are still literals at their call sites; the 2026-08-26 sweep changed this
+#: one in two places and six tests, which is what the constant is for.
+_PICK_STAGE = "Which stage?"
 
 
 def _card_path(button: str) -> str:
@@ -1972,7 +2011,7 @@ def build_player_embed(
         for stage, row in (player.get("stages") or {}).items()
     )
     if rounds:
-        embed.add_field(name="Rounds", value=rounds[:1024], inline=False)
+        embed.add_field(name=FIELD_STAGES, value=rounds[:1024], inline=False)
 
     if squads:
         embed.set_footer(text=_squad_basis(squads))
@@ -1998,7 +2037,7 @@ class _PlaceInGroupModal(discord.ui.Modal, title="Which group are they in?"):
         self.grouping = grouping
 
     stage = discord.ui.Label(
-        text="Which round?",
+        text=_PICK_STAGE,
         component=discord.ui.Select(
             options=[
                 discord.SelectOption(label=db.STAGE_LABELS[key], value=key)
@@ -4228,6 +4267,23 @@ class _RetryGroupingView(discord.ui.View):
 # choice in the words it was offered in rather than paraphrasing it.
 _RECORDING_LABELS = {"draw": "Initial Seed", "final": "Final Standings"}
 
+#: The two shapes of nothing on the group view, and they are not the same
+#: nothing. `_GROUP_NO_STAGE` is a stage the picker offers that nobody has ever
+#: recorded; `_GROUP_NO_MEMBERS` is a group inside a stage we do hold, which
+#: the reader picked a letter to reach.
+#:
+#: **Both end on the same door, and the door is a live button on the view as
+#: well as a name in the sentence.** Constants since 2026-08-26: the first said
+#: *round*, two tests named the phrase, and splitting a pair that is decided
+#: together is what `DESIGN.md` rule 6 exists to stop.
+_GROUP_NO_STAGE = (
+    "We do not have anything recorded for this stage yet.\n\nYou can add it with **{record}**."
+)
+_GROUP_NO_MEMBERS = (
+    "We do not have anyone recorded for this group.\n\n"
+    "Anyone can paste the standings in with **{record}**."
+)
+
 # What a line resolved to. `problem` is a parse failure, `skipped` is the user
 # deciding this one is not worth chasing; both are excluded from the write and
 # neither blocks it.
@@ -4418,7 +4474,7 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         component=discord.ui.Select(options=[discord.SelectOption(label="_", value="_")]),
     )
     round_ = discord.ui.Label(
-        text="Round",
+        text="Stage",
         component=discord.ui.Select(
             options=[discord.SelectOption(label=db.STAGE_LABELS[k], value=k) for k in db.STAGES]
         ),
@@ -4927,7 +4983,7 @@ def _group_title(stage: str, label: str | None) -> str:
     arrive already holding. The knockouts have no letter at all: 32 players, one
     field, and `db.get_groups` drops them for exactly that reason.
     """
-    round_name = db.STAGE_LABELS.get(stage, "This round")
+    round_name = db.STAGE_LABELS.get(stage, "This stage")
     if not label:
         return round_name
     return f"{round_name} - Group {label}"
@@ -5070,15 +5126,12 @@ def build_group_embed(
         # Both end on the same door, and the door is a live button on the view
         # as well as a name in the sentence.
         if label is None:
-            embed.description = (
-                f"{opener}We do not have anything recorded for this round yet.\n\n"
-                f"You can add it with **{_btn_words(CD_BTN_RECORD)}**."
-            )[:4096]
+            embed.description = (opener + _GROUP_NO_STAGE.format(record=_btn_words(CD_BTN_RECORD)))[
+                :4096
+            ]
         else:
             embed.description = (
-                f"{opener}We do not have anyone recorded for this group.\n\n"
-                f"Anyone can paste the standings in with "
-                f"**{_btn_words(CD_BTN_RECORD)}**."
+                opener + _GROUP_NO_MEMBERS.format(record=_btn_words(CD_BTN_RECORD))
             )[:4096]
         return embed
 
@@ -5135,7 +5188,7 @@ def build_group_embed(
             name="Not the whole group",
             value=(
                 f"We have **{_plural(len(members), 'player')}** of the "
-                f"**{expected}** in this round. Anyone can add the rest with "
+                f"**{expected}** in this stage. Anyone can add the rest with "
                 f"**{_btn_words(CD_BTN_RECORD)}**."
             ),
             inline=False,
@@ -5151,7 +5204,7 @@ def build_group_embed(
                 f"Everything above is free, and so is recording it. What "
                 f"{premium.PREMIUM_BRAND} adds here is the model: how often "
                 f"each of these players gets through, across thousands of "
-                f"simulated rounds. Run `/upgrade` to unlock it."
+                f"simulated stages. Run `/upgrade` to unlock it."
             ),
             inline=False,
         )
@@ -5480,7 +5533,7 @@ def _standing_worked_out(state: dict) -> str | None:
         # field", which is the question this surface exists for.
         place = _projected_place(result, row)
         lines = [
-            f"`{words.probability(row.advance):>4}`  Through to the next round",
+            f"`{words.probability(row.advance):>4}`  {_STANDING_THROUGH}",
             f"`{words.probability(row.win_group):>4}`  Winning the group outright",
             "",
             f"Projected finish **{place}** of **{len(result.rows)}**, "
@@ -6949,7 +7002,7 @@ class _GroupView(discord.ui.View):
         # the rounds the game plays are a fact about the game, and the rounds we
         # hold are a fact about our record. Driving the picker off the second
         # made the two indistinguishable.
-        self.add_item(self._select("Which round?", self._stage_options(), row, self._on_stage))
+        self.add_item(self._select(_PICK_STAGE, self._stage_options(), row, self._on_stage))
         row += 1
         if len(self.groups) > 1:
             self.add_item(
@@ -7674,9 +7727,9 @@ def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord
     tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
         (f"{as_of}\n\n" if as_of else "")
-        + f"Over {result.trials:,} simulations of the round. The first column "
-        f"gives the odds of finishing in the top **{result.advance}** and going "
-        f"through, the second the odds of winning the group outright."
+        + _ODDS_OVER.format(trials=result.trials)
+        + " "
+        + _ODDS_COLUMNS.format(advance=result.advance)
         + "\n\n"
         + "\n".join(lines)
         + tail

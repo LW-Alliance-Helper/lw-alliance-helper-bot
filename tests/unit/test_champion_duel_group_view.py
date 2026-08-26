@@ -468,7 +468,8 @@ def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
 
     embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
 
-    assert "simulations of the round" in embed.description
+    trials = odds_lib._models()["semifinals"]["trials"]
+    assert hub._ODDS_OVER.format(trials=trials) in embed.description
     assert "**P8**" in embed.description
     assert "Total Hero Power" not in embed.description
 
@@ -550,7 +551,7 @@ def test_every_round_the_game_plays_is_offered(cd_db):
     view = _view_of(grouping, stage="semifinals", members=members, label="H")
 
     assert db.recorded_stages(grouping["id"]) == ["semifinals"]
-    picker = _picker(view, "Which round?")
+    picker = _picker(view, hub._PICK_STAGE)
     assert picker is not None
     assert [o.value for o in picker.options] == list(db.STAGES)
 
@@ -562,7 +563,7 @@ def test_the_rounds_are_offered_in_the_order_they_are_played(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    labels = [o.label for o in _picker(view, "Which round?").options]
+    labels = [o.label for o in _picker(view, hub._PICK_STAGE).options]
     assert labels == [db.STAGE_LABELS[s] for s in db.STAGES]
 
 
@@ -574,7 +575,7 @@ def test_a_round_we_hold_nothing_for_is_marked_rather_than_hidden(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    marks = {o.value: o.description for o in _picker(view, "Which round?").options}
+    marks = {o.value: o.description for o in _picker(view, hub._PICK_STAGE).options}
     assert marks["semifinals"] is None
     assert marks["qualifiers"] == hub._STAGE_NOT_HELD
     assert marks["knockouts"] == hub._STAGE_NOT_HELD
@@ -624,7 +625,7 @@ def test_the_round_being_read_is_the_one_showing_as_chosen(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    chosen = [o.value for o in _picker(view, "Which round?").options if o.default]
+    chosen = [o.value for o in _picker(view, hub._PICK_STAGE).options if o.default]
     assert chosen == ["semifinals"]
 
 
@@ -668,7 +669,7 @@ def test_an_empty_round_says_so_and_offers_to_record_it(cd_db):
     view = _view_of(grouping, stage="knockouts", members=[])
     embed = view._embed()
 
-    assert "this round" in embed.description
+    assert hub._GROUP_NO_STAGE.format(record=hub._btn_words(hub.CD_BTN_RECORD)) in embed.description
     assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
     assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
 
@@ -682,7 +683,10 @@ def test_an_empty_lettered_group_is_not_told_the_round_is_missing(cd_db):
     embed = hub.build_group_embed(members=[], stage="semifinals", label="H", grouping=grouping)
 
     assert "this group" in embed.description
-    assert "this round" not in embed.description
+    assert (
+        hub._GROUP_NO_STAGE.format(record=hub._btn_words(hub.CD_BTN_RECORD))
+        not in embed.description
+    )
 
 
 def test_a_champion_duel_we_hold_nothing_for_opens_rather_than_refusing(cd_db):
@@ -941,7 +945,7 @@ def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
     )
     assert {
         "Which Champion Duel?",
-        "Which round?",
+        hub._PICK_STAGE,
         "Which group?",
         "Which alliance?",
         "Page 1 / 5",
@@ -965,7 +969,12 @@ def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
             can_odds=True,
         )
     )
-    assert {"Which Champion Duel?", "Which round?", "Which alliance?", "Page 1 / 2"} <= busiest
+    assert {
+        "Which Champion Duel?",
+        hub._PICK_STAGE,
+        "Which alliance?",
+        "Page 1 / 2",
+    } <= busiest
     assert ("Which group?" in busiest) is False
     assert (hub.CD_BTN_ODDS in busiest) == odds_lib.KNOCKOUT_AVAILABLE
     # A complete field, so no record button. Two of the 32 missing is what puts

@@ -430,6 +430,41 @@ _STANDING_UNCLAIMED = (
 #: catalog's link between two things.
 CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
 
+#: ⚠️ NOT SIGNED OFF. Kevin asked for the control on 2026-08-26 and suggested
+#: the words; the variants are enumerated in the pull request body rather than
+#: here, which is the rule this project has now paid for twice
+#: (`CHAMPION_DUEL_INDEX.md`).
+#:
+#: **What it fixes.** `_ALLIANCE_NO_TAG` fires when we hold somebody's account
+#: and no alliance tag, and the only route to fix that was `➕ Add a player`.
+#: That control genuinely works -- the tag is a field on `_AddPlayerModal` and
+#: `upsert_registrant` fills a blank one on the row already held rather than
+#: duplicating it -- but Kevin: *"the label says you are adding a player when
+#: you are filling in one field about yourself."* The label describes the
+#: control (`UX.md`), and that one described somebody else's.
+#:
+#: **Member voice, deliberately.** "my", not "your", because it pairs with
+#: `🔗 This is my account` on the claim it depends on, and `UX.md` names that
+#: pair as one of the two things a voice sweep must not touch.
+#:
+#: ✏️ is the catalog's *edit, change*, and an edit is what this is. Not ➕,
+#: which is Create and is the word that made the old route read wrong.
+CD_BTN_EDIT_ME = "✏️ Edit my information"
+
+#: ⚠️ NOT SIGNED OFF, on the same terms as the button above it.
+#:
+#: **It takes the button's own noun**, which is the rule Kevin set on the
+#: claiming acknowledgements: the modal a control opens says what the control
+#: said. It is also `_STANDING_RECORDED` word for word -- the heading over
+#: exactly these fields on `🏅 Your standing` -- so the surface that sends you
+#: here and the screen you arrive on name the same thing.
+#:
+#: Near-collision, checked rather than assumed: `champion_duel_claim`'s modal
+#: is titled **Your account**, settled 2026-08-25. That one asks *which*
+#: account is yours; this one holds the facts about it. Same shape as the
+#: buttons that open them, which are `🔗 This is my account` and this.
+_EDIT_ME_TITLE = "Your information"
+
 #: The round we hold nothing for. Not an error: a Champion Duel that has not
 #: reached its semifinals has no group to stand in, and saying so plainly is
 #: the honest state rather than an empty table.
@@ -2547,6 +2582,30 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
         await _ask_or_write(interaction, self.player, offered, source="observed")
 
 
+def _edit_me_modal(player: dict, *, can_write: bool, grouping: dict | None):
+    """`✏️ Edit my information`: the add modal, opened on the reader's own row.
+
+    NOT A SECOND MODAL, and that is the point rather than a saving. The fields
+    are the same five, `upsert_registrant` is keyed on (name, warzone) and
+    fills blanks on the row already held, and a member correcting their own
+    entry is the same write as somebody entering it -- so a parallel modal
+    would be two screens that have to be kept saying the same thing.
+
+    **Only from a claim.** Without one there is no "my", which is why every
+    call site here sits behind a state that already resolved a claimed player.
+    """
+    return _AddPlayerModal(
+        can_write,
+        name=player.get("display_name"),
+        server=player.get("server"),
+        alliance=player.get("alliance"),
+        thp=player.get("thp"),
+        troop_level=player.get("troop_level"),
+        grouping=grouping,
+        title=_EDIT_ME_TITLE,
+    )
+
+
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     """Create a registrant from a sighting.
 
@@ -2569,8 +2628,12 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         name: str | None = None,
         server: str | None = None,
         grouping: dict | None = None,
+        alliance: str | None = None,
+        thp=None,
+        troop_level=None,
+        title: str | None = None,
     ):
-        super().__init__()
+        super().__init__(**({"title": title[:45]} if title else {}))
         self.can_write = can_write
         self.grouping = grouping
         # Safe to set on self: `Modal._init_children` deepcopies each declared
@@ -2580,6 +2643,23 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             self.name.default = name[:64]
         if server:
             self.server.default = server[:10]
+        # ALL FIVE OR NONE, for `CD_BTN_EDIT_ME`. A member opening their own
+        # record to change one field must see the other four as we hold them:
+        # a blank box beside a filled one reads as "we have nothing", which is
+        # the surface lying about its own record. Nothing is lost by leaving
+        # one alone either way -- `upsert_registrant` writes only the fields a
+        # caller actually supplied, so a blank has never erased anything.
+        if alliance:
+            self.alliance.default = str(alliance)[:8]
+        if thp:
+            # The separator form rather than `325.8M`. `parse_power` reads both
+            # and this one round-trips exactly, where the short form re-enters
+            # as a number rounded to one decimal place -- a member who changed
+            # nothing would have their Total Hero Power moved by pressing save.
+            self.thp.default = f"{float(thp):,.0f}"[:16]
+        if troop_level:
+            for option in self.troop_level.component.options:
+                option.default = option.value == str(troop_level)
 
     # Five components is the cap and all five earn their place. `group` moved
     # off this screen when Total Hero Power and troop level arrived: a letter
@@ -5659,16 +5739,39 @@ class _StandingClaimView(discord.ui.View):
     the plan's three states -- not in our data at all, add yourself right here.
     """
 
-    def __init__(self, *, user_id: int, can_write: bool, grouping: dict | None = None):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        can_write: bool,
+        grouping: dict | None = None,
+        player: dict | None = None,
+    ):
         super().__init__(timeout=600)
         self.user_id = user_id
         self.can_write = can_write
         self.grouping = grouping
+        self.player = player
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=CD_BTN_WHO_AM_I[:80], style=discord.ButtonStyle.primary)
         button.callback = self._on_press
         self.add_item(button)
+
+        # ONLY WHERE A CLAIM IS HELD. This view is both the unclaimed landing
+        # and the footer of a standing that has one, and on the landing there
+        # is no "my" to edit -- the claim is the only thing to press.
+        #
+        # Secondary against the claim's primary: re-pointing the claim is the
+        # act this view was built for and it stays the loud one.
+        if player:
+            edit = discord.ui.Button(
+                label=(CD_BTN_EDIT_ME if can_write else f"🔒 {CD_BTN_EDIT_ME}")[:80],
+                style=discord.ButtonStyle.secondary,
+                disabled=not can_write,
+            )
+            edit.callback = self._on_edit_me
+            self.add_item(edit)
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -5684,6 +5787,11 @@ class _StandingClaimView(discord.ui.View):
     async def _on_press(self, inter: discord.Interaction):
         await inter.response.send_modal(
             claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
+        )
+
+    async def _on_edit_me(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _edit_me_modal(self.player, can_write=self.can_write, grouping=self.grouping)
         )
 
 
@@ -6524,15 +6632,24 @@ class _AllianceView(discord.ui.View):
             self.add_item(button)
             return
         if state == "no_tag":
-            add = discord.ui.Button(
-                label=(CD_BTN_ADD if self.can_write else f"🔒 {CD_BTN_ADD}")[:80],
+            # `CD_BTN_EDIT_ME` RATHER THAN `➕ Add a player`, and this state is
+            # the one Kevin was looking at when he asked for it: we hold their
+            # account and no alliance tag, and the old exit told them to add a
+            # player. Same modal, same write, opened on their own row.
+            #
+            # It is the exit for this state as well as the fix for the label,
+            # so it is not optional here: `_ALLIANCE_NO_TAG` lost the sentence
+            # that named the old control on the same day, and `UX.md` principle
+            # 3 does not let this state have no door.
+            edit = discord.ui.Button(
+                label=(CD_BTN_EDIT_ME if self.can_write else f"🔒 {CD_BTN_EDIT_ME}")[:80],
                 style=discord.ButtonStyle.primary
                 if self.can_write
                 else discord.ButtonStyle.secondary,
                 disabled=not self.can_write,
             )
-            add.callback = self._on_add
-            self.add_item(add)
+            edit.callback = self._on_edit_me
+            self.add_item(edit)
             return
 
         players = self.state.get("players") or []
@@ -6635,8 +6752,14 @@ class _AllianceView(discord.ui.View):
             claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
         )
 
-    async def _on_add(self, inter: discord.Interaction):
-        await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
+    async def _on_edit_me(self, inter: discord.Interaction):
+        await inter.response.send_modal(
+            _edit_me_modal(
+                self.state.get("player") or {},
+                can_write=self.can_write,
+                grouping=self.grouping,
+            )
+        )
 
     async def _on_record(self, inter: discord.Interaction):
         # Read before responding, not after: a modal has to be the first
@@ -8015,8 +8138,16 @@ class ChampionDuelHubView(discord.ui.View):
         # not depend on noticing anything: whoever opens their own standing can
         # point it at a different account from right here, and claiming a new
         # one moves the claim (`CLAIM_MOVED`). Nothing has to be detected.
+        #
+        # The player rides along so `CD_BTN_EDIT_ME` has a row to open on. It
+        # comes off the read above rather than off `self`, for the same reason
+        # the standing itself does: a claim can move while this hub is on
+        # screen, and the modal would prefill an account they gave up.
         view = _StandingClaimView(
-            user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
+            user_id=inter.user.id,
+            can_write=self.can_write,
+            grouping=self.grouping,
+            player=standing.get("player"),
         )
         await inter.followup.send(
             embed=build_standing_embed(standing, can_odds=can_odds),

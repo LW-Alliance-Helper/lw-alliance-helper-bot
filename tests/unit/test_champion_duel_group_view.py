@@ -1418,7 +1418,82 @@ def test_a_claimed_account_with_no_tag_is_offered_the_field_that_is_missing(cd_d
 
     assert state["state"] == "no_tag"
     assert "Tagless" in hub.build_alliance_embed(state, can_odds=True).description
-    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_ADD]
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_EDIT_ME]
+
+
+def test_the_no_tag_state_offers_the_control_that_is_about_the_reader(cd_db):
+    """Kevin, 2026-08-26: the old exit here was `➕ Add a player`, and *"the
+    label says you are adding a player when you are filling in one field about
+    yourself."* Same modal, same write, opened on their own row.
+
+    This state has no other door -- `_ALLIANCE_NO_TAG` lost the sentence that
+    named the old control on the same day -- so `UX.md` principle 3 makes the
+    button the exit rather than a convenience.
+    """
+    grouping, _groups, _players = _alliance_world()
+    bare = db.upsert_registrant("Tagless", server="738", thp=1)
+    state = hub.read_alliance(_leader(bare, user_id=7), grouping)
+    view = hub._AllianceView(
+        user_id=7, grouping=grouping, state=state, can_odds=True, can_intel=True, can_write=True
+    )
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_EDIT_ME]
+    assert modal.name.default == "Tagless"
+    assert modal.server.default == "738"
+
+
+def test_the_edit_control_carries_every_field_we_hold_rather_than_the_two_it_needs(cd_db):
+    """A member opening their own record to change one thing sees the other
+    four as we hold them. A blank box beside a filled one reads as "we have
+    nothing", which is the surface lying about its own record.
+    """
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant(
+        "Bracketless", server="900", alliance="ZZQ", thp=325_800_000, troop_level=8
+    )
+    state = hub.read_alliance(_leader(held, user_id=11), grouping)
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+    chosen = [o.value for o in modal.troop_level.component.options if o.default]
+
+    assert modal.alliance.default == "ZZQ"
+    assert modal.thp.default == "325,800,000"
+    assert chosen == ["8"]
+    # The separator form round-trips exactly. `325.8M` re-enters as a number
+    # rounded to one decimal place, so a member who changed nothing would have
+    # their Total Hero Power moved by pressing save.
+    assert hub.parse_power(modal.thp.default) == 325_800_000
+
+
+def test_the_edit_control_is_titled_for_the_reader_not_for_adding_somebody(cd_db):
+    """The modal a control opens says what the control said, which is the rule
+    Kevin set on the claiming acknowledgements."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Nobodyhere", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=12), grouping)
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    assert modal.title == hub._EDIT_ME_TITLE
+    assert modal.title != hub._AddPlayerModal(True).title
+
+
+def test_a_prefilled_edit_does_not_leak_into_the_next_person_who_adds(cd_db):
+    """`Modal._init_children` deepcopies each declared item onto the instance,
+    and this is the test that says so out loud: a default set for one reader
+    must not be sitting in the box for the next."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Zzqplayer", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=13), grouping)
+
+    hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+    fresh = hub._AddPlayerModal(True, grouping=grouping)
+
+    assert fresh.name.default is None
+    assert fresh.alliance.default is None
+    assert not [o for o in fresh.troop_level.component.options if o.default]
 
 
 def test_an_empty_listing_is_about_the_reader_rather_than_their_alliance(cd_db):

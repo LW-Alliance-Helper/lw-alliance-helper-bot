@@ -3006,3 +3006,47 @@ def test_nothing_claims_a_reading_nobody_took(standing_db):
     assert hub._STANDING_READ_AT.split("{")[0].strip() not in recorded, (
         "the surface says when a rank was read, over a row that holds no rank"
     )
+
+
+def test_the_standing_offers_the_edit_control_only_where_a_claim_is_held(standing_db):
+    """`_StandingClaimView` is both the unclaimed landing and the footer of a
+    standing that has one. On the landing there is no "my" to edit."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+
+    held = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+    )
+    landing = hub._StandingClaimView(
+        user_id=ADMIN_ID, can_write=True, grouping=standing_db["grouping"]
+    )
+
+    assert [getattr(i, "label", None) for i in held.children] == [
+        hub.CD_BTN_WHO_AM_I,
+        hub.CD_BTN_EDIT_ME,
+    ]
+    assert [getattr(i, "label", None) for i in landing.children] == [hub.CD_BTN_WHO_AM_I]
+
+
+def test_the_edit_control_locks_rather_than_hides_where_the_reader_cannot_write(standing_db):
+    """A locked control renders disabled rather than hidden, so the shape of
+    the product is visible. `can_write` is not the Premium gate -- contributing
+    has been free since 2026-08-17 -- and this follows `➕ Add a player`'s own
+    treatment of it either way."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=False,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+    )
+    edit = [i for i in view.children if hub.CD_BTN_EDIT_ME in (getattr(i, "label", None) or "")]
+
+    assert len(edit) == 1
+    assert edit[0].disabled
+    assert edit[0].label.startswith("🔒")

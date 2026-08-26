@@ -14,6 +14,7 @@ it is showing.
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import discord
 import pytest
@@ -21,12 +22,19 @@ import pytest
 import champion_duel_db as db
 import champion_duel_hub as hub
 import champion_duel_odds as odds_lib
+import champion_duel_store as store_lib
+import champion_duel_wording as words
 
 
 @pytest.fixture
 def cd_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
     db.init_db()
+    # `📇 Your alliance` reads stored odds, and `store_lib.lookup` degrades
+    # rather than raising on a bad store -- so without the table these tests
+    # would pass while silently exercising the no-odds branch every time.
+    # Idempotent, and it is the pair `on_ready` calls.
+    store_lib.init_store()
     return None
 
 
@@ -1078,3 +1086,754 @@ def test_the_empty_round_makes_recording_the_recommended_one(cd_db):
         if getattr(i, "style", None) is discord.ButtonStyle.primary
     ]
     assert primaries == [hub.CD_BTN_RECORD]
+
+
+# ── `📇 Your alliance` ────────────────────────────────────────────────────────
+#
+# Leadership's view of their own people, reading across every group. The tests
+# that matter most here are the ones asserting the read is NOT a group filter:
+# #536 shipped one that sits inside a single group, and treating that as having
+# answered this question is the specific mistake `PLAN_champion_duel_ia.md`
+# names.
+
+KEV = {"discord_user_id": "111", "discord_name": "Kevin", "guild_id": "999"}
+TYPES = ("Tank", "Missile", "Aircraft")
+#: `push_to_bot.FALLBACK_RATIOS`. Squads are derived from THP for the ~97% of
+#: the field with no sighting, so a fixture setting powers independently of THP
+#: would grade the power gap off one column and the grid off another.
+RATIOS = (0.338, 0.258, 0.238)
+
+
+def _squads(registrant_id, thp, source="estimated"):
+    for slot, squad_type, ratio in zip((1, 2, 3), TYPES, RATIOS):
+        db.set_squad(
+            registrant_id,
+            slot,
+            squad_type=squad_type,
+            power=round(thp * ratio),
+            source=source,
+            actor=KEV,
+        )
+
+
+def _alliance_world(*, stage="semifinals"):
+    """One Champion Duel over two warzones, with OGV spread across two groups.
+
+    Deliberately mixed: two groups, an account nobody has placed, an account on
+    another alliance, and an `[OGV]` on a warzone outside the event entirely.
+    Every one of those is a case the read has to get right and none of them is
+    visible from inside a single group.
+    """
+    grouping = db.create_grouping(["738", "900"], started_so_today_is(stage), origin="member")
+    groups = {
+        letter: db.get_or_create_group(grouping["id"], stage, letter) for letter in ("H", "C")
+    }
+    placed = {}
+    for name, server, alliance, letter, rank in (
+        ("Kestrel", "738", "OGV", "H", 1),
+        ("Plover", "738", "OGV", "H", 3),
+        ("Rival", "738", "Kite", "H", 2),
+        ("Merlin", "0900", "OGV", "C", 2),
+        ("Stranger", "900", "Kite", "C", 1),
+    ):
+        reg = db.upsert_registrant(name, server=server, alliance=alliance, thp=300_000_000)
+        _squads(reg["id"], 300_000_000)
+        db.set_placement(groups[letter]["id"], reg["id"], rank=rank)
+        placed[name] = reg
+    # Held, never placed. A leader needs to see these; a read keyed on group
+    # membership would drop exactly the people they most need to notice.
+    placed["Benched"] = db.upsert_registrant("Benched", server="738", alliance="OGV", thp=10)
+    # The same three letters, another tournament. Tags are not unique across
+    # the game, which is why the warzone scoping is doing real work.
+    placed["Impostor"] = db.upsert_registrant("Impostor", server="1500", alliance="OGV", thp=10)
+    return grouping, groups, placed
+
+
+def _text_of(embed) -> str:
+    """Everything the reader can see, as one string."""
+    return "\n".join([embed.description or ""] + [f.value for f in embed.fields])
+
+
+def _store_odds(group_id, *, stage="semifinals"):
+    """A stored answer for one group, keyed by row position.
+
+    Built rather than computed: this surface reads the store and never runs the
+    model, so what is under test is the read-back rather than the engine. The
+    ordering matches `get_group_scouting`, which is what `OddsRow.key` indexes.
+    """
+    members = db.get_group_scouting(group_id)
+    rows = [
+        odds_lib.OddsRow(
+            name=m["display_name"],
+            advance=0.9 - i * 0.1,
+            win_group=0.5 - i * 0.05,
+            points_mean=400 - i * 10,
+            points_sd=12.0,
+            key=str(i),
+        )
+        for i, m in enumerate(members)
+    ]
+    store_lib.store(group_id, members, odds_lib.GroupOdds(rows=rows), stage=stage)
+
+
+def _two_full_groups():
+    """Sixteen `[OGV]` accounts across two full semi-final groups.
+
+    Deliberately unscouted -- `source='estimated'` is what ~97% of the roster
+    carries -- so the reads take the wordiest branches and the widest grids,
+    which is what makes this the right fixture for both the cost bound and the
+    message-size one.
+    """
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    for letter in ("A", "B"):
+        group = db.get_or_create_group(grouping["id"], "semifinals", letter)
+        for i in range(8):
+            reg = db.upsert_registrant(
+                f"{letter}{i}", server="738", alliance="OGV", thp=300_000_000
+            )
+            _squads(reg["id"], 300_000_000)
+            db.set_placement(group["id"], reg["id"], rank=i + 1)
+    return grouping, None
+
+
+def _leader(registrant, user_id=1):
+    db.claim_registrant(registrant["id"], user_id, discord_name="Leader", guild_id="999")
+    return user_id
+
+
+def test_the_alliance_is_read_across_groups_and_not_inside_one(cd_db):
+    """The question is *where is my alliance*, and the answer spans the round.
+
+    Kevin, 2026-08-24: *"If I'm looking for my alliance, I want to see everyone
+    no matter what group they're in ... I would never go group first."* The
+    filter that shipped in #536 answers "who from my alliance is in THIS
+    group", so a read that could only see one group would be that filter again.
+    """
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    assert state["state"] == "held"
+    assert state["alliance"] == "OGV"
+    names = [p["display_name"] for p in state["players"]]
+    assert "Kestrel" in names and "Merlin" in names, "two groups, one alliance"
+    assert "Rival" not in names and "Stranger" not in names
+
+
+def test_whose_alliance_it_is_comes_from_the_claim(cd_db):
+    """`guild_alliance_mappings` carries an `alliance_name`, but only for guilds
+    linked to Map Manager, so it cannot be relied on. The claiming leader's own
+    recorded account carries the tag, and that is a fact somebody read."""
+    grouping, _groups, players = _alliance_world()
+    other = hub.read_alliance(_leader(players["Rival"], user_id=2), grouping)
+
+    assert other["alliance"] == "Kite"
+    assert [p["display_name"] for p in other["players"]] == ["Stranger", "Rival"]
+
+
+def test_an_account_outside_this_champion_duel_is_not_in_this_alliance(cd_db):
+    """Alliance tags are three letters and are not unique across the game. The
+    grouping's Participating Warzones are what say who is in this event."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    assert "Impostor" not in [p["display_name"] for p in state["players"]]
+
+
+def test_a_padded_warzone_is_still_inside_its_own_champion_duel(cd_db):
+    """`parse_warzones` canonicalizes a grouping through `str(int(...))` and a
+    registrant added from a modal can hold `0900`. Compared as strings, that
+    player is permanently outside their own event and nothing says so."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    merlin = next(p for p in state["players"] if p["display_name"] == "Merlin")
+    assert merlin["server"] == "0900"
+    assert db.warzone_key("0900") == db.warzone_key("900") == "900"
+
+
+def test_the_listing_leads_on_whoever_got_deepest(cd_db):
+    """The shape is the rounds, furthest first. For an alliance that rarely
+    gets more than one player through, that section has one name in it and that
+    name is the point -- which one flat sorted grid would bury."""
+    grouping, groups, players = _alliance_world()
+    quals = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    early = db.upsert_registrant("Wader", server="738", alliance="OGV", thp=200_000_000)
+    db.set_placement(quals["id"], early["id"], rank=40)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=False)
+    named = [f.name for f in embed.fields if not f.name.startswith("🔒")]
+
+    assert named[0] == db.STAGE_LABELS["semifinals"]
+    assert named.index(db.STAGE_LABELS["qualifiers"]) < named.index(hub._ALLIANCE_UNPLACED)
+    assert "Benched" in embed.fields[named.index(hub._ALLIANCE_UNPLACED)].value
+
+
+def test_an_account_in_no_round_is_held_rather_than_missing(cd_db):
+    """A blank round is a gap in our record, not a statement that somebody is
+    not playing, so the field is named for the gap and carries the door.
+
+    The door is its own field. Appended to the rows it was the first thing a
+    1,024-character clamp cut, and it is the only exit this state has.
+    """
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=False)
+
+    names = [f.name for f in embed.fields]
+    assert "Benched" in embed.fields[names.index(hub._ALLIANCE_UNPLACED)].value
+    assert (
+        hub._btn_words(hub.CD_BTN_RECORD)
+        in embed.fields[names.index(hub._ALLIANCE_UNPLACED) + 1].value
+    )
+
+
+def test_nothing_here_tells_a_player_whether_they_are_still_in_it(cd_db):
+    """Kevin struck exactly that from `🏅 Your standing` on 2026-08-25, and the
+    plan says this session inherits it. The figures say how far somebody gets;
+    a verdict would be narrating the game back at people playing it."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=True)
+
+    text = " ".join([embed.description or ""] + [f.value for f in embed.fields]).lower()
+    for narration in ("still in it", "long shot", "reward", "band", "you need"):
+        assert narration not in text
+
+
+def test_the_free_half_is_the_whole_screen_and_the_paid_half_is_the_tail(cd_db):
+    """Free is what we recorded, paid is what we worked out. A free alliance
+    sees every one of their people and where they are; what is locked is how
+    far each one gets."""
+    grouping, groups, players = _alliance_world()
+    _store_odds(groups["H"]["id"])
+    user_id = _leader(players["Kestrel"])
+
+    free = hub.build_alliance_embed(hub.read_alliance(user_id, grouping), can_odds=False)
+    paid = hub.build_alliance_embed(hub.read_alliance(user_id, grouping), can_odds=True)
+
+    # Read off the round's own field rather than the whole embed: the upsell
+    # names what it is selling, so it says "getting through" itself and an
+    # assertion over everything on screen would pass on the wrong text.
+    def rows(embed):
+        return next(f.value for f in embed.fields if f.name == db.STAGE_LABELS["semifinals"])
+
+    assert "Kestrel" in rows(free) and "Group H" in rows(free)
+    assert "through" not in rows(free)
+    assert f"🔒 {hub._ALLIANCE_LOCKED_FIELD}" in [f.name for f in free.fields]
+    assert "through" in rows(paid)
+    assert not [f for f in paid.fields if f.name.startswith("🔒")]
+
+
+def test_a_stored_answer_is_read_back_by_position_rather_than_by_name(cd_db):
+    """`OddsRow.key` is the index into the members list that produced the
+    answer, which is what lets two players sharing a display name stay two
+    players. This is also the bug #541 found in `_from_payload`, which was
+    rebuilding rows without their key -- and this surface renders many."""
+    grouping, groups, players = _alliance_world()
+    _store_odds(groups["H"]["id"])
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=True)
+
+    row = next(line for line in _text_of(embed).splitlines() if "Kestrel" in line)
+    assert "through" in row and "win the group" in row
+
+
+def test_a_group_with_nothing_stored_shows_the_rest_of_the_row(cd_db):
+    """`missing` is never shown, and it must not cost the player their place in
+    the listing: an answer computed against a different set of people is wrong
+    rather than old, but where they are is still recorded and still free."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=True)
+
+    assert "Kestrel" in _text_of(embed)
+    assert "through" not in _text_of(embed)
+    assert embed.footer.text is None
+
+
+def test_a_round_with_no_model_is_never_scouted_for_odds(cd_db):
+    """A qualifier group is 100 players, so `get_group_scouting` over one is
+    four queries and a profile read for an answer that round has never had.
+    `STAGES_WITH_A_MODEL` is read rather than a list kept in step by hand."""
+    grouping = db.create_grouping(["738"], started_so_today_is("qualifiers"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    lead = db.upsert_registrant("Kestrel", server="738", alliance="OGV", thp=300_000_000)
+    db.set_placement(group["id"], lead["id"], rank=1)
+
+    with patch.object(db, "get_group_scouting", side_effect=AssertionError("scouted")) as spy:
+        state = hub.read_alliance(_leader(lead), grouping)
+    assert spy.call_count == 0
+    assert state["odds"] == {}
+
+
+def test_the_two_alliance_reads_agree_about_what_one_alliance_is(cd_db):
+    """The group filter and this read both answer "same alliance?", and a
+    leader seeing twelve players in one and eleven in the other has no way to
+    tell which is wrong. Both go through `db.alliance_tag`."""
+    grouping, groups, players = _alliance_world()
+    padded = db.upsert_registrant("Padded", server="738", alliance=" OGV ", thp=300_000_000)
+    db.set_placement(groups["H"]["id"], padded["id"], rank=4)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    in_group = hub._by_alliance(db.get_group_members(groups["H"]["id"]), "OGV")
+
+    assert "Padded" in [p["display_name"] for p in state["players"]]
+    assert "Padded" in [m["display_name"] for m in in_group]
+
+
+def test_a_leader_we_cannot_identify_is_offered_the_claim_rather_than_a_list(cd_db):
+    """Whose alliance it is comes from the claim, so with no claim there is no
+    question to answer -- and the exit is the flow that fixes it."""
+    grouping, _groups, _players = _alliance_world()
+    state = hub.read_alliance(4242, grouping)
+    view = hub._AllianceView(
+        user_id=4242, grouping=grouping, state=state, can_odds=True, can_intel=True, can_write=True
+    )
+
+    assert state["state"] == "unclaimed"
+    assert hub._ALLIANCE_UNCLAIMED in hub.build_alliance_embed(state, can_odds=True).description
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_WHO_AM_I]
+
+
+def test_a_claimed_account_with_no_tag_is_offered_the_field_that_is_missing(cd_db):
+    """A blank tag is a gap in the record, not a claim that somebody is in no
+    alliance -- `upsert_registrant` refuses to let a blank overwrite an
+    imported value for exactly that reason."""
+    grouping, _groups, _players = _alliance_world()
+    bare = db.upsert_registrant("Tagless", server="738", thp=1)
+    state = hub.read_alliance(_leader(bare, user_id=7), grouping)
+    view = hub._AllianceView(
+        user_id=7, grouping=grouping, state=state, can_odds=True, can_intel=True, can_write=True
+    )
+
+    assert state["state"] == "no_tag"
+    assert "Tagless" in hub.build_alliance_embed(state, can_odds=True).description
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_ADD]
+
+
+def test_an_empty_listing_is_about_the_reader_rather_than_their_alliance(cd_db):
+    """Found by `/code-review`, and it needed the scoping rule to see.
+
+    This read is scoped by the grouping's own warzones, so the reader is in
+    their own result whenever they are in this Champion Duel -- which makes an
+    empty list reachable ONLY when the reader is somewhere else. Answering that
+    with "we do not hold anyone from OGV yet" over a `📥 Record a group` door
+    is a claim about their alliance drawn from a fact about them, and the wrong
+    thing to press either way. The fix is the claim, and it leads.
+    """
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    db.create_grouping(["1500"], started_so_today_is("semifinals"), origin="member")
+    lead = db.upsert_registrant("Kestrel", server="1500", alliance="OGV", thp=1)
+    state = hub.read_alliance(_leader(lead), grouping, warzone="738")
+    view = hub._AllianceView(
+        user_id=1, grouping=grouping, state=state, can_odds=True, can_intel=True, can_write=True
+    )
+
+    assert state["players"] == []
+    assert state["state"] == "elsewhere"
+    description = hub.build_alliance_embed(state, can_odds=True).description
+    assert "738" in description, "which Champion Duel this server is in"
+    assert [getattr(i, "label", None) for i in view.children] == [
+        hub.CD_BTN_WHO_AM_I,
+        hub.CD_BTN_RECORD,
+    ]
+    assert view.children[0].style is discord.ButtonStyle.primary
+    assert view.children[1].style is discord.ButtonStyle.secondary
+
+
+def test_a_leader_who_switched_warzone_still_sees_the_alliance_they_left(cd_db):
+    """`elsewhere` is a note, never a refusal. Their old alliance is still
+    recorded and still theirs to look at, so the listing renders and the note
+    only says which Champion Duel it is about -- the same call `read_standing`
+    made about the same state."""
+    grouping, _groups, players = _alliance_world()
+    moved = db.upsert_registrant("Kestrel", server="1500", alliance="OGV", thp=1)
+    state = hub.read_alliance(_leader(moved), grouping, warzone="738")
+
+    assert state["state"] == "elsewhere"
+    embed = hub.build_alliance_embed(state, can_odds=False)
+    assert "Plover" in _text_of(embed), "their old alliance still renders"
+    assert "738" in embed.description
+
+
+def test_a_long_alliance_pages_at_twenty(cd_db):
+    """Paging at 20 is this feature's fallback for any long listing, and it is
+    applied to the flattened order rather than per round -- so a page is twenty
+    players rather than twenty per section."""
+    grouping = db.create_grouping(["738"], started_so_today_is("qualifiers"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    for i in range(1, 26):
+        reg = db.upsert_registrant(f"Bird{i:02d}", server="738", alliance="OGV", thp=1)
+        db.set_placement(group["id"], reg["id"], rank=i)
+    lead = db.upsert_registrant("Bird01", server="738")
+    state = hub.read_alliance(_leader(lead), grouping)
+
+    first = hub.build_alliance_embed(state, can_odds=False, page=0)
+    second = hub.build_alliance_embed(state, can_odds=False, page=1)
+
+    assert _text_of(first).count("**Bird") == hub.GROUP_PAGE_SIZE
+    assert _text_of(second).count("**Bird") == 5
+    assert "Showing 1 to 20 of 25 players" in first.footer.text
+    view = hub._AllianceView(
+        user_id=1, grouping=grouping, state=state, can_odds=False, can_intel=False, can_write=True
+    )
+    assert "Page 1 / 2" in [getattr(i, "label", None) for i in view.children]
+
+
+def test_a_group_recorded_at_the_draw_shows_its_seeds_rather_than_dashes(cd_db):
+    """Found by `/code-review`. `seed_rank` and `rank` are different facts, and
+    between the draw and the standings every row has the first and none of the
+    second -- which is the window "who will get into the semifinals" is read
+    in. Reading only `rank` printed a dash for the whole alliance and sorted
+    them alphabetically."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    for name, seed in (("Zephyr", 2), ("Albatross", 5), ("Kestrel", 1)):
+        reg = db.upsert_registrant(name, server="738", alliance="OGV", thp=1)
+        db.set_placement(group["id"], reg["id"], seed_rank=seed)
+
+    state = hub.read_alliance(_leader(db.upsert_registrant("Kestrel", server="738")), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=False)
+    listed = [line for line in _text_of(embed).splitlines() if "**" in line]
+
+    assert [p["display_name"] for p in state["players"]] == ["Kestrel", "Zephyr", "Albatross"]
+    assert listed[0].startswith("`1` **Kestrel** *(seed)*")
+    assert "`-`" not in _text_of(embed)
+
+
+def test_a_page_of_twenty_never_loses_its_tail_to_a_field_limit(cd_db):
+    """Found by `/code-review`. A field value stops at 1,024 characters and
+    twenty rows carrying two probabilities run to about 1,800, so the clamp
+    every other call site uses would drop players the footer went on counting.
+    """
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    for i in range(1, 21):
+        reg = db.upsert_registrant(
+            f"Longbirdname{i:02d}", server="738", alliance="OGV", thp=300_000_000
+        )
+        db.set_placement(group["id"], reg["id"], rank=i)
+    _store_odds(group["id"])
+    state = hub.read_alliance(
+        _leader(db.upsert_registrant("Longbirdname01", server="738")), grouping
+    )
+
+    embed = hub.build_alliance_embed(state, can_odds=True)
+
+    assert _text_of(embed).count("**Longbirdname") == 20, "every player on the page"
+    assert all(len(f.value) <= hub.FIELD_LIMIT for f in embed.fields)
+    assert len([f for f in embed.fields if "Longbirdname" in f.value]) > 1, "split, not clamped"
+
+
+def test_a_free_guild_never_reads_the_store_at_all(cd_db):
+    """Found by `/code-review`. The embed renders no odds without the
+    entitlement, so reading them is a `get_group_scouting` per group for
+    nothing -- and worse than nothing, because `lookup` stamps `last_viewed_at`
+    and that is what orders the sweeper. A free guild paging this listing would
+    push its own groups ahead of ones a paying guild is waiting on."""
+    grouping, groups, players = _alliance_world()
+    _store_odds(groups["H"]["id"])
+    user_id = _leader(players["Kestrel"])
+
+    with patch.object(db, "get_group_scouting", wraps=db.get_group_scouting) as spy:
+        free = hub.read_alliance(user_id, grouping, with_odds=False)
+    assert spy.call_count == 0
+    assert free["odds"] == {}
+
+    with patch.object(db, "get_group_scouting", wraps=db.get_group_scouting) as spy:
+        paid = hub.read_alliance(user_id, grouping, with_odds=True)
+    assert spy.call_count == 2, "one per group, not one per player"
+    assert set(paid["odds"]) == {groups["H"]["id"]}, "group C has nothing stored"
+
+
+def test_a_stale_answer_we_cannot_date_is_withheld_rather_than_shown_bare(cd_db):
+    """Found by `/code-review`. The caveat is the CONDITION on showing a stale
+    figure rather than a decoration over it, which is the rule
+    `build_odds_embed` set. An unreadable timestamp costs the answer, not the
+    line."""
+    grouping, groups, players = _alliance_world()
+    _store_odds(groups["H"]["id"])
+    # Stale, and dated with something no one can parse. Both halves are needed:
+    # a fresh answer carries no caveat, so only stale reaches the rule.
+    with db._get_conn() as conn:
+        conn.execute(
+            "UPDATE odds_runs SET fingerprint = 'moved', computed_at = 'whenever' WHERE group_id = ?",
+            (groups["H"]["id"],),
+        )
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+    embed = hub.build_alliance_embed(state, can_odds=True)
+
+    assert groups["H"]["id"] not in state["odds"]
+    assert "through" not in _text_of(embed)
+    assert "Kestrel" in _text_of(embed), "and it costs them nothing else"
+
+
+# ── Handing out the personal reads ───────────────────────────────────────────
+
+
+def test_the_reads_cover_the_round_where_a_group_is_everyone_you_play(cd_db):
+    """A semi-final group of 8 meets every other once, so the seven names
+    beside somebody are exactly the seven they play. The qualifiers are a
+    hundred who do not all meet and the knockouts are a bracket whose pairings
+    nothing in the schema holds.
+
+    The qualifier player here is the load-bearing half: without the round
+    filter she gets a read against ninety-nine people she will never meet, and
+    it is ninety-nine 1,296-cell grids to produce it.
+    """
+    grouping, _groups, players = _alliance_world()
+    quals = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    for i in range(4):
+        early = db.upsert_registrant(f"Wader{i}", server="738", alliance="OGV", thp=200_000_000)
+        _squads(early["id"], 200_000_000)
+        db.set_placement(quals["id"], early["id"], rank=i + 1)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    result = hub.team_reads(state)
+
+    assert "Wader0" in [p["display_name"] for p in state["players"]], "held, and listed"
+    assert not [e for e in result["embeds"] if "Wader" in e.title], "and never read"
+
+    assert db.ROUND_ROBIN_STAGES == ("semifinals",)
+    assert result["stage"] == "semifinals"
+    # Kestrel and Plover in group H, Merlin in group C. Benched has no round.
+    assert [e.title for e in result["embeds"]] == [
+        hub._READS_TITLE.format(player=name) for name in ("Kestrel", "Merlin", "Plover")
+    ]
+
+
+def test_one_read_carries_every_opponent_in_that_group(cd_db):
+    """The mock is one player and their opponents, and the count comes off the
+    group rather than off a schedule we do not hold."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+
+    assert [f.name for f in kestrel.fields] == ["Rival", "Plover"]
+    assert "2 opponents" in kestrel.description
+    assert "remaining" not in kestrel.description.lower()
+
+
+def test_a_read_never_prints_the_envelope_mean_as_the_odds(cd_db):
+    """`champion_duel_intel` is explicit that weighting every configuration
+    equally is the wrong prior and quoting the mean as an estimate would be a
+    worse claim than the one it criticises. Where there is no recommendation to
+    price, the range is the answer."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+    block = next(f.value for f in kestrel.fields if f.name == "Rival")
+
+    assert block.startswith("Runs from ")
+    # The odds line names the player it is about, so its absence is what says
+    # no single number was printed. Keyed off the constant rather than typed,
+    # because Kevin owns this copy and it will move.
+    assert hub._READ_ODDS.format(odds="", player="Kestrel").strip("* ") not in block
+
+
+def test_a_settled_matchup_gives_the_figure_rather_than_a_range_of_one(cd_db):
+    """Found by `/code-review`. `build_intel_embed` suppresses its range where
+    the power gap decides the match, because there the envelope is "<1% to
+    <1%" -- true, useless, and reading as a broken surface. Every line-up gives
+    the same answer there, which is exactly when one number is honest."""
+    grouping, groups, players = _alliance_world()
+    giant = db.upsert_registrant("Giant", server="738", alliance="Kite", thp=900_000_000)
+    _squads(giant["id"], 900_000_000)
+    db.set_placement(groups["H"]["id"], giant["id"], rank=4)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+    block = next(f.value for f in kestrel.fields if f.name == "Giant")
+
+    assert "Runs from" not in block
+    assert block.splitlines()[0].endswith("Kestrel wins")
+    assert words.order_barely_matters(0.0).split(".")[0] in block
+
+
+def test_an_opponent_we_cannot_build_stays_on_the_page(cd_db):
+    """A leader handing this to a player needs to see that one of their
+    meetings is unanswerable and which box fixes it. A list quietly six long in
+    one group and seven in another says nothing at all."""
+    grouping, groups, players = _alliance_world()
+    blank = db.upsert_registrant("Ghost", server="738", alliance="Kite", thp=300_000_000)
+    db.set_placement(groups["H"]["id"], blank["id"], rank=4)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+    ghost = next(f.value for f in kestrel.fields if f.name == "Ghost")
+
+    assert "Ghost" in [f.name for f in kestrel.fields]
+    assert "1, 2, 3" in ghost
+
+
+def test_a_player_we_cannot_build_is_said_once_rather_than_seven_times(cd_db):
+    """Every one of their meetings would fail identically and for the same
+    reason, so the read names the player instead of printing one fact seven
+    times."""
+    grouping, groups, players = _alliance_world()
+    bare = db.upsert_registrant("Fledgling", server="738", alliance="OGV", thp=300_000_000)
+    db.set_placement(groups["H"]["id"], bare["id"], rank=4)
+
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    theirs = next(e for e in hub.team_reads(state)["embeds"] if "Fledgling" in e.title)
+
+    assert theirs.fields == []
+    assert "Fledgling" in theirs.description
+    assert "1, 2, 3" in theirs.description
+
+
+def test_the_batch_names_whoever_did_not_fit(cd_db):
+    """One press is bounded so it cannot become several seconds of engine. A
+    cut that is a count rather than names leaves a leader unable to go and get
+    the people it dropped -- the same rule the alliance select's own cut line
+    follows."""
+    grouping, _big = _two_full_groups()
+    lead = db.upsert_registrant("A0", server="738")
+    state = hub.read_alliance(_leader(lead), grouping, with_odds=False)
+
+    result = hub.team_reads(state, limit=3)
+
+    assert result["shown"] == 3
+    assert len(result["cut"]) == 13
+    assert hub.READS_PER_PRESS == 10
+
+
+def test_a_full_group_of_reads_fits_a_discord_message(cd_db):
+    """The measurement `read_batches` is allowed to lean on.
+
+    A single read must stay well inside the 6,000 characters Discord counts
+    across a message, because an embed over that on its own cannot be sent at
+    all and batching cannot save it. Seven opponents on the wordiest branches
+    -- nothing scouted, so every block carries a range, the no-line-up sentence
+    and the record-your-squads ask -- is the worst shape this produces.
+    """
+    grouping, _big = _two_full_groups()
+    lead = db.upsert_registrant("A0", server="738")
+    state = hub.read_alliance(_leader(lead), grouping, with_odds=False)
+    biggest = max(hub.team_reads(state, limit=8)["embeds"], key=hub._embed_chars)
+
+    assert len(biggest.fields) == 7, "a full semi-final group, less the player"
+    assert hub._embed_chars(biggest) < hub.READS_CHAR_BUDGET / 2
+
+
+def test_no_message_carries_more_embed_than_discord_counts(cd_db):
+    """The cap people know about is ten embeds; the one that binds is 6,000
+    characters across all of them. A read is about 2,500, so a team of five is
+    several messages rather than one -- and nothing is dropped to make it fit.
+    """
+    grouping, _big = _two_full_groups()
+    lead = db.upsert_registrant("A0", server="738")
+    state = hub.read_alliance(_leader(lead), grouping, with_odds=False)
+    embeds = hub.team_reads(state)["embeds"]
+
+    batches = hub.read_batches(embeds)
+
+    assert len(batches) > 1, "ten reads do not fit one message"
+    assert sum(len(b) for b in batches) == len(embeds), "nothing dropped"
+    for batch in batches:
+        assert len(batch) <= hub.READS_EMBEDS_PER_MESSAGE
+        assert sum(hub._embed_chars(e) for e in batch) <= hub.READS_CHAR_BUDGET
+
+
+def test_one_oversized_read_is_sent_alone_rather_than_dropped(cd_db):
+    """The reads are the deliverable. An embed nothing can batch with still
+    goes out, because a batching rule that quietly lost one would be the worst
+    version of the cut this surface refuses to make silently."""
+    huge = discord.Embed(title="🎯 Kestrel", description="x" * (hub.READS_CHAR_BUDGET + 10))
+    small = discord.Embed(title="🎯 Plover", description="y")
+
+    batches = hub.read_batches([huge, small])
+
+    assert [len(b) for b in batches] == [1, 1]
+    assert batches[0][0] is huge
+
+
+def test_a_read_says_it_is_one_match_rather_than_a_meeting(cd_db):
+    """Every probability here is `best_of=1`: a meeting is three matches with a
+    redeploy between them, and pricing the advice at Bo3 would charge a
+    decision to a series the player gets to remake twice. It is also the figure
+    the simulator measured as actively wrong."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+
+    assert kestrel.footer.text == hub._READS_BASIS
+    assert "one match" in kestrel.footer.text
+
+
+def test_the_reads_are_private_until_somebody_posts_them(cd_db):
+    """`PROPOSAL_champion_duel_ia.md` principle 5: an individual pulls it as an
+    ephemeral and posting to a channel is a deliberate leadership act. Follows
+    `SharePredictionView`, including holding the payload rather than rendering
+    it twice."""
+    embeds = [discord.Embed(title="🎯 Kestrel")]
+    view = hub._ReadsShareView(embeds=embeds, user_id=1)
+
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_SHARE_READS]
+    assert view.embeds is embeds
+
+
+def test_the_reads_control_is_absent_where_no_round_carries_one(cd_db):
+    """A padlock says "you could buy this"; absence says "this round does not
+    work that way". The qualifiers are the second, and the two must not read as
+    the same refusal."""
+    grouping = db.create_grouping(["738"], started_so_today_is("qualifiers"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    lead = db.upsert_registrant("Kestrel", server="738", alliance="OGV", thp=1)
+    db.set_placement(group["id"], lead["id"], rank=1)
+    state = hub.read_alliance(_leader(lead), grouping)
+
+    labels = [
+        getattr(i, "label", None)
+        for i in hub._AllianceView(
+            user_id=1,
+            grouping=grouping,
+            state=state,
+            can_odds=True,
+            can_intel=True,
+            can_write=True,
+        ).children
+    ]
+    assert not [label for label in labels if label and hub.CD_BTN_READS in label]
+
+
+def test_the_reads_control_locks_rather_than_hides_where_it_could_run(cd_db):
+    """`UX.md` principle 5. A free alliance in the semi-finals should see the
+    shape of what it would be buying."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    view = hub._AllianceView(
+        user_id=1, grouping=grouping, state=state, can_odds=False, can_intel=False, can_write=True
+    )
+    locked = next(i for i in view.children if hub.CD_BTN_READS in (getattr(i, "label", None) or ""))
+
+    assert locked.label.startswith("🔒")
+    assert locked.disabled is True
+
+
+def test_the_hub_offers_the_alliance_beside_the_group(cd_db):
+    """The plan splits `🏅 Your group` into `🏅 Your standing`, `📇 Your
+    alliance` and the roster behind a filter, so the two sit together for
+    exactly as long as the old control survives."""
+    grouping, _groups, _players = _alliance_world()
+    view = hub.ChampionDuelHubView(
+        user_id=1, is_admin=False, can_write=True, engine_ok=True, grouping=grouping
+    )
+    row = [getattr(i, "label", None) for i in view.children if getattr(i, "row", None) == 1]
+
+    assert hub.CD_BTN_ALLIANCE in row
+    assert row.index(hub.CD_BTN_ALLIANCE) == row.index(hub.CD_BTN_GROUP) + 1
+
+
+def test_the_alliance_control_is_absent_without_a_champion_duel(cd_db):
+    """Same rule as `🏅 Your group` and `📥 Record a group`: with no grouping
+    resolved there is no event to read an alliance out of, and the caller is
+    being asked for their warzone instead."""
+    view = hub.ChampionDuelHubView(
+        user_id=1, is_admin=False, can_write=True, engine_ok=True, grouping=None
+    )
+
+    assert hub.CD_BTN_ALLIANCE not in [getattr(i, "label", None) for i in view.children]

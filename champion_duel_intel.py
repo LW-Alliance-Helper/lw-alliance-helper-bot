@@ -756,7 +756,7 @@ class Read:
 def reads_for(you: dict, opponents: list[dict], *, best_of: int = 1) -> list[Read]:
     """One player's read against every opponent given, in the order given.
 
-    THIS IS THE "HAND IT OUT" HALF OF `📇 Your alliance`, and the reason it is
+    THIS IS THE "HAND IT OUT" HALF OF `🏰 Your alliance`, and the reason it is
     here rather than in the surface is that "which of these could not be read"
     is a finding about our data. A surface that filtered them out would be
     deciding what the record says.

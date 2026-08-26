@@ -30,7 +30,7 @@ import champion_duel_wording as words
 def cd_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
     db.init_db()
-    # `📇 Your alliance` reads stored odds, and `store_lib.lookup` degrades
+    # `🏰 Your alliance` reads stored odds, and `store_lib.lookup` degrades
     # rather than raising on a bad store -- so without the table these tests
     # would pass while silently exercising the no-odds branch every time.
     # Idempotent, and it is the pair `on_ready` calls.
@@ -1088,7 +1088,7 @@ def test_the_empty_round_makes_recording_the_recommended_one(cd_db):
     assert primaries == [hub.CD_BTN_RECORD]
 
 
-# ── `📇 Your alliance` ────────────────────────────────────────────────────────
+# ── `🏰 Your alliance` ────────────────────────────────────────────────────────
 #
 # Leadership's view of their own people, reading across every group. The tests
 # that matter most here are the ones asserting the read is NOT a group filter:
@@ -1815,7 +1815,7 @@ def test_the_reads_control_locks_rather_than_hides_where_it_could_run(cd_db):
 
 
 def test_the_hub_offers_the_alliance_beside_the_group(cd_db):
-    """The plan splits `🏅 Your group` into `🏅 Your standing`, `📇 Your
+    """The plan splits `🏅 Your group` into `🏅 Your standing`, `🏰 Your
     alliance` and the roster behind a filter, so the two sit together for
     exactly as long as the old control survives."""
     grouping, _groups, _players = _alliance_world()

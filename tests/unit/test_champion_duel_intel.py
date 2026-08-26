@@ -434,7 +434,7 @@ def test_no_options_is_no_spread_rather_than_a_spread_of_zero(cd_db):
 
 # ── One player against their whole group ─────────────────────────────────────
 #
-# `reads_for` is the loop `📇 Your alliance` runs to hand a player their own
+# `reads_for` is the loop `🏰 Your alliance` runs to hand a player their own
 # page. What is tested here is what it does with the cases that do NOT produce
 # an answer, because a loop that dropped them would be deciding what the record
 # says on the surface's behalf.

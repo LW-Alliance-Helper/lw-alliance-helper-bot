@@ -115,25 +115,27 @@ CD_BTN_GROUP = "🏅 Your group"
 # group it is a rank within"*, which is this surface word for word. It is the
 # same glyph `CD_BTN_GROUP` carries, and that is deliberate rather than a
 # collision: the plan retires `🏅 Your group` in session 6 and splits it into
-# this and `📇 Your alliance`, so the two share a mark for exactly as long as
+# this and `🏰 Your alliance`, so the two share a mark for exactly as long as
 # the old one survives.
 CD_BTN_STANDING = "🏅 Your standing"
 # Approved by Kevin, 2026-08-24, as one of the four IA labels
 # (`PLAN_champion_duel_ia.md`, *Settled names*). The words are not open.
 #
-# ⚠️ THE GLYPH CONTRADICTS A DECISION RECORDED TEN LINES ABOVE, and this note
-# is here rather than a silent change because the label is his and a session
-# does not overrule it. `CD_BTN_GROUP`'s comment records 📇 as **retired for
-# being illegible at button size** -- *"Kevin could not identify that glyph at
-# 200% zoom"* -- which is also why `CD_BTN_INTEL`'s comment lists ♟️ as ruled
-# out "which is what retired 📇". The label was approved the day after. Both
-# facts are his and they disagree, so this ships as approved and the conflict
-# is in the pull request for him to settle.
+# 🏰 SETTLED BY KEVIN, 2026-08-26, over 📇 and over retiring the label. It
+# shipped on 📇 and flagged rather than substituting a mark silently, because
+# the label was his: `CD_BTN_GROUP`'s comment records 📇 as **retired for being
+# illegible at button size** -- *"Kevin could not identify that glyph at 200%
+# zoom"* -- and `CD_BTN_INTEL`'s lists ♟️ as ruled out "which is what retired
+# 📇". He settled the mark; the words were never in question, and the
+# retirement note now stops contradicting a live label.
 #
-# The sense is right whatever he decides: `DESIGN.md` has no glyph for "the
-# people on my side", 👥 is Member Sync's and out of reach by rule 3, and a
-# card index is a list of the people you keep track of.
-CD_BTN_ALLIANCE = "📇 Your alliance"
+# 🏰 was uncatalogued and has its own `DESIGN.md` Action-catalog row as of the
+# same day. `DESIGN.md` had no glyph for *the people on your side*, which is the
+# gap that pushed the session to 📇 in the first place: 👥 is Member Sync's and
+# out of reach by rule 3, ➕ and 🏅 are taken on this same grid, and 🗂️, 🤝
+# and 🛡️ are spoken for elsewhere. 👪 was the other free one and is a
+# household rather than a side.
+CD_BTN_ALLIANCE = "🏰 Your alliance"
 # Deliberately not "prediction". The game runs its own prediction, and it is a
 # betting market on individual matches (Kevin, 2026-08-16). This answers a
 # question that one does not: whether you get out of your group.
@@ -558,62 +560,61 @@ _STANDING_ELSEWHERE = (
 _STANDING_ELSEWHERE_WARZONE = " ({warzone})"
 
 
-# ── `📇 Your alliance` copy ───────────────────────────────────────────────────
+# ── `🏰 Your alliance` copy ───────────────────────────────────────────────────
 #
-# ⚠️ EVERY STRING IN THIS BLOCK IS NOT SIGNED OFF. The variants are enumerated
-# in the pull request body rather than here, because this project has twice
-# lost a batch of alternatives with a session report and had to rebuild them
-# (`CHAMPION_DUEL_INDEX.md`). Only `CD_BTN_ALLIANCE` itself is approved.
+# **Signed off by Kevin, 2026-08-26**, off a page that put the strings to him
+# one block per string, each rendered on the Discord surface it sits on. Three
+# of the twenty-two are still marked below: his answers reach this file through
+# `HANDOFF_apply_alliance_copy_and_stage.md`, whose lists name nineteen.
 #
 # `notes/UX.md` is binding on all of it: US English, **"I" acts and "we"
 # holds**, `odds` rather than `chance`, and sentence case on anything that
 # reads as a label.
 
-#: ⚠️ NOT SIGNED OFF. Nobody has told us which account the reader plays, so we
-#: cannot know whose alliance to show.
+#: Nobody has told us which account the reader plays, so we cannot know whose
+#: alliance to show.
 #:
-#: Deliberately parallel to `_STANDING_UNCLAIMED` in shape -- what is missing,
-#: then what fixing it buys -- because the two land on the same claim flow from
-#: the same hub and a reader who dismisses one will meet the other.
+#: **Kevin cut it to two sentences on one line**, 2026-08-26, from a version
+#: that ran what-is-missing and what-fixing-it-buys as separate paragraphs. It
+#: still says both; it no longer needs the break to.
 #:
 #: **It does not reuse `_STANDING_UNCLAIMED`.** That one opens *"We do not know
 #: which of these players is you"*, and "these players" is pointing at a roster
 #: that is on screen there and is not here.
 _ALLIANCE_UNCLAIMED = (
-    "We do not know which account is yours, so we cannot tell which alliance is yours.\n\n"
-    "Tell us once and this opens on your own alliance every time."
+    "We do not have an account recorded for you. "
+    "Tell us your account and we can find your alliance."
 )
 
-#: ⚠️ NOT SIGNED OFF. They hold a claim, on an account carrying no alliance tag.
+#: They hold a claim, on an account carrying no alliance tag.
 #:
 #: **The tag is a recorded field and a blank one is a gap in the record**, not a
 #: statement that somebody is in no alliance -- `upsert_registrant` refuses to
 #: let a blank overwrite an imported value for exactly that reason. So this
-#: says what is missing and offers the door, which is principle 3.
+#: says what is missing, and the door under it is a control rather than a
+#: sentence naming one, which is principle 3.
 #:
-#: `➕ Add a player` is the control, and it is genuinely the right one rather
-#: than the nearest one: `upsert_registrant` fills a blank `alliance` on an
-#: existing row, so re-entering the same name and warzone with the tag records
-#: it against the account already held.
-_ALLIANCE_NO_TAG = (
-    "We do not have an alliance recorded for **{player}**, so we cannot tell "
-    "whose people to show.\n\n"
-    "Add it with **{add}**, using the same name and warzone."
-)
+#: **It used to end *"Add it with `➕ Add a player`, using the same name and
+#: warzone"*, and Kevin cut that on 2026-08-26** -- the same day he asked for
+#: `CD_BTN_EDIT_ME`. Sending somebody to *add a player* in order to fill in one
+#: field about themselves is the thing that control exists to stop, so the
+#: sentence naming it goes with it.
+_ALLIANCE_NO_TAG = "We do not have an alliance recorded for **{player}**."
 
-#: ⚠️ NOT SIGNED OFF. The tag is held and nobody carries it in this Champion
-#: Duel. Reachable when a leader's own account is the only one we hold.
+#: The tag is held and nobody carries it in this Champion Duel. Reachable when
+#: a leader's own account is the only one we hold.
 #:
 #: **It does not say the alliance is not in the event.** We hold what people
 #: entered, and one recorded account out of forty is the normal state of a
 #: record nobody has filled in yet rather than a finding about the alliance.
+#: **Kevin's wording says *recorded* outright** for that reason.
 _ALLIANCE_NOBODY = (
-    "We do not hold anyone from **{alliance}** in this Champion Duel yet.\n\n"
+    "We do not have anyone from **{alliance}** recorded in this Champion Duel yet.\n\n"
     "Anyone can add them one at a time with **{add}**, or paste a whole group "
     "in with **{record}**."
 )
 
-#: ⚠️ NOT SIGNED OFF. How much of this alliance we hold, said once at the top.
+#: How much of this alliance we hold, said once at the top.
 #:
 #: **"Accounts", not "players" or "people".** A registrant is an account and
 #: accounts change hands (`PROPOSAL_champion_duel_ia.md`, *What we hold is
@@ -622,36 +623,44 @@ _ALLIANCE_NOBODY = (
 #: name, which is what a leader recognises their team by.
 _ALLIANCE_HELD = "{count} on file."
 
-#: ⚠️ NOT SIGNED OFF. The field name over accounts we hold that are in no round
-#: of this Champion Duel.
+#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD. It was on the page Kevin answered and
+#: he raised nothing against it, but `HANDOFF_apply_alliance_copy_and_stage.md`
+#: names nineteen of the twenty-two and this is one of the three it skips. It
+#: is unchanged apart from the *round* → *stage* sweep, which it did not carry
+#: when he read it.
+#:
+#: The field name over accounts we hold that are in no stage of this Champion
+#: Duel.
 #:
 #: **Last, and named for the gap rather than for the people.** These are held
 #: accounts nobody has placed, so the fact is about our record; a name like
 #: "Not playing" would be a claim about the player that nothing supports.
 _ALLIANCE_UNPLACED = "No round recorded"
 
-#: ⚠️ NOT SIGNED OFF. What the unplaced accounts need, said once under them
-#: rather than once per row.
+#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD, on the same terms as the heading above
+#: it. What the unplaced accounts need, said once under them rather than once
+#: per row.
 _ALLIANCE_UNPLACED_BODY = "We hold these accounts but no round for them. **{record}** places them."
 
-#: ⚠️ NOT SIGNED OFF. The Premium half, named for the thing rather than the act,
+#: The Premium half, named for the thing rather than the act,
 #: the same way `_STANDING_WORKED_OUT` is.
 _ALLIANCE_LOCKED_FIELD = "Their odds"
 
-#: ⚠️ NOT SIGNED OFF. The upsell, on the embed rather than on the disabled
-#: button, which cannot carry a reason (`UX.md` principle 5).
+#: The upsell, on the embed rather than on the disabled button, which cannot
+#: carry a reason (`UX.md` principle 5).
 #:
 #: **It names what the model adds over the rows already above it**, which are
 #: free and are most of the screen. A leader can already see who is where.
-_ALLIANCE_LOCKED = (
-    "Everything above is free. What Premium adds is how far each of these "
-    "players gets: their odds of getting through, and of winning their group."
-)
+#:
+#: **Kevin cut the "everything above is free" half** on 2026-08-26 and closed it
+#: *"and more"* instead: the free rows are on the screen being read, so a line
+#: spent saying they are free tells the reader what they can already see.
+_ALLIANCE_LOCKED = "Premium sees their odds of getting through, of winning their group, and more."
 
 
 # ── The personal reads ────────────────────────────────────────────────────────
 
-#: ⚠️ NOT SIGNED OFF. The control that produces one read per player.
+#: The control that produces one read per player.
 #:
 #: 🎯 is `CD_BTN_INTEL`'s glyph and that is the point: this is that surface
 #: applied to a whole team at once, so the mark that means "take aim at one
@@ -659,21 +668,26 @@ _ALLIANCE_LOCKED = (
 #: who has seen one should recognise the other).
 CD_BTN_READS = "🎯 Head to head for everyone"
 
-#: ⚠️ NOT SIGNED OFF. Where a read is possible at all, said on the surface that
-#: offers it rather than discovered by pressing.
+#: Where a read is possible at all, said on the surface that offers it rather
+#: than discovered by pressing.
 #:
 #: **The semi-finals and only the semi-finals**, and `db.ROUND_ROBIN_STAGES` is
 #: what decides it rather than this sentence. A group of 8 meeting every other
 #: once is the one round where the rest of the group IS somebody's opponent
 #: list; the qualifiers are 100 players who do not all meet, and the knockouts
 #: are a bracket whose pairings nothing in the schema holds.
+#:
+#: **It says "head to head", not "head to head reads."** Kevin, 2026-08-26.
+#: The reader has just pressed `CD_BTN_READS`, which names the surface; the
+#: word *reads* is ours for the output and made them learn a second noun for
+#: something they had already found.
 _READS_ROUND_ONLY = (
-    "Head to head reads cover the **{round}**, where everyone in a group plays "
+    "Head to head covers the **{round}**, where everyone in a group plays "
     "everyone else. We cannot say who meets who in the other rounds."
 )
 
-#: ⚠️ NOT SIGNED OFF. The read's own opening line: which group it is about, and
-#: how many meetings it covers.
+#: The read's own opening line: which group it is about, and how many
+#: meetings it covers.
 #:
 #: **IT DOES NOT SAY "REMAINING", AND THE MOCK DOES.** Kevin's page is headed
 #: *"3 OPPONENTS REMAINING"*, and nothing the bot holds can say that: the only
@@ -685,9 +699,9 @@ _READS_ROUND_ONLY = (
 _READS_TITLE = "🎯 {player}"
 _READS_OPENER = "**{group}** · {count}."
 
-#: ⚠️ NOT SIGNED OFF. Inline labels inside one opponent's block. **Kevin's own
-#: words, off the mock he made** -- "Usually deploys", "Suggested answer" --
-#: rather than wording invented here.
+#: Inline labels inside one opponent's block. **Kevin's own words, off the
+#: mock he made** -- "Usually deploys", "Suggested answer" -- rather than
+#: wording invented here.
 #:
 #: `_READ_ANSWER` is deliberately NOT `FIELD_YOURS`. That one says "Your
 #: recommended line-up" and is right on `🎯 Head to head`, where the reader is
@@ -703,15 +717,15 @@ _READS_OPENER = "**{group}** · {count}."
 _READ_DEPLOYS = "Usually deploys"
 _READ_ANSWER = "Suggested answer"
 
-#: ⚠️ NOT SIGNED OFF. The odds line at the head of one opponent's block.
+#: The odds line at the head of one opponent's block.
 #:
 #: **"Odds", not "win chance."** The mock's own footer says *"estimated win
 #: chance"*; `notes/UX.md` settles that word the other way, and the mock is a
 #: picture rather than approved copy.
 _READ_ODDS = "**{odds}** {player} wins"
 
-#: ⚠️ NOT SIGNED OFF. Where there is no recommendation to price, the honest
-#: single figure does not exist and the range is the answer.
+#: Where there is no recommendation to price, the honest single figure does
+#: not exist and the range is the answer.
 #:
 #: **`Envelope.mean` is never printed as the odds**, and that is the
 #: correctness point rather than a style choice. `champion_duel_intel` states
@@ -721,8 +735,8 @@ _READ_ODDS = "**{odds}** {player} wins"
 #: number cannot carry, so the range is what goes here.
 _READ_RANGE = "Runs from {floor} to {ceiling}, depending on what the two of them set."
 
-#: ⚠️ NOT SIGNED OFF. This opponent cannot be read at all: a slot of theirs has
-#: no squad recorded, so there is no line-up to put on the field.
+#: This opponent cannot be read at all: a slot of theirs has no squad
+#: recorded, so there is no line-up to put on the field.
 #:
 #: **The row stays on the page.** A leader handing this to a player needs to
 #: see that one of their seven meetings is unanswerable, and which box fixes
@@ -733,7 +747,7 @@ _READ_NO_OPPONENT = (
     "Slot(s) {slots} have no squad recorded. {path}"
 )
 
-#: ⚠️ NOT SIGNED OFF. What every figure on a read is, said once at the bottom.
+#: What every figure on a read is, said once at the bottom.
 #:
 #: **"One match, not a meeting"** is the load-bearing half. Every probability
 #: here is `best_of=1`, because a meeting is three matches with a redeploy
@@ -745,18 +759,17 @@ _READS_BASIS = (
     "Odds are for one match, not a whole meeting. Squad types we have not seen are inferred."
 )
 
-#: ⚠️ NOT SIGNED OFF. The player's own side is what is missing, which stops
-#: every one of their meetings rather than one.
+#: The player's own side is what is missing, which stops every one of their
+#: meetings rather than one.
 _READS_NEEDS_THEM = (
     "We do not have a full line-up for **{player}**, so none of their meetings "
     "can be worked out. Slot(s) {slots} have no squad recorded."
 )
 
-#: ⚠️ NOT SIGNED OFF. Nobody in the alliance is in a round these reads cover.
+#: Nobody in the alliance is in a round these reads cover.
 _READS_NOBODY = "We do not hold anyone from **{alliance}** in the **{round}** yet."
 
-#: ⚠️ NOT SIGNED OFF. How many reads went out and, where it matters, who did
-#: not fit.
+#: How many reads went out and, where it matters, who did not fit.
 #:
 #: **The cut is named rather than counted.** `CHAMPION_DUEL_INDEX.md`'s rule --
 #: a filter that silently drops its tail reads as "your alliance is not in
@@ -764,8 +777,8 @@ _READS_NOBODY = "We do not hold anyone from **{alliance}** in the **{round}** ye
 #: cannot see which of their people was left out cannot go and get them.
 _READS_CUT = "The first {shown} by rank. Not included: {names}."
 
-#: ⚠️ NOT SIGNED OFF. The control that hands the reads to the channel, and the
-#: line that rides with them.
+#: The control that hands the reads to the channel, and the line that rides
+#: with them.
 #:
 #: Follows `CD_BTN_SHARE` to the word, because it is the same act on a
 #: different payload: an ephemeral answer that the person who asked for it
@@ -5682,7 +5695,7 @@ def _elsewhere_note(player: dict, warzone=None) -> str:
     return line + "."
 
 
-# ── `📇 Your alliance` ────────────────────────────────────────────────────────
+# ── `🏰 Your alliance` ────────────────────────────────────────────────────────
 #
 # Leadership's view of their own people, and the surface that answers the one
 # question the information architecture rethink found nobody had asked for.
@@ -5779,7 +5792,7 @@ def _alliance_odds(players: list[dict]) -> dict[int, dict]:
 def read_alliance(
     user_id: int, grouping: dict | None, *, warzone=None, with_odds: bool = True
 ) -> dict:
-    """Everything `📇 Your alliance` renders, in one blocking read.
+    """Everything `🏰 Your alliance` renders, in one blocking read.
 
     Returns a dict whose `state` is one of:
 
@@ -5966,7 +5979,7 @@ def _add_listing(embed: discord.Embed, name: str, lines: list[str]) -> None:
 
 
 def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> discord.Embed:
-    """`📇 Your alliance`: where all of my people are, and how far they get.
+    """`🏰 Your alliance`: where all of my people are, and how far they get.
 
     **One field per round, furthest round first.** The rounds are the shape of
     the answer: a leader wants to know who got deepest before they want a
@@ -5996,7 +6009,6 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
             title=CD_BTN_ALLIANCE[:256],
             description=_ALLIANCE_NO_TAG.format(
                 player=discord.utils.escape_markdown(_label(player)),
-                add=_btn_words(CD_BTN_ADD),
             )[:4096],
             color=discord.Color.blurple(),
         )
@@ -6093,7 +6105,7 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
 
 # ── The personal reads ────────────────────────────────────────────────────────
 #
-# **This is the half of `📇 Your alliance` that reaches somebody.** Kevin
+# **This is the half of `🏰 Your alliance` that reaches somebody.** Kevin
 # produced these by hand and tagged players one at a time; doing it for the
 # whole team in one action is the mechanism that turns a computed answer into
 # one that arrived. The content is his -- he mocked a page showing one player,
@@ -6402,7 +6414,7 @@ class _ReadsShareView(discord.ui.View):
 
 
 class _AllianceView(discord.ui.View):
-    """`📇 Your alliance`, with the page control and the way to hand reads out.
+    """`🏰 Your alliance`, with the page control and the way to hand reads out.
 
     Re-reads on every press rather than paging a captured list. This view lives
     fifteen minutes, and a claim can move or a group can be recorded inside

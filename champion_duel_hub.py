@@ -115,25 +115,27 @@ CD_BTN_GROUP = "🏅 Your group"
 # group it is a rank within"*, which is this surface word for word. It is the
 # same glyph `CD_BTN_GROUP` carries, and that is deliberate rather than a
 # collision: the plan retires `🏅 Your group` in session 6 and splits it into
-# this and `📇 Your alliance`, so the two share a mark for exactly as long as
+# this and `🏰 Your alliance`, so the two share a mark for exactly as long as
 # the old one survives.
 CD_BTN_STANDING = "🏅 Your standing"
 # Approved by Kevin, 2026-08-24, as one of the four IA labels
 # (`PLAN_champion_duel_ia.md`, *Settled names*). The words are not open.
 #
-# ⚠️ THE GLYPH CONTRADICTS A DECISION RECORDED TEN LINES ABOVE, and this note
-# is here rather than a silent change because the label is his and a session
-# does not overrule it. `CD_BTN_GROUP`'s comment records 📇 as **retired for
-# being illegible at button size** -- *"Kevin could not identify that glyph at
-# 200% zoom"* -- which is also why `CD_BTN_INTEL`'s comment lists ♟️ as ruled
-# out "which is what retired 📇". The label was approved the day after. Both
-# facts are his and they disagree, so this ships as approved and the conflict
-# is in the pull request for him to settle.
+# 🏰 SETTLED BY KEVIN, 2026-08-26, over 📇 and over retiring the label. It
+# shipped on 📇 and flagged rather than substituting a mark silently, because
+# the label was his: `CD_BTN_GROUP`'s comment records 📇 as **retired for being
+# illegible at button size** -- *"Kevin could not identify that glyph at 200%
+# zoom"* -- and `CD_BTN_INTEL`'s lists ♟️ as ruled out "which is what retired
+# 📇". He settled the mark; the words were never in question, and the
+# retirement note now stops contradicting a live label.
 #
-# The sense is right whatever he decides: `DESIGN.md` has no glyph for "the
-# people on my side", 👥 is Member Sync's and out of reach by rule 3, and a
-# card index is a list of the people you keep track of.
-CD_BTN_ALLIANCE = "📇 Your alliance"
+# 🏰 was uncatalogued and has its own `DESIGN.md` Action-catalog row as of the
+# same day. `DESIGN.md` had no glyph for *the people on your side*, which is the
+# gap that pushed the session to 📇 in the first place: 👥 is Member Sync's and
+# out of reach by rule 3, ➕ and 🏅 are taken on this same grid, and 🗂️, 🤝
+# and 🛡️ are spoken for elsewhere. 👪 was the other free one and is a
+# household rather than a side.
+CD_BTN_ALLIANCE = "🏰 Your alliance"
 # Deliberately not "prediction". The game runs its own prediction, and it is a
 # betting market on individual matches (Kevin, 2026-08-16). This answers a
 # question that one does not: whether you get out of your group.
@@ -354,6 +356,20 @@ _ODDS_BASIS = (
     "we have not seen are sampled, so these carry that uncertainty."
 )
 
+#: What the odds table was computed over, and what its two columns mean.
+#:
+#: **Two constants rather than one sentence**, and the split is where the
+#: fields are: a test can assert the trial count line without knowing how many
+#: get out of a group, and the column line without knowing the trial count.
+#: They were f-strings inside `build_odds_embed` until the 2026-08-26 sweep
+#: moved *round* to *stage* and the test guarding them carried its own copy of
+#: the words -- the `_ODDS_AS_OF` failure, one surface along.
+_ODDS_OVER = "Over {trials:,} simulations of the stage."
+_ODDS_COLUMNS = (
+    "The first column gives the odds of finishing in the top **{advance}** and "
+    "going through, the second the odds of winning the group outright."
+)
+
 #: The same, for the bracket, which is averaged over seedings rather than run
 #: against the one anybody will get.
 _BRACKET_BASIS = (
@@ -400,7 +416,7 @@ _INTEL_NEEDS_BOTH = "⚠️ I need both players for a head to head."
 #: 3 puts the exit on the message, and `_StandingClaimView` carries it.
 _STANDING_UNCLAIMED = (
     "We do not know which of these players is you.\n\n"
-    "Tell us once and this opens on your own round every time."
+    "Tell us once and this opens on your own stage every time."
 )
 
 #: The control that opens `champion_duel_claim.ClaimModal` from a surface with
@@ -414,10 +430,70 @@ _STANDING_UNCLAIMED = (
 #: catalog's link between two things.
 CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
 
+#: ⚠️ NOT SIGNED OFF. Kevin asked for the control on 2026-08-26 and suggested
+#: the words; the variants are enumerated in the pull request body rather than
+#: here, which is the rule this project has now paid for twice
+#: (`CHAMPION_DUEL_INDEX.md`).
+#:
+#: **What it fixes.** `_ALLIANCE_NO_TAG` fires when we hold somebody's account
+#: and no alliance tag, and the only route to fix that was `➕ Add a player`.
+#: That control genuinely works -- the tag is a field on `_AddPlayerModal` and
+#: `upsert_registrant` fills a blank one on the row already held rather than
+#: duplicating it -- but Kevin: *"the label says you are adding a player when
+#: you are filling in one field about yourself."* The label describes the
+#: control (`UX.md`), and that one described somebody else's.
+#:
+#: **Member voice, deliberately.** "my", not "your", because it pairs with
+#: `🔗 This is my account` on the claim it depends on, and `UX.md` names that
+#: pair as one of the two things a voice sweep must not touch.
+#:
+#: ✏️ is the catalog's *edit, change*, and an edit is what this is. Not ➕,
+#: which is Create and is the word that made the old route read wrong.
+CD_BTN_EDIT_ME = "✏️ Edit my information"
+
+#: ⚠️ NOT SIGNED OFF, on the same terms as the button above it.
+#:
+#: **It takes the button's own noun**, which is the rule Kevin set on the
+#: claiming acknowledgements: the modal a control opens says what the control
+#: said. It is also `_STANDING_RECORDED` word for word -- the heading over
+#: exactly these fields on `🏅 Your standing` -- so the surface that sends you
+#: here and the screen you arrive on name the same thing.
+#:
+#: Near-collision, checked rather than assumed: `champion_duel_claim`'s modal
+#: is titled **Your account**, settled 2026-08-25. That one asks *which*
+#: account is yours; this one holds the facts about it. Same shape as the
+#: buttons that open them, which are `🔗 This is my account` and this.
+_EDIT_ME_TITLE = "Your information"
+
+#: ⚠️ NOT SIGNED OFF, on the same terms as the two above. Variants in the pull
+#: request body.
+#:
+#: **The add flow's own note is wrong here and `/code-review` found it.** It
+#: says *"was already here. Opening them instead of adding a duplicate"*, which
+#: fires on every edit -- the member's own row always matches -- and tells
+#: somebody the write was declined when it landed.
+_EDIT_ME_DONE = "✅ Updated **{player}**."
+
+#: ⚠️ NOT SIGNED OFF, and it reports a real outcome rather than refusing one.
+#:
+#: **A registrant is keyed on (name, warzone) and cannot be renamed.** Both are
+#: editable boxes on this modal, so a member whose in-game name changed types
+#: the new one and `upsert_registrant` INSERTs a second account -- their claim
+#: stays on the first, and anything they just entered lands on a row nobody
+#: holds. Silently is how that becomes an orphan nobody can trace.
+#:
+#: **It names no exit and does not need to.** The card this rides on carries
+#: the claim pair already, so `🔗 This is my account` is on screen underneath
+#: for somebody who really has moved.
+_EDIT_ME_NEW = (
+    "ℹ️ **{player}** is a new account, because the name or warzone changed. "
+    "**{held}** is still your account."
+)
+
 #: The round we hold nothing for. Not an error: a Champion Duel that has not
 #: reached its semifinals has no group to stand in, and saying so plainly is
 #: the honest state rather than an empty table.
-_STANDING_NO_ROUND = "We have not recorded a round for you yet. You can add it with **{record}**."
+_STANDING_NO_ROUND = "We have not recorded a stage for you yet. You can add it with **{record}**."
 
 #: The free half's heading. Kevin's, 2026-08-25, over "What we recorded".
 #:
@@ -454,14 +530,17 @@ _STANDING_NOTHING_RECORDED = "Nothing recorded yet."
 #: this is the first inside an embed field.
 _STANDING_READ_AT = "-# Updated {when}."
 
-#: The round has no model, which today is the qualifiers and only them.
+#: The stage has no model, which today is the qualifiers and only them.
 #:
-#: **It says which round rather than "this round".** A reader who has just
-#: switched the picker to the qualifiers needs to know it is the round and not
-#: the bot, and `STAGES_WITH_A_MODEL` is a fact about rounds.
+#: **It names the stage rather than saying "this stage".** A reader who has
+#: just switched the picker to the qualifiers needs to know it is the stage and
+#: not the bot, and `STAGES_WITH_A_MODEL` is a fact about stages.
+#:
+#: The `{round}` field keeps its name. The 2026-08-26 sweep moved the copy and
+#: left every identifier alone, so it collides with nothing else in flight.
 _STANDING_NO_MODEL = (
     "We do not model the **{round}**, so there is no projection for it. "
-    "Your rank and kill score above are what the round is scored on."
+    "Your rank and kill score above are what the stage is scored on."
 )
 
 # THE VERDICT AND THE REWARD BAND ARE GONE, and this note is here so nobody
@@ -509,6 +588,14 @@ _STANDING_NO_MODEL = (
 #: button and it is the claim. Kevin's call, made knowing the redesign; do not
 #: re-add a route to a control that is about to move.
 _STANDING_NOT_WORKED_OUT = "We do not have a projection for your group yet."
+
+#: The first of the two figures `🏅 Your standing` opens on.
+#:
+#: **Getting out of your group is getting to the next stage**, which is the
+#: word the game uses for the qualifiers, the semi-finals and the knockouts.
+#: It said *round* until 2026-08-26 and one test carried the words rather than
+#: reading them, so the sweep made it a constant on the way past.
+_STANDING_THROUGH = "Through to the next stage"
 
 #: The upsell, on the embed rather than on the disabled button, which cannot
 #: carry a reason. It names what the model adds over the free half sitting
@@ -558,62 +645,61 @@ _STANDING_ELSEWHERE = (
 _STANDING_ELSEWHERE_WARZONE = " ({warzone})"
 
 
-# ── `📇 Your alliance` copy ───────────────────────────────────────────────────
+# ── `🏰 Your alliance` copy ───────────────────────────────────────────────────
 #
-# ⚠️ EVERY STRING IN THIS BLOCK IS NOT SIGNED OFF. The variants are enumerated
-# in the pull request body rather than here, because this project has twice
-# lost a batch of alternatives with a session report and had to rebuild them
-# (`CHAMPION_DUEL_INDEX.md`). Only `CD_BTN_ALLIANCE` itself is approved.
+# **Signed off by Kevin, 2026-08-26**, off a page that put the strings to him
+# one block per string, each rendered on the Discord surface it sits on. Three
+# of the twenty-two are still marked below: his answers reach this file through
+# `HANDOFF_apply_alliance_copy_and_stage.md`, whose lists name nineteen.
 #
 # `notes/UX.md` is binding on all of it: US English, **"I" acts and "we"
 # holds**, `odds` rather than `chance`, and sentence case on anything that
 # reads as a label.
 
-#: ⚠️ NOT SIGNED OFF. Nobody has told us which account the reader plays, so we
-#: cannot know whose alliance to show.
+#: Nobody has told us which account the reader plays, so we cannot know whose
+#: alliance to show.
 #:
-#: Deliberately parallel to `_STANDING_UNCLAIMED` in shape -- what is missing,
-#: then what fixing it buys -- because the two land on the same claim flow from
-#: the same hub and a reader who dismisses one will meet the other.
+#: **Kevin cut it to two sentences on one line**, 2026-08-26, from a version
+#: that ran what-is-missing and what-fixing-it-buys as separate paragraphs. It
+#: still says both; it no longer needs the break to.
 #:
 #: **It does not reuse `_STANDING_UNCLAIMED`.** That one opens *"We do not know
 #: which of these players is you"*, and "these players" is pointing at a roster
 #: that is on screen there and is not here.
 _ALLIANCE_UNCLAIMED = (
-    "We do not know which account is yours, so we cannot tell which alliance is yours.\n\n"
-    "Tell us once and this opens on your own alliance every time."
+    "We do not have an account recorded for you. "
+    "Tell us your account and we can find your alliance."
 )
 
-#: ⚠️ NOT SIGNED OFF. They hold a claim, on an account carrying no alliance tag.
+#: They hold a claim, on an account carrying no alliance tag.
 #:
 #: **The tag is a recorded field and a blank one is a gap in the record**, not a
 #: statement that somebody is in no alliance -- `upsert_registrant` refuses to
 #: let a blank overwrite an imported value for exactly that reason. So this
-#: says what is missing and offers the door, which is principle 3.
+#: says what is missing, and the door under it is a control rather than a
+#: sentence naming one, which is principle 3.
 #:
-#: `➕ Add a player` is the control, and it is genuinely the right one rather
-#: than the nearest one: `upsert_registrant` fills a blank `alliance` on an
-#: existing row, so re-entering the same name and warzone with the tag records
-#: it against the account already held.
-_ALLIANCE_NO_TAG = (
-    "We do not have an alliance recorded for **{player}**, so we cannot tell "
-    "whose people to show.\n\n"
-    "Add it with **{add}**, using the same name and warzone."
-)
+#: **It used to end *"Add it with `➕ Add a player`, using the same name and
+#: warzone"*, and Kevin cut that on 2026-08-26** -- the same day he asked for
+#: `CD_BTN_EDIT_ME`. Sending somebody to *add a player* in order to fill in one
+#: field about themselves is the thing that control exists to stop, so the
+#: sentence naming it goes with it.
+_ALLIANCE_NO_TAG = "We do not have an alliance recorded for **{player}**."
 
-#: ⚠️ NOT SIGNED OFF. The tag is held and nobody carries it in this Champion
-#: Duel. Reachable when a leader's own account is the only one we hold.
+#: The tag is held and nobody carries it in this Champion Duel. Reachable when
+#: a leader's own account is the only one we hold.
 #:
 #: **It does not say the alliance is not in the event.** We hold what people
 #: entered, and one recorded account out of forty is the normal state of a
 #: record nobody has filled in yet rather than a finding about the alliance.
+#: **Kevin's wording says *recorded* outright** for that reason.
 _ALLIANCE_NOBODY = (
-    "We do not hold anyone from **{alliance}** in this Champion Duel yet.\n\n"
+    "We do not have anyone from **{alliance}** recorded in this Champion Duel yet.\n\n"
     "Anyone can add them one at a time with **{add}**, or paste a whole group "
     "in with **{record}**."
 )
 
-#: ⚠️ NOT SIGNED OFF. How much of this alliance we hold, said once at the top.
+#: How much of this alliance we hold, said once at the top.
 #:
 #: **"Accounts", not "players" or "people".** A registrant is an account and
 #: accounts change hands (`PROPOSAL_champion_duel_ia.md`, *What we hold is
@@ -622,36 +708,44 @@ _ALLIANCE_NOBODY = (
 #: name, which is what a leader recognises their team by.
 _ALLIANCE_HELD = "{count} on file."
 
-#: ⚠️ NOT SIGNED OFF. The field name over accounts we hold that are in no round
-#: of this Champion Duel.
+#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD. It was on the page Kevin answered and
+#: he raised nothing against it, but `HANDOFF_apply_alliance_copy_and_stage.md`
+#: names nineteen of the twenty-two and this is one of the three it skips. It
+#: is unchanged apart from the *round* → *stage* sweep, which it did not carry
+#: when he read it.
+#:
+#: The field name over accounts we hold that are in no stage of this Champion
+#: Duel.
 #:
 #: **Last, and named for the gap rather than for the people.** These are held
 #: accounts nobody has placed, so the fact is about our record; a name like
 #: "Not playing" would be a claim about the player that nothing supports.
-_ALLIANCE_UNPLACED = "No round recorded"
+_ALLIANCE_UNPLACED = "No stage recorded"
 
-#: ⚠️ NOT SIGNED OFF. What the unplaced accounts need, said once under them
-#: rather than once per row.
-_ALLIANCE_UNPLACED_BODY = "We hold these accounts but no round for them. **{record}** places them."
+#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD, on the same terms as the heading above
+#: it. What the unplaced accounts need, said once under them rather than once
+#: per row.
+_ALLIANCE_UNPLACED_BODY = "We hold these accounts but no stage for them. **{record}** places them."
 
-#: ⚠️ NOT SIGNED OFF. The Premium half, named for the thing rather than the act,
+#: The Premium half, named for the thing rather than the act,
 #: the same way `_STANDING_WORKED_OUT` is.
 _ALLIANCE_LOCKED_FIELD = "Their odds"
 
-#: ⚠️ NOT SIGNED OFF. The upsell, on the embed rather than on the disabled
-#: button, which cannot carry a reason (`UX.md` principle 5).
+#: The upsell, on the embed rather than on the disabled button, which cannot
+#: carry a reason (`UX.md` principle 5).
 #:
 #: **It names what the model adds over the rows already above it**, which are
 #: free and are most of the screen. A leader can already see who is where.
-_ALLIANCE_LOCKED = (
-    "Everything above is free. What Premium adds is how far each of these "
-    "players gets: their odds of getting through, and of winning their group."
-)
+#:
+#: **Kevin cut the "everything above is free" half** on 2026-08-26 and closed it
+#: *"and more"* instead: the free rows are on the screen being read, so a line
+#: spent saying they are free tells the reader what they can already see.
+_ALLIANCE_LOCKED = "Premium sees their odds of getting through, of winning their group, and more."
 
 
 # ── The personal reads ────────────────────────────────────────────────────────
 
-#: ⚠️ NOT SIGNED OFF. The control that produces one read per player.
+#: The control that produces one read per player.
 #:
 #: 🎯 is `CD_BTN_INTEL`'s glyph and that is the point: this is that surface
 #: applied to a whole team at once, so the mark that means "take aim at one
@@ -659,21 +753,26 @@ _ALLIANCE_LOCKED = (
 #: who has seen one should recognise the other).
 CD_BTN_READS = "🎯 Head to head for everyone"
 
-#: ⚠️ NOT SIGNED OFF. Where a read is possible at all, said on the surface that
-#: offers it rather than discovered by pressing.
+#: Where a read is possible at all, said on the surface that offers it rather
+#: than discovered by pressing.
 #:
 #: **The semi-finals and only the semi-finals**, and `db.ROUND_ROBIN_STAGES` is
 #: what decides it rather than this sentence. A group of 8 meeting every other
 #: once is the one round where the rest of the group IS somebody's opponent
 #: list; the qualifiers are 100 players who do not all meet, and the knockouts
 #: are a bracket whose pairings nothing in the schema holds.
+#:
+#: **It says "head to head", not "head to head reads."** Kevin, 2026-08-26.
+#: The reader has just pressed `CD_BTN_READS`, which names the surface; the
+#: word *reads* is ours for the output and made them learn a second noun for
+#: something they had already found.
 _READS_ROUND_ONLY = (
-    "Head to head reads cover the **{round}**, where everyone in a group plays "
-    "everyone else. We cannot say who meets who in the other rounds."
+    "Head to head covers the **{round}**, where everyone in a group plays "
+    "everyone else. We cannot say who meets who in the other stages."
 )
 
-#: ⚠️ NOT SIGNED OFF. The read's own opening line: which group it is about, and
-#: how many meetings it covers.
+#: The read's own opening line: which group it is about, and how many
+#: meetings it covers.
 #:
 #: **IT DOES NOT SAY "REMAINING", AND THE MOCK DOES.** Kevin's page is headed
 #: *"3 OPPONENTS REMAINING"*, and nothing the bot holds can say that: the only
@@ -685,9 +784,9 @@ _READS_ROUND_ONLY = (
 _READS_TITLE = "🎯 {player}"
 _READS_OPENER = "**{group}** · {count}."
 
-#: ⚠️ NOT SIGNED OFF. Inline labels inside one opponent's block. **Kevin's own
-#: words, off the mock he made** -- "Usually deploys", "Suggested answer" --
-#: rather than wording invented here.
+#: Inline labels inside one opponent's block. **Kevin's own words, off the
+#: mock he made** -- "Usually deploys", "Suggested answer" -- rather than
+#: wording invented here.
 #:
 #: `_READ_ANSWER` is deliberately NOT `FIELD_YOURS`. That one says "Your
 #: recommended line-up" and is right on `🎯 Head to head`, where the reader is
@@ -703,15 +802,15 @@ _READS_OPENER = "**{group}** · {count}."
 _READ_DEPLOYS = "Usually deploys"
 _READ_ANSWER = "Suggested answer"
 
-#: ⚠️ NOT SIGNED OFF. The odds line at the head of one opponent's block.
+#: The odds line at the head of one opponent's block.
 #:
 #: **"Odds", not "win chance."** The mock's own footer says *"estimated win
 #: chance"*; `notes/UX.md` settles that word the other way, and the mock is a
 #: picture rather than approved copy.
 _READ_ODDS = "**{odds}** {player} wins"
 
-#: ⚠️ NOT SIGNED OFF. Where there is no recommendation to price, the honest
-#: single figure does not exist and the range is the answer.
+#: Where there is no recommendation to price, the honest single figure does
+#: not exist and the range is the answer.
 #:
 #: **`Envelope.mean` is never printed as the odds**, and that is the
 #: correctness point rather than a style choice. `champion_duel_intel` states
@@ -721,8 +820,8 @@ _READ_ODDS = "**{odds}** {player} wins"
 #: number cannot carry, so the range is what goes here.
 _READ_RANGE = "Runs from {floor} to {ceiling}, depending on what the two of them set."
 
-#: ⚠️ NOT SIGNED OFF. This opponent cannot be read at all: a slot of theirs has
-#: no squad recorded, so there is no line-up to put on the field.
+#: This opponent cannot be read at all: a slot of theirs has no squad
+#: recorded, so there is no line-up to put on the field.
 #:
 #: **The row stays on the page.** A leader handing this to a player needs to
 #: see that one of their seven meetings is unanswerable, and which box fixes
@@ -733,7 +832,7 @@ _READ_NO_OPPONENT = (
     "Slot(s) {slots} have no squad recorded. {path}"
 )
 
-#: ⚠️ NOT SIGNED OFF. What every figure on a read is, said once at the bottom.
+#: What every figure on a read is, said once at the bottom.
 #:
 #: **"One match, not a meeting"** is the load-bearing half. Every probability
 #: here is `best_of=1`, because a meeting is three matches with a redeploy
@@ -745,18 +844,17 @@ _READS_BASIS = (
     "Odds are for one match, not a whole meeting. Squad types we have not seen are inferred."
 )
 
-#: ⚠️ NOT SIGNED OFF. The player's own side is what is missing, which stops
-#: every one of their meetings rather than one.
+#: The player's own side is what is missing, which stops every one of their
+#: meetings rather than one.
 _READS_NEEDS_THEM = (
     "We do not have a full line-up for **{player}**, so none of their meetings "
     "can be worked out. Slot(s) {slots} have no squad recorded."
 )
 
-#: ⚠️ NOT SIGNED OFF. Nobody in the alliance is in a round these reads cover.
+#: Nobody in the alliance is in a round these reads cover.
 _READS_NOBODY = "We do not hold anyone from **{alliance}** in the **{round}** yet."
 
-#: ⚠️ NOT SIGNED OFF. How many reads went out and, where it matters, who did
-#: not fit.
+#: How many reads went out and, where it matters, who did not fit.
 #:
 #: **The cut is named rather than counted.** `CHAMPION_DUEL_INDEX.md`'s rule --
 #: a filter that silently drops its tail reads as "your alliance is not in
@@ -764,8 +862,8 @@ _READS_NOBODY = "We do not hold anyone from **{alliance}** in the **{round}** ye
 #: cannot see which of their people was left out cannot go and get them.
 _READS_CUT = "The first {shown} by rank. Not included: {names}."
 
-#: ⚠️ NOT SIGNED OFF. The control that hands the reads to the channel, and the
-#: line that rides with them.
+#: The control that hands the reads to the channel, and the line that rides
+#: with them.
 #:
 #: Follows `CD_BTN_SHARE` to the word, because it is the same act on a
 #: different payload: an ephemeral answer that the person who asked for it
@@ -1272,6 +1370,20 @@ FIELD_OTHERS = "Other line-ups & winning odds"
 FIELD_FIX = "What would fix this"
 FIELD_ANYWAY = "Worth recording anyway"
 FIELD_WORTH = "Best and worst case"
+#: The player card's list of where they have got to.
+#:
+#: A constant because the 2026-08-26 sweep moved it and five tests named the
+#: old words, which is the `_ODDS_AS_OF` failure waiting to happen again.
+FIELD_STAGES = "Stages"
+
+#: The question every stage picker asks, on the record modal and on the group
+#: view's own select.
+#:
+#: **The one picker question that is a constant, and only because it moved.**
+#: Its siblings -- `Which group?`, `Which Champion Duel?`, `Which alliance?` --
+#: are still literals at their call sites; the 2026-08-26 sweep changed this
+#: one in two places and six tests, which is what the constant is for.
+_PICK_STAGE = "Which stage?"
 
 
 def _card_path(button: str) -> str:
@@ -1959,7 +2071,7 @@ def build_player_embed(
         for stage, row in (player.get("stages") or {}).items()
     )
     if rounds:
-        embed.add_field(name="Rounds", value=rounds[:1024], inline=False)
+        embed.add_field(name=FIELD_STAGES, value=rounds[:1024], inline=False)
 
     if squads:
         embed.set_footer(text=_squad_basis(squads))
@@ -1985,7 +2097,7 @@ class _PlaceInGroupModal(discord.ui.Modal, title="Which group are they in?"):
         self.grouping = grouping
 
     stage = discord.ui.Label(
-        text="Which round?",
+        text=_PICK_STAGE,
         component=discord.ui.Select(
             options=[
                 discord.SelectOption(label=db.STAGE_LABELS[key], value=key)
@@ -2495,6 +2607,51 @@ class _SquadDetailModal(discord.ui.Modal, title="Squad powers and types"):
         await _ask_or_write(interaction, self.player, offered, source="observed")
 
 
+def _edit_me_modal(player: dict, *, can_write: bool, grouping: dict | None):
+    """`✏️ Edit my information`: the add modal, opened on the reader's own row.
+
+    NOT A SECOND MODAL, and that is the point rather than a saving. The fields
+    are the same five, `upsert_registrant` is keyed on (name, warzone) and
+    fills blanks on the row already held, and a member correcting their own
+    entry is the same write as somebody entering it -- so a parallel modal
+    would be two screens that have to be kept saying the same thing.
+
+    **Only from a claim.** Without one there is no "my", which is why every
+    call site here sits behind a state that already resolved a claimed player.
+    """
+    return _AddPlayerModal(
+        can_write,
+        name=player.get("display_name"),
+        server=player.get("server"),
+        alliance=player.get("alliance"),
+        thp=player.get("thp"),
+        troop_level=player.get("troop_level"),
+        grouping=grouping,
+        editing=player,
+    )
+
+
+async def _open_edit_me(inter: discord.Interaction, *, can_write: bool, grouping: dict | None):
+    """`✏️ Edit my information`, opened on the claim as it stands right now.
+
+    READ BEFORE RESPONDING, not after. A modal has to be the first response to
+    an interaction so this cannot defer first, and one indexed SQLite read is
+    well inside the three seconds -- `_on_record` takes the same route for the
+    same reason.
+
+    **Fresh rather than off the view.** Both views that carry this button live
+    ten and fifteen minutes, and a claim can move from another message inside
+    that window -- `ClaimResultView` has a release button that does exactly
+    that. A snapshot taken when the message was sent would prefill an account
+    the reader gave up, and then write to it. Found by `/code-review`.
+    """
+    player = await asyncio.to_thread(db.get_claimed_registrant, inter.user.id)
+    if player is None:
+        await inter.response.send_message(claim_lib.CLAIM_NOT_LINKED, ephemeral=True)
+        return
+    await inter.response.send_modal(_edit_me_modal(player, can_write=can_write, grouping=grouping))
+
+
 class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     """Create a registrant from a sighting.
 
@@ -2517,10 +2674,19 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         name: str | None = None,
         server: str | None = None,
         grouping: dict | None = None,
+        alliance: str | None = None,
+        thp=None,
+        troop_level=None,
+        editing: dict | None = None,
     ):
-        super().__init__()
+        # `editing` is the registrant this was opened on, and it carries the
+        # whole difference between the two flows: the title, the
+        # acknowledgement, and whether landing on a different account is the
+        # point or an accident. None is the add flow, which is the default.
+        super().__init__(**({"title": _EDIT_ME_TITLE[:45]} if editing else {}))
         self.can_write = can_write
         self.grouping = grouping
+        self.editing = editing
         # Safe to set on self: `Modal._init_children` deepcopies each declared
         # item onto the instance, so a default here cannot leak to the next
         # person who opens this modal.
@@ -2528,6 +2694,23 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             self.name.default = name[:64]
         if server:
             self.server.default = server[:10]
+        # ALL FIVE OR NONE, for `CD_BTN_EDIT_ME`. A member opening their own
+        # record to change one field must see the other four as we hold them:
+        # a blank box beside a filled one reads as "we have nothing", which is
+        # the surface lying about its own record. Nothing is lost by leaving
+        # one alone either way -- `upsert_registrant` writes only the fields a
+        # caller actually supplied, so a blank has never erased anything.
+        if alliance:
+            self.alliance.default = str(alliance)[:8]
+        if thp:
+            # The separator form rather than `325.8M`. `parse_power` reads both
+            # and this one round-trips exactly, where the short form re-enters
+            # as a number rounded to one decimal place -- a member who changed
+            # nothing would have their Total Hero Power moved by pressing save.
+            self.thp.default = f"{float(thp):,.0f}"[:16]
+        if troop_level:
+            for option in self.troop_level.component.options:
+                option.default = option.value == str(troop_level)
 
     # Five components is the cap and all five earn their place. `group` moved
     # off this screen when Total Hero Power and troop level arrived: a letter
@@ -2561,6 +2744,27 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             ],
         ),
     )
+
+    def _note(self, player: dict, *, existing: bool) -> str:
+        """What just happened, in the terms of the flow that opened this.
+
+        The add flow's two notes are about a player the caller may not have
+        held; the edit flow's are about the caller's own row, where "already
+        here" is the normal case rather than the interesting one.
+        """
+        if self.editing is None:
+            return (
+                f"ℹ️ **{_label(player)}** was already here. "
+                "Opening them instead of adding a duplicate."
+                if existing
+                else f"✅ Added **{_label(player)}**."
+            )
+        if player.get("id") != self.editing.get("id"):
+            return _EDIT_ME_NEW.format(
+                player=discord.utils.escape_markdown(_label(player)),
+                held=discord.utils.escape_markdown(_label(self.editing)),
+            )
+        return _EDIT_ME_DONE.format(player=discord.utils.escape_markdown(_label(player)))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2614,11 +2818,7 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         # also lets somebody who only knows a name stop after one screen.
         aside = ""
 
-        note = (
-            f"ℹ️ **{_label(player)}** was already here. Opening them instead of adding a duplicate."
-            if existing
-            else f"✅ Added **{_label(player)}**."
-        )
+        note = self._note(player, existing=bool(existing))
         await send_player_card(
             interaction,
             player,
@@ -4215,6 +4415,23 @@ class _RetryGroupingView(discord.ui.View):
 # choice in the words it was offered in rather than paraphrasing it.
 _RECORDING_LABELS = {"draw": "Initial Seed", "final": "Final Standings"}
 
+#: The two shapes of nothing on the group view, and they are not the same
+#: nothing. `_GROUP_NO_STAGE` is a stage the picker offers that nobody has ever
+#: recorded; `_GROUP_NO_MEMBERS` is a group inside a stage we do hold, which
+#: the reader picked a letter to reach.
+#:
+#: **Both end on the same door, and the door is a live button on the view as
+#: well as a name in the sentence.** Constants since 2026-08-26: the first said
+#: *round*, two tests named the phrase, and splitting a pair that is decided
+#: together is what `DESIGN.md` rule 6 exists to stop.
+_GROUP_NO_STAGE = (
+    "We do not have anything recorded for this stage yet.\n\nYou can add it with **{record}**."
+)
+_GROUP_NO_MEMBERS = (
+    "We do not have anyone recorded for this group.\n\n"
+    "Anyone can paste the standings in with **{record}**."
+)
+
 # What a line resolved to. `problem` is a parse failure, `skipped` is the user
 # deciding this one is not worth chasing; both are excluded from the write and
 # neither blocks it.
@@ -4405,7 +4622,7 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         component=discord.ui.Select(options=[discord.SelectOption(label="_", value="_")]),
     )
     round_ = discord.ui.Label(
-        text="Round",
+        text="Stage",
         component=discord.ui.Select(
             options=[discord.SelectOption(label=db.STAGE_LABELS[k], value=k) for k in db.STAGES]
         ),
@@ -4914,7 +5131,7 @@ def _group_title(stage: str, label: str | None) -> str:
     arrive already holding. The knockouts have no letter at all: 32 players, one
     field, and `db.get_groups` drops them for exactly that reason.
     """
-    round_name = db.STAGE_LABELS.get(stage, "This round")
+    round_name = db.STAGE_LABELS.get(stage, "This stage")
     if not label:
         return round_name
     return f"{round_name} - Group {label}"
@@ -5057,15 +5274,12 @@ def build_group_embed(
         # Both end on the same door, and the door is a live button on the view
         # as well as a name in the sentence.
         if label is None:
-            embed.description = (
-                f"{opener}We do not have anything recorded for this round yet.\n\n"
-                f"You can add it with **{_btn_words(CD_BTN_RECORD)}**."
-            )[:4096]
+            embed.description = (opener + _GROUP_NO_STAGE.format(record=_btn_words(CD_BTN_RECORD)))[
+                :4096
+            ]
         else:
             embed.description = (
-                f"{opener}We do not have anyone recorded for this group.\n\n"
-                f"Anyone can paste the standings in with "
-                f"**{_btn_words(CD_BTN_RECORD)}**."
+                opener + _GROUP_NO_MEMBERS.format(record=_btn_words(CD_BTN_RECORD))
             )[:4096]
         return embed
 
@@ -5122,7 +5336,7 @@ def build_group_embed(
             name="Not the whole group",
             value=(
                 f"We have **{_plural(len(members), 'player')}** of the "
-                f"**{expected}** in this round. Anyone can add the rest with "
+                f"**{expected}** in this stage. Anyone can add the rest with "
                 f"**{_btn_words(CD_BTN_RECORD)}**."
             ),
             inline=False,
@@ -5138,7 +5352,7 @@ def build_group_embed(
                 f"Everything above is free, and so is recording it. What "
                 f"{premium.PREMIUM_BRAND} adds here is the model: how often "
                 f"each of these players gets through, across thousands of "
-                f"simulated rounds. Run `/upgrade` to unlock it."
+                f"simulated stages. Run `/upgrade` to unlock it."
             ),
             inline=False,
         )
@@ -5467,7 +5681,7 @@ def _standing_worked_out(state: dict) -> str | None:
         # field", which is the question this surface exists for.
         place = _projected_place(result, row)
         lines = [
-            f"`{words.probability(row.advance):>4}`  Through to the next round",
+            f"`{words.probability(row.advance):>4}`  {_STANDING_THROUGH}",
             f"`{words.probability(row.win_group):>4}`  Winning the group outright",
             "",
             f"Projected finish **{place}** of **{len(result.rows)}**, "
@@ -5593,16 +5807,42 @@ class _StandingClaimView(discord.ui.View):
     the plan's three states -- not in our data at all, add yourself right here.
     """
 
-    def __init__(self, *, user_id: int, can_write: bool, grouping: dict | None = None):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        can_write: bool,
+        grouping: dict | None = None,
+        player: dict | None = None,
+    ):
         super().__init__(timeout=600)
         self.user_id = user_id
         self.can_write = can_write
         self.grouping = grouping
+        # WHETHER THE BUTTON IS THERE, not what it opens on. `_open_edit_me`
+        # re-reads the claim when it is pressed, so this is only the question
+        # of whether there was a "my" when the message was built.
+        self.player = player
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=CD_BTN_WHO_AM_I[:80], style=discord.ButtonStyle.primary)
         button.callback = self._on_press
         self.add_item(button)
+
+        # ONLY WHERE A CLAIM IS HELD. This view is both the unclaimed landing
+        # and the footer of a standing that has one, and on the landing there
+        # is no "my" to edit -- the claim is the only thing to press.
+        #
+        # Secondary against the claim's primary: re-pointing the claim is the
+        # act this view was built for and it stays the loud one.
+        if player:
+            edit = discord.ui.Button(
+                label=(CD_BTN_EDIT_ME if can_write else f"🔒 {CD_BTN_EDIT_ME}")[:80],
+                style=discord.ButtonStyle.secondary,
+                disabled=not can_write,
+            )
+            edit.callback = self._on_edit_me
+            self.add_item(edit)
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -5619,6 +5859,9 @@ class _StandingClaimView(discord.ui.View):
         await inter.response.send_modal(
             claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
         )
+
+    async def _on_edit_me(self, inter: discord.Interaction):
+        await _open_edit_me(inter, can_write=self.can_write, grouping=self.grouping)
 
 
 def standing_opener(standing: dict | None) -> str:
@@ -5682,7 +5925,7 @@ def _elsewhere_note(player: dict, warzone=None) -> str:
     return line + "."
 
 
-# ── `📇 Your alliance` ────────────────────────────────────────────────────────
+# ── `🏰 Your alliance` ────────────────────────────────────────────────────────
 #
 # Leadership's view of their own people, and the surface that answers the one
 # question the information architecture rethink found nobody had asked for.
@@ -5779,7 +6022,7 @@ def _alliance_odds(players: list[dict]) -> dict[int, dict]:
 def read_alliance(
     user_id: int, grouping: dict | None, *, warzone=None, with_odds: bool = True
 ) -> dict:
-    """Everything `📇 Your alliance` renders, in one blocking read.
+    """Everything `🏰 Your alliance` renders, in one blocking read.
 
     Returns a dict whose `state` is one of:
 
@@ -5966,7 +6209,7 @@ def _add_listing(embed: discord.Embed, name: str, lines: list[str]) -> None:
 
 
 def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> discord.Embed:
-    """`📇 Your alliance`: where all of my people are, and how far they get.
+    """`🏰 Your alliance`: where all of my people are, and how far they get.
 
     **One field per round, furthest round first.** The rounds are the shape of
     the answer: a leader wants to know who got deepest before they want a
@@ -5996,7 +6239,6 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
             title=CD_BTN_ALLIANCE[:256],
             description=_ALLIANCE_NO_TAG.format(
                 player=discord.utils.escape_markdown(_label(player)),
-                add=_btn_words(CD_BTN_ADD),
             )[:4096],
             color=discord.Color.blurple(),
         )
@@ -6093,7 +6335,7 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
 
 # ── The personal reads ────────────────────────────────────────────────────────
 #
-# **This is the half of `📇 Your alliance` that reaches somebody.** Kevin
+# **This is the half of `🏰 Your alliance` that reaches somebody.** Kevin
 # produced these by hand and tagged players one at a time; doing it for the
 # whole team in one action is the mechanism that turns a computed answer into
 # one that arrived. The content is his -- he mocked a page showing one player,
@@ -6402,7 +6644,7 @@ class _ReadsShareView(discord.ui.View):
 
 
 class _AllianceView(discord.ui.View):
-    """`📇 Your alliance`, with the page control and the way to hand reads out.
+    """`🏰 Your alliance`, with the page control and the way to hand reads out.
 
     Re-reads on every press rather than paging a captured list. This view lives
     fifteen minutes, and a claim can move or a group can be recorded inside
@@ -6443,7 +6685,7 @@ class _AllianceView(discord.ui.View):
 
         `UX.md` principle 3. The dead ends here are different gaps and take
         different doors: nobody claimed is the claim flow, a claimed account
-        with no tag is `➕ Add a player` re-entering the same name with one, an
+        with no tag is `✏️ Edit my information` opened on their own row, an
         account in a different Champion Duel is the claim again, and a tag we
         hold nobody for is `📥 Record a group`.
         """
@@ -6459,15 +6701,24 @@ class _AllianceView(discord.ui.View):
             self.add_item(button)
             return
         if state == "no_tag":
-            add = discord.ui.Button(
-                label=(CD_BTN_ADD if self.can_write else f"🔒 {CD_BTN_ADD}")[:80],
+            # `CD_BTN_EDIT_ME` RATHER THAN `➕ Add a player`, and this state is
+            # the one Kevin was looking at when he asked for it: we hold their
+            # account and no alliance tag, and the old exit told them to add a
+            # player. Same modal, same write, opened on their own row.
+            #
+            # It is the exit for this state as well as the fix for the label,
+            # so it is not optional here: `_ALLIANCE_NO_TAG` lost the sentence
+            # that named the old control on the same day, and `UX.md` principle
+            # 3 does not let this state have no door.
+            edit = discord.ui.Button(
+                label=(CD_BTN_EDIT_ME if self.can_write else f"🔒 {CD_BTN_EDIT_ME}")[:80],
                 style=discord.ButtonStyle.primary
                 if self.can_write
                 else discord.ButtonStyle.secondary,
                 disabled=not self.can_write,
             )
-            add.callback = self._on_add
-            self.add_item(add)
+            edit.callback = self._on_edit_me
+            self.add_item(edit)
             return
 
         players = self.state.get("players") or []
@@ -6570,8 +6821,8 @@ class _AllianceView(discord.ui.View):
             claim_lib.ClaimModal(can_write=self.can_write, grouping=self.grouping)
         )
 
-    async def _on_add(self, inter: discord.Interaction):
-        await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
+    async def _on_edit_me(self, inter: discord.Interaction):
+        await _open_edit_me(inter, can_write=self.can_write, grouping=self.grouping)
 
     async def _on_record(self, inter: discord.Interaction):
         # Read before responding, not after: a modal has to be the first
@@ -6937,7 +7188,7 @@ class _GroupView(discord.ui.View):
         # the rounds the game plays are a fact about the game, and the rounds we
         # hold are a fact about our record. Driving the picker off the second
         # made the two indistinguishable.
-        self.add_item(self._select("Which round?", self._stage_options(), row, self._on_stage))
+        self.add_item(self._select(_PICK_STAGE, self._stage_options(), row, self._on_stage))
         row += 1
         if len(self.groups) > 1:
             self.add_item(
@@ -7662,9 +7913,9 @@ def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord
     tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
         (f"{as_of}\n\n" if as_of else "")
-        + f"Over {result.trials:,} simulations of the round. The first column "
-        f"gives the odds of finishing in the top **{result.advance}** and going "
-        f"through, the second the odds of winning the group outright."
+        + _ODDS_OVER.format(trials=result.trials)
+        + " "
+        + _ODDS_COLUMNS.format(advance=result.advance)
         + "\n\n"
         + "\n".join(lines)
         + tail
@@ -7950,8 +8201,14 @@ class ChampionDuelHubView(discord.ui.View):
         # not depend on noticing anything: whoever opens their own standing can
         # point it at a different account from right here, and claiming a new
         # one moves the claim (`CLAIM_MOVED`). Nothing has to be detected.
+        #
+        # The player rides along so `CD_BTN_EDIT_ME` is offered at all; the
+        # modal it opens re-reads the claim when it is pressed.
         view = _StandingClaimView(
-            user_id=inter.user.id, can_write=self.can_write, grouping=self.grouping
+            user_id=inter.user.id,
+            can_write=self.can_write,
+            grouping=self.grouping,
+            player=standing.get("player"),
         )
         await inter.followup.send(
             embed=build_standing_embed(standing, can_odds=can_odds),

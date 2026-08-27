@@ -30,7 +30,7 @@ import champion_duel_wording as words
 def cd_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
     db.init_db()
-    # `📇 Your alliance` reads stored odds, and `store_lib.lookup` degrades
+    # `🏰 Your alliance` reads stored odds, and `store_lib.lookup` degrades
     # rather than raising on a bad store -- so without the table these tests
     # would pass while silently exercising the no-odds branch every time.
     # Idempotent, and it is the pair `on_ready` calls.
@@ -468,7 +468,8 @@ def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
 
     embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
 
-    assert "simulations of the round" in embed.description
+    trials = odds_lib._models()["semifinals"]["trials"]
+    assert hub._ODDS_OVER.format(trials=trials) in embed.description
     assert "**P8**" in embed.description
     assert "Total Hero Power" not in embed.description
 
@@ -550,7 +551,7 @@ def test_every_round_the_game_plays_is_offered(cd_db):
     view = _view_of(grouping, stage="semifinals", members=members, label="H")
 
     assert db.recorded_stages(grouping["id"]) == ["semifinals"]
-    picker = _picker(view, "Which round?")
+    picker = _picker(view, hub._PICK_STAGE)
     assert picker is not None
     assert [o.value for o in picker.options] == list(db.STAGES)
 
@@ -562,7 +563,7 @@ def test_the_rounds_are_offered_in_the_order_they_are_played(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    labels = [o.label for o in _picker(view, "Which round?").options]
+    labels = [o.label for o in _picker(view, hub._PICK_STAGE).options]
     assert labels == [db.STAGE_LABELS[s] for s in db.STAGES]
 
 
@@ -574,7 +575,7 @@ def test_a_round_we_hold_nothing_for_is_marked_rather_than_hidden(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    marks = {o.value: o.description for o in _picker(view, "Which round?").options}
+    marks = {o.value: o.description for o in _picker(view, hub._PICK_STAGE).options}
     assert marks["semifinals"] is None
     assert marks["qualifiers"] == hub._STAGE_NOT_HELD
     assert marks["knockouts"] == hub._STAGE_NOT_HELD
@@ -624,7 +625,7 @@ def test_the_round_being_read_is_the_one_showing_as_chosen(cd_db):
 
     view = _view_of(grouping, stage="semifinals", members=db.get_group_members(group["id"]))
 
-    chosen = [o.value for o in _picker(view, "Which round?").options if o.default]
+    chosen = [o.value for o in _picker(view, hub._PICK_STAGE).options if o.default]
     assert chosen == ["semifinals"]
 
 
@@ -668,7 +669,7 @@ def test_an_empty_round_says_so_and_offers_to_record_it(cd_db):
     view = _view_of(grouping, stage="knockouts", members=[])
     embed = view._embed()
 
-    assert "this round" in embed.description
+    assert hub._GROUP_NO_STAGE.format(record=hub._btn_words(hub.CD_BTN_RECORD)) in embed.description
     assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
     assert any(hub.CD_BTN_RECORD in (getattr(i, "label", None) or "") for i in view.children)
 
@@ -682,7 +683,10 @@ def test_an_empty_lettered_group_is_not_told_the_round_is_missing(cd_db):
     embed = hub.build_group_embed(members=[], stage="semifinals", label="H", grouping=grouping)
 
     assert "this group" in embed.description
-    assert "this round" not in embed.description
+    assert (
+        hub._GROUP_NO_STAGE.format(record=hub._btn_words(hub.CD_BTN_RECORD))
+        not in embed.description
+    )
 
 
 def test_a_champion_duel_we_hold_nothing_for_opens_rather_than_refusing(cd_db):
@@ -941,7 +945,7 @@ def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
     )
     assert {
         "Which Champion Duel?",
-        "Which round?",
+        hub._PICK_STAGE,
         "Which group?",
         "Which alliance?",
         "Page 1 / 5",
@@ -965,7 +969,12 @@ def test_the_busiest_this_view_gets_still_fits_discords_grid(cd_db):
             can_odds=True,
         )
     )
-    assert {"Which Champion Duel?", "Which round?", "Which alliance?", "Page 1 / 2"} <= busiest
+    assert {
+        "Which Champion Duel?",
+        hub._PICK_STAGE,
+        "Which alliance?",
+        "Page 1 / 2",
+    } <= busiest
     assert ("Which group?" in busiest) is False
     assert (hub.CD_BTN_ODDS in busiest) == odds_lib.KNOCKOUT_AVAILABLE
     # A complete field, so no record button. Two of the 32 missing is what puts
@@ -1088,7 +1097,7 @@ def test_the_empty_round_makes_recording_the_recommended_one(cd_db):
     assert primaries == [hub.CD_BTN_RECORD]
 
 
-# ── `📇 Your alliance` ────────────────────────────────────────────────────────
+# ── `🏰 Your alliance` ────────────────────────────────────────────────────────
 #
 # Leadership's view of their own people, reading across every group. The tests
 # that matter most here are the ones asserting the read is NOT a group filter:
@@ -1409,7 +1418,82 @@ def test_a_claimed_account_with_no_tag_is_offered_the_field_that_is_missing(cd_d
 
     assert state["state"] == "no_tag"
     assert "Tagless" in hub.build_alliance_embed(state, can_odds=True).description
-    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_ADD]
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_EDIT_ME]
+
+
+def test_the_no_tag_state_offers_the_control_that_is_about_the_reader(cd_db):
+    """Kevin, 2026-08-26: the old exit here was `➕ Add a player`, and *"the
+    label says you are adding a player when you are filling in one field about
+    yourself."* Same modal, same write, opened on their own row.
+
+    This state has no other door -- `_ALLIANCE_NO_TAG` lost the sentence that
+    named the old control on the same day -- so `UX.md` principle 3 makes the
+    button the exit rather than a convenience.
+    """
+    grouping, _groups, _players = _alliance_world()
+    bare = db.upsert_registrant("Tagless", server="738", thp=1)
+    state = hub.read_alliance(_leader(bare, user_id=7), grouping)
+    view = hub._AllianceView(
+        user_id=7, grouping=grouping, state=state, can_odds=True, can_intel=True, can_write=True
+    )
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_EDIT_ME]
+    assert modal.name.default == "Tagless"
+    assert modal.server.default == "738"
+
+
+def test_the_edit_control_carries_every_field_we_hold_rather_than_the_two_it_needs(cd_db):
+    """A member opening their own record to change one thing sees the other
+    four as we hold them. A blank box beside a filled one reads as "we have
+    nothing", which is the surface lying about its own record.
+    """
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant(
+        "Bracketless", server="900", alliance="ZZQ", thp=325_800_000, troop_level=8
+    )
+    state = hub.read_alliance(_leader(held, user_id=11), grouping)
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+    chosen = [o.value for o in modal.troop_level.component.options if o.default]
+
+    assert modal.alliance.default == "ZZQ"
+    assert modal.thp.default == "325,800,000"
+    assert chosen == ["8"]
+    # The separator form round-trips exactly. `325.8M` re-enters as a number
+    # rounded to one decimal place, so a member who changed nothing would have
+    # their Total Hero Power moved by pressing save.
+    assert hub.parse_power(modal.thp.default) == 325_800_000
+
+
+def test_the_edit_control_is_titled_for_the_reader_not_for_adding_somebody(cd_db):
+    """The modal a control opens says what the control said, which is the rule
+    Kevin set on the claiming acknowledgements."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Nobodyhere", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=12), grouping)
+
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    assert modal.title == hub._EDIT_ME_TITLE
+    assert modal.title != hub._AddPlayerModal(True).title
+
+
+def test_a_prefilled_edit_does_not_leak_into_the_next_person_who_adds(cd_db):
+    """`Modal._init_children` deepcopies each declared item onto the instance,
+    and this is the test that says so out loud: a default set for one reader
+    must not be sitting in the box for the next."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Zzqplayer", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=13), grouping)
+
+    hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+    fresh = hub._AddPlayerModal(True, grouping=grouping)
+
+    assert fresh.name.default is None
+    assert fresh.alliance.default is None
+    assert not [o for o in fresh.troop_level.component.options if o.default]
 
 
 def test_an_empty_listing_is_about_the_reader_rather_than_their_alliance(cd_db):
@@ -1815,7 +1899,7 @@ def test_the_reads_control_locks_rather_than_hides_where_it_could_run(cd_db):
 
 
 def test_the_hub_offers_the_alliance_beside_the_group(cd_db):
-    """The plan splits `🏅 Your group` into `🏅 Your standing`, `📇 Your
+    """The plan splits `🏅 Your group` into `🏅 Your standing`, `🏰 Your
     alliance` and the roster behind a filter, so the two sit together for
     exactly as long as the old control survives."""
     grouping, _groups, _players = _alliance_world()
@@ -1837,3 +1921,45 @@ def test_the_alliance_control_is_absent_without_a_champion_duel(cd_db):
     )
 
     assert hub.CD_BTN_ALLIANCE not in [getattr(i, "label", None) for i in view.children]
+
+
+def test_an_edit_is_acknowledged_as_an_update_not_as_a_refused_duplicate(cd_db):
+    """Found by `/code-review`. The add flow's note fires on every edit — the
+    member's own row always matches `find_registrants` — so it told somebody
+    the write was declined when it landed."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Selfedit", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=21), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    note = modal._note(state["player"], existing=True)
+
+    assert note == hub._EDIT_ME_DONE.format(player=hub._label(state["player"]))
+    assert "duplicate" not in note
+
+
+def test_an_edit_that_lands_on_a_new_account_says_so_rather_than_orphaning_it(cd_db):
+    """A registrant is keyed on (name, warzone) and cannot be renamed, and both
+    are editable boxes. A member whose in-game name changed creates a second
+    account and their claim stays on the first, so anything they entered lands
+    on a row nobody holds. Found by `/code-review`."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=22), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    renamed = db.upsert_registrant("Newname", server="738", alliance="ZZQ", thp=1)
+    note = modal._note(renamed, existing=False)
+
+    assert hub._label(renamed) in note
+    assert hub._label(state["player"]) in note, "the account they still hold is named"
+    assert db.get_claimed_registrant(22)["id"] == held["id"], "the claim did not follow"
+
+
+def test_the_add_flow_keeps_its_own_two_notes(cd_db):
+    """The edit path is the branch, not the replacement."""
+    modal = hub._AddPlayerModal(True)
+    player = db.upsert_registrant("Freshadd", server="738")
+
+    assert "Added" in modal._note(player, existing=False)
+    assert "duplicate" in modal._note(player, existing=True)

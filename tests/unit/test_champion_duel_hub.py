@@ -219,7 +219,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     rounds = next(
         f.value
         for f in hub.build_player_embed(player, None, grouping=mine).fields
-        if f.name == "Rounds"
+        if f.name == hub.FIELD_STAGES
     )
     assert "Group D (not your Champion Duel)" in rounds
 
@@ -227,7 +227,7 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     theirs_view = next(
         f.value
         for f in hub.build_player_embed(player, None, grouping=theirs).fields
-        if f.name == "Rounds"
+        if f.name == hub.FIELD_STAGES
     )
     assert "Group D" in theirs_view and "different Champion Duel" not in theirs_view
 
@@ -1268,8 +1268,8 @@ def test_the_card_leads_with_the_alliance_tag_and_holds_qualifiers_below(cd_db):
     assert embed.title.startswith("[DxL] ")
     assert "738" in embed.title
     names = [f.name for f in embed.fields]
-    assert names.index("Squads") < names.index("Rounds")
-    assert "Group" in next(f.value for f in embed.fields if f.name == "Rounds")
+    assert names.index("Squads") < names.index(hub.FIELD_STAGES)
+    assert "Group" in next(f.value for f in embed.fields if f.name == hub.FIELD_STAGES)
 
 
 # ── Record a line-up ──────────────────────────────────────────────────────────
@@ -2132,7 +2132,7 @@ def test_the_player_card_reads_a_knockout_placement_as_a_round(cd_db):
 
     embed = hub.build_player_embed(db.get_player("AlphaOne", server="738"), None)
 
-    rounds = next(f.value for f in embed.fields if f.name == "Rounds")
+    rounds = next(f.value for f in embed.fields if f.name == hub.FIELD_STAGES)
     assert "**Knockout Stage** · Made it to Top 16" in rounds
     assert "Rank 11" not in rounds, "the placement replaces the bare rank, not sits beside it"
 
@@ -2887,7 +2887,7 @@ def test_the_worked_out_half_states_the_numbers_and_passes_no_judgement(standing
         hub.build_standing_embed(_standing_of(standing_db), can_odds=True),
         hub._STANDING_WORKED_OUT,
     )
-    assert "Through to the next round" in worked
+    assert hub._STANDING_THROUGH in worked
     assert "Projected finish" in worked
     for narration in ("in the running", "long shot", "band", "reward", "wins still pay"):
         assert narration not in worked.lower(), (
@@ -3006,3 +3006,92 @@ def test_nothing_claims_a_reading_nobody_took(standing_db):
     assert hub._STANDING_READ_AT.split("{")[0].strip() not in recorded, (
         "the surface says when a rank was read, over a row that holds no rank"
     )
+
+
+def test_the_standing_offers_the_edit_control_only_where_a_claim_is_held(standing_db):
+    """`_StandingClaimView` is both the unclaimed landing and the footer of a
+    standing that has one. On the landing there is no "my" to edit."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+
+    held = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+    )
+    landing = hub._StandingClaimView(
+        user_id=ADMIN_ID, can_write=True, grouping=standing_db["grouping"]
+    )
+
+    assert [getattr(i, "label", None) for i in held.children] == [
+        hub.CD_BTN_WHO_AM_I,
+        hub.CD_BTN_EDIT_ME,
+    ]
+    assert [getattr(i, "label", None) for i in landing.children] == [hub.CD_BTN_WHO_AM_I]
+
+
+def test_the_edit_control_locks_rather_than_hides_where_the_reader_cannot_write(standing_db):
+    """A locked control renders disabled rather than hidden, so the shape of
+    the product is visible. `can_write` is not the Premium gate -- contributing
+    has been free since 2026-08-17 -- and this follows `➕ Add a player`'s own
+    treatment of it either way."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=False,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+    )
+    edit = [i for i in view.children if hub.CD_BTN_EDIT_ME in (getattr(i, "label", None) or "")]
+
+    assert len(edit) == 1
+    assert edit[0].disabled
+    assert edit[0].label.startswith("🔒")
+
+
+async def test_the_edit_control_reads_the_claim_when_it_is_pressed(standing_db):
+    """Found by `/code-review`. Both views carrying this button live ten and
+    fifteen minutes, and `ClaimResultView` can release a claim from another
+    message inside that window. A snapshot taken when the message was sent
+    would prefill an account the reader gave up, and then write to it.
+    """
+    first = _claim(standing_db, which=3)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=db.get_claimed_registrant(ADMIN_ID),
+    )
+
+    moved = _claim(standing_db, which=6)
+    inter = _interaction()
+    await view._on_edit_me(inter)
+
+    assert moved != first
+    opened = inter.response.send_modal.await_args.args[0]
+    assert opened.name.default == db.get_registrant(moved)["display_name"]
+    inter.response.send_message.assert_not_awaited()
+
+
+async def test_the_edit_control_refuses_where_the_claim_has_gone(standing_db):
+    """Released while the hub sat on screen. The refusal is the claim module's
+    own, not a second wording of it."""
+    rid = _claim(standing_db)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=db.get_claimed_registrant(ADMIN_ID),
+    )
+
+    db.release_claim(str(ADMIN_ID))
+    inter = _interaction()
+    await view._on_edit_me(inter)
+
+    assert rid
+    inter.response.send_modal.assert_not_awaited()
+    inter.response.send_message.assert_awaited_once()
+    assert inter.response.send_message.await_args.args[0] == claim_lib.CLAIM_NOT_LINKED

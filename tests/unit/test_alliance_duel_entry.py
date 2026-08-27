@@ -104,20 +104,26 @@ def test_the_path_names_every_opponent_once_the_league_is_played_out():
     for week in range(1, ad.LEAGUE_WEEKS + 1):
         _play_week(rows, week, winner_of=lambda m: m.a)
 
-    text = _text(hub.path_embed(_state(rows)))
+    embed = hub.path_embed(_state(rows))
+    text = _text(embed)
     assert "Week 1:" in text and "Week 4:" in text
-    assert "recorded result" in text
-    assert "What is blocking it" not in text
+    assert hub.VS_LABEL_RECORDED in text
+    # Every week is recorded, so there is no open week to fork on and
+    # nothing outstanding for the footer to ask for. Offering "if you win"
+    # on a week the game has already decided invites planning around a
+    # result that has already landed.
+    assert hub.VS_PATH_IF_WIN not in text
+    assert embed.footer.text is None
 
 
 def test_a_blocked_path_names_the_matches_never_says_not_enough_data():
+    """The blockers live on the preview now: they are per-branch, and a
+    combined list would send someone to scout for a route they are not on."""
     rows = _bracket() + _bracket(week=2)
     _play_week(rows, 1, winner_of=lambda m: m.a)
-    text = _text(hub.path_embed(_state(rows)))
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
 
-    assert "What is blocking it" in text
     assert " vs " in text
-    assert "week 2" in text
     for vague in ("not enough data", "insufficient", "unavailable"):
         assert vague not in text.lower()
 
@@ -125,31 +131,85 @@ def test_a_blocked_path_names_the_matches_never_says_not_enough_data():
 def test_the_blocking_set_becomes_the_scouting_list():
     rows = _bracket() + _bracket(week=2)
     _play_week(rows, 1, winner_of=lambda m: m.a)
-    text = _text(hub.path_embed(_state(rows)))
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
 
-    assert "Scout these first" in text
-    assert "needs power, members and gift level" in text
+    assert hub.VS_PATH_BLOCKED_SCOUTABLE in text
+    # Match-shaped, and each line asks for what that match is short of. Both
+    # sides short of the same three collapses rather than saying it twice.
+    assert "both need power, members and gift level" in text
+    assert " vs " in text
     # Not "go scout fifteen alliances": the lineage produces a short set.
-    # Counted off the scouting block alone -- the blockers above it use the
-    # same bullet, and the walk now reaches every week rather than stopping at
-    # the first one it cannot name, so both blocks grew.
-    listed = [line for line in text.splitlines() if line.startswith("· ") and ": " in line]
+    listed = [line for line in text.splitlines() if line.startswith("· ")]
     assert 0 < len(listed) <= 8
 
 
 def test_the_path_says_how_firmly_each_step_is_known():
     """A confirmed result and a coin-flip estimate reaching the same
     conclusion are not the same claim and must not render alike."""
-    rows = _bracket(
-        **{
-            OWN_TAG: {"power": 900_000_000, "members": 100, "gift_level": 25},
-            "A02": {"power": 100_000_000, "members": 40, "gift_level": 5},
-        }
-    ) + _bracket(week=2)
+    strong = {"power": 900_000_000, "members": 100, "gift_level": 25}
+    weak = {"power": 100_000_000, "members": 40, "gift_level": 5}
+    # Our own pair plus the two feeding week 2, so the opponent that week
+    # is reachable by estimate rather than left unnamed.
+    rows = _bracket(**{OWN_TAG: strong, "A02": weak, "A03": strong, "A04": weak}) + _bracket(week=2)
     text = _text(hub.path_embed(_state(rows)))
-    assert "estimated from stats" in text
+    assert hub.VS_LABEL_BOT in text
     for leak in ("SOURCE_", "confirmed'", "estimated'"):
         assert leak not in text
+
+
+def test_the_path_forks_on_this_week_and_shows_both_branches():
+    """The fork is the screen: "who do we play if we lose" is the question it
+    exists to answer, so both branches are projected, not described."""
+    rows = _bracket() + _bracket(week=2)
+    text = _text(hub.path_embed(_state(rows)))
+    assert hub.VS_PATH_IF_WIN in text
+    assert hub.VS_PATH_IF_LOSE in text
+
+
+def test_an_unnamed_week_is_counted_on_the_path_and_named_on_the_preview():
+    """The path has two branches to fit and no room, so it counts. The preview
+    has one branch and room for the answer itself."""
+    rows = _bracket() + _bracket(week=2)
+    assert "one of 2 alliances" in _text(hub.path_embed(_state(rows)))
+
+    preview = _text(hub.path_preview_embed(_state(rows), "W"))
+    assert "one of 2 alliances" not in preview
+    assert "one of A03, A04" in preview
+
+
+def test_the_footer_asks_for_the_right_work_per_cause():
+    """A single "enter them" would send somebody to the predictions screen to
+    find a match the bot would happily have predicted off numbers nobody typed."""
+    rows = _bracket() + _bracket(week=2)
+    footer = hub.path_embed(_state(rows)).footer.text
+    # Nothing is scouted, so every blocker is waiting on numbers and the
+    # prediction half has nothing to ask for.
+    assert "power, members and gift level" in footer
+    assert "your prediction" not in footer
+
+
+def test_a_fully_recorded_alliance_is_never_sent_to_scout_it_again():
+    """The defect the split exists to fix: a match blocked because the model
+    declined used to land both its sides on a list headed "Scout these first",
+    each marked already recorded, pointing at the one action that cannot help."""
+    level = {"power": 500_000_000, "members": 80, "gift_level": 20}
+    rows = _bracket(**{tag: dict(level) for tag in ("A03", "A04")}) + _bracket(week=2)
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
+
+    block = text.split(hub.VS_PATH_BLOCKED_SCOUTABLE)[-1]
+    scouting = block.split(hub.VS_PATH_BLOCKED_UNDECIDED)[0]
+    assert "A03 vs A04" not in scouting
+    assert "A03 vs A04" in text.split(hub.VS_PATH_BLOCKED_UNDECIDED)[-1]
+
+
+def test_the_path_view_offers_both_previews_and_a_way_to_scout():
+    view = hub.VSPathView(_state(_bracket()), owner_id=7)
+    labels = {item.label for item in view.children}
+    assert hub.VS_BTN_PREVIEW_WIN in labels
+    assert hub.VS_BTN_PREVIEW_LOSE in labels
+    # Scout hangs off the path because the path is where someone finds out an
+    # alliance decides their week and knows nothing about them.
+    assert hub.VS_BTN_SCOUT in labels
 
 
 def test_own_alliance_mode_gets_the_upsell_not_an_error():

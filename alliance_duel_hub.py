@@ -102,22 +102,20 @@ class HubState:
         return None
 
     def display_name(self, alliance: ad.AllianceKey) -> str:
-        """How an alliance reads on screen: its tag, plus its name when one was
-        typed. Falls back to the normalised key so a row is never nameless.
+        """How an alliance reads on screen: its tag, as the game prints it.
 
-        Clamped, because both halves are alliance-supplied cells. This lands in
-        embed titles (256) and select option labels (100), and one long name
-        pasted into a sheet would otherwise take a whole surface down.
+        **No brackets.** The game shows `nWA`, so we do. They were decoration
+        around an identifier that is already unambiguous, and on a path screen
+        listing eight of them in a column they were eight rows of noise.
+
+        Falls back to the normalised key so a row is never nameless. Clamped
+        because the tag is an alliance-supplied cell, and this lands in embed
+        titles (256) and select option labels (100).
         """
-        profile = self.profiles.get(alliance)
         for row in self.rows:
             if row.alliance == alliance and row.tag_display:
-                tag = f"[{row.tag_display[:16]}]"
-                break
-        else:
-            tag = f"[{alliance.tag.upper()[:16]}]"
-        name = ((profile.name if profile else "") or "")[:48]
-        return f"{tag} {name}".strip() if name else tag
+                return row.tag_display[:16]
+        return alliance.tag.upper()[:16]
 
     def own_match(self, week: int | None) -> ad.AllianceKey | None:
         """Who the guild faces in `week`, from the recorded Opponent column."""

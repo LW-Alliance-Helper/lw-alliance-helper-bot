@@ -289,7 +289,6 @@ COL_WEEK = "Week"
 COL_RANKING = "Ranking"
 COL_TAG = "Tag"
 COL_WARZONE = "Warzone"
-COL_NAME = "Name"
 COL_POWER = "Power"
 COL_MEMBERS = "Members"
 COL_GIFT_LEVEL = "Gift Level"
@@ -324,7 +323,6 @@ SHEET_COLUMNS: tuple[str, ...] = (
     COL_RANKING,
     COL_TAG,
     COL_WARZONE,
-    COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
@@ -347,7 +345,6 @@ SHEET_COLUMNS: tuple[str, ...] = (
 #: these cells stay empty and the ones that do get filled become the
 #: power-trajectory history for free.
 PERSISTENT_COLUMNS: tuple[str, ...] = (
-    COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
@@ -567,7 +564,6 @@ class AllianceWeek:
 
     week_date: _dt.date | None = None
     ranking: int | None = None
-    name: str = ""
     tag_display: str = ""
     warzone_display: str = ""
 
@@ -637,7 +633,6 @@ class AllianceProfile:
     """
 
     alliance: AllianceKey
-    name: str = ""
     power: int | None = None
     members: int | None = None
     gift_level: int | None = None
@@ -820,7 +815,6 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
                 alliance=alliance,
                 week_date=parse_week_date(cell(COL_WEEK_DATE), today=today),
                 ranking=parse_int(cell(COL_RANKING)),
-                name=cell(COL_NAME) or "",
                 tag_display=cell(COL_TAG) or "",
                 warzone_display=cell(COL_WARZONE) or "",
                 power=parse_power(cell(COL_POWER)),
@@ -862,8 +856,6 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         out[COL_WEEK_DATE] = row.week_date.isoformat()
     if row.ranking is not None:
         out[COL_RANKING] = str(row.ranking)
-    if row.name:
-        out[COL_NAME] = row.name
     if row.power is not None:
         out[COL_POWER] = str(row.power)
     if row.members is not None:
@@ -1013,7 +1005,6 @@ def build_profile(rows: Iterable[AllianceWeek], alliance: AllianceKey) -> Allian
     """
     mine = sorted((r for r in rows if r.alliance == alliance), key=_row_sort_key)
     profile = {
-        "name": "",
         "power": None,
         "members": None,
         "gift_level": None,

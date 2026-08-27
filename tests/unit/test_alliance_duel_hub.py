@@ -146,7 +146,7 @@ def test_the_hub_leads_with_the_matchup_someone_opened_it_for():
     rows[0].opponent = _key("A02")
     state = _state(rows)
     text = _text(hub.hub_embed(state))
-    assert "[US]" in text and "[A02]" in text
+    assert "US" in text and "A02" in text
     assert "S35" in text and "Diamond" in text
 
 
@@ -209,7 +209,7 @@ def test_the_bracket_renders_a_blank_cell_as_unknown_never_as_zero():
 def test_the_bracket_is_ordered_by_ranking_like_the_in_game_screen():
     rows = _bracket_rows()
     text = _text(hub.bracket_embed(_state(rows), 1))
-    positions = [text.index(f"[{tag}]") for tag in (OWN_TAG, "A02", "A03")]
+    positions = [text.index(tag) for tag in (OWN_TAG, "A02", "A03")]
     assert positions == sorted(positions)
 
 
@@ -224,7 +224,7 @@ def test_the_bracket_marks_which_row_is_yours():
 def test_the_week_view_puts_your_own_matchup_first():
     rows = _bracket_rows()
     text = _text(hub.week_embed(_state(rows), 1))
-    assert text.index("[US]") < text.index("[A03]")
+    assert text.index("US") < text.index("A03")
 
 
 def test_a_confirmed_result_outranks_every_projection():
@@ -239,8 +239,8 @@ def test_a_confirmed_result_outranks_every_projection():
     rows[0].week_score = 5
     text = _text(hub.week_embed(_state(rows), 1))
     # The stats say we walk it; the recorded result says we lost. Result wins.
-    assert "✅ [A02] took it (5-8)" in text
-    assert "Estimated: [US]" not in text
+    assert "✅ A02 took it (5-8)" in text
+    assert "Estimated: US" not in text
 
 
 def test_an_unassessed_matchup_never_reads_like_a_call():
@@ -258,7 +258,7 @@ def test_a_projected_matchup_names_the_evidence_it_rests_on():
         }
     )
     text = _text(hub.week_embed(_state(rows), 1))
-    assert "Estimated: [US] favored" in text
+    assert "Estimated: US favored" in text
 
 
 def test_own_alliance_mode_still_shows_the_matchup_it_recorded():
@@ -267,7 +267,7 @@ def test_own_alliance_mode_still_shows_the_matchup_it_recorded():
     rows = [_row(OWN_TAG, ranking=1, opponent=_key("A02")), _row("A02", ranking=2)]
     state = _state(rows, tracking_mode=ad.MODE_OWN_ALLIANCE)
     text = _text(hub.week_embed(state, 1))
-    assert "[US]" in text and "[A02]" in text
+    assert "US" in text and "A02" in text
 
 
 # ── Scout profile ─────────────────────────────────────────────────────────────
@@ -464,7 +464,7 @@ def test_the_picker_offers_this_weeks_opponent_first():
     rows = _bracket_rows()
     rows[0].opponent = _key("A07")
     options = ad_ui._scout_options(_state(rows))
-    assert options[0].label.startswith("[A07]")
+    assert options[0].label.startswith("A07")
     assert options[0].description == "This week's opponent"
 
 

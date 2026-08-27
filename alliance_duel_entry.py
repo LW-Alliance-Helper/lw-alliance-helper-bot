@@ -45,7 +45,7 @@ ENTRY_TIMEOUT = 300
 #: name them without retyping the words.
 VS_BTN_LOG_SCORE = "✏️ Log today's score"
 VS_BTN_ADD_ALLIANCE = "➕ Add or edit alliance"
-VS_BTN_DETAILS = "✏️ Add name and notes"
+VS_BTN_DETAILS = "✏️ Add or edit notes"
 #: ✏️ rather than 🔍: recording a read is an edit, and 🔍 names looking one up.
 VS_BTN_KNOWN = "✏️ Set a Known read"
 #: Bare, and both the same style. These differ only by which side they name,
@@ -307,9 +307,9 @@ def _score_ack(state, week: int, day: int) -> discord.Embed:
 class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
     """The five values that decide whether a matchup can be projected at all.
 
-    Name and notes are deliberately not here: five inputs is Discord's cap, and
-    these five are the ones that unlock everything else. The optional pair get
-    their own reopenable modal, following the `ModalLaunchView` pattern.
+    Notes are deliberately not here: five inputs is Discord's cap, and these
+    five are the ones that unlock everything else. Notes get their own
+    reopenable modal, following the `ModalLaunchView` pattern.
 
     Power takes the survey shorthand, where a bare `301` means 301 million.
     Day scores in `ScoreModal` do the opposite on purpose.
@@ -402,12 +402,15 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         )
 
 
-class AllianceDetailsModal(discord.ui.Modal, title="Name and notes"):
-    """The optional pair, reopened from the acknowledgement.
+class AllianceDetailsModal(discord.ui.Modal, title="Notes on this alliance"):
+    """The optional extra, reopened from the acknowledgement.
 
     Notes replace the structured player-power fields the original spec had.
     Free text is honest about what this is: whatever the officer wants to
     remember about the alliance, in whatever language they write in.
+
+    An alliance name used to sit above this field. Nothing rendered it once
+    tags stopped carrying one, so it was collecting a value no surface read.
     """
 
     def __init__(self, state, alliance: ad.AllianceKey, week: int):
@@ -417,12 +420,6 @@ class AllianceDetailsModal(discord.ui.Modal, title="Name and notes"):
         self.week = week
         profile = state.profiles.get(alliance)
 
-        self.name = discord.ui.TextInput(
-            label="Alliance name",
-            default=(profile.name if profile else "") or None,
-            required=False,
-            max_length=64,
-        )
         self.notes = discord.ui.TextInput(
             label="Notes",
             style=discord.TextStyle.paragraph,
@@ -430,13 +427,11 @@ class AllianceDetailsModal(discord.ui.Modal, title="Name and notes"):
             required=False,
             max_length=900,
         )
-        self.add_item(self.name)
         self.add_item(self.notes)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = _row_for_write(self.state, self.alliance, self.week)
-        row.name = self.name.value.strip()
         row.notes = self.notes.value.strip()
 
         problem = await save_rows(self.state, [row])

@@ -729,3 +729,72 @@ def test_recorded_opponents_match_the_algorithm_on_a_clean_league(trial):
     rows = _simulate_league(random.Random(100 + trial))
     for week in range(1, ad.LEAGUE_WEEKS + 1):
         assert ad.pairing_disagreements(rows, week) == ()
+
+
+def test_an_unnamed_week_still_narrows_to_the_alliances_that_could_fill_it():
+    """ "One of four" is a different claim from "not worked out yet", and the
+    difference is what makes the week worth scouting."""
+    rows = _full_bracket(weeks=4)
+    projection = ad.project_own_path(_key(0), rows)
+
+    # Nothing is recorded, so only week 1 pairs straight off the rankings.
+    assert projection.steps[0].opponent == _key(1)
+    assert projection.steps[0].candidates == ()
+
+    by_week = {s.week: s for s in projection.steps}
+    # A week-w slot is fed by 2^(w-1) alliances until results fold them out.
+    assert len(by_week[2].candidates) == 2
+    assert len(by_week[3].candidates) == 4
+    assert len(by_week[4].candidates) == 8
+    assert all(s.opponent is None for s in (by_week[2], by_week[3], by_week[4]))
+
+
+def test_recording_a_week_folds_the_candidate_set_down():
+    rows = _full_bracket(weeks=4)
+    _play_out(rows, 1, winner_of=lambda m: m.a)
+
+    by_week = {s.week: s for s in ad.project_own_path(_key(0), rows).steps}
+    # Week 1 is in, so every week-1 match below has collapsed to its winner.
+    assert by_week[2].opponent == _key(2)
+    assert len(by_week[3].candidates) == 2
+    assert len(by_week[4].candidates) == 4
+
+
+def test_the_walk_carries_past_a_week_it_cannot_name():
+    """It used to stop dead there, which cost every later week -- including
+    ones both branches of the fork agree on."""
+    rows = _full_bracket(weeks=4)
+    projection = ad.project_own_path(_key(0), rows)
+    assert [s.week for s in projection.steps] == [1, 2, 3, 4]
+
+
+def test_a_forked_walk_never_states_an_opponent_one_branch_only_reaches():
+    """Past the fork an opponent is named only where every live branch lands
+    on the same one. Otherwise the step carries candidates and no opponent."""
+    rows = _full_bracket(weeks=4)
+    for step in ad.project_own_path(_key(0), rows).steps:
+        if step.opponent is not None:
+            assert step.candidates == ()
+        else:
+            assert step.source is None
+
+
+def test_a_blocked_match_says_whether_scouting_would_help():
+    complete = _full_bracket(weeks=2)
+    for row in complete:
+        row.power, row.members, row.gift_level = 1_000_000_000, 100, 30
+    profiles = ad.build_profiles(complete)
+    match = ad.Match(1, _key(0), _key(1))
+    # Everything recorded and the metrics dead level: scouting cannot help.
+    assert ad.blocker_cause(match, profiles) == ad.BLOCKED_NO_AGREEMENT
+
+    thin = _full_bracket(weeks=2)
+    for row in thin:
+        row.power, row.members, row.gift_level = 1_000_000_000, 100, 30
+    for row in thin:
+        if row.alliance == _key(1):
+            row.gift_level = None
+    profiles = ad.build_profiles(thin)
+    assert ad.blocker_cause(match, profiles) == ad.BLOCKED_MISSING_INPUTS
+    assert ad.missing_inputs(profiles.get(_key(1))) == (ad.COL_GIFT_LEVEL,)
+    assert ad.missing_inputs(profiles.get(_key(0))) == ()

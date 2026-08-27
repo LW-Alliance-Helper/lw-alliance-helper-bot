@@ -1420,6 +1420,12 @@ class PathStep:
     #: known. ``None`` while the match itself is unresolved.
     outcome: str | None = None
     outcome_source: str | None = None
+    #: Who could occupy the slot while `opponent` is ``None`` — every alliance
+    #: still alive in the sub-bracket feeding it. Empty once the opponent is
+    #: named, because then there is exactly one of these and `opponent` is it.
+    #: This is what lets a week the path cannot name still say *one of four
+    #: alliances* rather than nothing at all.
+    candidates: tuple[AllianceKey, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1452,6 +1458,53 @@ class PathProjection:
 #: and the week, return the projected winner, or ``None`` when it can't call
 #: it. Kept as a callback so this module stays free of the voting model.
 Estimator = Callable[[AllianceKey, AllianceKey, int], "AllianceKey | None"]
+
+
+#: A blocked match is waiting on numbers nobody has entered. Scouting either
+#: side clears it, and the bot predicts it unprompted once they land.
+BLOCKED_MISSING_INPUTS = "missing_inputs"
+
+#: A blocked match has everything and the model still will not call it: the
+#: three metrics point in directions that cancel. **Scouting cannot clear
+#: this one** — every input already exists — so the only thing that resolves
+#: it is somebody deciding it themselves.
+BLOCKED_NO_AGREEMENT = "no_agreement"
+
+
+def blocker_cause(match: "Match", profiles: Mapping[AllianceKey, AllianceProfile]) -> str:
+    """Why `match` will not resolve, which is what decides how to offer it.
+
+    The two causes want opposite things from the reader and must never be
+    presented as one list. A match missing inputs is a scouting job; a match
+    the model declines is a judgement call, and telling someone to go scout an
+    alliance whose power, members and gift level are all already recorded
+    sends them to do the one thing that cannot help.
+
+    Reads the Tier 1 gate rather than asking the estimator, because
+    :func:`assess` returns ``None`` on exactly that condition and the callback
+    has no channel to explain a decline through.
+    """
+    for side in (match.a, match.b):
+        profile = profiles.get(side)
+        if profile is None or not profile.is_tier_1:
+            return BLOCKED_MISSING_INPUTS
+    return BLOCKED_NO_AGREEMENT
+
+
+def missing_inputs(profile: AllianceProfile | None) -> tuple[str, ...]:
+    """Which of the three Tier 1 inputs `profile` is short of, in column order.
+
+    Empty for a Tier 1 alliance. Named rather than counted so a scouting line
+    can ask for the two things it actually needs instead of all three.
+    """
+    if profile is None:
+        return (COL_POWER, COL_MEMBERS, COL_GIFT_LEVEL)
+    absent = (
+        (COL_POWER, profile.power),
+        (COL_MEMBERS, profile.members),
+        (COL_GIFT_LEVEL, profile.gift_level),
+    )
+    return tuple(column for column, value in absent if value is None)
 
 
 def project_own_path(
@@ -1543,31 +1596,79 @@ def project_own_path(
         memo[(week, path, pos)] = result
         return result
 
+    def candidates(week: int, path: tuple[str, ...], pos: int) -> tuple[AllianceKey, ...]:
+        """Every alliance that could still occupy `pos` at `week`.
+
+        One entry once the slot resolves, because then there is exactly one.
+        Otherwise the sub-bracket feeding it is walked down to the alliances
+        still alive in it, folding out every match along the way that *does*
+        resolve. That fold is what makes the set shrink as a league is played:
+        a week-4 slot draws on eight alliances before anything is recorded and
+        four once week 1 is in, which is the difference between "not worked out
+        yet" and "one of four".
+        """
+        who, _ = occupant(week, path, pos)
+        if who is not None:
+            return (who,)
+        if week <= 1:
+            return ()
+        out: list[AllianceKey] = []
+        for half in (2 * pos, 2 * pos + 1):
+            for alliance in candidates(week - 1, path[:-1], half):
+                if alliance not in out:
+                    out.append(alliance)
+        return tuple(out)
+
     steps: list[PathStep] = []
-    path: tuple[str, ...] = ()
+    #: Every own-outcome sequence still live. One entry while our own results
+    #: are known; it forks the first week our own match will not resolve.
+    #:
+    #: **The walk continues through that fork rather than stopping at it.** The
+    #: two branches share most of their sub-bracket, so a later week often has
+    #: the same candidate set either way — which is how a path that cannot say
+    #: who you play in week 3 can still narrow week 4 to four alliances. It
+    #: only *names* an opponent when every live branch agrees on one, so a fork
+    #: can never turn one branch's guess into a stated fact.
+    live: list[tuple[str, ...]] = [()]
 
     for week in range(1, min(upto_week, LEAGUE_WEEKS) + 1):
         pos = ranking_index >> (week - 1)
-        opponent, source = occupant(week, path, pos ^ 1)
+        resolved = [occupant(week, path, pos ^ 1) for path in live]
+        named = {who for who, _ in resolved}
+
+        if len(named) == 1 and None not in named:
+            opponent = resolved[0][0]
+            source = _weakest_source(*(src for _, src in resolved))
+        else:
+            opponent = source = None
+
         if opponent is None:
-            steps.append(PathStep(week, None, None))
-            break
+            pool: list[AllianceKey] = []
+            for path in live:
+                for alliance in candidates(week, path, pos ^ 1):
+                    if alliance not in pool:
+                        pool.append(alliance)
+            steps.append(PathStep(week, None, None, candidates=tuple(pool)))
+            live = [path + (result,) for path in live for result in ("W", "L")]
+            continue
 
         own = resolver.resolve(week, target, opponent)
         if own is None:
             steps.append(PathStep(week, opponent, source))
-            break
+            live = [path + (result,) for path in live for result in ("W", "L")]
+            continue
 
+        result = "W" if own.winner == target else "L"
         steps.append(
             PathStep(
                 week=week,
                 opponent=opponent,
                 source=source,
-                outcome="W" if own.winner == target else "L",
+                outcome=result,
                 outcome_source=own.source,
             )
         )
-        path += ("W" if own.winner == target else "L",)
+        live = [path + (result,) for path in live]
 
     return PathProjection(target, tuple(steps), tuple(blocked))
 

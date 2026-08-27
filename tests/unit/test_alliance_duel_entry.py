@@ -130,7 +130,10 @@ def test_the_blocking_set_becomes_the_scouting_list():
     assert "Scout these first" in text
     assert "needs power, members and gift level" in text
     # Not "go scout fifteen alliances": the lineage produces a short set.
-    listed = [line for line in text.splitlines() if line.startswith("· ")]
+    # Counted off the scouting block alone -- the blockers above it use the
+    # same bullet, and the walk now reaches every week rather than stopping at
+    # the first one it cannot name, so both blocks grew.
+    listed = [line for line in text.splitlines() if line.startswith("· ") and ": " in line]
     assert 0 < len(listed) <= 8
 
 

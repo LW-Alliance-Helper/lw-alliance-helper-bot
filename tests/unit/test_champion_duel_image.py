@@ -458,8 +458,8 @@ def _slate_group(names, *, scouted=None, label="M", stage="semifinals"):
 def _slate(names, pairs, *, scouted=None, day="2026-08-25", **kwargs):
     group = _slate_group(names, scouted=scouted, **kwargs)
     ids = [db.resolve_registrant(n, server="738")["id"] for n in names]
-    db.set_slate(group["id"], day, [(ids[a], ids[b]) for a, b in pairs], actor=ACTOR)
-    return picks_lib.build(group["id"], day)
+    db.set_slate(ACTOR["guild_id"], day, [(ids[a], ids[b]) for a, b in pairs], actor=ACTOR)
+    return picks_lib.build(ACTOR["guild_id"], day)
 
 
 def _drawn(monkeypatch, slate):
@@ -508,8 +508,8 @@ def test_the_card_is_webp_like_the_other_one(cd_db):
 def test_a_card_with_no_meetings_is_refused(cd_db):
     """An empty card is not a smaller card. Nothing upstream should produce
     one, and drawing a header over a footer would hide that it did."""
-    group = _slate_group(("Ravenshade", "NightOwl"))
-    empty = picks_lib.assemble(db.get_group(group["id"]), "2026-08-25", [])
+    _slate_group(("Ravenshade", "NightOwl"))
+    empty = picks_lib.assemble(ACTOR["guild_id"], "2026-08-25", [])
     with pytest.raises(ValueError):
         img.render_slate(empty)
 
@@ -554,7 +554,7 @@ def test_the_card_never_rounds_a_probability_into_a_certainty(cd_db, monkeypatch
     rid = db.resolve_registrant("Pebble", server="738")["id"]
     with db._get_conn() as conn:
         conn.execute("UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (rid,))
-    slate = picks_lib.build(slate.group["id"], "2026-08-25")
+    slate = picks_lib.build(slate.guild_id, "2026-08-25")
 
     drawn = _drawn(monkeypatch, slate)
     assert ">99%" in drawn
@@ -692,7 +692,7 @@ def test_each_row_gets_its_own_bar_split_where_that_meeting_splits(cd_db):
             "AND o.slot = squads.slot) WHERE registrant_id = ?",
             (ids["Ravenshade"], ids["NightOwl"]),
         )
-    slate = picks_lib.build(slate.group["id"], "2026-08-25")
+    slate = picks_lib.build(slate.guild_id, "2026-08-25")
     card = Image.open(io.BytesIO(img.render_slate(slate))).convert("RGB")
 
     row = img.PICKS["row"]

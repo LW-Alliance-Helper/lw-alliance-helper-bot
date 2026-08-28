@@ -692,25 +692,50 @@ def init_db() -> None:
         # Those numbers are on the reader's own screen and a second copy of a
         # game concept goes stale; all we store is which meetings they chose.
         #
-        # One slate per group per day, updated in place. The volume is a
-        # thin-provisioned zvol that never gives blocks back (`CLAUDE.md`), so
-        # there is no history table and no second slate for the same evening:
-        # rebuilding tomorrow's card rewrites the row set that already exists.
+        # **A slate is not a group's.** It is a set of meetings somebody chose,
+        # for a day, and the group was never a property of the thing: the
+        # meetings are drawn from a field of 128 that mixes warzones, and at the
+        # knockouts there is no lettered group at all. So the identity is the
+        # guild that built it, the day it is for, and which of that day's cards
+        # it is.
+        #
+        # `guild_id` is NOT NULL and carries the ownership `group_id` used to
+        # supply by proxy. It is not decoration: without it nothing says whose
+        # slate this is, and a NULL in the UNIQUE below would not constrain at
+        # all -- SQLite treats every NULL in a unique index as distinct, which
+        # is the same trap `get_or_create_group` documents for knockout labels.
+        #
+        # `card_no` is how a day carries more than `MAX_PICKS` meetings. The
+        # card is capped for legibility and overflow makes a second card rather
+        # than dropping a row. Bounded at `MAX_CARDS_PER_DAY`, which is derived
+        # from the game rather than chosen. The bound is the point: the volume
+        # is a thin-provisioned zvol that never gives blocks back
+        # (`CLAUDE.md`), so an unconstrained slate table is unbounded growth on
+        # a disk that never shrinks. Within one `card_no` the slate is still
+        # updated in place -- there is no history table, and rebuilding card 1
+        # rewrites the row set that already exists.
+        #
+        # `stage` is stamped when the slate is created rather than derived when
+        # it is read. The card prints it, and a semifinal card re-rendered
+        # during the knockouts would otherwise relabel itself. NULLable,
+        # because a guild whose grouping has no calendar has no stage to stamp,
+        # and a card headed by its date alone beats one headed by a guess.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pick_slates (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id   INTEGER NOT NULL,
+                guild_id   TEXT    NOT NULL,
                 -- the date the meetings are PLAYED, not the evening the card
                 -- was built. The next day's schedule is visible in advance and
                 -- the card is prepared the night before, so those are two
                 -- different days and only one of them is worth storing.
                 play_on    TEXT    NOT NULL,
+                card_no    INTEGER NOT NULL DEFAULT 1,
+                stage      TEXT,
                 created_at TEXT    NOT NULL,
                 created_by TEXT,
                 updated_at TEXT    NOT NULL,
                 updated_by TEXT,
-                UNIQUE (group_id, play_on),
-                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+                UNIQUE (guild_id, play_on, card_no)
             )
         """)
         # The meetings themselves, keyed by the position the preparer put them
@@ -905,6 +930,151 @@ def init_db() -> None:
         )
 
         _migrate_stages_to_groupings(conn)
+
+    _migrate_slates_off_groups()
+
+
+def _migrate_slates_off_groups() -> None:
+    """Re-key `pick_slates` from a group to a guild, a day and a card. Runs once.
+
+    A slate stopped being one group's card: it is a set of meetings somebody
+    chose, for a day, drawn from a field that mixes warzones and that has no
+    lettered group at all once the knockouts start. So `group_id` goes and
+    `guild_id`, `card_no` and `stage` arrive -- and both the primary key and
+    the unique constraint change with them, which `ALTER TABLE` cannot do.
+
+    `pick_meetings` is untouched. It was already group-agnostic, its rows key
+    off `pick_slates.id`, and the ids are preserved through the rebuild so
+    every meeting stays attached to its slate.
+
+    **On its own connection, with `foreign_keys` OFF, and that is not
+    optional.** `pick_meetings` has a `REFERENCES pick_slates(id) ON DELETE
+    CASCADE`, which makes two things true at once and both were measured on
+    SQLite 3.45.1 rather than assumed:
+
+    - `ALTER TABLE pick_slates RENAME TO ...` **rewrites that REFERENCES clause
+      to the new name**, whatever `legacy_alter_table` or `foreign_keys` say.
+      The old table is then dropped and every later insert into `pick_meetings`
+      fails with *no such table*. So the rebuild goes the other way: create the
+      new table under a temporary name, copy, drop the old one, rename into
+      place. Nothing references the temporary name, so nothing is rewritten.
+    - `DROP TABLE pick_slates` with foreign keys ON runs an implicit DELETE
+      first, which **fires the cascade and takes every meeting with it**.
+
+    `PRAGMA foreign_keys` is a no-op inside a transaction, which is why this
+    does not take `init_db`'s connection.
+
+    **Guarded on the old column existing**, not on the table being empty: a
+    re-run on a rebuilt table must do nothing, and an emptied table still needs
+    its shape changed.
+
+    **Where a slate's guild cannot be resolved, the slate is dropped and the
+    count is printed.** `guild_id` is NOT NULL for a reason -- a NULL would sit
+    in the new UNIQUE and constrain nothing, because SQLite counts every NULL
+    in a unique index as distinct -- so there is no row to write for a slate
+    nobody owns. The route tried is `groups.created_by_guild_id` and then the
+    grouping's, which is every route the old shape had; a slate answering
+    neither was already unreachable, because nothing can ask for a card
+    without knowing whose it is. This is the one destructive step here, which
+    is why the count is printed rather than swallowed.
+    """
+    conn = _get_conn()
+    try:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(pick_slates)").fetchall()}
+        if not columns or "group_id" not in columns:
+            return
+
+        rows = conn.execute(
+            """
+            SELECT s.id, s.play_on, s.created_at, s.created_by, s.updated_at, s.updated_by,
+                   g.stage AS stage,
+                   COALESCE(g.created_by_guild_id, gr.created_by_guild_id) AS guild_id
+            FROM pick_slates s
+            LEFT JOIN groups g ON g.id = s.group_id
+            LEFT JOIN groupings gr ON gr.id = g.grouping_id
+            ORDER BY s.id
+            """
+        ).fetchall()
+        orphans = 0
+        collisions = 0
+        seen: set = set()
+        migrated = []
+        for row in rows:
+            guild_id = _text(row["guild_id"])
+            if not guild_id:
+                orphans += 1
+                continue
+            # One card per guild per day survives, which is what the old UNIQUE
+            # already guaranteed per group. Two groups of one guild could share
+            # a day, and the second is dropped rather than silently renumbered
+            # into a second card nobody built.
+            key = (guild_id, row["play_on"])
+            if key in seen:
+                collisions += 1
+                continue
+            seen.add(key)
+            migrated.append((row, guild_id))
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        # A rebuild that failed part way leaves this behind, and SQLite runs
+        # DDL outside the surrounding transaction -- so the CREATE below would
+        # fail on the re-run that is meant to recover.
+        conn.execute("DROP TABLE IF EXISTS pick_slates_rebuilt")
+        conn.execute("""
+            CREATE TABLE pick_slates_rebuilt (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id   TEXT    NOT NULL,
+                play_on    TEXT    NOT NULL,
+                card_no    INTEGER NOT NULL DEFAULT 1,
+                stage      TEXT,
+                created_at TEXT    NOT NULL,
+                created_by TEXT,
+                updated_at TEXT    NOT NULL,
+                updated_by TEXT,
+                UNIQUE (guild_id, play_on, card_no)
+            )
+        """)
+        conn.executemany(
+            """
+            INSERT INTO pick_slates_rebuilt
+                (id, guild_id, play_on, card_no, stage,
+                 created_at, created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["id"],
+                    guild_id,
+                    row["play_on"],
+                    row["stage"],
+                    row["created_at"],
+                    row["created_by"],
+                    row["updated_at"],
+                    row["updated_by"],
+                )
+                for row, guild_id in migrated
+            ],
+        )
+        # The meetings of a slate that did not survive go with it. The cascade
+        # cannot do this -- foreign keys are off, and the old table is dropped
+        # rather than emptied -- so they are deleted here or they would be left
+        # pointing at an id nothing holds.
+        conn.execute(
+            "DELETE FROM pick_meetings WHERE slate_id NOT IN (SELECT id FROM pick_slates_rebuilt)"
+        )
+        conn.execute("DROP TABLE pick_slates")
+        conn.execute("ALTER TABLE pick_slates_rebuilt RENAME TO pick_slates")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        print(
+            "[CHAMPION_DUEL] pick_slates re-keyed to (guild, day, card): "
+            f"{len(migrated)} slate(s) migrated"
+            + (f"; {orphans} with no resolvable guild dropped" if orphans else "")
+            + (f"; {collisions} same-guild same-day duplicate(s) dropped" if collisions else "")
+        )
+    finally:
+        conn.close()
 
 
 # The imported grouping's sign-up date, from its in-game Match Overview. There
@@ -2337,7 +2507,7 @@ def get_registrant(registrant_id) -> dict | None:
 
 def _claim_row(conn, where: str, params: tuple) -> dict | None:
     row = conn.execute(
-        f"SELECT * FROM registrant_claims WHERE {where}",  # noqa: S608
+        f"SELECT * FROM registrant_claims WHERE {where}",
         params,
     ).fetchone()
     return dict(row) if row else None
@@ -2398,7 +2568,7 @@ def claims_for(registrant_ids) -> dict[int, dict]:
             chunk = ids[start : start + 500]
             marks = ",".join("?" * len(chunk))
             for row in conn.execute(
-                f"SELECT * FROM registrant_claims WHERE registrant_id IN ({marks})",  # noqa: S608
+                f"SELECT * FROM registrant_claims WHERE registrant_id IN ({marks})",
                 chunk,
             ).fetchall():
                 out[row["registrant_id"]] = dict(row)
@@ -2530,13 +2700,30 @@ def release_claim(discord_user_id) -> dict | None:
 # something somebody says is about to.
 
 
-#: How many meetings one card carries. A semifinal group of eight plays 28
-#: meetings over four days -- eight on a two-meeting day, four on the last --
-#: and the person building a card ships the profitable ones rather than all of
-#: them. Seventeen is above anything one group's day can produce, so the cap is
-#: a guard against a runaway selection rather than a rule about what to pick,
-#: and the card is laid out to render that many legibly.
-MAX_PICKS = 17
+#: How many meetings one card carries. **The binding constraint is legibility,
+#: not Discord** (Kevin, 2026-08-27): twenty rows of text is well inside an
+#: embed description's 4,096 characters, and what runs out first is how tall
+#: the image gets before it has to be tapped to be read.
+#:
+#: **Overflow makes a second card, it never drops a row.** A twenty-first
+#: meeting goes on card 2 rather than off the bottom, which is what retires
+#: caption row-dropping by construction rather than by rule.
+MAX_PICKS = 20
+
+#: How many cards one guild can build for one day.
+#:
+#: **Not a rationing limit -- a runaway guard**, and the number comes from the
+#: game rather than from a preference. An alliance carding its whole warzone is
+#: the normal case, not the extreme one: the field mixes warzones, so a guild
+#: may legitimately want most of the day on cards. **128 players play at most
+#: 64 meetings a day** (Kevin, 2026-08-28), so four cards of `MAX_PICKS` hold
+#: the entire day's field with room over. Nobody doing real work reaches it and
+#: it never needs explaining on a surface.
+#:
+#: What it does buy is a bound, and the bound is the point: the volume is a
+#: thin-provisioned zvol that never gives blocks back (`CLAUDE.md`), so a slate
+#: table nothing constrains is unbounded growth on a disk that never shrinks.
+MAX_CARDS_PER_DAY = 4
 
 
 def _play_on(value) -> str:
@@ -2597,8 +2784,38 @@ def _registrant_name(registrant_id: int) -> str:
     return (row["display_name"] if row else None) or f"registrant {registrant_id}"
 
 
-def set_slate(group_id: int, play_on, meetings, *, actor=None) -> dict:
-    """Replace the meetings on one group's card for one day.
+def _card_no(value) -> int:
+    """Which of the day's cards this is, or a ValueError.
+
+    Refused at the door rather than clamped. A caller asking for card 9 has a
+    bug or a loop, and writing it as card 4 would silently overwrite a card
+    somebody built.
+    """
+    try:
+        card_no = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"card_no must be a number, not {value!r}") from None
+    if not 1 <= card_no <= MAX_CARDS_PER_DAY:
+        raise ValueError(f"card_no must be 1..{MAX_CARDS_PER_DAY}, not {card_no}")
+    return card_no
+
+
+def _stage_for_guild(guild_id) -> str | None:
+    """The round this guild's grouping is playing, or None.
+
+    What a slate's `stage` is stamped from when the caller does not name one.
+    None for a guild whose warzone is in no grouping we hold, or whose grouping
+    has no calendar -- both are ordinary states, and a card headed by its date
+    alone is better than one headed by a guess.
+    """
+    grouping = resolve_grouping_for_guild(guild_id)
+    if grouping is None:
+        return None
+    return current_stage(grouping["id"])
+
+
+def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None) -> dict:
+    """Replace the meetings on one of a guild's cards for one day.
 
     `meetings` is a list of `(a_registrant_id, b_registrant_id)` pairs in the
     order they should appear. The whole set is rewritten inside one
@@ -2606,20 +2823,32 @@ def set_slate(group_id: int, play_on, meetings, *, actor=None) -> dict:
     one at a time would leave a reader who pulled the card mid-edit a slate
     that was true at no point.
 
-    **Both players must already be in the group.** The meetings are picked out
-    of a group we hold rather than typed, and a pair from outside it would put
-    two names on a card headed by a group neither is in. The refusal names who,
-    because "one of these is not in the group" is not something a person can
-    act on.
+    **Both players must exist, and that is the whole membership rule now.** It
+    used to be "both must be in the group", which a group-keyed slate could
+    ask. A slate is a set of meetings somebody chose out of a field of 128 that
+    mixes warzones and that has no lettered group at all at the knockouts, so
+    there is no group left to check against. What actually stops an impossible
+    pair is the entry flow filtering Player 2 to who Player 1 can meet -- and
+    where the bracket is unknown nothing does, which is a gap named rather than
+    papered over with a check that would only refuse legitimate pairs.
+
+    **`stage` is stamped, not derived on read.** It defaults to whatever round
+    the guild's grouping is playing, and a rebuild keeps whatever was stamped
+    first unless a stage is named explicitly. A card re-rendered after the
+    event moved on must still say which round it was for.
 
     Order within a pair is kept as given: the card draws the first name on the
     left. The same two players the other way round are the SAME meeting,
-    though, and the second one is refused rather than drawn twice.
+    though, and the second one is refused rather than drawn twice -- on this
+    card and on the guild's other cards for the same day, because a reader
+    seeing one meeting twice is the same mistake either way.
     """
-    group = get_group(group_id)
-    if group is None:
-        raise LookupError(f"no group {group_id}")
+    gid = _text(guild_id)
+    if not gid:
+        raise ValueError("a slate belongs to a guild")
     day = _play_on(play_on)
+    card_no = _card_no(card_no)
+    explicit_stage = _stage(stage) if stage else None
 
     pairs = [(int(a), int(b)) for a, b in meetings]
     if not pairs:
@@ -2627,59 +2856,97 @@ def set_slate(group_id: int, play_on, meetings, *, actor=None) -> dict:
     if len(pairs) > MAX_PICKS:
         raise ValueError(f"a card carries at most {MAX_PICKS} meetings, not {len(pairs)}")
 
-    members = {m["registrant_id"]: m for m in get_group_members(group_id)}
+    names: dict[int, str] = {}
     seen: set = set()
     for a, b in pairs:
         if a == b:
             raise ValueError("a meeting needs two different players")
         for side in (a, b):
-            if side not in members:
-                raise ValueError(f"{_registrant_name(side)} is not in this group")
+            if side not in names:
+                row = get_registrant(side)
+                if row is None:
+                    raise ValueError(f"there is no registrant {side}")
+                names[side] = row["display_name"]
         key = frozenset((a, b))
         if key in seen:
-            names = " and ".join(members[s]["display_name"] for s in (a, b))
-            raise ValueError(f"{names} are on this card twice")
+            pair = " and ".join(names[s] for s in (a, b))
+            raise ValueError(f"{pair} are on this card twice")
         seen.add(key)
 
     now = _now()
     sid = str(actor.get("discord_user_id")) if actor and actor.get("discord_user_id") else None
+    # Resolved before the write connection is opened. It reads the guild's
+    # warzone and its grouping's calendar on a connection of its own, and a
+    # nested read underneath an open write is the shape that deadlocks.
+    stamped = explicit_stage or _stage_for_guild(gid)
     with _get_conn() as conn:
+        # The same meeting on two of the day's cards. Read before the write and
+        # excluding this card, so rebuilding card 1 never trips over its own
+        # rows.
+        for row in conn.execute(
+            """
+            SELECT s.card_no, m.a_id, m.b_id
+            FROM pick_slates s JOIN pick_meetings m ON m.slate_id = s.id
+            WHERE s.guild_id = ? AND s.play_on = ? AND s.card_no != ?
+            """,
+            (gid, day, card_no),
+        ).fetchall():
+            if frozenset((row["a_id"], row["b_id"])) in seen:
+                pair = " and ".join(_registrant_name(x) for x in (row["a_id"], row["b_id"]))
+                other = row["card_no"]
+                raise ValueError(f"{pair} are already on card {other} for this day")
+
         conn.execute(
             """
-            INSERT INTO pick_slates (group_id, play_on, created_at, created_by,
-                                     updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(group_id, play_on) DO UPDATE SET
+            INSERT INTO pick_slates (guild_id, play_on, card_no, stage, created_at,
+                                     created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, play_on, card_no) DO UPDATE SET
+                stage      = COALESCE(?, pick_slates.stage),
                 updated_at = excluded.updated_at,
                 updated_by = excluded.updated_by
             """,
-            (int(group_id), day, now, sid, now, sid),
+            (
+                gid,
+                day,
+                card_no,
+                stamped,
+                now,
+                sid,
+                now,
+                sid,
+                explicit_stage,
+            ),
         )
         slate_id = conn.execute(
-            "SELECT id FROM pick_slates WHERE group_id = ? AND play_on = ?",
-            (int(group_id), day),
+            "SELECT id FROM pick_slates WHERE guild_id = ? AND play_on = ? AND card_no = ?",
+            (gid, day, card_no),
         ).fetchone()["id"]
         conn.execute("DELETE FROM pick_meetings WHERE slate_id = ?", (slate_id,))
         conn.executemany(
             "INSERT INTO pick_meetings (slate_id, position, a_id, b_id) VALUES (?, ?, ?, ?)",
             [(slate_id, i, a, b) for i, (a, b) in enumerate(pairs, start=1)],
         )
-    return get_slate(group_id, day)
+    return get_slate(gid, day, card_no=card_no)
 
 
-def get_slate(group_id: int, play_on) -> dict | None:
-    """One group's card for one day, with its meetings in order, or None.
+def get_slate(guild_id, play_on, *, card_no=1) -> dict | None:
+    """One of a guild's cards for one day, with its meetings in order, or None.
 
     A slate whose players have since been removed comes back with fewer
     meetings rather than with holes: `pick_meetings` cascades on the registrant
     and the positions are read in order rather than counted, so a card built
     from this renders what is left.
     """
+    gid = _text(guild_id)
+    if not gid:
+        return None
     day = _play_on(play_on)
+    card_no = _card_no(card_no)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM pick_slates WHERE group_id = ? AND play_on = ?",
-            (int(group_id), day),
+            "SELECT * FROM pick_slates WHERE guild_id = ? AND play_on = ? AND card_no = ?",
+            (gid, day, card_no),
         ).fetchone()
         if row is None:
             return None
@@ -2695,39 +2962,55 @@ def get_slate(group_id: int, play_on) -> dict | None:
     return slate
 
 
-def slate_days(group_id: int, limit: int = 25) -> list[dict]:
-    """Which days this group has a card for, newest first, with their sizes.
+def slate_days(guild_id, limit: int = 25) -> list[dict]:
+    """Which cards this guild has, newest day first, with their sizes.
+
+    One row per card rather than per day, because two cards for one day are two
+    things a picker has to tell apart -- and a row that collapsed them would
+    offer one entry opening whichever of them the read happened to reach.
 
     Capped at Discord's select limit by default, because the only thing that
     reads this is a picker.
     """
+    gid = _text(guild_id)
+    if not gid:
+        return []
     with _get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT s.play_on, s.updated_at, s.updated_by, COUNT(m.slate_id) AS meetings
+            SELECT s.play_on, s.card_no, s.stage, s.updated_at, s.updated_by,
+                   COUNT(m.slate_id) AS meetings
             FROM pick_slates s LEFT JOIN pick_meetings m ON m.slate_id = s.id
-            WHERE s.group_id = ?
+            WHERE s.guild_id = ?
             GROUP BY s.id
-            ORDER BY s.play_on DESC
+            ORDER BY s.play_on DESC, s.card_no ASC
             LIMIT ?
             """,
-            (int(group_id), int(limit)),
+            (gid, int(limit)),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def delete_slate(group_id: int, play_on) -> bool:
-    """Drop one day's card. True when there was one.
+def delete_slate(guild_id, play_on, *, card_no=1) -> bool:
+    """Drop one of a day's cards. True when there was one.
 
     The meetings go with it through the cascade. Nothing is archived: the
     volume never gives blocks back, and a card somebody deleted is a selection
     they changed their mind about rather than a record of anything.
+
+    **The day's other cards are left alone.** Deleting card 1 does not renumber
+    card 2 down into it: a renumber would move a card somebody is looking at
+    while they are looking at it, and an empty card 1 costs nothing.
     """
+    gid = _text(guild_id)
+    if not gid:
+        return False
     day = _play_on(play_on)
+    card_no = _card_no(card_no)
     with _get_conn() as conn:
         cur = conn.execute(
-            "DELETE FROM pick_slates WHERE group_id = ? AND play_on = ?",
-            (int(group_id), day),
+            "DELETE FROM pick_slates WHERE guild_id = ? AND play_on = ? AND card_no = ?",
+            (gid, day, card_no),
         )
     return cur.rowcount > 0
 
@@ -3404,38 +3687,40 @@ def get_profiles(registrant_ids) -> dict[int, dict]:
     return {r["registrant_id"]: _profile_from_row(r) for r in rows}
 
 
-def get_group_scouting(group_id: int) -> list[dict]:
-    """One group's members with their squads and orders, in finishing order.
+def get_scouting(registrant_ids) -> list[dict]:
+    """Any set of registrants with their squads and orders, in one read.
 
-    `get_group_members` answers "who is in this group", which is what a member
-    reading their group wants. This answers "what can we predict about them",
-    which is what the odds need, and it is a different query rather than a flag
-    on the first one: the group listing is read on every open and would be
-    paying for scouting nobody asked for.
+    The odds need "what can we predict about these players", and until the
+    picks card stopped being a group's card that question only ever arrived as
+    a group. It does not any more: a slate is a set of meetings somebody chose
+    out of a field of 128 that mixes warzones, and at the knockouts there is no
+    lettered group to read at all. So the bulk read is by registrant, and
+    `get_group_scouting` is that read with a membership query in front of it.
 
-    Bulk rather than `get_player` per member. A group of 8 is 8 registrants, and
-    a query each for squads and orders per player is 16 round trips inside a
-    Discord interaction to answer something two queries cover.
+    Bulk rather than `get_player` per name, for the reason it always was: a
+    query each for squads and orders per player is two round trips a head
+    inside a Discord interaction, to answer something three queries cover.
 
-    Rows keep everything `get_group_members` returns, so a caller can render the
-    group and score it from one read. `id` is set to the registrant id, because
-    that is the key `build_side` and the squad lookups expect, and a group
-    membership row's own primary key would silently match nothing.
-
-    The imported profile rides along for the same reason `thp` does: the odds
-    read it, and a query that returns everything except the one field the model
-    wants is a feature that cannot work in production and still passes its
-    tests.
+    Rows are the registrant's own, with `id` set to the registrant id -- the
+    key `build_side` and the squad lookups expect. Ordered by display name,
+    because a set of registrants has no finishing order to sort by; the caller
+    that has one imposes it.
     """
-    members = get_group_members(group_id)
-    if not members:
+    ids = [int(i) for i in registrant_ids]
+    if not ids:
         return []
-    ids = [m["registrant_id"] for m in members]
     marks = ",".join("?" for _ in ids)
     squads: dict[int, list] = {i: [] for i in ids}
     orders: dict[int, list] = {i: [] for i in ids}
     profiles = get_profiles(ids)
     with _get_conn() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT * FROM registrants WHERE id IN ({marks}) ORDER BY display_name",
+                tuple(ids),
+            ).fetchall()
+        ]
         for r in conn.execute(
             f"SELECT * FROM squads WHERE registrant_id IN ({marks}) ORDER BY registrant_id, slot",
             tuple(ids),
@@ -3447,12 +3732,50 @@ def get_group_scouting(group_id: int) -> list[dict]:
             tuple(ids),
         ).fetchall():
             orders[r["registrant_id"]].append(dict(r))
+    for row in rows:
+        rid = row["id"]
+        row["registrant_id"] = rid
+        row["squads"] = squads.get(rid, [])
+        row["orders"] = orders.get(rid, [])
+        row["profile"] = profiles.get(rid)
+    return rows
+
+
+def get_group_scouting(group_id: int) -> list[dict]:
+    """One group's members with their squads and orders, in finishing order.
+
+    `get_group_members` answers "who is in this group", which is what a member
+    reading their group wants. This answers "what can we predict about them",
+    which is what the odds need, and it is a different query rather than a flag
+    on the first one: the group listing is read on every open and would be
+    paying for scouting nobody asked for.
+
+    The scouting half is `get_scouting`, which takes any set of registrants.
+    What this adds is the membership -- who they are and where they finished --
+    which is why the two are not one function: a slate has no group and would
+    otherwise have to fake one to ask the same question.
+
+    Rows keep everything `get_group_members` returns, so a caller can render
+    the group and score it from one read. `id` is set to the registrant id,
+    because that is the key `build_side` and the squad lookups expect, and a
+    group membership row's own primary key would silently match nothing.
+
+    The imported profile rides along for the same reason `thp` does: the odds
+    read it, and a query that returns everything except the one field the model
+    wants is a feature that cannot work in production and still passes its
+    tests.
+    """
+    members = get_group_members(group_id)
+    if not members:
+        return []
+    scouting = {r["id"]: r for r in get_scouting([m["registrant_id"] for m in members])}
     for m in members:
         rid = m["registrant_id"]
+        row = scouting.get(rid, {})
         m["id"] = rid
-        m["squads"] = squads.get(rid, [])
-        m["orders"] = orders.get(rid, [])
-        m["profile"] = profiles.get(rid)
+        m["squads"] = row.get("squads", [])
+        m["orders"] = row.get("orders", [])
+        m["profile"] = row.get("profile")
     return members
 
 
@@ -4428,7 +4751,7 @@ def revert_edit(edit_id: int, *, actor, force: bool = False) -> dict:
             None if restored is None else (float(restored) if field == "power" else restored)
         )
         conn.execute(
-            f"UPDATE squads SET {field} = ?, updated_at = ?, updated_by = ?, "  # noqa: S608
+            f"UPDATE squads SET {field} = ?, updated_at = ?, updated_by = ?, "
             "source = 'edited' WHERE registrant_id = ? AND slot = ?",
             (restored_typed, _now(), actor["discord_user_id"], reg_id, slot),
         )
@@ -4717,10 +5040,10 @@ def purge_user_data(discord_user_id, *, apply: bool = False) -> dict:
     with _get_conn() as conn:
         for table, where in _REMOVAL_DELETES:
             if apply:
-                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount
             else:
                 n = conn.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",
                     params,
                 ).fetchone()[0]
             if n:
@@ -4728,12 +5051,12 @@ def purge_user_data(discord_user_id, *, apply: bool = False) -> dict:
         for table, sets, where in _REMOVAL_SCRUBS:
             if apply:
                 n = conn.execute(
-                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    f"UPDATE {table} SET {sets} WHERE {where}",
                     params,
                 ).rowcount
             else:
                 n = conn.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",
                     params,
                 ).fetchone()[0]
             if n:

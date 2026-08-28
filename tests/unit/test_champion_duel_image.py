@@ -471,8 +471,8 @@ def _slate_group(names, *, scouted=None, label="M", stage="semifinals"):
 def _slate(names, pairs, *, scouted=None, day="2026-08-25", **kwargs):
     group = _slate_group(names, scouted=scouted, **kwargs)
     ids = [db.resolve_registrant(n, server="738")["id"] for n in names]
-    db.set_slate(group["id"], day, [(ids[a], ids[b]) for a, b in pairs], actor=ACTOR)
-    return picks_lib.build(group["id"], day)
+    db.set_slate(ACTOR["guild_id"], day, [(ids[a], ids[b]) for a, b in pairs], actor=ACTOR)
+    return picks_lib.build(ACTOR["guild_id"], day)
 
 
 class _StubPick:

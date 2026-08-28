@@ -207,6 +207,16 @@ def predict(player_a: dict, player_b: dict) -> Prediction:
 
     a = build_side(player_a)
     b = build_side(player_b)
+    # **1 is correct and nobody should "fix" it.** It reads like an oversight
+    # -- the VS card renders semifinal and knockout meetings, and the game
+    # plays those as a Bo3 -- so this comment exists to stop the next session
+    # changing it. The unit here is one match, and scoring the meeting as a
+    # series is measurably worse rather than merely different: on 310 real
+    # results a Bo3 amplifies the favourite by 0.4pp while `series_win_prob`
+    # amplifies by 8.4pp, because it assumes independent matches where the real
+    # scoreline distribution is bimodal (chi-square 358.3 on 3 df). Brier goes
+    # 0.1010 -> 0.1052 and log loss 0.3892 -> 0.5599. Source:
+    # `champion-duel-simulator`, `semifinal_data/FINDING_matchup_model_stage.md`.
     p_a = predict_pair(a, b, best_of=1)
     return Prediction(p_a=p_a, a=a, b=b, engine=constants())
 
@@ -224,8 +234,21 @@ def predict_pair(a: SideInput, b: SideInput, *, best_of: int) -> float:
     the exact defect this argument exists to fix, and a default would reinstate
     it one layer up. `predict` passes 1 explicitly for the same reason.
 
-    A qualifier meeting is a single match, semifinal and knockout meetings are
-    a Bo3, and both finals are a Bo5 (Kevin, 2026-08-15/16).
+    **Every caller in this repo passes 1, and that is the measured answer
+    rather than an unset default.** The game does play a qualifier meeting as
+    one match, semifinal and knockout meetings as a Bo3, and both finals as a
+    Bo5 (Kevin, 2026-08-15/16) -- so passing the real series length looks like
+    the more careful choice. It is not. Scored on 310 real results, a Bo3 in
+    this game amplifies the favourite by 0.4pp while this engine's
+    `series_win_prob` amplifies by 8.4pp, because it assumes independent
+    matches where the real scoreline distribution is bimodal (chi-square 358.3
+    on 3 df). Brier gets worse (0.1010 -> 0.1052) and log loss much worse
+    (0.3892 -> 0.5599). Source: `champion-duel-simulator`,
+    `semifinal_data/FINDING_matchup_model_stage.md`.
+
+    So the argument stays required, because a silent 1 and a chosen 1 are
+    different things to a reader of the call site -- but the number to choose
+    is 1 until the engine's series model is refitted.
     """
     if not ENGINE_AVAILABLE:
         raise RuntimeError("champion-duel-engine is not installed")

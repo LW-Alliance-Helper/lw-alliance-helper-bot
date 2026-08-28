@@ -3,8 +3,10 @@
 **Two cards live here.** `render` draws one matchup on the designed VS card and
 is what the rest of this docstring is about. `render_slate` draws a whole day's
 picks as a list of matchups, and it works differently in one important way: its
-height is not fixed, so it has no static template and paints its own bands
-instead. Its own section at the foot of this file carries the reasoning.
+height is not fixed, so it has no single static template. It assembles a
+header, a repeated row band and a footer instead, on one of two templates --
+one column of up to ten meetings, two columns of up to twenty. Its own section
+at the foot of this file carries the reasoning.
 
 The embed carries the same numbers. This exists because an embed is not what
 gets forwarded into an alliance chat, and sharing is how a prediction earns the
@@ -509,94 +511,163 @@ def render(result: predict_lib.Prediction, *, subtitle: str | None = None) -> by
 
 # ── The day's picks ───────────────────────────────────────────────────────────
 #
-# A second card, and a different kind of one. The VS card composites a finished
-# template; this one draws its own bands, because **a slate's height is not
-# fixed**: a card carries five to seventeen meetings and grows with them, so
-# there is no single image the artwork could arrive as. What it can arrive as is
-# three bands — a header, one row, a footer — which `bands` in the layout names
-# and `_band_art` composites the moment the files exist. Until then the bands
-# are painted from `palette`, in the VS card's own colours so the two read as
-# one product.
+# A second card, and a different kind of one. The VS card composites one
+# finished template; this one assembles bands, because **a slate's height is not
+# fixed**: it carries one to twenty meetings and grows with them.
+#
+# **Two templates, not one elastic card.** Kevin, 27 Aug: *"I think having a
+# different design for 1 column of 10 vs 2 columns of 10 is better so we know
+# which we need."* So `single` is one column of up to ten and `wide` is two
+# columns of up to twenty; height is data, the column count is the template,
+# and the switch is automatic on row count. The columns balance rather than
+# fill -- eleven rows is six and five, never ten and one, which would read as a
+# mistake every time -- and a short column ends early rather than stretching its
+# rows, because one row pitch on every card is what stops two rows on the same
+# card being different sizes.
+#
+# **What a row carries is one percentage, on the picked side, and nothing else.**
+# No row number, no confidence, no second percentage, no basis label. The number
+# itself is the caller's; nothing about which one is decided here.
 #
 # Everything else follows the VS card deliberately: the same fonts through
 # `storm_renderer`, the same `words.probability` refusal to round a certainty
-# into existence, the same positional blue-left / red-right, and the same bar
-# routine over a track the layout names.
+# into existence, and the same positional blue-left / red-right.
 
 
 def _picks_colour(key: str) -> tuple:
     return ImageColor.getrgb(PICKS["palette"][key])
 
 
+# A placeholder, and the only card string that does not live in
+# `champion_duel_picks.py` beside `CARD_TITLE` and the rest. It is here because
+# the cap is new artwork and no module owned the word yet, and this session
+# does not open that one. **Move it there with the others when the copy
+# sign-off lands** -- this is not meant to become a second home for card copy.
+CARD_PICK_LABEL = "PICK"
+
+
+_GEOM = PICKS["geometry"]
+_ROWS_TOP = _GEOM["header_h"] - _GEOM["header_overlap"]
+
+
+def picks_template(rows: int) -> dict:
+    """Which of the two templates `rows` meetings are drawn on.
+
+    One column up to ten, two columns to twenty. Above twenty the card is not
+    drawn at all: overflow makes a second slate, it never drops a row. That is
+    what retires `CAPTION_TRUNCATED` by construction rather than by rule, and
+    it is why this raises instead of clamping.
+    """
+    if rows < 1:
+        raise ValueError("a picks card needs at least one meeting")
+    if rows > _GEOM["max_rows"]:
+        raise ValueError(
+            f"a picks card carries at most {_GEOM['max_rows']} meetings, not {rows}; "
+            "a twenty-first meeting is a second slate"
+        )
+    single = PICKS["templates"]["single"]
+    return single if rows <= single["rows_per_column"] else PICKS["templates"]["wide"]
+
+
+def _column_split(rows: int, template: dict) -> list[int]:
+    """How many rows each column carries.
+
+    The columns balance rather than fill, and an odd count puts the extra row
+    on the left. Kevin, correcting the wireframe: *"just do it as 6 and 5 and
+    don't squish the 6, let there be an empty space under the 5."*
+    """
+    columns = len(template["columns"])
+    per = [rows // columns] * columns
+    for i in range(rows % columns):
+        per[i] += 1
+    return per
+
+
 def picks_height(rows: int) -> int:
     """How tall a card with `rows` meetings comes out.
 
     Public because the layout tests assert against it and a surface sizing an
-    upload wants it without rendering first.
+    upload wants it without rendering first. It is the tallest column that sets
+    the height, so eleven rows in two columns is a six-row card.
     """
-    return PICKS["header"]["h"] + rows * PICKS["row"]["pitch"] + PICKS["footer"]["h"]
+    template = picks_template(rows)
+    tallest = max(_column_split(rows, template))
+    return _last_bar_bottom(tallest) + _GEOM["trailing"] + _GEOM["footer_h"]
 
 
-def _vertical_gradient(w: int, h: int, top: tuple, bottom: tuple):
-    """One column of colour, stretched.
+def _last_bar_bottom(rows_in_column: int) -> int:
+    """The bottom edge of the lowest bar on the card.
 
-    Cheaper than filling per pixel, and the same trick `_split_bar` uses along
-    the other axis.
+    Everything under the rows is measured from the bar rather than from the row
+    band, because the band is taller than its pitch and its lower half is
+    transparent. The bar is the ink.
     """
-    column = bytearray()
-    for py in range(h):
-        t = py / max(h - 1, 1)
-        column.extend(round(c0 + (c1 - c0) * t) for c0, c1 in zip(top, bottom))
-    return Image.frombytes("RGB", (1, h), bytes(column)).resize((w, h)).convert("RGBA")
+    return _ROWS_TOP + _GEOM["bar"]["y"] + (rows_in_column - 1) * _GEOM["pitch"] + _GEOM["bar"]["h"]
 
 
-def _band_art(key: str, w: int, h: int):
-    """The finished artwork for one band, or None while there is none.
+def picks_size(rows: int) -> tuple[int, int]:
+    """The finished card's pixel size, without rendering it."""
+    return picks_template(rows)["width"], picks_height(rows)
 
-    A named file that is not on disk is treated as absent rather than raised
-    on, which is the opposite of the VS card's rule about its template. The
-    difference is what the failure costs: that card cannot be drawn at all
-    without its background, where this one is drawn either way and a missing
-    band is a card that looks plainer than intended.
+
+_art_cache: dict[str, Image.Image | None] = {}
+
+
+def _art(name: str, *, required: bool = False) -> Image.Image | None:
+    """One piece of the artwork, loaded once and copied per use.
+
+    **A decorative piece that will not load is treated as absent rather than
+    raised on**, which is the opposite of the VS card's rule about its
+    template. The difference is what the failure costs: that card cannot be
+    drawn at all without its background, where the header, footer and row band
+    only make this one look plainer than intended.
+
+    **`required=True` inverts that, and the PICK cap is the one piece that
+    asks for it.** The cap is not decoration -- it is the only thing on a row
+    that says who to back and by how much, and a row drawn without it is
+    indistinguishable from a row nobody could predict. That is a card making a
+    false statement rather than a plain one, so it fails instead, and
+    `champion_duel_hub._send_prediction` falls back to the embed, which carries
+    the same numbers.
+
+    Unreadable counts the same as missing: `os.path.isfile` says a path exists,
+    not that Pillow can decode what is at it.
+
+    **Nothing is resized here.** Every piece is committed at the size it is
+    drawn at, so the 4x downscale off the masters is paid once by
+    `scripts/build_champion_duel_picks_assets.py` rather than on every render.
     """
-    name = (PICKS.get("bands") or {}).get(key)
-    if not name:
+    if name not in _art_cache:
+        try:
+            _art_cache[name] = Image.open(os.path.join(_ASSETS, name)).convert("RGBA")
+        except Exception:  # noqa: BLE001 - a decorative piece must not fail the render
+            _art_cache[name] = None
+    art = _art_cache[name]
+    if art is None:
+        if required:
+            raise FileNotFoundError(f"the picks card cannot be drawn without {name}")
         return None
-    path = os.path.join(_ASSETS, name)
-    if not os.path.isfile(path):
-        return None
-    return Image.open(path).convert("RGBA").resize((w, h), Image.LANCZOS)
+    return art.copy()
 
 
-def _plate(box: dict, fill: tuple, border: tuple):
-    """One row's plate, drawn once and pasted per row.
+def _at(box: dict, dx: int, dy: int) -> dict:
+    """A row box moved onto the row and column it is being drawn for.
 
-    Every row is the same shape, so the 4x supersample that keeps a 12px corner
-    from stepping is paid once for the card rather than once for each of
-    seventeen rows.
+    Row boxes are stored once, relative to the row band's own corner rather
+    than to the card's. There is only one row shape, and a layout that repeated
+    it twenty times would be twenty places for a revision to half-land.
     """
-    s = _BAR_SCALE
-    w, h = box["w"], box["h"]
-    layer = Image.new("RGBA", (w * s, h * s), (0, 0, 0, 0))
-    ImageDraw.Draw(layer).rounded_rectangle(
-        [0, 0, w * s - 1, h * s - 1],
-        radius=box["radius"] * s,
-        fill=fill + (255,),
-        outline=border + (255,),
-        width=s,
-    )
-    return layer.resize((w, h), Image.LANCZOS)
+    return {**box, "x": box["x"] + dx, "y": box["y"] + dy}
 
 
-def _at(box: dict, dy: int) -> dict:
-    """A row box moved onto the row it is being drawn for.
+def _mirrored(box: dict, width: int) -> dict:
+    """`box` reflected across the vertical centre of a `width`-wide space.
 
-    Row boxes are stored once, with `y` measured from the top of the row band
-    rather than from the top of the card. There is only one row shape, and a
-    layout that repeated it seventeen times would be seventeen places for a
-    revision to half-land.
+    The PICK cap's artwork points one way and is mirrored for the other side,
+    so its text boxes have to be mirrored with it or the type lands on the
+    chamfer.
     """
-    return {**box, "y": box["y"] + dy}
+    return {**box, "x": width - (box["x"] + box["w"])}
 
 
 def _shared_name_size(draw, labels, max_w: int) -> int:
@@ -613,28 +684,37 @@ def _shared_name_size(draw, labels, max_w: int) -> int:
     have -- and, worse, invites a caller to reuse that font object for every
     row, which draws those names as empty boxes. That is what the first version
     of this did.
+
+    The floor is 17 because the game's 20-character name limit does not bound
+    full-width scripts: twenty Korean or Chinese glyphs run about twice as wide
+    as twenty Latin ones, and Kevin's own reference card carries several. Below
+    the floor `_ellipsized` takes over.
     """
-    for size in range(30, 18, -1):
+    for size in range(30, 17, -1):
         if all(
             draw.textlength(label, font=_font_for_text(label, size, bold=True)) <= max_w
             for label in labels
         ):
             return size
-    return 19
+    return 17
 
 
-def _picks_header(canvas, draw, slate, width: int) -> None:
-    """Title, what the card is of, the column heading, and the badge."""
-    header = PICKS["header"]
-    art = _band_art("header", width, header["h"])
+def _picks_header(canvas, draw, slate, template: dict) -> None:
+    """The title, what the card is of, and the badge."""
+    header = template["header"]
+    art = _art(header["art"])
     if art is not None:
         canvas.alpha_composite(art, (0, 0))
 
     box = header["event_title"]
     title = picks_lib.CARD_TITLE
-    _text(draw, box, title, _font_for_text(title, 34, bold=True), TEXT, align=box["align"])
+    font = _fit(draw, title, box["w"] - 24, start=34, minimum=22, bold=True)
+    _text(draw, box, title, font, TEXT, align=box["align"])
 
-    box = header["round_metadata"]
+    # The words are the slate's, not this module's: what the subject line says
+    # -- the stage and the date, with no group in it -- belongs to whoever owns
+    # `Slate`. This box is geometry only.
+    box = header["subject"]
     subject = slate.subject()
     font = _fit(draw, subject, box["w"] - 24, start=26, minimum=17, bold=True)
     _text(
@@ -646,42 +726,94 @@ def _picks_header(canvas, draw, slate, width: int) -> None:
         align=box["align"],
     )
 
-    # Two lines rather than one, because the column is as wide as a word and a
-    # bare "CONFIDENCE" over a card of paired probabilities reads as confidence
-    # in one of the players.
-    box = header["confidence_heading"]
-    heading_font = _font_for_text("H", 15, bold=True)
-    for i, line in enumerate(picks_lib.CARD_CONFIDENCE_HEADING):
-        _text(
-            draw,
-            _at(box, i * box["line_height"]),
-            line,
-            heading_font,
-            MUTED,
-            align=box["align"],
-        )
-
-    rule = header["rule"]
-    draw.rectangle(
-        [rule["x"], rule["y"], rule["x"] + rule["w"] - 1, rule["y"] + rule["h"] - 1],
-        fill=_picks_colour("rule"),
-    )
+    # No frame is painted out here. Unlike the VS template, this artwork leaves
+    # the top-right corner clear -- Kevin composited the mark onto the magenta
+    # glow himself and accepted it.
     _logo(canvas, header["logo_badge"])
 
 
-def _picks_row(canvas, draw, pick, top: int, name_size: int, fonts) -> None:
-    """One meeting.
+def _pick_cap(percentage: str, *, mirror: bool):
+    """The gold PICK cap, with its two lines set on it.
 
-    A row we cannot predict keeps both names and says so across the middle
-    instead of carrying two percentages and a bar. It is the most useful row on
-    the card — it names two players nobody has scouted, to the alliance about
-    to read it — so it is drawn rather than dropped.
+    **Set at 4x and downsampled by the caller.** The cap occupies 103x58 on the
+    bar and carries two lines with the lower one the bigger, which is too tight
+    to set directly; the artwork is stored at 412x232 so the type goes on
+    there. It is the same supersample the odds bar and the logo already use,
+    applied to the one region of this card that needs it.
+
+    **The two zones take different text colours, and that is a decision rather
+    than a preference.** Kevin, 28 Aug: *"I left space in the cap for it to say
+    'PICK' in the upper gold section and the percentage to be larger in the
+    dark lower section."* The ground flips between them -- median relative
+    luminance 0.44 above the split and 0.014 below it -- so one colour would
+    fail on one of the two.
+
+    **Each line carries a halo in the other zone's tone**, because neither zone
+    is flat: both run a diagonal highlight across them, and a fill chosen
+    against the median disappears where that highlight crosses a glyph. The
+    halo is a stroke rather than the offset shadow `_text` draws, because an
+    offset one reads as a drop shadow on a plate this small.
     """
+    spec = PICKS["cap"]
+    # Required, unlike every other piece: see `_art`. A row that loses its cap
+    # loses the pick and the number with it, and reads as a meeting nobody
+    # could call rather than as a card missing some polish.
+    art = _art(spec["art"], required=True)
+    if mirror:
+        art = art.transpose(Image.FLIP_LEFT_RIGHT)
+    width = spec["draw"][0]
+    draw = ImageDraw.Draw(art)
+
+    for key, text, fill, halo, start, minimum in (
+        (
+            "label",
+            CARD_PICK_LABEL,
+            _picks_colour("cap_label"),
+            _picks_colour("cap_label_halo"),
+            46,
+            30,
+        ),
+        (
+            "percentage",
+            percentage,
+            _picks_colour("cap_percentage"),
+            _picks_colour("cap_percentage_halo"),
+            96,
+            56,
+        ),
+    ):
+        box = _mirrored(spec[key], width) if mirror else spec[key]
+        font = _fit(draw, text, box["w"], start=start, minimum=minimum, bold=True)
+        x, y = _place(draw, box, text, font, align=box["align"], metric="ink")
+        draw.text((x, y), text, font=font, fill=fill, stroke_width=5, stroke_fill=halo)
+    return art
+
+
+def _picks_row(canvas, draw, pick, origin: tuple[int, int], name_size: int) -> None:
+    """One meeting: the band, two names, and a cap on the picked side.
+
+    **A row nobody can predict keeps both names and carries no cap.** It is
+    still the most useful row on the card -- it names two players nobody has
+    scouted, to the alliance about to read it -- so it is drawn rather than
+    dropped. What it does not do is claim a pick: the cap *is* the claim, and
+    an absent one says so more honestly than a word across the middle, where
+    this artwork has its starburst anyway.
+
+    **The name box is reserved on both bars whether or not either carries a
+    cap.** Kevin, 28 Aug: *"I want us to always put the name only in the space
+    where the pick will not go. This way no matter what we always have the same
+    space for a name."* Without that the picked player's name -- the one that
+    matters most -- would be the first to ellipsize.
+    """
+    dx, dy = origin
     row = PICKS["row"]
-    _text(draw, _at(row["index"], top), str(pick.position), fonts["index"], MUTED)
+
+    band = _art(_GEOM["row_band"]["art"])
+    if band is not None:
+        canvas.alpha_composite(band, (dx, dy))
 
     for side, box_key in (("a", "name_a"), ("b", "name_b")):
-        box = _at(row[box_key], top)
+        box = _at(row[box_key], dx, dy)
         label = getattr(pick, f"{side}_label") or picks_lib.CARD_UNKNOWN
         # One size for the card, but the font itself is chosen per name: these
         # names carry Korean and Arabic, and a Latin face renders those as
@@ -697,32 +829,30 @@ def _picks_row(canvas, draw, pick, top: int, name_size: int, fonts) -> None:
         )
 
     if not pick.predicted:
-        box = _at(row["no_prediction"], top)
-        _text(draw, box, picks_lib.CARD_NO_PREDICTION, fonts["absent"], MUTED, align=box["align"])
         return
 
-    for prob, box_key in ((pick.p_a, "probability_a"), (pick.p_b, "probability_b")):
-        box = _at(row[box_key], top)
-        text = words.probability(prob)
-        _text(draw, box, text, _font_for_text(text, 26, bold=True), TEXT, align=box["align"])
+    # Blue left, red right are positional and never judgemental -- the game's
+    # own convention and the VS card's rule. Which of the two the cap lands on
+    # is the only thing on the row that says who to back.
+    picked = "a" if pick.p_a >= pick.p_b else "b"
+    cap = _pick_cap(
+        words.probability(pick.p_a if picked == "a" else pick.p_b),
+        mirror=picked == "b",
+    )
+    box = _at(row[f"cap_{picked}"], dx, dy)
+    canvas.alpha_composite(cap.resize((box["w"], box["h"]), Image.LANCZOS), (box["x"], box["y"]))
 
-    _split_bar(canvas, _at(row["track"], top), pick.p_a)
 
-    box = _at(row["confidence"], top)
-    level = pick.confidence().capitalize()
-    _text(draw, box, level, fonts["confidence"], MUTED, align=box["align"])
-
-
-def _picks_footer(canvas, draw, top: int, width: int) -> None:
+def _picks_footer(canvas, draw, top: int, template: dict) -> None:
     """The one line between this card and the game's own betting market."""
-    footer = PICKS["footer"]
-    art = _band_art("footer", width, footer["h"])
+    footer = template["footer"]
+    art = _art(footer["art"])
     if art is not None:
         canvas.alpha_composite(art, (0, top))
 
-    box = _at(footer["summary"], top)
+    box = _at(footer["summary"], 0, top)
     text = picks_lib.CARD_FOOTER
-    font = _fit(draw, text, box["w"] - 32, start=21, minimum=15)
+    font = _fit(draw, text, box["w"] - 32, start=17, minimum=12)
     _text(
         draw,
         box,
@@ -737,67 +867,70 @@ def render_slate(slate) -> bytes:
     """The day's picks as a WebP image.
 
     **The canvas grows with the slate**, which is the one structural difference
-    from `render`. Five meetings and seventeen meetings are the same card at
-    two heights, so the header and footer are bands rather than regions of a
-    fixed picture and the row band repeats. Nothing is scaled: as on the VS
+    from `render`. Three meetings and twenty are the same card at two widths
+    and many heights, so the header and footer are bands rather than regions of
+    a fixed picture and the row band repeats. Nothing is scaled: as on the VS
     card, every coordinate is drawn at the size the layout states.
 
-    **WebP, but LOSSLESS where the VS card is q=95.** The two settings are
-    right for two different pictures. That card is mostly a photographic neon
-    background, where lossy WebP is four fifths smaller at an error nothing on
-    the artwork shows. This one is flat colour and type, which is the worst
-    case for lossy ringing and the best case for lossless: measured on a
-    seventeen-row card, lossless is **79 KB against 132 KB at q=95** and exact
-    rather than approximate. It costs about half a second more to encode, and
-    the bytes are read far more often than they are written.
-    """
-    if not slate.picks:
-        raise ValueError("a picks card needs at least one meeting")
+    **Rows are drawn strongest pick first.** Kevin, 27 Aug: *"I think let's go
+    with strongest pick first. To me it doesn't really matter the order."* So
+    the order on the card is the card's own rather than the order the maker
+    entered the meetings in, and a row nobody can predict sorts to the end. In
+    two columns the reading order is the left column then the right, and
+    nothing on the card states that: the row numerals were removed deliberately
+    and Kevin does not mind the order.
 
-    width = PICKS["canvas"]["width"]
-    height = picks_height(len(slate.picks))
-    canvas = _vertical_gradient(
-        width, height, _picks_colour("background_top"), _picks_colour("background_bottom")
+    **WebP at q=95, the same as the VS card, and this is a change.** The old
+    picks card encoded lossless, correctly: it was flat colour and type, which
+    is the best case for lossless and the worst for lossy ringing. It is now
+    the same photographic neon artwork the VS card is, and the measurement
+    followed the picture rather than the precedent. On the twenty-row card
+    lossless is **854 KB against 430 KB at q=95**, for a mean error of
+    1.26/255 -- the identical figure the VS card accepted -- and q=95 is also
+    the *faster* encode, 0.84s against 1.34s. Checked where it would show
+    first: the PICK cap's small type on gold, magnified 5x, is
+    indistinguishable between the two.
+    """
+    template = picks_template(len(slate.picks))
+
+    # `sorted` is stable, so meetings we cannot predict keep the order they
+    # arrived in rather than being shuffled among themselves.
+    picks = sorted(
+        slate.picks,
+        key=lambda p: (p.predicted, max(p.p_a, p.p_b) if p.predicted else 0.0),
+        reverse=True,
+    )
+
+    canvas = Image.new(
+        "RGBA",
+        (template["width"], picks_height(len(picks))),
+        _picks_colour("background") + (255,),
     )
     draw = ImageDraw.Draw(canvas)
+
+    # The header goes down before any row. The row band is transparent above
+    # its bar and the stack is lifted into the header's dead space, so the
+    # first row's starburst has to bleed over the header rather than under it.
+    _picks_header(canvas, draw, slate, template)
+
     row = PICKS["row"]
-
-    _picks_header(canvas, draw, slate, width)
-
     name_size = _shared_name_size(
         draw,
-        [
-            getattr(p, f"{s}_label") or picks_lib.CARD_UNKNOWN
-            for p in slate.picks
-            for s in ("a", "b")
-        ],
+        [getattr(p, f"{s}_label") or picks_lib.CARD_UNKNOWN for p in picks for s in ("a", "b")],
         row["name_a"]["w"] - 16,
     )
-    fonts = {
-        "index": _font_for_text("1", 22, bold=True),
-        "confidence": _font_for_text("H", 19),
-        "absent": _font_for_text("H", 20),
-    }
-    plates = (
-        _plate(row["plate"], _picks_colour("row_plate"), _picks_colour("row_border")),
-        _plate(row["plate"], _picks_colour("row_plate_alt"), _picks_colour("row_border")),
-    )
-    band = _band_art("row", width, row["pitch"])
 
-    top = PICKS["header"]["h"]
-    for i, pick in enumerate(slate.picks):
-        y = top + i * row["pitch"]
-        if band is not None:
-            canvas.alpha_composite(band, (0, y))
-        else:
-            canvas.alpha_composite(plates[i % 2], (row["plate"]["x"], y + row["plate"]["y"]))
-        _picks_row(canvas, draw, pick, y, name_size, fonts)
+    split = _column_split(len(picks), template)
+    at = 0
+    for column_x, count in zip(template["columns"], split):
+        for i in range(count):
+            _picks_row(
+                canvas, draw, picks[at], (column_x, _ROWS_TOP + i * _GEOM["pitch"]), name_size
+            )
+            at += 1
 
-    _picks_footer(canvas, draw, top + len(slate.picks) * row["pitch"], width)
+    _picks_footer(canvas, draw, _last_bar_bottom(max(split)) + _GEOM["trailing"], template)
 
     buf = io.BytesIO()
-    # `method=4` rather than 6: at lossless the two produce the same picture
-    # and 6 is the slower search. It is 4 here and 6 on the VS card because
-    # only one of them is paying that search for a smaller file.
-    canvas.convert("RGB").save(buf, format="WEBP", lossless=True, method=4)
+    canvas.convert("RGB").save(buf, format="WEBP", quality=95, method=6)
     return buf.getvalue()

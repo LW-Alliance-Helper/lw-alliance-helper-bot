@@ -1,139 +1,179 @@
 {
-  "note": "The day's picks card. Unlike the VS card this one has NO static template, because its height is not fixed: a slate carries five to seventeen rows and the canvas grows with them. So the artwork, when it arrives, cannot be one flat image either -- it has to arrive as three bands (header, one row, footer), which `bands` below names and the renderer composites. Until then the renderer draws the bands itself from `palette`. Every box is still read from this file rather than hard-coded, so a design revision stays a file swap.",
-  "canvas": {
-    "width": 1400,
-    "margin": 40
+  "note": "The day's picks card. Two templates, not one elastic card: `single` is one column of up to ten meetings, `wide` is two columns of up to twenty. Height is data (a row pitch per row), the column count is the template, and the switch is automatic on row count. Every box is read from this file rather than hard-coded so a design revision stays a file swap. Coordinates are runtime pixels; the committed artwork is already at that scale, so nothing is resized at render time except the PICK cap, which is drawn 4x and downsampled because two lines of type inside 58px is too tight to set directly.",
+  "provenance": "Measured at native resolution against Kevin's delivered 4x masters and his hand-assembled three-row mockup, 28 Aug. `champion_duel_picks_MASTER_manifest.json` beside this file records which master each runtime piece came from. Figures carried in the proposal were read off a downscaled render and several were out: the row pitch is 452 master (113 runtime), not the ~458 recorded, and the logo square is 389 master (97 runtime), not ~305.",
+  "master_scale": 4,
+  "geometry": {
+    "note": "The card is a header band, a stack of row bands, and a footer band, over a flat ground. A row band is taller than its pitch, so consecutive rows overlap by design and each sits about 30% inside the one above.",
+    "row_band": {
+      "w": 860,
+      "h": 163,
+      "art": "picks_row.webp"
+    },
+    "bar": {
+      "y": 53,
+      "h": 58,
+      "note": "The coloured bar inside the row band, measured off the master: y 212..443 of 652, exactly the 232 the manifest states. The bar runs the full band width, tapering at both outer terminals."
+    },
+    "emblem": {
+      "x": 380,
+      "w": 102,
+      "note": "The VS starburst at the band's centre, measured x 1519..1926 of 3440 master. Both name boxes stop clear of it. Its bleed runs from y 38 to y 577 master, well above and below the bar, which is what makes the row overlap read as depth rather than as a collision."
+    },
+    "pitch": 113,
+    "header_h": 150,
+    "footer_h": 90,
+    "header_overlap": 11,
+    "trailing": 57,
+    "max_rows": 20,
+    "gap_note": "`header_overlap` lifts the whole row stack into the header's dead space and `trailing` sets the space under the last bar. Together they answer Kevin's 28 Aug note that the gap above the first row was too big. Measured on the artwork rather than guessed: the header's ink stops 33px above its band's bottom edge and the footer's starts 18px below its band's top, so the visible gaps are (86 - overlap) above and (trailing + 18) below. At 11 and 57 both read 75. His mockup was 86 and 64, which is the 1.35x he saw. The card's total height is unchanged by the fix -- 11px moves from the top to the bottom."
   },
-  "bands": {
-    "header": null,
-    "row": null,
-    "footer": null,
-    "note": "Filenames beside this one, when Kevin's artwork lands. A band is drawn at the canvas width and its own band height; the row band repeats once per row. A band left null is drawn from `palette` instead."
-  },
-  "palette": {
-    "background_top": "#0b0b1a",
-    "background_bottom": "#010007",
-    "row_plate": "#0d0d1c",
-    "row_plate_alt": "#12121f",
-    "row_border": "#2a2a44",
-    "rule": "#e29a18"
-  },
-  "header": {
-    "h": 158,
-    "event_title": {
-      "x": 40,
-      "y": 26,
-      "w": 460,
-      "h": 46,
-      "align": "left"
+  "templates": {
+    "single": {
+      "width": 950,
+      "columns": [45],
+      "rows_per_column": 10,
+      "header": {
+        "art": "picks_header_single.webp",
+        "event_title": {
+          "x": 150,
+          "y": 50,
+          "w": 650,
+          "h": 40,
+          "align": "center"
+        },
+        "subject": {
+          "x": 150,
+          "y": 92,
+          "w": 650,
+          "h": 30,
+          "align": "center",
+          "note": "The stage and the date, whatever `Slate.subject()` returns. Centred under the crest and stopping clear of the logo at x815. Renamed from `round_metadata`: `round` is `stage` everywhere a member reads it (#545)."
+        },
+        "logo_badge": {
+          "x": 815,
+          "y": 8,
+          "w": 97,
+          "h": 97,
+          "radius": 14,
+          "align": "center",
+          "note": "Where Kevin composited it in the mockup and accepted it -- on the magenta glow, clear of the gold corner bracket. Measured 389x389 master at x3260, y33. No frame is painted out here: unlike the VS template this artwork leaves the corner clear."
+        }
+      },
+      "footer": {
+        "art": "picks_footer_single.webp",
+        "summary": {
+          "x": 140,
+          "y": 4,
+          "w": 670,
+          "h": 22,
+          "align": "center",
+          "note": "The footer artwork's own top 18px is flat ground before the ornament starts, and the centre stays dark for another 8. The line sits in that band rather than on the crest, which is the only clear space the cap leaves."
+        }
+      }
     },
-    "round_metadata": {
-      "x": 520,
-      "y": 26,
-      "w": 560,
-      "h": 46,
-      "align": "center"
-    },
-    "confidence_heading": {
-      "x": 1200,
-      "y": 100,
-      "w": 160,
-      "h": 20,
-      "line_height": 22,
-      "align": "right",
-      "note": "Two stacked lines, and they sit BELOW the badge rather than beside it: the badge is square and as wide as this column, so the two would overlap. Kept clear of the rule below them as well."
-    },
-    "logo_badge": {
-      "x": 1284,
-      "y": 16,
-      "w": 76,
-      "h": 76,
-      "radius": 14,
-      "align": "center",
-      "note": "Square, right edge on the content margin (x1360), matching the VS card's convention of standing the mark on the background rather than in a frame."
-    },
-    "rule": {
-      "x": 40,
-      "y": 150,
-      "w": 1320,
-      "h": 2
+    "wide": {
+      "width": 1900,
+      "columns": [45, 995],
+      "rows_per_column": 10,
+      "header": {
+        "art": "picks_header_wide.webp",
+        "event_title": {
+          "x": 300,
+          "y": 50,
+          "w": 1300,
+          "h": 40,
+          "align": "center"
+        },
+        "subject": {
+          "x": 300,
+          "y": 92,
+          "w": 1300,
+          "h": 30,
+          "align": "center"
+        },
+        "logo_badge": {
+          "x": 1765,
+          "y": 8,
+          "w": 97,
+          "h": 97,
+          "radius": 14,
+          "align": "center",
+          "note": "Right-aligned on the same 38px margin as the single card, so the mark sits in the same place relative to the corner on both."
+        }
+      },
+      "footer": {
+        "art": "picks_footer_wide.webp",
+        "summary": {
+          "x": 300,
+          "y": 4,
+          "w": 1300,
+          "h": 22,
+          "align": "center"
+        }
+      },
+      "gutter_note": "The two columns sit at x45 and x995, which puts a 90px gutter between them and keeps the 45px side margin the single card has. The wide artwork carries one centred crest rather than two, and it lands in that gutter."
     }
   },
   "row": {
-    "pitch": 74,
-    "plate": {
-      "x": 40,
-      "y": 2,
-      "w": 1320,
-      "h": 64,
-      "radius": 12
-    },
-    "index": {
-      "x": 40,
-      "y": 2,
-      "w": 52,
-      "h": 64,
-      "align": "center"
-    },
+    "note": "Boxes are relative to the row band's own top-left, so they are stored once and moved onto whichever row and column they are being drawn for. There is one row shape and a layout repeating it twenty times would be twenty places for a revision to half-land.",
     "name_a": {
-      "x": 124,
-      "y": 2,
-      "w": 320,
-      "h": 64,
-      "align": "right"
-    },
-    "probability_a": {
-      "x": 456,
-      "y": 2,
-      "w": 88,
-      "h": 64,
-      "align": "right"
-    },
-    "track": {
-      "x": 556,
-      "y": 24,
-      "w": 200,
-      "h": 20,
-      "radius": 10
-    },
-    "probability_b": {
-      "x": 768,
-      "y": 2,
-      "w": 88,
-      "h": 64,
-      "align": "left"
+      "x": 103,
+      "y": 53,
+      "w": 269,
+      "h": 58,
+      "align": "center"
     },
     "name_b": {
-      "x": 868,
-      "y": 2,
-      "w": 320,
-      "h": 64,
-      "align": "left"
-    },
-    "confidence": {
-      "x": 1200,
-      "y": 2,
-      "w": 160,
-      "h": 64,
-      "align": "right"
-    },
-    "no_prediction": {
-      "x": 456,
-      "y": 2,
-      "w": 400,
-      "h": 64,
-      "align": "center",
-      "note": "Spans both probabilities and the track. A row nobody can predict keeps its two names and says so across the middle."
-    }
-  },
-  "footer": {
-    "h": 92,
-    "summary": {
-      "x": 40,
-      "y": 26,
-      "w": 1320,
-      "h": 40,
+      "x": 488,
+      "y": 53,
+      "w": 269,
+      "h": 58,
       "align": "center"
-    }
+    },
+    "name_note": "Both boxes are the same width and both are reserved unconditionally -- Kevin, 28 Aug: 'I want us to always put the name only in the space where the pick will not go. This way no matter what we always have the same space for a name.' The box is the bar minus one cap width on the outer end and stops 6px clear of the starburst on the inner end. A bar with no cap still leaves its 103px empty, so a name never moves when the pick changes sides, and the picked player's name -- the one that matters most -- is not the first to ellipsize.",
+    "cap_a": {
+      "x": 0,
+      "y": 53,
+      "w": 103,
+      "h": 58
+    },
+    "cap_b": {
+      "x": 757,
+      "y": 53,
+      "w": 103,
+      "h": 58
+    },
+    "cap_note": "Far left for blue, far right for red, flush on the bar's outer terminal and exactly the bar's height. Only the picked side carries one, and a row with no prediction carries none."
+  },
+  "cap": {
+    "art": "picks_pick_cap.webp",
+    "native": [1672, 941],
+    "draw": [412, 232],
+    "note": "The PICK cap was drawn in a separate session from the rest of the set and is not on the 4x grid -- 1672x941 native, which is why it was left out of the delivered manifest. Its geometry is recorded here instead. Scaling its native height to the bar's 232 master gives 412x232, an aspect match to within a fifth of a pixel; the mockup shows it slightly wider because Kevin placed it by hand. It is stored at 412x232 and drawn there, then downsampled to the 103x58 it occupies, so the two lines of type are set at 4x. For the red side the art is mirrored horizontally and the text boxes are mirrored with it.",
+    "label": {
+      "x": 110,
+      "y": 44,
+      "w": 270,
+      "h": 52,
+      "align": "center",
+      "note": "The upper zone. Bright gold ground, so dark type -- measured median relative luminance 0.44."
+    },
+    "percentage": {
+      "x": 110,
+      "y": 100,
+      "w": 270,
+      "h": 104,
+      "align": "center",
+      "note": "The lower zone, and the bigger of the two lines. Dark gold ground, median relative luminance 0.014, so light type. Kevin, 28 Aug: 'I left space in the cap for it to say PICK in the upper gold section and the percentage to be larger in the dark lower section.'"
+    },
+    "split_note": "The two zones divide at y399 of 941 native (y98 of 232), found as the largest luminance step down the plate. Neither zone is flat -- both carry a diagonal highlight -- so each line is drawn over a halo in its own zone's tone rather than relying on the ground being uniform."
+  },
+  "palette": {
+    "background": "#040616",
+    "cap_label": "#150e02",
+    "cap_label_halo": "#f6d98a",
+    "cap_percentage": "#fff8e8",
+    "cap_percentage_halo": "#150e02",
+    "note": "`background` is the flat ground the whole set was drawn to dissolve into, and it is why the `_fixed` footers supersede the originals: theirs fades to #050721 instead."
   }
 }

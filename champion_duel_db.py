@@ -968,6 +968,11 @@ def _migrate_slates_off_groups() -> None:
     re-run on a rebuilt table must do nothing, and an emptied table still needs
     its shape changed.
 
+    **A guild's second card for one day is renumbered rather than dropped.**
+    The old UNIQUE was per group, so a guild tracking two groups held two
+    slates for one evening quite legitimately, and the new shape has the
+    numbers spare.
+
     **Where a slate's guild cannot be resolved, the slate is dropped and the
     count is printed.** `guild_id` is NOT NULL for a reason -- a NULL would sit
     in the new UNIQUE and constrain nothing, because SQLite counts every NULL
@@ -996,24 +1001,28 @@ def _migrate_slates_off_groups() -> None:
             """
         ).fetchall()
         orphans = 0
-        collisions = 0
-        seen: set = set()
+        overflowed = 0
+        cards: dict = {}
         migrated = []
         for row in rows:
             guild_id = _text(row["guild_id"])
             if not guild_id:
                 orphans += 1
                 continue
-            # One card per guild per day survives, which is what the old UNIQUE
-            # already guaranteed per group. Two groups of one guild could share
-            # a day, and the second is dropped rather than silently renumbered
-            # into a second card nobody built.
+            # **A guild's second card for a day is renumbered, not dropped.**
+            # The old UNIQUE was per group, so one guild tracking two groups
+            # legitimately held two slates for one evening -- and the new shape
+            # has `MAX_CARDS_PER_DAY` numbers to put them in. Deleting the
+            # second would take a card somebody built and its meetings with it,
+            # to save a number that is already there. Oldest first, so card 1
+            # is the one that was card 1 before.
             key = (guild_id, row["play_on"])
-            if key in seen:
-                collisions += 1
+            card_no = cards.get(key, 0) + 1
+            if card_no > MAX_CARDS_PER_DAY:
+                overflowed += 1
                 continue
-            seen.add(key)
-            migrated.append((row, guild_id))
+            cards[key] = card_no
+            migrated.append((row, guild_id, card_no))
 
         conn.commit()
         conn.execute("PRAGMA foreign_keys=OFF")
@@ -1040,20 +1049,21 @@ def _migrate_slates_off_groups() -> None:
             INSERT INTO pick_slates_rebuilt
                 (id, guild_id, play_on, card_no, stage,
                  created_at, created_by, updated_at, updated_by)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     row["id"],
                     guild_id,
                     row["play_on"],
+                    card_no,
                     row["stage"],
                     row["created_at"],
                     row["created_by"],
                     row["updated_at"],
                     row["updated_by"],
                 )
-                for row, guild_id in migrated
+                for row, guild_id, card_no in migrated
             ],
         )
         # The meetings of a slate that did not survive go with it. The cascade
@@ -1071,7 +1081,11 @@ def _migrate_slates_off_groups() -> None:
             "[CHAMPION_DUEL] pick_slates re-keyed to (guild, day, card): "
             f"{len(migrated)} slate(s) migrated"
             + (f"; {orphans} with no resolvable guild dropped" if orphans else "")
-            + (f"; {collisions} same-guild same-day duplicate(s) dropped" if collisions else "")
+            + (
+                f"; {overflowed} past {MAX_CARDS_PER_DAY} cards for one day dropped"
+                if overflowed
+                else ""
+            )
         )
     finally:
         conn.close()
@@ -2856,22 +2870,9 @@ def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None)
     if len(pairs) > MAX_PICKS:
         raise ValueError(f"a card carries at most {MAX_PICKS} meetings, not {len(pairs)}")
 
-    names: dict[int, str] = {}
-    seen: set = set()
     for a, b in pairs:
         if a == b:
             raise ValueError("a meeting needs two different players")
-        for side in (a, b):
-            if side not in names:
-                row = get_registrant(side)
-                if row is None:
-                    raise ValueError(f"there is no registrant {side}")
-                names[side] = row["display_name"]
-        key = frozenset((a, b))
-        if key in seen:
-            pair = " and ".join(names[s] for s in (a, b))
-            raise ValueError(f"{pair} are on this card twice")
-        seen.add(key)
 
     now = _now()
     sid = str(actor.get("discord_user_id")) if actor and actor.get("discord_user_id") else None
@@ -2880,6 +2881,30 @@ def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None)
     # nested read underneath an open write is the shape that deadlocks.
     stamped = explicit_stage or _stage_for_guild(gid)
     with _get_conn() as conn:
+        # Every name on the card in one read. A `get_registrant` a side would
+        # be up to forty connections and eighty PRAGMAs inside a Discord
+        # interaction, which is what the group-keyed version avoided by
+        # reading the group's members once.
+        ids = sorted({rid for pair in pairs for rid in pair})
+        marks = ",".join("?" for _ in ids)
+        names = {
+            r["id"]: r["display_name"]
+            for r in conn.execute(
+                f"SELECT id, display_name FROM registrants WHERE id IN ({marks})", tuple(ids)
+            ).fetchall()
+        }
+        for rid in ids:
+            if rid not in names:
+                raise ValueError(f"there is no registrant {rid}")
+
+        seen: set = set()
+        for a, b in pairs:
+            key = frozenset((a, b))
+            if key in seen:
+                pair = " and ".join(names[side] for side in (a, b))
+                raise ValueError(f"{pair} are on this card twice")
+            seen.add(key)
+
         # The same meeting on two of the day's cards. Read before the write and
         # excluding this card, so rebuilding card 1 never trips over its own
         # rows.
@@ -2892,7 +2917,9 @@ def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None)
             (gid, day, card_no),
         ).fetchall():
             if frozenset((row["a_id"], row["b_id"])) in seen:
-                pair = " and ".join(_registrant_name(x) for x in (row["a_id"], row["b_id"]))
+                pair = " and ".join(
+                    names.get(x) or _registrant_name(x) for x in (row["a_id"], row["b_id"])
+                )
                 other = row["card_no"]
                 raise ValueError(f"{pair} are already on card {other} for this day")
 

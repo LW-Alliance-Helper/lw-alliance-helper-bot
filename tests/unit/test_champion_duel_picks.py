@@ -571,6 +571,28 @@ def test_the_subject_is_the_stage_and_a_calendar_date(cd_db):
     assert "Day" not in slate.subject()
 
 
+def test_the_second_card_of_a_day_says_which_one_it_is(cd_db):
+    """Two cards headed identically are two cards a reader cannot tell apart,
+    and row numbers restart at 1 on each -- so "number four" would name two
+    different meetings. Off on card 1, because a day that did not overflow
+    should read exactly as a day that cannot."""
+    first = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals")
+    second = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals", card_no=2)
+
+    assert first.subject() == "Semi-finals · Aug 25"
+    assert second.subject() == "Semi-finals · Aug 25 · Card 2"
+
+
+def test_a_preview_refuses_the_same_card_number_the_save_would(cd_db):
+    """The other half of the preview/save agreement `assemble` exists for: a
+    card 5 that renders and is then refused on save is the same defect as an
+    oversized one that renders and is then refused."""
+    _field()
+    a, b = _ids("Ravenshade", "NightOwl")
+    with pytest.raises(ValueError, match=f"1..{db.MAX_CARDS_PER_DAY}"):
+        picks.assemble(GUILD, DAY, [(a, b)], card_no=db.MAX_CARDS_PER_DAY + 1)
+
+
 def test_the_knockouts_read_the_same_way_as_every_other_stage(cd_db):
     """They used to be the exception, because they are one field of 32 with no
     letter and the subject line led with a group. Nothing leads with a group
@@ -801,6 +823,34 @@ def test_the_meetings_foreign_key_still_points_at_the_rebuilt_table(cd_db):
     db.delete_slate(GUILD, DAY)
     with db._get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM pick_meetings").fetchone()[0] == 0
+
+
+def test_a_guilds_second_card_for_a_day_is_renumbered_rather_than_dropped(cd_db):
+    """The old UNIQUE was per group, so a guild tracking two groups held two
+    slates for one evening quite legitimately. The new shape has the numbers
+    spare, and deleting the second would take a card somebody built and its
+    meetings with it to save a number that is already there.
+    """
+    first = _field(NAMES[:4])
+    second = _field(("Stranger", "Passerby"), stage="semifinals", label="N")
+    with db._get_conn() as conn:
+        conn.execute(
+            "UPDATE groups SET created_by_guild_id = ? WHERE id IN (?, ?)",
+            (GUILD, first["id"], second["id"]),
+        )
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Stranger", "Passerby")
+    _rewind_to_group_keyed_slates()
+    _old_slate(first["id"], DAY, [(a, b)], slate_id=7)
+    _old_slate(second["id"], DAY, [(c, d)], slate_id=8)
+
+    db._migrate_slates_off_groups()
+
+    # Oldest first, so card 1 is the one that was card 1 before.
+    assert db.get_slate(GUILD, DAY)["id"] == 7
+    assert db.get_slate(GUILD, DAY, card_no=2)["id"] == 8
+    assert [(m["a_id"], m["b_id"]) for m in db.get_slate(GUILD, DAY, card_no=2)["meetings"]] == [
+        (c, d)
+    ]
 
 
 def test_a_slate_whose_guild_cannot_be_found_is_dropped_with_its_meetings(cd_db):

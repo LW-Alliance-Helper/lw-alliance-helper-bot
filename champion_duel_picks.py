@@ -105,8 +105,13 @@ CARD_FOOTER = "Our prediction for each meeting. Not the game's odds."
 #: already reads this way for the same reason.
 CARD_UNKNOWN = "(unknown)"
 
-#: The caption's row lines. `{i}` is the row's place on the card, so a reader
-#: can say "number four" and be understood.
+#: Which of the day's cards this is, appended to the subject on card 2 and up.
+#: Never on card 1: a day that did not overflow twenty meetings reads the way
+#: it always did, and only a day that split has anything to disambiguate.
+CARD_NUMBER = "Card {n}"
+
+#: The caption's row lines. `{i}` is the row's place on THIS card, so a reader
+#: naming a row on an overflowed day needs the card from the subject line too.
 CAPTION_ROW = "{i}. **{a}** {p_a} · **{b}** {p_b} ({confidence})"
 CAPTION_ROW_UNPREDICTED = "{i}. **{a}** and **{b}**: no squads recorded"
 CAPTION_TRUNCATED = "Some rows are on the card only."
@@ -197,9 +202,17 @@ class Slate:
         The date alone where no stage was stamped, which is a guild whose
         grouping has no calendar. That is better than a guess, and it is the
         only half of this line the card can always fill in.
+
+        **Card 2 says so, and card 1 does not.** A day that overflowed twenty
+        meetings produces two cards, and two cards headed identically are two
+        cards a reader cannot tell apart -- with row numbers restarting at 1 on
+        each, so "number four" names two different meetings. The marker is what
+        makes "card 2, number four" sayable. Off on card 1, because a day that
+        did not overflow should read exactly as it did before.
         """
         stage_label = db.STAGE_LABELS.get(self.stage, self.stage)
-        parts = [p for p in (stage_label, self.date_label()) if p]
+        card = CARD_NUMBER.format(n=self.card_no) if self.card_no > 1 else ""
+        parts = [p for p in (stage_label, self.date_label(), card) if p]
         return " · ".join(parts)
 
 
@@ -296,6 +309,12 @@ def assemble(
     # preview and save this function exists to prevent.
     if len(pairs) > db.MAX_PICKS:
         raise ValueError(f"a card carries at most {db.MAX_PICKS} meetings, not {len(pairs)}")
+    # And the same card number, for the same reason: a preview of card 5 that
+    # renders and is then refused at save is the disagreement the cap above
+    # exists to prevent. The bound is read off `db` rather than restated, so
+    # the two cannot drift.
+    if not 1 <= card_no <= db.MAX_CARDS_PER_DAY:
+        raise ValueError(f"card_no must be 1..{db.MAX_CARDS_PER_DAY}, not {card_no}")
 
     slate = Slate(
         guild_id=str(guild_id or ""),

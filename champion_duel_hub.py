@@ -956,11 +956,13 @@ _PICK_STEPS = ("warzone", "player", "opponent")
 _PICK_DAYS_AHEAD = 2
 
 # ⚠️ EVERY STRING FROM HERE TO `CD_BTN_PICKS_BACK` IS A PLACEHOLDER awaiting
-# session E, which is a sign-off rather than a build: one published page, one
-# block per string, each rendered on the Discord surface it appears on. They
-# already follow the rules a sweep would apply -- US English, no em dashes, "I"
-# acts and "we" holds, and `stage` rather than `round` anywhere a member reads
-# it (#545) -- so what is open is the wording, not the shape.
+# session E, with one exception marked where it sits: `CD_BTN_PICKS` is settled.
+#
+# Session E is a sign-off rather than a build: one published page, one block per
+# string, each rendered on the Discord surface it appears on. They already
+# follow the rules a sweep would apply -- US English, no em dashes, "I" acts and
+# "we" holds, and `stage` rather than `round` anywhere a member reads it
+# (#545) -- so what is open is the wording, not the shape.
 _PICKS_INTRO = (
     "Tap a warzone, then the two players, and the meeting goes on the card. Nothing to type."
 )
@@ -1013,14 +1015,19 @@ _PICKS_CARD_COUNT = "{n} on this day"
 _PICKS_TODAY = "{day} (today)"
 _PICKS_FOOTER_CAP = "A card carries {n} meetings. The next one opens a second card."
 
-# ⚠️ PLACEHOLDER LABELS, session E. 🔮 is the catalog's *forecast of something
-# that has not happened*, which is exactly what a picks card is, and nothing
-# else on the hub grid carries it -- `CD_BTN_ODDS` is the other 🔮 in this file
-# and it lives on the group view, so rule 7's never-repeat-a-glyph-in-a-choice-
-# set holds. The words borrow `champion_duel_picks.PICKS_TITLE`, which Kevin
-# approved 2026-08-24 as the card's own title, so the door and the thing behind
-# it read as one name.
+# ✅ APPROVED, and it is the one label here that is not open. Kevin settled it
+# 2026-08-24 as one of the four IA names (`PLAN_champion_duel_ia.md`, *Settled
+# names*: *"They are the labels; do not re-open them."*), and
+# `champion_duel_picks.PICKS_TITLE` is the same string approved the same day for
+# the card's own title -- so the door and the thing behind it read as one name.
+#
+# 🔮 is the catalog's *forecast of something that has not happened*, which is
+# what a picks card is. The other 🔮 in this file is `CD_BTN_ODDS`, which lives
+# on the group view rather than this grid, so rule 7's
+# never-repeat-a-glyph-across-a-choice-set holds.
 CD_BTN_PICKS = "🔮 Today's picks"
+
+# ⚠️ PLACEHOLDER LABELS from here, session E.
 CD_BTN_PICKS_ADD = "➕ Add a meeting"
 CD_BTN_PICKS_SAVE = "➕ Add this meeting"
 CD_BTN_PICKS_DELETE = "🗑️ Delete this card"

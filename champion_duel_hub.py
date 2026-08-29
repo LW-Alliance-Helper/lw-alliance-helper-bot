@@ -43,10 +43,11 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
 import io
 import itertools
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 
@@ -55,6 +56,7 @@ import champion_duel_db as db
 import champion_duel_image
 import champion_duel_intel as intel_lib
 import champion_duel_odds as odds_lib
+import champion_duel_picks as picks_lib
 import champion_duel_predict as predict_lib
 import champion_duel_store as store_lib
 import champion_duel_wording as words
@@ -900,6 +902,132 @@ READS_CHAR_BUDGET = 5500
 #: Discord's other cap on the same message, kept beside the one that binds so
 #: neither is mistaken for the whole rule.
 READS_EMBEDS_PER_MESSAGE = 10
+
+# ── The day's picks ──────────────────────────────────────────────────────────
+#
+# THE DOOR. `db.set_slate` has had no caller outside its own tests since it
+# shipped: the card renders, and no member could reach it. `_PicksView` below is
+# the flow that fills one in, and its whole shape exists to satisfy one
+# constraint -- **nothing here asks anybody to reproduce a name.**
+#
+# Both doors out of that were opened and closed on the same day (Kevin,
+# 2026-08-27). Reading names off an image is out on cost and on evidence:
+# *"there is never a consensus on how certain characters get read and
+# displayed."* Typing is out because *"we can never guarantee that anyone in
+# there would be able to be typed"* -- the field carries Korean and Tamil
+# script, pipe padding and look-alike Cyrillic, and several names have no
+# typeable substring on an English keyboard. Pasting into a modal was rejected
+# as the primary path because it costs an app switch per name on a phone.
+#
+# So a meeting is chosen by tapping: **warzone, then Player 1, then Player 2.**
+# The warzone number is under each portrait on the game's own Predict screen,
+# which is the screen the maker is reading while they build the card.
+#
+# **Discord string selects have no type-ahead**, which settles the one open
+# question the design left. Kevin called one *"the ideal UX"* and asked whether
+# it exists. It does not: the only filtered pickers Discord offers are the
+# auto-populated ones (user, role, channel), which pick Discord entities rather
+# than arbitrary options, and slash-command autocomplete, which is typing by
+# another name and is out for the reason above. The three selects were designed
+# to work either way and this says which way it is.
+
+#: The rounds a card can be built for. **Not the qualifiers**: the game runs no
+#: prediction market on them, so the card never renders one (Kevin, 2026-08-27:
+#: *"Qualifiers does not have prediction betting so there is no need to even
+#: think about that."*).
+#:
+#: Derived from `db.STAGES` rather than typed out, so a fourth round the game
+#: adds reaches this by being added there once.
+PICK_STAGES = tuple(stage for stage in db.STAGES if stage != "qualifiers")
+
+#: Options in one select. **Discord's ceiling, and deliberately not
+#: `GROUP_PAGE_SIZE`.** That twenty is about how many rows a reader scans in an
+#: embed before the list stops being a list; this is the hard limit Discord puts
+#: on a component. Cutting a select to twenty would add a page for nothing.
+_PICK_OPTIONS = 25
+
+#: The three taps, in order, and the key each one's page is kept under. The
+#: pager moves whichever of them the maker is currently working in.
+_PICK_STEPS = ("warzone", "player", "opponent")
+
+#: How many days forward the day picker offers, beyond today. A card is built
+#: *"the day/evening/morning before"* (Kevin, 2026-08-27), so tomorrow has to be
+#: one tap away, and the day after covers somebody working a night early.
+_PICK_DAYS_AHEAD = 2
+
+# ⚠️ EVERY STRING FROM HERE TO `CD_BTN_PICKS_BACK` IS A PLACEHOLDER awaiting
+# session E, which is a sign-off rather than a build: one published page, one
+# block per string, each rendered on the Discord surface it appears on. They
+# already follow the rules a sweep would apply -- US English, no em dashes, "I"
+# acts and "we" holds, and `stage` rather than `round` anywhere a member reads
+# it (#545) -- so what is open is the wording, not the shape.
+_PICKS_INTRO = (
+    "Tap a warzone, then the two players, and the meeting goes on the card. Nothing to type."
+)
+_PICKS_EMPTY = "Nothing on this card yet."
+_PICKS_NO_GROUPING = (
+    "We do not know which Champion Duel your alliance is in yet. Set it with **{button}**."
+)
+_PICKS_NO_STAGE = (
+    "A picks card covers the semi-finals and the knockouts. The game runs no "
+    "prediction market on the qualifiers, so there is nothing to card yet."
+)
+_PICKS_NO_FIELD = (
+    "We hold no draw for the {stage} yet, so there is nobody to pick from. "
+    "Record it with **{button}** and this card opens."
+)
+_PICKS_PICK_DAY = "Which day?"
+_PICKS_PICK_CARD = "Which card?"
+_PICKS_PICK_REMOVE = "Take a meeting off"
+_PICKS_PICK_WARZONE = "Which warzone?"
+_PICKS_PICK_P1 = "Player 1"
+_PICKS_PICK_P2 = "Player 2"
+_PICKS_PAGED = "{what}, page {page} of {pages}"
+_PICKS_MEETING = "`{i}` **{a}** vs **{b}**"
+_PICKS_MEETING_OPTION = "{i}. {a} vs {b}"
+_PICKS_NOBODY_LEFT = (
+    "Nobody is left in the {stage} to pick from. Everybody we hold has been knocked out."
+)
+_PICKS_NO_OPPONENTS = (
+    "We hold nobody **{name}** can meet. Record the rest of their group with "
+    "**{button}** and they show up here."
+)
+_PICKS_WORKING = "Building: **{a}** against **{b}**"
+_PICKS_WORKING_HALF = "Building: **{a}**, opponent still to pick"
+_PICKS_DERIVED = (
+    "The bracket puts **{name}** against them in the round of 32. "
+    "Pick somebody else below if the game says otherwise."
+)
+_PICKS_ADDED = "✅ Added **{a}** against **{b}**."
+_PICKS_ROLLED = "✅ Added **{a}** against **{b}**. That was the 21st, so it opened card {n}."
+_PICKS_REMOVED = "🗑️ Took **{a}** against **{b}** off the card."
+_PICKS_DELETED = "🗑️ Deleted the card for {day}."
+_PICKS_FULL = (
+    "⚠️ All {cards} of this day's cards are full, at {picks} meetings each. "
+    "Take one off before adding another."
+)
+_PICKS_SAME_PLAYER = "⚠️ A meeting needs two different players."
+_PICKS_TAKEN = "Already on card {n}"
+_PICKS_CARD_EMPTY = "Nothing yet"
+_PICKS_CARD_COUNT = "{n} on this day"
+_PICKS_TODAY = "{day} (today)"
+_PICKS_FOOTER_CAP = "A card carries {n} meetings. The next one opens a second card."
+
+# ⚠️ PLACEHOLDER LABELS, session E. 🔮 is the catalog's *forecast of something
+# that has not happened*, which is exactly what a picks card is, and nothing
+# else on the hub grid carries it -- `CD_BTN_ODDS` is the other 🔮 in this file
+# and it lives on the group view, so rule 7's never-repeat-a-glyph-in-a-choice-
+# set holds. The words borrow `champion_duel_picks.PICKS_TITLE`, which Kevin
+# approved 2026-08-24 as the card's own title, so the door and the thing behind
+# it read as one name.
+CD_BTN_PICKS = "🔮 Today's picks"
+CD_BTN_PICKS_ADD = "➕ Add a meeting"
+CD_BTN_PICKS_SAVE = "➕ Add this meeting"
+CD_BTN_PICKS_DELETE = "🗑️ Delete this card"
+# Bare, both of them: they are flow exits, which `notes/DESIGN.md` rule 7 names
+# as established bare treatment.
+CD_BTN_PICKS_RESTART = "Start again"
+CD_BTN_PICKS_BACK = "Back"
 
 
 def _is_admin(user_id: int) -> bool:
@@ -6531,8 +6659,15 @@ def team_reads(state: dict, *, limit: int = READS_PER_PRESS) -> dict:
 
     **`db.ROUND_ROBIN_STAGES` decides which round this covers**, and there is
     only one. The rest of a semi-final group of eight IS somebody's opponent
-    list; the qualifiers are a hundred players who do not all meet, and the
-    knockouts are a bracket whose pairings nothing in the schema holds.
+    list; the qualifiers are a hundred players who do not all meet, and a
+    knockout player meets exactly one person at a time, so "everyone else in the
+    round" is not an opponent list there however well we know the bracket.
+
+    **That last clause used to read "a bracket whose pairings nothing in the
+    schema holds", and it is corrected rather than deleted.** The round of 32
+    pairing IS derivable from `seed_rank` -- it is a fold, seed *i* against seed
+    33 - i, and `_fold_partner` uses it. The conclusion is unchanged: one
+    opponent is not seven, so this surface still covers the semi-finals only.
 
     ONE `get_group_scouting` PER GROUP, and both the player and their opponents
     come out of it. Reading a player separately would give them a squad set
@@ -7998,6 +8133,1107 @@ async def send_group_view(
     view.message = await interaction.original_response()
 
 
+def _pick_day(value) -> str:
+    """A day to build a card for, as an ISO date. Today for anything else.
+
+    **The surface's guard, not the storage rule.** `champion_duel_db._play_on`
+    is what decides whether a day is writable and it still refuses at the door;
+    this only decides what to render. The one producer of the value is the day
+    select below, whose options are built from `db.server_today` and
+    `db.slate_days` and are therefore already dates, so anything that does not
+    parse here is a forged interaction payload rather than a state a member can
+    reach. Today is the honest thing to show for one, and raising inside a
+    callback would show them "Interaction failed" instead.
+    """
+    try:
+        return datetime.fromisoformat(str(value)[:10]).date().isoformat()
+    except (TypeError, ValueError):
+        return db.server_today().isoformat()
+
+
+def _pick_field(grouping_id, stage: str, recorded: list[str]) -> list[dict]:
+    """Everyone drawn into one round of one Champion Duel, group letter and all.
+
+    The three selects all read off this one list, and it is read once when the
+    flow opens rather than per tap: choosing a warzone or a player narrows a
+    list already in hand.
+
+    **Group by group rather than `get_roster`.** `get_roster` reads every
+    registrant in the database and then costs an `attach_stages` query a row;
+    this costs two reads a group, which is sixteen groups at the semi-finals and
+    one at the knockouts. It also hands back `seed_rank` and `rank` directly,
+    which is what the knockout pairing below is derived from.
+
+    **The letter is put on the row here.** `get_group_members` selects from
+    `group_members`, which does not carry one -- the letter is a property of the
+    group -- and the semi-final filter needs it per player.
+
+    Reading must not write, so this goes through `_read_group` rather than
+    calling `get_or_create_group` itself: the knockouts are the one round whose
+    label is NULL, and creating that row for a round nobody has recorded would
+    make `recorded_stages` report it as held.
+    """
+    if stage not in recorded:
+        return []
+    # `get_groups` drops NULL labels, which is every knockout row -- 32 players,
+    # one field, no letter. So an empty answer for a round we do hold means the
+    # unlettered field rather than an empty round.
+    labels = [g["group"] for g in db.get_groups(stage, grouping_id)] or [None]
+    field: list[dict] = []
+    for label in labels:
+        for member in _read_group(grouping_id, stage, label, recorded):
+            member["grp"] = label
+            field.append(member)
+    return field
+
+
+def _still_in(field: list[dict], stage: str) -> list[dict]:
+    """The players a meeting can still be built from.
+
+    Only the knockouts drop anybody. A knockout `rank` is a final placement, and
+    in a rigid 32-bracket that placement is the exit round, so a player carrying
+    one has been knocked out and cannot be in tomorrow's meetings. Everyone in a
+    semi-final group meets every other one of them over the round, so a
+    semi-final `rank` says where they finished and never that they are gone.
+    """
+    if stage != "knockouts":
+        return list(field)
+    return [m for m in field if m.get("rank") is None]
+
+
+def _warzone_counts(field: list[dict]) -> list[tuple[str, int]]:
+    """Which warzones this round's field is drawn from, and how many from each.
+
+    **Driven off the field, never off sixteen.** A grouping is sixteen warzones
+    today and Kevin named the growth himself (2026-08-27: *"Nothing says that
+    can't increase in the future"*), so this offers seventeen the day the game
+    plays seventeen, with no code change.
+
+    **And it does not narrow the way the design assumed.** Groups mix warzones:
+    joining the recorded semi-final field against the LWS warzone paste gives
+    per-warzone counts of 32, 9, 8, 7 and 4, so one warzone alone can overflow
+    Discord's 25-option cap. Player 1 pages for that reason.
+
+    Numeric order through `_server_sort`, which is the ordering the hub already
+    lists warzones in: the reader arrives holding a number they read off the
+    Predict screen and is looking it up rather than browsing.
+
+    Normalised through `db.warzone_key`, which is the one comparison this
+    feature makes for "same warzone". A registrant added through a modal can
+    hold `0738` where the grouping holds `738`, and two spellings of one warzone
+    would split its players across two options that each look incomplete.
+    """
+    counts: dict[str, int] = {}
+    for member in field:
+        zone = db.warzone_key(member.get("server"))
+        if zone:
+            counts[zone] = counts.get(zone, 0) + 1
+    return sorted(counts.items(), key=lambda pair: _server_sort({"server": pair[0]}))
+
+
+def _in_warzone(field: list[dict], warzone) -> list[dict]:
+    """One warzone's players out of the field, by name."""
+    key = db.warzone_key(warzone)
+    if not key:
+        return []
+    rows = [m for m in field if db.warzone_key(m.get("server")) == key]
+    return sorted(rows, key=lambda m: (m.get("display_name") or "").lower())
+
+
+def _fold_partner(field: list[dict], player: dict, stage: str) -> dict | None:
+    """Who the bracket says Player 1 meets, or None where nothing says.
+
+    **The round of 32 is a fold. The round of 16 onwards is not.** Measured
+    against `champion-duel-simulator`, `knockout_data/knockout_field.csv` and
+    `knockout_reconstruction.csv` -- the round 3 capture -- and re-derived rather
+    than read off that file's own header: every one of the sixteen first-round
+    meetings is seed *i* against seed **33 - i**, 16 of 16, no violations and
+    every name resolved. The eight second-round meetings give six distinct seed
+    sums, so from there the seeds say nothing. The bracket *tree order* is drawn
+    rather than seeded; only the first round's pairing follows from the
+    position, which is the half `champion_duel_db.py`'s schema comment used to
+    deny.
+
+    **Derived and preselected, never enforced.** This is one event. The standing
+    rule on this project is not to move on a single observation, and a hard
+    validation refusing a pair outside the fold would block legitimate entry the
+    day the game changes the rule. The caller offers this as the default and
+    lets it be overridden, so the flow is right either way.
+
+    **Only while the whole field is unplayed.** Once any knockout result is
+    recorded the field is past its first round, the fold no longer describes it,
+    and there is nothing to derive. The 32 comes from `db.GROUP_SIZE` rather
+    than a literal, and so does the 33 -- the fold is *size + 1* -- so a bracket
+    of a different size needs nothing changed here.
+    """
+    if stage != "knockouts":
+        return None
+    size = db.GROUP_SIZE.get("knockouts")
+    alive = _still_in(field, stage)
+    if not size or len(field) != size or len(alive) != size:
+        return None
+    seed = player.get("seed_rank")
+    if seed is None:
+        return None
+    partner = size + 1 - seed
+    return next((m for m in alive if m.get("seed_rank") == partner), None)
+
+
+def _pick_opponents(field: list[dict], player: dict, stage: str) -> list[dict]:
+    """Who Player 1 can meet, which is what validates the meeting as it is made.
+
+    `set_slate`'s only membership rule is that both players exist, and its
+    docstring says why: *"What actually stops an impossible pair is the entry
+    flow filtering Player 2 to who Player 1 can meet."* This is that filter, and
+    the rule differs by round because the format does.
+
+    - **Semi-finals**: the seven other members of Player 1's own group. Eight
+      players meet each other once over the round, so the rest of the group is
+      exactly the opponent list, which is a fact about the format rather than
+      about our record (`db.ROUND_ROBIN_STAGES`).
+    - **Knockouts**: everyone still in. A bracket pairs by position rather than
+      by group, and from the round of 16 there is nothing to derive, so the list
+      is the remaining field -- 16, then 8, then 4, all inside the cap.
+
+    Ordered with the derived partner first where there is one, then by name. At
+    the round of 32 that puts the answer at the top of a list of 31, which is
+    what turns Player 2 from a search into a confirmation.
+    """
+    others = [m for m in _still_in(field, stage) if m["registrant_id"] != player["registrant_id"]]
+    # A player we hold no letter for cannot be narrowed, and narrowing to the
+    # other letterless rows would be worse than not narrowing: it would offer a
+    # list nothing says they can meet. Fall through to the round's whole field
+    # and let the maker choose, which is what every other unknown here does.
+    if stage in db.ROUND_ROBIN_STAGES and player.get("grp"):
+        others = [m for m in others if m.get("grp") == player.get("grp")]
+    others.sort(key=lambda m: (m.get("display_name") or "").lower())
+    partner = _fold_partner(field, player, stage)
+    if partner is not None:
+        others = [partner] + [m for m in others if m["registrant_id"] != partner["registrant_id"]]
+    return others
+
+
+def _pick_name(member: dict) -> str:
+    """A player as one select option's label.
+
+    Never escaped and never decorated: a select label is drawn as plain text, so
+    the pipe padding and combining marks real names carry come through as they
+    are. The 100 is Discord's, and a name long enough to reach it is why the
+    warzone goes on the description line rather than the label.
+    """
+    return ((member or {}).get("display_name") or "?")[:100]
+
+
+def _pick_where(member: dict) -> str:
+    """Where a player is from, for the line under their name in a select.
+
+    The warzone leads because it is what the Predict screen prints under each
+    portrait, and because it is the only thing separating two players who share
+    a name: names are unique per warzone and not across them.
+    """
+    return " · ".join(str(x) for x in (member.get("server"), member.get("alliance")) if x)[:100]
+
+
+def read_picks(
+    guild_id,
+    grouping: dict | None,
+    *,
+    play_on=None,
+    card_no: int = 1,
+    field=None,
+    field_stage: str | None = None,
+) -> dict:
+    """Everything the picks builder renders, in one blocking read.
+
+    Returns a dict whose `state` is one of:
+
+      no_grouping -- the guild's warzone is in no Champion Duel we hold, so
+                     there is no field to pick from and no round to stamp.
+      no_stage    -- the round running is one this card does not cover, which is
+                     the qualifiers or a window before any round starts.
+      no_field    -- the round is one we card and we hold no draw for it. The
+                     door out is recording the group, and the surface says so.
+      ready       -- there is a field.
+
+    **The round is the one the card is stamped with, and only then the one
+    running.** `set_slate` stamps `_stage_for_guild` at creation and keeps it on
+    every rebuild, so a card built at the semi-finals and edited during the
+    knockouts is still a semi-final card. Reading the knockout field for it
+    would offer players its own rows cannot contain.
+
+    **Every one of the day's cards is read, not just this one.** `set_slate`
+    refuses the same two players twice across a day in either order, so the
+    select has to be able to mark a pair that is already carded elsewhere. A
+    refusal that only arrives after all three taps is the thing this prevents.
+
+    **`field` is handed back in rather than re-read where the round has not
+    moved.** Reading it costs two queries a group, which is a dozen a card at
+    the semi-finals, and a twenty-meeting card is twenty of those reads for a
+    list that cannot have changed between two taps. `field_stage` is what the
+    caller last read it for: a different round is a different field and re-reads.
+    """
+    if not grouping:
+        return {
+            "state": "no_grouping",
+            "guild_id": guild_id,
+            "grouping": None,
+            "stage": None,
+            "field": [],
+            "names": {},
+        }
+
+    day = _pick_day(play_on)
+    # Clamped rather than refused, and the bound is read off `db` so the two
+    # cannot drift. The only producer of this is the card select, whose options
+    # this module builds inside the same bound.
+    card_no = max(1, min(int(card_no), db.MAX_CARDS_PER_DAY))
+    cards = {n: db.get_slate(guild_id, day, card_no=n) for n in range(1, db.MAX_CARDS_PER_DAY + 1)}
+    slate = cards.get(card_no)
+    recorded = db.recorded_stages(grouping["id"])
+    stage = (slate or {}).get("stage") or db.current_stage(grouping["id"])
+
+    out = {
+        "state": "ready",
+        "guild_id": guild_id,
+        "grouping": grouping,
+        "stage": stage,
+        "play_on": day,
+        "card_no": card_no,
+        "cards": cards,
+        "slate": slate,
+        "days": db.slate_days(guild_id),
+        "recorded": recorded,
+        "field": [],
+        "names": {},
+    }
+    if stage not in PICK_STAGES:
+        out["state"] = "no_stage"
+        return out
+
+    out["field"] = (
+        list(field)
+        if field is not None and field_stage == stage
+        else _pick_field(grouping["id"], stage, recorded)
+    )
+    names = {m["registrant_id"]: m for m in out["field"]}
+    # A carded player the field does not hold: somebody moved out of the group
+    # after the meeting was made. The row stays on the card either way, and one
+    # read fills its name in rather than letting the surface print a blank
+    # beside a meeting somebody chose.
+    carded = {
+        rid
+        for card in cards.values()
+        if card
+        for meeting in card["meetings"]
+        for rid in (meeting["a_id"], meeting["b_id"])
+    }
+    for row in db.get_scouting(sorted(carded - set(names))):
+        names[row["registrant_id"]] = row
+    out["names"] = names
+    if not out["field"]:
+        out["state"] = "no_field"
+    return out
+
+
+def _meeting_line(meeting: dict, names: dict) -> str:
+    """One row of the card being built: its place, and the two names.
+
+    Names are escaped because they are bolded here. A player called `Rav**en`
+    would otherwise appear under a different name from the one the card draws,
+    which is the reason `champion_duel_picks.caption` escapes them too.
+
+    **No percentage, deliberately.** This is the bench somebody assembles a card
+    on, and the prediction is what the card itself says. Printing it here as
+    well would make two places to read one number off, and only one of them is
+    the thing that gets shared.
+    """
+    both = [
+        discord.utils.escape_markdown(
+            (names.get(meeting[side]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+        )
+        for side in ("a_id", "b_id")
+    ]
+    return _PICKS_MEETING.format(i=meeting["position"], a=both[0], b=both[1])
+
+
+def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -> discord.Embed:
+    """The card as it stands, and what is still needed to add to it.
+
+    **Deliberately not the card.** The image, the embed beside it and the share
+    path are one surface built together; this is the bench. It says what is on
+    the card rather than what the card will look like, and the two must not
+    become two answers to the same question.
+
+    `working` is the half-made meeting, which exists only while the three
+    selects are on screen, `derived` is the bracket's own answer for Player 2
+    where it has one, and `notice` is the exit for a select that has nothing to
+    offer -- **every dead end carries its exit** (`notes/UX.md`, principle 3),
+    and a screen with a control missing and no sentence saying why is the
+    flattest one this feature can produce.
+    """
+    if state["state"] == "no_grouping":
+        return discord.Embed(
+            title=picks_lib.PICKS_TITLE,
+            description=_PICKS_NO_GROUPING.format(button=_btn_words(CD_BTN_ADD_GROUPING)),
+            color=discord.Color.blurple(),
+        )
+
+    # Built through `Slate` rather than formatted here, so the subject on the
+    # bench and the subject on the card are the same string by construction.
+    slate = picks_lib.Slate(
+        guild_id=str(state.get("guild_id") or ""),
+        play_on=state["play_on"],
+        stage=state.get("stage") or "",
+        card_no=state["card_no"],
+    )
+    embed = discord.Embed(
+        title=f"{picks_lib.PICKS_TITLE}: {slate.subject()}",
+        color=discord.Color.blurple(),
+    )
+    if state.get("grouping"):
+        embed.set_author(name=_grouping_name(state["grouping"], whose="Your"))
+    if state["state"] == "no_stage":
+        embed.description = _PICKS_NO_STAGE
+        return embed
+    if state["state"] == "no_field":
+        embed.description = _PICKS_NO_FIELD.format(
+            stage=db.STAGE_LABELS.get(state["stage"], state["stage"]),
+            button=_btn_words(CD_BTN_RECORD),
+        )
+        return embed
+
+    lines = [_PICKS_INTRO]
+    if working:
+        lines += ["", working]
+    if derived:
+        lines.append(derived)
+    if notice:
+        lines += ["", notice]
+    embed.description = "\n".join(lines)
+
+    meetings = (state.get("slate") or {}).get("meetings") or []
+    embed.add_field(
+        name=_plural(len(meetings), "meeting"),
+        value=(
+            "\n".join(_meeting_line(m, state["names"]) for m in meetings)[:1024]
+            if meetings
+            else _PICKS_EMPTY
+        ),
+        inline=False,
+    )
+    if len(meetings) >= db.MAX_PICKS:
+        embed.set_footer(text=_PICKS_FOOTER_CAP.format(n=db.MAX_PICKS))
+    return embed
+
+
+class _PicksView(discord.ui.View):
+    """The card, and the three selects that put a meeting on it.
+
+    **Two modes on one message rather than two surfaces.** The card is what the
+    maker is working on and the three selects are one meeting's worth of work
+    inside it, so `Back` returns to the thing they were building rather than to
+    a menu. Discord allows five action rows and a select takes a whole one, so
+    the modes also exist because warzone, Player 1, Player 2, a pager and the
+    buttons already fill the five.
+
+    **Every add and every removal is written immediately.** A twenty-meeting
+    card is sixty taps and this view times out in fifteen minutes; holding the
+    work in memory until a Save button would lose a card somebody spent the
+    evening on. `set_slate` rewrites the whole card in one transaction, so
+    writing per meeting is not a half-written card either -- it is a shorter
+    card that is true, which is what the reader would see anyway.
+
+    **The stage is not a control.** `set_slate` stamps the round the guild's
+    grouping is playing and keeps it on every rebuild, so a picker offering a
+    different one would build a card out of one round's field and stamp it with
+    another's. `read_picks` resolves it once, off the stored card first.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        guild_id,
+        state: dict,
+        can_write: bool = True,
+    ):
+        super().__init__(timeout=900)
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.can_write = can_write
+        self.state = state
+        self.message: discord.Message | None = None
+
+        # The half-made meeting. All three are cleared together whenever the
+        # axis above them moves, the same rule `_GroupView._reload` applies to
+        # its own selects: a Player 1 chosen in one warzone means nothing once
+        # the warzone changes, and a Player 2 means nothing without a Player 1.
+        self.warzone: str | None = None
+        self.p1: int | None = None
+        self.p2: int | None = None
+        # A page each, rather than one shared. One pager row is all the screen
+        # has, so it moves whichever list the maker is working in -- but a
+        # Player 1 picked off page 2 has to still be sitting in a select showing
+        # page 2 afterwards. A single counter reset that select to page 1 under
+        # them, which put the other people they were choosing between out of
+        # reach with nothing on screen to say so.
+        self.pages = dict.fromkeys(_PICK_STEPS, 0)
+        self.adding = False
+        self._build()
+
+    # ── shape ────────────────────────────────────────────────────────────────
+
+    @property
+    def meetings(self) -> list[dict]:
+        return ((self.state.get("slate") or {}).get("meetings")) or []
+
+    @property
+    def field(self) -> list[dict]:
+        return self.state.get("field") or []
+
+    def _member(self, registrant_id) -> dict | None:
+        return (self.state.get("names") or {}).get(registrant_id)
+
+    def _taken(self) -> dict[frozenset, int]:
+        """Every pair already on one of the day's cards, and which card it is on.
+
+        `set_slate` refuses the same two players twice across a day, in either
+        order. Marking them here is what stops that refusal arriving only after
+        somebody has made all three taps.
+        """
+        out: dict[frozenset, int] = {}
+        for number, card in (self.state.get("cards") or {}).items():
+            for meeting in (card or {}).get("meetings") or []:
+                out[frozenset((meeting["a_id"], meeting["b_id"]))] = number
+        return out
+
+    def _build(self):
+        self.clear_items()
+        if self.state["state"] != "ready":
+            return
+        if self.adding:
+            self._build_adding()
+        else:
+            self._build_card()
+
+    def _build_card(self):
+        row = 0
+        self.add_item(self._select(_PICKS_PICK_DAY, self._day_options(), row, self._on_day))
+        row += 1
+        # Only where there is something to choose between. One card is the
+        # normal day and a picker over it would be a control whose every option
+        # is where the reader already is.
+        if self._cards_in_play() > 1:
+            self.add_item(self._select(_PICKS_PICK_CARD, self._card_options(), row, self._on_card))
+            row += 1
+        # A write, so it renders with the write gate rather than beside it. A
+        # select cannot be drawn disabled the way a button can, so the only
+        # honest treatment of a reader who may not write is not to offer it.
+        if self.meetings and self.can_write:
+            self.add_item(
+                self._select(_PICKS_PICK_REMOVE, self._remove_options(), row, self._on_remove)
+            )
+            row += 1
+        self._add(
+            CD_BTN_PICKS_ADD,
+            discord.ButtonStyle.primary if self.can_write else discord.ButtonStyle.secondary,
+            row,
+            self._on_add,
+            disabled=not self.can_write,
+        )
+        if self.meetings:
+            self._add(
+                CD_BTN_PICKS_DELETE,
+                discord.ButtonStyle.secondary,
+                row,
+                self._on_delete,
+                disabled=not self.can_write,
+            )
+
+    def _step(self) -> str:
+        """Which of the three taps is being made, which is what the pager moves.
+
+        One pager row is all the screen has once three selects and the buttons
+        are on it, so it points at the list the maker is working in, and the page
+        it shows is named in that select's own placeholder. Only one select ever
+        shows a page at a time, so the two arrows are never ambiguous about what
+        they move.
+        """
+        if not self.warzone:
+            return "warzone"
+        return "player" if self.p1 is None else "opponent"
+
+    def _build_adding(self):
+        # Everyone still in, and the warzone counts taken off that rather than
+        # off the whole field. A warzone whose players have all been knocked out
+        # is not one to offer, and a count including them would promise players
+        # the next select cannot show.
+        alive = _still_in(self.field, self.state["stage"])
+        zones = _warzone_counts(alive)
+        players = _in_warzone(alive, self.warzone) if self.warzone else []
+        opponents = self._opponents()
+
+        step = self._step()
+        pages = max(
+            1,
+            -(
+                -len({"warzone": zones, "player": players, "opponent": opponents}[step])
+                // _PICK_OPTIONS
+            ),
+        )
+        self.pages[step] = max(0, min(self.pages[step], pages - 1))
+
+        row = 0
+        # No warzones is a round with nobody left in it, which the knockouts
+        # reach once the last meeting has been played. There is nothing to pick,
+        # the embed says so, and the only control is the way back.
+        if zones:
+            self.add_item(
+                self._select(
+                    self._placeholder("warzone", _PICKS_PICK_WARZONE, step, pages),
+                    self._warzone_options(zones),
+                    row,
+                    self._on_warzone,
+                )
+            )
+            row += 1
+        if self.warzone and players:
+            self.add_item(
+                self._select(
+                    self._placeholder("player", _PICKS_PICK_P1, step, pages),
+                    self._player_options(players),
+                    row,
+                    self._on_p1,
+                )
+            )
+            row += 1
+        # An empty opponent list is a group we hold one player of. The embed
+        # carries the door out rather than this offering an empty control.
+        if self.p1 is not None and opponents:
+            self.add_item(
+                self._select(
+                    self._placeholder("opponent", _PICKS_PICK_P2, step, pages),
+                    self._opponent_options(opponents),
+                    row,
+                    self._on_p2,
+                )
+            )
+            row += 1
+        if pages > 1:
+            # `storm_log.py`'s labels to the character. This is the bot's
+            # pagination and a second wording of it would be a second thing to
+            # learn (`notes/DESIGN.md`, emoji rule 7).
+            self._pager("◀ Prev", row, self._on_prev, self.pages[step] == 0)
+            self._pager(f"Page {self.pages[step] + 1} / {pages}", row, None, True)
+            self._pager("Next ▶", row, self._on_next, self.pages[step] >= pages - 1)
+            row += 1
+        self._add(
+            CD_BTN_PICKS_SAVE,
+            discord.ButtonStyle.success,
+            row,
+            self._on_save,
+            disabled=not (self.can_write and self.p1 is not None and self.p2 is not None),
+        )
+        # The way back out of a half-made meeting, and it is a button rather
+        # than re-picking the warzone already selected: a client with nothing
+        # new to send sends nothing at all, so a select somebody re-taps the
+        # same value on may never reach us.
+        self._add(CD_BTN_PICKS_RESTART, discord.ButtonStyle.secondary, row, self._on_restart)
+        self._add(CD_BTN_PICKS_BACK, discord.ButtonStyle.secondary, row, self._on_back)
+
+    def _placeholder(self, mine: str, label: str, step: str, pages: int) -> str:
+        """A select's placeholder, saying which page it shows while it pages."""
+        if pages > 1 and mine == step:
+            return _PICKS_PAGED.format(what=label, page=self.pages[mine] + 1, pages=pages)[:150]
+        return label[:150]
+
+    def _slice(self, rows: list, step: str) -> list:
+        first = self.pages[step] * _PICK_OPTIONS
+        return rows[first : first + _PICK_OPTIONS]
+
+    # ── options ──────────────────────────────────────────────────────────────
+
+    def _days(self) -> list[str]:
+        """The days offered, in the order somebody building a card wants them.
+
+        Today first, then the days a card can be built for ahead of it, then
+        whatever days already carry cards. A slate is prepared *"the
+        day/evening/morning before"* (Kevin, 2026-08-27), so tomorrow has to be
+        one tap away, and a day already carrying a card has to be reachable to
+        be corrected.
+        """
+        today = db.server_today()
+        days = [(today + timedelta(days=n)).isoformat() for n in range(_PICK_DAYS_AHEAD + 1)]
+        for row in self.state.get("days") or []:
+            if row["play_on"] not in days:
+                days.append(row["play_on"])
+        if self.state["play_on"] not in days:
+            days.append(self.state["play_on"])
+        return days[:_PICK_OPTIONS]
+
+    def _day_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in self.state.get("days") or []:
+            counts[row["play_on"]] = counts.get(row["play_on"], 0) + (row["meetings"] or 0)
+        return counts
+
+    def _day_options(self) -> list[discord.SelectOption]:
+        counts = self._day_counts()
+        today = db.server_today().isoformat()
+        options = []
+        for day in self._days():
+            # Built through `Slate.date_label` rather than formatted here, so
+            # the day on the picker and the day on the card head are the same
+            # string by construction.
+            label = picks_lib.Slate(guild_id="", play_on=day).date_label()
+            if day == today:
+                label = _PICKS_TODAY.format(day=label)
+            held = counts.get(day, 0)
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=day,
+                    description=(
+                        _PICKS_CARD_COUNT.format(n=_plural(held, "meeting"))
+                        if held
+                        else _PICKS_CARD_EMPTY
+                    )[:100],
+                    default=day == self.state["play_on"],
+                )
+            )
+        return options
+
+    def _cards_in_play(self) -> int:
+        """How many of the day's cards exist, counting the one being looked at.
+
+        The picker appears at two, which is a day that overflowed twenty
+        meetings. Below that there is nothing to move between.
+        """
+        held = {n for n, card in (self.state.get("cards") or {}).items() if card}
+        held.add(self.state["card_no"])
+        return len(held)
+
+    def _card_options(self) -> list[discord.SelectOption]:
+        cards = self.state.get("cards") or {}
+        options = []
+        for number in range(1, db.MAX_CARDS_PER_DAY + 1):
+            held = len((cards.get(number) or {}).get("meetings") or [])
+            if not held and number != self.state["card_no"]:
+                continue
+            options.append(
+                discord.SelectOption(
+                    label=picks_lib.CARD_NUMBER.format(n=number)[:100],
+                    value=str(number),
+                    description=(_plural(held, "meeting") if held else _PICKS_CARD_EMPTY)[:100],
+                    default=number == self.state["card_no"],
+                )
+            )
+        return options
+
+    def _remove_options(self) -> list[discord.SelectOption]:
+        options = []
+        for meeting in self.meetings[:_PICK_OPTIONS]:
+            a = (self._member(meeting["a_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+            b = (self._member(meeting["b_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+            options.append(
+                discord.SelectOption(
+                    label=_PICKS_MEETING_OPTION.format(i=meeting["position"], a=a, b=b)[:100],
+                    value=str(meeting["position"]),
+                )
+            )
+        return options
+
+    def _warzone_options(self, zones) -> list[discord.SelectOption]:
+        shown = self._slice(zones, "warzone")
+        # The chosen warzone is carried onto whatever window is showing, so the
+        # select never reads as unset while a warzone is filtering the two lists
+        # under it. Same reason `_alliance_options` carries its own selection.
+        chosen = db.warzone_key(self.warzone)
+        if chosen and chosen not in {zone for zone, _ in shown}:
+            shown = [(chosen, 0)] + list(shown)[: _PICK_OPTIONS - 1]
+        return [
+            discord.SelectOption(
+                label=str(zone)[:100],
+                value=str(zone),
+                description=_plural(count, "player")[:100] if count else None,
+                default=zone == db.warzone_key(self.warzone),
+            )
+            for zone, count in shown
+        ]
+
+    def _player_options(self, players) -> list[discord.SelectOption]:
+        chosen = self.p1
+        shown = self._slice(players, "player")
+        if chosen is not None and chosen not in {m["registrant_id"] for m in shown}:
+            picked = self._member(chosen)
+            if picked:
+                shown = [picked] + list(shown)[: _PICK_OPTIONS - 1]
+        return [
+            discord.SelectOption(
+                label=_pick_name(member),
+                value=str(member["registrant_id"]),
+                description=_pick_where(member) or None,
+                default=member["registrant_id"] == chosen,
+            )
+            for member in shown
+        ]
+
+    def _opponents(self) -> list[dict]:
+        player = self._member(self.p1) if self.p1 is not None else None
+        if player is None:
+            return []
+        return _pick_opponents(self.field, player, self.state["stage"])
+
+    def _opponent_options(self, opponents) -> list[discord.SelectOption]:
+        taken = self._taken()
+        shown = self._slice(opponents, "opponent")
+        if self.p2 is not None and self.p2 not in {m["registrant_id"] for m in shown}:
+            picked = self._member(self.p2)
+            if picked:
+                shown = [picked] + list(shown)[: _PICK_OPTIONS - 1]
+        options = []
+        for member in shown:
+            # A pair already on one of the day's cards is marked rather than
+            # dropped. Dropping it would read as "these two cannot meet", which
+            # is the one thing this select is otherwise saying.
+            on_card = taken.get(frozenset((self.p1, member["registrant_id"])))
+            options.append(
+                discord.SelectOption(
+                    label=_pick_name(member),
+                    value=str(member["registrant_id"]),
+                    description=(
+                        _PICKS_TAKEN.format(n=on_card) if on_card else _pick_where(member) or None
+                    ),
+                    default=member["registrant_id"] == self.p2,
+                )
+            )
+        return options
+
+    # ── controls ─────────────────────────────────────────────────────────────
+
+    def _add(self, label, style, row, cb, *, disabled=False):
+        button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=disabled)
+        button.callback = cb
+        self.add_item(button)
+
+    def _select(self, placeholder, options, row, callback):
+        select = discord.ui.Select(placeholder=placeholder[:150], options=options, row=row)
+        select.callback = callback
+        return select
+
+    def _pager(self, label, row, callback, disabled):
+        button = discord.ui.Button(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            row=row,
+            disabled=disabled,
+        )
+        if callback is not None:
+            button.callback = callback
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    # ── rendering ────────────────────────────────────────────────────────────
+
+    def _embed(self) -> discord.Embed:
+        """One place the embed is built, so the two ways in cannot drift.
+
+        It carries the half-made meeting because the three selects cannot: a
+        Player 1 the pager has moved off shows nothing in its own select, and a
+        chosen player who is invisible on the surface that chose them is the
+        state this line exists to make impossible.
+        """
+        working = derived = notice = None
+        if not self.adding or self.state["state"] != "ready":
+            return build_picks_embed(self.state)
+
+        if not _warzone_counts(_still_in(self.field, self.state["stage"])):
+            notice = _PICKS_NOBODY_LEFT.format(
+                stage=db.STAGE_LABELS.get(self.state["stage"], self.state["stage"])
+            )
+        if self.p1 is not None:
+            player = self._member(self.p1) or {}
+            a = discord.utils.escape_markdown(_pick_name(player))
+            if self.p2 is not None:
+                working = _PICKS_WORKING.format(
+                    a=a, b=discord.utils.escape_markdown(_pick_name(self._member(self.p2) or {}))
+                )
+            else:
+                working = _PICKS_WORKING_HALF.format(a=a)
+            partner = _fold_partner(self.field, player, self.state["stage"])
+            if partner is not None:
+                derived = _PICKS_DERIVED.format(
+                    name=discord.utils.escape_markdown(_pick_name(partner))
+                )
+            if not self._opponents():
+                notice = _PICKS_NO_OPPONENTS.format(name=a, button=_btn_words(CD_BTN_RECORD))
+        return build_picks_embed(self.state, working=working, derived=derived, notice=notice)
+
+    async def _rerender(self, inter: discord.Interaction, *, notice: str | None = None):
+        """Redraw from what is already in hand, and say what just happened.
+
+        The acknowledgement is a separate ephemeral rather than a line on the
+        embed: the embed is the card as it now stands, and a "removed X" line
+        living on it would still be there two taps later describing something
+        that is no longer the last thing to happen.
+        """
+        self._build()
+        await inter.edit_original_response(embed=self._embed(), view=self)
+        if notice:
+            await inter.followup.send(notice, ephemeral=True)
+
+    async def _reload(self, inter: discord.Interaction, *, notice: str | None = None):
+        """Re-read the day's cards, then redraw.
+
+        Everything the three selects need is already in hand -- the field is
+        read once when the flow opens and a warzone or a player only narrows
+        it -- so this is for the half that a write moves. The field goes back in
+        rather than being read again, and `read_picks` drops it the moment the
+        round it was read for stops being the round this card is for.
+        """
+        self.state = await asyncio.to_thread(
+            functools.partial(
+                read_picks,
+                self.guild_id,
+                self.state["grouping"],
+                play_on=self.state["play_on"],
+                card_no=self.state["card_no"],
+                field=self.state.get("field"),
+                field_stage=self.state.get("stage"),
+            )
+        )
+        await self._rerender(inter, notice=notice)
+
+    # ── the card ─────────────────────────────────────────────────────────────
+
+    async def _on_day(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.state["play_on"] = inter.data["values"][0]
+        # Back to card 1 with the day, because card 3 of one day says nothing
+        # about another: a day that never overflowed has no card 3 at all, and
+        # carrying the number across would open an empty card nobody made.
+        self.state["card_no"] = 1
+        self._clear_working()
+        await self._reload(inter)
+
+    async def _on_card(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.state["card_no"] = int(inter.data["values"][0])
+        self._clear_working()
+        await self._reload(inter)
+
+    async def _on_remove(self, inter: discord.Interaction):
+        await inter.response.defer()
+        position = int(inter.data["values"][0])
+        gone = next((m for m in self.meetings if m["position"] == position), None)
+        if gone is None:
+            await self._reload(inter)
+            return
+        kept = [(m["a_id"], m["b_id"]) for m in self.meetings if m["position"] != position]
+        a = discord.utils.escape_markdown(
+            (self._member(gone["a_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+        )
+        b = discord.utils.escape_markdown(
+            (self._member(gone["b_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+        )
+        # An empty card is deleted rather than written, because `set_slate`
+        # refuses an empty list by design: "no card for tomorrow yet" and "a
+        # card with nothing on it" are different things to say to a reader and
+        # only one of them is true.
+        if kept:
+            await asyncio.to_thread(
+                db.set_slate,
+                self.guild_id,
+                self.state["play_on"],
+                kept,
+                card_no=self.state["card_no"],
+                actor=_actor(inter),
+            )
+        else:
+            await asyncio.to_thread(
+                db.delete_slate,
+                self.guild_id,
+                self.state["play_on"],
+                card_no=self.state["card_no"],
+            )
+        await self._reload(inter, notice=_PICKS_REMOVED.format(a=a, b=b))
+
+    async def _on_delete(self, inter: discord.Interaction):
+        await inter.response.defer()
+        await asyncio.to_thread(
+            db.delete_slate, self.guild_id, self.state["play_on"], card_no=self.state["card_no"]
+        )
+        day = picks_lib.Slate(guild_id="", play_on=self.state["play_on"]).date_label()
+        await self._reload(inter, notice=_PICKS_DELETED.format(day=day))
+
+    async def _on_add(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.adding = True
+        self._clear_working()
+        await self._rerender(inter)
+
+    # ── one meeting ──────────────────────────────────────────────────────────
+
+    def _clear_working(self):
+        self.warzone = self.p1 = self.p2 = None
+        self.pages = dict.fromkeys(_PICK_STEPS, 0)
+
+    async def _on_warzone(self, inter: discord.Interaction):
+        """A different warzone, and both lists under it start again.
+
+        Every axis below the one that moved is re-resolved rather than patched,
+        which is the rule `_GroupView._reload` applies to its own selects: a
+        Player 1 chosen in one warzone means nothing in another, and a page into
+        that warzone's players means less than nothing.
+        """
+        await inter.response.defer()
+        self.warzone = inter.data["values"][0]
+        self.p1 = self.p2 = None
+        self.pages["player"] = self.pages["opponent"] = 0
+        await self._rerender(inter)
+
+    async def _on_p1(self, inter: discord.Interaction):
+        """Player 1, and the bracket's answer for Player 2 where it has one.
+
+        **Preselected, not enforced.** At the knockout round of 32 the pairing
+        is a fold and the opponent follows from the seed, so this is where
+        Player 2 stops being a search and becomes a confirmation. It is set as a
+        value rather than only drawn as a default because a default nobody
+        pressed is not a choice: without this the Add button would sit disabled
+        under an opponent the reader can already see.
+        """
+        await inter.response.defer()
+        self.p1 = int(inter.data["values"][0])
+        self.pages["opponent"] = 0
+        partner = _fold_partner(self.field, self._member(self.p1) or {}, self.state["stage"])
+        self.p2 = partner["registrant_id"] if partner else None
+        await self._rerender(inter)
+
+    async def _on_p2(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.p2 = int(inter.data["values"][0])
+        await self._rerender(inter)
+
+    async def _on_prev(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.pages[self._step()] -= 1
+        await self._rerender(inter)
+
+    async def _on_next(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.pages[self._step()] += 1
+        await self._rerender(inter)
+
+    async def _on_restart(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self._clear_working()
+        await self._rerender(inter)
+
+    async def _on_back(self, inter: discord.Interaction):
+        await inter.response.defer()
+        self.adding = False
+        self._clear_working()
+        await self._rerender(inter)
+
+    async def _on_save(self, inter: discord.Interaction):
+        """Put the meeting on the card, rolling onto the next card when this one
+        is full.
+
+        **Overflow opens a card, it never drops a row.** Twenty is what stays
+        legible on the image, not what the data can hold, so the twenty-first
+        meeting is card 2 rather than a refusal. `db.MAX_CARDS_PER_DAY` is a
+        runaway guard rather than rationing -- four cards of twenty hold the
+        whole day's 64 meetings with room over -- so reaching it is the one
+        state that does refuse.
+        """
+        await inter.response.defer()
+        if self.p1 is None or self.p2 is None:
+            await self._rerender(inter)
+            return
+        if self.p1 == self.p2:
+            await self._rerender(inter, notice=_PICKS_SAME_PLAYER)
+            return
+
+        target = self.state["card_no"]
+        cards = self.state.get("cards") or {}
+        while target <= db.MAX_CARDS_PER_DAY:
+            if len((cards.get(target) or {}).get("meetings") or []) < db.MAX_PICKS:
+                break
+            target += 1
+        if target > db.MAX_CARDS_PER_DAY:
+            await self._rerender(
+                inter,
+                notice=_PICKS_FULL.format(cards=db.MAX_CARDS_PER_DAY, picks=db.MAX_PICKS),
+            )
+            return
+
+        pairs = [(m["a_id"], m["b_id"]) for m in ((cards.get(target) or {}).get("meetings") or [])]
+        pairs.append((self.p1, self.p2))
+        a = discord.utils.escape_markdown(_pick_name(self._member(self.p1) or {}))
+        b = discord.utils.escape_markdown(_pick_name(self._member(self.p2) or {}))
+        try:
+            await asyncio.to_thread(
+                db.set_slate,
+                self.guild_id,
+                self.state["play_on"],
+                pairs,
+                card_no=target,
+                actor=_actor(inter),
+            )
+        except ValueError as exc:
+            # `set_slate` is the authority on a pair already carded, across
+            # every one of the day's cards. The selects mark what a read
+            # already knew about; this catches the pair somebody else carded
+            # while this view was on screen.
+            await self._rerender(inter, notice=f"⚠️ {exc}")
+            return
+
+        rolled = target != self.state["card_no"]
+        self.state["card_no"] = target
+        self._clear_working()
+        notice = (
+            _PICKS_ROLLED.format(a=a, b=b, n=target) if rolled else _PICKS_ADDED.format(a=a, b=b)
+        )
+        await self._reload(inter, notice=notice)
+
+
+async def send_picks_view(
+    interaction: discord.Interaction,
+    *,
+    grouping: dict | None,
+    user_id: int,
+    can_write: bool = True,
+) -> None:
+    """Open the picks card for today, on the round the guild is playing.
+
+    **It opens on every state rather than refusing three of them.** A guild with
+    no Champion Duel resolved, a round the card does not cover, and a round we
+    hold no draw for are all real and all different, and each one arrives with
+    the control that fixes it named on the surface. Refusing would put the
+    flattest dead end in the feature exactly where the contribution is wanted,
+    which is the state `send_group_view` was rebuilt out of.
+    """
+    state = await asyncio.to_thread(read_picks, interaction.guild_id, grouping)
+    view = _PicksView(
+        user_id=user_id,
+        guild_id=interaction.guild_id,
+        state=state,
+        can_write=can_write,
+    )
+    await interaction.followup.send(embed=view._embed(), view=view, ephemeral=True)
+    view.message = await interaction.original_response()
+
+
 class ChampionDuelHubView(discord.ui.View):
     """The button grid. Rows group by kind: everyone, contributors, operator."""
 
@@ -8157,11 +9393,33 @@ class ChampionDuelHubView(discord.ui.View):
         if self.warzone:
             self._add(CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 1, self._on_warzone)
 
-        # Row 2 — operator only, and absent entirely for everyone else.
+        # Row 2 — the day's card, and it is alone on a row because row 1 is
+        # already at Discord's five.
+        #
+        # **THE PLACEMENT IS NOT SETTLED HERE.** IA session 6 reorganises this
+        # grid and `PLAN_champion_duel_ia.md` gives it this control to place,
+        # with `🏅 Your group` marked *"absorbed by `🔮 Today's picks`"*. This is
+        # a working door until then, and it is here rather than nowhere because
+        # `db.set_slate` has had no caller outside its own tests since it
+        # shipped: without a button the card renders and no member can reach it.
+        #
+        # Absent without a grouping, the same as recording and the group view:
+        # with no Champion Duel resolved there is no field to pick two players
+        # out of, and the caller is being asked for their warzone instead.
+        if self.grouping:
+            self._add(
+                f"🔒 {CD_BTN_PICKS}" if not self.can_write else CD_BTN_PICKS,
+                discord.ButtonStyle.secondary,
+                2,
+                self._on_picks,
+                disabled=not self.can_write,
+            )
+
+        # Row 3 — operator only, and absent entirely for everyone else.
         if self.is_admin:
-            self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 2, self._on_edits)
-            self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 2, self._on_revert)
-            self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 2, self._on_export)
+            self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 3, self._on_edits)
+            self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 3, self._on_revert)
+            self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 3, self._on_export)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
 
@@ -8298,6 +9556,24 @@ class ChampionDuelHubView(discord.ui.View):
                 groupings=groupings,
                 warzone=self.warzone,
             )
+        )
+
+    async def _on_picks(self, inter: discord.Interaction):
+        """The day's card, and the flow that fills one in.
+
+        Opens on today for the round the guild's Champion Duel is playing. It
+        opens on the states with nothing in them too, each carrying the control
+        that fixes it, which is the same deal `_on_group` takes: an alliance
+        that has just set its Participating Warzones holds nothing by
+        definition, and being told so with no way to fix it is the dead end
+        this whole surface is being rebuilt out of.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await send_picks_view(
+            inter,
+            grouping=self.grouping,
+            user_id=self.user_id,
+            can_write=self.can_write,
         )
 
     async def _on_group(self, inter: discord.Interaction):

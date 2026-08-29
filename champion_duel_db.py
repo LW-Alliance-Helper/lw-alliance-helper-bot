@@ -496,10 +496,32 @@ def init_db() -> None:
         # `seed_rank` and `rank` are separate because they are different numbers
         # for the same player and round. Every player has a rank from the moment
         # a group is drawn (the seed position) and a different one after it is
-        # played. For knockouts `seed_rank` is the bracket position 1..32, which
-        # is given rather than derived -- the game reorders when it places them
-        # and the rule is not known -- and `rank` is the final placement, which
-        # in a rigid 32-bracket is also the exit round.
+        # played. For knockouts `seed_rank` is the bracket position 1..32 and
+        # `rank` is the final placement, which in a rigid 32-bracket is also the
+        # exit round.
+        #
+        # **CORRECTED 2026-08-28. This comment used to say the bracket position
+        # was "given rather than derived -- the game reorders when it places
+        # them and the rule is not known". Half of that is wrong, and it is the
+        # half every caller needed.**
+        #
+        # Measured against `champion-duel-simulator`, `knockout_data/
+        # knockout_field.csv` and `knockout_reconstruction.csv` (the round 3
+        # capture), re-derived rather than read off that file's header:
+        #
+        #   * **The round of 32 pairing IS derivable, and it is a fold.** Seed
+        #     *i* meets seed **33 - i**, 16 of 16, no violations and every name
+        #     resolved. `champion_duel_hub._fold_partner` is built on this.
+        #   * **The bracket TREE ORDER is not.** The eight round-of-16 meetings
+        #     give six distinct seed sums, so from there the seeds say nothing.
+        #     The drawn order reads 1, 16, 7, 14, 4, 12, 5, 10, 9, 6, 11, 3, 13,
+        #     8, 15, 2 where a standard 32-bracket gives 1, 16, 8, 9, 4, 13, 5,
+        #     12, 2, 15, 7, 10, 3, 14, 6, 11 -- only the first two coincide.
+        #
+        # **One event, so derive and preselect, never validate against it.** The
+        # standing rule on this project is not to move on a single observation,
+        # and a check refusing a pair outside the fold would block legitimate
+        # entry the day the game changes it.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS group_members (
                 group_id      INTEGER NOT NULL,

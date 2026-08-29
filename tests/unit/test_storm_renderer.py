@@ -998,3 +998,64 @@ class TestClosedEmptyZoneRendering:
         types = [ln["type"] for ln in lines]
         assert types == ["header", "row", "row"]
         assert lines[0]["text"] == "Stage 3:"
+
+
+class TestHyphenWrapKeepsOneNameInOneFont:
+    """A long name hyphen-breaks across lines. Each fragment used to
+    pick its own font, so `Alexey-Волмирев` set `Alexey-` in Inter and
+    `Волмирев` in the fallback — two adjacent lines of one name in two
+    typefaces.
+
+    Unreachable before 2026-08-29: both halves resolved to Inter,
+    because the router only looked at the first non-Latin script range
+    it recognised and Cyrillic was not in the table. Widening the
+    routing is what makes this visible, so the guard ships with it.
+    """
+
+    # Under 20 characters on purpose: in-game usernames cap there and
+    # `_attempt_flow_at` truncates to match, so a longer fixture would
+    # be asserting against a name the renderer never sees.
+    MIXED = "Alexey-Волмиревски"
+
+    @pytest.fixture(autouse=True)
+    def _bundled_only(self, monkeypatch):
+        monkeypatch.setattr(sr, "_SYSTEM_FONT_DIRS", ())
+        sr._font_file.cache_clear()
+        yield
+        sr._font_file.cache_clear()
+
+    def _long_lines(self, name):
+        """The `long` line dicts a narrow one-column pill produces."""
+        block = sr.RosterZone(name="Nuclear Silo", max_players=1, members=[name])
+        lines, _overflow = sr._attempt_flow_at(
+            [block],
+            sr._try_font(16),
+            pill_content_width_px=90,
+            cols=1,
+            max_rows=20,
+            canonical_zone="Nuclear Silo",
+            wrap_max_px=90,
+        )
+        return [line for line in lines if line["type"] == "long"]
+
+    def test_every_fragment_carries_the_whole_name(self):
+        pieces = self._long_lines(self.MIXED)
+        assert len(pieces) >= 2, "test premise: the name has to wrap"
+        assert {p["whole"] for p in pieces} == {self.MIXED}
+
+    def test_every_fragment_draws_in_the_same_font(self):
+        pieces = self._long_lines(self.MIXED)
+        fonts = {sr._font_for_text(p.get("whole") or p["name"], 16).path for p in pieces}
+        assert len(fonts) == 1, "one name, one typeface"
+
+    def test_a_wrapped_name_is_measured_in_the_font_that_draws_it(self):
+        """Wrapping in Inter a name Inter cannot draw measures every
+        Cyrillic character as Inter's `.notdef` box, so the break lands
+        in the wrong place."""
+        cyrillic = "Волмиревскийплан"
+        inter = sr._try_font(16)
+        drawn_font = sr._font_for_text(cyrillic, 16)
+        assert inter.path != drawn_font.path, "test premise: Inter has no Cyrillic"
+        assert sr._wrap_name_to_lines(cyrillic, inter, 90) != sr._wrap_name_to_lines(
+            cyrillic, drawn_font, 90
+        )

@@ -333,6 +333,32 @@ class TestNothingCoversIt:
             sr._font_for_text("ธนวัฒน", 24)
         assert "ธนวัฒน" not in caplog.text
 
+    def test_a_missing_package_asks_for_a_package(self, bundled_only, caplog):
+        """Nothing in the stack draws Thai here, so the line names the
+        codepoint and asks for the family."""
+        import logging
+
+        sr._log_undrawable.cache_clear()
+        with caplog.at_level(logging.INFO, logger="storm_renderer"):
+            sr._font_for_text("ธนวัฒน", 24)
+        assert "no installed font draws" in caplog.text
+        assert "Add the family" in caplog.text
+
+    def test_a_mixed_name_does_not_ask_for_a_package(self, bundled_only, caplog):
+        """Arabic beside Hangul: both files are in this repo and no
+        package fixes it, because no single font covers both. Telling
+        an operator to install something would send them after a font
+        that does not exist.
+        """
+        import logging
+
+        sr._log_undrawable.cache_clear()
+        with caplog.at_level(logging.INFO, logger="storm_renderer"):
+            sr._font_for_text("한별진한별진한별진한 الرمالي", 24)
+        assert "Add the family" not in caplog.text
+        assert "no single font draws this whole name" in caplog.text
+        assert "Every font it needs is installed" in caplog.text
+
 
 # ── Finding the files ────────────────────────────────────────────────
 
@@ -380,14 +406,26 @@ class TestFontResolution:
         """
         assert sr._load_font.cache_info().maxsize <= 16
 
-    def test_coverage_probing_holds_one_font_per_file(self):
-        """The probe instance is the one thing worth pinning: every
-        name asks it, and there is one per family rather than one per
-        size."""
+    def test_coverage_probing_reuses_one_font_per_file(self):
         a = sr._probe_font(sr._INTER_REGULAR)
         b = sr._probe_font(sr._INTER_REGULAR)
         assert a is b
         assert a.size == sr._FONT_PROBE_PX
+
+    def test_a_name_nothing_covers_does_not_pin_the_whole_stack(self, bundled_only):
+        """An emoji in a name — the everyday case of a character no
+        family draws — makes the router walk all sixteen families
+        looking for the one that draws the most of it. With an
+        unbounded probe cache that walk would pin every face, the
+        16 MB CJK file included, for the life of the process. Measured
+        at about 5 MB, permanently, off one player's name.
+        """
+        sr._probe_font.cache_clear()
+        sr._font_covers_char.cache_clear()
+        sr._font_for_text("Ashvale\U0001f525", 24)
+        held = sr._probe_font.cache_info().currsize
+        assert held <= sr._PROBE_FONT_ENTRIES
+        assert held < len(sr._FONT_STACK)
 
     def test_a_latin_name_never_opens_the_cjk_file(self, bundled_only, monkeypatch):
         """Lazily, and only what the name needs. Inter covers the

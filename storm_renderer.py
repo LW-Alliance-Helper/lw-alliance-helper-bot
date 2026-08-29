@@ -880,14 +880,26 @@ def _open_font(path: str, size: int):
         return None
 
 
-@functools.lru_cache(maxsize=32)
-def _probe_font(path: str):
-    """The one instance of `path` coverage is measured with.
+# Bounded, and small, for the same reason as `_FONT_CACHE_ENTRIES`
+# below. Holding one probe face per family sounds free and is not:
+# a name containing a character NO family draws — an emoji is the
+# everyday case — walks the entire stack looking for the font that
+# draws the most of it, and an unbounded cache would then pin all
+# sixteen faces, the 16 MB CJK file among them, for the life of the
+# process. Measured at about 5 MB, permanently, off one emoji in one
+# player's name.
+#
+# Four is enough because the ANSWERS are cached, not just the faces:
+# `_font_covers_char` remembers every (file, character) it has been
+# asked, so in the steady state a probe font is not needed at all. It
+# is the cold walk that reloads, and that costs a few milliseconds
+# once.
+_PROBE_FONT_ENTRIES = 4
 
-    Held for the life of the process, deliberately: it is asked about
-    every name the bot draws, there is one per family, and at 16 px the
-    whole stack is a few MB.
-    """
+
+@functools.lru_cache(maxsize=_PROBE_FONT_ENTRIES)
+def _probe_font(path: str):
+    """The instance of `path` that coverage is measured with."""
     return _open_font(path, _FONT_PROBE_PX)
 
 
@@ -977,6 +989,10 @@ def _family_for_text(text: str, *, bold: bool = False) -> tuple[Optional[str], O
     best_path: Optional[str] = None
     best_drawn = -1
     chars = set(text)
+    # Characters NO family drew, as opposed to ones the winning family
+    # happened to miss. The two mean different things and the log below
+    # says different things about them.
+    nobody: Optional[set[str]] = None
 
     for family in _FONT_STACK:
         path = _family_font_file(family, bold)
@@ -985,6 +1001,7 @@ def _family_for_text(text: str, *, bold: bool = False) -> tuple[Optional[str], O
         missing = {ch for ch in chars if not _font_covers_char(path, ch)}
         if not missing:
             return family.key, path
+        nobody = missing if nobody is None else (nobody & missing)
         # Probe the distinct characters, but score the whole string:
         # a name that is six Hangul syllables and two Arabic letters
         # should land on the font that draws the six.
@@ -993,32 +1010,51 @@ def _family_for_text(text: str, *, bold: bool = False) -> tuple[Optional[str], O
             best_key, best_path, best_drawn = family.key, path, drawn
 
     if best_key is not None:
-        _log_undrawable(_undrawable_signature(text, best_path))
+        unseen = _codepoints(nobody or ())
+        boxes = _codepoints(ch for ch in chars if not _font_covers_char(best_path, ch))
+        _log_undrawable(unseen, boxes)
     return best_key, best_path
 
 
-def _undrawable_signature(text: str, path: Optional[str]) -> str:
-    """The codepoints of `text` no font could draw, as `U+0E2A,U+0E21`.
+def _codepoints(chars) -> str:
+    """`U+0E18,U+0E19` — the log's currency.
 
-    Codepoints rather than the name itself: this goes to the log, the
-    name belongs to a player, and the codepoint is the part that says
+    Codepoints rather than the name itself: this goes to a log file, the
+    name belongs to a player, and the codepoint is the half that says
     which font is missing.
     """
-    if path is None:
-        return ",".join(sorted({f"U+{ord(ch):04X}" for ch in text}))
-    return ",".join(sorted({f"U+{ord(ch):04X}" for ch in text if not _font_covers_char(path, ch)}))
+    return ",".join(sorted({f"U+{ord(ch):04X}" for ch in chars}))
 
 
 @functools.lru_cache(maxsize=256)
-def _log_undrawable(signature: str) -> None:
-    """Once per distinct set of missing codepoints, not once per render
-    — a roster redrawn on every edit would otherwise log the same gap
-    dozens of times an evening."""
-    logger.info(
-        "render: no installed font draws %s — drawing the rest of the name. "
-        "Add the family that covers it to the deploy image.",
-        signature,
-    )
+def _log_undrawable(unseen: str, boxes: str) -> None:
+    """Once per distinct gap, not once per render — a roster redrawn on
+    every edit would otherwise log the same thing dozens of times an
+    evening.
+
+    Two different failures, said differently, because only one of them
+    has a fix an operator can act on:
+
+    `unseen` is codepoints NO family in the stack drew. That is a
+    missing font package and naming it is the whole point of the line.
+
+    `unseen` empty means some font drew every character, just never one
+    font all of them — a name mixing Arabic with Hangul, say. That is
+    the case per-character fallback was measured against and rejected
+    for; no package fixes it, so the line must not ask for one.
+    """
+    if unseen:
+        logger.info(
+            "render: no installed font draws %s — drew the rest of the name. "
+            "Add the family covering it to the deploy image.",
+            unseen,
+        )
+    else:
+        logger.info(
+            "render: no single font draws this whole name — drew the longest run "
+            "it could; %s will show as boxes. Every font it needs is installed.",
+            boxes,
+        )
 
 
 def _try_font(size: int, bold: bool = False):
@@ -1672,9 +1708,12 @@ def _attempt_flow_at(
                     # multi-col promoted-long rows are bounded by
                     # the slot width.
                     wrap_budget = pill_content_width_px if cols == 1 else wrap_max_px
+                    # Wrap in the font that will DRAW the name, not in
+                    # Inter. A Cyrillic name measured in a face that has
+                    # no Cyrillic is measured against its .notdef box.
                     pieces = _wrap_name_to_lines(
                         name,
-                        font_regular,
+                        _font_for_text(name, font_regular.size),
                         wrap_budget,
                     )
                 else:
@@ -1689,7 +1728,13 @@ def _attempt_flow_at(
                             )
                         )
                         continue
-                    lines.append({"type": "long", "name": piece})
+                    # `whole` is the unwrapped name, carried so the
+                    # font is picked from it rather than from the
+                    # fragment. "Alexey-Волмирев" hyphen-breaks into
+                    # "Alexey-" and "Волмирев", and picking per
+                    # fragment would set two adjacent lines of one name
+                    # in two different typefaces.
+                    lines.append({"type": "long", "name": piece, "whole": name})
                     content_rows += 1
             else:
                 current_row.append(name)
@@ -1797,7 +1842,10 @@ def _row_height_for_line(line: dict, font_regular, font_bold) -> int:
             max_h = max(max_h, _font_row_height(f))
         return max_h
     if line["type"] == "long":
-        name = line.get("name", "")
+        # `whole` when present: a hyphen-wrapped fragment is a piece of
+        # one name and must be measured in that name's font, or the two
+        # halves get different row heights.
+        name = line.get("whole") or line.get("name", "")
         f = _font_for_text(name, font_regular.size)
         return max(_font_row_height(font_regular), _font_row_height(f))
     # empty
@@ -1878,7 +1926,9 @@ def _draw_flow_lines(
                 name_font = _font_for_text(name, font_regular.size)
                 draw.text((x, cy), name, fill=_TEXT_MUTED, font=name_font)
         elif line["type"] == "long":
-            name_font = _font_for_text(line["name"], font_regular.size)
+            # From `whole` rather than the fragment: see the note where
+            # the line is built.
+            name_font = _font_for_text(line.get("whole") or line["name"], font_regular.size)
             draw.text((x0 + pad_x + indent, cy), line["name"], fill=_TEXT_MUTED, font=name_font)
         elif line["type"] == "empty":
             draw.text((x0 + pad_x + indent, cy), "(empty)", fill=_TEXT_MUTED, font=font_regular)

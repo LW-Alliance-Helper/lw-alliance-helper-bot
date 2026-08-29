@@ -33,9 +33,11 @@ when content overflows the box.
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import os
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -96,23 +98,136 @@ class RosterData:
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_INTER_REGULAR = os.path.join(_HERE, "assets", "fonts", "Inter-Regular.ttf")
-_INTER_BOLD = os.path.join(_HERE, "assets", "fonts", "Inter-Bold.ttf")
-# Fallback fonts for non-Latin scripts (#236). Inter covers Latin +
-# Cyrillic + Greek; these handle CJK and Arabic player names that
-# would otherwise render as `.notdef` tofu boxes.
-_NOTO_CJK_REGULAR = os.path.join(
-    _HERE,
-    "assets",
-    "fonts",
-    "NotoSansCJKsc-Regular.otf",
+_BUNDLED_FONT_DIR = os.path.join(_HERE, "assets", "fonts")
+_INTER_REGULAR = os.path.join(_BUNDLED_FONT_DIR, "Inter-Regular.ttf")
+_INTER_BOLD = os.path.join(_BUNDLED_FONT_DIR, "Inter-Bold.ttf")
+_NOTO_CJK_REGULAR = os.path.join(_BUNDLED_FONT_DIR, "NotoSansCJKsc-Regular.otf")
+_NOTO_ARABIC_REGULAR = os.path.join(_BUNDLED_FONT_DIR, "NotoSansArabic-Regular.ttf")
+
+# Where an *installed* family lands. `fonts-noto-core` unpacks into the
+# first entry (see `nixpacks.toml` / `railpack.json`); DejaVu is what the
+# base image already carries and is what `_try_font` has always fallen
+# back to. Deliberately Linux-only: a developer's Windows font folder
+# would make a local render disagree with the container's.
+_SYSTEM_FONT_DIRS = (
+    "/usr/share/fonts/truetype/noto",
+    "/usr/share/fonts/opentype/noto",
+    "/usr/share/fonts/truetype/dejavu",
 )
-_NOTO_ARABIC_REGULAR = os.path.join(
-    _HERE,
-    "assets",
-    "fonts",
-    "NotoSansArabic-Regular.ttf",
+
+
+@dataclass(frozen=True)
+class _FontFamily:
+    """One entry in `_FONT_STACK`.
+
+    `regular` / `bold` are file *names*, resolved against the bundled
+    asset folder first and the container's font directories second, so
+    a bundled file always wins over an installed one of the same name.
+    An empty `bold` means the family ships Regular only and a bold
+    request gets the Regular weight.
+    """
+
+    key: str
+    regular: tuple[str, ...]
+    bold: tuple[str, ...]
+    bundled: bool  # committed to this repo, so absence is a broken deploy
+    covers: str  # what it is here for, printed by `log_font_coverage`
+
+
+# The fallback order, and the order is the load-bearing part.
+#
+# 1. Inter first: it is the project face and the only one with a Bold
+#    weight bundled, so every name it CAN draw looks like the rest of
+#    the card.
+# 2. Noto Sans second, ahead of every script-specific face. It is what
+#    closes the largest gap by a distance — Latin Extended-A (Turkish
+#    `ı ğ ş`, Polish `ł ą`, Czech `č`, Romanian `ă`, ~45,000 players),
+#    Ukrainian `і`, Macedonian `Ѕ`, Greek, and the small-caps /
+#    phonetic / modifier letters players style their names with — which
+#    between them accounted for nearly all of the 232 names in the
+#    roster measurement that no bundled font could draw (115 Latin
+#    extended and decorative, 85 Phonetic Extensions, 37 modifier
+#    letters, categories that overlap). Not exotic alphabets.
+#    Put it below the CJK or Arabic faces and a Turkish name renders
+#    correctly in a completely different typeface from the name beside
+#    it.
+# 3. Then the scripts, heaviest player population first, so the common
+#    case touches the fewest files.
+# 4. DejaVu last: broad, already present, and the least like Inter.
+_FONT_STACK: tuple[_FontFamily, ...] = (
+    _FontFamily("inter", ("Inter-Regular.ttf",), ("Inter-Bold.ttf",), True, "Latin"),
+    _FontFamily(
+        "noto",
+        ("NotoSans-Regular.ttf",),
+        ("NotoSans-Bold.ttf",),
+        False,
+        "Latin Extended, Cyrillic, Greek, Vietnamese, phonetic + modifier letters",
+    ),
+    _FontFamily(
+        "cjk",
+        ("NotoSansCJKsc-Regular.otf",),
+        (),
+        True,
+        "Japanese, Korean, Han, Vietnamese",
+    ),
+    _FontFamily(
+        "arabic",
+        ("NotoSansArabic-Regular.ttf",),
+        ("NotoSansArabic-Bold.ttf",),
+        True,
+        "Arabic",
+    ),
+    _FontFamily("thai", ("NotoSansThai-Regular.ttf",), ("NotoSansThai-Bold.ttf",), False, "Thai"),
+    _FontFamily(
+        "devanagari",
+        ("NotoSansDevanagari-Regular.ttf",),
+        ("NotoSansDevanagari-Bold.ttf",),
+        False,
+        "Devanagari (Hindi, Nepali, Marathi)",
+    ),
+    _FontFamily(
+        "tamil", ("NotoSansTamil-Regular.ttf",), ("NotoSansTamil-Bold.ttf",), False, "Tamil"
+    ),
+    _FontFamily(
+        "hebrew", ("NotoSansHebrew-Regular.ttf",), ("NotoSansHebrew-Bold.ttf",), False, "Hebrew"
+    ),
+    _FontFamily(
+        "georgian",
+        ("NotoSansGeorgian-Regular.ttf",),
+        ("NotoSansGeorgian-Bold.ttf",),
+        False,
+        "Georgian",
+    ),
+    _FontFamily(
+        "bengali", ("NotoSansBengali-Regular.ttf",), ("NotoSansBengali-Bold.ttf",), False, "Bengali"
+    ),
+    _FontFamily(
+        "khmer", ("NotoSansKhmer-Regular.ttf",), ("NotoSansKhmer-Bold.ttf",), False, "Khmer"
+    ),
+    _FontFamily(
+        "myanmar", ("NotoSansMyanmar-Regular.ttf",), ("NotoSansMyanmar-Bold.ttf",), False, "Myanmar"
+    ),
+    _FontFamily("lao", ("NotoSansLao-Regular.ttf",), ("NotoSansLao-Bold.ttf",), False, "Lao"),
+    _FontFamily(
+        "armenian",
+        ("NotoSansArmenian-Regular.ttf",),
+        ("NotoSansArmenian-Bold.ttf",),
+        False,
+        "Armenian",
+    ),
+    _FontFamily(
+        "sinhala", ("NotoSansSinhala-Regular.ttf",), ("NotoSansSinhala-Bold.ttf",), False, "Sinhala"
+    ),
+    _FontFamily(
+        "dejavu",
+        ("DejaVuSans.ttf",),
+        ("DejaVuSans-Bold.ttf",),
+        False,
+        "broad last resort",
+    ),
 )
+
+
 _ICONS_DS_DIR = os.path.join(_HERE, "assets", "storm_icons", "ds")
 _ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
 
@@ -713,81 +828,271 @@ def _s_box(b: Box) -> tuple[int, int, int, int]:
     return _s(b.x), _s(b.y), _s(b.x + b.w), _s(b.y + b.h)
 
 
-def _try_font(size: int, bold: bool = False):
-    """Inter is the project font (bundled at `assets/fonts/`). Falls
-    back to DejaVu / Arial if the bundled files aren't present —
-    keeps `render()` non-fatal in environments where assets weren't
-    copied (e.g. partial deployments)."""
+# ── Fonts ────────────────────────────────────────────────────────────
+#
+# One name, one font. `_font_for_text` returns the first family in
+# `_FONT_STACK` that can draw the WHOLE string, so everything that
+# measures a name — shrink-to-fit, wrap, ellipsis, the shared row
+# height — keeps working against a single face.
+#
+# Coverage is asked of the font FILE rather than inferred from the
+# codepoint. Guessing by script range is what shipped Cyrillic to a
+# Latin-subset Inter: the ranges only listed the scripts somebody had
+# already been bitten by, so every script nobody had hit yet silently
+# claimed to be covered.
+#
+# The question "can this file draw this character" is answered the only
+# way it can be: rasterise the character, rasterise a private-use
+# codepoint no font assigns, and compare. Identical bitmaps mean the
+# font drew its .notdef box — the tofu the reader would have seen.
+
+
+# Coverage is a property of the file, not of the size, so probe at one
+# small size and reuse the answer for every size the card asks for.
+_FONT_PROBE_PX = 16
+
+# Plane-15 private use. Nothing assigns it, so whatever a font draws
+# for it IS that font's .notdef glyph.
+_NOTDEF_SENTINEL = "\U000f0000"
+
+
+@functools.lru_cache(maxsize=64)
+def _font_file(name: str) -> Optional[str]:
+    """Absolute path to `name`, bundled copy first, or `None`.
+
+    Cached: the answer is a property of the container, and a font that
+    was not in the image at boot will not appear in it later.
+    """
+    for directory in (_BUNDLED_FONT_DIR, *_SYSTEM_FONT_DIRS):
+        path = os.path.join(directory, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _open_font(path: str, size: int):
+    """`ImageFont.truetype(path, size)`, or `None` if it will not open."""
     from PIL import ImageFont
 
-    candidates = [_INTER_BOLD if bold else _INTER_REGULAR]
-    candidates.extend(
-        [
-            "arialbd.ttf" if bold else "arial.ttf",
-            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            if bold
-            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ]
-    )
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except (OSError, IOError):
+    try:
+        return ImageFont.truetype(path, size)
+    except (OSError, IOError):
+        return None
+
+
+@functools.lru_cache(maxsize=32)
+def _probe_font(path: str):
+    """The one instance of `path` coverage is measured with.
+
+    Held for the life of the process, deliberately: it is asked about
+    every name the bot draws, there is one per family, and at 16 px the
+    whole stack is a few MB.
+    """
+    return _open_font(path, _FONT_PROBE_PX)
+
+
+# Small on purpose, and the number is a memory decision rather than a
+# taste one. A held FreeType face is not free — measured on the bundled
+# files, each additional SIZE of Noto Sans CJK costs about 1.2 MB
+# resident (Inter, 0.12 MB), because the glyph cache is per size. On
+# Railway memory is around 83% of the hosting bill against roughly 1%
+# for CPU, so an unbounded font cache is the version of this that costs
+# money: `champion_duel_image._fit` alone walks 28 sizes looking for one
+# that fits, and would pin every one of them.
+#
+# What actually repeats is one size drawn across many rows of the same
+# card — a roster of forty names at one size, in two or three faces. A
+# cache of eight covers that and bounds the worst case at roughly 10 MB.
+# The shrink-to-fit walk gets no reuse from a larger cache anyway: it
+# steps down through sizes and never revisits one.
+_FONT_CACHE_ENTRIES = 8
+
+
+@functools.lru_cache(maxsize=_FONT_CACHE_ENTRIES)
+def _load_font(path: str, size: int):
+    """`ImageFont.truetype(path, size)`, or `None` if it will not open."""
+    return _open_font(path, size)
+
+
+@functools.lru_cache(maxsize=32)
+def _notdef_bitmap(path: str) -> Optional[bytes]:
+    font = _probe_font(path)
+    if font is None:
+        return None
+    try:
+        return bytes(font.getmask(_NOTDEF_SENTINEL))
+    except Exception:  # noqa: BLE001 - an unprobeable font is just unusable
+        return None
+
+
+@functools.lru_cache(maxsize=8192)
+def _font_covers_char(path: str, ch: str) -> bool:
+    """Whether the file at `path` has a real glyph for `ch`.
+
+    Zero-width formatting characters (ZWJ, variation selectors) are
+    counted as covered: they have no glyph to draw in any font, so
+    holding them against a face would reject every font for a name that
+    merely contains one.
+    """
+    if unicodedata.category(ch) in ("Cf", "Cc"):
+        return True
+    notdef = _notdef_bitmap(path)
+    if notdef is None:
+        return False
+    font = _probe_font(path)
+    try:
+        return bytes(font.getmask(ch)) != notdef
+    except Exception:  # noqa: BLE001 - unrenderable is uncovered
+        return False
+
+
+def _family_font_file(family: _FontFamily, bold: bool) -> Optional[str]:
+    """The file to use for `family`, preferring Bold when asked and the
+    family has one. A family that ships Regular only answers a bold
+    request with its Regular weight rather than nothing — the same
+    trade `_font_for_text` has always made for the bundled Noto files.
+    """
+    names = (*family.bold, *family.regular) if bold else family.regular
+    for name in names:
+        path = _font_file(name)
+        if path is not None:
+            return path
+    return None
+
+
+def _family_for_text(text: str, *, bold: bool = False) -> tuple[Optional[str], Optional[str]]:
+    """`(family key, font path)` for the first family in `_FONT_STACK`
+    that draws every character of `text`.
+
+    When nothing draws all of it, falls back to whichever family draws
+    the MOST of it — the name is on the card beside a caption that
+    carries it exactly, so half a name read in the right typeface beats
+    a full row of boxes. Ties go to the earlier family, which keeps the
+    house face winning wherever it can.
+    """
+    if not text:
+        return None, None
+
+    best_key: Optional[str] = None
+    best_path: Optional[str] = None
+    best_drawn = -1
+    chars = set(text)
+
+    for family in _FONT_STACK:
+        path = _family_font_file(family, bold)
+        if path is None:
             continue
+        missing = {ch for ch in chars if not _font_covers_char(path, ch)}
+        if not missing:
+            return family.key, path
+        # Probe the distinct characters, but score the whole string:
+        # a name that is six Hangul syllables and two Arabic letters
+        # should land on the font that draws the six.
+        drawn = sum(1 for ch in text if ch not in missing)
+        if drawn > best_drawn:
+            best_key, best_path, best_drawn = family.key, path, drawn
+
+    if best_key is not None:
+        _log_undrawable(_undrawable_signature(text, best_path))
+    return best_key, best_path
+
+
+def _undrawable_signature(text: str, path: Optional[str]) -> str:
+    """The codepoints of `text` no font could draw, as `U+0E2A,U+0E21`.
+
+    Codepoints rather than the name itself: this goes to the log, the
+    name belongs to a player, and the codepoint is the part that says
+    which font is missing.
+    """
+    if path is None:
+        return ",".join(sorted({f"U+{ord(ch):04X}" for ch in text}))
+    return ",".join(sorted({f"U+{ord(ch):04X}" for ch in text if not _font_covers_char(path, ch)}))
+
+
+@functools.lru_cache(maxsize=256)
+def _log_undrawable(signature: str) -> None:
+    """Once per distinct set of missing codepoints, not once per render
+    — a roster redrawn on every edit would otherwise log the same gap
+    dozens of times an evening."""
+    logger.info(
+        "render: no installed font draws %s — drawing the rest of the name. "
+        "Add the family that covers it to the deploy image.",
+        signature,
+    )
+
+
+def _try_font(size: int, bold: bool = False):
+    """The project face at `size`. Inter is bundled at
+    `assets/fonts/`; falls back to DejaVu / Arial when the bundled
+    files aren't present, so `render()` stays non-fatal in an
+    environment the assets didn't reach.
+
+    For anything a *player* typed, use `_font_for_text` instead. Inter
+    is a 66 KB Latin subset — it has three characters of Latin
+    Extended-A and no Greek or Cyrillic at all — and this function does
+    not check coverage.
+    """
+    from PIL import ImageFont
+
+    candidates = [
+        _INTER_BOLD if bold else _INTER_REGULAR,
+        "arialbd.ttf" if bold else "arial.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for path in candidates:
+        font = _load_font(path, size)
+        if font is not None:
+            return font
     return ImageFont.load_default()
 
 
-# Unicode ranges that need a fallback font because Inter's coverage is
-# Latin / Cyrillic / Greek only. Order matters when the same string
-# contains multiple scripts — the first matching range wins.
-_FALLBACK_SCRIPT_RANGES = (
-    # Hangul Jamo (Korean component letters)
-    (0x1100, 0x11FF, "cjk"),
-    # Broad CJK band covering: CJK Symbols and Punctuation (3000–303F),
-    # Hiragana (3040–309F), Katakana (30A0–30FF), Bopomofo (3100–312F),
-    # Hangul Compatibility Jamo (3130–318F — caught the tester's
-    # "ㅇ" character render-as-tofu bug 2026-05-23), Kanbun + Bopomofo
-    # Extended (3190–31BF), CJK Strokes (31C0–31EF), Katakana
-    # Phonetic Extensions (31F0–31FF), Enclosed CJK Letters and
-    # Months (3200–32FF), CJK Compatibility (3300–33FF), CJK
-    # Extension A (3400–4DBF), CJK Unified Ideographs (4E00–9FFF).
-    (0x3000, 0x9FFF, "cjk"),
-    # Hangul Syllables (Korean)
-    (0xAC00, 0xD7AF, "cjk"),
-    # Hangul Jamo Extended-B
-    (0xD7B0, 0xD7FF, "cjk"),
-    # CJK Compatibility Ideographs
-    (0xF900, 0xFAFF, "cjk"),
-    # CJK Compatibility Forms + Vertical Forms + Small Form Variants
-    (0xFE10, 0xFE6F, "cjk"),
-    # Halfwidth and Fullwidth Forms (CJK punctuation / fullwidth Latin)
-    (0xFF00, 0xFFEF, "cjk"),
-    # Arabic
-    (0x0600, 0x06FF, "arabic"),
-    # Arabic Supplement
-    (0x0750, 0x077F, "arabic"),
-    # Arabic Presentation Forms-A
-    (0xFB50, 0xFDFF, "arabic"),
-    # Arabic Presentation Forms-B
-    (0xFE70, 0xFEFF, "arabic"),
-)
+def log_font_coverage() -> list[str]:
+    """Print which font families the running container actually has,
+    and return the keys of the ones it does not.
+
+    Called once at boot (`bot.py`'s `on_ready`). The coverage half of
+    this fix is an *installed* package rather than a committed file, and
+    an environment change fails silently: a build that quietly drops
+    `fonts-noto-core` brings the empty boxes straight back with no
+    error anywhere. This is the line that says so, at the moment it
+    becomes true rather than weeks later off a screenshot.
+
+    Resolves paths only — `os.path.exists`, no font loading — so the
+    16 MB CJK file is still not read until a name needs it.
+    """
+    missing: list[str] = []
+    for family in _FONT_STACK:
+        path = _family_font_file(family, bold=False)
+        if path is not None:
+            continue
+        missing.append(family.key)
+        if family.bundled:
+            print(
+                f"[FONTS] MISSING bundled font {family.regular[0]} ({family.covers}) — "
+                "the deploy did not carry assets/fonts/. Names in that script will "
+                "render as empty boxes."
+            )
+    if missing:
+        installed_missing = [k for k in missing if not _family_of(k).bundled]
+        if installed_missing:
+            print(
+                f"[FONTS] {len(installed_missing)} font families not installed: "
+                f"{', '.join(installed_missing)}. Names in those scripts render "
+                "partially. Expected `fonts-noto-core` in the deploy image."
+            )
+    else:
+        print(f"[FONTS] all {len(_FONT_STACK)} font families present.")
+    return missing
 
 
-def _script_family_for_text(text: str) -> str:
-    """Return `"inter"` if Inter can render every character in `text`,
-    or the fallback family name (`"cjk"` / `"arabic"`) for the first
-    out-of-coverage character. Used by `_font_for_text` so a member
-    name in Korean or Chinese picks the Noto fallback while a Latin
-    name stays on Inter."""
-    if not text:
-        return "inter"
-    for ch in text:
-        cp = ord(ch)
-        for lo, hi, family in _FALLBACK_SCRIPT_RANGES:
-            if lo <= cp <= hi:
-                return family
-    return "inter"
+def _family_of(key: str) -> _FontFamily:
+    for family in _FONT_STACK:
+        if family.key == key:
+            return family
+    raise KeyError(key)
 
 
 def _wrap_name_to_lines(
@@ -904,58 +1209,75 @@ def _wrap_name_to_lines(
 
 
 def _font_for_text(text: str, size: int, *, bold: bool = False):
-    """Pick a font capable of rendering `text` (#236). Latin /
-    Cyrillic / Greek stay on Inter (the project font); CJK and Arabic
-    fall back to the bundled Noto fonts.
+    """Pick the one font that can draw `text` (#236).
 
-    Only `bold=True` for Inter is supported today — the bundled Noto
-    fallbacks ship Regular only since CJK/Arabic bold is rare in the
-    bot's render output and the Bold weights would each double the
-    asset size. A `bold=True` request for a non-Latin string returns
-    the Regular weight of the fallback rather than the missing Bold
-    file.
+    Walks `_FONT_STACK` in order and returns the first family whose
+    file covers every character of the string — Inter for a Latin
+    name, Noto Sans for a Turkish or Ukrainian one, the CJK file for
+    Korean, and so on. Coverage is measured against the file, not
+    guessed from the codepoint; see the section header above for why
+    that distinction is the whole bug.
+
+    Returns ONE font, deliberately. Per-character fallback was measured
+    against all 3,689 names in the roster and bought ten more of them
+    than this does, in exchange for changing every place a name is
+    measured. So the contract here is unchanged and no caller needs
+    touching — `champion_duel_image.py` imports this function and
+    should not have to know any of the above.
+
+    Bold is best-effort: a family that ships Regular only (the bundled
+    CJK file) answers `bold=True` with its Regular weight, because
+    CJK/Arabic bold is rare in the bot's output and the Bold weights
+    would each double the asset.
     """
-    from PIL import ImageFont
-
-    family = _script_family_for_text(text)
-    if family == "inter":
+    _key, path = _family_for_text(text, bold=bold)
+    if path is None:
         return _try_font(size, bold=bold)
-    if family == "cjk":
-        fallback_path = _NOTO_CJK_REGULAR
-    else:  # arabic
-        fallback_path = _NOTO_ARABIC_REGULAR
-    try:
-        return ImageFont.truetype(fallback_path, size)
-    except (OSError, IOError):
-        # Fallback file missing (e.g. partial deployment) — render
-        # with Inter; the characters that need the fallback will show
-        # as .notdef boxes but the rest of the post still goes through.
+    font = _load_font(path, size)
+    if font is None:
+        # Resolved a moment ago and will not open now — a truncated
+        # copy, or a file pulled out from under a running container.
         return _try_font(size, bold=bold)
+    return font
 
 
 def _draw_header(draw, layout: EventLayout, roster: RosterData) -> None:
     """Header strip: charcoal bar with left / center / right text.
     Left text combines the event name with the preset name when
     present so the rendered image is self-identifying when alliances
-    save them for records."""
+    save them for records.
+
+    Every string here is routed through `_font_for_text` rather than
+    `_try_font`: the preset name and the team label are typed by an
+    officer, so they are player text and can be in any script. Each is
+    measured with the same font it is drawn with, so picking per
+    string is safe.
+    """
     canvas_w = int(round(layout.svg_w * SCALE))
     draw.rectangle((0, 0, canvas_w, _s(layout.header.h)), fill=_HEADER_FILL)
-    font = _try_font(_pt_to_px(_HEADER_PT), bold=True)
+    size = _pt_to_px(_HEADER_PT)
     pad_x = _s(15)
-    text_y = _s(layout.header.h / 2) - int(font.size * 0.55)
+    text_y = _s(layout.header.h / 2) - int(size * 0.55)
 
     event_full = "Desert Storm" if roster.event_type.upper() == "DS" else "Canyon Storm"
     if roster.preset_name:
         left_text = f"{event_full} — {roster.preset_name}"
     else:
         left_text = event_full
-    draw.text((pad_x, text_y), left_text, fill=_HEADER_TEXT, font=font)
+    draw.text(
+        (pad_x, text_y),
+        left_text,
+        fill=_HEADER_TEXT,
+        font=_font_for_text(left_text, size, bold=True),
+    )
 
     if roster.team_label:
+        font = _font_for_text(roster.team_label, size, bold=True)
         tw = draw.textlength(roster.team_label, font=font)
         draw.text(((canvas_w - tw) / 2, text_y), roster.team_label, fill=_HEADER_TEXT, font=font)
 
     if roster.event_date_label:
+        font = _font_for_text(roster.event_date_label, size, bold=True)
         tw = draw.textlength(roster.event_date_label, font=font)
         draw.text(
             (canvas_w - pad_x - tw, text_y), roster.event_date_label, fill=_HEADER_TEXT, font=font

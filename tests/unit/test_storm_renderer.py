@@ -521,62 +521,84 @@ class TestMapBasedRender:
 
 
 class TestFontFallbackForNonLatinNames:
-    """#236: Inter covers Latin / Cyrillic / Greek; CJK + Arabic
-    player names need bundled Noto fallback fonts. The script-detection
-    helper picks the right family per string."""
+    """#236, re-cut 2026-08-29 when the routing was measured.
+
+    The old version of this class asserted a Russian name "keeps
+    Inter", which is exactly the bug: the bundled Inter is a 66 KB
+    Latin subset with no Cyrillic at all, so those names rendered as
+    empty boxes for a year with every test green. The router now asks
+    the font file whether it can draw the string instead of guessing
+    from the codepoint, so these assert on the family it lands on.
+
+    Pinned to the bundled fonts. A CI runner with `fonts-noto-core`
+    installed routes Cyrillic to Noto Sans and this file would
+    otherwise say different things in different places; the full
+    installed-stack corpus lives in `test_font_coverage.py`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _bundled_only(self, monkeypatch):
+        monkeypatch.setattr(sr, "_SYSTEM_FONT_DIRS", ())
+        sr._font_file.cache_clear()
+        yield
+        sr._font_file.cache_clear()
 
     def test_latin_name_keeps_inter(self):
-        assert sr._script_family_for_text("Alice") == "inter"
-        assert sr._script_family_for_text("Member 5") == "inter"
-        assert sr._script_family_for_text("José") == "inter"  # Spanish
-        assert sr._script_family_for_text("João") == "inter"  # Portuguese
-        assert sr._script_family_for_text("Müller") == "inter"  # German
-        assert sr._script_family_for_text("") == "inter"  # empty edge
+        assert sr._family_for_text("Alice")[0] == "inter"
+        assert sr._family_for_text("Member 5")[0] == "inter"
+        assert sr._family_for_text("José")[0] == "inter"  # Spanish
+        assert sr._family_for_text("João")[0] == "inter"  # Portuguese
+        assert sr._family_for_text("Müller")[0] == "inter"  # German
 
-    def test_cyrillic_name_keeps_inter(self):
-        # Inter covers Cyrillic — Russian player names render on Inter
-        # directly, no fallback needed.
-        assert sr._script_family_for_text("Алексей") == "inter"
+    def test_empty_name_asks_for_no_font(self):
+        assert sr._family_for_text("") == (None, None)
+
+    def test_cyrillic_name_leaves_inter(self):
+        # Was `test_cyrillic_name_keeps_inter`, asserting the opposite.
+        # Inter has no Cyrillic; with nothing installed the CJK file is
+        # what draws these.
+        assert sr._family_for_text("Алексей")[0] == "cjk"
 
     def test_korean_name_picks_cjk(self):
         # Hangul Syllables block.
-        assert sr._script_family_for_text("김민준") == "cjk"
-        assert sr._script_family_for_text("이서연") == "cjk"
+        assert sr._family_for_text("김민준")[0] == "cjk"
+        assert sr._family_for_text("이서연")[0] == "cjk"
 
     def test_japanese_name_picks_cjk(self):
         # Hiragana + Katakana + Kanji.
-        assert sr._script_family_for_text("たなか") == "cjk"
-        assert sr._script_family_for_text("タナカ") == "cjk"
-        assert sr._script_family_for_text("田中") == "cjk"
+        assert sr._family_for_text("たなか")[0] == "cjk"
+        assert sr._family_for_text("タナカ")[0] == "cjk"
+        assert sr._family_for_text("田中")[0] == "cjk"
 
     def test_chinese_name_picks_cjk(self):
         # CJK Unified Ideographs.
-        assert sr._script_family_for_text("王伟") == "cjk"
-        assert sr._script_family_for_text("张三") == "cjk"
+        assert sr._family_for_text("王伟")[0] == "cjk"
+        assert sr._family_for_text("张三")[0] == "cjk"
 
     def test_arabic_name_picks_arabic(self):
-        assert sr._script_family_for_text("محمد") == "arabic"
-        assert sr._script_family_for_text("علي") == "arabic"
+        assert sr._family_for_text("محمد")[0] == "arabic"
+        assert sr._family_for_text("علي")[0] == "arabic"
+
+    def test_turkish_name_leaves_the_latin_subset(self):
+        # `ı ğ ş` are three of the letters Inter does not have. With
+        # nothing installed the Arabic file is the only bundled one
+        # that draws all of Latin Extended-A — correct, and a different
+        # typeface from the name beside it, which is what installing
+        # Noto Sans fixes.
+        assert sr._family_for_text("Işık")[0] == "arabic"
 
     def test_mixed_latin_and_cjk_picks_cjk(self):
-        # Mixed strings (e.g. "한국 Member" or "Member 김") need the CJK
-        # font for the whole string so the non-Latin characters don't
-        # show as .notdef boxes. CJK fonts also render Latin (just with
-        # a slightly different aesthetic).
-        assert sr._script_family_for_text("한국 Member") == "cjk"
-        assert sr._script_family_for_text("Member 김") == "cjk"
+        # Mixed strings ("한국 Member", "Member 김") need one font that
+        # covers the whole string, or the non-Latin half is boxes. CJK
+        # fonts render Latin too, just with a different aesthetic.
+        assert sr._family_for_text("한국 Member")[0] == "cjk"
+        assert sr._family_for_text("Member 김")[0] == "cjk"
 
     def test_font_loader_returns_a_font(self):
-        # Smoke test the actual loader so a font-file-missing scenario
-        # would surface here rather than crashing render().
-        from PIL.ImageFont import FreeTypeFont
-
+        # Smoke the actual loader so a font-file-missing scenario
+        # surfaces here rather than crashing render().
         f = sr._font_for_text("김민준", 16)
-        # Either the Noto fallback loaded, or it gracefully fell back
-        # to Inter (the catch path inside `_font_for_text`).
         assert f is not None
-        # The Inter latin font also returns; both should be FreeTypeFont
-        # or load_default (PIL's fallback for missing files).
         f2 = sr._font_for_text("Alice", 16)
         assert f2 is not None
 
@@ -775,23 +797,31 @@ class TestPairedSubsNameWrap:
 
 
 class TestHangulCompatibilityJamoCoverage:
-    """Tester report 2026-05-23: a member's name with `ㅇ` (Hangul
+    """Tester report 2026-05-23: a member name with `ㅇ` (Hangul
     Compatibility Jamo, U+3147) rendered as a tofu box because the
-    range wasn't in the script-detection table. Noto Sans CJK SC has
-    the glyph; my range check just didn't route through it."""
+    range wasn't in the script-detection table. There is no table any
+    more — the router asks the file — but the reported names stay here
+    as the regression they were."""
+
+    @pytest.fixture(autouse=True)
+    def _bundled_only(self, monkeypatch):
+        monkeypatch.setattr(sr, "_SYSTEM_FONT_DIRS", ())
+        sr._font_file.cache_clear()
+        yield
+        sr._font_file.cache_clear()
 
     def test_hangul_compatibility_jamo_routes_to_cjk(self):
         # U+3147 — the character the tester hit.
-        assert sr._script_family_for_text("ㅇ") == "cjk"
+        assert sr._family_for_text("ㅇ")[0] == "cjk"
 
     def test_mixed_latin_plus_compatibility_jamo_routes_to_cjk(self):
         # "LANDERSㅇ" — the actual rendering name from the tester
         # screenshot.
-        assert sr._script_family_for_text("LANDERSㅇ") == "cjk"
+        assert sr._family_for_text("LANDERSㅇ")[0] == "cjk"
 
     def test_bopomofo_routes_to_cjk(self):
-        # ㄅ — U+3105, Bopomofo. Falls in the broadened CJK band.
-        assert sr._script_family_for_text("ㄅ") == "cjk"
+        # ㄅ — U+3105, Bopomofo.
+        assert sr._family_for_text("ㄅ")[0] == "cjk"
 
 
 # ── Closed-empty zone rendering ─────────────────────────────────────────────

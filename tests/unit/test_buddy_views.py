@@ -179,8 +179,26 @@ def test_hub_leadership_sees_management_and_premium_buttons():
         "Open setup",
         "Auto-assign",
         "self-service",
+        "Undo last change",
+        "Save as preset",
+        "Load preset",
+        "Delete preset",
     ):
         assert any(needle in l for l in labels), needle
+
+
+def test_hub_buttons_fit_discords_five_per_row_limit():
+    view = _hub(is_leader=True, is_premium=True)
+    per_row = {}
+    for c in view.children:
+        per_row[c.row] = per_row.get(c.row, 0) + 1
+    assert per_row and max(per_row.values()) <= 5, per_row
+
+
+def test_a_member_never_sees_the_preset_or_undo_buttons():
+    labels = [c.label for c in _hub(is_leader=False, is_premium=True).children]
+    assert not any("preset" in l.lower() for l in labels)
+    assert not any("Undo" in l for l in labels)
 
 
 # ── persistent click handler ──────────────────────────────────────────────────

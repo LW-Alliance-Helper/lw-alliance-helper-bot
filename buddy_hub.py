@@ -6,13 +6,20 @@ One command opens a hub that adapts to tier and role:
 - **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
   list · ↩️ Undo last change · ⚙️ Open setup
 - **Premium leadership:** ✨ Auto-assign · ♻️ Re-pair from scratch ·
-  📣 Post self-service buttons
+  📣 Post self-service buttons · 💾 Save as preset · 📂 Load preset ·
+  🗑️ Delete preset
 
 Every action that writes captures the pair list first, so ↩️ Undo can put it
 back. That snapshot lives on the view for the length of the sitting and is
 never stored (#289 F-03). Every action that writes also reports what it
 dropped and why, rather than the fixed "invalid pairs were cleared" line that
 told an alliance nothing (#289 F-06).
+
+Named presets (Stage 3) keep a lineup on the alliance's own sheet rather than
+in our database — `buddy.save_preset` and friends, shaped after
+`storm_strategy`'s zone presets. Loading one goes through the ordinary
+validator, so a preset restores a lineup but can never bring back someone who
+has left or contradict the profession survey.
 
 The member-facing lookup is free and works whether the caller is a War Leader
 or an Engineer. Leadership actions are role-gated; the Premium actions gate via
@@ -98,11 +105,11 @@ def _with_report(text: str, result) -> str:
 
 
 class _ConfirmView(discord.ui.View):
-    def __init__(self, owner_id: int, on_confirm):
+    def __init__(self, owner_id: int, on_confirm, confirm_label: str = "♻️ Yes, rebuild"):
         super().__init__(timeout=60)
         self.owner_id = owner_id
         self._on_confirm = on_confirm
-        yes = discord.ui.Button(label="♻️ Yes, rebuild", style=discord.ButtonStyle.danger)
+        yes = discord.ui.Button(label=confirm_label, style=discord.ButtonStyle.danger)
         no = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         yes.callback = self._yes
         no.callback = self._no
@@ -124,6 +131,27 @@ class _ConfirmView(discord.ui.View):
     async def _no(self, inter: discord.Interaction):
         await inter.response.edit_message(content="Canceled. No pairings changed.", view=None)
         self.stop()
+
+
+class _PresetNameModal(discord.ui.Modal, title="Save this lineup as a preset"):
+    """Names the preset the current pairings get written to.
+
+    An existing name is replaced rather than refused — updating a saved lineup
+    is the common case, and the confirmation says which of the two happened."""
+
+    def __init__(self, hub):
+        super().__init__()
+        self.hub = hub
+        self.preset_name = discord.ui.TextInput(
+            label="Preset name",
+            placeholder="e.g. Season 4 Opener",
+            required=True,
+            max_length=buddy.MAX_PRESET_NAME,
+        )
+        self.add_item(self.preset_name)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.hub._commit_preset(interaction, (self.preset_name.value or "").strip())
 
 
 class _BuddyHubView(discord.ui.View):
@@ -174,6 +202,9 @@ class _BuddyHubView(discord.ui.View):
             self._add(
                 "📣 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
             )
+            self._add("💾 Save as preset", discord.ButtonStyle.secondary, 3, self._save_preset)
+            self._add("📂 Load preset", discord.ButtonStyle.secondary, 3, self._load_preset)
+            self._add("🗑️ Delete preset", discord.ButtonStyle.secondary, 3, self._delete_preset)
 
     # ── everyone ──────────────────────────────────────────────────────────────
 
@@ -422,6 +453,142 @@ class _BuddyHubView(discord.ui.View):
             view=_ConfirmView(inter.user.id, _do),
             ephemeral=True,
         )
+
+    # ── presets (#289 Stage 3) ────────────────────────────────────────────────
+    #
+    # Saved lineups live on the alliance's own sheet, keyed by name, the same
+    # way Storm strategy presets do. Loading one runs it through the ordinary
+    # validator, so a preset can restore a lineup but never resurrect someone
+    # who has left or contradict the profession survey.
+
+    async def _save_preset(self, inter: discord.Interaction):
+        if not await self._premium_guard(inter, "buddy_presets"):
+            return
+        await inter.response.send_modal(_PresetNameModal(self))
+
+    async def _commit_preset(self, inter: discord.Interaction, name: str):
+        """Modal callback: write the current pairings to the preset tab."""
+        import config
+
+        if not name:
+            await inter.response.send_message(
+                "⚠️ Give the preset a name — something like `Season 4 Opener`.", ephemeral=True
+            )
+            return
+        await inter.response.defer(ephemeral=True, thinking=True)
+        cfg = config.get_buddy_config(self.guild_id)
+        tab = cfg.get("preset_tab")
+        existing = await asyncio.to_thread(buddy.list_presets, self.guild_id, tab)
+        replacing = any(n.strip().lower() == name.lower() for n in existing)
+        result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
+        if not result.pairs:
+            await inter.followup.send(
+                "ℹ️ There are no pairings to save yet. Pair some people first, "
+                "then save the lineup as a preset.",
+                ephemeral=True,
+            )
+            return
+        ok = await asyncio.to_thread(buddy.save_preset, self.guild_id, tab, name, result)
+        if not ok:
+            await inter.followup.send(
+                f"⚠️ Couldn't write to the **{tab}** tab. Check the bot still has "
+                "edit access to your sheet.",
+                ephemeral=True,
+            )
+            return
+        count = len(result.pairs)
+        verb = "Updated" if replacing else "Saved"
+        await inter.followup.send(
+            f"💾 {verb} **{name}** — {count} pairing{'s' if count != 1 else ''}.",
+            ephemeral=True,
+        )
+
+    async def _preset_picker(self, inter: discord.Interaction, prompt: str, on_pick):
+        """Shared opener for Load and Delete: list the presets, or say there are
+        none. Returns True when a picker was shown."""
+        import config
+
+        cfg = config.get_buddy_config(self.guild_id)
+        names = await asyncio.to_thread(buddy.list_presets, self.guild_id, cfg.get("preset_tab"))
+        if not names:
+            await inter.followup.send(
+                "ℹ️ No saved presets yet. Use 💾 **Save as preset** to keep the "
+                "lineup you have now.",
+                ephemeral=True,
+            )
+            return False
+        opts = [discord.SelectOption(label=n[:100], value=n[:100]) for n in names]
+        await inter.followup.send(
+            prompt,
+            view=ui.PickerView(opts, inter.user.id, on_pick, placeholder="Pick a preset…"),
+            ephemeral=True,
+        )
+        return True
+
+    async def _load_preset(self, inter: discord.Interaction):
+        if not await self._premium_guard(inter, "buddy_presets"):
+            return
+        import config
+
+        await inter.response.defer(ephemeral=True, thinking=True)
+        cfg = config.get_buddy_config(self.guild_id)
+
+        async def _pick(i: discord.Interaction, name: str):
+            await i.response.defer(ephemeral=True, thinking=True)
+            pairs = await asyncio.to_thread(
+                buddy.load_preset, self.guild_id, cfg.get("preset_tab"), name
+            )
+            if not pairs:
+                await i.followup.send(f"⚠️ **{name}** has no pairings saved in it.", ephemeral=True)
+                return
+            self.session.capture(
+                await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
+                f"loading {name}",
+            )
+            result = await asyncio.to_thread(ui.apply_pairs, self.guild_id, cfg, pairs)
+            await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
+            embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
+            kept = len(result.pairs)
+            await i.followup.send(
+                content=_with_report(
+                    f"📂 Loaded **{name}** — {kept} pairing{'s' if kept != 1 else ''} restored.",
+                    result,
+                ),
+                embed=embed,
+                ephemeral=True,
+            )
+
+        await self._preset_picker(inter, "Pick a preset to load:", _pick)
+
+    async def _delete_preset(self, inter: discord.Interaction):
+        if not await self._premium_guard(inter, "buddy_presets"):
+            return
+        import config
+
+        await inter.response.defer(ephemeral=True, thinking=True)
+        cfg = config.get_buddy_config(self.guild_id)
+
+        async def _pick(i: discord.Interaction, name: str):
+            async def _do(i2: discord.Interaction):
+                await i2.response.defer(ephemeral=True, thinking=True)
+                ok = await asyncio.to_thread(
+                    buddy.delete_preset, self.guild_id, cfg.get("preset_tab"), name
+                )
+                await i2.followup.send(
+                    f"🗑️ Deleted the preset **{name}**."
+                    if ok
+                    else f"⚠️ Couldn't find a preset named **{name}**.",
+                    ephemeral=True,
+                )
+
+            await i.response.send_message(
+                f"Delete the preset **{name}**? Your current buddy list stays exactly "
+                "as it is — this only removes the saved copy.",
+                view=_ConfirmView(self.owner_user_id, _do, confirm_label="🗑️ Yes, delete"),
+                ephemeral=True,
+            )
+
+        await self._preset_picker(inter, "Pick a preset to delete:", _pick)
 
     async def _post_buttons(self, inter: discord.Interaction):
         if not await self._premium_guard(inter, "buddy_self_service"):

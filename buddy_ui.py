@@ -875,6 +875,11 @@ class _PickerView(discord.ui.View):
         self.stop()
 
 
+# Public alias: the hub builds its preset pickers with the same paginated,
+# owner-locked control the editor uses, rather than growing a second one.
+PickerView = _PickerView
+
+
 def _pair_value(p) -> str:
     """Stable token for a pair option: wl_id|eng_id (falls back to names)."""
     return f"{(p.wl_discord_id or p.war_leader)}|{(p.eng_discord_id or p.engineer)}"

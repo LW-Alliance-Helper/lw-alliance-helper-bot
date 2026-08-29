@@ -136,11 +136,14 @@ PREMIUM_FEATURES: set[str] = {
     "multiple_surveys",
     "thread_destinations",
     # Profession Buddy System (#289). Free tier keeps the shared list, the
-    # /buddy lookup, and manual pairing; these four gate the Premium layer.
+    # /buddy lookup, manual pairing, and the single-step undo — that one is
+    # data protection rather than a feature, so it isn't gated. These five
+    # gate the Premium layer.
     "buddy_auto_assign",
     "buddy_self_service",
     "buddy_auto_repair",
     "buddy_dm",
+    "buddy_presets",
     # Transfer Management (#16) — entirely Premium (no free slice).
     "transfers",
     # Map Manager integration (#316). The `/map_manager` hub's Link action

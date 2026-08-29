@@ -735,3 +735,100 @@ def test_an_unscoped_fill_still_pairs_everyone():
 
     assert len(result.pairs) == 2
     assert result.unpaired_wl == []
+
+
+# ── named presets (#289 Stage 3) ──────────────────────────────────────────────
+#
+# Presets live on the alliance's own sheet, keyed by name, the way Storm
+# strategy presets do — so the bot keeps no copy of who is paired with whom.
+
+
+PTAB = "Buddy Presets"
+
+
+def test_a_preset_round_trips_through_the_sheet(sheets):
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    assert buddy.save_preset(GID, PTAB, "Season 4 Opener", result) is True
+
+    assert buddy.list_presets(GID, PTAB) == ["Season 4 Opener"]
+    loaded = buddy.load_preset(GID, PTAB, "Season 4 Opener")
+    assert pair_keys(loaded) == pair_keys(result.pairs)
+
+
+def test_a_preset_stores_names_and_ids_on_the_alliances_own_tab(sheets):
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    buddy.save_preset(GID, PTAB, "Off Week", assign_buddies(members, []))
+
+    header, row = sheets[PTAB].rows[0], sheets[PTAB].rows[1]
+    assert header == buddy.PRESET_HEADER
+    assert row == ["Off Week", "1", "Wanda", "3", "Eve"]
+
+
+def test_saving_over_a_name_replaces_it_and_leaves_the_others_alone(sheets):
+    a = assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    b = assign_buddies([W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", a)
+    buddy.save_preset(GID, PTAB, "Off Week", b)
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", b)  # updated in place
+
+    assert sorted(buddy.list_presets(GID, PTAB)) == ["Off Week", "Season 4 Opener"]
+    assert pair_keys(buddy.load_preset(GID, PTAB, "Season 4 Opener")) == {("2", "4")}
+    assert pair_keys(buddy.load_preset(GID, PTAB, "Off Week")) == {("2", "4")}
+
+
+def test_matching_a_preset_name_ignores_case(sheets):
+    buddy.save_preset(
+        GID, PTAB, "Season 4 Opener", assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    )
+
+    assert pair_keys(buddy.load_preset(GID, PTAB, "SEASON 4 OPENER")) == {("1", "3")}
+
+
+def test_deleting_a_preset_removes_only_that_one(sheets):
+    a = assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    b = assign_buddies([W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", a)
+    buddy.save_preset(GID, PTAB, "Off Week", b)
+
+    assert buddy.delete_preset(GID, PTAB, "Season 4 Opener") is True
+    assert buddy.list_presets(GID, PTAB) == ["Off Week"]
+    assert buddy.delete_preset(GID, PTAB, "Season 4 Opener") is False
+
+
+def test_an_unknown_preset_loads_as_nothing_rather_than_erroring(sheets):
+    buddy.save_preset(GID, PTAB, "Off Week", assign_buddies([W("Wanda", "1"), E("Eve", "3")], []))
+
+    assert buddy.load_preset(GID, PTAB, "Never Saved") == []
+    assert buddy.save_preset(GID, PTAB, "   ", assign_buddies([], [])) is False
+
+
+def test_loading_a_preset_cannot_bring_back_someone_who_left(sheets):
+    import buddy_ui
+
+    # Saved while Ed was here.
+    was = assign_buddies([W("Wanda", "1"), E("Eve", "3"), W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", was)
+
+    # Ed has since left: only three people are on Squad Powers now.
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Username", "Discord ID", "Profession"],
+            ["Wanda", "1", "War Leader"],
+            ["Walt", "2", "War Leader"],
+            ["Eve", "3", "Engineer"],
+        ]
+    )
+    cfg = {
+        "buddy_tab": "Buddies",
+        "profession_tab": "Squad Powers",
+        "profession_col_header": "Profession",
+        "engineer_doubling": 0,
+    }
+    pairs = buddy.load_preset(GID, PTAB, "Season 4 Opener")
+    result = buddy_ui.apply_pairs(GID, cfg, pairs)
+
+    names = {p.engineer for p in result.pairs}
+    assert "Ed" not in names
+    assert buddy.DROP_MISSING_ENG in {d.reason for d in result.dropped}
+    assert "Ed" in buddy_ui.describe_dropped(result)

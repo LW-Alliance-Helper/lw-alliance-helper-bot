@@ -256,7 +256,8 @@ def init_db():
                 reliability_tab           TEXT    DEFAULT '',
                 reliability_column        TEXT    DEFAULT '',
                 include_col_header        TEXT    DEFAULT '',
-                roster_filter_enabled     INTEGER DEFAULT 0
+                roster_filter_enabled     INTEGER DEFAULT 0,
+                preset_tab                TEXT    DEFAULT 'Buddy Presets'
             )
         """)
         conn.commit()
@@ -1417,6 +1418,11 @@ def init_db():
             # is intersected against the alliance roster tab shared with
             # Conductor Rotation, so a departure drops out with no sheet edit.
             ("roster_filter_enabled", "INTEGER DEFAULT 0"),
+            # Named pairing presets (#289 Stage 3). Rows live on the alliance's
+            # own sheet keyed by preset name, the same shape Storm strategies
+            # use -- so a saved lineup is their data on their spreadsheet and
+            # the bot stores no member names or Discord IDs of its own.
+            ("preset_tab", "TEXT    DEFAULT 'Buddy Presets'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_buddy_config ADD COLUMN {col} {definition}")
@@ -4740,6 +4746,7 @@ _TAB_OWNERS = [
     ("guild_configs", "tab_member_default", "tab_member_default", "your default member tab"),
     ("guild_train_config", "tab_name", "train_tab_name", "your train schedule"),
     ("guild_buddy_config", "buddy_tab", "buddy_tab", "your Buddy System list"),
+    ("guild_buddy_config", "preset_tab", "preset_tab", "your saved buddy presets"),
     ("guild_growth_config", "tab_growth", "tab_growth", "your Growth Tracking snapshots"),
     ("guild_growth_config", "tab_breakdown", "tab_breakdown", "your Growth Breakdown"),
     ("guild_growth_config", "tab_source", "tab_source", "your Growth data source"),
@@ -5770,6 +5777,7 @@ _BUDDY_DEFAULTS = {
     "reliability_column": "",
     "include_col_header": "",
     "roster_filter_enabled": 0,
+    "preset_tab": "Buddy Presets",
 }
 
 _BUDDY_FIELDS = set(_BUDDY_DEFAULTS)

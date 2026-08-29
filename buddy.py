@@ -1214,3 +1214,103 @@ def write_profession_cell(
     except Exception as e:
         print(f"[BUDDY] profession row append failed for guild {guild_id}: {e}")
         return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Named presets (#289 Stage 3)
+#
+# A saved lineup lives on the alliance's own sheet, one row per pairing, keyed
+# by preset name — the same shape `storm_strategy` uses for its zone presets.
+# That choice is deliberate and worth keeping: the rows are member names and
+# Discord IDs, and putting them on the spreadsheet the alliance already owns
+# means the bot stores none of it. Save replaces every row carrying that name;
+# delete drops them. Both rewrite the tab, which is right here — a preset tab is
+# small and changes rarely, unlike the buddy list itself.
+# ══════════════════════════════════════════════════════════════════════════════
+
+PRESET_HEADER = [
+    "Preset Name",
+    "War Leader ID",
+    "War Leader",
+    "Engineer ID",
+    "Engineer",
+]
+
+# Long enough for a season or a rotation, short enough to sit in a Discord
+# select option beside the pairing count.
+MAX_PRESET_NAME = 60
+
+
+def _preset_rows(guild_id: int, preset_tab: str):
+    """``(worksheet, body_rows)`` for the preset tab, or ``(None, [])``."""
+    ws = _open_tab(guild_id, preset_tab, PRESET_HEADER)
+    if ws is None:
+        return None, []
+    try:
+        values = ws.get_all_values()
+    except Exception as e:
+        print(f"[BUDDY] preset read failed for guild {guild_id}: {e}")
+        return None, []
+    return ws, [r for r in values[1:] if any((c or "").strip() for c in r)]
+
+
+def list_presets(guild_id: int, preset_tab: str) -> list:
+    """Preset names on the tab, in the order they first appear. [] on failure."""
+    _ws, rows = _preset_rows(guild_id, preset_tab)
+    seen: dict[str, None] = {}
+    for row in rows:
+        name = _cell(row, 0)
+        if name and name not in seen:
+            seen[name] = None
+    return list(seen)
+
+
+def load_preset(guild_id: int, preset_tab: str, name: str) -> list:
+    """The pairs saved under ``name``, or [] when there's no such preset.
+
+    Returned as plain ``Pair``s with no validation — the caller runs them
+    through ``assign_buddies`` like any other pair list, so a preset can never
+    resurrect someone who has left or contradict the profession survey."""
+    _ws, rows = _preset_rows(guild_id, preset_tab)
+    want = (name or "").strip().lower()
+    out: list[Pair] = []
+    for row in rows:
+        if _cell(row, 0).lower() != want:
+            continue
+        wl_id, wl_name = _cell(row, 1), _cell(row, 2)
+        eng_id, eng_name = _cell(row, 3), _cell(row, 4)
+        if not (wl_id or wl_name) or not (eng_id or eng_name):
+            continue
+        out.append(Pair(wl_name, wl_id, eng_name, eng_id, source="preset"))
+    return out
+
+
+def save_preset(guild_id: int, preset_tab: str, name: str, result: PairingResult) -> bool:
+    """Write ``result``'s pairings to the tab under ``name``, replacing any rows
+    already carrying it. Returns False when the tab can't be opened or written.
+
+    Only pairings are stored. Who is unpaired is a fact about the alliance right
+    now, not about the lineup, so it's recomputed when the preset is loaded."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    ws, rows = _preset_rows(guild_id, preset_tab)
+    if ws is None:
+        return False
+    keep = [r for r in rows if _cell(r, 0).lower() != name.lower()]
+    added = [
+        [name, p.wl_discord_id, p.war_leader, p.eng_discord_id, p.engineer] for p in result.pairs
+    ]
+    return _rewrite(ws, PRESET_HEADER, keep + added, guild_id, preset_tab, current_rows=len(rows))
+
+
+def delete_preset(guild_id: int, preset_tab: str, name: str) -> bool:
+    """Remove every row for ``name``. False when there was nothing to remove."""
+    ws, rows = _preset_rows(guild_id, preset_tab)
+    if ws is None:
+        return False
+    want = (name or "").strip().lower()
+    keep = [r for r in rows if _cell(r, 0).lower() != want]
+    if len(keep) == len(rows):
+        return False
+    return _rewrite(ws, PRESET_HEADER, keep, guild_id, preset_tab, current_rows=len(rows))

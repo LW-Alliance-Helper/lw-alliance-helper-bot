@@ -1272,3 +1272,421 @@ def announcement_embed(week: int, intent: str) -> discord.Embed:
         )
     embed.set_footer(text="A call from your leadership.")
     return embed
+
+
+# ── Predictions on the rest of the league (#403) ──────────────────────────────
+
+#: The buttons on the predictions screen, taken from the signed-off mockups.
+VS_BTN_PREDICT_WEEK = "Enter predictions for this week's matches"
+VS_BTN_SAVE_PREDICTIONS = "Save predictions"
+VS_BTN_CANCEL_PREDICTIONS = "Cancel and go back"
+
+#: The select's own prompt. "As many as you like" because the whole point is
+#: clearing several matches in one sitting; one-at-a-time is what the scout
+#: card already does for the single match that is yours.
+VS_PREDICT_PLACEHOLDER = "Who wins? Pick as many as you like."
+
+#: How a match reads in the list, grouped by who decided it. **No heading says
+#: "your alliance"**: a bare group is what a person here entered, which is the
+#: same rule the path labels follow.
+VS_PREDICT_GROUP_HUMAN = "Predicted"
+VS_PREDICT_GROUP_BOT = "Predicted by me"
+VS_PREDICT_GROUP_NONE = "Not predicted"
+
+#: Select option descriptions. Plain text: a description cannot render a
+#: mention, so the person's name is resolved against the guild rather than
+#: written as `<@id>` the way the embed does it.
+VS_PREDICT_OPT_NONE = "No prediction yet"
+VS_PREDICT_OPT_MINE = "Predicted by me"
+VS_PREDICT_OPT_BY = "Predicted by {who}"
+VS_PREDICT_OPT_REPLACES = "Replaces the prediction of {winner}"
+
+#: Stated as an error and nothing more. Both sides of one match is not a
+#: choice we can interpret, so the message names the match and the rule rather
+#: than telling anyone what to tap next.
+PREDICT_CONTRADICTION = (
+    "⚠️ You picked both sides of {a} v {b}. Each pairing can only have one winner."
+)
+#: The confirmation names every call, not just a count. A mis-tap is only
+#: visible if the winner is spelled out, and at sixteen alliances the list is
+#: seven matches at the very most, so it always fits.
+PREDICT_SAVED = "✅ Saved {n} prediction{s}: {matches}"
+PREDICT_SAVED_MATCH = "{winner} over {loser}"
+
+#: Only reachable from a stale screen, so it acknowledges rather than
+#: scolds: nobody who sees it has done anything wrong.
+PREDICT_NOTHING_TO_SAVE = "Nothing to save."
+
+
+def week_matches(state, week: int, *, exclude_own: bool = True) -> list[ad.Match]:
+    """This week's matchups, minus the guild's own.
+
+    Own is excluded because it is not this screen's job: it has a Picked flow
+    on the scout card, where the head-to-head history and the opponent's
+    numbers are already on screen. Asking for it twice would split one answer
+    across two surfaces.
+
+    Takes the whole league, never one week's rows. `compute_week_pairing`
+    weighs every prior result to order the bracket, so handing it a slice
+    silently reproduces week 1's pairing for every later week.
+    """
+    pairing = ad.compute_week_pairing(state.league_rows(), week)
+    if isinstance(pairing, ad.BracketIncomplete):
+        return []
+    return [
+        match for match in pairing.matches if not (exclude_own and state.own in (match.a, match.b))
+    ]
+
+
+def predicted_winner(state, match: ad.Match) -> tuple[ad.AllianceKey | None, str]:
+    """Who is predicted to win `match`, and who said so.
+
+    Returns the winner and the raw `Picked By` cell, which may be a Discord
+    user id, a name somebody typed into the sheet, or empty. Reads either
+    side's row, the same way `_MatchResolver` does: one row carries the call
+    for the whole match, so a save writes one row rather than two.
+    """
+    for side, other in ((match.a, match.b), (match.b, match.a)):
+        row = state.row_for(side, match.week)
+        if row is None or row.picked is None:
+            continue
+        if row.opponent is not None and row.opponent != other:
+            continue
+        return (side if row.picked == "W" else other), row.picked_by
+    return None, ""
+
+
+def credit(picked_by: str, guild) -> str:
+    """Who to credit a prediction to, per Kevin's rule 2026-08-27.
+
+    A numeric id is a call made through Discord and renders as a live mention,
+    which does not ping inside an embed. Anything else was typed into the
+    sheet by hand and is shown as written. An empty cell shows nothing at all
+    rather than an apology: most sheet-typed predictions have one, because
+    `Picked By` is a column most people never fill in.
+    """
+    value = (picked_by or "").strip()
+    if not value:
+        return ""
+    if value.isdigit():
+        return f"<@{value}>"
+    return discord.utils.escape_markdown(value[:64])
+
+
+def _credit_name(picked_by: str, guild) -> str:
+    """The same credit as plain text, for a select option description.
+
+    Descriptions do not render mentions, so an id has to be resolved against
+    the guild. An id we cannot resolve -- someone who left -- falls back to
+    saying a prediction exists without naming a person, which is true and
+    better than printing a raw snowflake.
+    """
+    value = (picked_by or "").strip()
+    if not value:
+        return ""
+    if not value.isdigit():
+        return value[:64]
+    member = guild.get_member(int(value)) if guild else None
+    return member.display_name if member else ""
+
+
+def own_projection(state):
+    """The guild's path, or None when there is not a bracket to walk.
+
+    Hoisted out of the per-match loop deliberately: the walk is not free, and
+    the predictions screen would otherwise run one for every match on it.
+    """
+    if state.own is None:
+        return None
+    projection = ad.project_own_path(
+        state.own,
+        state.league_rows(),
+        estimate=ad.make_estimator(state.profiles),
+    )
+    return None if isinstance(projection, ad.BracketIncomplete) else projection
+
+
+def decides_which_week(projection, match: ad.Match) -> int | None:
+    """The week this match helps decide an opponent for, if any.
+
+    A match matters to the reader exactly when both its sides are still live
+    candidates for one of their own future weeks: whoever wins it carries on
+    towards them. The earliest such week is the one worth naming, because it
+    is the one that arrives first.
+    """
+    if projection is None:
+        return None
+    for step in projection.steps:
+        if step.opponent is None and match.a in step.candidates and match.b in step.candidates:
+            return step.week
+    return None
+
+
+def predictions_embed(state, week: int, staged: dict, guild=None, actor_id=None) -> discord.Embed:
+    """This week's other matches, grouped by who predicted them.
+
+    Staged choices render exactly as saved ones do, so what the screen shows
+    before Save is what the sheet holds after it. Nothing here writes.
+    """
+    embed = discord.Embed(title=f"Week {week} predictions", color=discord.Color.blurple())
+    league = state.league
+    embed.description = (
+        f"**{league.season} · {league.tier} {league.group}**\n"
+        "Any matches you do not predict, I will predict, as long as there is "
+        "enough data to do so."
+    )
+
+    estimate = ad.make_estimator(state.profiles)
+    groups: dict[str, list[str]] = {
+        VS_PREDICT_GROUP_HUMAN: [],
+        VS_PREDICT_GROUP_BOT: [],
+        VS_PREDICT_GROUP_NONE: [],
+    }
+    notes = []
+    projection = own_projection(state)
+    for index, match in enumerate(week_matches(state, week)):
+        pair = f"{state.display_name(match.a)} v {state.display_name(match.b)}"
+        if index in staged:
+            # Staged rows credit whoever is staging them, so the screen before
+            # Save reads exactly as the sheet will after it.
+            groups[VS_PREDICT_GROUP_HUMAN].append(
+                f"{pair} · **{state.display_name(staged[index])}** "
+                f"{credit(str(actor_id or ''), guild)}".rstrip()
+            )
+            continue
+        winner, picked_by = predicted_winner(state, match)
+        if winner is not None:
+            groups[VS_PREDICT_GROUP_HUMAN].append(
+                f"{pair} · **{state.display_name(winner)}** {credit(picked_by, guild)}".rstrip()
+            )
+            continue
+        guess = estimate(match.a, match.b, week)
+        if guess is not None:
+            groups[VS_PREDICT_GROUP_BOT].append(f"{pair} · **{state.display_name(guess)}**")
+        else:
+            groups[VS_PREDICT_GROUP_NONE].append(pair)
+
+        # Only for matches nobody here has decided. A note about one they
+        # already predicted tells them something they acted on; a note about
+        # one the bot guessed is an invitation to overrule it.
+        decides = decides_which_week(projection, match)
+        if decides is not None and len(notes) < 2:
+            notes.append(f"{pair} decides who you meet in week {decides}.")
+
+    for name, lines in groups.items():
+        if lines:
+            embed.add_field(name=name, value="\n".join(lines)[:1024], inline=False)
+    if notes:
+        embed.set_footer(text=" ".join(notes))
+    return embed
+
+
+def prediction_options(state, week: int, staged: dict, guild=None) -> list[discord.SelectOption]:
+    """Two options per match, one per direction, described by where it stands.
+
+    Both directions are offered rather than a winner picker per match because
+    Discord allows five components and a sixteen-alliance league has seven
+    other matches. One select carries all of them.
+    """
+    options = []
+    for index, match in enumerate(week_matches(state, week)):
+        if index in staged:
+            current, who = staged[index], ""
+        else:
+            current, picked_by = predicted_winner(state, match)
+            who = _credit_name(picked_by, guild)
+            if current is None:
+                current = ad.make_estimator(state.profiles)(match.a, match.b, week)
+                who = VS_PREDICT_OPT_MINE if current is not None else ""
+        for side, other in ((match.a, match.b), (match.b, match.a)):
+            if current is None:
+                description = VS_PREDICT_OPT_NONE
+            elif side == current:
+                # No name resolves for a member who has left, and the same
+                # rule applies as to an empty `Picked By`: show nothing rather
+                # than claim there is no prediction, which would be false.
+                description = (
+                    VS_PREDICT_OPT_MINE
+                    if who == VS_PREDICT_OPT_MINE
+                    else (VS_PREDICT_OPT_BY.format(who=who) if who else None)
+                )
+            else:
+                description = VS_PREDICT_OPT_REPLACES.format(winner=state.display_name(current))
+            options.append(
+                discord.SelectOption(
+                    label=f"{state.display_name(side)} beats {state.display_name(other)}"[:100],
+                    value=f"{index}:{'a' if side == match.a else 'b'}",
+                    description=description[:100] if description else None,
+                )
+            )
+    return options
+
+
+class PredictionsView(discord.ui.View):
+    """Screen 2: predict the rest of the league's week, several at a time.
+
+    **Nothing is written until Save.** Choices stage in memory and re-render
+    the embed, so a mis-tap costs a second tap rather than a sheet write and a
+    correction. That is also why Cancel exists as a real control: leaving
+    without saving has to be an offered move, not a thing you do by ignoring
+    the screen.
+    """
+
+    def __init__(self, state, week: int, owner_id: int, guild=None):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.owner_id = owner_id
+        self.guild = guild
+        self.message: discord.Message | None = None
+        #: match index -> the alliance staged to win it.
+        self.staged: dict[int, ad.AllianceKey] = {}
+        self._build()
+
+    def _build(self) -> None:
+        self.clear_items()
+        options = prediction_options(self.state, self.week, self.staged, self.guild)
+        select = discord.ui.Select(
+            placeholder=VS_PREDICT_PLACEHOLDER,
+            options=options[:25],
+            min_values=0,
+            max_values=min(len(options), 25) or 1,
+            disabled=not options,
+            row=0,
+        )
+        select.callback = self._staged
+        self.add_item(select)
+
+        save = discord.ui.Button(
+            label=VS_BTN_SAVE_PREDICTIONS,
+            style=discord.ButtonStyle.primary,
+            disabled=not self.staged,
+            row=1,
+        )
+        save.callback = self._save
+        self.add_item(save)
+
+        cancel = discord.ui.Button(
+            label=VS_BTN_CANCEL_PREDICTIONS, style=discord.ButtonStyle.secondary, row=1
+        )
+        cancel.callback = self._cancel
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint="`/vs`")
+
+    def _apply(self, values: list[str]) -> ad.Match | None:
+        """Stage one round of choices, or name the match that contradicts.
+
+        Both directions of the same match are selectable, so picking both is
+        possible and means nothing. Discord does not report which was tapped
+        last, so guessing would be inventing an answer: the save is refused
+        and the match is named instead.
+        """
+        matches = week_matches(self.state, self.week)
+        chosen: dict[int, set] = {}
+        for raw in values:
+            index, _, side = raw.partition(":")
+            chosen.setdefault(int(index), set()).add(side)
+        for index, sides in chosen.items():
+            if len(sides) > 1:
+                return matches[index]
+        for index, sides in chosen.items():
+            match = matches[index]
+            self.staged[index] = match.a if sides == {"a"} else match.b
+        return None
+
+    async def _staged(self, interaction: discord.Interaction):
+        clash = self._apply(list(interaction.data.get("values") or []))
+        if clash is not None:
+            await interaction.response.send_message(
+                PREDICT_CONTRADICTION.format(
+                    a=self.state.display_name(clash.a), b=self.state.display_name(clash.b)
+                ),
+                ephemeral=True,
+            )
+            return
+        self._build()
+        await interaction.response.edit_message(
+            embed=predictions_embed(
+                self.state, self.week, self.staged, self.guild, interaction.user.id
+            ),
+            view=self,
+        )
+
+    async def _save(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Taken and cleared *before* the write, not after. `save_rows` awaits
+        # on a thread, so a second press landing during that await would read
+        # the same staging and write every row a second time.
+        staged, self.staged = dict(self.staged), {}
+        if not staged:
+            await interaction.followup.send(PREDICT_NOTHING_TO_SAVE, ephemeral=True)
+            return
+
+        matches = week_matches(self.state, self.week)
+        rows = []
+        called = []
+        # Week order, not tap order, so the confirmation reads down the embed
+        # the person is looking at rather than replaying how they got there.
+        for index in sorted(staged):
+            winner = staged[index]
+            match = matches[index]
+            loser = match.other(winner)
+            # One row per match, not two. `_MatchResolver` reads a Picked call
+            # off either side, and writing both would double the sheet traffic
+            # and give rule 7 two cells to disagree about.
+            row = _row_for_write(self.state, winner, self.week)
+            row.picked = "W"
+            row.picked_by = str(interaction.user.id)
+            row.opponent = loser
+            rows.append(row)
+            called.append(
+                PREDICT_SAVED_MATCH.format(
+                    winner=self.state.display_name(winner),
+                    loser=self.state.display_name(loser),
+                )
+            )
+
+        problem = await save_rows(self.state, rows)
+        if problem:
+            # Put the staging back, so a retry costs one tap rather than all
+            # of them. Nothing was written, so the screen is still true.
+            self.staged = staged
+            await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
+            return
+
+        saved = len(rows)
+        self._build()
+        # `defer(thinking=True)` opened a new ephemeral message, so
+        # `edit_original_response` would edit that rather than the screen. The
+        # view's own message is the one that has to change: without this the
+        # rebuild never reaches Discord, Save stays live over an empty staging,
+        # and the calls never appear credited to the person who made them.
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    embed=predictions_embed(
+                        self.state, self.week, self.staged, self.guild, interaction.user.id
+                    ),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+        await interaction.followup.send(
+            PREDICT_SAVED.format(n=saved, s="" if saved == 1 else "s", matches=", ".join(called)),
+            ephemeral=True,
+        )
+
+    async def _cancel(self, interaction: discord.Interaction):
+        self.staged.clear()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()

@@ -10,6 +10,7 @@ is not that gspread was called but that the *rules around* the call hold:
 - the day a score is filed under comes from server time, not guild-local
 """
 
+import asyncio
 import datetime as _dt
 import inspect
 
@@ -779,3 +780,270 @@ def test_a_week_whose_predecessor_is_unrecorded_says_so_rather_than_guessing():
     state = _state(rows)
     text = _text(hub.week_embed(state, 2))
     assert "Week 1's results decide who plays who in week 2" in text
+
+
+# ── Predictions on the rest of the league (#403, screen 2) ────────────────────
+
+
+class _FakeMember:
+    def __init__(self, display_name):
+        self.display_name = display_name
+
+
+class _FakeGuild:
+    def __init__(self, members=None):
+        self._members = members or {}
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+
+class _FakeResponse:
+    def __init__(self):
+        self.edited = None
+        self.sent = None
+
+    async def edit_message(self, **kw):
+        self.edited = kw
+
+    async def send_message(self, content=None, **kw):
+        self.sent = content
+
+    async def defer(self, **kw):
+        pass
+
+
+class _FakeInteraction:
+    def __init__(self, values=None, user_id=99, guild=None):
+        self.data = {"values": values or []}
+        self.user = type("U", (), {"id": user_id})()
+        self.guild = guild
+        self.response = _FakeResponse()
+        self.followed = []
+
+        async def _send(content=None, **kw):
+            self.followed.append(content)
+
+        self.followup = type("F", (), {"send": staticmethod(_send)})()
+
+
+def _picked(rows, tag, winner_tag, opponent_tag, by="", week=1):
+    for row in rows:
+        if row.week == week and row.alliance == _key(tag):
+            row.picked = "W" if tag == winner_tag else "L"
+            row.picked_by = by
+            row.opponent = _key(opponent_tag)
+
+
+def test_your_own_match_is_not_on_the_predictions_screen():
+    """It has a Picked flow on the scout card, where the head-to-head and the
+    opponent's numbers are already on screen. Asking twice splits one answer."""
+    state = _state(_bracket())
+    matches = entry.week_matches(state, 1)
+    assert matches
+    assert all(OWN not in (m.a, m.b) for m in matches)
+
+
+def test_a_discord_prediction_credits_a_live_mention_and_a_sheet_one_its_text():
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="123456789012345678")
+    _picked(rows, "A05", "A05", "A06", by="Sarah")
+    text = _text(entry.predictions_embed(_state(rows), 1, {}))
+
+    assert "<@123456789012345678>" in text
+    assert "Sarah" in text
+
+
+def test_a_prediction_with_nobody_named_shows_nothing_rather_than_an_apology():
+    """Kevin's rule, 2026-08-27. `Picked By` is a column most people never
+    fill in, so this is the common case for anything typed into the sheet."""
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="")
+    text = _text(entry.predictions_embed(_state(rows), 1, {}))
+
+    assert "A03 v A04" in text
+    for apology in ("from the sheet", "unknown", "someone"):
+        assert apology not in text.lower()
+
+
+def test_every_match_offers_both_directions():
+    state = _state(_bracket())
+    options = entry.prediction_options(state, 1, {})
+    assert len(options) == 2 * len(entry.week_matches(state, 1))
+    assert len(options) <= 25
+
+
+def test_the_option_matching_a_prediction_names_who_made_it():
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="42")
+    guild = _FakeGuild({42: _FakeMember("Kevin")})
+    described = {
+        o.label: o.description for o in entry.prediction_options(_state(rows), 1, {}, guild)
+    }
+    assert described["A03 beats A04"] == "Predicted by Kevin"
+    assert described["A04 beats A03"] == "Replaces the prediction of A03"
+
+
+def test_a_predictor_who_has_left_says_nothing_never_no_prediction_yet():
+    """There *is* a prediction; we just cannot name who made it. Saying "no
+    prediction yet" would be flatly false."""
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="42")
+    described = {
+        o.label: o.description for o in entry.prediction_options(_state(rows), 1, {}, _FakeGuild())
+    }
+    assert described["A03 beats A04"] is None
+
+
+@pytest.mark.asyncio
+async def test_staging_writes_nothing_until_save(_captured):
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+
+    assert view.staged
+    assert _captured == []
+
+
+@pytest.mark.asyncio
+async def test_saving_writes_one_row_per_match_not_two(_captured):
+    """`_MatchResolver` reads a Picked call off either side, so a second row
+    would double the sheet traffic and give rule 7 two cells to disagree
+    about."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+    await view._save(_FakeInteraction(user_id=7))
+
+    assert len(_captured) == 2
+    assert all(row.picked == "W" for row in _captured)
+    assert all(row.picked_by == "7" for row in _captured)
+    assert len({row.alliance for row in _captured}) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_confirmation_names_every_call_in_week_order(_captured):
+    """Kevin's call, 2026-08-29. A count alone hides a mis-tap, so each winner
+    is spelled out. Week order, not tap order, so the list reads down the embed
+    the person is looking at rather than replaying how they got there."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    # Staged later-match-first on purpose, so tap order and week order differ.
+    await view._staged(_FakeInteraction(values=["2:a", "0:b"]))
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    matches = entry.week_matches(state, 1)
+    first = f"{state.display_name(matches[0].b)} over {state.display_name(matches[0].a)}"
+    third = f"{state.display_name(matches[2].a)} over {state.display_name(matches[2].b)}"
+    said = interaction.followed[0]
+
+    assert "Saved 2 predictions" in said
+    assert first in said and third in said
+    assert said.index(first) < said.index(third)
+
+
+@pytest.mark.asyncio
+async def test_one_prediction_is_not_pluralised(_captured):
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    match = entry.week_matches(state, 1)[0]
+    assert interaction.followed[0] == (
+        f"✅ Saved 1 prediction: {state.display_name(match.a)} over {state.display_name(match.b)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_second_press_writes_nothing_and_says_so(_captured):
+    """The screen is edited on save, so Save goes dead — but component state
+    can be stale, and a dead-end acknowledgment beats `Saved 0 predictions:`."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    await view._save(_FakeInteraction(user_id=7))
+    written_once = list(_captured)
+
+    second = _FakeInteraction(user_id=7)
+    await view._save(second)
+
+    assert list(_captured) == written_once
+    assert second.followed == [entry.PREDICT_NOTHING_TO_SAVE]
+
+
+@pytest.mark.asyncio
+async def test_two_presses_racing_write_one_set_of_rows(monkeypatch):
+    """`save_rows` awaits on a thread. Staging is taken and cleared before the
+    write precisely so the press that lands during it finds nothing to do."""
+    written = []
+    started = asyncio.Event()
+
+    async def _slow(state, rows):
+        written.extend(rows)
+        started.set()
+        await asyncio.sleep(0.05)
+        return ""
+
+    monkeypatch.setattr(entry, "save_rows", _slow)
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+
+    first = asyncio.create_task(view._save(_FakeInteraction(user_id=7)))
+    await started.wait()
+    second = _FakeInteraction(user_id=7)
+    await view._save(second)
+    await first
+
+    assert len(written) == 2
+    assert second.followed == [entry.PREDICT_NOTHING_TO_SAVE]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_hands_the_staging_back(monkeypatch):
+    """Nothing was written, so the screen is still true. Losing the staging
+    would make the retry cost every tap again."""
+
+    async def _refuse(state, rows):
+        return "I couldn't write to your tab: nope"
+
+    monkeypatch.setattr(entry, "save_rows", _refuse)
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+    before = dict(view.staged)
+
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    assert view.staged == before
+    assert "couldn't write" in (interaction.followed[0] or "")
+
+
+@pytest.mark.asyncio
+async def test_picking_both_directions_is_refused_and_names_the_match(_captured):
+    """Discord does not report which was tapped last, so guessing would be
+    inventing an answer."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    interaction = _FakeInteraction(values=["0:a", "0:b"])
+    await view._staged(interaction)
+
+    assert not view.staged
+    assert _captured == []
+    match = entry.week_matches(state, 1)[0]
+    assert state.display_name(match.a) in (interaction.response.sent or "")
+
+
+@pytest.mark.asyncio
+async def test_save_is_dead_until_something_is_staged(_captured):
+    view = entry.PredictionsView(_state(_bracket()), 1, owner_id=99)
+    saves = [i for i in view.children if getattr(i, "label", "") == entry.VS_BTN_SAVE_PREDICTIONS]
+    assert saves and saves[0].disabled
+
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    saves = [i for i in view.children if getattr(i, "label", "") == entry.VS_BTN_SAVE_PREDICTIONS]
+    assert saves and not saves[0].disabled

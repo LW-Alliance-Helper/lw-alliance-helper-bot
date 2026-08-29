@@ -850,6 +850,17 @@ class VSPathView(discord.ui.View):
         scout.callback = self._scout
         self.add_item(scout)
 
+        # Row 1 is the write row, matching the hub: reads above, writes below,
+        # so a mis-tap on a phone lands on something read-only.
+        predict = discord.ui.Button(
+            label=ad_entry.VS_BTN_PREDICT_WEEK,
+            style=discord.ButtonStyle.secondary,
+            disabled=not ad_entry.week_matches(state, state.week or 1),
+            row=1,
+        )
+        predict.callback = self._predict
+        self.add_item(predict)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
@@ -869,6 +880,20 @@ class VSPathView(discord.ui.View):
 
     async def _scout(self, interaction: discord.Interaction):
         await ad_ui.open_scout_picker(interaction, self.state)
+
+    async def _predict(self, interaction: discord.Interaction):
+        week = self.state.week or 1
+        view = ad_entry.PredictionsView(self.state, week, interaction.user.id, interaction.guild)
+        await interaction.response.send_message(
+            embed=ad_entry.predictions_embed(
+                self.state, week, {}, interaction.guild, interaction.user.id
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        # The view edits this message on save and strips it on timeout, and it
+        # can do neither without the handle. Same pattern as the hub's own.
+        view.message = await interaction.original_response()
 
 
 class VSHubView(discord.ui.View):

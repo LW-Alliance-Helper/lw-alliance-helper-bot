@@ -143,11 +143,13 @@ class _FontFamily:
 #    closes the largest gap by a distance — Latin Extended-A (Turkish
 #    `ı ğ ş`, Polish `ł ą`, Czech `č`, Romanian `ă`, ~45,000 players),
 #    Ukrainian `і`, Macedonian `Ѕ`, Greek, and the small-caps /
-#    phonetic / modifier letters players style their names with — which
-#    between them accounted for nearly all of the 232 names in the
-#    roster measurement that no bundled font could draw (115 Latin
+#    phonetic / modifier letters players decorate their names with —
+#    which between them accounted for nearly all of the 232 names in
+#    the roster measurement that no bundled font could draw (115 Latin
 #    extended and decorative, 85 Phonetic Extensions, 37 modifier
-#    letters, categories that overlap). Not exotic alphabets.
+#    letters, categories that overlap). Not exotic alphabets. The game
+#    blocks emoji in names, so those characters ARE the decoration, and
+#    the slice should be expected to grow.
 #    Put it below the CJK or Arabic faces and a Turkish name renders
 #    correctly in a completely different typeface from the name beside
 #    it.
@@ -881,13 +883,20 @@ def _open_font(path: str, size: int):
 
 
 # Bounded, and small, for the same reason as `_FONT_CACHE_ENTRIES`
-# below. Holding one probe face per family sounds free and is not:
-# a name containing a character NO family draws — an emoji is the
-# everyday case — walks the entire stack looking for the font that
-# draws the most of it, and an unbounded cache would then pin all
-# sixteen faces, the 16 MB CJK file among them, for the life of the
-# process. Measured at about 5 MB, permanently, off one emoji in one
-# player's name.
+# below. Holding one probe face per family sounds free and is not: a
+# string containing a character NO family draws walks the entire stack
+# looking for the font that draws the most of it, and an unbounded
+# cache would then pin all sixteen faces, the 16 MB CJK file among
+# them, for the life of the process. Measured at about 5 MB,
+# permanently, off one such string.
+#
+# What reaches this path is not exotic. The game blocks emoji in player
+# names, so players decorate with small-caps and modifier letters
+# instead — which is why those were the largest slice of the names the
+# roster measurement could not draw, and why Noto Sans sits second in
+# the stack. Emoji itself arrives the other way round: `preset_name`
+# and `team_label` are typed by an officer in Discord, where there is
+# nothing stopping them.
 #
 # Four is enough because the ANSWERS are cached, not just the faces:
 # `_font_covers_char` remembers every (file, character) it has been

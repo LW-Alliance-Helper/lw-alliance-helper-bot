@@ -71,9 +71,13 @@ def _codepoints(chars) -> str:
 # ── The corpus ───────────────────────────────────────────────────────
 
 # One invented name per script, ordered by the player population behind
-# it (LWServers country counts). The three at the bottom are not scripts
-# — they are how players style a plain Latin handle, and they were the
-# single largest slice of the names no bundled font could draw.
+# it (LWServers country counts).
+#
+# The last two rows are not scripts. They are how players decorate a
+# plain Latin handle, and they were the single largest slice of the
+# names no bundled font could draw — which follows, because the game
+# blocks emoji in names and small-caps and modifier letters are what is
+# left to decorate with. Expect that slice to grow, not shrink.
 CORPUS = {
     "Latin": "Ashvale",
     "Latin-1 accents": "Rooijmüller",
@@ -412,13 +416,17 @@ class TestFontResolution:
         assert a is b
         assert a.size == sr._FONT_PROBE_PX
 
-    def test_a_name_nothing_covers_does_not_pin_the_whole_stack(self, bundled_only):
-        """An emoji in a name — the everyday case of a character no
-        family draws — makes the router walk all sixteen families
-        looking for the one that draws the most of it. With an
-        unbounded probe cache that walk would pin every face, the
-        16 MB CJK file included, for the life of the process. Measured
-        at about 5 MB, permanently, off one player's name.
+    def test_a_string_nothing_covers_does_not_pin_the_whole_stack(self, bundled_only):
+        """A character no family draws makes the router walk all
+        sixteen families looking for the one that draws the most of the
+        string. With an unbounded probe cache that walk would pin every
+        face, the 16 MB CJK file included, for the life of the process.
+        Measured at about 5 MB, permanently, off one such string.
+
+        Emoji is the cheapest way to write the test, not the everyday
+        case: the game blocks emoji in player names. It reaches the
+        renderer through `preset_name` and `team_label`, which an
+        officer types in Discord, where nothing blocks it.
         """
         sr._probe_font.cache_clear()
         sr._font_covers_char.cache_clear()

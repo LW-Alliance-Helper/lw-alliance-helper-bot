@@ -415,7 +415,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 # off the Premium gate on 2026-08-17 and nothing has gated it
                 # since.
                 "**Champion Duel hub.**\n"
-                "🏅 Your standing: where you sit in your stage, and how far you get.\n"
+                "🏅 Your standing: where you sit in your stage, and 💎 how far you get.\n"
                 "🎯 Head to head: 💎 how to play one opponent.\n"
                 "🔮 Today's picks: the day's matchups as a card you can post.\n"
                 "🏰 Your alliance: where all of your people are, across every group.",

@@ -962,23 +962,19 @@ def test_the_press_reads_the_store_at_all(group):
 
     assert "_stored_odds" in body, "the odds press stopped reading the store"
     assert "stored=" in body, "the press looked the answer up and then did not pass it on"
-    # Both surfaces go through it rather than growing a second copy.
-    callers = {
-        node.name
+    # EVERY press, not "at least one of them". A set of function names cannot
+    # tell two `_on_odds` apart, so it passed while one of them went its own
+    # way -- which is the exact regression the message below names.
+    presses = [
+        ast.get_source_segment(source, node) or ""
         for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.AsyncFunctionDef)
-        and node.name == "_on_odds"
-        and "send_group_odds" in (ast.get_source_segment(source, node) or "")
-    }
-    assert callers == {"_on_odds"}, "an odds press stopped going through send_group_odds"
-    assert (
-        sum(
-            1
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_odds"
-        )
-        == 2
-    ), "the group listing and the standing are the two presses"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_odds"
+    ]
+
+    assert len(presses) == 2, "the group listing and the standing are the two presses"
+    assert all("send_group_odds" in body for body in presses), (
+        "an odds press stopped going through send_group_odds"
+    )
 
 
 def test_the_sweep_does_not_grow_with_every_tournament_ever_played(cd_db):

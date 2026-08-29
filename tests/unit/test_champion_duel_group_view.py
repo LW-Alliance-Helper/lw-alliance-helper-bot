@@ -1909,7 +1909,12 @@ def test_the_alliance_is_one_of_the_four_entries_and_the_group_is_not(cd_db):
     """
     grouping, _groups, _players = _alliance_world()
     view = hub.ChampionDuelHubView(
-        user_id=1, is_admin=False, can_write=True, engine_ok=True, grouping=grouping
+        user_id=1,
+        is_admin=False,
+        can_write=True,
+        engine_ok=True,
+        grouping=grouping,
+        standing={"state": "held"},
     )
     front = [getattr(i, "label", None) for i in view.children if getattr(i, "row", None) == 0]
 

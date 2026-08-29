@@ -611,11 +611,13 @@ _STANDING_NO_MODEL = (
 #: moves `🔮 Odds of advancing` onto THIS surface. The line would send
 #: the reader where they already are.
 #:
-#: WARNING: it is a dead end until session 6 lands. The reasoning for dropping
-#: it -- the press is on this embed already -- is true of the surface session 6
-#: builds and not of the one shipping here: `_StandingClaimView` carries one
-#: button and it is the claim. Kevin's call, made knowing the redesign; do not
-#: re-add a route to a control that is about to move.
+#: **IT IS NOT A DEAD END ANY MORE**, and it was one for four days. The
+#: reasoning for dropping the navigation -- the press is on this embed already
+#: -- was true of the surface session 6 builds and not of the one that shipped
+#: here, where `_StandingClaimView` carried one button and it was the claim.
+#: Session 6 landed it: `🔮 Odds of advancing` is on this message, and pressing
+#: it computes the projection this sentence says we do not have. Do not re-add
+#: a route in words to a control that is on the same message.
 _STANDING_NOT_WORKED_OUT = "We do not have a projection for your group yet."
 
 #: The first of the two figures `🏅 Your standing` opens on.
@@ -6180,10 +6182,18 @@ class _StandingClaimView(discord.ui.View):
         """
         await inter.response.defer(ephemeral=True, thinking=True)
         row = (self.standing or {}).get("row") or {}
+        grouping = await self._their_grouping()
+        # THE READER'S OWN WARZONE WHERE WE FOLLOWED THEIR CLAIM OUT OF THIS
+        # SERVER'S TOURNAMENT. It is only a parsing prior for the record modal
+        # on that surface -- which number on a pasted line is the warzone -- and
+        # this guild's number is the wrong prior for a paste out of a Champion
+        # Duel this guild is not in.
+        here = bool(self.grouping and grouping and grouping["id"] == self.grouping["id"])
+        warzone = self.warzone if here else ((self.player or {}).get("server") or self.warzone)
         await send_group_view(
             inter,
-            grouping=await self._their_grouping(),
-            warzone=self.warzone,
+            grouping=grouping,
+            warzone=warzone,
             user_id=self.user_id,
             can_write=self.can_write,
             stage=(self.standing or {}).get("stage"),
@@ -9882,13 +9892,19 @@ class ChampionDuelHubView(discord.ui.View):
         # complaint this rethink started from was that the most valuable thing
         # in the feature was the fifth button along.
         #
-        # NOTHING IS DELETED. Every control that came off this row is reachable
-        # from where the person already is: predicting a one-off is on the card
+        # NOTHING IS DELETED, and two controls below are here only because of
+        # that. Every control that came off this row is reachable from where
+        # the person already is: predicting a one-off is on the card
         # `🔮 Today's picks` opens, `➕ Add a player` is at the miss and on the
         # alliance listing that names it, the capture guide is beside the two
         # write controls it explains, and `🏅 Your group` is reached through
         # the reader on `🏅 Your standing` rather than picked out of a list
         # (`PLAN_champion_duel_ia.md`, *nobody goes group-first*).
+        #
+        # **Where a moved control's new home is out of reach, it stays on the
+        # root**, which is the rule row 1 applies twice. Retiring a door is not
+        # the same act as taking a surface away, and this session must not do
+        # the second while doing the first.
         #
         # FIRST, AND FIRST ON PURPOSE. `PROPOSAL_champion_duel_ia.md` principle
         # 1 is identity first: the hub opens on the person, and the control
@@ -9904,8 +9920,9 @@ class ChampionDuelHubView(discord.ui.View):
         # and `Record a group` are: with no Champion Duel resolved there is no
         # round to stand in, and the caller is being asked for their warzone
         # instead.
+        known = (self.standing or {}).get("state") in ("held", "elsewhere")
         if self.grouping:
-            if (self.standing or {}).get("state") in ("held", "elsewhere"):
+            if known:
                 self._add(CD_BTN_STANDING, discord.ButtonStyle.primary, 0, self._on_standing)
             else:
                 self._add(CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, 0, self._on_who_am_i)
@@ -9956,6 +9973,18 @@ class ChampionDuelHubView(discord.ui.View):
             self._on_find,
             disabled=not self.engine_ok,
         )
+        # ONLY WHERE THE READER CANNOT REACH IT THROUGH THEMSELVES. The plan
+        # retires this from the root because you get to your own group by
+        # getting to yourself first, and that is true the moment we know who
+        # somebody is -- `🏅 Your standing` carries it, opened on their own
+        # letter. It is not true before then: an unclaimed reader has no
+        # standing to reach it from, and the group listing is a free read
+        # carrying the round picker, the alliance filter and the door to
+        # recording a round we hold nothing for. Retiring a door must not take
+        # a surface away, so the old one stays exactly as long as it is the
+        # only one.
+        if self.grouping and not known:
+            self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
         # ONLY WHERE `🔮 Today's picks` IS NOT. Predicting one match is
         # absorbed by the day's card and is offered there for a one-off, so on
         # every surface that has the card this would be a second front door to
@@ -9974,7 +10003,7 @@ class ChampionDuelHubView(discord.ui.View):
         # rather than disabled when there is none: on that surface the caller is
         # being asked for their warzone and has nothing to record yet.
         #
-        # STILL OPEN TO EVERYONE. `PROPOSAL_champion_duel_ia.md` principle 4
+        # OPEN TO EVERYONE, STILL. `PROPOSAL_champion_duel_ia.md` principle 4
         # puts batch entry behind a role the alliance configures; that role map
         # does not exist, building one reaches outside this session's files,
         # and gating this today would take recording away from members who have
@@ -10136,6 +10165,24 @@ class ChampionDuelHubView(discord.ui.View):
                 groupings=groupings,
                 warzone=self.warzone,
             )
+        )
+
+    async def _on_group(self, inter: discord.Interaction):
+        """Who is in this Champion Duel, for a reader we cannot place in it.
+
+        No stage and no letter: we do not know which group is theirs, so this
+        opens exactly what the retired root control opened -- the round the
+        guild is playing, with the picker and the alliance filter on it. A
+        reader we do know reaches the same surface from `🏅 Your standing`,
+        where it can be opened on their own group instead.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await send_group_view(
+            inter,
+            grouping=self.grouping,
+            warzone=self.warzone,
+            user_id=self.user_id,
+            can_write=self.can_write,
         )
 
     async def _on_picks(self, inter: discord.Interaction):

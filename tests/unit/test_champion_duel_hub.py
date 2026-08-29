@@ -3195,7 +3195,7 @@ def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
     """Demoted, not deleted. Finding a player is how you reach an opponent and
     is the gap-fill door; recording a group is batch contribution; changing the
     warzone is the settings half of "four entries plus settings"."""
-    view = _root(grouping={"id": 1}, warzone="738")
+    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
 
     assert _row(view, 1) == [
         hub.CD_BTN_FIND,
@@ -3204,10 +3204,51 @@ def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
     ]
 
 
-def test_no_row_is_over_discords_five():
+def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
+    """Retiring a door is not the same act as taking a surface away.
+
+    `\U0001f3c5 Your group` is retired because you get to your own group by getting
+    to yourself first, and that is true the moment we know who somebody is:
+    `\U0001f3c5 Your standing` carries it, opened on their own letter. Before then
+    there is no standing to reach it from, and the group listing is a free read
+    carrying the round picker, the alliance filter and the door to recording a
+    round we hold nothing for. So the old control survives exactly as long as
+    it is the only one.
+    """
+    unknown = _root(grouping={"id": 1}, warzone="738")
+    known = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+
+    assert hub.CD_BTN_GROUP in _row(unknown, 1)
+    assert hub.CD_BTN_GROUP not in _labels(known)
+    # And never a front-row entry either way.
+    assert hub.CD_BTN_GROUP not in _row(unknown, 0)
+
+
+async def test_the_root_group_door_opens_what_it_always_opened(monkeypatch):
+    """No stage and no letter. We cannot place this reader in the event, so it
+    opens the round the guild is playing rather than guessing at a group."""
+    view = _root(grouping={"id": 1}, warzone="738")
+    press = next(b for b in view.children if b.label == hub.CD_BTN_GROUP)
+
+    seen = {}
+
+    async def _fake(interaction, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(hub, "send_group_view", _fake)
+    await press.callback(_interaction())
+
+    assert seen["grouping"] == {"id": 1}
+    assert seen["warzone"] == "738"
+    assert "stage" not in seen and "label" not in seen
+
+
+@pytest.mark.parametrize("standing", [None, {"state": "held"}])
+def test_no_row_is_over_discords_five(standing):
     """Five buttons a row is Discord's cap and the old grid was at it, which is
-    why the picks control shipped alone on a row of its own."""
-    view = _root(grouping={"id": 1}, warzone="738", is_admin=True)
+    why the picks control shipped alone on a row of its own. Both readers,
+    because the unknown one carries an extra control on row 1."""
+    view = _root(grouping={"id": 1}, warzone="738", is_admin=True, standing=standing)
 
     for n in range(5):
         assert len(_row(view, n)) <= 5, f"row {n} is over Discord's five"
@@ -3222,6 +3263,22 @@ def test_the_operator_row_moves_up_with_everything_else():
     assert _row(view, 3) == []
 
 
+@pytest.mark.parametrize("standing", [None, {"state": "held"}])
+def test_no_two_controls_on_the_grid_share_a_glyph(standing):
+    """`notes/DESIGN.md` emoji rule 7: never repeat one glyph across a choice
+    set, because two identical marks side by side give the eye nothing to
+    navigate by.
+
+    This grid has two claims on \U0001f3c5 now, `\U0001f3c5 Your standing` and
+    `\U0001f3c5 Your group`, and they are never drawn together: knowing who the
+    reader is is exactly what swaps one for the other.
+    """
+    view = _root(grouping={"id": 1}, warzone="738", is_admin=True, standing=standing)
+    glyphs = [(b.label or "").replace("\U0001f512 ", "").split(" ", 1)[0] for b in view.children]
+
+    assert len(glyphs) == len(set(glyphs)), glyphs
+
+
 def test_the_identity_pair_still_swaps_on_the_front_row():
     """A button reading "your standing" is a promise to somebody we cannot pick
     out of a hundred rows, so the label follows the claim."""
@@ -3234,7 +3291,11 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     """Nothing is deleted. The plan moves doors, and this walks each one to the
     surface it moved to, because "eight buttons become four" is only true if
     the other four still open something."""
-    view = _root(grouping=standing_db["grouping"], warzone=STANDING_WARZONES[0])
+    view = _root(
+        grouping=standing_db["grouping"],
+        warzone=STANDING_WARZONES[0],
+        standing={"state": "held"},
+    )
     root = _labels(view)
 
     assert hub.CD_BTN_PREDICT not in root
@@ -3414,6 +3475,44 @@ async def test_the_group_press_follows_an_account_in_another_champion_duel(stand
 
     assert standing["state"] == "elsewhere"
     assert (await view._their_grouping())["id"] == other["id"]
+
+
+async def test_the_group_press_takes_the_readers_warzone_out_of_this_server(
+    standing_db, monkeypatch
+):
+    """The parsing prior follows the group, not the guild.
+
+    `warzone` is only what the record modal on that surface uses to decide
+    which number on a pasted line is the warzone. This guild's number is the
+    wrong prior for a paste out of a Champion Duel this guild is not in.
+    """
+    other = db.ensure_grouping([str(3000 + i) for i in range(16)], "2026-08-04")
+    mine = db.upsert_registrant(name="Faraway", server="3000", alliance="ZZQ", thp=1)
+    db.set_stage(mine["id"], "semifinals", grp="D", grouping_id=other["id"])
+    db.claim_registrant(mine["id"], str(OUTSIDER_ID), discord_name="Faraway", guild_id="999")
+    standing = hub.read_standing(
+        OUTSIDER_ID, standing_db["grouping"], warzone=STANDING_WARZONES[0], with_odds=False
+    )
+    view = hub._StandingClaimView(
+        user_id=OUTSIDER_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        warzone=STANDING_WARZONES[0],
+    )
+
+    seen = {}
+
+    async def _fake(interaction, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(hub, "send_group_view", _fake)
+    await view._on_group(_interaction(OUTSIDER_ID))
+
+    assert seen["grouping"]["id"] == other["id"]
+    assert seen["warzone"] == "3000"
+    assert seen["label"] == "D"
 
 
 async def test_the_group_view_opens_on_a_letter_it_is_given(standing_db):

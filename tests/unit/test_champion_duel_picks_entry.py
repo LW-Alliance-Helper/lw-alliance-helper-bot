@@ -529,7 +529,10 @@ async def test_taking_the_last_meeting_off_deletes_the_card(cd_db):
     db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
     view = _view(grouping, play_on=day)
 
-    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_REMOVE), 1)
+    remove = _select_by_placeholder(view, hub._PICKS_PICK_REMOVE)
+    # The option names the two players rather than the row's place on the card.
+    assert remove.options[0].value == f"{_rid('Alfa')}:{_rid('Bravo')}"
+    await _pick(view, remove, remove.options[0].value)
 
     assert db.get_slate(GUILD, day) is None
 
@@ -759,3 +762,144 @@ async def test_a_card_stamped_for_another_round_reads_that_rounds_field(cd_db):
 
     assert view.state["stage"] == "knockouts"
     assert len(view.state["field"]) == 32
+
+
+# ── What `/code-review` found ─────────────────────────────────────────────────
+
+
+async def test_adding_does_not_delete_a_meeting_somebody_else_added(cd_db):
+    """`set_slate` is a full replace, so writing the card back off a snapshot
+    this view read minutes ago deletes everything anybody else added in
+    between, silently and with no error to catch."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
+    view = _view(grouping, play_on=day)
+
+    # A second officer cards a meeting while this view sits on screen.
+    db.set_slate(
+        GUILD,
+        day,
+        [(_rid("Alfa"), _rid("Bravo")), (_rid("Echo"), _rid("Foxtrot"))],
+        actor=ACTOR,
+    )
+
+    await _press(view, hub.CD_BTN_PICKS_ADD)
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_WARZONE), "738")
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P1), _rid("Charlie"))
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P2), _rid("Delta"))
+    await _press(view, hub.CD_BTN_PICKS_SAVE)
+
+    stored = db.get_slate(GUILD, day)["meetings"]
+    assert {frozenset((m["a_id"], m["b_id"])) for m in stored} == {
+        frozenset((_rid("Alfa"), _rid("Bravo"))),
+        frozenset((_rid("Echo"), _rid("Foxtrot"))),
+        frozenset((_rid("Charlie"), _rid("Delta"))),
+    }
+
+
+async def test_removing_one_meeting_takes_off_that_meeting_and_no_other(cd_db):
+    """Positions shift the moment anybody else edits the card, so a removal
+    keyed on one takes off whatever moved into that slot instead."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
+    view = _view(grouping, play_on=day)
+    remove = _select_by_placeholder(view, hub._PICKS_PICK_REMOVE)
+
+    # Somebody else puts a meeting in front of it, so row 1 is now theirs.
+    db.set_slate(
+        GUILD,
+        day,
+        [(_rid("Echo"), _rid("Foxtrot")), (_rid("Alfa"), _rid("Bravo"))],
+        actor=ACTOR,
+    )
+    await _pick(view, remove, remove.options[0].value)
+
+    stored = db.get_slate(GUILD, day)["meetings"]
+    assert [(m["a_id"], m["b_id"]) for m in stored] == [(_rid("Echo"), _rid("Foxtrot"))]
+
+
+async def test_a_round_we_hold_nothing_for_still_offers_the_other_days(cd_db):
+    """A reader can have a card for another day, and the day picker is the only
+    way back to it. Without it, moving onto an unrecorded round strands a live
+    view with no controls at all."""
+    grouping = _grouping("knockouts")
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    tomorrow = (db.server_today() + timedelta(days=1)).isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], stage="semifinals", actor=ACTOR)
+    view = _view(grouping, play_on=day)
+
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_DAY), tomorrow)
+
+    assert view.state["state"] == "no_field"
+    back = _select_by_placeholder(view, hub._PICKS_PICK_DAY)
+    assert day in {o.value for o in back.options}
+    await _pick(view, back, day)
+    assert view.state["state"] == "ready"
+
+
+async def test_a_full_card_rolls_onto_one_with_room_wherever_it_is(cd_db):
+    """ "The card is full" may only ever mean the whole day is. A full last card
+    reporting a full day while card 1 has room after a removal is a refusal
+    that is not true."""
+    grouping = _grouping("knockouts")
+    _knockout_field(grouping)
+    day = db.server_today().isoformat()
+    ids = [_rid(name) for name in NATO]
+    # Cards 2, 3 and 4 filled with sixty distinct meetings. A different step
+    # per card, so no pair repeats and `set_slate` never refuses the fixture.
+    for card, step in zip(range(2, db.MAX_CARDS_PER_DAY + 1), (1, 2, 3)):
+        db.set_slate(
+            GUILD,
+            day,
+            [(ids[i], ids[i + step]) for i in range(db.MAX_PICKS)],
+            card_no=card,
+            actor=ACTOR,
+        )
+    view = _view(grouping, play_on=day, card_no=db.MAX_CARDS_PER_DAY)
+
+    await _press(view, hub.CD_BTN_PICKS_ADD)
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_WARZONE), "738")
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P1), _rid("Alfa"))
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P2), _rid("Foxtrot"))
+    inter = await _press(view, hub.CD_BTN_PICKS_SAVE)
+
+    assert view.state["card_no"] == 1
+    assert [(m["a_id"], m["b_id"]) for m in db.get_slate(GUILD, day)["meetings"]] == [
+        (_rid("Alfa"), _rid("Foxtrot"))
+    ]
+    assert "card 1" in inter.followup.send.call_args.args[0]
+
+
+def test_a_full_card_of_long_names_keeps_every_row(cd_db):
+    """A field value stops at 1,024 characters and a card carries twenty rows of
+    two names. A clamp would drop the tail while the heading went on counting
+    them, which is the silent cut this feature refuses to make anywhere else."""
+    grouping = _grouping("knockouts")
+    long_names = [f"{name} {'x' * 40}" for name in NATO]
+    _place(
+        grouping,
+        "knockouts",
+        None,
+        [(name, "738", i, None) for i, name in enumerate(long_names, start=1)],
+    )
+    day = db.server_today().isoformat()
+    ids = [db.resolve_registrant(name)["id"] for name in long_names]
+    db.set_slate(
+        GUILD,
+        day,
+        [(ids[i], ids[i + 1]) for i in range(db.MAX_PICKS)],
+        actor=ACTOR,
+    )
+
+    embed = hub.build_picks_embed(hub.read_picks(GUILD, grouping, play_on=day))
+
+    rendered = "".join(f.value for f in embed.fields)
+    assert embed.fields[0].name == f"{db.MAX_PICKS} meetings"
+    for name in long_names[: db.MAX_PICKS + 1]:
+        assert name in rendered
+    assert all(len(f.value) <= 1024 for f in embed.fields)

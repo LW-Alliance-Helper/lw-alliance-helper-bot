@@ -999,7 +999,7 @@ _PICKS_DERIVED = (
     "Pick somebody else below if the game says otherwise."
 )
 _PICKS_ADDED = "✅ Added **{a}** against **{b}**."
-_PICKS_ROLLED = "✅ Added **{a}** against **{b}**. That was the 21st, so it opened card {n}."
+_PICKS_ROLLED = "✅ Added **{a}** against **{b}**. Card {full} was full, so it went on card {n}."
 _PICKS_REMOVED = "🗑️ Took **{a}** against **{b}** off the card."
 _PICKS_DELETED = "🗑️ Deleted the card for {day}."
 _PICKS_FULL = (
@@ -8435,6 +8435,67 @@ def read_picks(
     return out
 
 
+def _card_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None) -> int | None:
+    """Put one meeting on a day's cards. The card it landed on, or None if full.
+
+    **Each card is read immediately before it is rewritten, and that is the
+    whole point of this function.** `set_slate` is a full replace, so writing a
+    card back off a snapshot the view read minutes ago deletes every meeting
+    anybody else added in between, silently and with no error to catch. This
+    view lives fifteen minutes and two officers can easily build the same
+    evening's card. Found by `/code-review`.
+
+    **It narrows the window rather than closing it**, and the difference has to
+    be stated. The read and the write are two statements on two connections, so
+    a write landing between them is still lost. Closing it properly means one
+    transaction that appends, which belongs in `champion_duel_db` beside
+    `set_slate` rather than here. What this buys is a window of one function
+    call instead of one view lifetime.
+
+    **Cards are tried from this one upward and then from the start**, so
+    "the card is full" only ever means the whole day is. Overflow opening the
+    next card is the normal case (`db.MAX_PICKS` is legibility, not storage);
+    wrapping is what stops a full card 4 reporting a full day while card 1 has
+    room after a removal.
+    """
+    order = list(range(card_no, db.MAX_CARDS_PER_DAY + 1)) + list(range(1, card_no))
+    for target in order:
+        stored = db.get_slate(guild_id, play_on, card_no=target)
+        pairs = [(m["a_id"], m["b_id"]) for m in (stored or {}).get("meetings") or []]
+        if len(pairs) >= db.MAX_PICKS:
+            continue
+        pairs.append((int(pair[0]), int(pair[1])))
+        db.set_slate(guild_id, play_on, pairs, card_no=target, actor=actor)
+        return target
+    return None
+
+
+def _uncard_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None) -> bool:
+    """Take one meeting off a card. False if it was not on it.
+
+    Re-read before the rewrite for the reason `_card_a_meeting` is, and the pair
+    identifies the row rather than its position: positions shift the moment
+    anybody else edits the card, so a removal keyed on one can take off a
+    meeting nobody asked about.
+
+    **An emptied card is deleted rather than written**, because `set_slate`
+    refuses an empty list by design. "Nobody has built tomorrow's card yet" and
+    "the card is empty" are different things to say to a reader, and only one of
+    them is ever true.
+    """
+    stored = db.get_slate(guild_id, play_on, card_no=card_no)
+    pairs = [(m["a_id"], m["b_id"]) for m in (stored or {}).get("meetings") or []]
+    wanted = frozenset((int(pair[0]), int(pair[1])))
+    kept = [p for p in pairs if frozenset(p) != wanted]
+    if len(kept) == len(pairs):
+        return False
+    if kept:
+        db.set_slate(guild_id, play_on, kept, card_no=card_no, actor=actor)
+    else:
+        db.delete_slate(guild_id, play_on, card_no=card_no)
+    return True
+
+
 def _meeting_line(meeting: dict, names: dict) -> str:
     """One row of the card being built: its place, and the two names.
 
@@ -8511,16 +8572,20 @@ def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -
         lines += ["", notice]
     embed.description = "\n".join(lines)
 
+    # Through `_add_listing` rather than into one field, for the reason its own
+    # docstring gives: a field value stops at 1,024 characters and a card can
+    # carry twenty rows of two names each, so a clamp here would drop the tail
+    # of the card while the heading went on counting them. That is the silent
+    # cut this feature refuses to make anywhere else.
     meetings = (state.get("slate") or {}).get("meetings") or []
-    embed.add_field(
-        name=_plural(len(meetings), "meeting"),
-        value=(
-            "\n".join(_meeting_line(m, state["names"]) for m in meetings)[:1024]
-            if meetings
-            else _PICKS_EMPTY
-        ),
-        inline=False,
-    )
+    if meetings:
+        _add_listing(
+            embed,
+            _plural(len(meetings), "meeting"),
+            [_meeting_line(m, state["names"]) for m in meetings],
+        )
+    else:
+        embed.add_field(name=_plural(0, "meeting"), value=_PICKS_EMPTY, inline=False)
     if len(meetings) >= db.MAX_PICKS:
         embed.set_footer(text=_PICKS_FOOTER_CAP.format(n=db.MAX_PICKS))
     return embed
@@ -8609,8 +8674,18 @@ class _PicksView(discord.ui.View):
 
     def _build(self):
         self.clear_items()
-        if self.state["state"] != "ready":
+        # Nothing to render for a guild in no Champion Duel: there is no day to
+        # pick, no field to pick from, and the embed carries the control that
+        # fixes it.
+        if self.state["state"] == "no_grouping":
             return
+        # A round this card does not cover, and a round we hold no draw for,
+        # both still get the day picker. A reader can have a card for another
+        # day, and this is the only way back to it -- without it, moving the day
+        # onto an unrecorded round strands a live view with no controls at all.
+        # Found by `/code-review`.
+        if self.state["state"] != "ready":
+            self.adding = False
         if self.adding:
             self._build_adding()
         else:
@@ -8620,6 +8695,8 @@ class _PicksView(discord.ui.View):
         row = 0
         self.add_item(self._select(_PICKS_PICK_DAY, self._day_options(), row, self._on_day))
         row += 1
+        if self.state["state"] != "ready":
+            return
         # Only where there is something to choose between. One card is the
         # normal day and a picker over it would be a control whose every option
         # is where the reader already is.
@@ -8838,7 +8915,11 @@ class _PicksView(discord.ui.View):
             options.append(
                 discord.SelectOption(
                     label=_PICKS_MEETING_OPTION.format(i=meeting["position"], a=a, b=b)[:100],
-                    value=str(meeting["position"]),
+                    # The two players rather than the row's place on the card.
+                    # Positions shift the moment anybody else edits it, and a
+                    # removal keyed on one takes off whatever moved into that
+                    # slot instead.
+                    value=f"{meeting['a_id']}:{meeting['b_id']}",
                 )
             )
         return options
@@ -9034,39 +9115,24 @@ class _PicksView(discord.ui.View):
 
     async def _on_remove(self, inter: discord.Interaction):
         await inter.response.defer()
-        position = int(inter.data["values"][0])
-        gone = next((m for m in self.meetings if m["position"] == position), None)
-        if gone is None:
-            await self._reload(inter)
-            return
-        kept = [(m["a_id"], m["b_id"]) for m in self.meetings if m["position"] != position]
-        a = discord.utils.escape_markdown(
-            (self._member(gone["a_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+        pair = tuple(int(x) for x in inter.data["values"][0].split(":"))
+        a, b = (
+            discord.utils.escape_markdown(
+                (self._member(side) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
+            )
+            for side in pair
         )
-        b = discord.utils.escape_markdown(
-            (self._member(gone["b_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
-        )
-        # An empty card is deleted rather than written, because `set_slate`
-        # refuses an empty list by design: "no card for tomorrow yet" and "a
-        # card with nothing on it" are different things to say to a reader and
-        # only one of them is true.
-        if kept:
-            await asyncio.to_thread(
-                db.set_slate,
+        gone = await asyncio.to_thread(
+            functools.partial(
+                _uncard_a_meeting,
                 self.guild_id,
                 self.state["play_on"],
-                kept,
-                card_no=self.state["card_no"],
+                self.state["card_no"],
+                pair,
                 actor=_actor(inter),
             )
-        else:
-            await asyncio.to_thread(
-                db.delete_slate,
-                self.guild_id,
-                self.state["play_on"],
-                card_no=self.state["card_no"],
-            )
-        await self._reload(inter, notice=_PICKS_REMOVED.format(a=a, b=b))
+        )
+        await self._reload(inter, notice=_PICKS_REMOVED.format(a=a, b=b) if gone else None)
 
     async def _on_delete(self, inter: discord.Interaction):
         await inter.response.defer()
@@ -9164,31 +9230,19 @@ class _PicksView(discord.ui.View):
             await self._rerender(inter, notice=_PICKS_SAME_PLAYER)
             return
 
-        target = self.state["card_no"]
-        cards = self.state.get("cards") or {}
-        while target <= db.MAX_CARDS_PER_DAY:
-            if len((cards.get(target) or {}).get("meetings") or []) < db.MAX_PICKS:
-                break
-            target += 1
-        if target > db.MAX_CARDS_PER_DAY:
-            await self._rerender(
-                inter,
-                notice=_PICKS_FULL.format(cards=db.MAX_CARDS_PER_DAY, picks=db.MAX_PICKS),
-            )
-            return
-
-        pairs = [(m["a_id"], m["b_id"]) for m in ((cards.get(target) or {}).get("meetings") or [])]
-        pairs.append((self.p1, self.p2))
         a = discord.utils.escape_markdown(_pick_name(self._member(self.p1) or {}))
         b = discord.utils.escape_markdown(_pick_name(self._member(self.p2) or {}))
+        opened = self.state["card_no"]
         try:
-            await asyncio.to_thread(
-                db.set_slate,
-                self.guild_id,
-                self.state["play_on"],
-                pairs,
-                card_no=target,
-                actor=_actor(inter),
+            target = await asyncio.to_thread(
+                functools.partial(
+                    _card_a_meeting,
+                    self.guild_id,
+                    self.state["play_on"],
+                    opened,
+                    (self.p1, self.p2),
+                    actor=_actor(inter),
+                )
             )
         except ValueError as exc:
             # `set_slate` is the authority on a pair already carded, across
@@ -9197,12 +9251,19 @@ class _PicksView(discord.ui.View):
             # while this view was on screen.
             await self._rerender(inter, notice=f"⚠️ {exc}")
             return
+        if target is None:
+            await self._rerender(
+                inter,
+                notice=_PICKS_FULL.format(cards=db.MAX_CARDS_PER_DAY, picks=db.MAX_PICKS),
+            )
+            return
 
-        rolled = target != self.state["card_no"]
         self.state["card_no"] = target
         self._clear_working()
         notice = (
-            _PICKS_ROLLED.format(a=a, b=b, n=target) if rolled else _PICKS_ADDED.format(a=a, b=b)
+            _PICKS_ADDED.format(a=a, b=b)
+            if target == opened
+            else _PICKS_ROLLED.format(a=a, b=b, full=opened, n=target)
         )
         await self._reload(inter, notice=notice)
 

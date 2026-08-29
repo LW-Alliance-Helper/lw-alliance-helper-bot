@@ -61,7 +61,10 @@ import champion_duel_predict as predict_lib
 
 # ── Copy ──────────────────────────────────────────────────────────────────────
 #
-# ⚠️ AWAITING SIGN-OFF, everything below except `PICKS_TITLE`.
+# ✅ SIGNED OFF by Kevin on 2026-08-29, off the picks sign-off page --
+# <https://claude.ai/code/artifact/6cd70358-2103-4708-83f5-9684ddd4f098> --
+# except `CARD_FOOTER`, `CARD_NUMBER` and `TEXT_ALT`, which are marked where
+# they sit. **The reasoning below is kept and the variants are spent.**
 #
 # **NOTHING HERE IS EXEMPT FROM `notes/UX.md`, and this module used to say it
 # was.** The exemption on record is written as *the card, not the module*, and
@@ -86,6 +89,19 @@ CARD_TITLE = "CHAMPION DUEL"
 #: The whole card's footer. It exists to hold one line between us and the
 #: game's own betting market, which is a different thing sitting on the same
 #: screen: the multipliers there are the game's, these numbers are ours.
+# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
+# than a string, and it is being walked through rather than guessed at.
+#
+# Kevin, 29 Aug: *"I thought I had changed this before. We should say 'This
+# is purely our predictions and do not represent the in-game odds of match
+# outcomes.'"* **Two things to settle before it goes on the card**: the
+# sentence does not agree with itself (*This is ... and do not represent*).
+#
+# **The length is fine and was measured rather than worried about**: at 87
+# characters it fits both templates without ellipsizing, shrinking the footer
+# from 17px to 15px on the single-column card and not at all on the wide one.
+# The grammar-corrected wording is 89 and costs one more pixel. **Held on the
+# wording only.**
 CARD_FOOTER = "Our prediction for each meeting. Not the game's odds."
 
 #: A side with no name at all, which is a meeting naming a registrant that no
@@ -99,6 +115,14 @@ CARD_UNKNOWN = "(unknown)"
 #: Which of the day's cards this is, appended to the subject on card 2 and up.
 #: Never on card 1: a day that did not overflow twenty meetings reads the way
 #: it always did, and only a day that split has anything to disambiguate.
+# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
+# than a string, and it is being walked through rather than guessed at.
+#
+# Kevin, 29 Aug: *"If it has to be 2 cards, we need to tell them each one. So
+# it would be '# of #'. It would only show when cards > 1."* **That is not a
+# wording change**: a slate knows its own number and not how many the day
+# has, and the marker currently appears on card 2 and up rather than on both
+# halves of a split. The total has to be read and carried. **Held.**
 CARD_NUMBER = "Card {n}"
 
 #: The text half's row lines, one per meeting, in the same order the image
@@ -123,9 +147,14 @@ TEXT_ROW_UNPREDICTED = "**{a}** and **{b}**: no squads recorded"
 #: accessibility rule already set: the image carries the pick, the text carries
 #: what the image cannot fit.
 TEXT_COIN_FLIP = (
-    "A row at 50% is a true coin flip. The side named on it is the one the "
-    "tie-break landed on, not a read on who wins."
+    "Where a row says 50%, treat the pick as a coin toss. "
+    "The model has nothing to separate those two."
 )
+#
+# Kevin took the variant that speaks to the reader about what to do rather
+# than to us about what the model did. **It says nothing about a tie-break**,
+# which was deliberate on his part: the reader does not need to know which
+# side `p_a >= p_b` landed on to know not to trust the side named.
 
 #: The image's own description, which Discord caps at 1,024 characters.
 #:
@@ -136,6 +165,16 @@ TEXT_COIN_FLIP = (
 #: are already carried in full by the text beside the image, on the same
 #: message, where a screen reader reaches them without the attachment at all.
 #: A description that is always complete beats one that is usually complete.
+# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
+# than a string, and it is being walked through rather than guessed at.
+#
+# Kevin, 29 Aug: *"Is the entire context of the image in the message with it?
+# If it is, then we should just mark the image as decorative so there is no
+# alt text and a screenreader skips it."* The answer to his question is yes,
+# and it is the guarantee this whole surface is built on. **Held on whether
+# Discord can express `decorative` at all** -- an attachment either carries a
+# description or it does not, and what a client announces without one is not
+# silence.
 TEXT_ALT = (
     "Champion Duel picks for {subject}, drawn as an image. "
     "Every meeting on it is written out in the text beside it."

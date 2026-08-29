@@ -656,6 +656,31 @@ def test_an_unreadable_tab_falls_back_to_a_full_rewrite(sheets):
     assert ws.calls == ["batch_clear", "update"]
 
 
+def test_evaluated_profession_cells_do_not_make_every_row_look_changed(sheets):
+    """The load-bearing half of the diff: Sheets hands back what a formula
+    *evaluated to*, not the formula. Comparing the Profession columns would
+    therefore mark every row changed on every write, quietly restoring the
+    whole-tab rewrite this replaced. FakeWS can't evaluate, so the evaluation
+    is staged here by hand."""
+    sheets["Squad Powers"] = FakeWS([["Username", "Discord ID", "Profession"]])
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+
+    ws = sheets["Buddies"]
+    assert ws.rows[1][2].startswith("="), "precondition: formulas were written"
+    # What the real API would return once Sheets has evaluated them.
+    for row in ws.rows[1:]:
+        for col, value in ((2, buddy.WAR_LEADER), (5, buddy.ENGINEER)):
+            if row[col]:
+                row[col] = value
+    ws.calls.clear()
+
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+
+    assert ws.calls == [], "an unchanged tab was rewritten because of the formulas"
+
+
 # ── what changed (#289 F-05, F-06) ────────────────────────────────────────────
 
 

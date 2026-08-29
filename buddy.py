@@ -714,7 +714,10 @@ def _write_body(
     Falls back to the full rewrite on an unreadable tab, a shape the diff won't
     guess at, or a change big enough that patching costs more calls than
     rewriting. That fallback is the old behaviour, so this is never worse than
-    a rewrite — usually it's a single call, and when nothing moved, none."""
+    a rewrite — usually it's a single call, and when nothing moved, none.
+
+    Buddies-tab only: `_row_key` reads the three-block layout to work out who
+    owns a row. Other tabs (the preset tab) go straight to `_rewrite`."""
     try:
         current = [list(r) for r in ws.get_all_values()[1:]]
     except Exception as e:

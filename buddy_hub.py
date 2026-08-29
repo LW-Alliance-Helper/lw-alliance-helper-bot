@@ -584,7 +584,7 @@ class _BuddyHubView(discord.ui.View):
             await i.response.send_message(
                 f"Delete the preset **{name}**? Your current buddy list stays exactly "
                 "as it is — this only removes the saved copy.",
-                view=_ConfirmView(self.owner_user_id, _do, confirm_label="🗑️ Yes, delete"),
+                view=_ConfirmView(i.user.id, _do, confirm_label="🗑️ Yes, delete"),
                 ephemeral=True,
             )
 

@@ -408,10 +408,16 @@ async def test_three_taps_put_a_meeting_on_the_card(cd_db):
     assert [(m["a_id"], m["b_id"]) for m in stored["meetings"]] == [(_rid("Alfa"), _rid("Charlie"))]
 
 
-async def test_player_one_at_the_round_of_32_preselects_the_bracket_partner(cd_db):
-    """This is the round where an unfiltered Player 2 would have been 31 options
-    against a cap of 25. The tap that chooses Player 1 answers Player 2 too, so
-    the meeting can be added without a third one."""
+async def test_player_one_at_the_round_of_32_offers_the_bracket_partner_first(cd_db):
+    """**Offered, never chosen.** Session C set Player 2 from the fold here, and
+    Kevin took that out on 29 Aug: *"I do not know how this actually works out
+    and would rather let the user choose, especially if we don't know the actual
+    seed ranks it's safer that way."* The rule is measured on one event and
+    `seed_rank` is given rather than derived, so a value nobody picked would
+    have written a match on the strength of both.
+
+    What survives is the ordering, which makes no claim: at a list of 31 the
+    likely opponent is the first option, and choosing them is still one tap."""
     grouping = _grouping("knockouts")
     _knockout_field(grouping)
     view = _view(grouping)
@@ -420,18 +426,20 @@ async def test_player_one_at_the_round_of_32_preselects_the_bracket_partner(cd_d
     await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_WARZONE), "738")
     await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P1), _rid("Alfa"))
 
-    assert view.p2 == _rid("Flint")
+    assert view.p2 is None, "nothing is chosen on the maker's behalf"
+    first = _select_by_placeholder(view, hub._PICKS_PICK_P2).options[0]
+    assert first.value == str(_rid("Flint")), "the fold still puts them at the top"
     save = next(
         item
         for item in view.children
         if isinstance(item, discord.ui.Button) and item.label == hub.CD_BTN_PICKS_SAVE
     )
-    assert not save.disabled
+    assert save.disabled, "a match cannot be added until somebody picks an opponent"
 
 
-async def test_the_preselected_partner_can_be_overridden(cd_db):
-    """One event, 16 of 16. A hard validation would block legitimate entry the
-    day the game changes the rule."""
+async def test_the_bracket_partner_is_only_ever_a_suggestion(cd_db):
+    """One event, 16 of 16. Anybody else in the round can be chosen instead, and
+    nothing about the fold gets in the way."""
     grouping = _grouping("knockouts")
     _knockout_field(grouping)
     view = _view(grouping)

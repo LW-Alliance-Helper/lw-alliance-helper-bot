@@ -443,14 +443,51 @@ def test_a_player_on_two_rows_is_built_once(cd_db):
     assert slate.picks[0].prediction.a is slate.picks[1].prediction.a
 
 
-def test_positions_are_the_order_they_were_picked_in(cd_db):
-    _field()
+def test_a_slate_comes_back_in_the_cards_order_not_the_makers(cd_db):
+    """The defect this pairing closes. `render_slate` draws strongest pick
+    first, so a text half that walked the entry order described a card whose
+    rows were somewhere else -- and session A took the numerals off the image,
+    so there was nothing on it to disagree with.
+
+    The lopsided meeting is entered second on purpose: with the two orders
+    identical this would pass without the sort existing."""
+    _field(("Ravenshade", "NightOwl", "Goliath", "Pebble"))
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Goliath", "Pebble")
+    with db._get_conn() as conn:
+        conn.execute("UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (d,))
+    db.set_slate(GUILD, DAY, [(a, b), (c, d)], actor=ACTOR)
+    slate = picks.build(GUILD, DAY)
+
+    assert [p.a_name for p in slate.picks] == ["Goliath", "Ravenshade"]
+    strongest = [max(p.p_a, p.p_b) for p in slate.picks]
+    assert strongest == sorted(strongest, reverse=True)
+    # The entry order is still on the row, and is still the truth about where
+    # the meeting sits in storage. It is simply not what anything renders.
+    assert [p.entry_position for p in slate.picks] == [2, 1]
+
+
+def test_a_row_nobody_can_predict_sorts_to_the_end(cd_db):
+    """It stays on the card -- it names two players nobody has scouted, to the
+    alliance about to read it -- but it cannot be ranked among rows that carry
+    a number, and the useful end of a card is the top."""
+    _field(scouted=2)
     a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
     db.set_slate(GUILD, DAY, [(c, d), (a, b)], actor=ACTOR)
     slate = picks.build(GUILD, DAY)
 
-    assert [p.position for p in slate.picks] == [1, 2]
-    assert [p.a_name for p in slate.picks] == ["Ironclad", "Ravenshade"]
+    assert [p.predicted for p in slate.picks] == [True, False]
+
+
+def test_the_card_and_the_text_beside_it_are_one_order(cd_db):
+    """`render_slate` sorts by the same key, and `sorted` is stable, so
+    re-sorting a slate that already carries this order changes nothing. That
+    is what makes row three here row three on the image."""
+    _field(scouted=4)
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    db.set_slate(GUILD, DAY, [(c, d), (a, b)], actor=ACTOR)
+    slate = picks.build(GUILD, DAY)
+
+    assert picks.card_order(slate.picks) == slate.picks
 
 
 def test_a_slate_can_be_scored_before_it_is_saved(cd_db):
@@ -511,11 +548,15 @@ def test_two_players_sharing_a_name_are_told_apart_by_server(cd_db):
     db.set_slate(GUILD, DAY, [(a, b), (twin, c)], actor=ACTOR)
     slate = picks.build(GUILD, DAY)
 
-    assert slate.picks[0].a_label == "Ravenshade #738"
-    assert slate.picks[1].a_label == "Ravenshade #912"
+    # Order-independent: the slate comes back in the card's order rather than
+    # the order the meetings were entered in, so the twins are looked up by
+    # who they are beside rather than by where they landed.
+    labels = {pick.b_label: pick.a_label for pick in slate.picks}
+    assert labels["NightOwl"] == "Ravenshade #738"
+    assert labels["Ironclad"] == "Ravenshade #912"
     # And nobody else pays for it: the suffix costs a third of the width a name
     # has to fit into.
-    assert slate.picks[0].b_label == "NightOwl"
+    assert set(labels) == {"NightOwl", "Ironclad"}
 
 
 def test_the_same_player_on_two_rows_gains_no_suffix(cd_db):
@@ -537,7 +578,7 @@ def test_a_name_with_markdown_in_it_reads_the_same_in_both_places(cd_db):
     slate = picks.build(GUILD, DAY)
 
     assert slate.picks[0].a_label == "Rav**en", "the label itself is what the card draws"
-    assert "**Rav\\*\\*en**" in picks.caption(slate)
+    assert "**Rav\\*\\*en**" in "\n".join(picks.text_rows(slate))
 
 
 def test_a_side_with_no_name_says_so_the_same_way_on_both_surfaces(cd_db):
@@ -550,7 +591,7 @@ def test_a_side_with_no_name_says_so_the_same_way_on_both_surfaces(cd_db):
     slate = picks.assemble(GUILD, DAY, [(a, 9999)])
 
     assert slate.picks[0].b_label == picks.CARD_UNKNOWN
-    assert picks.CARD_UNKNOWN in picks.caption(slate)
+    assert picks.CARD_UNKNOWN in "\n".join(picks.text_rows(slate))
 
 
 # ── What the card is of ───────────────────────────────────────────────────────
@@ -666,27 +707,59 @@ def test_todays_card_reads_the_games_clock(cd_db, monkeypatch):
     assert len(picks.todays(GUILD).picks) == 1
 
 
-# ── The caption ───────────────────────────────────────────────────────────────
+# ── The text half ─────────────────────────────────────────────────────────────
 
 
-def test_the_caption_carries_every_row(cd_db):
+def test_the_text_half_carries_every_row(cd_db):
     """It is what survives a screen reader, a failed image load and Discord's
     own search, and on a slate that matters more than on one prediction:
     there are up to twenty numbers in the picture."""
     _field(scouted=4)
     a, b, c, d = _ids("Ravenshade", "NightOwl", "Kestrel", "Basalt")
     db.set_slate(GUILD, DAY, [(a, b), (c, d)], stage="semifinals", actor=ACTOR)
-    text = picks.caption(picks.build(GUILD, DAY))
+    rows = picks.text_rows(picks.build(GUILD, DAY))
 
-    assert text.startswith(picks.PICKS_TITLE)
-    assert "Semi-finals · Aug 25" in text
+    assert len(rows) == 2
+    text = "\n".join(rows)
     assert "**Ravenshade**" in text and "**NightOwl**" in text
     assert "no squads recorded" in text
-    assert len(text.splitlines()) == 3
 
 
-def test_the_caption_never_rounds_a_certainty_into_existence(cd_db):
-    """The one claim the card exists to refuse. The caption used to format its
+def test_the_text_half_carries_no_row_numbers(cd_db):
+    """The defect this session closes. The rows used to open `1.`, `2.` off the
+    entry order while the card drew them strongest first, and session A had
+    already taken the numerals off the image -- so the number named a row that
+    was nowhere. Both halves follow the card's order now, and neither counts."""
+    _field(scouted=6)
+    ids = _ids(*NAMES)
+    db.set_slate(GUILD, DAY, [(ids[0], ids[1]), (ids[2], ids[3])], actor=ACTOR)
+    rows = picks.text_rows(picks.build(GUILD, DAY))
+
+    assert not any(row.startswith(("1.", "2.")) for row in rows)
+    for template in (picks.TEXT_ROW, picks.TEXT_ROW_UNPREDICTED):
+        assert "{i}" not in template
+
+
+def test_the_text_half_is_in_the_same_order_as_the_card(cd_db):
+    """One order, arrived at once. The image re-sorts by the same key, which is
+    a no-op on a list that already carries it, so row three here is row three
+    on the picture."""
+    _field(scouted=6)
+    ids = _ids(*NAMES)
+    db.set_slate(GUILD, DAY, [(ids[4], ids[5]), (ids[0], ids[1])], actor=ACTOR)
+    slate = picks.build(GUILD, DAY)
+
+    assert picks.card_order(slate.picks) == slate.picks
+    # The rows come out in that order, strongest pick at the top.
+    strongest = [max(p.p_a, p.p_b) for p in slate.picks]
+    assert strongest == sorted(strongest, reverse=True)
+    assert picks.text_rows(slate) == picks.text_rows(
+        picks.Slate(guild_id=GUILD, play_on=DAY, picks=picks.card_order(slate.picks))
+    )
+
+
+def test_the_text_half_never_rounds_a_certainty_into_existence(cd_db):
+    """The one claim the card exists to refuse. The text used to format its
     own percentage and said 100% above a card that said >99%."""
     _field(("Goliath", "Pebble"))
     a, b = _ids("Goliath", "Pebble")
@@ -694,32 +767,116 @@ def test_the_caption_never_rounds_a_certainty_into_existence(cd_db):
         conn.execute("UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (b,))
     db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
 
-    text = picks.caption(picks.build(GUILD, DAY))
+    text = "\n".join(picks.text_rows(picks.build(GUILD, DAY)))
     assert ">99%" in text
     assert "100%" not in text
 
 
-def test_a_caption_too_long_for_discord_drops_whole_rows_and_says_so(cd_db):
-    """Clamped by dropping rows off the end rather than by cutting mid-line: a
-    caption that stopped mid-row would read as a card with fewer meetings on it
-    than it has."""
+def test_a_full_card_of_long_names_still_carries_every_row(cd_db):
+    """**Nothing is dropped, and nothing can be.** The clamp this replaces
+    dropped whole rows off the end and said so, which put a meeting on the
+    image that was not in the text. Twenty rows is the hard cap and an embed
+    description holds 4,096 characters, so the worst case is under half of it
+    and there is nothing left for a truncation rule to do.
+
+    These names are 67 characters, more than three times the game's own
+    20-character limit, so the measurement below is well past the worst a real
+    card can carry."""
     long_names = tuple("Player" + "o" * 60 + str(i) for i in range(7))
     _field(long_names)
     ids = _ids(*long_names)
     pairs = list(itertools.combinations(ids, 2))[: db.MAX_PICKS]
     db.set_slate(GUILD, DAY, pairs, actor=ACTOR)
-    text = picks.caption(picks.build(GUILD, DAY))
+    rows = picks.text_rows(picks.build(GUILD, DAY))
 
-    assert len(text) <= picks.CAPTION_LIMIT
-    assert text.endswith(picks.CAPTION_TRUNCATED)
-    # Whole lines, so the last row shown is a complete one.
-    assert not text.splitlines()[-2].endswith("**")
+    assert len(rows) == db.MAX_PICKS
+    assert len("\n".join(rows)) < 4096
+    assert not hasattr(picks, "CAPTION_TRUNCATED")
+    assert not hasattr(picks, "CAPTION_LIMIT")
 
 
-def test_the_caption_is_free_of_em_dashes(cd_db):
-    """It is a Discord message, so `notes/UX.md` reaches it. Copy rendered into
-    the card image is workshopped and exempt; this is not."""
-    for template in (picks.CAPTION_ROW, picks.CAPTION_ROW_UNPREDICTED, picks.CAPTION_TRUNCATED):
+def test_the_coin_flip_line_is_said_only_on_a_card_that_has_one(cd_db):
+    """Kevin, 2026-08-28: *"we can do a cap but should likely add a line of
+    text in the embed itself that those are truly a coin flip."* The image
+    still prints `PICK 50%`, because `p_a >= p_b` names a side and suppressing
+    the cap would drop the pick from the one row where naming a side is the
+    whole task. The honesty lives in the text beside it."""
+    _field(("Mirror", "Image"))
+    a, b = _ids("Mirror", "Image")
+    with db._get_conn() as conn:
+        for slot, power in enumerate((30_000_000, 28_000_000, 25_000_000), start=1):
+            conn.execute(
+                "UPDATE squads SET power = ? WHERE registrant_id IN (?, ?) AND slot = ?",
+                (power, a, b, slot),
+            )
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+    slate = picks.build(GUILD, DAY)
+
+    assert picks.is_coin_flip(slate.picks[0]), "two identical line-ups are a tie-break"
+    assert picks.has_coin_flip(slate)
+
+
+def test_a_card_with_no_tie_break_on_it_says_nothing_about_coin_flips(cd_db):
+    """A caveat on a card the reader can see has no 50% row would be explaining
+    something that is not there."""
+    _field(("Goliath", "Pebble"))
+    a, b = _ids("Goliath", "Pebble")
+    with db._get_conn() as conn:
+        conn.execute("UPDATE squads SET power = power / 4 WHERE registrant_id = ?", (b,))
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+
+    assert not picks.has_coin_flip(picks.build(GUILD, DAY))
+
+
+def test_a_row_with_no_prediction_is_not_a_coin_flip(cd_db):
+    """It is a row we have nothing to say about, not a row we say 50% about."""
+    _field(scouted=0)
+    a, b = _ids("Ravenshade", "NightOwl")
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+    slate = picks.build(GUILD, DAY)
+
+    assert not slate.picks[0].predicted
+    assert not picks.is_coin_flip(slate.picks[0])
+    assert not picks.has_coin_flip(slate)
+
+
+def test_the_alt_text_points_at_the_rows_and_fits_discords_cap(cd_db):
+    """Discord caps an attachment description at 1,024, and twenty decorated
+    names run past that. The rows are in the text on the same message either
+    way, so the description names the card and points at them."""
+    long_names = tuple("Player" + "o" * 60 + str(i) for i in range(7))
+    _field(long_names)
+    ids = _ids(*long_names)
+    db.set_slate(
+        GUILD,
+        DAY,
+        list(itertools.combinations(ids, 2))[: db.MAX_PICKS],
+        stage="semifinals",
+        actor=ACTOR,
+    )
+    slate = picks.build(GUILD, DAY)
+    alt = picks.alt_text(slate)
+
+    assert len(alt) <= picks.ALT_LIMIT
+    assert slate.subject() in alt
+    assert long_names[0] not in alt
+
+
+def test_every_string_this_module_renders_is_free_of_em_dashes(cd_db):
+    """`notes/UX.md` reaches all of them. **The card strings are not exempt**:
+    the exemption on record is written as *the card, not the module*, and the
+    card it covers is the VS card, whose copy Kevin actually workshopped."""
+    for template in (
+        picks.TEXT_ROW,
+        picks.TEXT_ROW_UNPREDICTED,
+        picks.TEXT_COIN_FLIP,
+        picks.TEXT_ALT,
+        picks.CARD_TITLE,
+        picks.CARD_FOOTER,
+        picks.CARD_UNKNOWN,
+        picks.CARD_NUMBER,
+        picks.PICKS_TITLE,
+    ):
         assert "—" not in template
 
 

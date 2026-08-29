@@ -99,6 +99,15 @@ CD_BTN_REVERT = "⏪ Revert an edit"
 CD_BTN_EXPORT = "📤 Export edits"
 CD_BTN_FILTER = "🔍 Filter these"
 CD_BTN_SHARE = "📤 Share this prediction to current channel"
+
+#: What a share button says when the bot cannot post in this channel. One
+#: string rather than one per share button: it is the same refusal about the
+#: same two permissions, and the picks card copied it word for word before this
+#: was hoisted, which is how two wordings of one sentence start.
+_SHARE_DENIED = (
+    "⚠️ I can't post in this channel. I need **Send Messages** and "
+    "**Attach Files** here. You can still save the image and post it yourself."
+)
 CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
@@ -955,21 +964,33 @@ _PICK_STEPS = ("warzone", "player", "opponent")
 #: one tap away, and the day after covers somebody working a night early.
 _PICK_DAYS_AHEAD = 2
 
-# ⚠️ EVERY STRING FROM HERE TO `CD_BTN_PICKS_BACK` IS A PLACEHOLDER awaiting
-# session E, with one exception marked where it sits: `CD_BTN_PICKS` is settled.
+# ✅ SIGNED OFF by Kevin on 2026-08-29, off the picks sign-off page --
+# <https://claude.ai/code/artifact/6cd70358-2103-4708-83f5-9684ddd4f098>.
+# `_PICKS_NO_STAGE` and `_PICKS_TODAY` are the two he did not close, and both
+# say so where they sit.
 #
-# Session E is a sign-off rather than a build: one published page, one block per
-# string, each rendered on the Discord surface it appears on. They already
-# follow the rules a sweep would apply -- US English, no em dashes, "I" acts and
-# "we" holds, and `stage` rather than `round` anywhere a member reads it
-# (#545) -- so what is open is the wording, not the shape.
+# **THE GAME'S WORD IS `match`, AND IT IS NOW OURS.** Kevin, 29 Aug: *"Note
+# that the game uses Matches to describe these"* and *"meeting = match"*. The
+# schema still says `pick_meetings` and this module still has `_meeting_line`,
+# because renaming a table is not a copy change -- but **nothing a member reads
+# says "meeting" any more.**
 _PICKS_INTRO = (
-    "Tap a warzone, then the two players, and the meeting goes on the card. Nothing to type."
+    "To add matches to your picks, select a warzone and then the two players.\n\n"
+    "Note that the game uses Matches to describe these."
 )
-_PICKS_EMPTY = "Nothing on this card yet."
+_PICKS_EMPTY = "No matches added yet"
 _PICKS_NO_GROUPING = (
     "We do not know which Champion Duel your alliance is in yet. Set it with **{button}**."
 )
+# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
+# than a string, and it is being walked through rather than guessed at.
+#
+# Kevin, 29 Aug, having read `_PICKS_NO_FIELD` right after it: *"I think we
+# could just have that as the default nothing here because maybe someone got
+# a date wrong and then we're gating on that when we shouldn't."* That is a
+# question about the `no_stage` STATE, not about this sentence -- the stage
+# is derived from the grouping's calendar, so a mistyped start date can shut
+# the flow with a message about the qualifiers. **Held until it is settled.**
 _PICKS_NO_STAGE = (
     "A picks card covers the semi-finals and the knockouts. The game runs no "
     "prediction market on the qualifiers, so there is nothing to card yet."
@@ -980,13 +1001,21 @@ _PICKS_NO_FIELD = (
 )
 _PICKS_PICK_DAY = "Which day?"
 _PICKS_PICK_CARD = "Which card?"
-_PICKS_PICK_REMOVE = "Take a meeting off"
+_PICKS_PICK_REMOVE = "Remove a match"
 _PICKS_PICK_WARZONE = "Which warzone?"
 _PICKS_PICK_P1 = "Player 1"
 _PICKS_PICK_P2 = "Player 2"
 _PICKS_PAGED = "{what}, page {page} of {pages}"
-_PICKS_MEETING = "`{i}` **{a}** vs **{b}**"
-_PICKS_MEETING_OPTION = "{i}. {a} vs {b}"
+#: **No numeral, on either of them.** The card has carried none since session
+#: A took them off (Kevin, 2026-08-27: *"get rid of the row #. Irrelevant"*),
+#: and the text beside it dropped its own in session D -- so a number here
+#: would be the last surface in this feature counting rows, and it would count
+#: them in a third order: the bench lists meetings as they were entered, and
+#: the card draws them strongest pick first. **A meeting is identified by its
+#: place in the list, and the listing and the select below it are rendered from
+#: the same list in the same order.** Found by `/code-review`.
+_PICKS_MEETING = "**{a}** vs **{b}**"
+_PICKS_MEETING_OPTION = "{a} vs {b}"
 _PICKS_NOBODY_LEFT = (
     "Nobody is left in the {stage} to pick from. Everybody we hold has been knocked out."
 )
@@ -994,26 +1023,50 @@ _PICKS_NO_OPPONENTS = (
     "We hold nobody **{name}** can meet. Record the rest of their group with "
     "**{button}** and they show up here."
 )
-_PICKS_WORKING = "Building: **{a}** against **{b}**"
-_PICKS_WORKING_HALF = "Building: **{a}**, opponent still to pick"
-_PICKS_DERIVED = (
-    "The bracket puts **{name}** against them in the round of 32. "
-    "Pick somebody else below if the game says otherwise."
-)
-_PICKS_ADDED = "✅ Added **{a}** against **{b}**."
-_PICKS_ROLLED = "✅ Added **{a}** against **{b}**. Card {full} was full, so it went on card {n}."
-_PICKS_REMOVED = "🗑️ Took **{a}** against **{b}** off the card."
+#: The half-made match, and the blank is doing the work the second select
+#: cannot: it says an opponent is still owed rather than leaving the line
+#: looking finished (Kevin, 29 Aug).
+_PICKS_WORKING = "Entering match details: {a} vs {b}"
+_PICKS_WORKING_HALF = "Entering match details: {a} vs _____"
+#
+# `_PICKS_DERIVED` was here and is gone with the behaviour it described.
+# **Kevin took the preselect out on 29 Aug**: *"I do not know how this
+# actually works out and would rather let the user choose, especially if we
+# don't know the actual seed ranks it's safer that way."* Session C had the
+# fold filling Player 2 in at the round of 32 -- seed i against seed 33 - i,
+# measured 16 of 16 on one event -- and one event is not a rule.
+#
+# **The derivation still orders the list**, in `_opponents`: the partner is
+# offered first out of 31 rather than chosen. That is what letting the maker
+# choose looks like while still putting the likely answer where they will see
+# it, and it makes no claim the surface has to stand behind.
+_PICKS_ADDED = "✅ Added **{a}** vs **{b}**."
+_PICKS_ROLLED = "✅ Added **{a}** vs **{b}**. Card {full} was full, so it went on card {n}."
+_PICKS_REMOVED = "🗑️ Took **{a}** vs **{b}** off the card."
 _PICKS_DELETED = "🗑️ Deleted the card for {day}."
+# ⚠️ Kevin marked this UNCHANGED on 29 Aug, and it still says *meetings* --
+# the one member-facing string that does, now that `match` is the word.
+# **Not swept on his behalf**: he approved the sentence he was shown.
 _PICKS_FULL = (
     "⚠️ All {cards} of this day's cards are full, at {picks} meetings each. "
     "Take one off before adding another."
 )
-_PICKS_SAME_PLAYER = "⚠️ A meeting needs two different players."
+_PICKS_SAME_PLAYER = "⚠️ A match needs two different players."
 _PICKS_TAKEN = "Already on card {n}"
 _PICKS_CARD_EMPTY = "Nothing yet"
 _PICKS_CARD_COUNT = "{n} on this day"
+# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
+# than a string, and it is being walked through rather than guessed at.
+#
+# Kevin, 29 Aug: *"We should add the day of the week here and we probably
+# need to specify somewhere that this goes from the game's server time."*
+# The weekday is a change to `Slate.date_label`, which the CARD's subject
+# line also uses, and *"somewhere"* is not yet a place. **Held.**
 _PICKS_TODAY = "{day} (today)"
-_PICKS_FOOTER_CAP = "A card carries {n} meetings. The next one opens a second card."
+_PICKS_FOOTER_CAP = (
+    "We can only add {n} matches per card. Adding more than {n} will generate another card."
+)
+_PICKS_NO_CARD = "There is nothing on this card yet, so there is nothing to draw."
 
 # ✅ APPROVED, and it is the one label here that is not open. Kevin settled it
 # 2026-08-24 as one of the four IA names (`PLAN_champion_duel_ia.md`, *Settled
@@ -1028,13 +1081,23 @@ _PICKS_FOOTER_CAP = "A card carries {n} meetings. The next one opens a second ca
 CD_BTN_PICKS = "🔮 Today's picks"
 
 # ⚠️ PLACEHOLDER LABELS from here, session E.
-CD_BTN_PICKS_ADD = "➕ Add a meeting"
-CD_BTN_PICKS_SAVE = "➕ Add this meeting"
-CD_BTN_PICKS_DELETE = "🗑️ Delete this card"
+CD_BTN_PICKS_ADD = "Add a match"
+CD_BTN_PICKS_SAVE = "Add match to card"
+#: **Danger, and Kevin asked for it by name**: *"make this a Danger button
+#: because it is a destructive action."* It clears the whole card, not one
+#: match, and it is the only control in this flow that cannot be undone.
+CD_BTN_PICKS_DELETE = "Remove all matches"
+#: 🖼️ is the catalog's *image version of something that also has a
+#: text form* (`notes/DESIGN.md`), which is this message exactly: the card is
+#: drawn and every row of it is written out beside the drawing.
+CD_BTN_PICKS_SHOW = "Create the card"
+#: Follows `CD_BTN_SHARE` to the word, because it is the same act on a
+#: different thing -- the same rule `CD_BTN_SHARE_READS` follows.
+CD_BTN_PICKS_SHARE = "📤 Post this card to current channel"
 # Bare, both of them: they are flow exits, which `notes/DESIGN.md` rule 7 names
 # as established bare treatment.
-CD_BTN_PICKS_RESTART = "Start again"
-CD_BTN_PICKS_BACK = "Back"
+CD_BTN_PICKS_RESTART = "Start over"
+CD_BTN_PICKS_BACK = "Cancel and go back"
 
 
 def _is_admin(user_id: int) -> bool:
@@ -1344,11 +1407,7 @@ class SharePredictionView(discord.ui.View):
                 file=discord.File(io.BytesIO(self.png), filename="champion_duel_prediction.webp"),
             )
         except discord.Forbidden:
-            await interaction.followup.send(
-                "⚠️ I can't post in this channel. I need **Send Messages** and "
-                "**Attach Files** here. You can still save the image and post it yourself.",
-                ephemeral=True,
-            )
+            await interaction.followup.send(_SHARE_DENIED, ephemeral=True)
 
 
 CARD_DEFAULT_SUBTITLE = "Matchup prediction"
@@ -8303,8 +8362,10 @@ def _pick_opponents(field: list[dict], player: dict, stage: str) -> list[dict]:
       is the remaining field -- 16, then 8, then 4, all inside the cap.
 
     Ordered with the derived partner first where there is one, then by name. At
-    the round of 32 that puts the answer at the top of a list of 31, which is
-    what turns Player 2 from a search into a confirmation.
+    the round of 32 that puts the likely answer at the top of a list of 31.
+    **Ordering only.** It used to be set as Player 2 as well, and Kevin took that
+    out on 29 Aug -- the ordering survives because it makes no claim, and being
+    wrong about it costs a scroll rather than a match nobody chose.
     """
     others = [m for m in _still_in(field, stage) if m["registrant_id"] != player["registrant_id"]]
     # A player we hold no letter for cannot be narrowed, and narrowing to the
@@ -8504,11 +8565,11 @@ def _uncard_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None)
 
 
 def _meeting_line(meeting: dict, names: dict) -> str:
-    """One row of the card being built: its place, and the two names.
+    """One row of the card being built: the two names, and nothing else.
 
     Names are escaped because they are bolded here. A player called `Rav**en`
     would otherwise appear under a different name from the one the card draws,
-    which is the reason `champion_duel_picks.caption` escapes them too.
+    which is the reason `champion_duel_picks.text_rows` escapes them too.
 
     **No percentage, deliberately.** This is the bench somebody assembles a card
     on, and the prediction is what the card itself says. Printing it here as
@@ -8521,10 +8582,10 @@ def _meeting_line(meeting: dict, names: dict) -> str:
         )
         for side in ("a_id", "b_id")
     ]
-    return _PICKS_MEETING.format(i=meeting["position"], a=both[0], b=both[1])
+    return _PICKS_MEETING.format(a=both[0], b=both[1])
 
 
-def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -> discord.Embed:
+def build_picks_embed(state: dict, *, working=None, notice=None) -> discord.Embed:
     """The card as it stands, and what is still needed to add to it.
 
     **Deliberately not the card.** The image, the embed beside it and the share
@@ -8532,12 +8593,11 @@ def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -
     the card rather than what the card will look like, and the two must not
     become two answers to the same question.
 
-    `working` is the half-made meeting, which exists only while the three
-    selects are on screen, `derived` is the bracket's own answer for Player 2
-    where it has one, and `notice` is the exit for a select that has nothing to
-    offer -- **every dead end carries its exit** (`notes/UX.md`, principle 3),
-    and a screen with a control missing and no sentence saying why is the
-    flattest one this feature can produce.
+    `working` is the half-made match, which exists only while the three
+    selects are on screen, and `notice` is the exit for a select that has
+    nothing to offer -- **every dead end carries its exit** (`notes/UX.md`,
+    principle 3), and a screen with a control missing and no sentence saying why
+    is the flattest one this feature can produce.
     """
     if state["state"] == "no_grouping":
         return discord.Embed(
@@ -8573,8 +8633,6 @@ def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -
     lines = [_PICKS_INTRO]
     if working:
         lines += ["", working]
-    if derived:
-        lines.append(derived)
     if notice:
         lines += ["", notice]
     embed.description = "\n".join(lines)
@@ -8584,6 +8642,10 @@ def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -
     # carry twenty rows of two names each, so a clamp here would drop the tail
     # of the card while the heading went on counting them. That is the silent
     # cut this feature refuses to make anywhere else.
+    # ⚠️ `_plural(n, "meeting")` here and in `build_slate_embed` is the field
+    # heading a member reads -- `2 meetings` over the list. Kevin's `match` is
+    # not applied to it yet: it was not a block on the sign-off page, so he was
+    # never shown it. **Raise it rather than sweeping it.**
     meetings = (state.get("slate") or {}).get("meetings") or []
     if meetings:
         _add_listing(
@@ -8596,6 +8658,151 @@ def build_picks_embed(state: dict, *, working=None, derived=None, notice=None) -
     if len(meetings) >= db.MAX_PICKS:
         embed.set_footer(text=_PICKS_FOOTER_CAP.format(n=db.MAX_PICKS))
     return embed
+
+
+def build_slate_embed(slate) -> discord.Embed:
+    """The card as text, for beside the image. Every row, and never fewer.
+
+    **This is the half that makes the image safe to send.** Kevin, 2026-08-28:
+    *"we cannot have things just on an image that are not also in text."* So
+    everything the card draws is here -- its subject in the title, its rows in
+    the fields, its footer in the footer -- and the one thing the card cannot
+    draw, the coin-flip caveat, is here too.
+
+    **It cannot overflow.** A card carries at most `db.MAX_PICKS` meetings, and
+    the limit that binds a whole embed is Discord's 6,000 characters across
+    everything on the message. Twenty rows of sixty-character names measure
+    about 3,100 and twenty of a hundred characters about 4,800, so the worst
+    case a roster can produce is comfortably inside it -- and the game caps a
+    name at twenty. The rows go through `_add_listing` because an embed FIELD
+    stops at 1,024 even though the message as a whole does not, and a clamp
+    there would drop the tail of the card while the heading went on counting
+    it. **Not the description's 4,096**, which is what an earlier draft of this
+    docstring named: the rows are fields, so that number never applied. Found
+    by `/code-review`.
+
+    **In the card's order, by construction.** `picks_lib.assemble` returns the
+    slate strongest pick first and `render_slate` re-sorts by the same key,
+    which is a no-op on an already-sorted list -- so row three here is row
+    three on the image without either half being told about the other. Neither
+    is numbered: session A took the numerals off the card, and a numeral here
+    would be counting rows that carry none.
+    """
+    embed = discord.Embed(
+        title=f"{picks_lib.PICKS_TITLE}: {slate.subject()}",
+        color=discord.Color.blurple(),
+    )
+    # Only where there is one. A caveat about 50% rows on a card that has none
+    # would be explaining something the reader cannot see.
+    if picks_lib.has_coin_flip(slate):
+        embed.description = picks_lib.TEXT_COIN_FLIP
+    _add_listing(
+        embed,
+        _plural(len(slate.picks), "meeting"),
+        picks_lib.text_rows(slate),
+    )
+    embed.set_footer(text=picks_lib.CARD_FOOTER)
+    return embed
+
+
+def _slate_file(png: bytes | None, alt: str) -> dict:
+    """The attachment kwargs for a card, or none where the render failed.
+
+    A dict rather than a `File | None`, because `discord.File` cannot be sent
+    twice: the object is consumed on send, so the ephemeral and the shared copy
+    each need their own built from the same bytes.
+
+    **The description is the alt text**, which is how a screen reader names the
+    attachment. It points at the rows rather than repeating them -- Discord
+    caps a description at 1,024 and twenty decorated names run past that --
+    and the rows are in the embed on the same message either way.
+    """
+    if png is None:
+        return {}
+    return {
+        "file": discord.File(
+            io.BytesIO(png),
+            filename="champion_duel_picks.webp",
+            description=alt,
+        )
+    }
+
+
+class _SlateShareView(discord.ui.View):
+    """Hands the card to the channel, which is the deliberate half.
+
+    Private by default (`PROPOSAL_champion_duel_ia.md` principle 5): the maker
+    pulls the card as an ephemeral and chooses to post it. Follows
+    `SharePredictionView` -- the same 📤, the same "to current channel"
+    phrasing, the same disable-after-use, and the same held payload rather than
+    a second render, so what lands in the channel is what was read. A second
+    render could disagree with the first if squads were recorded in between,
+    and a card that changes between being read and being shared is worse than
+    the memory.
+
+    **The image and the text go together or not at all.** They are one message
+    here for the same reason they are one message on the ephemeral: an image
+    posted without its rows is the thing this surface exists to refuse.
+
+    `png` is None where the render failed. The rows are the substance and the
+    embed carries all of them, so the card still posts -- as text, silently,
+    because the numbers are identical either way.
+
+    No `interaction_check`: the message this hangs off is ephemeral, so the
+    only person who can press it is the only person who can see it.
+    """
+
+    def __init__(self, *, png: bytes | None, embed: discord.Embed, alt: str, user_id: int):
+        super().__init__(timeout=600)
+        self.png = png
+        self.embed = embed
+        self.alt = alt
+        self.user_id = user_id
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+
+        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    @discord.ui.button(label=CD_BTN_PICKS_SHARE, style=discord.ButtonStyle.secondary)
+    async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        button.disabled = True
+        await interaction.edit_original_response(view=self)
+        try:
+            # Posted to the channel directly: a followup to an ephemeral
+            # interaction would itself be ephemeral, which is the one thing
+            # this button exists to avoid.
+            await interaction.channel.send(
+                f"-# Shared by <@{self.user_id}>",
+                embed=self.embed,
+                **_slate_file(self.png, self.alt),
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(_SHARE_DENIED, ephemeral=True)
+
+
+async def _draw_slate(slate) -> bytes | None:
+    """The card as WebP, or None where it would not draw.
+
+    A render is more moving parts than an embed -- fonts, four pieces of
+    artwork, Pillow -- and none of them are worth losing a card over. **The
+    fallback is silent to the reader** because the rows are identical either
+    way and the embed carries every one of them; the exception still reaches
+    Sentry. That is the same deal `_send_prediction` makes, and it is only
+    honest here because the text half is guaranteed complete.
+    """
+    try:
+        return await asyncio.to_thread(champion_duel_image.render_slate, slate)
+    except Exception as exc:  # noqa: BLE001 - a failed render must not eat the card
+        try:
+            import sentry_sdk
+
+            sentry_sdk.capture_exception(exc)
+        except ImportError:  # pragma: no cover - sentry optional in some envs
+            pass
+        return None
 
 
 class _PicksView(discord.ui.View):
@@ -8725,10 +8932,15 @@ class _PicksView(discord.ui.View):
             self._on_add,
             disabled=not self.can_write,
         )
+        # A read, so no write gate on it: anybody who can open the bench can
+        # look at the card. Only where there is a card -- `render_slate`
+        # refuses an empty one, and a button that always fails is worse than a
+        # button that is not there.
         if self.meetings:
+            self._add(CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, row, self._on_show)
             self._add(
                 CD_BTN_PICKS_DELETE,
-                discord.ButtonStyle.secondary,
+                discord.ButtonStyle.danger,
                 row,
                 self._on_delete,
                 disabled=not self.can_write,
@@ -8921,7 +9133,7 @@ class _PicksView(discord.ui.View):
             b = (self._member(meeting["b_id"]) or {}).get("display_name") or picks_lib.CARD_UNKNOWN
             options.append(
                 discord.SelectOption(
-                    label=_PICKS_MEETING_OPTION.format(i=meeting["position"], a=a, b=b)[:100],
+                    label=_PICKS_MEETING_OPTION.format(a=a, b=b)[:100],
                     # The two players rather than the row's place on the card.
                     # Positions shift the moment anybody else edits it, and a
                     # removal keyed on one takes off whatever moved into that
@@ -9041,7 +9253,7 @@ class _PicksView(discord.ui.View):
         chosen player who is invisible on the surface that chose them is the
         state this line exists to make impossible.
         """
-        working = derived = notice = None
+        working = notice = None
         if not self.adding or self.state["state"] != "ready":
             return build_picks_embed(self.state)
 
@@ -9058,14 +9270,9 @@ class _PicksView(discord.ui.View):
                 )
             else:
                 working = _PICKS_WORKING_HALF.format(a=a)
-            partner = _fold_partner(self.field, player, self.state["stage"])
-            if partner is not None:
-                derived = _PICKS_DERIVED.format(
-                    name=discord.utils.escape_markdown(_pick_name(partner))
-                )
             if not self._opponents():
                 notice = _PICKS_NO_OPPONENTS.format(name=a, button=_btn_words(CD_BTN_RECORD))
-        return build_picks_embed(self.state, working=working, derived=derived, notice=notice)
+        return build_picks_embed(self.state, working=working, notice=notice)
 
     async def _rerender(self, inter: discord.Interaction, *, notice: str | None = None):
         """Redraw from what is already in hand, and say what just happened.
@@ -9080,14 +9287,12 @@ class _PicksView(discord.ui.View):
         if notice:
             await inter.followup.send(notice, ephemeral=True)
 
-    async def _reload(self, inter: discord.Interaction, *, notice: str | None = None):
-        """Re-read the day's cards, then redraw.
+    async def _reload_state(self) -> None:
+        """Re-read the day's cards into `self.state`, without redrawing.
 
-        Everything the three selects need is already in hand -- the field is
-        read once when the flow opens and a warzone or a player only narrows
-        it -- so this is for the half that a write moves. The field goes back in
-        rather than being read again, and `read_picks` drops it the moment the
-        round it was read for stops being the round this card is for.
+        Split out of `_reload` for `_on_show`, which needs what is on the card
+        now but must not repaint the bench underneath a card it is about to
+        send. Everything else about the two is the same read.
         """
         self.state = await asyncio.to_thread(
             functools.partial(
@@ -9100,6 +9305,17 @@ class _PicksView(discord.ui.View):
                 field_stage=self.state.get("stage"),
             )
         )
+
+    async def _reload(self, inter: discord.Interaction, *, notice: str | None = None):
+        """Re-read the day's cards, then redraw.
+
+        Everything the three selects need is already in hand -- the field is
+        read once when the flow opens and a warzone or a player only narrows
+        it -- so this is for the half that a write moves. The field goes back in
+        rather than being read again, and `read_picks` drops it the moment the
+        round it was read for stops being the round this card is for.
+        """
+        await self._reload_state()
         await self._rerender(inter, notice=notice)
 
     # ── the card ─────────────────────────────────────────────────────────────
@@ -9149,6 +9365,73 @@ class _PicksView(discord.ui.View):
         day = picks_lib.Slate(guild_id="", play_on=self.state["play_on"]).date_label()
         await self._reload(inter, notice=_PICKS_DELETED.format(day=day))
 
+    async def _on_show(self, inter: discord.Interaction):
+        """Draw the card, and send it with every row written out beside it.
+
+        **One message, and that is the requirement rather than the layout.**
+        Kevin, 2026-08-28: *"we cannot have things just on an image that are
+        not also in text."* The image and the embed are sent together, so there
+        is no state in which the drawing has arrived and the rows have not.
+
+        **A card that will not draw still goes out.** The rows are the
+        substance and the embed carries all of them, so a failed render costs
+        the picture and nothing else -- the same silent fallback
+        `_send_prediction` makes, for the same reason: the numbers are
+        identical either way and the exception still reaches Sentry.
+
+        **Scored from what is on the card right now, not from what the bench
+        was holding.** This view lives fifteen minutes and two officers can
+        build one evening's card, so the meetings are re-read before they are
+        drawn. Scoring is engine work and rendering is Pillow, so both go off
+        the event loop. The bench itself is not repainted underneath the card
+        -- nothing reads `self.state` without rebuilding first, and a message
+        that jumped while a card was being sent would read as the card having
+        changed it.
+        """
+        await inter.response.defer()
+        await self._reload_state()
+        pairs = [(m["a_id"], m["b_id"]) for m in self.meetings]
+        if not pairs:
+            await self._rerender(inter, notice=_PICKS_NO_CARD)
+            return
+        try:
+            slate = await asyncio.to_thread(
+                functools.partial(
+                    picks_lib.assemble,
+                    self.guild_id,
+                    self.state["play_on"],
+                    pairs,
+                    # `state["stage"]` rather than the stored card's own,
+                    # which `read_picks` has already resolved: a card whose
+                    # stage was stamped NULL -- a guild whose grouping came
+                    # off the Map Manager warzone fallback -- falls back to
+                    # the round the grouping is playing. Reading the stored
+                    # value here would head the shared card with a bare date
+                    # while the bench above it said `Semi-finals`. Found by
+                    # `/code-review`.
+                    stage=self.state.get("stage") or "",
+                    card_no=self.state["card_no"],
+                )
+            )
+        except RuntimeError:
+            # `picks_lib.assemble` raises this and only this when the engine is
+            # not installed, which is an operator problem said in the
+            # operator's words rather than a card that quietly never appears.
+            await inter.followup.send(_ENGINE_MISSING, ephemeral=True)
+            return
+
+        embed = build_slate_embed(slate)
+        alt = picks_lib.alt_text(slate)
+        png = await _draw_slate(slate)
+        view = _SlateShareView(png=png, embed=embed, alt=alt, user_id=self.user_id)
+        view.message = await inter.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            wait=True,
+            **_slate_file(png, alt),
+        )
+
     async def _on_add(self, inter: discord.Interaction):
         await inter.response.defer()
         self.adding = True
@@ -9176,20 +9459,21 @@ class _PicksView(discord.ui.View):
         await self._rerender(inter)
 
     async def _on_p1(self, inter: discord.Interaction):
-        """Player 1, and the bracket's answer for Player 2 where it has one.
+        """Player 1. Player 2 stays empty, including where the bracket has an answer.
 
-        **Preselected, not enforced.** At the knockout round of 32 the pairing
-        is a fold and the opponent follows from the seed, so this is where
-        Player 2 stops being a search and becomes a confirmation. It is set as a
-        value rather than only drawn as a default because a default nobody
-        pressed is not a choice: without this the Add button would sit disabled
-        under an opponent the reader can already see.
+        **Offered, never chosen.** Session C set Player 2 from the fold at the
+        round of 32, and Kevin took that out on 29 Aug: *"I do not know how this
+        actually works out and would rather let the user choose, especially if
+        we don't know the actual seed ranks it's safer that way."* The bracket
+        rule is measured on one event, `seed_rank` is given rather than derived,
+        and a value nobody picked would have written a match on the strength of
+        both. **`_opponents` still sorts the partner to the top**, so the likely
+        answer is the first thing in the list and the tap is still one tap.
         """
         await inter.response.defer()
         self.p1 = int(inter.data["values"][0])
+        self.p2 = None
         self.pages["opponent"] = 0
-        partner = _fold_partner(self.field, self._member(self.p1) or {}, self.state["stage"])
-        self.p2 = partner["registrant_id"] if partner else None
         await self._rerender(inter)
 
     async def _on_p2(self, inter: discord.Interaction):

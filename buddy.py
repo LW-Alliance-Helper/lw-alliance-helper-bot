@@ -11,8 +11,14 @@ always has a home. This module owns:
 
 No Discord imports live here — the UI layer (`buddy_ui.py`) drives this module
 off the event loop via ``asyncio.to_thread``. Sheet helpers mirror
-``train_rotation`` (``_open_tab`` / ``_cell`` / ``_col_letter`` / ``_rewrite``)
-and the quota-safe one-``batch_clear``-plus-one-``update`` rewrite.
+``train_rotation`` (``_open_tab`` / ``_cell`` / ``_col_letter`` / ``_rewrite``).
+
+Writes go through ``_write_body``, which diffs the rendered tab against what's
+there and issues only the rows that moved — the same targeted-write pattern as
+``alliance_duel.apply_upsert`` and ``storm_member_rules.delete_rule_at``.
+Changing one pairing used to clear and rewrite every row (#289 F-02), which
+re-sorted the tab under anything an alliance kept beside it. The full rewrite
+is still there as the fallback for a tab the diff won't guess at.
 
 Profession's single source of truth is the Squad Powers tab. The Buddies tab
 never *stores* profession — its Profession cells are live-lookup formulas back
@@ -89,11 +95,40 @@ class Pair:
     source: str = "auto"  # "auto" | "manual" — informational; every pair is sticky
 
 
+# Why a pair that was on the Buddies tab didn't survive validation (#289 F-06).
+# Machine keys only — the sentences leadership reads are built in `buddy_ui`, so
+# the wording lives in one place and this module stays Discord-free.
+DROP_MISSING_WL = "missing_wl"
+DROP_MISSING_ENG = "missing_eng"
+DROP_PROFESSION_WL = "profession_wl"
+DROP_PROFESSION_ENG = "profession_eng"
+DROP_ENGINEER_TAKEN = "engineer_taken"
+DROP_DOUBLING_OFF = "doubling_off"
+DROP_WL_FULL = "wl_full"
+DROP_SELF = "self"
+
+
+@dataclass
+class DroppedPair:
+    """A pairing the tab carried that validation refused to keep.
+
+    Names are whatever we could resolve — the tab's spelling when the member
+    couldn't be found at all, the roster's when they could. Both are only ever
+    rendered back to a human, never matched on."""
+
+    war_leader: str
+    engineer: str
+    reason: str
+
+
 @dataclass
 class PairingResult:
     pairs: list = field(default_factory=list)
     unpaired_wl: list = field(default_factory=list)
     unpaired_eng: list = field(default_factory=list)
+    # Pairs the tab carried that didn't survive (#289 F-06). Defaulted so every
+    # existing caller and test that builds a PairingResult by hand still works.
+    dropped: list = field(default_factory=list)
 
 
 def _member_key(m: Member) -> str:
@@ -225,6 +260,7 @@ def assign_buddies(
     wl_priority: str = "name",
     eng_priority: str = "name",
     fill: bool = True,
+    fill_only: set | None = None,
 ) -> PairingResult:
     """Stability-first 1:1 pairing of War Leaders and Engineers.
 
@@ -248,6 +284,14 @@ def assign_buddies(
     ``fill=False`` validates and preserves ``existing_pairs`` and computes the
     free pools, but creates **no** new pairings — used by the manual editor so
     an "unpair" isn't instantly auto-refilled.
+
+    ``fill_only`` narrows gap-filling to the given member keys (#289 F-08).
+    Someone setting their own profession should come away with a buddy, not
+    quietly pair up everyone else in the alliance; passing just their key makes
+    the fill place them and leave every other gap alone.
+
+    Pairings the tab carried that don't survive validation come back in
+    ``result.dropped`` with a reason each, rather than vanishing (#289 F-06).
 
     Pure and deterministic: identical input → identical output; feeding the
     result's pairs back as ``existing_pairs`` produces zero churn.
@@ -282,19 +326,44 @@ def assign_buddies(
         return None
 
     kept_pairs: list[Pair] = []
+    dropped: list[DroppedPair] = []
     eng_used: set[str] = set()
     wl_load: dict[str, int] = {}
 
-    # Step 2 — validate & preserve existing pairs.
+    # Step 2 — validate & preserve existing pairs. Every rejection is recorded
+    # with its reason: silently dropping a pairing is what made this look like
+    # the bot losing people's buddies (#289 F-05, F-06).
     for p in existing_pairs:
         wl = resolve(p.wl_discord_id, p.war_leader)
         eng = resolve(p.eng_discord_id, p.engineer)
         if not (wl and eng):
+            dropped.append(
+                DroppedPair(
+                    p.war_leader,
+                    p.engineer,
+                    DROP_MISSING_WL if not wl else DROP_MISSING_ENG,
+                )
+            )
             continue
-        if _classify(wl.profession) != "wl" or _classify(eng.profession) != "eng":
+        if _classify(wl.profession) != "wl":
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_PROFESSION_WL))
+            continue
+        if _classify(eng.profession) != "eng":
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_PROFESSION_ENG))
             continue
         wk, ek = _member_key(wl), _member_key(eng)
-        if wk == ek or ek in eng_used or wl_load.get(wk, 0) >= cap:
+        if wk == ek:
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_SELF))
+            continue
+        if ek in eng_used:
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_ENGINEER_TAKEN))
+            continue
+        if wl_load.get(wk, 0) >= cap:
+            # cap == 1 means doubling is switched off, which is the actionable
+            # case: the alliance can turn it on and keep this pairing.
+            dropped.append(
+                DroppedPair(wl.name, eng.name, DROP_DOUBLING_OFF if cap == 1 else DROP_WL_FULL)
+            )
             continue
         kept_pairs.append(Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, source=p.source))
         eng_used.add(ek)
@@ -327,34 +396,53 @@ def assign_buddies(
             pairs=list(kept_pairs),
             unpaired_wl=list(unpaired_wl_pool),
             unpaired_eng=list(free_eng),
+            dropped=dropped,
         )
 
-    # Step 4 — base 1:1 fill (give every unpaired WL an Engineer before doubling).
-    while unpaired_wl_pool and free_eng:
-        wl = unpaired_wl_pool.pop(0)
-        eng = free_eng.pop(0)
+    def _wants(m: Member) -> bool:
+        """Whether this member is allowed to pick up a new pairing."""
+        return fill_only is None or _member_key(m) in fill_only
+
+    def _bind(wl: Member, eng: Member) -> None:
         new_pairs.append(Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, "auto"))
         wl_load[_member_key(wl)] = wl_load.get(_member_key(wl), 0) + 1
         eng_used.add(_member_key(eng))
 
+    # Step 4 — base 1:1 fill (give every unpaired WL an Engineer before doubling).
+    for wl in [m for m in unpaired_wl_pool if _wants(m)]:
+        if not free_eng:
+            break
+        eng = free_eng.pop(0)
+        unpaired_wl_pool.remove(wl)
+        _bind(wl, eng)
+
+    # A named Engineer with no free War Leader left still needs a home — attach
+    # them to whoever has capacity. Only runs under `fill_only`; a general fill
+    # reaches the same members through step 5.
+    if fill_only is not None:
+        for eng in [m for m in free_eng if _wants(m)]:
+            candidates = [m for m in all_wl if wl_load.get(_member_key(m), 0) < cap]
+            if not candidates:
+                break
+            candidates.sort(key=lambda m: (wl_load.get(_member_key(m), 0), _norm(m.name)))
+            free_eng.remove(eng)
+            _bind(candidates[0], eng)
+
     # Step 5 — Engineer doubling: leftover Engineers attach to the least-loaded
     # War Leader (cap 2). War Leaders are never doubled.
-    if engineer_doubling and free_eng:
+    if fill_only is None and engineer_doubling and free_eng:
         while free_eng:
             candidates = [m for m in all_wl if wl_load.get(_member_key(m), 0) < 2]
             if not candidates:
                 break
             candidates.sort(key=lambda m: (wl_load.get(_member_key(m), 0), _norm(m.name)))
-            wl = candidates[0]
-            eng = free_eng.pop(0)
-            new_pairs.append(Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, "auto"))
-            wl_load[_member_key(wl)] += 1
-            eng_used.add(_member_key(eng))
+            _bind(candidates[0], free_eng.pop(0))
 
     return PairingResult(
         pairs=kept_pairs + new_pairs,
         unpaired_wl=list(unpaired_wl_pool),
         unpaired_eng=list(free_eng),
+        dropped=dropped,
     )
 
 
@@ -474,20 +562,202 @@ def _col_letter(n: int) -> str:
     return out
 
 
+# Rows of headroom the full rewrite clears past the longer of old/new body.
+# Enough to catch a stray row someone left just under the list; nowhere near
+# enough to reach content parked further down the tab.
+_CLEAR_MARGIN = 20
+
+
 def _rewrite(
-    ws, header: list[str], body_rows: list[list[str]], guild_id: int, tab_name: str
+    ws,
+    header: list[str],
+    body_rows: list[list[str]],
+    guild_id: int,
+    tab_name: str,
+    current_rows: int = 0,
 ) -> bool:
     """Clear the tab below the header and write ``body_rows`` in one batch.
     One ``update`` after one ``batch_clear`` stays well under the Sheets
-    60-writes/min quota. ``USER_ENTERED`` so Profession formulas evaluate."""
+    60-writes/min quota. ``USER_ENTERED`` so Profession formulas evaluate.
+
+    The clear reaches to whichever is longer — what's being written or what's
+    already there — plus a small margin. It used to reach 5,000 rows past the
+    data, which took anything an alliance had parked below the list with it.
+
+    This is the fallback path. ``_write_body`` is what callers go through, and
+    it only lands here when the tab can't be safely patched in place."""
+    extent = max(len(body_rows), current_rows) + _CLEAR_MARGIN
     try:
-        ws.batch_clear([f"A2:{_col_letter(len(header))}{len(body_rows) + 5000}"])
+        ws.batch_clear([f"A2:{_col_letter(len(header))}{extent + 1}"])
         if body_rows:
             ws.update("A2", body_rows, value_input_option="USER_ENTERED")
         return True
     except Exception as e:
         print(f"[BUDDY] rewrite of {tab_name!r} failed for guild {guild_id}: {e}")
         return False
+
+
+# Columns the diff compares. The Profession cells (C, F, I) are deliberately
+# excluded: they hold live-lookup formulas, and `get_all_values` hands back
+# what those evaluated to rather than the formula text, so comparing them would
+# mark every row changed on every write. A row's formulas are rewritten
+# whenever its ID/Name cells move, which is the only time they need to change.
+_IDENTITY_COLS = (0, 1, 3, 4, 6, 7)
+
+# Ceiling on row insert/delete operations before a full rewrite is cheaper.
+# Each one is its own Sheets call; `alliance_duel.apply_upsert` carries the scar
+# from a version that blew the 60/min write quota looping over single-row calls.
+_MAX_ROW_OPS = 8
+
+
+def _row_identity(row: list[str]) -> tuple:
+    """The ID/Name cells of one row, for spotting which rows actually changed."""
+    return tuple(_cell(row, i) for i in _IDENTITY_COLS)
+
+
+def _row_key(row: list[str]) -> tuple:
+    """Who a Buddies-tab row belongs to, for matching it across a rewrite.
+
+    The War Leader in the left block owns the row; when that block is blank the
+    row belongs to the unpaired Engineer in the middle block. Keyed on Discord
+    ID when there is one so a rename doesn't read as a different row, else on
+    the normalised name. A row carrying nobody returns ``()`` and never
+    matches — blank padding must not pair up with real data."""
+    did, name = _cell(row, 0), _cell(row, 1)
+    if did or name:
+        return ("wl", did or _norm(name))
+    did, name = _cell(row, 3), _cell(row, 4)
+    if did or name:
+        return ("eng", did or _norm(name))
+    return ()
+
+
+def _diff_ops(current: list[list[str]], target: list[list[str]]):
+    """Plan the smallest set of operations that turns ``current`` into ``target``.
+
+    Returns ``(deletes, inserts, updates)`` in final 1-based sheet row numbers,
+    or **None** when the tab isn't in a shape this can safely patch and the
+    caller should fall back to a full rewrite.
+
+    Both sides are keyed by `_row_key` and both are written in the same sorted
+    order, so the plan is a straight three-way split rather than a general diff:
+    keys only on the tab are deleted, keys only in the new body are inserted,
+    and keys on both sides get their cells updated when they differ.
+
+    Two things make it return None rather than guess:
+
+    * a duplicate or empty key on either side — the key stops being an identity
+      and rows could be matched to the wrong person;
+    * shared keys sitting in a different relative order on the two sides, which
+      means the tab has been reordered by hand and patching it in place would
+      scatter rows rather than tidy them.
+    """
+    cur_keys = [_row_key(r) for r in current]
+    tgt_keys = [_row_key(r) for r in target]
+    if not all(cur_keys) or not all(tgt_keys):
+        return None
+    if len(set(cur_keys)) != len(cur_keys) or len(set(tgt_keys)) != len(tgt_keys):
+        return None
+
+    cur_set, tgt_set = set(cur_keys), set(tgt_keys)
+    shared = cur_set & tgt_set
+    if [k for k in cur_keys if k in shared] != [k for k in tgt_keys if k in shared]:
+        return None
+
+    # Sheet rows are 1-based and row 1 is the header, so body index i is row i+2.
+    deletes = sorted(
+        (i + 2 for i, k in enumerate(cur_keys) if k not in tgt_set),
+        reverse=True,
+    )
+    cur_by_key = {k: current[i] for i, k in enumerate(cur_keys)}
+    inserts: list[tuple[int, list[str]]] = []
+    updates: list[tuple[int, list[str]]] = []
+    for i, k in enumerate(tgt_keys):
+        rownum = i + 2
+        if k not in cur_set:
+            inserts.append((rownum, target[i]))
+        elif _row_identity(cur_by_key[k]) != _row_identity(target[i]):
+            updates.append((rownum, target[i]))
+
+    if len(deletes) + len(inserts) > _MAX_ROW_OPS:
+        return None
+    return deletes, inserts, updates
+
+
+def _runs(rows: list[int]) -> list[tuple[int, int]]:
+    """Collapse sorted-descending row numbers into ``(start, end)`` runs so a
+    block of adjacent deletions costs one Sheets call instead of one each."""
+    out: list[tuple[int, int]] = []
+    for n in rows:
+        if out and out[-1][0] == n + 1:
+            out[-1] = (n, out[-1][1])
+        else:
+            out.append((n, n))
+    return out
+
+
+def _write_body(
+    ws, header: list[str], body_rows: list[list[str]], guild_id: int, tab_name: str
+) -> bool:
+    """Bring the tab's body to ``body_rows``, touching as little as possible.
+
+    Changing one pairing used to clear and rewrite every row, which re-sorted
+    the tab under anything an alliance had written beside it and cost a full
+    rewrite for a two-cell change (#289 F-02). This diffs first and issues only
+    what actually moved, following the same targeted-write pattern as
+    `alliance_duel.apply_upsert` and `storm_member_rules.delete_rule_at`.
+
+    Real row inserts and deletes are used rather than a rewrite, so a row keeps
+    the cells an alliance added to the right of the list, and the Profession
+    formulas have their row references adjusted by Sheets rather than by us.
+
+    Falls back to the full rewrite on an unreadable tab, a shape the diff won't
+    guess at, or a change big enough that patching costs more calls than
+    rewriting. That fallback is the old behaviour, so this is never worse than
+    a rewrite — usually it's a single call, and when nothing moved, none."""
+    try:
+        current = [list(r) for r in ws.get_all_values()[1:]]
+    except Exception as e:
+        print(f"[BUDDY] diff read of {tab_name!r} failed for guild {guild_id}: {e}")
+        return _rewrite(ws, header, body_rows, guild_id, tab_name)
+
+    # Trailing blank rows are padding the sheet keeps, not rows we wrote.
+    while current and not any((c or "").strip() for c in current[-1]):
+        current.pop()
+
+    # Nothing on the tab yet: one write beats one insert per row.
+    if not current:
+        return _rewrite(ws, header, body_rows, guild_id, tab_name)
+
+    plan = _diff_ops(current, body_rows)
+    if plan is None:
+        return _rewrite(ws, header, body_rows, guild_id, tab_name, current_rows=len(current))
+    deletes, inserts, updates = plan
+    if not (deletes or inserts or updates):
+        return True
+
+    last_col = _col_letter(len(header))
+    try:
+        # Deletions run bottom-up so earlier row numbers stay valid; insertions
+        # then run top-down, each landing on the row number it ends up at.
+        for start, end in _runs(deletes):
+            ws.delete_rows(start, end)
+        for rownum, row in inserts:
+            ws.insert_row(row, rownum, value_input_option="USER_ENTERED")
+        if updates:
+            ws.batch_update(
+                [
+                    {"range": f"A{rownum}:{last_col}{rownum}", "values": [row]}
+                    for rownum, row in updates
+                ],
+                value_input_option="USER_ENTERED",
+            )
+        return True
+    except Exception as e:
+        # A partial write is worse than either outcome, so rebuild the tab
+        # outright rather than leaving it half-patched.
+        print(f"[BUDDY] targeted write of {tab_name!r} failed for guild {guild_id}: {e}")
+        return _rewrite(ws, header, body_rows, guild_id, tab_name, current_rows=len(current))
 
 
 def load_pairs(guild_id: int, buddy_tab: str) -> list:
@@ -671,8 +941,11 @@ def save_pairs(
     War-Leader rows first (sorted by name), each with their 0–2 Engineers, then
     unpaired-Engineer rows in the middle (D–F) block with a blank left block.
     ID + Name are written as values; Profession cells as live-lookup formulas
-    (or static values when the Squad Powers columns can't be resolved). One
-    batched rewrite."""
+    (or static values when the Squad Powers columns can't be resolved).
+
+    The alphabetical order is kept — it's what makes the tab readable — but
+    getting there no longer means rewriting it. `_write_body` diffs this
+    rendering against the tab and writes only the rows that moved."""
     ws = _open_tab(guild_id, buddy_tab, BUDDY_HEADER)
     if ws is None:
         return False
@@ -734,7 +1007,7 @@ def save_pairs(
         )
         rownum += 1
 
-    return _rewrite(ws, BUDDY_HEADER, body, guild_id, buddy_tab)
+    return _write_body(ws, BUDDY_HEADER, body, guild_id, buddy_tab)
 
 
 def read_all_professions(

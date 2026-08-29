@@ -1,10 +1,14 @@
 """Unit tests for buddy.py — the Sheet I/O layer (#289).
 
 A FakeWS models the gspread surface buddy.py uses (get_all_values /
-batch_clear / update / update_cell / append_row). config.get_spreadsheet and
-config.get_or_create_worksheet are patched to hand back FakeWS instances so
-save → load round-trips through real module logic, and the single-cell
-profession write can be asserted against sibling cells.
+batch_clear / update / update_cell / append_row, plus the row-level
+insert_row / delete_rows / batch_update the targeted writer needs).
+config.get_spreadsheet and config.get_or_create_worksheet are patched to hand
+back FakeWS instances so save → load round-trips through real module logic, and
+the single-cell profession write can be asserted against sibling cells.
+
+FakeWS also records the calls it received, so the #289 F-02 tests can assert
+that a one-pairing change costs one write rather than a whole-tab rewrite.
 """
 
 from unittest.mock import patch
@@ -18,10 +22,15 @@ GID = 999
 
 
 class FakeWS:
-    """In-memory worksheet. Row 0 is the header."""
+    """In-memory worksheet. Row 0 is the header.
+
+    Records every call in `calls` so the targeted-write tests can assert *how*
+    the tab was written, not just what it ends up holding — the whole point of
+    the diff writer is that a small change costs a small number of calls."""
 
     def __init__(self, rows=None):
         self.rows = [list(r) for r in (rows or [])]
+        self.calls: list[str] = []
 
     def get_all_values(self):
         return [list(r) for r in self.rows]
@@ -30,13 +39,17 @@ class FakeWS:
         return list(self.rows[n - 1]) if 0 < n <= len(self.rows) else []
 
     def batch_clear(self, ranges):
+        self.calls.append("batch_clear")
+        self.clear_ranges = list(ranges)
         self.rows = self.rows[:1]  # keep header only
 
     def update(self, rng, values, value_input_option=None):
+        self.calls.append("update")
         start = 0 if str(rng).upper().startswith("A1") else 1
         self.rows = self.rows[:start] + [list(r) for r in values]
 
     def update_cell(self, row, col, value):
+        self.calls.append("update_cell")
         while len(self.rows) < row:
             self.rows.append([])
         r = self.rows[row - 1]
@@ -45,7 +58,37 @@ class FakeWS:
         r[col - 1] = value
 
     def append_row(self, row, value_input_option=None):
+        self.calls.append("append_row")
         self.rows.append(list(row))
+
+    # ── row-level ops the diff writer uses ────────────────────────────────
+    #
+    # Modelled on the real Sheets behaviour that makes them worth using: an
+    # insert or delete shifts whole rows, so cells beyond the written columns
+    # travel with their row instead of being orphaned.
+
+    def insert_row(self, values, index=1, value_input_option=None, inherit_from_before=False):
+        self.calls.append("insert_row")
+        self.rows.insert(index - 1, list(values))
+
+    def delete_rows(self, start_index, end_index=None):
+        self.calls.append("delete_rows")
+        end = start_index if end_index is None else end_index
+        del self.rows[start_index - 1 : end]
+
+    def batch_update(self, data, value_input_option=None, **kw):
+        self.calls.append("batch_update")
+        for entry in data:
+            rng = str(entry["range"])
+            rownum = int("".join(c for c in rng.split(":")[0] if c.isdigit()))
+            values = entry["values"][0]
+            while len(self.rows) < rownum:
+                self.rows.append([])
+            row = self.rows[rownum - 1]
+            while len(row) < len(values):
+                row.append("")
+            for i, v in enumerate(values):
+                row[i] = v
 
 
 @pytest.fixture
@@ -492,3 +535,203 @@ def test_roster_warning_silent_when_filter_off(sheets):
     import buddy_ui
 
     assert buddy_ui.roster_warning(GID, {"roster_filter_enabled": 0}) == ""
+
+
+# ── targeted writes (#289 F-02) ───────────────────────────────────────────────
+#
+# The tab stays alphabetical; getting there stops meaning a full rewrite. These
+# assert the *shape* of the write, because "the tab ends up correct" was always
+# true — what changed is the cost, and what survives alongside it.
+
+
+def _seed_two_pairs(sheets):
+    """Walt with Ed and Wanda with Eve, saved. Returns (worksheet, members)."""
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+    ws = sheets["Buddies"]
+    ws.calls.clear()
+    return ws, members
+
+
+def _swapped():
+    """The same two War Leaders holding each other's Engineer."""
+    return buddy.PairingResult(
+        pairs=[Pair("Walt", "2", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")],
+    )
+
+
+def test_swapping_two_engineers_costs_one_batch_update_and_no_clear(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_update"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "3"), ("1", "4")}
+
+
+def test_a_note_beside_the_list_survives_a_pairing_change(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    # An alliance parks its own column beyond the nine the bot owns.
+    for row, note in zip(ws.rows[1:], ["covers nights", "new recruit"]):
+        row.append(note)
+
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert [r[9] for r in ws.rows[1:]] == ["covers nights", "new recruit"]
+
+
+def test_unpairing_inserts_one_row_and_leaves_the_others_untouched(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    # Wanda and Eve broken: Wanda keeps her row, Eve moves to the unpaired block.
+    after = buddy.PairingResult(
+        pairs=[Pair("Walt", "2", "Ed", "4")],
+        unpaired_wl=[W("Wanda", "1")],
+        unpaired_eng=[E("Eve", "3")],
+    )
+    buddy.save_pairs(GID, "Buddies", after, "Squad Powers", "Profession")
+
+    # One row appears, one row's cells change. Nothing is cleared.
+    assert sorted(ws.calls) == ["batch_update", "insert_row"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "4")}
+    assert any(r[3] == "3" and not r[0] for r in ws.rows[1:]), "Eve has an unpaired row"
+
+
+def test_a_write_that_changes_nothing_touches_the_sheet_not_at_all(sheets):
+    ws, members = _seed_two_pairs(sheets)
+    same = assign_buddies(members, buddy.load_pairs(GID, "Buddies"))
+    buddy.save_pairs(GID, "Buddies", same, "Squad Powers", "Profession")
+
+    assert ws.calls == []
+
+
+def test_a_hand_reordered_tab_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    ws.rows[1], ws.rows[2] = ws.rows[2], ws.rows[1]  # someone dragged the rows
+    ws.calls.clear()
+
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_clear", "update"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "3"), ("1", "4")}
+
+
+def test_a_change_too_big_to_patch_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    many = [W("WL%02d" % i, "1%02d" % i) for i in range(10)]
+    many += [E("Eng%02d" % i, "2%02d" % i) for i in range(10)]
+    buddy.save_pairs(GID, "Buddies", assign_buddies(many, []), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_clear", "update"]
+    assert len(buddy.load_pairs(GID, "Buddies")) == 10
+
+
+def test_the_full_rewrite_no_longer_clears_thousands_of_rows(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    ws.rows[1], ws.rows[2] = ws.rows[2], ws.rows[1]  # force the rewrite path
+    ws.calls.clear()
+
+    buddy.save_pairs(
+        GID,
+        "Buddies",
+        assign_buddies([W("Wanda", "1"), E("Eve", "3")], []),
+        "Squad Powers",
+        "Profession",
+    )
+
+    assert len(ws.clear_ranges) == 1
+    last_row = int("".join(c for c in ws.clear_ranges[0].split(":")[1] if c.isdigit()))
+    assert last_row < 100, "clear reached row %d" % last_row
+
+
+def test_an_unreadable_tab_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+
+    def boom():
+        raise RuntimeError("Sheets is having a moment")
+
+    ws.get_all_values = boom
+    ok = buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ok is True
+    assert ws.calls == ["batch_clear", "update"]
+
+
+# ── what changed (#289 F-05, F-06) ────────────────────────────────────────────
+
+
+def test_a_departed_member_is_reported_not_silently_dropped():
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    existing = [Pair("Wanda", "1", "Ed", "4")]  # Ed has left the alliance
+    result = assign_buddies(members, existing, fill=False)
+
+    assert result.pairs == []
+    assert [(d.war_leader, d.engineer, d.reason) for d in result.dropped] == [
+        ("Wanda", "Ed", buddy.DROP_MISSING_ENG)
+    ]
+
+
+def test_a_profession_change_is_reported_against_the_person_who_changed():
+    members = [W("Wanda", "1"), W("Ed", "4")]  # Ed is a War Leader now
+    result = assign_buddies(members, [Pair("Wanda", "1", "Ed", "4")], fill=False)
+
+    assert [d.reason for d in result.dropped] == [buddy.DROP_PROFESSION_ENG]
+
+
+def test_doubling_off_names_the_engineer_it_removes():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=False, fill=False)
+
+    assert len(result.pairs) == 1
+    assert [(d.engineer, d.reason) for d in result.dropped] == [("Ed", buddy.DROP_DOUBLING_OFF)]
+
+
+def test_doubling_on_keeps_both_and_reports_nothing():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=False)
+
+    assert len(result.pairs) == 2
+    assert result.dropped == []
+
+
+def test_the_report_reads_as_sentences_and_survives_an_empty_result():
+    import buddy_ui
+
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    result = assign_buddies(members, [Pair("Wanda", "1", "Ed", "4")], fill=False)
+    text = buddy_ui.describe_dropped(result)
+
+    assert "Ed" in text and "Wanda" in text
+    assert "1 pairing cleared" in text
+    assert buddy_ui.describe_dropped(assign_buddies(members, [], fill=False)) == ""
+
+
+# ── scoped fill (#289 F-08) ───────────────────────────────────────────────────
+
+
+def test_fill_only_places_the_actor_and_leaves_everyone_else_unpaired():
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    # Walt is the one who just set their profession.
+    result = assign_buddies(members, [], fill=True, fill_only={"2"})
+
+    assert len(result.pairs) == 1
+    assert result.pairs[0].war_leader == "Walt"
+    assert {m.name for m in result.unpaired_wl} == {"Wanda"}
+
+
+def test_fill_only_finds_a_named_engineer_a_war_leader_with_room():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3")]
+    # Ed just became an Engineer; doubling is on, so Wanda has room.
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=True, fill_only={"4"})
+
+    assert pair_keys(result.pairs) == {("1", "3"), ("1", "4")}
+
+
+def test_an_unscoped_fill_still_pairs_everyone():
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [], fill=True)
+
+    assert len(result.pairs) == 2
+    assert result.unpaired_wl == []

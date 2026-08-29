@@ -4,9 +4,15 @@ One command opens a hub that adapts to tier and role:
 
 - **Everyone:** 🔍 Who's my buddy? · 📋 View buddy list
 - **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
-  list · ⚙️ Open setup
+  list · ↩️ Undo last change · ⚙️ Open setup
 - **Premium leadership:** ✨ Auto-assign · ♻️ Re-pair from scratch ·
   📣 Post self-service buttons
+
+Every action that writes captures the pair list first, so ↩️ Undo can put it
+back. That snapshot lives on the view for the length of the sitting and is
+never stored (#289 F-03). Every action that writes also reports what it
+dropped and why, rather than the fixed "invalid pairs were cleared" line that
+told an alliance nothing (#289 F-06).
 
 The member-facing lookup is free and works whether the caller is a War Leader
 or an Engineer. Leadership actions are role-gated; the Premium actions gate via
@@ -82,6 +88,15 @@ def _name_list(names: list) -> str:
     return "\n".join(shown)
 
 
+def _with_report(text: str, result) -> str:
+    """Append the what-changed block when an action dropped any pairings.
+
+    Every write goes through this, so "3 pairings cleared" always arrives with
+    the three names and three reasons attached (#289 F-06)."""
+    report = ui.describe_dropped(result)
+    return f"{text}\n\n{report}" if report else text
+
+
 class _ConfirmView(discord.ui.View):
     def __init__(self, owner_id: int, on_confirm):
         super().__init__(timeout=60)
@@ -122,6 +137,9 @@ class _BuddyHubView(discord.ui.View):
         self.is_leader = is_leader
         self.is_premium = is_premium
         self.message: Optional[discord.Message] = None
+        # This officer's sitting. Holds the single-step undo in memory and
+        # nothing else; it dies with the view (#289 F-03).
+        self.session = ui.BuddySession()
         self._build()
 
     async def interaction_check(self, inter):
@@ -149,6 +167,7 @@ class _BuddyHubView(discord.ui.View):
                 "🔄 Refresh from sheet", discord.ButtonStyle.secondary, 1, self._refresh_sheet
             )
             self._add("📣 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
+            self._add("↩️ Undo last change", discord.ButtonStyle.secondary, 1, self._undo)
             self._add("⚙️ Open setup", discord.ButtonStyle.secondary, 1, self._setup)
             self._add("✨ Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
             self._add("♻️ Re-pair from scratch", discord.ButtonStyle.danger, 2, self._from_scratch)
@@ -195,7 +214,7 @@ class _BuddyHubView(discord.ui.View):
         cfg = config.get_buddy_config(self.guild_id)
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
-        view = ui.BuddyManageView(self.bot, self.guild_id, inter.user.id)
+        view = ui.BuddyManageView(self.bot, self.guild_id, inter.user.id, session=self.session)
         view.message = await inter.followup.send(embed=embed, view=view, ephemeral=True)
 
     async def _refresh_sheet(self, inter: discord.Interaction):
@@ -209,6 +228,10 @@ class _BuddyHubView(discord.ui.View):
 
         await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
+        self.session.capture(
+            await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
+            "the refresh",
+        )
         # fill=False inside compute_current: keep exactly what's in the sheet
         # (drop only invalid pairs); leave gap-filling to the Auto-assign button.
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
@@ -216,9 +239,43 @@ class _BuddyHubView(discord.ui.View):
         await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         await inter.followup.send(
-            content=(
-                "🔄 Read your sheet and synced the buddy list. Invalid pairs (like two "
-                "Engineers together) were cleared. Use ✨ Auto-assign to fill any gaps."
+            content=_with_report(
+                "🔄 Read your sheet and synced the buddy list. "
+                "Use ✨ Auto-assign to fill any gaps.",
+                result,
+            ),
+            embed=embed,
+            ephemeral=True,
+        )
+
+    async def _undo(self, inter: discord.Interaction):
+        """Put the pair list back the way it was before this sitting's last write.
+
+        One step, and only within this sitting — the snapshot lives on the view
+        and is never stored (#289 F-03). Anything further back is what a saved
+        preset is for."""
+        if not self._leader_ok(inter):
+            await inter.response.send_message(_DENY_NOT_LEADER, ephemeral=True)
+            return
+        import config
+
+        await inter.response.defer(ephemeral=True, thinking=True)
+        label = self.session.label
+        snapshot = self.session.take()
+        if snapshot is None:
+            await inter.followup.send(
+                "ℹ️ Nothing to undo. Undo reaches back to the last change you made "
+                "while this hub has been open — reopen `/buddy` and it starts fresh.",
+                ephemeral=True,
+            )
+            return
+        cfg = config.get_buddy_config(self.guild_id)
+        result = await asyncio.to_thread(ui.apply_pairs, self.guild_id, cfg, snapshot)
+        await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
+        embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
+        await inter.followup.send(
+            content=_with_report(
+                f"↩️ Put the buddy list back to how it was before {label}.", result
             ),
             embed=embed,
             ephemeral=True,
@@ -280,6 +337,10 @@ class _BuddyHubView(discord.ui.View):
 
         await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
+        self.session.capture(
+            await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
+            "the auto-assign",
+        )
         result = await asyncio.to_thread(
             ui.compute_autofill, self.guild_id, cfg, from_scratch=False
         )
@@ -289,8 +350,11 @@ class _BuddyHubView(discord.ui.View):
         rel_note = " Engineers ordered by reliability." if cfg.get("reliability_enabled") else ""
         roster_note = await asyncio.to_thread(ui.roster_warning, self.guild_id, cfg)
         await inter.followup.send(
-            content=f"✨ Buddies assigned (existing pairs kept).{rel_note}"
-            + (f"\n\n{roster_note}" if roster_note else ""),
+            content=_with_report(
+                f"✨ Buddies assigned (existing pairs kept).{rel_note}"
+                + (f"\n\n{roster_note}" if roster_note else ""),
+                result,
+            ),
             embed=embed,
             ephemeral=True,
         )
@@ -310,6 +374,10 @@ class _BuddyHubView(discord.ui.View):
 
         async def _do(i: discord.Interaction):
             await i.response.defer(ephemeral=True, thinking=True)
+            self.session.capture(
+                await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
+                "the rebuild",
+            )
             await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
             await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
             embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))

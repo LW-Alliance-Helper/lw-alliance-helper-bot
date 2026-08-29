@@ -12,9 +12,26 @@ jobs:
     name: Unit & Integration Tests
     runs-on: ubuntu-latest
 
+    env:
+      # The font-coverage corpus can only be asserted where the fonts
+      # are. Set here so `tests/unit/test_font_coverage.py` runs its
+      # whole-corpus assertions instead of skipping them, and so a
+      # dropped apt package below fails the build rather than quietly
+      # turning that test off.
+      EXPECT_SYSTEM_FONTS: "1"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      # The same packages the deploy image installs (`nixpacks.toml` /
+      # `railpack.json`). CI and production must not drift apart on the
+      # package name: if they do, the test that proves player names
+      # render stops covering the thing it is there for.
+      - name: Install fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-dejavu-core
 
       - name: Set up Python
         uses: actions/setup-python@v6

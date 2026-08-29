@@ -288,6 +288,21 @@ async def on_ready():
         bot._cd_store_ready = False
         print(f"[CHAMPION_DUEL] Odds store init failed, odds compute on press: {e}")
 
+    # Which font families this container actually carries. Three are
+    # committed to `assets/fonts/`; the rest arrive as an apt package
+    # (`fonts-noto-core`, see `nixpacks.toml`). An environment change
+    # fails silently in a way a code change does not — a build that
+    # quietly drops the package brings empty boxes back to every
+    # non-Latin name on every card, with no error anywhere. This is the
+    # line that says so at boot rather than weeks later off a
+    # screenshot. Resolves paths only; loads no font.
+    try:
+        import storm_renderer
+
+        storm_renderer.log_font_coverage()
+    except Exception as e:  # noqa: BLE001 - a font report must not block boot
+        print(f"[FONTS] Coverage check failed: {e}")
+
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
     # How much parallelism this container actually has, printed once.

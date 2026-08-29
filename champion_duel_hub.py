@@ -501,6 +501,24 @@ _EDIT_ME_NEW = (
     "**{held}** is still your account."
 )
 
+#: ⚠️ NOT SIGNED OFF. The hub's second line, under the warzone counts.
+#:
+#: **It had to change and it is session 6 that broke it.** The line said
+#: *"Predict a match, or look up a player to see their squads and power.
+#: Missing someone? **Add a player**."* and named two controls that are no
+#: longer on the root: predicting is absorbed by `🔮 Today's picks` and
+#: adding a player happens at the miss. Prose naming a button that is not on
+#: the surface is the dead end `UX.md` principle 3 exists to stop, so the
+#: sentence now names the one control that is there and says where the other
+#: one is reached from.
+#:
+#: Variants are on the copy page rather than here, which is the rule this
+#: project has paid for twice (`notes/CHAMPION_DUEL_INDEX.md`).
+_HUB_ROSTER_LINE = (
+    "Look up a player to see their squads and power. "
+    "Missing someone? **{find}**, and add them from there."
+)
+
 #: The round we hold nothing for. Not an error: a Champion Duel that has not
 #: reached its semifinals has no group to stand in, and saying so plainly is
 #: the honest state rather than an empty table.
@@ -2390,6 +2408,21 @@ class PlayerActionsView(discord.ui.View):
             button.callback = callback
             self.add_item(button)
 
+        # WHERE THE GUIDE LIVES NOW. It was a hub button until session 6, and
+        # `PLAN_champion_duel_ia.md` attaches it to the entry flows it
+        # explains: its two screens are the deployment order and one squad's
+        # power and type, which is exactly what the two controls beside it ask
+        # for. Beside them is where somebody looks when the question occurs to
+        # them, and on the hub it was a shelf between them and the answer.
+        #
+        # NEVER LOCKED, and that is unchanged. Documentation is not a paid
+        # surface: someone deciding whether the feature is worth paying for
+        # should be able to see what contributing involves, and withholding a
+        # picture of a game screen protects nothing.
+        guide = discord.ui.Button(label=CD_BTN_GUIDE[:80], style=discord.ButtonStyle.secondary)
+        guide.callback = self._on_guide
+        self.add_item(guide)
+
         # The one control here that is not a contribution, so it is never
         # locked: a claim says who the reader is, not what they saw.
         #
@@ -2409,6 +2442,16 @@ class PlayerActionsView(discord.ui.View):
         from wizard_registry import expire_view_message
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
+
+    async def _on_guide(self, inter: discord.Interaction):
+        """The annotated screens, beside the controls that ask for them.
+
+        A modal cannot carry an image and putting the guide in front of one
+        would charge everybody who already knows an extra press on every entry,
+        so it stays its own control rather than a step.
+        """
+        embeds, files = build_guide()
+        await inter.response.send_message(embeds=embeds, files=files, ephemeral=True)
 
     async def _on_squads(self, inter: discord.Interaction):
         await inter.response.send_modal(_SquadDetailModal(player=self.player))
@@ -2510,6 +2553,13 @@ class _MissView(discord.ui.View):
         button.callback = self._on_add
         self.add_item(button)
 
+        # Beside the control it explains, which is where session 6 put it:
+        # `_AddPlayerModal` asks for three squad powers and their types, and
+        # the guide's second screen is where to read them off. Never locked.
+        guide = discord.ui.Button(label=CD_BTN_GUIDE[:80], style=discord.ButtonStyle.secondary)
+        guide.callback = self._on_guide
+        self.add_item(guide)
+
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
             await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
@@ -2527,6 +2577,10 @@ class _MissView(discord.ui.View):
                 self.can_write, name=self.name, server=self.server, grouping=self.grouping
             )
         )
+
+    async def _on_guide(self, inter: discord.Interaction):
+        embeds, files = build_guide()
+        await inter.response.send_message(embeds=embeds, files=files, ephemeral=True)
 
 
 class _FindPlayerModal(discord.ui.Modal, title="Find a Champion Duel player"):
@@ -5999,6 +6053,15 @@ class _StandingClaimView(discord.ui.View):
     flow built for a caller with no row on screen. A miss inside that modal
     lands on `_MissView` and its `➕ Add a player`, which is the third of
     the plan's three states -- not in our data at all, add yourself right here.
+
+    **IT IS ALSO WHERE THE GROUP AND THE ODDS NOW LIVE.**
+    `PLAN_champion_duel_ia.md` session 6 retires `🏅 Your group` from the
+    root and moves `🔮 Odds of advancing` onto this surface, and both land
+    here rather than back on the hub because this is the surface the reader
+    reached through themselves: the group is theirs, and the odds are about the
+    group they are standing in. `_STANDING_NOT_WORKED_OUT` was a dead end until
+    this -- it says we hold no projection, and the press that makes one is now
+    on the same message.
     """
 
     def __init__(
@@ -6008,6 +6071,9 @@ class _StandingClaimView(discord.ui.View):
         can_write: bool,
         grouping: dict | None = None,
         player: dict | None = None,
+        standing: dict | None = None,
+        can_odds: bool = False,
+        warzone: str | None = None,
     ):
         super().__init__(timeout=600)
         self.user_id = user_id
@@ -6017,18 +6083,67 @@ class _StandingClaimView(discord.ui.View):
         # re-reads the claim when it is pressed, so this is only the question
         # of whether there was a "my" when the message was built.
         self.player = player
+        # WHICH group and WHICH round the two new presses are about. They
+        # re-read everything they render; this decides only which group they
+        # are about, and that cannot change without the claim moving, which
+        # redraws this message.
+        self.standing = standing
+        # Defaults False so a caller that forgets it renders the padlock rather
+        # than handing out the paid surface. `send_group_odds` re-checks the
+        # entitlement on the press anyway, so this only decides how it is drawn.
+        self.can_odds = can_odds
+        # The guild's own number. Only a parsing prior for the record modal on
+        # the group listing, never a filter.
+        self.warzone = warzone
         self.message: discord.Message | None = None
 
-        button = discord.ui.Button(label=CD_BTN_WHO_AM_I[:80], style=discord.ButtonStyle.primary)
+        row = (standing or {}).get("row") or {}
+        stage = (standing or {}).get("stage")
+        # ONLY WHERE WE KNOW THE READER. This view is both the unclaimed
+        # landing and the footer of a standing that has one, and on the landing
+        # "your group" and "your odds" would both be promises to somebody we
+        # cannot pick out of a hundred rows. The landing stays exactly what it
+        # was: one button, and it is the claim.
+        if player:
+            # Wherever there is a model and a group to run it over. The
+            # qualifiers came out of the bot on 2026-08-21 and the knockouts
+            # are a bracket rather than a group, so `odds_lib` decides which
+            # rounds have one -- the same dispatch the group listing defers to.
+            #
+            # Disabled with a padlock on the free tier rather than hidden,
+            # which is `DESIGN.md`'s Premium rule and what the embed above it
+            # already does with its own `Your odds` field.
+            if row.get("group_id") and stage in odds_lib.STAGES_WITH_A_MODEL:
+                odds = discord.ui.Button(
+                    label=(CD_BTN_ODDS if can_odds else f"🔒 {CD_BTN_ODDS}")[:80],
+                    style=discord.ButtonStyle.primary
+                    if can_odds
+                    else discord.ButtonStyle.secondary,
+                    disabled=not can_odds,
+                )
+                odds.callback = self._on_odds
+                self.add_item(odds)
+            # The roster, reached through the reader rather than picked out of
+            # a list. Never locked: who you are facing is a read, and every way
+            # of contributing to it is free.
+            group = discord.ui.Button(label=CD_BTN_GROUP[:80], style=discord.ButtonStyle.secondary)
+            group.callback = self._on_group
+            self.add_item(group)
+
+        # PRIMARY ONLY ON THE LANDING. There it is the only thing to press and
+        # the whole point of the message. On a standing it is the identity
+        # footer under two controls about the round the reader is in, and
+        # `DESIGN.md` allows one primary per view -- which the odds take, being
+        # what somebody who opened their own standing came for.
+        button = discord.ui.Button(
+            label=CD_BTN_WHO_AM_I[:80],
+            style=discord.ButtonStyle.secondary if player else discord.ButtonStyle.primary,
+        )
         button.callback = self._on_press
         self.add_item(button)
 
-        # ONLY WHERE A CLAIM IS HELD. This view is both the unclaimed landing
-        # and the footer of a standing that has one, and on the landing there
-        # is no "my" to edit -- the claim is the only thing to press.
-        #
-        # Secondary against the claim's primary: re-pointing the claim is the
-        # act this view was built for and it stays the loud one.
+        # ONLY WHERE A CLAIM IS HELD, for the same reason: on the landing there
+        # is no "my" to edit.
         if player:
             edit = discord.ui.Button(
                 label=(CD_BTN_EDIT_ME if can_write else f"🔒 {CD_BTN_EDIT_ME}")[:80],
@@ -6037,6 +6152,66 @@ class _StandingClaimView(discord.ui.View):
             )
             edit.callback = self._on_edit_me
             self.add_item(edit)
+
+    async def _their_grouping(self) -> dict | None:
+        """The Champion Duel the reader's own round is in, not the guild's.
+
+        The two are the same whenever the claimed account is in this server's
+        Champion Duel, which is the ordinary case. They are not when it is
+        somewhere else (`read_standing`'s `elsewhere`), and not when the only
+        round we hold for the account is an older event's -- and opening the
+        guild's tournament in either case would show somebody a group they are
+        not in, under a heading about their own standing.
+        """
+        gid = ((self.standing or {}).get("row") or {}).get("grouping_id")
+        if gid is None or (self.grouping and gid == self.grouping["id"]):
+            return self.grouping
+        return await asyncio.to_thread(db.get_grouping, gid)
+
+    async def _on_group(self, inter: discord.Interaction):
+        """Everyone in the round the reader is standing in.
+
+        Opened on their own group rather than on a letter picked off a list,
+        which is the case `PLAN_champion_duel_ia.md` says stops being
+        group-first the moment you reach it through yourself. A reader we hold
+        no round for gets exactly what the retired hub button gave them: the
+        guild's Champion Duel on the round it is playing, with the picker and
+        the door to recording one.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        row = (self.standing or {}).get("row") or {}
+        await send_group_view(
+            inter,
+            grouping=await self._their_grouping(),
+            warzone=self.warzone,
+            user_id=self.user_id,
+            can_write=self.can_write,
+            stage=(self.standing or {}).get("stage"),
+            label=row.get("grp"),
+        )
+
+    async def _on_odds(self, inter: discord.Interaction):
+        """How the reader compares to the field, which is what this screen is for.
+
+        The embed above carries their own two figures wherever the store
+        already holds an answer. This is the whole table, and where nothing is
+        stored the press computes it, which is what closes the dead end
+        `_STANDING_NOT_WORKED_OUT` was.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        grouping = await self._their_grouping()
+        if grouping is None:
+            # The grouping the row pointed at is gone. Nothing to run a model
+            # over, said in the words the field above already uses.
+            await inter.followup.send(_STANDING_NOT_WORKED_OUT, ephemeral=True)
+            return
+        row = (self.standing or {}).get("row") or {}
+        await send_group_odds(
+            inter,
+            grouping=grouping,
+            stage=(self.standing or {}).get("stage"),
+            label=row.get("grp"),
+        )
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.user_id:
@@ -6965,6 +7140,23 @@ class _AllianceView(discord.ui.View):
                 )
                 claim.callback = self._on_who_am_i
                 self.add_item(claim)
+            # BOTH DOORS THE TEXT NAMES. `_ALLIANCE_NOBODY` offers adding
+            # people one at a time or pasting a whole group, and only the
+            # second was a control here: the first was prose pointing at a hub
+            # button. Session 6 takes `➕ Add a player` off the root, so the
+            # sentence would have named a control that is nowhere -- and
+            # `UX.md` principle 3 wants the exit on the message rather than a
+            # description of one. Secondary, because `DESIGN.md` allows one
+            # primary and recording a whole group is the recommended way to
+            # fill an empty listing.
+            add = discord.ui.Button(
+                label=(CD_BTN_ADD if self.can_write else f"🔒 {CD_BTN_ADD}")[:80],
+                style=discord.ButtonStyle.secondary,
+                disabled=not self.can_write,
+                row=row,
+            )
+            add.callback = self._on_add
+            self.add_item(add)
             record = discord.ui.Button(
                 label=(CD_BTN_RECORD if self.can_write else f"🔒 {CD_BTN_RECORD}")[:80],
                 style=discord.ButtonStyle.primary
@@ -7024,6 +7216,9 @@ class _AllianceView(discord.ui.View):
 
     async def _on_edit_me(self, inter: discord.Interaction):
         await _open_edit_me(inter, can_write=self.can_write, grouping=self.grouping)
+
+    async def _on_add(self, inter: discord.Interaction):
+        await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
 
     async def _on_record(self, inter: discord.Interaction):
         # Read before responding, not after: a modal has to be the first
@@ -7149,8 +7344,7 @@ def build_hub_embed(
             f"{opener}"
             f"**{total}** players {scope} across **{_plural(len(servers), 'warzone')}**: "
             f"{listed}.\n\n"
-            f"Predict a match, or look up a player to see their squads and power. "
-            f"Missing someone? **{_btn_words(CD_BTN_ADD)}**."
+            f"{_HUB_ROSTER_LINE.format(find=_btn_words(CD_BTN_FIND))}"
         )[:4096]
     else:
         embed.description = (
@@ -7705,53 +7899,61 @@ class _GroupView(discord.ui.View):
     # ── odds ─────────────────────────────────────────────────────────────────
 
     async def _on_odds(self, inter: discord.Interaction):
-        """Everyone's chance of getting out of this group.
+        """Everyone's chance of getting out of the group on screen.
 
         The gate is that every player has SOMETHING to place them by, which
         is a Total Hero Power or any single squad power. Neither is
         individually required. The engine fills what is missing from the shape
         fit and samples what nobody has measured.
 
-        A PRESS IS A READ WHEREVER IT CAN BE. The sweeper works these out in
-        the background a group at a time, so the common case is that the answer
-        is already sitting in the store and this press costs a SELECT. Where it
-        is not, the press pays for it exactly as it always did -- the store
-        makes a slow surface sometimes fast, and never the other way round.
+        The entitlement, the store and the stamp are `send_group_odds`, which
+        `🏅 Your standing` presses too.
         """
         await inter.response.defer(ephemeral=True, thinking=True)
-        # Re-resolved, not read off `self`. The flag was captured when the view
-        # was built, and this view lives 15 minutes against a 5 minute
-        # entitlement cache -- so the stale case that matters is a subscription
-        # that lapsed while the group was on screen, where the button is still
-        # live because it was enabled at build time. Reading `self.can_odds`
-        # would let that through; checking here catches it. One cached lookup
-        # in front of a simulation that costs seconds is not a price worth
-        # optimising.
-        if not await premium.feature_gate("champion_duel_odds", inter.guild_id, interaction=inter):
-            await _send_odds_upsell(inter)
-            return
-        group = await asyncio.to_thread(
-            db.get_or_create_group, self.grouping["id"], self.stage, self.label
-        )
-        scouted = await asyncio.to_thread(db.get_group_scouting, group["id"])
-        # The lookup is also the stamp. `last_viewed_at` is what `due()` orders
-        # on, most recent first, so a press that has to fall through and
-        # compute puts this group at the head of the sweeper's queue -- and the
-        # next reader gets it off the table. A press is the strongest signal
-        # this feature has about which of a tournament's seventeen groups
-        # anybody actually cares about, and it costs one row to record.
-        stored = await asyncio.to_thread(_stored_odds, group["id"], scouted, self.stage)
-        await inter.followup.send(
-            embed=await asyncio.to_thread(
-                build_odds_embed,
-                scouted,
-                self.stage,
-                self.label,
-                self.grouping,
-                stored=stored,
-            ),
-            ephemeral=True,
-        )
+        await send_group_odds(inter, grouping=self.grouping, stage=self.stage, label=self.label)
+
+
+async def send_group_odds(interaction, *, grouping: dict, stage: str, label) -> None:
+    """Everyone's odds for one group, behind the one gate this feature has.
+
+    Shared by the group listing and by `🏅 Your standing`, which session 6
+    moves this press onto (`PLAN_champion_duel_ia.md`). One copy, because the
+    two things that are easy to get wrong here are the gate and the stamp, and
+    a second implementation of either is a second chance to lose one.
+
+    THE GATE IS RE-RESOLVED HERE, not read off whatever drew the button. Both
+    views live fifteen minutes against a five minute entitlement cache, so the
+    stale case that matters is a subscription that lapsed while the surface sat
+    on screen, where the button is still live because it was enabled at build
+    time. One cached lookup in front of a simulation that costs seconds is not
+    a price worth optimising -- and it runs before `get_or_create_group`, so a
+    refused press writes nothing.
+
+    A PRESS IS A READ WHEREVER IT CAN BE. The sweeper works these out in the
+    background a group at a time, so the common case is that the answer is
+    already sitting in the store and this costs a SELECT. Where it is not, the
+    press pays for it exactly as it always did.
+    """
+    if not await premium.feature_gate(
+        "champion_duel_odds", interaction.guild_id, interaction=interaction
+    ):
+        await _send_odds_upsell(interaction)
+        return
+    group = await asyncio.to_thread(db.get_or_create_group, grouping["id"], stage, label)
+    scouted = await asyncio.to_thread(db.get_group_scouting, group["id"])
+    # The lookup is also the stamp. `last_viewed_at` is what `due()` orders
+    # on, most recent first, so a press that has to fall through and
+    # compute puts this group at the head of the sweeper's queue -- and the
+    # next reader gets it off the table. A press is the strongest signal
+    # this feature has about which of a tournament's seventeen groups
+    # anybody actually cares about, and it costs one row to record.
+    stored = await asyncio.to_thread(_stored_odds, group["id"], scouted, stage)
+    await interaction.followup.send(
+        embed=await asyncio.to_thread(
+            build_odds_embed, scouted, stage, label, grouping, stored=stored
+        ),
+        ephemeral=True,
+    )
 
 
 def _stored_odds(group_id: int, members: list[dict], stage: str):
@@ -8139,6 +8341,8 @@ async def send_group_view(
     warzone: str | None,
     user_id: int,
     can_write: bool = True,
+    stage: str | None = None,
+    label=None,
 ) -> None:
     """Open the caller's group, with the history reachable from it.
 
@@ -8147,6 +8351,16 @@ async def send_group_view(
     else is one select away, because a member who is out, or whose Champion
     Duel has finished, is looking backwards and there is no live round to show
     them.
+
+    **`stage` and `label` open it on one group that is already known**, which
+    is how `🏅 Your standing` reaches it now that session 6 has retired the hub
+    button. That is the difference between this and the old front door and it
+    is the whole point of the retirement: the reader arrives at their own group
+    through themselves rather than picking a letter out of a list they have no
+    way to place themselves in (`PLAN_champion_duel_ia.md`, *nobody goes
+    group-first*). Both are hints rather than instructions -- a round or a
+    letter we no longer hold falls back to what the surface would have opened
+    on anyway, because a stale pointer must not strand a live view.
 
     **It opens on a Champion Duel we hold nothing for as well.** It used to
     refuse one, which put the flattest dead end in the feature exactly where the
@@ -8168,9 +8382,14 @@ async def send_group_view(
 
     stages = await asyncio.to_thread(db.recorded_stages, grouping["id"])
     running = await asyncio.to_thread(db.current_stage, grouping["id"])
-    stage = _opening_stage(stages, running)
+    stage = stage if stage in db.STAGES else _opening_stage(stages, running)
     groups = await asyncio.to_thread(db.get_groups, stage, grouping["id"])
-    label = str(groups[0]["group"]) if groups else None
+    labels = [str(g["group"]) for g in groups]
+    # A letter we hold for this round, or the first one we do. `get_groups`
+    # drops the knockouts entirely -- one field of 32 with no letter -- so both
+    # sides of this land on None there, which is what the view expects.
+    wanted = str(label) if label is not None else None
+    label = wanted if wanted in labels else (labels[0] if labels else None)
     members = await asyncio.to_thread(_read_group, grouping["id"], stage, label, stages)
 
     # The only gated thing in Champion Duel. Everything else on this surface,
@@ -8503,48 +8722,19 @@ def read_picks(
     return out
 
 
-def _card_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None) -> int | None:
-    """Put one meeting on a day's cards. The card it landed on, or None if full.
-
-    **Each card is read immediately before it is rewritten, and that is the
-    whole point of this function.** `set_slate` is a full replace, so writing a
-    card back off a snapshot the view read minutes ago deletes every meeting
-    anybody else added in between, silently and with no error to catch. This
-    view lives fifteen minutes and two officers can easily build the same
-    evening's card. Found by `/code-review`.
-
-    **It narrows the window rather than closing it**, and the difference has to
-    be stated. The read and the write are two statements on two connections, so
-    a write landing between them is still lost. Closing it properly means one
-    transaction that appends, which belongs in `champion_duel_db` beside
-    `set_slate` rather than here. What this buys is a window of one function
-    call instead of one view lifetime.
-
-    **Cards are tried from this one upward and then from the start**, so
-    "the card is full" only ever means the whole day is. Overflow opening the
-    next card is the normal case (`db.MAX_PICKS` is legibility, not storage);
-    wrapping is what stops a full card 4 reporting a full day while card 1 has
-    room after a removal.
-    """
-    order = list(range(card_no, db.MAX_CARDS_PER_DAY + 1)) + list(range(1, card_no))
-    for target in order:
-        stored = db.get_slate(guild_id, play_on, card_no=target)
-        pairs = [(m["a_id"], m["b_id"]) for m in (stored or {}).get("meetings") or []]
-        if len(pairs) >= db.MAX_PICKS:
-            continue
-        pairs.append((int(pair[0]), int(pair[1])))
-        db.set_slate(guild_id, play_on, pairs, card_no=target, actor=actor)
-        return target
-    return None
-
-
 def _uncard_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None) -> bool:
     """Take one meeting off a card. False if it was not on it.
 
-    Re-read before the rewrite for the reason `_card_a_meeting` is, and the pair
-    identifies the row rather than its position: positions shift the moment
-    anybody else edits the card, so a removal keyed on one can take off a
-    meeting nobody asked about.
+    **Still a read and then a rewrite on two connections, and that window is
+    open.** Its twin closed by moving into `db.add_to_slate`; the same is not
+    true here, because a removal that loses a concurrent addition loses a
+    meeting somebody added seconds ago, where the addition it replaced was
+    losing a whole card. Worth doing and not done here, so it is written down
+    rather than implied.
+
+    The pair identifies the row rather than its position: positions shift the
+    moment anybody else edits the card, so a removal keyed on one can take off
+    a meeting nobody asked about.
 
     **An emptied card is deleted rather than written**, because `set_slate`
     refuses an empty list by design. "Nobody has built tomorrow's card yet" and
@@ -8910,6 +9100,16 @@ class _PicksView(discord.ui.View):
         self.add_item(self._select(_PICKS_PICK_DAY, self._day_options(), row, self._on_day))
         row += 1
         if self.state["state"] != "ready":
+            # THE ONE-OFF, ON THE SURFACE THAT ABSORBED IT. Session 6 takes
+            # `🆚 Predict a match` off the hub root because the day's card is
+            # what a member actually wants from it, and
+            # `PLAN_champion_duel_ia.md` keeps it reachable for a one-off
+            # rather than deleting it. Here is where a one-off is asked for:
+            # somebody looking at the card wanting two players who are not on
+            # it. It is offered on the states with no card too, because a round
+            # we hold no draw for is exactly when a hand-typed pair is the only
+            # answer available.
+            self._predict(row)
             return
         # Only where there is something to choose between. One card is the
         # normal day and a picker over it would be a control whose every option
@@ -8938,6 +9138,11 @@ class _PicksView(discord.ui.View):
         # button that is not there.
         if self.meetings:
             self._add(CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, row, self._on_show)
+        # BEFORE THE DESTRUCTIVE ONE, which stays at the end of its row
+        # (`notes/DESIGN.md`, grid layout). Never write-gated: predicting is a
+        # read and it is free.
+        self._predict(row)
+        if self.meetings:
             self._add(
                 CD_BTN_PICKS_DELETE,
                 discord.ButtonStyle.danger,
@@ -8945,6 +9150,22 @@ class _PicksView(discord.ui.View):
                 self._on_delete,
                 disabled=not self.can_write,
             )
+
+    def _predict(self, row: int) -> None:
+        """The one-off prediction, disabled with the engine rather than hidden.
+
+        `engine_ok` is read off the modules rather than passed in, exactly as
+        `_open_hub` computes it: it is a property of the deploy, not of the
+        caller, so a parameter would be one more thing every call site has to
+        get right for an answer that is the same for all of them.
+        """
+        self._add(
+            CD_BTN_PREDICT,
+            discord.ButtonStyle.secondary,
+            row,
+            self._on_predict,
+            disabled=not (predict_lib.ENGINE_AVAILABLE and db.NAMES_AVAILABLE),
+        )
 
     def _step(self) -> str:
         """Which of the three taps is being made, which is what the pager moves.
@@ -9365,6 +9586,15 @@ class _PicksView(discord.ui.View):
         day = picks_lib.Slate(guild_id="", play_on=self.state["play_on"]).date_label()
         await self._reload(inter, notice=_PICKS_DELETED.format(day=day))
 
+    async def _on_predict(self, inter: discord.Interaction):
+        """One match this card does not carry, typed rather than picked.
+
+        A modal, so it opens straight off the press and leaves the card on
+        screen behind it: the reader came here for the day's picks and asking
+        about one extra pair is an aside rather than a place to be sent.
+        """
+        await inter.response.send_modal(_PredictModal())
+
     async def _on_show(self, inter: discord.Interaction):
         """Draw the card, and send it with every row written out beside it.
 
@@ -9525,13 +9755,18 @@ class _PicksView(discord.ui.View):
         b = discord.utils.escape_markdown(_pick_name(self._member(self.p2) or {}))
         opened = self.state["card_no"]
         try:
+            # ONE TRANSACTION, in the database. This was a read of the card
+            # followed by a full rewrite of it on a second connection, so a
+            # meeting somebody else added in between was dropped silently.
+            # `db.add_to_slate` appends under `BEGIN IMMEDIATE`, which is what
+            # actually closes that rather than narrowing it.
             target = await asyncio.to_thread(
                 functools.partial(
-                    _card_a_meeting,
+                    db.add_to_slate,
                     self.guild_id,
                     self.state["play_on"],
-                    opened,
                     (self.p1, self.p2),
+                    card_no=opened,
                     actor=_actor(inter),
                 )
             )
@@ -9637,6 +9872,24 @@ class ChampionDuelHubView(discord.ui.View):
         self.add_item(button)
 
     def _build_buttons(self):
+        # ── Row 0: the four entries ──────────────────────────────────────────
+        #
+        # `PLAN_champion_duel_ia.md` session 6. Eight controls become four
+        # entries plus settings, and the four are the four questions
+        # `PROPOSAL_champion_duel_ia.md` traced, in the order it asks them:
+        # where I stand, how do I play this one, who should I pick today, how
+        # are my people doing. They are the whole of the front row, because the
+        # complaint this rethink started from was that the most valuable thing
+        # in the feature was the fifth button along.
+        #
+        # NOTHING IS DELETED. Every control that came off this row is reachable
+        # from where the person already is: predicting a one-off is on the card
+        # `🔮 Today's picks` opens, `➕ Add a player` is at the miss and on the
+        # alliance listing that names it, the capture guide is beside the two
+        # write controls it explains, and `🏅 Your group` is reached through
+        # the reader on `🏅 Your standing` rather than picked out of a list
+        # (`PLAN_champion_duel_ia.md`, *nobody goes group-first*).
+        #
         # FIRST, AND FIRST ON PURPOSE. `PROPOSAL_champion_duel_ia.md` principle
         # 1 is identity first: the hub opens on the person, and the control
         # that answers "where do I stand" is what the reader's eye should land
@@ -9657,21 +9910,11 @@ class ChampionDuelHubView(discord.ui.View):
             else:
                 self._add(CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, 0, self._on_who_am_i)
 
-        # Row 0 — the three ways in. Two of them lead to a player, and the
-        # write actions live on that player's card rather than here: asking
-        # "who?" once beats asking it again in every flow.
-        self._add(
-            CD_BTN_PREDICT,
-            discord.ButtonStyle.primary,
-            0,
-            self._on_predict,
-            disabled=not self.engine_ok,
-        )
-        # Beside Predict rather than beside Find, because the pairing that
-        # matters to the eye is the two controls that take two names. It renders
+        # Second, and the one entry that needs no Champion Duel resolved: it
+        # takes two names and answers about them wherever they play. It renders
         # locked rather than hidden on the free tier, which is the Premium rule
-        # in `DESIGN.md`: an alliance should see the shape of what they would be
-        # buying, and this one is hard to describe and easy to show.
+        # in `DESIGN.md`: an alliance should see the shape of what they would
+        # be buying, and this one is hard to describe and easy to show.
         self._add(
             CD_BTN_INTEL if self.can_intel else f"🔒 {CD_BTN_INTEL}",
             discord.ButtonStyle.secondary,
@@ -9679,58 +9922,64 @@ class ChampionDuelHubView(discord.ui.View):
             self._on_intel,
             disabled=not self.can_intel or not self.engine_ok,
         )
+        # NOT GATED ON `can_write`, and it used to be. The card is a read for
+        # everybody who is not building one, `_PicksView` draws its own write
+        # controls locked, and gating the door would deny the read to keep back
+        # the write. Nothing sets `can_write` False today, so this changes no
+        # surface now and stops the wrong one appearing if a gate ever lands.
+        #
+        # Absent without a grouping, the same as the two beside it: with no
+        # Champion Duel resolved there is no field to pick two players out of.
+        if self.grouping:
+            self._add(CD_BTN_PICKS, discord.ButtonStyle.secondary, 0, self._on_picks)
+        # Last of the four, and drawn whether or not we know the reader, unlike
+        # the identity pair above. That pair swaps label by claim state because
+        # a button reading "your standing" would be a promise to somebody we
+        # cannot pick out of a hundred rows; this one lands on a surface that
+        # says which of the three things is missing and carries the door for
+        # each. Hiding it would make "leadership has no view of their own
+        # people" and "you have not claimed yet" the same screen, which is the
+        # shape of the bug the round picker was fixed for.
+        if self.grouping:
+            self._add(CD_BTN_ALLIANCE, discord.ButtonStyle.secondary, 0, self._on_alliance)
+
+        # ── Row 1: looking somebody up, contributing, and the settings ───────
+        #
+        # Demoted rather than removed (`PLAN_champion_duel_ia.md`). Finding a
+        # player is how somebody reaches an opponent, and it is the gap-fill
+        # door as well: a miss lands on `_MissView` and its `➕ Add a player`,
+        # which is where adding one now lives.
         self._add(
             CD_BTN_FIND,
             discord.ButtonStyle.secondary,
-            0,
+            1,
             self._on_find,
             disabled=not self.engine_ok,
         )
-        # Deliberately on the front row: meeting someone we do not have is the
-        # most common way a contributor is currently turned away.
-        #
-        # NOT Premium, despite the padlock branch below. This comment used to
-        # say "Adding is Premium because it is a write", which was true until
-        # contributing came off the gate on 2026-08-17 and has described a gate
-        # that does not exist since -- nothing sets `can_write` False, so no
-        # padlock renders here. The branch survives because its 🔒-and-disable
-        # rendering is the shape any later gate reuses, which the odds and the
-        # intel surface both went on to use. Read it as unreachable, not live.
-        self._add(
-            f"🔒 {CD_BTN_ADD}" if not self.can_write else CD_BTN_ADD,
-            discord.ButtonStyle.secondary,
-            0,
-            self._on_add,
-            disabled=not self.can_write or not self.engine_ok,
-        )
-
-        # Row 1 — never locked. Someone deciding whether the feature is worth
-        # paying for should be able to see what contributing involves, and it
-        # is documentation: withholding it protects nothing.
-        self._add(CD_BTN_GUIDE, discord.ButtonStyle.secondary, 1, self._on_guide)
-        # Never locked, and absent rather than disabled without a grouping, for
-        # the same reason as recording: with none resolved there is no group to
-        # show and the caller is being asked for their warzone instead. Reading
-        # who you are facing is not a contribution, so it is not Premium.
-        if self.grouping:
-            self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
-        # Beside `🏅 Your group` because the plan splits that control into this
-        # and `🏅 Your standing`, so the two sit together for exactly as long as
-        # the old one survives (session 6 retires it).
-        #
-        # DRAWN WHETHER OR NOT WE KNOW THE READER, unlike the identity pair on
-        # row 0. That pair swaps label by claim state because a button reading
-        # "your standing" would be a promise to somebody we cannot pick out of a
-        # hundred rows; this one lands on a surface that says which of the three
-        # things is missing and carries the door for each. Hiding it would make
-        # "leadership has no view of their own people" and "you have not claimed
-        # yet" the same screen, which is the shape of the bug the round picker
-        # was fixed for.
-        if self.grouping:
-            self._add(CD_BTN_ALLIANCE, discord.ButtonStyle.secondary, 1, self._on_alliance)
+        # ONLY WHERE `🔮 Today's picks` IS NOT. Predicting one match is
+        # absorbed by the day's card and is offered there for a one-off, so on
+        # every surface that has the card this would be a second front door to
+        # something that already has one. A caller with no Champion Duel
+        # resolved has no card, and a DM never gets one -- and predicting two
+        # players who have never met is exactly what that caller came for.
+        if not self.grouping:
+            self._add(
+                CD_BTN_PREDICT,
+                discord.ButtonStyle.secondary,
+                1,
+                self._on_predict,
+                disabled=not self.engine_ok,
+            )
         # Recording needs a grouping to file the group against, so it is absent
         # rather than disabled when there is none: on that surface the caller is
         # being asked for their warzone and has nothing to record yet.
+        #
+        # STILL OPEN TO EVERYONE. `PROPOSAL_champion_duel_ia.md` principle 4
+        # puts batch entry behind a role the alliance configures; that role map
+        # does not exist, building one reaches outside this session's files,
+        # and gating this today would take recording away from members who have
+        # it. Demoted off the front row, which is the half of the move that
+        # does not need a decision from anybody.
         if self.grouping:
             self._add(
                 f"🔒 {CD_BTN_RECORD}" if not self.can_write else CD_BTN_RECORD,
@@ -9739,39 +9988,18 @@ class ChampionDuelHubView(discord.ui.View):
                 self._on_record,
                 disabled=not self.can_write,
             )
-        # A wrong warzone points the whole server at somebody else's tournament,
-        # and nothing else on this hub can fix it. Present whenever we resolved
-        # from one, which is the only time there is something to change.
+        # The settings half of "four entries plus settings". A wrong warzone
+        # points the whole server at somebody else's tournament, and nothing
+        # else on this hub can fix it. Present whenever we resolved from one,
+        # which is the only time there is something to change.
         if self.warzone:
             self._add(CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 1, self._on_warzone)
 
-        # Row 2 — the day's card, and it is alone on a row because row 1 is
-        # already at Discord's five.
-        #
-        # **THE PLACEMENT IS NOT SETTLED HERE.** IA session 6 reorganises this
-        # grid and `PLAN_champion_duel_ia.md` gives it this control to place,
-        # with `🏅 Your group` marked *"absorbed by `🔮 Today's picks`"*. This is
-        # a working door until then, and it is here rather than nowhere because
-        # `db.set_slate` has had no caller outside its own tests since it
-        # shipped: without a button the card renders and no member can reach it.
-        #
-        # Absent without a grouping, the same as recording and the group view:
-        # with no Champion Duel resolved there is no field to pick two players
-        # out of, and the caller is being asked for their warzone instead.
-        if self.grouping:
-            self._add(
-                f"🔒 {CD_BTN_PICKS}" if not self.can_write else CD_BTN_PICKS,
-                discord.ButtonStyle.secondary,
-                2,
-                self._on_picks,
-                disabled=not self.can_write,
-            )
-
-        # Row 3 — operator only, and absent entirely for everyone else.
+        # Row 2 — operator only, and absent entirely for everyone else.
         if self.is_admin:
-            self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 3, self._on_edits)
-            self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 3, self._on_revert)
-            self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 3, self._on_export)
+            self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 2, self._on_edits)
+            self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 2, self._on_revert)
+            self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 2, self._on_export)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
 
@@ -9819,6 +10047,9 @@ class ChampionDuelHubView(discord.ui.View):
             can_write=self.can_write,
             grouping=self.grouping,
             player=standing.get("player"),
+            standing=standing,
+            can_odds=can_odds,
+            warzone=self.warzone,
         )
         await inter.followup.send(
             embed=build_standing_embed(standing, can_odds=can_odds),
@@ -9884,9 +10115,6 @@ class ChampionDuelHubView(discord.ui.View):
     async def _on_find(self, inter: discord.Interaction):
         await inter.response.send_modal(_FindPlayerModal(self.can_write, grouping=self.grouping))
 
-    async def _on_add(self, inter: discord.Interaction):
-        await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
-
     async def _on_warzone(self, inter: discord.Interaction):
         await inter.response.send_modal(
             _WarzoneModal(can_write=self.can_write, current=self.warzone)
@@ -9915,7 +10143,7 @@ class ChampionDuelHubView(discord.ui.View):
 
         Opens on today for the round the guild's Champion Duel is playing. It
         opens on the states with nothing in them too, each carrying the control
-        that fixes it, which is the same deal `_on_group` takes: an alliance
+        that fixes it, which is the same deal `send_group_view` takes: an alliance
         that has just set its Participating Warzones holds nothing by
         definition, and being told so with no way to fix it is the dead end
         this whole surface is being rebuilt out of.
@@ -9927,40 +10155,6 @@ class ChampionDuelHubView(discord.ui.View):
             user_id=self.user_id,
             can_write=self.can_write,
         )
-
-    async def _on_group(self, inter: discord.Interaction):
-        """Who this caller is facing.
-
-        The odds of advancing belong on the surface this opens, because odds
-        need a group and this is where a group exists. They are wired and
-        gated: `CD_BTN_ODDS` renders there disabled with a padlock on the free
-        tier, which is the Premium rule, and `champion_duel_odds` is the one
-        entry in `PREMIUM_FEATURES` this feature has.
-
-        This docstring described them as unwired until 2026-08-20. That was
-        true when written -- the model was being rebuilt in
-        `champion-duel-simulator` as of 2026-08-16 -- and stopped being true
-        when #506 merged on the 19th.
-        """
-        await inter.response.defer(ephemeral=True, thinking=True)
-        await send_group_view(
-            inter,
-            grouping=self.grouping,
-            warzone=self.warzone,
-            user_id=self.user_id,
-            can_write=self.can_write,
-        )
-
-    async def _on_guide(self, inter: discord.Interaction):
-        """Its own button rather than part of the write flows.
-
-        A modal cannot carry an image, and putting the guide in front of the
-        modal would charge everyone who already knows an extra click on every
-        entry. Beside the two buttons it explains is where someone looks when
-        the question occurs to them.
-        """
-        embeds, files = build_guide()
-        await inter.response.send_message(embeds=embeds, files=files, ephemeral=True)
 
     async def _on_edits(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True, thinking=True)

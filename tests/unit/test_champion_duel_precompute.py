@@ -946,17 +946,39 @@ def test_the_press_reads_the_store_at_all(group):
     failure mode of this whole change is that it silently goes back to that:
     every test above passes `stored=` by hand, and none of them would notice
     the press quietly not looking anything up.
+
+    **Asserted on `send_group_odds`, which is where the press now is.** Session
+    6 put `🔮 Odds of advancing` on `🏅 Your standing` as well as on the
+    group listing, and the two share one implementation precisely so the gate
+    and the stamp cannot come apart -- which is what this guards.
     """
     source = pathlib.Path(hub.__file__).read_text(encoding="utf-8")
     press = next(
         node
         for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_odds"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "send_group_odds"
     )
     body = ast.get_source_segment(source, press)
 
     assert "_stored_odds" in body, "the odds press stopped reading the store"
     assert "stored=" in body, "the press looked the answer up and then did not pass it on"
+    # Both surfaces go through it rather than growing a second copy.
+    callers = {
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_on_odds"
+        and "send_group_odds" in (ast.get_source_segment(source, node) or "")
+    }
+    assert callers == {"_on_odds"}, "an odds press stopped going through send_group_odds"
+    assert (
+        sum(
+            1
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_odds"
+        )
+        == 2
+    ), "the group listing and the standing are the two presses"
 
 
 def test_the_sweep_does_not_grow_with_every_tournament_ever_played(cd_db):

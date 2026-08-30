@@ -201,6 +201,22 @@ def test_a_member_never_sees_the_preset_or_undo_buttons():
     assert not any("Undo" in l for l in labels)
 
 
+def test_saving_a_preset_is_gated_but_loading_and_deleting_are_not():
+    """A lapse must not strand a lineup the alliance made while paying, so the
+    gate sits on Save alone."""
+    import inspect
+
+    src = {
+        name: inspect.getsource(getattr(buddy_hub._BuddyHubView, name))
+        for name in ("_save_preset", "_load_preset", "_delete_preset")
+    }
+    assert "buddy_presets" in src["_save_preset"]
+    assert "_premium_guard" not in src["_load_preset"]
+    assert "_premium_guard" not in src["_delete_preset"]
+    for name in ("_load_preset", "_delete_preset"):
+        assert "_leader_ok" in src[name], name
+
+
 # ── persistent click handler ──────────────────────────────────────────────────
 
 

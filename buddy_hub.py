@@ -6,8 +6,11 @@ One command opens a hub that adapts to tier and role:
 - **Leadership:** ✏️ Manage pairings · 🔄 Refresh from sheet · 📣 Post buddy
   list · ↩️ Undo last change · ⚙️ Open setup
 - **Premium leadership:** ✨ Auto-assign · ♻️ Re-pair from scratch ·
-  📣 Post self-service buttons · 💾 Save as preset · 📂 Load preset ·
-  🗑️ Delete preset
+  📣 Post self-service buttons · 💾 Save as preset
+
+📂 Load preset and 🗑️ Delete preset are leadership but **not** Premium — saving
+a lineup is the paid part; using or clearing one you already saved is not, so a
+lapse never strands a preset the alliance made while paying.
 
 Every action that writes captures the pair list first, so ↩️ Undo can put it
 back. That snapshot lives on the view for the length of the sitting and is
@@ -462,6 +465,7 @@ class _BuddyHubView(discord.ui.View):
     # who has left or contradict the profession survey.
 
     async def _save_preset(self, inter: discord.Interaction):
+        # The one gated preset action. Loading and deleting stay free.
         if not await self._premium_guard(inter, "buddy_presets"):
             return
         await inter.response.send_modal(_PresetNameModal(self))
@@ -526,7 +530,11 @@ class _BuddyHubView(discord.ui.View):
         return True
 
     async def _load_preset(self, inter: discord.Interaction):
-        if not await self._premium_guard(inter, "buddy_presets"):
+        # Leadership-only, but deliberately *not* Premium: saving a lineup is
+        # the paid part, using or clearing one you already saved is not. A
+        # lapse must never strand a preset the alliance made while paying.
+        if not self._leader_ok(inter):
+            await inter.response.send_message(_DENY_NOT_LEADER, ephemeral=True)
             return
         import config
 
@@ -561,7 +569,11 @@ class _BuddyHubView(discord.ui.View):
         await self._preset_picker(inter, "Pick a preset to load:", _pick)
 
     async def _delete_preset(self, inter: discord.Interaction):
-        if not await self._premium_guard(inter, "buddy_presets"):
+        # Leadership-only, but deliberately *not* Premium: saving a lineup is
+        # the paid part, using or clearing one you already saved is not. A
+        # lapse must never strand a preset the alliance made while paying.
+        if not self._leader_ok(inter):
+            await inter.response.send_message(_DENY_NOT_LEADER, ephemeral=True)
             return
         import config
 

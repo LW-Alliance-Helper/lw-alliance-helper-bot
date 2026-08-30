@@ -136,9 +136,10 @@ PREMIUM_FEATURES: set[str] = {
     "multiple_surveys",
     "thread_destinations",
     # Profession Buddy System (#289). Free tier keeps the shared list, the
-    # /buddy lookup, manual pairing, and the single-step undo — that one is
-    # data protection rather than a feature, so it isn't gated. These five
-    # gate the Premium layer.
+    # /buddy lookup, manual pairing, the single-step undo, and loading or
+    # deleting a saved preset. Undo is data protection rather than a feature;
+    # `buddy_presets` gates *saving* a lineup only, so an alliance that lapses
+    # can still use and clear the presets it made while paying.
     "buddy_auto_assign",
     "buddy_self_service",
     "buddy_auto_repair",

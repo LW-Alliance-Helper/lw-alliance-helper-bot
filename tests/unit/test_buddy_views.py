@@ -217,6 +217,27 @@ def test_saving_a_preset_is_gated_but_loading_and_deleting_are_not():
         assert "_leader_ok" in src[name], name
 
 
+def test_the_buddy_wizard_asks_where_presets_live_and_counts_its_steps():
+    """The preset tab is the alliance's to name, so setup has to offer it. The
+    step count is asserted because adding a step means renumbering every later
+    one, and an off-by-one there is invisible until a user reads it."""
+    import inspect
+    import re
+
+    import setup_cog
+
+    src = inspect.getsource(setup_cog.run_buddy_setup)
+    assert 'exclude_field="preset_tab"' in src
+    assert 'update_buddy_config_field(guild_id, "preset_tab", preset_tab)' in src
+    assert "**Preset tab:** {preset_tab}" in src
+
+    steps = re.findall(r"\*\*Step (\d+)[a-z]? of (\d+)", src)
+    assert steps, "no step headings found"
+    totals = {total for _, total in steps}
+    assert totals == {"10"}, totals
+    assert max(int(n) for n, _ in steps) == 10
+
+
 # ── persistent click handler ──────────────────────────────────────────────────
 
 

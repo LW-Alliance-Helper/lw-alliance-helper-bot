@@ -4881,6 +4881,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         notify_id = current.get("notify_channel_id", 0) or 0
         fields = [
             ("Buddy Tab", current.get("buddy_tab") or "Buddy System"),
+            ("Preset Tab", current.get("preset_tab") or "Buddy Presets"),
             (
                 "Opt-out column",
                 f"`{current.get('include_col_header')}`"
@@ -4927,7 +4928,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
-    await channel.send("**Step 1 of 9 — Turn on the Profession Buddy System?**", view=enabled_view)
+    await channel.send("**Step 1 of 10 — Turn on the Profession Buddy System?**", view=enabled_view)
     await wait_view_or_cancel(enabled_view, cancel_event)
     if enabled_view.cancelled:
         wizard_registry.unregister(user.id, cancel_event)
@@ -4976,7 +4977,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Buddy tab name ────────────────────────────────────────────────
     buddy_tab = await ask_keep_or_change(
         channel,
-        "**Step 2 of 9 — Buddy List Tab**\n"
+        "**Step 2 of 10 — Buddy List Tab**\n"
         "Which tab in your Google Sheet should hold the buddy list? The bot owns "
         "this tab and rebuilds it (one row per War Leader, Engineers alongside).\n"
         "⚠️ *The bot will create it if it doesn't exist.*",
@@ -4991,12 +4992,32 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         return
     await warn_if_tab_claimed(channel, guild_id, buddy_tab, exclude_field="buddy_tab")
 
+    # ── Step 3: Preset tab (#289 Stage 3) ─────────────────────────────────────
+    # Presets live on the alliance's own sheet rather than in our database, so
+    # where they live is theirs to name.
+    preset_tab = await ask_keep_or_change(
+        channel,
+        "**Step 3 of 10 — Buddy Presets Tab**\n"
+        "Which tab should hold your saved pairing presets? Saving a lineup writes it "
+        "here, so your presets stay on your own sheet.\n"
+        "⚠️ *The bot will create it if it doesn't exist.*",
+        default="Buddy Presets",
+        current=current.get("preset_tab", ""),
+        modal_title="Buddy Presets Tab Name",
+        modal_label="Tab name",
+        timeout_cmd="setup_buddy",
+        cancel_event=cancel_event,
+    )
+    if preset_tab is None:
+        return
+    await warn_if_tab_claimed(channel, guild_id, preset_tab, exclude_field="preset_tab")
+
     # ── Step 3: Opt-out column (#427) ─────────────────────────────────────────
     # Optional. Blank keeps every row on the profession tab eligible, which is
     # the pre-#427 behaviour and what every existing alliance gets on upgrade.
     inc_view = YesNoView()
     await channel.send(
-        "**Step 3 of 9 — Leave people out of the buddy list?**\n"
+        "**Step 4 of 10 — Leave people out of the buddy list?**\n"
         f"Some alliances keep members on the **{profession_tab}** tab after they leave, "
         "so the historical record stays intact. Others have members who just don't want "
         "a buddy.\n\n"
@@ -5013,7 +5034,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if inc_view.selected:
         include_col_header = await ask_keep_or_change(
             channel,
-            "**Step 3a of 9 — Which column?**\n"
+            "**Step 4a of 10 — Which column?**\n"
             f"Type the **header name** exactly as it appears in row 1 of **{profession_tab}** "
             "(not the column letter, so you can move it later without breaking anything).\n\n"
             "The bot leaves someone out when their cell reads **no**, **false**, **0**, "
@@ -5044,7 +5065,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     if not has_member_roster_config(guild_id):
         await channel.send(
-            "**Step 4 of 9 — Keep the list in step with your roster** *(skipped)*\n"
+            "**Step 5 of 10 — Keep the list in step with your roster** *(skipped)*\n"
             "You haven't pointed the bot at a member roster yet. Set one up via `/setup` → "
             "👥 Member Sync (or 🚂 Train → Conductor Rotation) and re-run this wizard to have "
             "departures drop out of the buddy list on their own."
@@ -5066,7 +5087,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
                 "with no edit at all.*"
             )
         await channel.send(
-            f"**Step 4 of 9 — Keep the list in step with your roster?**\n{blurb}\n\n"
+            f"**Step 5 of 10 — Keep the list in step with your roster?**\n{blurb}\n\n"
             "Only people on that tab would be eligible for a buddy.",
             view=roster_view,
         )
@@ -5079,7 +5100,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Step 5: Engineer doubling ─────────────────────────────────────────────
     dbl_view = YesNoView()
     await channel.send(
-        "**Step 5 of 9 — Two Engineers per War Leader?**\n"
+        "**Step 6 of 10 — Two Engineers per War Leader?**\n"
         "When you have more Engineers than War Leaders, should we allow War Leaders "
         "to have 2 Engineers paired with them?",
         view=dbl_view,
@@ -5113,7 +5134,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     if power_source_available:
         scarcity_view = YesNoView()
         await channel.send(
-            "**Step 6 of 9 — When Engineers are scarce**\n"
+            "**Step 7 of 10 — When Engineers are scarce**\n"
             "If you have more War Leaders than Engineers, should we prioritize your "
             "strongest War Leaders first? (Note that this will read from your existing "
             "Power data source if you have one set up.)",
@@ -5145,7 +5166,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     rel_view = YesNoView()
     await channel.send(
-        "**Step 7 of 9 — Rank Engineers by reliability?**\n"
+        "**Step 8 of 10 — Rank Engineers by reliability?**\n"
         "Keep a 1-5 reliability score for your Engineers somewhere in your Google "
         "Sheet (higher = more dependable) and the bot will pair your most reliable "
         "Engineers with your top War Leaders. Leave this off to order Engineers "
@@ -5272,7 +5293,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
         rel_choice = _RelChoiceView()
         await channel.send(
-            "**Step 7a of 9 — Where are your reliability scores?**\n"
+            "**Step 8a of 10 — Where are your reliability scores?**\n"
             "The bot reads each Engineer's 1-5 score from here (it never writes to it) "
             "and matches members the same way it reads power:\n"
             f"{_rel_line('Tab name', disp_tab, default_rel_tab)}\n"
@@ -5307,7 +5328,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     )
     alerts_view = YesNoView()
     await channel.send(
-        "**Step 8 of 9 — Leadership alerts**\n"
+        "**Step 9 of 10 — Leadership alerts**\n"
         "When a member swaps profession and the bot re-pairs people, should it post a "
         "heads-up to a leadership channel?\n"
         "💎 Premium: these posts send only while Premium is active.",
@@ -5349,7 +5370,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
 
     dm_view = YesNoView()
     await channel.send(
-        "**Step 9 of 9 — Buddy DMs**\n"
+        "**Step 10 of 10 — Buddy DMs**\n"
         "Should the bot DM members their buddy when it changes?\n"
         "💎 Premium: these DMs send only while Premium is active.",
         view=dm_view,
@@ -5387,6 +5408,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
     # ── Save ──────────────────────────────────────────────────────────────────
     update_buddy_config_field(guild_id, "enabled", 1)
     update_buddy_config_field(guild_id, "buddy_tab", buddy_tab)
+    update_buddy_config_field(guild_id, "preset_tab", preset_tab)
     update_buddy_config_field(guild_id, "profession_tab", profession_tab)
     update_buddy_config_field(guild_id, "profession_col_header", profession_col_header)
     update_buddy_config_field(guild_id, "include_col_header", include_col_header)
@@ -5405,6 +5427,7 @@ async def run_buddy_setup(interaction: discord.Interaction, bot):
         color=discord.Color.green(),
         description=(
             f"**Buddy tab:** {buddy_tab}\n"
+            f"**Preset tab:** {preset_tab}\n"
             f"**Opt-out column:** "
             f"{f'`{include_col_header}` on {profession_tab}' if include_col_header else 'not set'}\n"
             f"**Limited to your member roster:** "

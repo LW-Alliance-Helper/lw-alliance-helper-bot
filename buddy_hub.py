@@ -408,7 +408,7 @@ class _BuddyHubView(discord.ui.View):
         await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         await inter.followup.send(
-            content=_with_report("Your last change has been undone.", result),
+            content=_with_report("↩️ Your last change has been undone.", result),
             embed=embed,
             ephemeral=True,
             **_conflict_kwargs(self, cfg, result),

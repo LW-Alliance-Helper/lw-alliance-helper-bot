@@ -482,11 +482,12 @@ _EDIT_ME_TITLE = "Your information"
 #: somebody the write was declined when it landed.
 _EDIT_ME_DONE = "✅ Updated **{player}**."
 
-#: ⚠️ NOT SIGNED OFF. **New copy on 2026-08-30**, so the variants are
-#: enumerated in the pull request body and this is a placeholder until Kevin
-#: picks one -- the rule this project has now paid for twice
-#: (`CHAMPION_DUEL_INDEX.md`). It is the only marker this session adds, and it
-#: is the only string on the feature that is genuinely unsettled.
+#: ✅ SIGNED OFF by Kevin on 2026-08-30. He took **variant A**, the one
+#: shipped as the placeholder, off the four enumerated in #556's body.
+#:
+#: **None of the four say "someone else's account", deliberately.** The row
+#: it collides with may be unclaimed, or may be this member's own duplicate,
+#: so naming an owner would be a guess stated as a fact.
 #:
 #: **It replaces `_EDIT_ME_NEW`, which described a bug.** That string announced
 #: the second account a rename used to create. `✏️ Edit my information` now

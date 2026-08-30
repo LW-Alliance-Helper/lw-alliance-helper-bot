@@ -1104,7 +1104,35 @@ def test_a_half_recorded_week_split_fills_in_from_thirteen():
             row.week_score = 5
     lines = entry.rest_of_league_lines(_state(rows), 1)
 
-    assert any(" 5 - 8 " in line for line in lines)
+    # 5 for one side derives 8 for the other, and 8 won, so 8 leads.
+    assert any(" 8 - 5 " in line for line in lines)
+
+
+def test_a_recorded_match_puts_its_winner_first():
+    """Match Record leads with the winner -- all eight rows of a real week,
+    three of them against seed order. Reading the two screens side by side is
+    the job, and a line needing a mental flip is a line that gets misread."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    loser, winner = match.a, match.b  # seed order puts the loser first
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == winner:
+            row.week_score = 9
+        elif row.alliance == loser:
+            row.week_score = 4
+    line = entry.rest_of_league_lines(_state(rows), 1)[0]
+
+    assert line == (f"{state.display_name(winner)} 9 - 4 {state.display_name(loser)}")
+
+
+def test_an_unrecorded_match_keeps_seed_order():
+    """No winner yet, so there is nothing to lead with."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    line = entry.rest_of_league_lines(state, 1)[0]
+
+    assert line.startswith(state.display_name(match.a))
 
 
 def test_your_own_match_is_not_in_the_rest_of_the_league():

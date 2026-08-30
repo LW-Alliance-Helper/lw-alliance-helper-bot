@@ -1763,22 +1763,37 @@ def rest_of_league_lines(state, week: int) -> list[str]:
     One side is enough: a matchup's two week scores total 13, which is already
     a validation rule, so a half-recorded match reads as a whole one rather
     than as missing.
+
+    **A recorded match puts its winner first**, which is what Match Record
+    does -- confirmed across all eight rows of a real week, three of them
+    against seed order. Reading the two screens side by side is the whole job
+    here, and a line that needs flipping first is a line that gets misread.
+    An unrecorded match has no winner to lead with, so it stays in seed order.
     """
     lines = []
     for match in week_matches(state, week):
-        a, b = state.display_name(match.a), state.display_name(match.b)
         row_a, row_b = state.row_for(match.a, week), state.row_for(match.b, week)
         score_a = row_a.week_score if row_a else None
         score_b = row_b.week_score if row_b else None
 
         if score_a is None and score_b is None:
-            lines.append(f"{a} v {b} - {VS_RESULTS_NOT_ENTERED}")
+            lines.append(
+                f"{state.display_name(match.a)} v {state.display_name(match.b)}"
+                f" - {VS_RESULTS_NOT_ENTERED}"
+            )
             continue
         if score_a is None:
             score_a = ad.WEEK_POINTS_TOTAL - score_b
         if score_b is None:
             score_b = ad.WEEK_POINTS_TOTAL - score_a
-        lines.append(f"{a} {score_a} - {score_b} {b}")
+
+        side_a, side_b = match.a, match.b
+        if score_b > score_a:
+            side_a, side_b = side_b, side_a
+            score_a, score_b = score_b, score_a
+        lines.append(
+            f"{state.display_name(side_a)} {score_a} - {score_b} {state.display_name(side_b)}"
+        )
     return lines
 
 

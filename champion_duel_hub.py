@@ -1019,10 +1019,18 @@ _PICK_DAYS_AHEAD = 2
 # schema still says `pick_meetings` and this module still has `_meeting_line`,
 # because renaming a table is not a copy change -- but **nothing a member reads
 # says "meeting" any more.**
-_PICKS_INTRO = (
-    "To add matches to your picks, select a warzone and then the two players.\n\n"
-    "Note that the game uses Matches to describe these."
-)
+#: ⚠️ The second sentence here was an INSTRUCTION, not copy, and it shipped.
+#: Kevin's *"Note that the game uses Matches to describe these"* is the reason
+#: for the meeting -> match sweep -- it is quoted in the comment directly above
+#: for exactly that purpose -- and it was pasted into the string as well.
+#: Removed 2026-08-30, on his say-so.
+#:
+#: Wrong three ways: nobody chose it and it was never on a sign-off page, the
+#: sentence before it already says *matches* so it was circular, and it
+#: narrates the game back at somebody playing it. Kevin, 2026-08-25: *"this
+#: goes back to us telling someone about the game when they play and already
+#: know this."*
+_PICKS_INTRO = "To add matches to your picks, select a warzone and then the two players."
 _PICKS_EMPTY = "No matches added yet"
 _PICKS_NO_GROUPING = (
     "We do not know which Champion Duel your alliance is in yet. Set it with **{button}**."

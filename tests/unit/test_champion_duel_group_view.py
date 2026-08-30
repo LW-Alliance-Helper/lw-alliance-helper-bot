@@ -1960,22 +1960,70 @@ def test_an_edit_is_acknowledged_as_an_update_not_as_a_refused_duplicate(cd_db):
     assert "duplicate" not in note
 
 
-def test_an_edit_that_lands_on_a_new_account_says_so_rather_than_orphaning_it(cd_db):
-    """A registrant is keyed on (name, warzone) and cannot be renamed, and both
-    are editable boxes. A member whose in-game name changed creates a second
-    account and their claim stays on the first, so anything they entered lands
-    on a row nobody holds. Found by `/code-review`."""
+def test_an_edit_renames_the_account_the_member_already_holds(cd_db):
+    """**The bug this replaces:** a registrant was keyed on (name, warzone) and
+    both are editable boxes, so a member whose in-game name changed got a
+    SECOND account -- their claim stayed on the first and everything they had
+    just entered landed on a row nobody held.
+
+    Kevin, 2026-08-30: *"if someone is EDITING their own information, it needs
+    to update them."* So it is one row throughout, and the id proves it: the
+    claim, the squads and every other reference are to `registrants(id)`, so
+    all of them follow a rename without being touched."""
     grouping, _groups, _players = _alliance_world()
     held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
     state = hub.read_alliance(_leader(held, user_id=22), grouping)
     modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
 
-    renamed = db.upsert_registrant("Newname", server="738", alliance="ZZQ", thp=1)
-    note = modal._note(renamed, existing=False)
+    renamed = db.upsert_registrant("Newname", server="738", rename_id=modal.editing["id"])
 
-    assert hub._label(renamed) in note
-    assert hub._label(state["player"]) in note, "the account they still hold is named"
-    assert db.get_claimed_registrant(22)["id"] == held["id"], "the claim did not follow"
+    assert renamed["id"] == held["id"], "the same row, renamed"
+    assert renamed["display_name"] == "Newname"
+    assert db.find_registrants("Oldname", "738") == [], "the old name is not still a row"
+    assert db.get_claimed_registrant(22)["id"] == held["id"], "the claim followed"
+    assert renamed["alliance"] == "ZZQ", "an untouched column survives the rename"
+
+    note = modal._note(renamed, existing=True)
+    assert note == hub._EDIT_ME_DONE.format(player=hub._label(renamed))
+
+
+def test_a_rename_onto_an_account_that_already_exists_is_refused(cd_db):
+    """The one case a rename cannot be. The name and warzone submitted are
+    already a DIFFERENT registrant, with its own squads and history, so there
+    are two real records and choosing between them is the member's call.
+
+    **Nothing is written**, which is the assertion with teeth: an upsert that
+    quietly moved the member onto somebody else's row, or overwrote it, would
+    be the data-destroying write this whole path exists to avoid."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=23), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    other = db.upsert_registrant("Takenname", server="738", alliance="QQZ", origin="imported")
+
+    with pytest.raises(db.RenameCollision) as caught:
+        db.upsert_registrant(
+            "Takenname", server="738", alliance="ZZQ", rename_id=modal.editing["id"]
+        )
+
+    assert caught.value.existing["id"] == other["id"], "it carries the row it hit"
+
+    assert db.get_registrant(held["id"])["display_name"] == "Oldname", "not renamed"
+    assert db.get_registrant(other["id"])["alliance"] == "QQZ", "the other row is untouched"
+    assert db.get_claimed_registrant(23)["id"] == held["id"], "the claim did not move"
+
+
+def test_the_add_flow_still_creates_a_second_account_on_a_new_name(cd_db):
+    """**`rename_id` is opt-in and this is the caller that must not opt in.**
+    `➕ Add a player` is how somebody enters an opponent, so a name we do not
+    hold has to create a row. Renaming there would silently overwrite whichever
+    player the adder happened to be looking at."""
+    first = db.upsert_registrant("Oldname", server="738", alliance="ZZQ")
+    second = db.upsert_registrant("Newname", server="738", alliance="ZZQ")
+
+    assert second["id"] != first["id"], "the add flow creates, exactly as before"
+    assert db.get_registrant(first["id"])["display_name"] == "Oldname"
 
 
 def test_the_add_flow_keeps_its_own_two_notes(cd_db):
@@ -1997,7 +2045,7 @@ def test_an_emptied_box_on_the_edit_flow_empties_the_field(cd_db):
     state = hub.read_alliance(_leader(held, user_id=31), grouping)
     modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
 
-    assert modal._blank_means(db.find_registrants("Clearme", "738")) is db.CLEAR
+    assert modal._blank_means() is db.CLEAR
 
 
 def test_a_blank_box_on_the_add_flow_still_means_nothing(cd_db):
@@ -2007,20 +2055,31 @@ def test_a_blank_box_on_the_add_flow_still_means_nothing(cd_db):
     every other caller of `upsert_registrant`."""
     db.upsert_registrant("Freshadd", server="738", alliance="ZZQ")
 
-    assert hub._AddPlayerModal(True)._blank_means(db.find_registrants("Freshadd", "738")) is None
+    assert hub._AddPlayerModal(True)._blank_means() is None
 
 
-def test_an_edit_that_lands_on_another_account_cannot_empty_its_fields(cd_db):
-    """Name and warzone are both editable here, so a submission can land on a
-    registrant this modal never showed anybody -- `_EDIT_ME_NEW` is the
-    acknowledgement for exactly that. The boxes were filled from somebody
-    else's row, so a cleared one says nothing about this account's fields."""
+def test_a_clear_can_no_longer_reach_an_account_the_modal_never_showed(cd_db):
+    """**The check this replaces is gone because the case is.** `_blank_means`
+    used to have to prove the submitted identity resolved back to the row the
+    modal opened on, because a changed name or warzone landed the write on a
+    different registrant -- where the boxes were filled from somebody else's
+    row, so a cleared one said nothing about theirs.
+
+    `rename_id` removes it at the root: the write lands on the row this opened
+    on or it does not happen at all. So the guarantee is now structural rather
+    than a check, and this is the test of it."""
     grouping, _groups, _players = _alliance_world()
     held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
     state = hub.read_alliance(_leader(held, user_id=32), grouping)
     modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
 
-    db.upsert_registrant("Someoneelse", server="738", alliance="QQZ", origin="imported")
+    stranger = db.upsert_registrant("Someoneelse", server="738", alliance="QQZ", origin="imported")
 
-    assert modal._blank_means(db.find_registrants("Someoneelse", "738")) is None
-    assert modal._blank_means([]) is None, "a name we hold nobody under creates the row"
+    # Submitting the stranger's exact identity, with alliance cleared.
+    with pytest.raises(db.RenameCollision):
+        db.upsert_registrant(
+            "Someoneelse", server="738", alliance=db.CLEAR, rename_id=modal.editing["id"]
+        )
+
+    assert db.get_registrant(stranger["id"])["alliance"] == "QQZ", "their tag survived"
+    assert db.get_registrant(held["id"])["alliance"] == "ZZQ", "and so did the member's"

@@ -3366,8 +3366,33 @@ def resolve_registrant(name: str, server=None) -> dict:
     return matches[0]
 
 
+class RenameCollision(Exception):
+    """The name and warzone a rename asks for are already a different account.
+
+    Only `rename_id` can raise this. Without it `upsert_registrant` is keyed on
+    (name, server) and a submitted identity that already exists is simply the
+    row it updates -- that is the upsert, and it is unchanged. A rename names
+    the row up front, so a matching row that is *not* that one is two real
+    records rather than one, and the write has nowhere to land that is not
+    somebody else's.
+
+    Carries the row it hit so the surface can name the other account instead of
+    resolving it a second time, the same reason `ClaimRefused` carries the
+    holder. It is a real registrant with its own squads and history, so
+    **nothing is written**: choosing between two records is a member's decision
+    and not one an upsert may take on their behalf.
+    """
+
+    def __init__(self, existing: dict):
+        super().__init__(
+            f"{existing.get('display_name')} on warzone {existing.get('server')} "
+            "is already a different account"
+        )
+        self.existing = existing
+
+
 def upsert_registrant(
-    name, *, server=None, grp=None, origin="self_reported", actor=None, **fields
+    name, *, server=None, grp=None, origin="self_reported", actor=None, rename_id=None, **fields
 ) -> dict:
     """Create or update one registrant, keyed on (name, server).
 
@@ -3391,6 +3416,26 @@ def upsert_registrant(
     and `server` are the row's identity and `grp` is round data that the record
     and reconcile flows own, so neither takes a `CLEAR`. **On INSERT `CLEAR` is
     the same as nothing**: a column with no value yet cannot be emptied.
+
+    **`rename_id` names the row up front, and it is the one way identity moves.**
+    Without it this is keyed on (name, server) exactly as it always was: a
+    submitted identity that does not match INSERTs, which is what `➕ Add a
+    player` needs -- somebody entering an opponent must create them, and a
+    rename there would silently overwrite a different player. With it the
+    caller has said *this row, whatever it is called now*, so `player_key`,
+    `display_name` and `server` are written like any other column and the row
+    keeps its id.
+
+    **That is why a rename costs nothing to the rest of the schema.** Nine
+    foreign keys reference `registrants(id)` and not one reads the name, so
+    squads, deployment orders, the claim, group membership, `pick_meetings` on
+    both sides and the profile all follow the row without being touched.
+
+    Raises `NoSuchRegistrant` when `rename_id` names a row that is gone, and
+    `RenameCollision` when the identity asked for is already a *different*
+    registrant -- see that class for why nothing is written in that case.
+    **Opt-in, like `CLEAR`**: every caller that has not heard of `rename_id`
+    behaves exactly as it does today.
     """
     if origin not in VALID_ORIGINS:
         raise ValueError(f"origin must be one of {VALID_ORIGINS}")
@@ -3415,9 +3460,24 @@ def upsert_registrant(
     actor_id = (actor or {}).get("discord_user_id")
 
     with _get_conn() as conn:
-        row = conn.execute(
+        match = conn.execute(
             "SELECT * FROM registrants WHERE player_key = ? AND server IS ?", (key, server)
         ).fetchone()
+        if rename_id is None:
+            # Keyed on the submitted identity, which is every caller that
+            # predates `rename_id` and is unchanged.
+            row = match
+        else:
+            # Keyed on the row the caller named. Read it back rather than
+            # trusting what they were handed: both views that reach this live
+            # ten and fifteen minutes, and an account can be merged away or a
+            # claim moved inside that window.
+            rename_id = int(rename_id)
+            row = conn.execute("SELECT * FROM registrants WHERE id = ?", (rename_id,)).fetchone()
+            if row is None:
+                raise NoSuchRegistrant(f"no registrant with id {rename_id}")
+            if match is not None and match["id"] != rename_id:
+                raise RenameCollision(dict(match))
         if row is None:
             # The columns come off `CLEARABLE_FIELDS` rather than being typed
             # out beside it, so this INSERT and the UPDATE below cannot come to
@@ -3467,6 +3527,16 @@ def upsert_registrant(
             # is the one place on this feature where a blank box is a statement
             # rather than an omission.
             sets, params = ["display_name = ?", "updated_at = ?"], [display, now]
+            # **The identity columns move only on a rename**, and only after
+            # the collision check above has proved the (key, server) they are
+            # moving to is free. Outside a rename the row was found *by* this
+            # key, so writing it back would be a no-op that quietly hid a
+            # normalization change -- `display_name` is already written on
+            # every path because the stored spelling is allowed to differ from
+            # the key that matched it.
+            if rename_id is not None:
+                sets.extend(["player_key = ?", "server = ?"])
+                params.extend([key, server])
             if grp:
                 sets.append("grp = ?")
                 params.append(grp)
@@ -3480,7 +3550,26 @@ def upsert_registrant(
                 sets.append("origin = ?")
                 params.append("imported")
             params.append(new_id)
-            conn.execute(f"UPDATE registrants SET {', '.join(sets)} WHERE id = ?", params)
+            try:
+                conn.execute(f"UPDATE registrants SET {', '.join(sets)} WHERE id = ?", params)
+            except sqlite3.IntegrityError:
+                # Only a rename can hit this: nothing else writes the identity
+                # columns. The collision SELECT above ran outside any lock, so
+                # a second writer can take the (key, server) between the two --
+                # and then the UNIQUE decides it instead of us. Re-read and
+                # raise the answer the surface already knows how to say, rather
+                # than letting a raw `IntegrityError` reach a member as a
+                # spinner that never resolves. Not retried, unlike
+                # `claim_registrant`: the retry there exists because a second
+                # pass takes a *decided* branch, and here the decision is
+                # already made -- somebody else holds the name.
+                taken = conn.execute(
+                    "SELECT * FROM registrants WHERE player_key = ? AND server IS ?",
+                    (key, server),
+                ).fetchone()
+                if taken is None or taken["id"] == new_id:
+                    raise
+                raise RenameCollision(dict(taken)) from None
 
         return dict(conn.execute("SELECT * FROM registrants WHERE id = ?", (new_id,)).fetchone())
 

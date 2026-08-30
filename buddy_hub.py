@@ -375,7 +375,7 @@ class _BuddyHubView(discord.ui.View):
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         await inter.followup.send(
             content=_with_report(
-                "Your buddy list has been synced from your sheet. "
+                "🔄 Your buddy list has been synced from your sheet. "
                 "Use ✨ Auto-assign to fill any gaps.",
                 result,
             ),
@@ -534,15 +534,15 @@ class _BuddyHubView(discord.ui.View):
             # tell leadership to go check a profession that may be perfectly fine.
             if cfg.get("roster_filter_enabled"):
                 because = (
-                    f"the rebuild only keeps people who are on your member roster **and** have "
+                    f"The rebuild only keeps people who are on your member roster **and** have "
                     f"a profession on **{prof_tab}**"
                 )
                 where = "those two tabs"
             else:
-                because = f"the rebuild reads who's eligible from **{prof_tab}**"
+                because = f"The rebuild reads who's eligible from **{prof_tab}**"
                 where = "that tab"
             warning += (
-                f"\n\n**{len(dropped)} will be removed from the list** — {because}:\n"
+                f"\n\n**{len(dropped)} will be removed from the list**. {because}:\n"
                 f"{_name_list(dropped)}\n\n"
                 f"If that's not what you expected, cancel and check {where} first."
             )
@@ -687,7 +687,7 @@ class _BuddyHubView(discord.ui.View):
                 )
 
             await i.response.send_message(
-                f"Delete the preset **{name}**? Your current buddy list stays exactly "
+                f"🗑️ Delete the preset **{name}**? Your current buddy list stays exactly "
                 "as it is, this only removes the saved preset. This cannot be undone.",
                 view=_ConfirmView(i.user.id, _do, confirm_label="🗑️ Yes, delete"),
                 ephemeral=True,

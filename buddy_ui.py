@@ -547,7 +547,7 @@ def build_buddy_list_embed(result, *, doubling: bool = False) -> discord.Embed:
         if dropped:
             embed.add_field(
                 name="​",
-                value=f"…and {dropped} more pairing(s) — see your buddy sheet tab.",
+                value=f"…and {dropped} more pairing(s). See your buddy sheet tab.",
                 inline=False,
             )
     else:
@@ -771,8 +771,8 @@ async def _handle_profession_click(interaction: discord.Interaction, code: str):
         )
     else:
         await interaction.followup.send(
-            f"✅ You're set as a **{new_prof}**. You don't have a buddy yet — "
-            "leadership has been notified.",
+            f"✅ You're set as a **{new_prof}**. You don't have a buddy yet. "
+            "Leadership has been notified.",
             ephemeral=True,
         )
 
@@ -1228,7 +1228,7 @@ class BuddyManageView(discord.ui.View):
                         )
                     )
                     note = (
-                        f"Buddies have been swapped. **{target.war_leader}** is now paired "
+                        f"🔁 Buddies have been swapped. **{target.war_leader}** is now paired "
                         f"with **{partner.engineer}** and **{partner.war_leader}** is now "
                         f"paired with **{target.engineer}**."
                     )
@@ -1249,7 +1249,7 @@ class BuddyManageView(discord.ui.View):
                             source="manual",
                         )
                     )
-                    note = f"**{target.war_leader}** is now paired with **{eng.name}**."
+                    note = f"🔁 **{target.war_leader}** is now paired with **{eng.name}**."
                 res = await self._save_pairs_list(cfg, new_pairs, before=pairs)
                 await i2.followup.send(note, ephemeral=True)
                 await self._refresh_editor(i2, res, cfg)

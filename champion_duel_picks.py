@@ -63,8 +63,11 @@ import champion_duel_predict as predict_lib
 #
 # ✅ SIGNED OFF by Kevin on 2026-08-29, off the picks sign-off page --
 # <https://claude.ai/code/artifact/6cd70358-2103-4708-83f5-9684ddd4f098> --
-# except `CARD_FOOTER`, `CARD_NUMBER` and `TEXT_ALT`, which are marked where
-# they sit. **The reasoning below is kept and the variants are spent.**
+# and the three it held back -- `CARD_FOOTER`, `CARD_NUMBER` and `TEXT_ALT` --
+# were settled the same day off
+# <https://claude.ai/code/artifact/5372637f-d147-4c58-ba1d-b4d4a51eaf3a>.
+# **Nothing in this module is open.** The reasoning below is kept and the
+# variants are spent.
 #
 # **NOTHING HERE IS EXEMPT FROM `notes/UX.md`, and this module used to say it
 # was.** The exemption on record is written as *the card, not the module*, and
@@ -89,20 +92,24 @@ CARD_TITLE = "CHAMPION DUEL"
 #: The whole card's footer. It exists to hold one line between us and the
 #: game's own betting market, which is a different thing sitting on the same
 #: screen: the multipliers there are the game's, these numbers are ours.
-# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
-# than a string, and it is being walked through rather than guessed at.
-#
-# Kevin, 29 Aug: *"I thought I had changed this before. We should say 'This
-# is purely our predictions and do not represent the in-game odds of match
-# outcomes.'"* **Two things to settle before it goes on the card**: the
-# sentence does not agree with itself (*This is ... and do not represent*).
-#
-# **The length is fine and was measured rather than worried about**: at 87
-# characters it fits both templates without ellipsizing, shrinking the footer
-# from 17px to 15px on the single-column card and not at all on the wide one.
-# The grammar-corrected wording is 89 and costs one more pixel. **Held on the
-# wording only.**
-CARD_FOOTER = "Our prediction for each meeting. Not the game's odds."
+#:
+#: ✅ SIGNED OFF by Kevin on 2026-08-29. His sentence, with *This is* ->
+#: *These are* so that it agrees with itself: *"I thought I had changed this
+#: before. We should say 'This is purely our predictions and do not represent
+#: the in-game odds of match outcomes.'"*
+#:
+#: **It also closes the last `meeting`/`match` inconsistency.** The string it
+#: replaced was the only member-facing *meeting* left on the card, and the
+#: sweep that made `match` the word skipped it correctly because it was held.
+#:
+#: **88 characters, and the fit is measured rather than reasoned about.**
+#: `_picks_footer` shrinks the line to fit and only ellipsizes once it hits
+#: 12px, so the cost of a longer footer is font size and not a silent cut.
+#: `test_card_footer_fits_both_templates` renders both templates and asserts
+#: the whole string is drawn.
+CARD_FOOTER = (
+    "These are purely our predictions and do not represent the in-game odds of match outcomes."
+)
 
 #: A side with no name at all, which is a meeting naming a registrant that no
 #: longer exists. `set_slate` refuses to write one, so it is only reachable
@@ -112,18 +119,20 @@ CARD_FOOTER = "Our prediction for each meeting. Not the game's odds."
 #: already reads this way for the same reason.
 CARD_UNKNOWN = "(unknown)"
 
-#: Which of the day's cards this is, appended to the subject on card 2 and up.
-#: Never on card 1: a day that did not overflow twenty meetings reads the way
-#: it always did, and only a day that split has anything to disambiguate.
-# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
-# than a string, and it is being walked through rather than guessed at.
-#
-# Kevin, 29 Aug: *"If it has to be 2 cards, we need to tell them each one. So
-# it would be '# of #'. It would only show when cards > 1."* **That is not a
-# wording change**: a slate knows its own number and not how many the day
-# has, and the marker currently appears on card 2 and up rather than on both
-# halves of a split. The total has to be read and carried. **Held.**
-CARD_NUMBER = "Card {n}"
+#: Which of the day's cards this is, and how many there are. On EVERY card of
+#: a day that split, and on no card of a day that did not.
+#:
+#: ✅ SIGNED OFF by Kevin on 2026-08-29: *"If it has to be 2 cards, we need to
+#: tell them each one. So it would be '# of #'. It would only show when cards
+#: > 1."*
+#:
+#: **The build is the change here, not the wording.** The marker used to read
+#: `Card 2` and appear on card 2 and up, so card 1 of a split said nothing and
+#: a reader holding it could not tell it was one of several -- which is the
+#: whole job the marker exists to do. A slate knows its own `card_no` and not
+#: the day's total, so `Slate.card_total` is read alongside it and carried
+#: into the subject. See `Slate.card_total`.
+CARD_NUMBER = "Card {n} of {total}"
 
 #: The text half's row lines, one per meeting, in the same order the image
 #: draws them.
@@ -165,20 +174,26 @@ TEXT_COIN_FLIP = (
 #: are already carried in full by the text beside the image, on the same
 #: message, where a screen reader reaches them without the attachment at all.
 #: A description that is always complete beats one that is usually complete.
-# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
-# than a string, and it is being walked through rather than guessed at.
-#
-# Kevin, 29 Aug: *"Is the entire context of the image in the message with it?
-# If it is, then we should just mark the image as decorative so there is no
-# alt text and a screenreader skips it."* The answer to his question is yes,
-# and it is the guarantee this whole surface is built on. **Held on whether
-# Discord can express `decorative` at all** -- an attachment either carries a
-# description or it does not, and what a client announces without one is not
-# silence.
-TEXT_ALT = (
-    "Champion Duel picks for {subject}, drawn as an image. "
-    "Every meeting on it is written out in the text beside it."
-)
+#:
+#: ✅ SIGNED OFF by Kevin on 2026-08-29, as his string with *following* ->
+#: *this*: the image and every row go out as ONE message, so *the following
+#: message* named a message that does not exist.
+#:
+#: **His correction to the framing is the part worth keeping, because it
+#: reverses an assumption this project held.** Kevin asked: *"Is the entire
+#: context of the image in the message with it? If it is, then we should just
+#: mark the image as decorative so there is no alt text and a screenreader
+#: skips it."* The answer to the first half is yes, and it is the guarantee
+#: this whole surface is built on. But **a description-less image is not
+#: silent**: Discord has no *decorative* flag, an attachment either carries a
+#: description or it does not, and a screen reader on one that does not
+#: announces *image* and *click to open image viewer*. So saying what the
+#: image is and where the detail lives beats saying nothing.
+#:
+#: **No `{subject}` in it any more.** The subject is on the embed title
+#: directly above, in the same message, so repeating it here spent the
+#: description on something already read out.
+TEXT_ALT = "Champion Duel picks card image. All details are in this message."
 
 
 # ── The type ──────────────────────────────────────────────────────────────────
@@ -238,18 +253,45 @@ class Slate:
     play_on: str
     stage: str = ""
     card_no: int = 1
+    #: How many cards the day has in all, which is what makes `card_no`
+    #: sayable. A slate is one row of `pick_slates` and knows only its own
+    #: number, so this is read beside it (`db.get_slate` counts the day) and
+    #: carried rather than derived here.
+    #:
+    #: **Defaults to 1, and a caller that does not know may leave it.** A
+    #: preview of a card somebody is part way through choosing is one card as
+    #: far as anybody reading it is concerned, and 1 is what the subject reads
+    #: as nothing at all -- which is the same thing it said before this
+    #: existed.
+    #:
+    #: Clamped to at least `card_no` in `subject`, so a stale or wrong total
+    #: can never print `Card 3 of 2`.
+    card_total: int = 1
     picks: list[Pick] = field(default_factory=list)
     updated_at: str | None = None
     updated_by: str | None = None
 
     def date_label(self) -> str:
-        """The day the meetings are played, as a calendar date.
+        """The day the meetings are played, as a weekday and a calendar date.
 
         A calendar date rather than a day number, because that is what the
         game's own Predict screen prints and what the maker is reading while
         they build the card (Kevin, 2026-08-27). A day number needed the
         grouping's calendar, which most groupings do not have, and read as
         `Day 38` on a four-day round whenever a slate outlived its grouping.
+
+        **The weekday leads, and it goes everywhere this label does** (Kevin,
+        2026-08-29: *"We should add the day of the week here"*). It was asked
+        for on the day picker, where somebody choosing between four dates is
+        thinking in weekdays; it is built here rather than there because the
+        card's own subject line reads off this too, and two spellings of one
+        day on two surfaces is the drift this method exists to prevent. **So
+        the shipped card head changes with it**, from `Semi-finals · Aug 29`
+        to `Semi-finals · Fri Aug 29`.
+
+        Abbreviated rather than spelled out. `Friday August 29` is most of the
+        width of a card subject spent on a word the three letters already say,
+        and `%b` beside it is already abbreviated.
 
         No year: the card is read the day before it is played, and a year on it
         would be the only part nobody needs.
@@ -258,7 +300,7 @@ class Slate:
             played = date.fromisoformat(self.play_on)
         except ValueError:  # pragma: no cover - `play_on` is validated on write
             return self.play_on
-        return f"{played.strftime('%b')} {played.day}"
+        return f"{played.strftime('%a')} {played.strftime('%b')} {played.day}"
 
     def subject(self) -> str:
         """What this card is of: the stage, and the day it is for.
@@ -274,15 +316,26 @@ class Slate:
         grouping has no calendar. That is better than a guess, and it is the
         only half of this line the card can always fill in.
 
-        **Card 2 says so, and card 1 does not.** A day that overflowed twenty
-        meetings produces two cards, and two cards headed identically are two
-        cards a reader cannot tell apart -- in a channel, in a search, or in
-        the sentence somebody writes under one of them. The marker is what
-        makes "card 2" sayable at all. Off on card 1, because a day that did
-        not overflow should read exactly as it did before.
+        **Every card of a split says which one it is, and a lone card says
+        nothing.** A day that overflowed twenty meetings produces two cards,
+        and two cards headed identically are two cards a reader cannot tell
+        apart -- in a channel, in a search, or in the sentence somebody writes
+        under one of them.
+
+        **It used to be on card 2 and up, which left card 1 silent** -- the
+        half of a split most likely to be read on its own carried nothing
+        saying it was half of one. Kevin, 2026-08-29: *"If it has to be 2
+        cards, we need to tell them each one. So it would be '# of #'. It
+        would only show when cards > 1."*
+
+        `card_total` is clamped up to `card_no` first. A total that has not
+        been read, or one read before another card was added, must not produce
+        `Card 3 of 2` -- and a marker that is wrong about the day is worse
+        than no marker, because it tells a reader cards exist that do not.
         """
         stage_label = db.STAGE_LABELS.get(self.stage, self.stage)
-        card = CARD_NUMBER.format(n=self.card_no) if self.card_no > 1 else ""
+        total = max(int(self.card_total or 1), int(self.card_no))
+        card = CARD_NUMBER.format(n=self.card_no, total=total) if total > 1 else ""
         parts = [p for p in (stage_label, self.date_label(), card) if p]
         return " · ".join(parts)
 
@@ -400,6 +453,7 @@ def assemble(
     *,
     stage: str = "",
     card_no: int = 1,
+    card_total: int = 1,
     updated_at=None,
     updated_by=None,
 ) -> Slate:
@@ -436,6 +490,7 @@ def assemble(
         play_on=play_on,
         stage=stage or "",
         card_no=card_no,
+        card_total=card_total,
         updated_at=updated_at,
         updated_by=updated_by,
     )
@@ -503,6 +558,7 @@ def build(guild_id, play_on, *, card_no: int = 1) -> Slate | None:
         [(m["a_id"], m["b_id"]) for m in stored["meetings"]],
         stage=stored.get("stage") or "",
         card_no=stored["card_no"],
+        card_total=stored.get("card_total") or 1,
         updated_at=stored.get("updated_at"),
         updated_by=stored.get("updated_by"),
     )
@@ -594,7 +650,13 @@ def alt_text(slate: Slate) -> str:
     """The image's description, for a reader who cannot see it.
 
     Points at the rows rather than repeating them -- see `TEXT_ALT`, which
-    carries the reasoning. Clamped rather than trusted: the subject is short
-    and bounded, but a description Discord refuses would fail the whole send.
+    carries the reasoning. Clamped rather than trusted: the string is a
+    constant today, but a description Discord refuses would fail the whole
+    send, and the clamp is what stops that being one edit away.
+
+    `slate` is taken and not read. The description says nothing about which
+    card it is, deliberately -- the subject is on the embed title in the same
+    message -- and the argument stays so that a caller passing the card it is
+    describing does not have to change if that ever stops being true.
     """
-    return TEXT_ALT.format(subject=slate.subject())[:ALT_LIMIT]
+    return TEXT_ALT[:ALT_LIMIT]

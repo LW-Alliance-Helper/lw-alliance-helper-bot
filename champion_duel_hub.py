@@ -739,11 +739,12 @@ _ALLIANCE_NOBODY = (
 #: name, which is what a leader recognises their team by.
 _ALLIANCE_HELD = "{count} on file."
 
-#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD. It was on the page Kevin answered and
-#: he raised nothing against it, but `HANDOFF_apply_alliance_copy_and_stage.md`
-#: names nineteen of the twenty-two and this is one of the three it skips. It
-#: is unchanged apart from the *round* → *stage* sweep, which it did not carry
-#: when he read it.
+#: ✅ SIGNED OFF by Kevin on 2026-08-29 as **unchanged**, off
+#: <https://claude.ai/code/artifact/5372637f-d147-4c58-ba1d-b4d4a51eaf3a>. It
+#: had been on the page he answered on 2026-08-26 and he raised nothing against
+#: it, but `HANDOFF_apply_alliance_copy_and_stage.md` named nineteen of the
+#: twenty-two and this was one of the three it skipped -- so it was put in
+#: front of him by name rather than counted as approved by silence.
 #:
 #: The field name over accounts we hold that are in no stage of this Champion
 #: Duel.
@@ -753,10 +754,31 @@ _ALLIANCE_HELD = "{count} on file."
 #: "Not playing" would be a claim about the player that nothing supports.
 _ALLIANCE_UNPLACED = "No stage recorded"
 
-#: ⚠️ NOT NAMED IN THE SIGN-OFF RECORD, on the same terms as the heading above
+#: ✅ SIGNED OFF by Kevin on 2026-08-29, on the same page as the heading above
 #: it. What the unplaced accounts need, said once under them rather than once
 #: per row.
-_ALLIANCE_UNPLACED_BODY = "We hold these accounts but no stage for them. **{record}** places them."
+#:
+#: **This is his own rewrite of the second sentence, not one of the options
+#: offered.** *You can* is the opening he settled on the empty-round body on
+#: 2026-08-24: it offers the reader something to do rather than telling them
+#: what a button does. The trailing period is mine; he wrote none.
+#:
+#: `{record}` renders the button's own words rather than a name for it, which
+#: is the rule set on the head-to-head modal -- the sentence and the control
+#: under it cannot drift apart if the sentence reads the control.
+#:
+#: **The bold is mine, and the wording is untouched.** Kevin typed no markdown.
+#: `notes/UX.md` is binding and says bold carries the noun the reader is looking
+#: for, and every one of the eight siblings that names a control bolds it --
+#: `_STANDING_NO_ROUND` is *"You can add it with **{record}**."*, which is the
+#: sentence this one echoes. Unbolded, `_btn_words` strips the emoji too, so the
+#: control's name would arrive as four ordinary words mid-sentence with nothing
+#: marking it as the thing to press. Formatting rather than copy, recorded here
+#: the same way the trailing period was.
+_ALLIANCE_UNPLACED_BODY = (
+    "We have these accounts on file but do not know their stage. "
+    "You can add a stage by using **{record}**."
+)
 
 #: The Premium half, named for the thing rather than the act,
 #: the same way `_STANDING_WORKED_OUT` is.
@@ -986,8 +1008,11 @@ _PICK_DAYS_AHEAD = 2
 
 # ✅ SIGNED OFF by Kevin on 2026-08-29, off the picks sign-off page --
 # <https://claude.ai/code/artifact/6cd70358-2103-4708-83f5-9684ddd4f098>.
-# `_PICKS_NO_STAGE` and `_PICKS_TODAY` are the two he did not close, and both
-# say so where they sit.
+# `_PICKS_NO_STAGE` and `_PICKS_TODAY` were the two he did not close that day.
+# He closed both on 2026-08-29 off
+# <https://claude.ai/code/artifact/5372637f-d147-4c58-ba1d-b4d4a51eaf3a>, and
+# neither answer was a wording change: one deleted the string and the state
+# behind it, the other moved the note he asked for onto the day picker.
 #
 # **THE GAME'S WORD IS `match`, AND IT IS NOW OURS.** Kevin, 29 Aug: *"Note
 # that the game uses Matches to describe these"* and *"meeting = match"*. The
@@ -1002,19 +1027,16 @@ _PICKS_EMPTY = "No matches added yet"
 _PICKS_NO_GROUPING = (
     "We do not know which Champion Duel your alliance is in yet. Set it with **{button}**."
 )
-# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
-# than a string, and it is being walked through rather than guessed at.
+# `_PICKS_NO_STAGE` was here and is GONE, along with the state it described.
+# Kevin settled it on 2026-08-29 by refusing the gate rather than by changing
+# the words: *"I think we could just have that as the default nothing here
+# because maybe someone got a date wrong and then we're gating on that when we
+# shouldn't."* -- *that* being `_PICKS_NO_FIELD` below, which is now the only
+# empty state the flow has. `_pick_stage` carries the build.
 #
-# Kevin, 29 Aug, having read `_PICKS_NO_FIELD` right after it: *"I think we
-# could just have that as the default nothing here because maybe someone got
-# a date wrong and then we're gating on that when we shouldn't."* That is a
-# question about the `no_stage` STATE, not about this sentence -- the stage
-# is derived from the grouping's calendar, so a mistyped start date can shut
-# the flow with a message about the qualifiers. **Held until it is settled.**
-_PICKS_NO_STAGE = (
-    "A picks card covers the semi-finals and the knockouts. The game runs no "
-    "prediction market on the qualifiers, so there is nothing to card yet."
-)
+# Deleted rather than kept for later. A string nothing draws is a string nobody
+# can sign off, which is the rule that took `CARD_CONFIDENCE_HEADING` out of
+# `champion_duel_picks`.
 _PICKS_NO_FIELD = (
     "We hold no draw for the {stage} yet, so there is nobody to pick from. "
     "Record it with **{button}** and this card opens."
@@ -1075,14 +1097,39 @@ _PICKS_SAME_PLAYER = "⚠️ A match needs two different players."
 _PICKS_TAKEN = "Already on card {n}"
 _PICKS_CARD_EMPTY = "Nothing yet"
 _PICKS_CARD_COUNT = "{n} on this day"
-# ⚠️ STILL OPEN. Kevin answered this one with a question or a change rather
-# than a string, and it is being walked through rather than guessed at.
+# ✅ SIGNED OFF by Kevin on 2026-08-29, and the string itself never changed.
+# Both halves of his answer landed somewhere else:
 #
-# Kevin, 29 Aug: *"We should add the day of the week here and we probably
-# need to specify somewhere that this goes from the game's server time."*
-# The weekday is a change to `Slate.date_label`, which the CARD's subject
-# line also uses, and *"somewhere"* is not yet a place. **Held.**
+# Kevin, 29 Aug: *"We should add the day of the week here and we probably need
+# to specify somewhere that this goes from the game's server time."*
+#
+# **The weekday is in `picks_lib.Slate.date_label`**, not here, because the
+# card's own subject line reads off the same method -- so `{day}` arrives
+# carrying it and the picker and the card cannot spell one day two ways.
+#
+# **The server clock became `_PICKS_DAY_CLOCK` below**, on this surface only.
+# Kevin settled where on 29 Aug: *"I don't want it on the card, I think that
+# just adds clutter and it's clear enough. This is more when someone is putting
+# together the card and they select the day. We just need a note where they are
+# inputting that info about this."*
 _PICKS_TODAY = "{day} (today)"
+
+# ⚠️ NOT SIGNED OFF. New copy, so the variants are enumerated in the pull
+# request body and it is a placeholder until Kevin picks one -- the rule this
+# project has now paid for twice (`CHAMPION_DUEL_INDEX.md`).
+#
+# **The note is on the entry surface and nowhere else, and that split is his.**
+# The person CHOOSING a day needs to know which clock decides it. The person
+# reading the finished card does not, and the card travels to people who never
+# opened the bot, so a line about server time there is clutter aimed at the
+# wrong reader.
+#
+# It sits in the bench description, directly above the day select, because
+# that select is the control it is about. It is not in the footer:
+# `_PICKS_FOOTER_CAP` takes that slot on a full card, and a note that
+# disappears once somebody has twenty matches is a note that vanishes exactly
+# when the day has been decided.
+_PICKS_DAY_CLOCK = "Days here follow the game's server clock, not your local time."
 _PICKS_FOOTER_CAP = (
     "We can only add {n} matches per card. Adding more than {n} will generate another card."
 )
@@ -2947,9 +2994,12 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         # ALL FIVE OR NONE, for `CD_BTN_EDIT_ME`. A member opening their own
         # record to change one field must see the other four as we hold them:
         # a blank box beside a filled one reads as "we have nothing", which is
-        # the surface lying about its own record. Nothing is lost by leaving
-        # one alone either way -- `upsert_registrant` writes only the fields a
-        # caller actually supplied, so a blank has never erased anything.
+        # the surface lying about its own record.
+        #
+        # **This is also what makes clearing safe to offer.** A box on the edit
+        # flow shows what we hold, so emptying one is a member disagreeing with
+        # something they can see rather than a guess about a field they were
+        # never shown. See `_blank_means`.
         if alliance:
             self.alliance.default = str(alliance)[:8]
         if thp:
@@ -2994,6 +3044,36 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
             ],
         ),
     )
+
+    def _blank_means(self, existing: list[dict]):
+        """What an empty box on THIS submission means: nothing, or `db.CLEAR`.
+
+        **The add flow is unchanged and stays unchanged.** Somebody adding a
+        player they just met has no idea what we already hold, so a box they
+        left alone is an omission and `upsert_registrant` writes nothing for
+        it. That rule protects imported values well outside this control and is
+        not what Kevin re-opened.
+
+        **The edit flow is the one place a blank box is a statement.** It opens
+        on the member's own row with all five fields filled in as we hold them
+        -- that is the ALL FIVE OR NONE rule above -- so somebody looking at
+        their alliance tag and deleting it has said something, and until now the
+        save silently declined to hear it. Kevin, 2026-08-29, on whether *Edit*
+        may empty a box: yes.
+
+        **And only on the account it opened on.** Name and warzone are both
+        editable here, and changing either lands the write on a DIFFERENT
+        registrant (`_EDIT_ME_NEW` is the acknowledgement for exactly that) --
+        where the boxes were filled from somebody else's row and a cleared one
+        says nothing about theirs. So clearing needs the submitted identity to
+        resolve back to the row this modal was opened on. Without the check, a
+        member correcting their own warzone could empty an imported alliance
+        tag on an account they have never seen.
+        """
+        held = (self.editing or {}).get("id")
+        if held is None:
+            return None
+        return db.CLEAR if any(row.get("id") == held for row in existing) else None
 
     def _note(self, player: dict, *, existing: bool) -> str:
         """What just happened, in the terms of the flow that opened this.
@@ -3047,13 +3127,28 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         level = int(chosen[0]) if chosen else None
 
         existing = await asyncio.to_thread(db.find_registrants, name, server)
+        # See `_blank_means`. `None` on the add flow, which writes nothing for
+        # an empty box; `db.CLEAR` on an edit of the account this was opened
+        # on, which empties the column.
+        blank = self._blank_means(existing)
         try:
             player = await asyncio.to_thread(
                 db.upsert_registrant,
                 name,
                 server=server,
-                alliance=(self.alliance.value or "").strip() or None,
-                thp=thp,
+                alliance=(self.alliance.value or "").strip() or blank,
+                thp=thp if thp is not None else blank,
+                # **NOT `blank`, and that is deliberate.** The other two are
+                # text boxes, which always submit their contents, so an empty
+                # one is unambiguously an empty one. This is a select, and an
+                # empty `values` means either "deselected" or "Discord did not
+                # echo the default back" -- and those are the same payload. A
+                # wrong guess here silently wipes the troop level of every
+                # member who opens this screen and changes something else, so
+                # the level keeps today's behaviour and cannot be cleared from
+                # here. Raised by `/code-review` as the one thing it could not
+                # settle, and it is right that it cannot be settled from the
+                # payload.
                 troop_level=level,
                 origin="self_reported",
                 actor=_actor(interaction),
@@ -8482,6 +8577,41 @@ def _pick_field(grouping_id, stage: str, recorded: list[str]) -> list[dict]:
     return field
 
 
+def _pick_stage(stage: str | None, recorded: list[str]) -> str:
+    """Which round a picks card is built from. **The calendar does not decide.**
+
+    Kevin, 2026-08-29, on the message this replaces: *"I think we could just
+    have that as the default nothing here because maybe someone got a date
+    wrong and then we're gating on that when we shouldn't."*
+
+    **The round used to be able to shut the flow.** It is derived from the
+    grouping's start date, so a start date typed a week out reported the
+    qualifiers while the semi-finals were being played -- and the flow answered
+    with a paragraph about the game running no prediction market on the
+    qualifiers, which is true and was not the reader's problem. One mistyped
+    field, and nobody in that alliance could build a card.
+
+    **So the record decides instead of the calendar.** A round we can card is
+    taken as it stands; anything else -- the qualifiers, a window before any
+    round starts, a grouping with no calendar at all -- falls back to the
+    furthest round we actually hold a draw for. That is the same rule
+    `db.furthest_stage_held` gives `current_stage`, off `recorded`, which this
+    flow has already read.
+
+    **It cannot lock anybody out, because the miss is not a refusal.** With no
+    draw for any round we card, this answers with the first of them and the
+    flow lands on `no_field` -- which names the round, carries
+    `CD_BTN_RECORD` as its way out, and is the same dead end any unrecorded
+    round produces. That is the *default nothing* Kevin asked for.
+    """
+    if stage in PICK_STAGES:
+        return stage
+    for candidate in reversed(PICK_STAGES):
+        if candidate in recorded:
+            return candidate
+    return PICK_STAGES[0]
+
+
 def _still_in(field: list[dict], stage: str) -> list[dict]:
     """The players a meeting can still be built from.
 
@@ -8646,11 +8776,16 @@ def read_picks(
 
       no_grouping -- the guild's warzone is in no Champion Duel we hold, so
                      there is no field to pick from and no round to stamp.
-      no_stage    -- the round running is one this card does not cover, which is
-                     the qualifiers or a window before any round starts.
-      no_field    -- the round is one we card and we hold no draw for it. The
-                     door out is recording the group, and the surface says so.
+      no_field    -- we hold no draw for the round, so there is nobody to pick
+                     from. The door out is recording the group, and the surface
+                     says so.
       ready       -- there is a field.
+
+    **There is no `no_stage` any more, and that is Kevin's call on 2026-08-29.**
+    The calendar could shut this flow, and a start date typed wrong shut it for
+    an alliance that had done nothing wrong. `_pick_stage` carries the whole
+    reasoning; the short version is that the round we hold a draw for wins over
+    the round the dates say, and the miss is `no_field` rather than a refusal.
 
     **The round is the one the card is stamped with, and only then the one
     running.** `set_slate` stamps `_stage_for_guild` at creation and keeps it on
@@ -8687,7 +8822,10 @@ def read_picks(
     cards = {n: db.get_slate(guild_id, day, card_no=n) for n in range(1, db.MAX_CARDS_PER_DAY + 1)}
     slate = cards.get(card_no)
     recorded = db.recorded_stages(grouping["id"])
-    stage = (slate or {}).get("stage") or db.current_stage(grouping["id"])
+    # Resolved once, and every surface downstream reads this rather than the
+    # calendar: the bench's subject, the field, `_still_in`, and the card the
+    # share path assembles. See `_pick_stage`.
+    stage = _pick_stage((slate or {}).get("stage") or db.current_stage(grouping["id"]), recorded)
 
     out = {
         "state": "ready",
@@ -8703,10 +8841,6 @@ def read_picks(
         "field": [],
         "names": {},
     }
-    if stage not in PICK_STAGES:
-        out["state"] = "no_stage"
-        return out
-
     out["field"] = (
         list(field)
         if field is not None and field_stage == stage
@@ -8730,6 +8864,29 @@ def read_picks(
     if not out["field"]:
         out["state"] = "no_field"
     return out
+
+
+def _cards_on_day(state: dict) -> int:
+    """How many cards this day actually has, off the read the flow already did.
+
+    `read_picks` reads every one of the day's card slots so the selects can mark
+    a pair that is carded elsewhere, so the total is already in hand and costs
+    nothing to count. **The bench and the card both head themselves off this**,
+    which is what stops one of them saying `Card 1 of 2` while the other says
+    `Card 1 of 3`.
+
+    **The highest card number, not how many there are**, and the difference is
+    a day with a gap in it: emptying card 2 while 1 and 3 exist deletes it, and
+    a COUNT would then head card 3 `Card 3 of 2`. That is the impossible marker
+    `Slate.subject` clamps against, arriving from the other side. The highest
+    number is the one that can never contradict the number beside it.
+
+    At least 1, and at least the card being looked at. A card being built has
+    not been written yet on the first meeting somebody adds, so the day can
+    honestly hold zero rows while the person is plainly looking at card 1.
+    """
+    cards = state.get("cards") or {}
+    return max(1, int(state.get("card_no") or 1), *(n for n, card in cards.items() if card))
 
 
 def _uncard_a_meeting(guild_id, play_on: str, card_no: int, pair, *, actor=None) -> bool:
@@ -8813,6 +8970,7 @@ def build_picks_embed(state: dict, *, working=None, notice=None) -> discord.Embe
         play_on=state["play_on"],
         stage=state.get("stage") or "",
         card_no=state["card_no"],
+        card_total=_cards_on_day(state),
     )
     embed = discord.Embed(
         title=f"{picks_lib.PICKS_TITLE}: {slate.subject()}",
@@ -8820,17 +8978,23 @@ def build_picks_embed(state: dict, *, working=None, notice=None) -> discord.Embe
     )
     if state.get("grouping"):
         embed.set_author(name=_grouping_name(state["grouping"], whose="Your"))
-    if state["state"] == "no_stage":
-        embed.description = _PICKS_NO_STAGE
-        return embed
     if state["state"] == "no_field":
-        embed.description = _PICKS_NO_FIELD.format(
-            stage=db.STAGE_LABELS.get(state["stage"], state["stage"]),
-            button=_btn_words(CD_BTN_RECORD),
+        # The clock note rides along, because the day select is drawn on this
+        # state too -- `_build_card` keeps it so a reader can get back to a day
+        # that does have a card. A control on screen without the sentence about
+        # it is the gap this state used to have. Found by `/code-review`.
+        embed.description = "\n\n".join(
+            (
+                _PICKS_NO_FIELD.format(
+                    stage=db.STAGE_LABELS.get(state["stage"], state["stage"]),
+                    button=_btn_words(CD_BTN_RECORD),
+                ),
+                _PICKS_DAY_CLOCK,
+            )
         )
         return embed
 
-    lines = [_PICKS_INTRO]
+    lines = [_PICKS_INTRO, "", _PICKS_DAY_CLOCK]
     if working:
         lines += ["", working]
     if notice:
@@ -9342,6 +9506,14 @@ class _PicksView(discord.ui.View):
 
     def _card_options(self) -> list[discord.SelectOption]:
         cards = self.state.get("cards") or {}
+        # The same total the card heads itself with, and read the same way, so
+        # an option in this picker and the card it opens are named the same
+        # thing. **Not `_cards_in_play`**, which counts cards rather than
+        # numbering them: that decides whether this select is drawn at all,
+        # where one card is nothing to move between, and a count read as a
+        # total labels card 3 of a gapped day `Card 3 of 2`. Found by
+        # `/code-review`.
+        total = _cards_on_day(self.state)
         options = []
         for number in range(1, db.MAX_CARDS_PER_DAY + 1):
             held = len((cards.get(number) or {}).get("meetings") or [])
@@ -9349,7 +9521,7 @@ class _PicksView(discord.ui.View):
                 continue
             options.append(
                 discord.SelectOption(
-                    label=picks_lib.CARD_NUMBER.format(n=number)[:100],
+                    label=picks_lib.CARD_NUMBER.format(n=number, total=total)[:100],
                     value=str(number),
                     description=(_plural(held, "meeting") if held else _PICKS_CARD_EMPTY)[:100],
                     default=number == self.state["card_no"],
@@ -9651,6 +9823,10 @@ class _PicksView(discord.ui.View):
                     # `/code-review`.
                     stage=self.state.get("stage") or "",
                     card_no=self.state["card_no"],
+                    # Off the same read the bench headed itself with, so the
+                    # card somebody shares says what the screen they built it
+                    # on said.
+                    card_total=_cards_on_day(self.state),
                 )
             )
         except RuntimeError:
@@ -9777,6 +9953,14 @@ class _PicksView(discord.ui.View):
                     self.state["play_on"],
                     (self.p1, self.p2),
                     card_no=opened,
+                    # The round `read_picks` resolved, not the one the calendar
+                    # would stamp. The two can differ now that `_pick_stage`
+                    # refuses to let a mistyped date decide, and the resolved
+                    # one is the round this card was built from -- stamping the
+                    # other would head the card for a round its own rows cannot
+                    # belong to, and would let it re-label itself as the draw
+                    # moved on. Found by `/code-review`.
+                    stage=self.state.get("stage") or None,
                     actor=_actor(inter),
                 )
             )

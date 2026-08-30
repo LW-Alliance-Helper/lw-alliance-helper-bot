@@ -601,27 +601,89 @@ def test_the_subject_is_the_stage_and_a_calendar_date(cd_db):
     """Kevin, 2026-08-27: *"Just put the round, something like 'Semi-finals
     Predictions' and leave it at that. Simple."* -- plus the date, as the
     in-game calendar date he asked for. No group letter and no day number.
-
-    Placeholder copy pending sign-off, so what is pinned here is the shape.
     """
     slate = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals")
 
-    assert slate.date_label() == "Aug 25"
-    assert slate.subject() == "Semi-finals · Aug 25"
+    assert slate.date_label() == "Tue Aug 25"
+    assert slate.subject() == "Semi-finals · Tue Aug 25"
     assert "Group" not in slate.subject()
     assert "Day" not in slate.subject()
 
 
-def test_the_second_card_of_a_day_says_which_one_it_is(cd_db):
-    """Two cards headed identically are two cards a reader cannot tell apart,
-    and row numbers restart at 1 on each -- so "number four" would name two
-    different meetings. Off on card 1, because a day that did not overflow
-    should read exactly as a day that cannot."""
-    first = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals")
-    second = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals", card_no=2)
+def test_the_weekday_leads_the_date_everywhere_the_label_goes(cd_db):
+    """Kevin, 2026-08-29: *"We should add the day of the week here"*, asked on
+    the day picker. It is built in `date_label` rather than at the picker
+    because the CARD reads off the same method, and one day spelled two ways on
+    two surfaces is what this method exists to prevent. **So this is a visible
+    change to something already on a member's screen.**"""
+    assert picks.Slate(guild_id=GUILD, play_on="2026-08-29").date_label() == "Sat Aug 29"
+    assert picks.Slate(guild_id=GUILD, play_on="2026-09-01").date_label() == "Tue Sep 1"
 
-    assert first.subject() == "Semi-finals · Aug 25"
-    assert second.subject() == "Semi-finals · Aug 25 · Card 2"
+
+def test_a_day_that_did_not_split_says_nothing_about_card_numbers(cd_db):
+    """A lone card reads exactly as it did before any of this: one card is not
+    "1 of 1", it is just the card."""
+    slate = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals")
+
+    assert slate.subject() == "Semi-finals · Tue Aug 25"
+    assert "Card" not in slate.subject()
+
+
+def test_every_card_of_a_split_says_which_one_it_is_and_how_many(cd_db):
+    """Kevin, 2026-08-29: *"If it has to be 2 cards, we need to tell them each
+    one. So it would be '# of #'. It would only show when cards > 1."*
+
+    **Card 1 is the half this fixes.** The marker used to appear on card 2 and
+    up, so the card most likely to be read on its own carried nothing saying it
+    was half of a pair."""
+    first = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals", card_total=2)
+    second = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals", card_no=2, card_total=2)
+
+    assert first.subject() == "Semi-finals · Tue Aug 25 · Card 1 of 2"
+    assert second.subject() == "Semi-finals · Tue Aug 25 · Card 2 of 2"
+
+
+def test_a_total_that_cannot_be_true_is_clamped_rather_than_printed(cd_db):
+    """`Card 3 of 2` tells a reader cards exist that do not, which is worse
+    than no marker at all. A total read before another card arrived, or one a
+    caller never filled in, is raised to the card in hand."""
+    stale = picks.Slate(guild_id=GUILD, play_on=DAY, stage="semifinals", card_no=3, card_total=2)
+
+    assert stale.subject() == "Semi-finals · Tue Aug 25 · Card 3 of 3"
+
+
+def test_the_days_total_comes_back_with_the_card_it_describes(cd_db):
+    """A slate row knows its own number and nothing about its siblings, so the
+    total is read beside it on the same connection rather than asked for
+    separately."""
+    _field()
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    db.set_slate(GUILD, DAY, [(a, b)], stage="semifinals", actor=ACTOR)
+
+    assert db.get_slate(GUILD, DAY)["card_total"] == 1
+    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Tue Aug 25"
+
+    db.set_slate(GUILD, DAY, [(c, d)], card_no=2, stage="semifinals", actor=ACTOR)
+
+    assert db.get_slate(GUILD, DAY)["card_total"] == 2
+    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Tue Aug 25 · Card 1 of 2"
+    assert picks.build(GUILD, DAY, card_no=2).subject() == "Semi-finals · Tue Aug 25 · Card 2 of 2"
+
+
+def test_the_total_is_the_highest_card_number_rather_than_how_many_there_are(cd_db):
+    """A day with a gap in it. Emptying card 2 while 1 and 3 exist deletes it,
+    and a COUNT would then head card 3 `Card 3 of 2` -- the impossible marker
+    `subject` clamps against, arriving from the other side. It has to agree
+    with `champion_duel_hub._cards_on_day`, which reads the same way."""
+    _field()
+    a, b, c, d, e, f = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper", "Kestrel", "Basalt")
+    for card, pair in ((1, (a, b)), (2, (c, d)), (3, (e, f))):
+        db.set_slate(GUILD, DAY, [pair], card_no=card, stage="semifinals", actor=ACTOR)
+    db.delete_slate(GUILD, DAY, card_no=2)
+
+    assert db.get_slate(GUILD, DAY)["card_total"] == 3
+    assert picks.build(GUILD, DAY).subject().endswith("Card 1 of 3")
+    assert picks.build(GUILD, DAY, card_no=3).subject().endswith("Card 3 of 3")
 
 
 def test_a_preview_refuses_the_same_card_number_the_save_would(cd_db):
@@ -640,7 +702,7 @@ def test_the_knockouts_read_the_same_way_as_every_other_stage(cd_db):
     now, so there is no exception left."""
     slate = picks.Slate(guild_id=GUILD, play_on=DAY, stage="knockouts")
 
-    assert slate.subject() == "Knockout Stage · Aug 25"
+    assert slate.subject() == "Knockout Stage · Tue Aug 25"
 
 
 def test_without_a_stage_the_date_alone_is_better_than_a_guess(cd_db):
@@ -648,7 +710,7 @@ def test_without_a_stage_the_date_alone_is_better_than_a_guess(cd_db):
     which is the normal state of a new alliance."""
     slate = picks.Slate(guild_id=GUILD, play_on=DAY)
 
-    assert slate.subject() == "Aug 25"
+    assert slate.subject() == "Tue Aug 25"
 
 
 def test_the_stage_is_stamped_from_the_guilds_grouping(cd_db, monkeypatch):
@@ -661,7 +723,7 @@ def test_the_stage_is_stamped_from_the_guilds_grouping(cd_db, monkeypatch):
 
     saved = db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
     assert saved["stage"] == "semifinals"
-    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Aug 25"
+    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Tue Aug 25"
 
 
 def test_the_stamped_stage_survives_the_event_moving_on(cd_db, monkeypatch):
@@ -680,7 +742,7 @@ def test_the_stamped_stage_survives_the_event_moving_on(cd_db, monkeypatch):
 
     rebuilt = db.set_slate(GUILD, DAY, [(a, b), (c, d)], actor=OTHER)
     assert rebuilt["stage"] == "semifinals"
-    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Aug 25"
+    assert picks.build(GUILD, DAY).subject() == "Semi-finals · Tue Aug 25"
 
 
 def test_a_stage_named_outright_beats_the_one_the_calendar_would_stamp(cd_db, monkeypatch):
@@ -858,7 +920,7 @@ def test_the_alt_text_points_at_the_rows_and_fits_discords_cap(cd_db):
     alt = picks.alt_text(slate)
 
     assert len(alt) <= picks.ALT_LIMIT
-    assert slate.subject() in alt
+    assert alt == "Champion Duel picks card image. All details are in this message."
     assert long_names[0] not in alt
 
 

@@ -66,6 +66,63 @@ VALID_SOURCES = ("observed", "estimated", "edited")
 VALID_ORIGINS = ("imported", "self_reported", "edited")
 VALID_TYPES = ("Tank", "Missile", "Aircraft")
 
+
+class _Clear:
+    """The value that means *empty this column*, as opposed to *say nothing*.
+
+    `upsert_registrant` writes only the fields a caller actually supplied, and
+    that rule is load-bearing: the add modal leaves four of its five boxes
+    optional, and a blank one there must never wipe a value that came off an
+    official import. `None` is how a caller says nothing, so `None` cannot also
+    be how it says *empty it* -- one value cannot carry both meanings, and
+    every caller that already passes `None` for a blank box means the first.
+
+    So clearing gets a value of its own. **Nothing is opted in by default**: a
+    caller that has not heard of `CLEAR` behaves exactly as it did.
+
+    Not `False`, not `""`, and not a bare `object()`. The first two are real
+    values some column could legitimately want; a sentinel that repr'd as
+    `<object object at 0x...>` would be unreadable in a traceback or a log
+    line, which is where a mis-passed sentinel actually surfaces.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return "CLEAR"
+
+
+#: See `_Clear`. Pass it to `upsert_registrant` for a column the caller means
+#: to empty. `Edit my information` does; `Add a player` does not.
+CLEAR = _Clear()
+
+#: The registrant columns `upsert_registrant` will write and will empty, in the
+#: order they sit on the table.
+#:
+#: **The list is here rather than inline so one name covers both loops**, the
+#: INSERT above and the UPDATE below: a column added to one and forgotten in
+#: the other is a field that saves on a new player and silently does not on an
+#: existing one. It is also what `CLEAR` is validated against, so a typo'd
+#: keyword raises instead of being ignored.
+#:
+#: `display_name`, `server` and `grp` are deliberately absent. The first two
+#: are the row's identity, which this function is keyed on; `grp` is round data
+#: that the record and reconcile flows own.
+CLEARABLE_FIELDS = ("alliance", "rank", "thp", "fsp", "troop_level")
+
+
+def _supplied(value):
+    """A value as it should be written on INSERT, where `CLEAR` means nothing.
+
+    A column that has never held anything cannot be emptied, so a caller
+    sending `CLEAR` into a create is asking for the state a create already
+    produces. Folded to `None` here rather than refused: the caller cannot know
+    whether the row exists -- that is the whole point of an upsert -- so
+    raising would make `CLEAR` unusable from the one flow that needs it.
+    """
+    return None if value is CLEAR else value
+
+
 # The rounds that carry groups, in the order they are played. Order is
 # load-bearing: a player's furthest round is the last of these they appear in.
 STAGES = ("qualifiers", "semifinals", "knockouts")
@@ -2979,7 +3036,7 @@ def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None)
     return get_slate(gid, day, card_no=card_no)
 
 
-def add_to_slate(guild_id, play_on, pair, *, card_no=1, actor=None) -> int | None:
+def add_to_slate(guild_id, play_on, pair, *, card_no=1, stage=None, actor=None) -> int | None:
     """Append one meeting to the first of a day's cards with room.
 
     Returns the card it landed on, or None when every card for the day is full.
@@ -2991,6 +3048,11 @@ def add_to_slate(guild_id, play_on, pair, *, card_no=1, actor=None) -> int | Non
     and a rewrite off a stale snapshot is a rewrite that drops rows. Narrowing
     the window to one function call was as far as that could go from outside
     the database. This closes it.
+
+    `stage` names the round to stamp a card being created, and is ignored on
+    one that already exists. Same contract as `set_slate`'s, for the same
+    reason: the caller is looking at a screen headed with a round and building
+    from that round's field, so where it says so, that wins over the calendar.
 
     `BEGIN IMMEDIATE` rather than the module's usual bare `with`. Python's
     sqlite3 opens a deferred transaction, which starts at the first write, so
@@ -3028,7 +3090,16 @@ def add_to_slate(guild_id, play_on, pair, *, card_no=1, actor=None) -> int | Non
     # `set_slate` gives: it reads the guild's warzone and its grouping's
     # calendar on a connection of its own, and a nested read underneath an open
     # write is the shape that deadlocks.
-    stamped = _stage_for_guild(gid)
+    #
+    # **A named stage wins over the calendar**, which is `set_slate`'s rule and
+    # is now needed here too: the picks flow no longer lets the calendar decide
+    # which round it is building (`champion_duel_hub._pick_stage`), so the round
+    # it resolved is the only one that describes the card. Stamped from the
+    # calendar instead, a card built during a mistyped-date window would be
+    # headed for a round its own rows cannot belong to -- and would re-resolve
+    # to a different round every time the draw moved on, which is exactly what
+    # stamping exists to stop.
+    stamped = (_stage(stage) if stage else None) or _stage_for_guild(gid)
 
     with _get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -3107,6 +3178,20 @@ def get_slate(guild_id, play_on, *, card_no=1) -> dict | None:
     meetings rather than with holes: `pick_meetings` cascades on the registrant
     and the positions are read in order rather than counted, so a card built
     from this renders what is left.
+
+    **`card_total` comes back with it**, which is the day's highest card
+    number. A slate row knows its own `card_no` and nothing about its siblings,
+    so a card that wants to head itself `Card 1 of 3` cannot get the 3 from the
+    row it is built from. Read on the same connection as the row rather than in
+    a second call: the two answers describe one day, and a caller that had to
+    ask twice could be handed a total from after a card it does not know about
+    arrived.
+
+    **MAX rather than COUNT, and the difference is a day with a gap in it.**
+    Emptying card 2 while 1 and 3 exist deletes it, and a count would then head
+    card 3 `Card 3 of 2`. The highest number is the one that can never
+    contradict the number printed beside it, and it is what
+    `champion_duel_hub._cards_on_day` reads for the same surfaces.
     """
     gid = _text(guild_id)
     if not gid:
@@ -3121,6 +3206,10 @@ def get_slate(guild_id, play_on, *, card_no=1) -> dict | None:
         if row is None:
             return None
         slate = dict(row)
+        slate["card_total"] = conn.execute(
+            "SELECT MAX(card_no) AS n FROM pick_slates WHERE guild_id = ? AND play_on = ?",
+            (gid, day),
+        ).fetchone()["n"]
         slate["meetings"] = [
             dict(r)
             for r in conn.execute(
@@ -3289,9 +3378,32 @@ def upsert_registrant(
 
     An existing row is never downgraded: an imported registrant stays
     `imported` even when someone later re-enters them by hand.
+
+    **A field can be emptied, and only on purpose.** `None` means the caller
+    said nothing and the stored value stands, which is what keeps a blank box
+    on the add modal from wiping an imported alliance tag. `db.CLEAR` means the
+    caller means to empty it, which is what `✏️ Edit my information` sends for
+    a box somebody deliberately cleared. **The two are different values because
+    they are different intentions**, and every caller that predates `CLEAR`
+    keeps today's behaviour exactly.
+
+    Clearing applies to the five optional columns and to nothing else. `name`
+    and `server` are the row's identity and `grp` is round data that the record
+    and reconcile flows own, so neither takes a `CLEAR`. **On INSERT `CLEAR` is
+    the same as nothing**: a column with no value yet cannot be emptied.
     """
     if origin not in VALID_ORIGINS:
         raise ValueError(f"origin must be one of {VALID_ORIGINS}")
+    # Every `CLEAR` is checked BEFORE anything is coerced. `_Clear` has a
+    # `__repr__`, so `str()` and `_server()` both turn it into the perfectly
+    # valid-looking text "CLEAR" -- an unguarded sentinel would not raise here,
+    # it would file somebody on warzone CLEAR. Found by `/code-review`.
+    for column, value in (("name", name), ("server", server), ("grp", grp), *fields.items()):
+        if value is CLEAR and column not in CLEARABLE_FIELDS:
+            raise ValueError(
+                f"{column} cannot be cleared; CLEARABLE_FIELDS names the ones that can"
+            )
+
     display = str(name).strip()
     if not display:
         raise ValueError("name is required")
@@ -3307,24 +3419,33 @@ def upsert_registrant(
             "SELECT * FROM registrants WHERE player_key = ? AND server IS ?", (key, server)
         ).fetchone()
         if row is None:
+            # The columns come off `CLEARABLE_FIELDS` rather than being typed
+            # out beside it, so this INSERT and the UPDATE below cannot come to
+            # disagree about which fields exist -- a column added to one and
+            # forgotten in the other saves on a new player and silently does
+            # not on an existing one. Every name here is a module constant, so
+            # there is nothing interpolated that a caller can reach.
+            columns = (
+                "player_key",
+                "display_name",
+                "server",
+                "grp",
+                *CLEARABLE_FIELDS,
+                "seeded",
+                "origin",
+                "added_by",
+                "created_at",
+                "updated_at",
+            )
             cur = conn.execute(
-                """
-                INSERT INTO registrants
-                    (player_key, display_name, server, grp, alliance, rank, thp,
-                     fsp, troop_level, seeded, origin, added_by, created_at,
-                     updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                f"INSERT INTO registrants ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' for _ in columns)})",
                 (
                     key,
                     display,
                     server,
                     grp,
-                    fields.get("alliance"),
-                    fields.get("rank"),
-                    fields.get("thp"),
-                    fields.get("fsp"),
-                    fields.get("troop_level"),
+                    *(_supplied(fields.get(col)) for col in CLEARABLE_FIELDS),
                     1 if fields.get("seeded") else 0,
                     origin,
                     actor_id,
@@ -3336,15 +3457,25 @@ def upsert_registrant(
         else:
             new_id = row["id"]
             # Only fill what the caller actually supplied; a modal that leaves
-            # alliance blank must not erase an imported value.
+            # alliance blank must not erase an imported value. **That rule is
+            # unchanged and is load-bearing well outside this one control** --
+            # `None` still writes nothing at all.
+            #
+            # `CLEAR` is the one way past it, and a caller has to ask for it by
+            # name. It is what `✏️ Edit my information` sends for a box the
+            # member emptied on a screen that showed them what we held, which
+            # is the one place on this feature where a blank box is a statement
+            # rather than an omission.
             sets, params = ["display_name = ?", "updated_at = ?"], [display, now]
             if grp:
                 sets.append("grp = ?")
                 params.append(grp)
-            for col in ("alliance", "rank", "thp", "fsp", "troop_level"):
-                if fields.get(col) is not None:
-                    sets.append(f"{col} = ?")
-                    params.append(fields[col])
+            for col in CLEARABLE_FIELDS:
+                value = fields.get(col)
+                if value is None:
+                    continue
+                sets.append(f"{col} = ?")
+                params.append(None if value is CLEAR else value)
             if row["origin"] == "self_reported" and origin == "imported":
                 sets.append("origin = ?")
                 params.append("imported")

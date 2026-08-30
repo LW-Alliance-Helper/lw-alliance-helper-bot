@@ -108,17 +108,42 @@ DROP_WL_FULL = "wl_full"
 DROP_SELF = "self"
 
 
+# The two reasons an officer can overrule. Both mean "these two pairings can't
+# both stand", and which one survives is currently decided alphabetically —
+# which is not a decision the bot should be making silently on the alliance's
+# behalf. `buddy_ui` offers the choice; everything else is simply reported.
+RESOLVABLE_DROPS = (DROP_ENGINEER_TAKEN, DROP_DOUBLING_OFF)
+
+
 @dataclass
 class DroppedPair:
     """A pairing the tab carried that validation refused to keep.
 
     Names are whatever we could resolve — the tab's spelling when the member
     couldn't be found at all, the roster's when they could. Both are only ever
-    rendered back to a human, never matched on."""
+    rendered back to a human, never matched on.
+
+    ``detail`` carries whatever the sentence needs beyond the two names — for a
+    profession change, what they changed *to*.
+
+    ``dropped`` and ``kept`` are the two ``Pair``s a resolvable conflict is
+    choosing between: the one that lost and the one that won. Swapping them is
+    the whole of resolving it, which is why both are carried rather than just
+    the loser."""
 
     war_leader: str
     engineer: str
     reason: str
+    detail: str = ""
+    dropped: object = None
+    kept: object = None
+
+    @property
+    def resolvable(self) -> bool:
+        """True when an officer could sensibly pick the other pairing instead."""
+        return (
+            self.reason in RESOLVABLE_DROPS and self.dropped is not None and self.kept is not None
+        )
 
 
 @dataclass
@@ -333,6 +358,12 @@ def assign_buddies(
     # Step 2 — validate & preserve existing pairs. Every rejection is recorded
     # with its reason: silently dropping a pairing is what made this look like
     # the bot losing people's buddies (#289 F-05, F-06).
+    # Which kept pairing currently holds each Engineer, and which kept pairings
+    # each War Leader has. A conflict needs both sides to offer a choice
+    # between them (#289 F-04, F-05).
+    eng_owner: dict[str, Pair] = {}
+    wl_holds: dict[str, list] = {}
+
     for p in existing_pairs:
         wl = resolve(p.wl_discord_id, p.war_leader)
         eng = resolve(p.eng_discord_id, p.engineer)
@@ -346,27 +377,46 @@ def assign_buddies(
             )
             continue
         if _classify(wl.profession) != "wl":
-            dropped.append(DroppedPair(wl.name, eng.name, DROP_PROFESSION_WL))
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_PROFESSION_WL, detail=wl.profession))
             continue
         if _classify(eng.profession) != "eng":
-            dropped.append(DroppedPair(wl.name, eng.name, DROP_PROFESSION_ENG))
+            dropped.append(
+                DroppedPair(wl.name, eng.name, DROP_PROFESSION_ENG, detail=eng.profession)
+            )
             continue
         wk, ek = _member_key(wl), _member_key(eng)
+        this = Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, source=p.source)
         if wk == ek:
-            dropped.append(DroppedPair(wl.name, eng.name, DROP_SELF))
+            dropped.append(DroppedPair(wl.name, eng.name, DROP_SELF, dropped=this))
             continue
         if ek in eng_used:
-            dropped.append(DroppedPair(wl.name, eng.name, DROP_ENGINEER_TAKEN))
+            # This Engineer already belongs to another War Leader. Which of the
+            # two keeps them is the alliance's call, not ours.
+            dropped.append(
+                DroppedPair(
+                    wl.name, eng.name, DROP_ENGINEER_TAKEN, dropped=this, kept=eng_owner.get(ek)
+                )
+            )
             continue
         if wl_load.get(wk, 0) >= cap:
             # cap == 1 means doubling is switched off, which is the actionable
-            # case: the alliance can turn it on and keep this pairing.
+            # case: the alliance can turn it on and keep this pairing, or pick
+            # which of the two Engineers this War Leader keeps.
+            held = wl_holds.get(wk) or []
             dropped.append(
-                DroppedPair(wl.name, eng.name, DROP_DOUBLING_OFF if cap == 1 else DROP_WL_FULL)
+                DroppedPair(
+                    wl.name,
+                    eng.name,
+                    DROP_DOUBLING_OFF if cap == 1 else DROP_WL_FULL,
+                    dropped=this,
+                    kept=held[0] if (cap == 1 and held) else None,
+                )
             )
             continue
-        kept_pairs.append(Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, source=p.source))
+        kept_pairs.append(this)
         eng_used.add(ek)
+        eng_owner[ek] = this
+        wl_holds.setdefault(wk, []).append(this)
         wl_load[wk] = wl_load.get(wk, 0) + 1
 
     # Step 3 — free pools.

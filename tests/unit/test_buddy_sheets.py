@@ -728,7 +728,7 @@ def test_the_report_reads_as_sentences_and_survives_an_empty_result():
     text = buddy_ui.describe_dropped(result)
 
     assert "Ed" in text and "Wanda" in text
-    assert "1 pairing cleared" in text
+    assert "1 pairing was removed" in text
     assert buddy_ui.describe_dropped(assign_buddies(members, [], fill=False)) == ""
 
 
@@ -857,3 +857,155 @@ def test_loading_a_preset_cannot_bring_back_someone_who_left(sheets):
     assert "Ed" not in names
     assert buddy.DROP_MISSING_ENG in {d.reason for d in result.dropped}
     assert "Ed" in buddy_ui.describe_dropped(result)
+
+
+# ── conflicts an officer settles (#289 F-04, F-05) ────────────────────────────
+#
+# Two situations leave two pairings that can't both stand. The list still
+# settles on a valid default, but which one survives is offered back rather
+# than decided alphabetically and reported as a fact.
+
+
+def test_one_engineer_two_war_leaders_is_a_conflict_not_a_removal():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Mid", "2"), E("Dana", "3")]
+    existing = [Pair("Alpha", "1", "Dana", "3"), Pair("Mid", "2", "Dana", "3")]
+    result = assign_buddies(members, existing, fill=False)
+
+    conflicts = buddy_ui.conflicts_in(result)
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.reason == buddy.DROP_ENGINEER_TAKEN
+    assert c.kept.war_leader == "Alpha" and c.dropped.war_leader == "Mid"
+
+    text = buddy_ui.describe_dropped(result)
+    assert "needs your decision" in text
+    assert "Dana" in text and "Alpha" in text and "Mid" in text
+    assert "were removed" not in text
+
+
+def test_doubling_off_is_a_conflict_and_points_at_the_setting():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), E("Testy", "3"), E("Dana", "4")]
+    existing = [Pair("Alpha", "1", "Testy", "3"), Pair("Alpha", "1", "Dana", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=False, fill=False)
+
+    conflicts = buddy_ui.conflicts_in(result)
+    assert len(conflicts) == 1
+    assert conflicts[0].reason == buddy.DROP_DOUBLING_OFF
+    text = buddy_ui.describe_dropped(result)
+    assert "Choose which Engineer" in text
+    assert "/setup" in text
+
+
+def test_a_war_leader_at_the_cap_of_two_is_reported_not_offered():
+    """Three Engineers on one War Leader is not a choice: two is the ceiling."""
+    import buddy_ui
+
+    members = [W("Alpha", "1"), E("Testy", "3"), E("Dana", "4"), E("Sam", "5")]
+    existing = [
+        Pair("Alpha", "1", "Testy", "3"),
+        Pair("Alpha", "1", "Dana", "4"),
+        Pair("Alpha", "1", "Sam", "5"),
+    ]
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=False)
+
+    assert buddy_ui.conflicts_in(result) == []
+    text = buddy_ui.describe_dropped(result)
+    assert "cannot have more than 2 Engineers" in text
+
+
+def test_resolving_a_conflict_swaps_which_pairing_survives():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Mid", "2"), E("Dana", "3")]
+    existing = [Pair("Alpha", "1", "Dana", "3"), Pair("Mid", "2", "Dana", "3")]
+    result = assign_buddies(members, existing, fill=False)
+    c = buddy_ui.conflicts_in(result)[0]
+
+    options = buddy_ui.conflict_options(c)
+    assert [label for label, _ in options] == ["Stay with Alpha", "Move to Mid"]
+
+    # The tab now holds only the surviving pairing.
+    on_tab = list(result.pairs)
+    assert pair_keys(on_tab) == {("1", "3")}
+
+    kept = buddy_ui.resolve_conflict(on_tab, c, options[0][1])
+    assert pair_keys(kept) == {("1", "3")}, "choosing what is already there changes nothing"
+
+    moved = buddy_ui.resolve_conflict(on_tab, c, options[1][1])
+    assert pair_keys(moved) == {("2", "3")}, "choosing the other side swaps them"
+
+
+def test_a_profession_change_names_what_they_changed_to():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Testy", "4")]  # Testy is a War Leader now
+    result = assign_buddies(members, [Pair("Alpha", "1", "Testy", "4")], fill=False)
+
+    assert result.dropped[0].detail == buddy.WAR_LEADER
+    assert "changed to War Leader" in buddy_ui.describe_dropped(result)
+
+
+def test_a_blank_profession_falls_back_rather_than_reading_as_changed_to_nothing():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), Member(name="Testy", discord_id="4", profession="")]
+    result = assign_buddies(members, [Pair("Alpha", "1", "Testy", "4")], fill=False)
+
+    text = buddy_ui.describe_dropped(result)
+    assert "changed profession" in text
+    assert "changed to ," not in text
+
+
+def test_the_removal_heading_agrees_with_its_count():
+    import buddy_ui
+
+    members = [W("Alpha", "1")]
+    one = assign_buddies(members, [Pair("Alpha", "1", "Gone", "9")], fill=False)
+    assert "1 pairing was removed" in buddy_ui.describe_dropped(one)
+
+    two = assign_buddies(
+        members, [Pair("Alpha", "1", "Gone", "9"), Pair("Alpha", "1", "Also", "8")], fill=False
+    )
+    assert "2 pairings were removed" in buddy_ui.describe_dropped(two)
+
+
+def test_no_string_a_member_reads_carries_an_em_dash():
+    """House rule, already enforced for Alliance Duel. Docstrings and comments
+    are exempt; anything that reaches Discord is not.
+
+    Exemptions are matched on content rather than line number so reformatting
+    can't silently widen them."""
+    import ast
+    import io as _io
+
+    for path in ("buddy.py", "buddy_ui.py", "buddy_hub.py"):
+        tree = ast.parse(_io.open(path, encoding="utf-8").read())
+        docs = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if ast.get_docstring(node, clean=False) is not None:
+                    docs.add(id(node.body[0].value))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if id(node) in docs or _predates_the_rule(node.value):
+                continue
+            assert "—" not in node.value, f"{path}:{node.lineno} {node.value[:60]!r}"
+
+
+# Em dashes in copy that predates this work, so they aren't ours to change
+# without sign-off. The bare dash is a stand-in for an empty cell in the list
+# embed, which is a different use of the glyph from punctuation.
+_PRE_EXISTING_EM_DASHES = (
+    "see your buddy sheet tab",
+    "You don't have a buddy yet",
+    "will be removed from the list",
+)
+
+
+def _predates_the_rule(value: str) -> bool:
+    return value.strip() == "—" or any(m in value for m in _PRE_EXISTING_EM_DASHES)

@@ -76,7 +76,8 @@ def _build_hub_embed(guild_id: int, cfg: dict, *, is_premium: bool) -> discord.E
             name="💎 Premium",
             value=(
                 "Auto-assign, one-click profession swapping, auto re-pairing with "
-                "leadership alerts, and buddy DMs are part of Premium. Run `/upgrade`."
+                "leadership alerts, saving lineups as presets, and buddy DMs are part "
+                "of Premium. Run `/upgrade`."
             ),
             inline=False,
         )
@@ -136,7 +137,110 @@ class _ConfirmView(discord.ui.View):
         self.stop()
 
 
-class _PresetNameModal(discord.ui.Modal, title="Save this lineup as a preset"):
+class _ConflictView(discord.ui.View):
+    """Hands back the calls the pairing logic shouldn't be making on its own.
+
+    Two situations leave two pairings that can't both stand: one Engineer
+    listed with two War Leaders, and a War Leader holding two Engineers while
+    doubling is off. Which one survived used to be decided alphabetically and
+    reported as a fact (#289 F-04, F-05). The list still settles on a valid
+    default so nothing is left broken, but the officer is offered the swap.
+
+    Conflicts are recomputed after every resolution rather than worked through
+    from a stale list, because settling one can change what the others are.
+    """
+
+    def __init__(self, hub, cfg: dict, conflicts: list):
+        super().__init__(timeout=300)
+        self.hub = hub
+        self.cfg = cfg
+        self.conflicts = conflicts
+        n = len(conflicts)
+        btn = discord.ui.Button(
+            label=f"⚖️ Choose ({n})" if n > 1 else "⚖️ Choose",
+            style=discord.ButtonStyle.primary,
+        )
+        btn.callback = self._open
+        self.add_item(btn)
+
+    async def interaction_check(self, inter):
+        if inter.user.id != self.hub.owner_user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    def _label(self, d) -> str:
+        if d.reason == buddy.DROP_ENGINEER_TAKEN:
+            return f"{d.engineer}: {d.kept.war_leader} or {d.war_leader}"[:100]
+        return f"{d.war_leader}: {d.kept.engineer} or {d.engineer}"[:100]
+
+    async def _open(self, inter: discord.Interaction):
+        if len(self.conflicts) == 1:
+            await self._offer(inter, self.conflicts[0], deferred=False)
+            return
+        opts = [
+            discord.SelectOption(label=self._label(d), value=str(i))
+            for i, d in enumerate(self.conflicts)
+        ]
+
+        async def _pick(i: discord.Interaction, value: str):
+            await self._offer(i, self.conflicts[int(value)], deferred=False)
+
+        await inter.response.send_message(
+            "Which one would you like to settle?",
+            view=ui.PickerView(opts, inter.user.id, _pick, placeholder="Pick a pairing…"),
+            ephemeral=True,
+        )
+
+    async def _offer(self, inter: discord.Interaction, conflict, *, deferred: bool):
+        options = ui.conflict_options(conflict)
+        if not options:
+            await inter.response.send_message(
+                "ℹ️ That one has already been settled.", ephemeral=True
+            )
+            return
+        opts = [
+            discord.SelectOption(label=label[:100], value=str(i))
+            for i, (label, _pair) in enumerate(options)
+        ]
+
+        async def _pick(i: discord.Interaction, value: str):
+            await i.response.defer(ephemeral=True, thinking=True)
+            await self._apply(i, conflict, options[int(value)][1])
+
+        await inter.response.send_message(
+            ui.describe_conflict(conflict),
+            view=ui.PickerView(opts, inter.user.id, _pick, placeholder="Pick one…"),
+            ephemeral=True,
+        )
+
+    async def _apply(self, inter: discord.Interaction, conflict, chosen):
+        tab = self.cfg.get("buddy_tab")
+        pairs = await asyncio.to_thread(buddy.load_pairs, self.hub.guild_id, tab)
+        self.hub.session.capture(pairs)
+        pairs = ui.resolve_conflict(pairs, conflict, chosen)
+        result = await asyncio.to_thread(ui.apply_pairs, self.hub.guild_id, self.cfg, pairs)
+        await ui.refresh_persistent_message(self.hub.bot, self.hub.guild_id, self.cfg, result)
+        embed = ui.build_buddy_list_embed(result, doubling=bool(self.cfg.get("engineer_doubling")))
+        await inter.followup.send(
+            content=_with_report(
+                f"**{chosen.war_leader}** is now paired with **{chosen.engineer}**.", result
+            ),
+            embed=embed,
+            ephemeral=True,
+            **_conflict_kwargs(self.hub, self.cfg, result),
+        )
+
+
+def _conflict_kwargs(hub, cfg: dict, result) -> dict:
+    """``{"view": ...}`` when an action left something for the officer to
+    decide, or ``{}``. Built as kwargs because discord.py's ``send`` treats a
+    ``None`` view as a real one and would raise on it."""
+    conflicts = ui.conflicts_in(result)
+    return {"view": _ConflictView(hub, cfg, conflicts)} if conflicts else {}
+
+
+class _PresetNameModal(discord.ui.Modal, title="Save current pairings as a preset"):
     """Names the preset the current pairings get written to.
 
     An existing name is replaced rather than refused — updating a saved lineup
@@ -262,10 +366,7 @@ class _BuddyHubView(discord.ui.View):
 
         await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
-        self.session.capture(
-            await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
-            "the refresh",
-        )
+        self.session.capture(await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg))
         # fill=False inside compute_current: keep exactly what's in the sheet
         # (drop only invalid pairs); leave gap-filling to the Auto-assign button.
         result = await asyncio.to_thread(ui.compute_current, self.guild_id, cfg)
@@ -274,12 +375,13 @@ class _BuddyHubView(discord.ui.View):
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         await inter.followup.send(
             content=_with_report(
-                "🔄 Read your sheet and synced the buddy list. "
+                "Your buddy list has been synced from your sheet. "
                 "Use ✨ Auto-assign to fill any gaps.",
                 result,
             ),
             embed=embed,
             ephemeral=True,
+            **_conflict_kwargs(self, cfg, result),
         )
 
     async def _undo(self, inter: discord.Interaction):
@@ -294,12 +396,10 @@ class _BuddyHubView(discord.ui.View):
         import config
 
         await inter.response.defer(ephemeral=True, thinking=True)
-        label = self.session.label
         snapshot = self.session.take()
         if snapshot is None:
             await inter.followup.send(
-                "ℹ️ Nothing to undo. Undo reaches back to the last change you made "
-                "while this hub has been open — reopen `/buddy` and it starts fresh.",
+                "ℹ️ Nothing to undo. You haven't changed anything since opening this hub.",
                 ephemeral=True,
             )
             return
@@ -308,11 +408,10 @@ class _BuddyHubView(discord.ui.View):
         await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
         await inter.followup.send(
-            content=_with_report(
-                f"↩️ Put the buddy list back to how it was before {label}.", result
-            ),
+            content=_with_report("Your last change has been undone.", result),
             embed=embed,
             ephemeral=True,
+            **_conflict_kwargs(self, cfg, result),
         )
 
     async def _post_list(self, inter: discord.Interaction):
@@ -371,10 +470,7 @@ class _BuddyHubView(discord.ui.View):
 
         await inter.response.defer(ephemeral=True, thinking=True)
         cfg = config.get_buddy_config(self.guild_id)
-        self.session.capture(
-            await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
-            "the auto-assign",
-        )
+        self.session.capture(await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg))
         result = await asyncio.to_thread(
             ui.compute_autofill, self.guild_id, cfg, from_scratch=False
         )
@@ -391,6 +487,7 @@ class _BuddyHubView(discord.ui.View):
             ),
             embed=embed,
             ephemeral=True,
+            **_conflict_kwargs(self, cfg, result),
         )
 
     async def _from_scratch(self, inter: discord.Interaction):
@@ -408,10 +505,7 @@ class _BuddyHubView(discord.ui.View):
 
         async def _do(i: discord.Interaction):
             await i.response.defer(ephemeral=True, thinking=True)
-            self.session.capture(
-                await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
-                "the rebuild",
-            )
+            self.session.capture(await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg))
             await asyncio.to_thread(ui.save_result, self.guild_id, cfg, result)
             await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
             embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
@@ -427,6 +521,7 @@ class _BuddyHubView(discord.ui.View):
                 + (f"\n\n{roster_note}" if roster_note else ""),
                 embed=embed,
                 ephemeral=True,
+                **_conflict_kwargs(self, cfg, result),
             )
 
         warning = (
@@ -476,7 +571,7 @@ class _BuddyHubView(discord.ui.View):
 
         if not name:
             await inter.response.send_message(
-                "⚠️ Give the preset a name — something like `Season 4 Opener`.", ephemeral=True
+                "⚠️ Give the preset a name, something like `Season 4 Opener`.", ephemeral=True
             )
             return
         await inter.response.defer(ephemeral=True, thinking=True)
@@ -503,7 +598,7 @@ class _BuddyHubView(discord.ui.View):
         count = len(result.pairs)
         verb = "Updated" if replacing else "Saved"
         await inter.followup.send(
-            f"💾 {verb} **{name}** — {count} pairing{'s' if count != 1 else ''}.",
+            f"💾 {verb} **{name}**, {count} pairing{'s' if count != 1 else ''}.",
             ephemeral=True,
         )
 
@@ -549,21 +644,19 @@ class _BuddyHubView(discord.ui.View):
             if not pairs:
                 await i.followup.send(f"⚠️ **{name}** has no pairings saved in it.", ephemeral=True)
                 return
-            self.session.capture(
-                await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg),
-                f"loading {name}",
-            )
+            self.session.capture(await asyncio.to_thread(ui.snapshot_pairs, self.guild_id, cfg))
             result = await asyncio.to_thread(ui.apply_pairs, self.guild_id, cfg, pairs)
             await ui.refresh_persistent_message(self.bot, self.guild_id, cfg, result)
             embed = ui.build_buddy_list_embed(result, doubling=bool(cfg.get("engineer_doubling")))
             kept = len(result.pairs)
             await i.followup.send(
                 content=_with_report(
-                    f"📂 Loaded **{name}** — {kept} pairing{'s' if kept != 1 else ''} restored.",
+                    f"📂 Loaded **{name}**, {kept} pairing{'s' if kept != 1 else ''} restored.",
                     result,
                 ),
                 embed=embed,
                 ephemeral=True,
+                **_conflict_kwargs(self, cfg, result),
             )
 
         await self._preset_picker(inter, "Pick a preset to load:", _pick)
@@ -595,7 +688,7 @@ class _BuddyHubView(discord.ui.View):
 
             await i.response.send_message(
                 f"Delete the preset **{name}**? Your current buddy list stays exactly "
-                "as it is — this only removes the saved copy.",
+                "as it is, this only removes the saved preset. This cannot be undone.",
                 view=_ConfirmView(i.user.id, _do, confirm_label="🗑️ Yes, delete"),
                 ephemeral=True,
             )

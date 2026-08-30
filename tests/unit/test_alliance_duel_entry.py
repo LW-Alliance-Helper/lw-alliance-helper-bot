@@ -1047,3 +1047,101 @@ async def test_save_is_dead_until_something_is_staged(_captured):
     await view._staged(_FakeInteraction(values=["0:a"]))
     saves = [i for i in view.children if getattr(i, "label", "") == entry.VS_BTN_SAVE_PREDICTIONS]
     assert saves and not saves[0].disabled
+
+
+# ── Screen 3: entering results (#404) ─────────────────────────────────────────
+
+
+def test_every_duel_day_shows_even_the_ones_nobody_entered():
+    """The gaps are the point of the screen: four blank days is the thing it
+    exists to tell you."""
+    rows = _bracket(**{OWN_TAG: {"opponent": _key("A02")}})
+    text = _text(entry.results_embed(_state(rows), 1))
+
+    for day in range(1, 7):
+        assert f"Day {day} " in text
+    for theme in ("Radar Training", "Base Expansion", "Enemy Buster"):
+        assert theme in text
+
+
+def test_a_played_day_names_the_verdict_and_never_abbreviates_a_score():
+    """The game prints these in full, so we do -- the same rule power follows."""
+    rows = _bracket(
+        **{
+            OWN_TAG: {
+                "opponent": _key("A02"),
+                "day_scores": {1: 1204000000},
+                "day_outcomes": {1: "W"},
+            },
+            "A02": {"opponent": OWN, "day_scores": {1: 980000000}},
+        }
+    )
+    text = _text(entry.results_embed(_state(rows), 1))
+
+    assert "1,204,000,000" in text
+    assert "980,000,000" in text
+    assert entry.VS_RESULTS_WON in text
+    assert "1.2b" not in text
+
+
+def test_a_day_with_scores_but_no_verdict_says_nothing_rather_than_guessing():
+    """`ScoreModal` only calls a day once it has both sides."""
+    rows = _bracket(**{OWN_TAG: {"opponent": _key("A02"), "day_scores": {1: 500}}})
+    lines = entry.own_day_lines(_state(rows), 1, OWN, _key("A02"))
+
+    assert lines[0] == "Day 1 Radar Training"
+    assert entry.VS_RESULTS_WON not in lines[0]
+    assert entry.VS_RESULTS_LOST not in lines[0]
+
+
+def test_a_half_recorded_week_split_fills_in_from_thirteen():
+    """A matchup's two week scores total 13, which is already a validation
+    rule, so one side is enough and the match reads whole."""
+    match = entry.week_matches(_state(_bracket()), 1)[0]
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == match.a:
+            row.week_score = 5
+    lines = entry.rest_of_league_lines(_state(rows), 1)
+
+    assert any(" 5 - 8 " in line for line in lines)
+
+
+def test_your_own_match_is_not_in_the_rest_of_the_league():
+    """It is the field above, at a completely different grain."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    own = state.display_name(OWN)
+
+    assert all(own not in line.split() for line in entry.rest_of_league_lines(state, 1))
+
+
+def test_the_day_picker_carries_what_each_day_already_holds():
+    """The hub's score button only ever offers today, which is no use on a
+    screen showing four days nobody entered."""
+    rows = _bracket(
+        **{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": {1: "W"}, "day_scores": {1: 5}}}
+    )
+    options = entry.day_options(_state(rows), 1)
+
+    assert len(options) == 6
+    assert options[0].description == entry.VS_RESULTS_WON
+    assert options[1].description == entry.VS_RESULTS_NOT_ENTERED
+
+
+def test_scored_days_get_air_and_empty_ones_stay_packed():
+    """Straight off the mockup: a three-line block is separated, a list of
+    what is missing is not."""
+    rows = _bracket(
+        **{
+            OWN_TAG: {"opponent": _key("A02"), "day_scores": {1: 5}, "day_outcomes": {1: "W"}},
+        }
+    )
+    lines = entry.own_day_lines(_state(rows), 1, OWN, _key("A02"))
+
+    assert lines[2] == ""
+    assert "" not in lines[3:]
+
+    bare = entry.own_day_lines(
+        _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}})), 1, OWN, _key("A02")
+    )
+    assert "" not in bare

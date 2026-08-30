@@ -1690,3 +1690,185 @@ class PredictionsView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
         self.stop()
+
+
+# ── Results for the week (#404) ───────────────────────────────────────────────
+
+#: Screen 3, from the signed-off mockups. `Enter this week's results` is the
+#: path-screen button that opens it; the rest are its own.
+VS_BTN_RESULTS_WEEK = "Enter this week's results"
+VS_BTN_DAY_SCORES = "Enter a day's scores"
+VS_BTN_BACK_TO_PATH = "Back to your path"
+
+VS_RESULTS_REST = "The rest of the League"
+VS_RESULTS_NOT_ENTERED = "Not entered"
+VS_RESULTS_WON = "Won"
+VS_RESULTS_LOST = "Lost"
+VS_RESULTS_FOOTER = (
+    "Every week score adds to 13. Day scores build the history behind every "
+    "prediction I make later."
+)
+#: The day picker behind `Enter a day's scores`. The hub's own score button
+#: only ever offers *today*, which is no use on a screen showing four days
+#: nobody has entered. The picker is not in the mockups, so both of its
+#: strings are **awaiting copy sign-off**.
+VS_DAY_PICK_PROMPT = "PLACEHOLDER_DAY_PROMPT"
+VS_DAY_PICK_PLACEHOLDER = "PLACEHOLDER_DAY_SELECT"
+
+
+def own_day_lines(state, week: int, own, opponent) -> list[str]:
+    """Your own matchup, one block per duel day.
+
+    Six days always, including the ones nobody has entered: the gaps are the
+    point of the screen. A day with scores but no verdict renders its numbers
+    and says nothing, because `ScoreModal` only calls a day once it has both.
+    """
+    mine = state.row_for(own, week)
+    theirs = state.row_for(opponent, week)
+    ours_name, theirs_name = state.display_name(own), state.display_name(opponent)
+
+    lines = []
+    block = False
+    for day in range(1, 7):
+        theme = ad.DUEL_DAY_BY_NUMBER[day].theme
+        outcome = mine.day_outcomes.get(day) if mine else None
+        our_score = mine.day_scores.get(day) if mine else None
+        their_score = theirs.day_scores.get(day) if theirs else None
+
+        # A day carrying scores is a three-line block and gets air after it.
+        # Empty days stay packed against each other: they are a list of what
+        # is missing, not six separate blocks.
+        if block:
+            lines.append("")
+        block = not (our_score is None and their_score is None and outcome is None)
+
+        if not block:
+            lines.append(f"Day {day} {theme} - {VS_RESULTS_NOT_ENTERED}")
+            continue
+
+        verdict = {"W": VS_RESULTS_WON, "L": VS_RESULTS_LOST}.get(outcome or "")
+        lines.append(f"Day {day} {theme}" + (f" - {verdict}" if verdict else ""))
+        # Never abbreviated. The game prints these in full and so do we, the
+        # same rule power follows.
+        if our_score is not None:
+            lines.append(f"{ours_name}: {our_score:,}")
+        if their_score is not None:
+            lines.append(f"{theirs_name}: {their_score:,}")
+    return lines
+
+
+def rest_of_league_lines(state, week: int) -> list[str]:
+    """Every other match on its week split, which is all the game shows.
+
+    One side is enough: a matchup's two week scores total 13, which is already
+    a validation rule, so a half-recorded match reads as a whole one rather
+    than as missing.
+    """
+    lines = []
+    for match in week_matches(state, week):
+        a, b = state.display_name(match.a), state.display_name(match.b)
+        row_a, row_b = state.row_for(match.a, week), state.row_for(match.b, week)
+        score_a = row_a.week_score if row_a else None
+        score_b = row_b.week_score if row_b else None
+
+        if score_a is None and score_b is None:
+            lines.append(f"{a} v {b} - {VS_RESULTS_NOT_ENTERED}")
+            continue
+        if score_a is None:
+            score_a = ad.WEEK_POINTS_TOTAL - score_b
+        if score_b is None:
+            score_b = ad.WEEK_POINTS_TOTAL - score_a
+        lines.append(f"{a} {score_a} - {score_b} {b}")
+    return lines
+
+
+def results_embed(state, week: int) -> discord.Embed:
+    """Screen 3: what actually happened.
+
+    **Two grains, on purpose.** Your own week is six days, because you watch it
+    happen and those day scores are the history every later prediction reads
+    from. Every other match is one line, because the week split is the only
+    thing the game shows you about it.
+    """
+    embed = discord.Embed(title=f"Week {week} results", color=discord.Color.blurple())
+    league = state.league
+    embed.description = f"**{league.season} · {league.tier} {league.group}**"
+
+    own = state.own
+    opponent = state.own_match(week)
+    if own is not None and opponent is not None:
+        embed.add_field(
+            name=f"{state.display_name(own)} v {state.display_name(opponent)}",
+            value="\n".join(own_day_lines(state, week, own, opponent))[:1024],
+            inline=False,
+        )
+
+    rest = rest_of_league_lines(state, week)
+    if rest:
+        embed.add_field(name=VS_RESULTS_REST, value="\n".join(rest)[:1024], inline=False)
+
+    embed.set_footer(text=VS_RESULTS_FOOTER)
+    return embed
+
+
+def day_options(state, week: int) -> list[discord.SelectOption]:
+    """The six days, each carrying what is already recorded against it."""
+    own = state.own
+    mine = state.row_for(own, week) if own is not None else None
+    options = []
+    for day in range(1, 7):
+        theme = ad.DUEL_DAY_BY_NUMBER[day].theme
+        outcome = mine.day_outcomes.get(day) if mine else None
+        score = mine.day_scores.get(day) if mine else None
+        if outcome in ("W", "L"):
+            note = VS_RESULTS_WON if outcome == "W" else VS_RESULTS_LOST
+        elif score is not None:
+            note = f"{score:,}"
+        else:
+            note = VS_RESULTS_NOT_ENTERED
+        options.append(
+            discord.SelectOption(
+                label=f"Day {day} {theme}"[:100], value=str(day), description=note[:100]
+            )
+        )
+    return options
+
+
+class DayPickerView(discord.ui.View):
+    """Pick which day to enter, then hand off to the modal that already exists.
+
+    A separate step rather than six buttons: the modal is the same one the hub
+    opens for today, and the only thing missing from it was a way to say
+    *which* day when today is not the one you are catching up on.
+    """
+
+    def __init__(self, state, week: int, owner_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+        select = discord.ui.Select(
+            placeholder=VS_DAY_PICK_PLACEHOLDER,
+            options=day_options(state, week),
+            min_values=1,
+            max_values=1,
+        )
+        select.callback = self._picked
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint="`/vs`")
+
+    async def _picked(self, interaction: discord.Interaction):
+        day = int((interaction.data.get("values") or ["1"])[0])
+        await interaction.response.send_modal(
+            ScoreModal(self.state, self.week, day, self.state.own_match(self.week))
+        )

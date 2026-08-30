@@ -861,6 +861,15 @@ class VSPathView(discord.ui.View):
         predict.callback = self._predict
         self.add_item(predict)
 
+        results = discord.ui.Button(
+            label=ad_entry.VS_BTN_RESULTS_WEEK,
+            style=discord.ButtonStyle.secondary,
+            disabled=state.own is None or state.week is None,
+            row=1,
+        )
+        results.callback = self._results
+        self.add_item(results)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
@@ -894,6 +903,63 @@ class VSPathView(discord.ui.View):
         # The view edits this message on save and strips it on timeout, and it
         # can do neither without the handle. Same pattern as the hub's own.
         view.message = await interaction.original_response()
+
+    async def _results(self, interaction: discord.Interaction):
+        week = self.state.week or 1
+        view = ResultsView(self.state, week, interaction.user.id)
+        await interaction.response.send_message(
+            embed=ad_entry.results_embed(self.state, week), view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+
+class ResultsView(discord.ui.View):
+    """Screen 3's controls. Lives here rather than in `alliance_duel_entry`
+    because Back re-renders the path, and entry cannot import the hub."""
+
+    def __init__(self, state: HubState, week: int, owner_id: int):
+        super().__init__(timeout=900)
+        self.state = state
+        self.week = week
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+        day = discord.ui.Button(
+            label=ad_entry.VS_BTN_DAY_SCORES,
+            style=discord.ButtonStyle.primary,
+            disabled=state.own is None,
+            row=0,
+        )
+        day.callback = self._day_scores
+        self.add_item(day)
+
+        back = discord.ui.Button(
+            label=ad_entry.VS_BTN_BACK_TO_PATH, style=discord.ButtonStyle.secondary, row=0
+        )
+        back.callback = self._back
+        self.add_item(back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
+
+    async def _day_scores(self, interaction: discord.Interaction):
+        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id)
+        await interaction.response.send_message(
+            ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+    async def _back(self, interaction: discord.Interaction):
+        view = VSPathView(self.state, self.owner_id)
+        await interaction.response.edit_message(embed=path_embed(self.state), view=view)
+        view.message = self.message
+        self.stop()
 
 
 class VSHubView(discord.ui.View):

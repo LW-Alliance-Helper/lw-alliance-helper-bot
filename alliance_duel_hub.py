@@ -933,6 +933,15 @@ class ResultsView(discord.ui.View):
         day.callback = self._day_scores
         self.add_item(day)
 
+        others = discord.ui.Button(
+            label=ad_entry.VS_BTN_OTHER_RESULTS,
+            style=discord.ButtonStyle.secondary,
+            disabled=not ad_entry.all_week_matches(state, week),
+            row=0,
+        )
+        others.callback = self._other_results
+        self.add_item(others)
+
         back = discord.ui.Button(
             label=ad_entry.VS_BTN_BACK_TO_PATH, style=discord.ButtonStyle.secondary, row=0
         )
@@ -954,6 +963,22 @@ class ResultsView(discord.ui.View):
             ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
         )
         view.message = await interaction.original_response()
+
+    async def _other_results(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            ad_entry.OtherResultsModal(self.state, self.week, view=self)
+        )
+
+    async def refresh(self, interaction: discord.Interaction) -> None:
+        """Re-render after a write. The modal defers with `thinking=True`, so
+        `edit_original_response` would edit that placeholder rather than the
+        screen -- the view's own message is the one that has to change."""
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(embed=ad_entry.results_embed(self.state, self.week), view=self)
+        except discord.HTTPException:
+            pass
 
     async def _back(self, interaction: discord.Interaction):
         view = VSPathView(self.state, self.owner_id)

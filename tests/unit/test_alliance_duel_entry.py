@@ -1173,3 +1173,108 @@ def test_scored_days_get_air_and_empty_ones_stay_packed():
         _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}})), 1, OWN, _key("A02")
     )
     assert "" not in bare
+
+
+# ── The other results, one box (#404) ─────────────────────────────────────────
+
+
+def _own_v(tag):
+    """A bracket where the guild's own match is against `tag`."""
+    return _bracket(**{OWN_TAG: {"opponent": _key(tag)}, tag: {"opponent": OWN}})
+
+
+def test_the_box_opens_holding_every_match_including_your_own():
+    """Kevin's call: the whole week comes off one game screen, so sending one
+    row of eight somewhere else would argue with how the data arrives."""
+    state = _state(_own_v("A02"))
+    text = entry.results_prefill(state, 1)
+
+    assert len(text.splitlines()) == ad.BRACKET_SIZE // 2
+    assert any(state.display_name(OWN) in line for line in text.splitlines())
+
+
+def test_a_recorded_match_comes_back_filled_so_it_can_be_corrected():
+    match = entry.week_matches(_state(_bracket()), 1)[0]
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == match.b:
+            row.week_score = 9
+        elif row.alliance == match.a:
+            row.week_score = 4
+    state = _state(rows)
+    line = next(
+        line
+        for line in entry.results_prefill(state, 1).splitlines()
+        if state.display_name(match.b) in line
+    )
+
+    assert line.endswith(f"{state.display_name(match.b)} 9-4")
+
+
+def test_the_leading_tag_says_whose_score_is_first_not_who_won():
+    """`QQQ 7-6` and `ZZZ 6-7` are the same result. 13 is odd, so no tie."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    forward, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 6-7")
+    backward, _ = entry.parse_results(state, 1, f"{a} v {b}: {b} 7-6")
+
+    winners = {
+        tuple(r.alliance for r in rows if r.week_outcome == "W") for rows in (forward, backward)
+    }
+    assert winners == {(match.b,)}
+
+
+def test_a_split_that_is_not_thirteen_is_refused():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 8-4")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_a_tag_on_neither_side_is_refused():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: ZQX 7-6")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_a_blank_line_records_nothing_and_is_not_a_problem():
+    """The box opens with eight empty lines. Leaving one alone is the normal
+    case, not an error."""
+    state = _state(_bracket())
+    rows, problems = entry.parse_results(state, 1, entry.results_prefill(state, 1))
+
+    assert rows == [] and problems == []
+
+
+def test_one_bad_line_stops_the_whole_write():
+    """All or nothing, matching the new-league paste. Half-saving a week and
+    leaving someone to work out which half landed is worse than refusing."""
+    state = _state(_bracket())
+    m0, m1 = entry.week_matches(state, 1)[:2]
+    good = (
+        f"{state.display_name(m0.a)} v {state.display_name(m0.b)}: {state.display_name(m0.a)} 9-4"
+    )
+    bad = f"{state.display_name(m1.a)} v {state.display_name(m1.b)}: {state.display_name(m1.a)} 8-4"
+    rows, problems = entry.parse_results(state, 1, f"{good}\n{bad}")
+
+    assert problems, "the bad line must be reported"
+    assert len(rows) == 2, "the good line still parses; the caller is what refuses"
+
+
+def test_the_confirmation_names_each_winner_once_not_twice():
+    """Two rows are written per match, one per side."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    said = entry.results_saved_lines(state, rows)
+
+    assert len(rows) == 2
+    assert said == [f"{a} beat {b} 9-4"]

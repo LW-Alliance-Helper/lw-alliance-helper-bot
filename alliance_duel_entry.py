@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import re
 
 import discord
 
@@ -1886,4 +1887,205 @@ class DayPickerView(discord.ui.View):
         day = int((interaction.data.get("values") or ["1"])[0])
         await interaction.response.send_modal(
             ScoreModal(self.state, self.week, day, self.state.own_match(self.week))
+        )
+
+
+# ── The rest of the league's results, one box (#404) ──────────────────────────
+
+#: Screen 3's second write path. Awaiting copy sign-off, all of it.
+VS_BTN_OTHER_RESULTS = "PLACEHOLDER_OTHER_RESULTS_BTN"
+VS_RESULTS_MODAL_TITLE = "PLACEHOLDER_RESULTS_TITLE"
+VS_RESULTS_FIELD_LABEL = "PLACEHOLDER_RESULTS_FIELD"
+RESULTS_SAVED = "PLACEHOLDER_RESULTS_SAVED({n})"
+RESULTS_SAVED_MATCH = "{winner} beat {loser} {high}-{low}"
+RESULTS_NOTHING_TO_SAVE = "PLACEHOLDER_RESULTS_NOTHING"
+RESULTS_REFUSED = "PLACEHOLDER_RESULTS_REFUSED"
+RESULTS_BAD_TAG = "PLACEHOLDER_BAD_TAG({label}, {tag}, {a}, {b})"
+RESULTS_BAD_TOTAL = "PLACEHOLDER_BAD_TOTAL({label}, {x}, {y}, {total})"
+RESULTS_BAD_LINE = "PLACEHOLDER_BAD_LINE({label}, {text})"
+RESULTS_UNKNOWN_MATCH = "PLACEHOLDER_UNKNOWN_MATCH({label})"
+
+#: Separates a line's match from its result. The prefill writes it; the person
+#: types after it.
+_RESULT_SEP = ":"
+
+
+def results_prefill(state, week: int) -> str:
+    """The box as it opens: one line per match, results already in it.
+
+    **Every match, not just the unrecorded ones.** A recorded line comes up
+    holding what the sheet has, so the same screen corrects a mistyped result
+    instead of needing a second way in.
+    """
+    lines = []
+    for match in all_week_matches(state, week):
+        label = f"{state.display_name(match.a)} v {state.display_name(match.b)}"
+        row_a, row_b = state.row_for(match.a, week), state.row_for(match.b, week)
+        score_a = row_a.week_score if row_a else None
+        score_b = row_b.week_score if row_b else None
+        if score_a is None and score_b is None:
+            lines.append(f"{label}{_RESULT_SEP} ")
+            continue
+        if score_a is None:
+            score_a = ad.WEEK_POINTS_TOTAL - score_b
+        if score_b is None:
+            score_b = ad.WEEK_POINTS_TOTAL - score_a
+        side, high, low = (
+            (match.a, score_a, score_b) if score_a >= score_b else (match.b, score_b, score_a)
+        )
+        lines.append(f"{label}{_RESULT_SEP} {state.display_name(side)} {high}-{low}")
+    return "\n".join(lines)
+
+
+def all_week_matches(state, week: int) -> list[ad.Match]:
+    """This week's matchups including the guild's own (#404, Kevin's call).
+
+    The whole week is read off one game screen, so sending one row of eight
+    somewhere else would be the tracker arguing with how the data arrives.
+    """
+    return week_matches(state, week, exclude_own=False)
+
+
+def _match_by_label(state, week: int, label: str) -> ad.Match | None:
+    """Find the match a prefilled label names, whichever way round it reads."""
+    wanted = {part.strip().casefold() for part in label.split(" v ") if part.strip()}
+    if len(wanted) != 2:
+        return None
+    for match in all_week_matches(state, week):
+        names = {state.display_name(match.a).casefold(), state.display_name(match.b).casefold()}
+        if names == wanted:
+            return match
+    return None
+
+
+def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
+    """Read the whole box. Returns rows to write and problems to report.
+
+    **A problem anywhere means nothing is written** -- the caller checks the
+    problem list before the rows. Half-saving a week and leaving someone to
+    work out which half landed is worse than refusing it, and it is what the
+    new-league paste already does.
+
+    The leading tag says whose score comes first, not who won: `QQQ 7-6` and
+    `ZZZ 6-7` are the same result, and the winner falls out of the numbers. A
+    week is 13, which is odd, so there is no tie to resolve.
+    """
+    rows: list[ad.AllianceWeek] = []
+    problems: list[str] = []
+
+    for raw in text.splitlines():
+        label, _, value = raw.partition(_RESULT_SEP)
+        label, value = label.strip(), value.strip()
+        if not label or not value:
+            continue
+
+        match = _match_by_label(state, week, label)
+        if match is None:
+            problems.append(RESULTS_UNKNOWN_MATCH.format(label=label))
+            continue
+
+        name_a, name_b = state.display_name(match.a), state.display_name(match.b)
+        parts = value.split()
+        digits = re.findall(r"\d+", parts[-1] if parts else "")
+        if len(parts) < 2 or len(digits) != 2:
+            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
+            continue
+
+        tag = " ".join(parts[:-1]).strip()
+        if tag.casefold() == name_a.casefold():
+            first, second = match.a, match.b
+        elif tag.casefold() == name_b.casefold():
+            first, second = match.b, match.a
+        else:
+            problems.append(RESULTS_BAD_TAG.format(label=label, tag=tag, a=name_a, b=name_b))
+            continue
+
+        x, y = int(digits[0]), int(digits[1])
+        if x + y != ad.WEEK_POINTS_TOTAL:
+            problems.append(
+                RESULTS_BAD_TOTAL.format(label=label, x=x, y=y, total=ad.WEEK_POINTS_TOTAL)
+            )
+            continue
+
+        for side, other, score in ((first, second, x), (second, first, y)):
+            row = _row_for_write(state, side, week)
+            row.week_score = score
+            row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
+            row.opponent = other
+            rows.append(row)
+
+    return rows, problems
+
+
+def results_saved_lines(state, rows: list[ad.AllianceWeek]) -> list[str]:
+    """One phrase per match for the confirmation, winners named.
+
+    Two rows are written per match, so this walks the winning halves only --
+    otherwise every result would be reported twice, once from each side.
+    """
+    out = []
+    for row in rows:
+        if row.week_outcome != "W" or row.opponent is None:
+            continue
+        out.append(
+            RESULTS_SAVED_MATCH.format(
+                winner=state.display_name(row.alliance),
+                loser=state.display_name(row.opponent),
+                high=row.week_score,
+                low=ad.WEEK_POINTS_TOTAL - (row.week_score or 0),
+            )
+        )
+    return out
+
+
+class OtherResultsModal(discord.ui.Modal):
+    """The whole week in one box (#404).
+
+    One paragraph field rather than five short ones, because the source is a
+    list: Match Record puts every match of the week on one scrollable screen,
+    already split into two numbers. An input that mirrors that is two presses
+    for a week where a match-at-a-time flow is twenty-two.
+    """
+
+    def __init__(self, state, week: int, view=None):
+        super().__init__(title=VS_RESULTS_MODAL_TITLE[:45], timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.view = view
+
+        self.box = discord.ui.TextInput(
+            label=VS_RESULTS_FIELD_LABEL[:45],
+            style=discord.TextStyle.paragraph,
+            default=results_prefill(state, week),
+            required=False,
+            max_length=1500,
+        )
+        self.add_item(self.box)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        rows, problems = parse_results(self.state, self.week, self.box.value or "")
+        if problems:
+            await interaction.followup.send(
+                "\n".join([RESULTS_REFUSED, *problems])[:1900], ephemeral=True
+            )
+            return
+        if not rows:
+            await interaction.followup.send(RESULTS_NOTHING_TO_SAVE, ephemeral=True)
+            return
+
+        said = results_saved_lines(self.state, rows)
+        problem = await save_rows(self.state, rows)
+        if problem:
+            await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
+            return
+
+        # The screen behind this is now stale in two ways -- the results are in,
+        # and its own button state was computed before them.
+        if self.view is not None:
+            await self.view.refresh(interaction)
+        await interaction.followup.send(
+            RESULTS_SAVED.format(n=len(said)) + " " + ", ".join(said), ephemeral=True
         )

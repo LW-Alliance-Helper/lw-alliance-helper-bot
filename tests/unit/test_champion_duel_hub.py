@@ -249,6 +249,80 @@ def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     assert "Group D" in theirs_view and "different Champion Duel" not in theirs_view
 
 
+async def test_the_edit_flow_empties_a_box_the_member_cleared(cd_db):
+    """Kevin settled on 2026-08-29 that `✏️ Edit my information` may clear a
+    field. The modal opened with the tag we hold in the box, so deleting it is
+    a member correcting a record they can see -- and this write used to be a
+    silent no-op, which told them it had saved."""
+    db.upsert_registrant("AlphaOne", server="738", alliance="OGV", thp=5, origin="imported")
+    held = db.get_player("AlphaOne", server="738")
+    modal = hub._edit_me_modal(held, can_write=True, grouping=None)
+    modal.name._value = "AlphaOne"
+    modal.server._value = "738"
+    modal.alliance._value = ""
+    modal.thp._value = ""
+
+    await modal.on_submit(_interaction())
+
+    after = db.get_player("AlphaOne", server="738")
+    assert after["alliance"] is None
+    assert after["thp"] is None
+    assert after["origin"] == "imported", "emptying a field is not a downgrade"
+
+
+async def test_an_untouched_troop_level_survives_an_edit(cd_db):
+    """**The one field an emptied box does NOT clear, and deliberately.** The
+    other two are text boxes, which always submit their contents. This is a
+    select, and an empty `values` means either "deselected" or "Discord did not
+    echo the default back" -- the same payload for two different intentions.
+    Guessing wrong wipes the troop level of every member who opens this screen
+    to change something else, so it keeps the behaviour it had.
+
+    Raised by `/code-review` as the one thing it could not settle. It cannot be
+    settled from the payload, so this pins the safe answer instead."""
+    db.upsert_registrant("AlphaOne", server="738", troop_level=9, origin="imported")
+    held = db.get_player("AlphaOne", server="738")
+    modal = hub._edit_me_modal(held, can_write=True, grouping=None)
+    modal.name._value = "AlphaOne"
+    modal.server._value = "738"
+    modal.alliance._value = ""
+
+    await modal.on_submit(_interaction())
+
+    assert db.get_player("AlphaOne", server="738")["troop_level"] == 9
+
+
+async def test_the_add_flow_still_leaves_an_imported_value_alone(cd_db):
+    """**Unchanged, and this is the half `/code-review` protected.** Somebody
+    adding a player they just met has no idea what we already hold, so a box
+    they left alone is an omission rather than a statement."""
+    db.upsert_registrant("AlphaOne", server="738", alliance="OGV", origin="imported")
+    modal = hub._AddPlayerModal(can_write=True)
+    modal.name._value = "AlphaOne"
+    modal.server._value = "738"
+    modal.alliance._value = ""
+
+    await modal.on_submit(_interaction())
+
+    assert db.get_player("AlphaOne", server="738")["alliance"] == "OGV"
+
+
+async def test_an_edit_that_lands_on_another_account_leaves_its_fields_alone(cd_db):
+    """Name and warzone are both editable, so a submission can land on a
+    registrant this modal never showed anybody. The boxes were filled from
+    somebody else's row, so a cleared one says nothing about this account."""
+    db.upsert_registrant("BetaTwo", server="738", alliance="OGV", origin="imported")
+    mine = db.get_player("AlphaOne", server="738")
+    modal = hub._edit_me_modal(mine, can_write=True, grouping=None)
+    modal.name._value = "BetaTwo"
+    modal.server._value = "738"
+    modal.alliance._value = ""
+
+    await modal.on_submit(_interaction())
+
+    assert db.get_player("BetaTwo", server="738")["alliance"] == "OGV"
+
+
 async def test_adding_someone_we_already_have_opens_them(cd_db):
     """Not an error and not a duplicate — identity is (name, server), so this
     is the same person. Saying so beats a refusal the contributor has to

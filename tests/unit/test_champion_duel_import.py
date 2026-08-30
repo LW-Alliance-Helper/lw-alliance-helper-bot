@@ -617,3 +617,92 @@ def test_the_odds_query_carries_the_profile(cd_db):
     by_name = {r["display_name"]: r for r in rows}
     assert by_name["AlphaOne"]["profile"]["types"] == ["Aircraft", "Tank", "Missile"]
     assert by_name["BetaTwo"]["profile"] is None
+
+
+# ── Emptying a field, as opposed to saying nothing about it ─────────────────
+#
+# Kevin settled on 2026-08-29 that `✏️ Edit my information` may empty a box.
+# `Add a player` may not, and that half is the one with teeth: the rule it
+# rests on protects imported values behind every other caller of this function.
+
+
+def test_a_blank_box_still_leaves_an_imported_value_alone(cd_db):
+    """**The rule this whole change had to keep.** `None` means the caller said
+    nothing, and the add modal leaves four of its five boxes optional -- so
+    somebody entering an opponent they just met must not wipe an alliance tag
+    that came off an official import."""
+    db.upsert_registrant("AlphaOne", server="738", alliance="OGV", thp=5, origin="imported")
+
+    kept = db.upsert_registrant("AlphaOne", server="738", alliance=None, thp=None)
+
+    assert kept["alliance"] == "OGV"
+    assert kept["thp"] == 5
+
+
+def test_clear_empties_the_column_and_nothing_else(cd_db):
+    """The other intention, said with a different value. Only the fields the
+    caller marked are emptied; the rest of the row stands."""
+    db.upsert_registrant(
+        "AlphaOne", server="738", alliance="OGV", thp=5, troop_level=9, origin="imported"
+    )
+
+    cleared = db.upsert_registrant("AlphaOne", server="738", alliance=db.CLEAR, thp=None)
+
+    assert cleared["alliance"] is None
+    assert cleared["thp"] == 5, "not asked about, so not touched"
+    assert cleared["troop_level"] == 9
+    assert cleared["display_name"] == "AlphaOne"
+    assert cleared["origin"] == "imported", "clearing a field is not a downgrade"
+
+
+def test_clearing_on_a_create_is_the_same_as_saying_nothing(cd_db):
+    """A column that has never held anything cannot be emptied, and the caller
+    cannot know whether the row exists -- that is what an upsert is for. So
+    `CLEAR` folds to nothing here rather than raising."""
+    made = db.upsert_registrant("Newname", server="738", alliance=db.CLEAR, thp=db.CLEAR)
+
+    assert made["alliance"] is None
+    assert made["thp"] is None
+
+
+def test_a_field_that_is_not_clearable_says_so_rather_than_writing_a_sentinel(cd_db):
+    """A typo'd keyword must not be swallowed. `grp` is round data the record
+    and reconcile flows own, and `seeded` is not written on update at all."""
+    with pytest.raises(ValueError, match="grp cannot be cleared"):
+        db.upsert_registrant("AlphaOne", server="738", grp=db.CLEAR)
+    with pytest.raises(ValueError, match="CLEARABLE_FIELDS"):
+        db.upsert_registrant("AlphaOne", server="738", seeded=db.CLEAR)
+
+
+def test_clearable_fields_covers_both_write_paths(cd_db):
+    """One tuple, two write paths. A column added to the INSERT and forgotten
+    in the UPDATE is a field that saves on a new player and silently does not
+    on an existing one, so both read the same list.
+
+    Compared as a float because the five columns are three storage types
+    between them, and what is being pinned is that the value arrived at all."""
+    for column in db.CLEARABLE_FIELDS:
+        # A fresh row per column, so the first write is the INSERT path.
+        made = db.upsert_registrant(f"Fresh{column}", server="738", **{column: 4})
+        assert float(made[column]) == 4, f"{column} did not save on create"
+        # And the UPDATE path, both writing and emptying.
+        again = db.upsert_registrant(f"Fresh{column}", server="738", **{column: 6})
+        assert float(again[column]) == 6, f"{column} did not save on update"
+        cleared = db.upsert_registrant(f"Fresh{column}", server="738", **{column: db.CLEAR})
+        assert cleared[column] is None, f"{column} did not clear"
+
+
+def test_the_identity_columns_refuse_the_sentinel_rather_than_writing_it(cd_db):
+    """`_Clear` has a `__repr__`, so an unguarded sentinel does not raise on its
+    way through `str()` or `_server()` -- it files somebody on warzone
+    **CLEAR**. Found by `/code-review`."""
+    with pytest.raises(ValueError, match="name cannot be cleared"):
+        db.upsert_registrant(db.CLEAR, server="738")
+    with pytest.raises(ValueError, match="server cannot be cleared"):
+        db.upsert_registrant("AlphaOne", server=db.CLEAR)
+    with pytest.raises(ValueError, match="grp cannot be cleared"):
+        db.upsert_registrant("AlphaOne", server="738", grp=db.CLEAR)
+    with pytest.raises(ValueError, match="seeded cannot be cleared"):
+        db.upsert_registrant("AlphaOne", server="738", seeded=db.CLEAR)
+
+    assert db.find_registrants("CLEAR") == []

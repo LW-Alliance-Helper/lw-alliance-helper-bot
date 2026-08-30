@@ -1933,6 +1933,18 @@ def test_the_alliance_control_is_absent_without_a_champion_duel(cd_db):
     assert hub.CD_BTN_ALLIANCE not in [getattr(i, "label", None) for i in view.children]
 
 
+def test_the_unplaced_line_names_its_control_the_way_every_sibling_does(cd_db):
+    """Kevin's wording, settled 2026-08-29, and the bold is the applying
+    session's: he typed no markdown, `notes/UX.md` says bold carries the noun
+    the reader is looking for, and `_btn_words` strips the emoji -- so unbolded
+    the control arrives as four ordinary words mid-sentence."""
+    rendered = hub._ALLIANCE_UNPLACED_BODY.format(record=hub._btn_words(hub.CD_BTN_RECORD))
+
+    assert rendered.startswith("We have these accounts on file but do not know their stage.")
+    assert "**Record a group**" in rendered
+    assert "—" not in rendered
+
+
 def test_an_edit_is_acknowledged_as_an_update_not_as_a_refused_duplicate(cd_db):
     """Found by `/code-review`. The add flow's note fires on every edit — the
     member's own row always matches `find_registrants` — so it told somebody
@@ -1973,3 +1985,42 @@ def test_the_add_flow_keeps_its_own_two_notes(cd_db):
 
     assert "Added" in modal._note(player, existing=False)
     assert "duplicate" in modal._note(player, existing=True)
+
+
+def test_an_emptied_box_on_the_edit_flow_empties_the_field(cd_db):
+    """Kevin settled on 2026-08-29 that `✏️ Edit my information` may clear a
+    field. The modal opens with all five boxes filled from the row, so somebody
+    deleting the contents of one has looked at what we hold and disagreed --
+    and until now the save silently declined to hear them."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Clearme", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=31), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    assert modal._blank_means(db.find_registrants("Clearme", "738")) is db.CLEAR
+
+
+def test_a_blank_box_on_the_add_flow_still_means_nothing(cd_db):
+    """**Unchanged, and it is the half with teeth.** Somebody adding a player
+    they just met has no idea what we already hold, so an untouched box is an
+    omission -- and the rule that makes it one protects imported values behind
+    every other caller of `upsert_registrant`."""
+    db.upsert_registrant("Freshadd", server="738", alliance="ZZQ")
+
+    assert hub._AddPlayerModal(True)._blank_means(db.find_registrants("Freshadd", "738")) is None
+
+
+def test_an_edit_that_lands_on_another_account_cannot_empty_its_fields(cd_db):
+    """Name and warzone are both editable here, so a submission can land on a
+    registrant this modal never showed anybody -- `_EDIT_ME_NEW` is the
+    acknowledgement for exactly that. The boxes were filled from somebody
+    else's row, so a cleared one says nothing about this account's fields."""
+    grouping, _groups, _players = _alliance_world()
+    held = db.upsert_registrant("Oldname", server="738", alliance="ZZQ", thp=1)
+    state = hub.read_alliance(_leader(held, user_id=32), grouping)
+    modal = hub._edit_me_modal(state["player"], can_write=True, grouping=grouping)
+
+    db.upsert_registrant("Someoneelse", server="738", alliance="QQZ", origin="imported")
+
+    assert modal._blank_means(db.find_registrants("Someoneelse", "738")) is None
+    assert modal._blank_means([]) is None, "a name we hold nobody under creates the row"

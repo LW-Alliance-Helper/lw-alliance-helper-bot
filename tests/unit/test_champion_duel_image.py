@@ -625,6 +625,21 @@ def test_the_card_carries_both_names_the_subject_and_the_footer(monkeypatch):
     assert picks_lib.CARD_FOOTER in drawn
 
 
+def test_card_footer_fits_both_templates(monkeypatch):
+    """**Rendered rather than reasoned about**, because the footer is the one
+    line on this card that a length change can silently cut.
+
+    Kevin's wording, settled 2026-08-29, is 89 characters against the 53 it
+    replaced. `_picks_footer` shrinks the line to fit before `_ellipsized`
+    touches it, so the cost of the longer sentence is type size: 17px on the
+    wide template unchanged, and 17 -> 14 on the single-column one. **Nothing
+    is cut on either**, which is what this pins -- `_drawn` records the string
+    after ellipsizing, so a truncation fails here.
+    """
+    for n in (1, 3, 14, 20):
+        assert picks_lib.CARD_FOOTER in _drawn(monkeypatch, _stub_slate(n)), n
+
+
 def test_a_row_carries_one_percentage_and_it_is_on_the_picked_side():
     """Question 2, closed: *"all that matters is who the pick is and who we
     predict to win."* One number, on the picked side, and the unpicked bar

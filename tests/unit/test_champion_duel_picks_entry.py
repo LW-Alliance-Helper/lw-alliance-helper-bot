@@ -287,16 +287,61 @@ def test_a_guild_with_no_champion_duel_gets_the_control_that_fixes_it(cd_db):
     assert hub._btn_words(hub.CD_BTN_ADD_GROUPING) in embed.description
 
 
-def test_the_qualifiers_are_not_a_round_this_card_covers(cd_db):
-    """The game runs no prediction market on them, so there is nothing to card
-    and the surface says so rather than offering an empty field."""
+def test_the_calendar_can_no_longer_shut_the_picks_flow(cd_db):
+    """**The whole point of Kevin's answer on 2026-08-29.** The round is
+    derived from the grouping's start date, so a date typed a week out reported
+    the qualifiers while the semi-finals were being played -- and the flow
+    answered with a paragraph about the qualifiers and no controls. One
+    mistyped field locked an alliance out of building a card.
+
+    Kevin: *"maybe someone got a date wrong and then we're gating on that when
+    we shouldn't."* So the record decides now: the calendar says qualifiers,
+    the semi-final draw is loaded, and the flow opens on it."""
+    grouping = _grouping("qualifiers")
+    _place(grouping, "qualifiers", "A", [("Alfa", "738", 1, None)])
+    _semifinal_field(grouping)
+
+    assert db.current_stage(grouping["id"]) == "qualifiers"
+
+    state = hub.read_picks(GUILD, grouping)
+
+    assert state["state"] == "ready"
+    assert state["stage"] == "semifinals"
+    assert len(state["field"]) == 8
+
+
+def test_with_no_draw_for_any_round_we_card_the_miss_is_not_a_refusal(cd_db):
+    """The *default nothing* Kevin asked for. Nothing is recorded but the
+    qualifiers, so there is genuinely nobody to pick from -- and the answer is
+    the same dead end any unrecorded round produces, naming the round and
+    carrying its way out, rather than a state with no controls at all."""
     grouping = _grouping("qualifiers")
     _place(grouping, "qualifiers", "A", [("Alfa", "738", 1, None)])
 
     state = hub.read_picks(GUILD, grouping)
 
-    assert state["state"] == "no_stage"
-    assert "qualifiers" in hub.build_picks_embed(state).description
+    assert state["state"] == "no_field"
+    assert state["stage"] == "semifinals"
+    assert hub._btn_words(hub.CD_BTN_RECORD) in hub.build_picks_embed(state).description
+
+
+def test_the_knockouts_win_over_the_semi_finals_when_both_are_held(cd_db):
+    """Falling back to what we hold means the FURTHEST thing we hold, which is
+    the rule `db.furthest_stage_held` already gives `current_stage`."""
+    grouping = _grouping("qualifiers")
+    _semifinal_field(grouping)
+    _knockout_field(grouping)
+
+    assert hub._pick_stage("qualifiers", db.recorded_stages(grouping["id"])) == "knockouts"
+    assert hub._pick_stage(None, db.recorded_stages(grouping["id"])) == "knockouts"
+
+
+def test_a_round_this_card_covers_is_taken_as_it_stands(cd_db):
+    """The fallback is a fallback. Where the derived round is one we card, it
+    wins whether or not a draw for it is loaded -- otherwise a guild between
+    draws would be quietly moved onto last round's field."""
+    assert hub._pick_stage("semifinals", ["knockouts"]) == "semifinals"
+    assert hub._pick_stage("knockouts", []) == "knockouts"
 
 
 def test_a_round_with_no_draw_recorded_points_at_recording_one(cd_db):
@@ -645,9 +690,155 @@ def test_the_subject_is_the_one_the_card_prints(cd_db):
     db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], card_no=2, actor=ACTOR)
 
     state = hub.read_picks(GUILD, grouping, play_on=day, card_no=2)
-    slate = picks.Slate(guild_id=GUILD, play_on=day, stage=state["stage"], card_no=2)
+    slate = picks.Slate(guild_id=GUILD, play_on=day, stage=state["stage"], card_no=2, card_total=2)
 
     assert hub.build_picks_embed(state).title.endswith(slate.subject())
+
+
+def test_the_bench_and_the_card_agree_on_how_many_cards_the_day_has(cd_db):
+    """A slate row knows its own number and nothing about its siblings. Both
+    surfaces read the total off the one read `read_picks` already does, which
+    is what stops the bench saying `Card 1 of 2` while the card says
+    `Card 1 of 3`."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
+    db.set_slate(GUILD, day, [(_rid("Charlie"), _rid("Delta"))], card_no=2, actor=ACTOR)
+
+    state = hub.read_picks(GUILD, grouping, play_on=day)
+
+    assert hub._cards_on_day(state) == 2
+    assert hub.build_picks_embed(state).title.endswith("Card 1 of 2")
+    assert picks.build(GUILD, day).subject().endswith("Card 1 of 2")
+
+
+def test_the_card_picker_names_its_options_the_way_the_cards_are_headed(cd_db):
+    """One label for both, so an option in the picker and the card it opens
+    read the same."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
+    db.set_slate(GUILD, day, [(_rid("Charlie"), _rid("Delta"))], card_no=2, actor=ACTOR)
+    view = _view(grouping, play_on=day)
+
+    labels = [o.label for o in _select_by_placeholder(view, hub._PICKS_PICK_CARD).options]
+
+    assert labels == ["Card 1 of 2", "Card 2 of 2"]
+
+
+def test_a_day_with_a_gap_in_it_never_says_card_3_of_2(cd_db):
+    """Emptying card 2 while 1 and 3 exist deletes it, so the day holds two
+    cards numbered 1 and 3. A COUNT read as a total heads the second of them
+    `Card 3 of 2`, which is the impossible marker `Slate.subject` clamps
+    against arriving from the other side. Found by `/code-review`."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    for card, pair in ((1, ("Alfa", "Bravo")), (2, ("Charlie", "Delta")), (3, ("Echo", "Foxtrot"))):
+        db.set_slate(GUILD, day, [(_rid(pair[0]), _rid(pair[1]))], card_no=card, actor=ACTOR)
+    db.delete_slate(GUILD, day, card_no=2)
+
+    state = hub.read_picks(GUILD, grouping, play_on=day, card_no=3)
+    view = _view(grouping, play_on=day, card_no=3)
+    labels = [o.label for o in _select_by_placeholder(view, hub._PICKS_PICK_CARD).options]
+
+    assert hub._cards_on_day(state) == 3
+    assert labels == ["Card 1 of 3", "Card 3 of 3"]
+    assert hub.build_picks_embed(state).title.endswith("Card 3 of 3")
+    assert "of 2" not in " ".join(labels)
+
+
+def test_the_round_the_flow_resolved_is_the_round_the_card_is_stamped_with(cd_db):
+    """**The other half of not gating on the calendar.** With the round stamped
+    from the calendar instead, a card built during a mistyped-date window would
+    be stamped `qualifiers` -- and would then re-resolve to whatever the draw
+    had moved on to every time somebody opened it, which is the drift stamping
+    exists to stop. Found by `/code-review`."""
+    grouping = _grouping("qualifiers")
+    _place(grouping, "qualifiers", "A", [("Alfa", "738", 1, None)])
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+
+    assert db.current_stage(grouping["id"]) == "qualifiers"
+
+    db.add_to_slate(
+        GUILD,
+        day,
+        (_rid("Alfa"), _rid("Bravo")),
+        stage=hub.read_picks(GUILD, grouping, play_on=day)["stage"],
+        actor=ACTOR,
+    )
+
+    assert db.get_slate(GUILD, day)["stage"] == "semifinals"
+    assert picks.build(GUILD, day).subject().startswith("Semi-finals")
+
+
+def test_a_stage_named_outright_is_ignored_on_a_card_that_already_exists(cd_db):
+    """`add_to_slate` takes `set_slate`'s rule with it: the stamp is made once
+    and a card re-opened after the draw moved on still says which round it was
+    for."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    _knockout_field(grouping)
+    day = db.server_today().isoformat()
+    db.add_to_slate(GUILD, day, (_rid("Alfa"), _rid("Bravo")), stage="semifinals", actor=ACTOR)
+
+    db.add_to_slate(GUILD, day, (_rid("Charlie"), _rid("Delta")), stage="knockouts", actor=ACTOR)
+
+    assert db.get_slate(GUILD, day)["stage"] == "semifinals"
+
+
+def test_the_default_nothing_carries_the_clock_note_too(cd_db):
+    """The day select is drawn on `no_field` as well, so a reader can get back
+    to a day that does have a card. A control on screen with no sentence about
+    it is the gap this state used to have. Found by `/code-review`."""
+    grouping = _grouping("knockouts")
+
+    state = hub.read_picks(GUILD, grouping)
+    embed = hub.build_picks_embed(state)
+    view = _view(grouping)
+
+    assert state["state"] == "no_field"
+    assert _select_by_placeholder(view, hub._PICKS_PICK_DAY) is not None
+    assert hub._PICKS_DAY_CLOCK in embed.description
+    assert hub._btn_words(hub.CD_BTN_RECORD) in embed.description
+
+
+def test_the_day_picker_says_which_clock_decides_the_day(cd_db):
+    """Kevin, 2026-08-29: *"This is more when someone is putting together the
+    card and they select the day. We just need a note where they are inputting
+    that info about this."* So it is on the entry surface, above the day
+    select, and **not on the card** -- which travels to people who never opened
+    the bot and for whom it is clutter.
+
+    ⚠️ Placeholder copy: `_PICKS_DAY_CLOCK` is new and not signed off."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+
+    state = hub.read_picks(GUILD, grouping)
+    embed = hub.build_picks_embed(state)
+
+    assert hub._PICKS_DAY_CLOCK in embed.description
+    assert hub._PICKS_DAY_CLOCK not in (embed.footer.text or "")
+
+
+def test_the_clock_note_is_not_on_the_card(cd_db):
+    """The other half of the split, and the half Kevin was explicit about: *"I
+    don't want it on the card, I think that just adds clutter and it's clear
+    enough."*"""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    day = db.server_today().isoformat()
+    db.set_slate(GUILD, day, [(_rid("Alfa"), _rid("Bravo"))], actor=ACTOR)
+    slate = picks.build(GUILD, day)
+
+    card = hub.build_slate_embed(slate)
+
+    assert hub._PICKS_DAY_CLOCK not in (card.description or "")
+    assert hub._PICKS_DAY_CLOCK not in (card.footer.text or "")
+    assert hub._PICKS_DAY_CLOCK not in "".join(f.value for f in card.fields)
 
 
 async def test_choosing_player_one_leaves_their_page_where_it_was(cd_db):

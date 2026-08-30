@@ -1,10 +1,19 @@
 name: Test & Deploy
 
+# `dev` is in both lists because feature work merges into `dev` and only
+# reaches `main` at a release. With `main` alone, a feature pull request
+# was never tested by CI at all -- #546 through #552 all merged unchecked
+# on their own branches -- and the first automated run happened on the
+# release pull request, after a week of changes had already been combined.
+#
+# `sheet-tests` and `deploy-ready` stay pinned to `refs/heads/main` below,
+# so nothing about deployment moves: a `dev` push runs the unit and
+# integration job and stops there.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   # ── Unit & Integration Tests ────────────────────────────────────────────────

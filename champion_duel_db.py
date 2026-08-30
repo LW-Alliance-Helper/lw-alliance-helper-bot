@@ -2979,6 +2979,127 @@ def set_slate(guild_id, play_on, meetings, *, card_no=1, stage=None, actor=None)
     return get_slate(gid, day, card_no=card_no)
 
 
+def add_to_slate(guild_id, play_on, pair, *, card_no=1, actor=None) -> int | None:
+    """Append one meeting to the first of a day's cards with room.
+
+    Returns the card it landed on, or None when every card for the day is full.
+
+    **One transaction, and that is the whole reason this exists beside
+    `set_slate`.** The surface used to read a card and then rewrite it whole,
+    on two connections, so a meeting somebody else added in between was
+    deleted silently and with no error to catch: `set_slate` is a full replace
+    and a rewrite off a stale snapshot is a rewrite that drops rows. Narrowing
+    the window to one function call was as far as that could go from outside
+    the database. This closes it.
+
+    `BEGIN IMMEDIATE` rather than the module's usual bare `with`. Python's
+    sqlite3 opens a deferred transaction, which starts at the first write, so
+    the reads above a write in one block are not inside it and two callers can
+    both read "card 1 has nineteen" before either writes. Taking the write lock
+    up front is what makes the read and the append one indivisible act, and it
+    is the reason no other function here needs it: everything else in this
+    module either reads or replaces, and only this one decides what to write
+    based on what it just read.
+
+    **The refusals are `set_slate`'s, word for word**, because they are read
+    out to the person building the card and two wordings of one rule is two
+    things to learn. A pair already carded anywhere in the day is refused
+    rather than drawn twice: a reader seeing one meeting twice is the same
+    mistake whichever card it is on.
+
+    **Cards are tried from `card_no` upward and then from the start**, so "the
+    card is full" only ever means the whole day is. Overflow opening the next
+    card is the normal case (`MAX_PICKS` is legibility, not storage), and
+    wrapping is what stops a full card 4 reporting a full day while card 1 has
+    room after a removal.
+    """
+    gid = _text(guild_id)
+    if not gid:
+        raise ValueError("a slate belongs to a guild")
+    day = _play_on(play_on)
+    card_no = _card_no(card_no)
+    a, b = int(pair[0]), int(pair[1])
+    if a == b:
+        raise ValueError("a meeting needs two different players")
+
+    now = _now()
+    sid = str(actor.get("discord_user_id")) if actor and actor.get("discord_user_id") else None
+    # Resolved before the write connection is opened, for the reason
+    # `set_slate` gives: it reads the guild's warzone and its grouping's
+    # calendar on a connection of its own, and a nested read underneath an open
+    # write is the shape that deadlocks.
+    stamped = _stage_for_guild(gid)
+
+    with _get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        names = {
+            r["id"]: r["display_name"]
+            for r in conn.execute(
+                "SELECT id, display_name FROM registrants WHERE id IN (?, ?)", (a, b)
+            ).fetchall()
+        }
+        for rid in (a, b):
+            if rid not in names:
+                raise ValueError(f"there is no registrant {rid}")
+
+        # Every meeting on every one of the day's cards, in one read. The count
+        # decides which card has room and the pairs decide whether this one is
+        # already somewhere, and both questions are about the same rows.
+        held: dict[int, list] = {}
+        for row in conn.execute(
+            """
+            SELECT s.card_no, m.a_id, m.b_id
+            FROM pick_slates s JOIN pick_meetings m ON m.slate_id = s.id
+            WHERE s.guild_id = ? AND s.play_on = ?
+            """,
+            (gid, day),
+        ).fetchall():
+            held.setdefault(row["card_no"], []).append(frozenset((row["a_id"], row["b_id"])))
+
+        wanted = frozenset((a, b))
+        for number in sorted(held):
+            if wanted in held[number]:
+                both = " and ".join(names[side] for side in (a, b))
+                raise ValueError(f"{both} are already on card {number} for this day")
+
+        order = list(range(card_no, MAX_CARDS_PER_DAY + 1)) + list(range(1, card_no))
+        target = next((n for n in order if len(held.get(n, ())) < MAX_PICKS), None)
+        if target is None:
+            return None
+
+        # The stage is stamped on creation and left alone on a card that
+        # already exists, which is `set_slate`'s rule: a card re-rendered after
+        # the event moved on must still say which round it was for.
+        conn.execute(
+            """
+            INSERT INTO pick_slates (guild_id, play_on, card_no, stage, created_at,
+                                     created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, play_on, card_no) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            (gid, day, target, stamped, now, sid, now, sid),
+        )
+        slate_id = conn.execute(
+            "SELECT id FROM pick_slates WHERE guild_id = ? AND play_on = ? AND card_no = ?",
+            (gid, day, target),
+        ).fetchone()["id"]
+        # MAX rather than COUNT. Positions are read in order rather than
+        # counted (`get_slate`), and a registrant deleted out from under a card
+        # takes its meeting with it through the cascade -- so a count would
+        # hand back a position that is already taken.
+        position = conn.execute(
+            "SELECT COALESCE(MAX(position), 0) + 1 AS n FROM pick_meetings WHERE slate_id = ?",
+            (slate_id,),
+        ).fetchone()["n"]
+        conn.execute(
+            "INSERT INTO pick_meetings (slate_id, position, a_id, b_id) VALUES (?, ?, ?, ?)",
+            (slate_id, position, a, b),
+        )
+    return target
+
+
 def get_slate(guild_id, play_on, *, card_no=1) -> dict | None:
     """One of a guild's cards for one day, with its meetings in order, or None.
 

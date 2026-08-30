@@ -407,11 +407,18 @@ HELP_CATEGORIES: dict[str, dict] = {
         "commands": [
             (
                 "/champion_duel",
+                # ⚠️ NOT SIGNED OFF. Rewritten for the hub session 6
+                # built: the root is four entries plus settings, and this
+                # described the eight-button grid it replaced. Two of its
+                # three lines named controls that are no longer on the root,
+                # and the 💎 was wrong before that -- contributing came
+                # off the Premium gate on 2026-08-17 and nothing has gated it
+                # since.
                 "**Champion Duel hub.**\n"
-                "🆚 Predict a match: two names in, each side's odds of winning.\n"
-                "🔍 Find a player: squads, sources, and their typical line-up.\n"
-                "💎 ✏️ Record their squads and ➕ Record a line-up: what your alliance "
-                "scouts, attributed to you and revertable.",
+                "🏅 Your standing: where you sit in your stage, and 💎 how far you get.\n"
+                "🎯 Head to head: 💎 how to play one opponent.\n"
+                "🔮 Today's picks: the day's matchups as a card you can post.\n"
+                "🏰 Your alliance: where all of your people are, across every group.",
             ),
         ],
     },

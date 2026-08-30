@@ -120,12 +120,15 @@ def test_admin_sees_the_operator_row():
 
 def test_write_buttons_lock_rather_than_vanish_on_the_free_tier():
     """Premium renders disabled, so the free tier sees the shape of the paid
-    product (`notes/DESIGN.md`)."""
-    view = hub.ChampionDuelHubView(
-        user_id=OUTSIDER_ID, is_admin=False, can_write=False, engine_ok=True
-    )
+    product (`notes/DESIGN.md`).
+
+    Asserted where the control lives. Session 6 takes `➕ Add a player` off
+    the root and leaves it at the miss, which is the surface the rule now has
+    to hold on.
+    """
+    view = hub._MissView(can_write=False, user_id=OUTSIDER_ID, name="NobodyAtAll", server="738")
     locked = [b for b in view.children if hub.CD_BTN_ADD in (b.label or "")]
-    assert locked, "the add button should still be on the grid"
+    assert locked, "the add button should still be on the miss"
     assert locked[0].disabled
     assert locked[0].label.startswith("🔒")
 
@@ -142,7 +145,10 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
     ]
     assert hub.CD_BTN_SQUADS not in labels
     assert hub.CD_BTN_ORDER not in labels
-    assert {hub.CD_BTN_FIND, hub.CD_BTN_ADD} <= set(labels)
+    assert hub.CD_BTN_FIND in labels
+    # And nor is adding one, since session 6. It is at the miss that finding
+    # produces, which is the point of need rather than a shelf on the root.
+    assert hub.CD_BTN_ADD not in labels
 
     on_card = [
         b.label
@@ -159,23 +165,34 @@ def test_the_write_actions_hang_off_a_player_not_the_hub():
     #
     # The claim is last and is not one of these: it says who the reader is
     # rather than what they saw, which is why it is never locked below.
-    assert on_card == [hub.CD_BTN_SQUADS, hub.CD_BTN_ORDER, claim_lib.CLAIM_BTN]
+    # `📖 Where to find these numbers` is on this card since session 6,
+    # beside the two controls it explains and in front of neither.
+    assert on_card == [
+        hub.CD_BTN_SQUADS,
+        hub.CD_BTN_ORDER,
+        hub.CD_BTN_GUIDE,
+        claim_lib.CLAIM_BTN,
+    ]
     assert not hasattr(hub, "_SquadModal")
 
 
 def test_the_player_card_locks_its_actions_on_the_free_tier():
     """Every *write* on the card, and only those.
 
-    The claim control is on this view and is deliberately outside the rule:
-    contributing is a reading somebody made, where a claim is a fact about the
-    reader, so locking it would gate somebody out of their own record.
+    Two controls here are deliberately outside the rule. The claim, because
+    contributing is a reading somebody made where a claim is a fact about the
+    reader, so locking it would gate somebody out of their own record. And the
+    capture guide, because it is documentation: somebody deciding whether the
+    feature is worth paying for should be able to see what contributing
+    involves, and withholding a picture of a game screen protects nothing.
     """
     view = hub.PlayerActionsView(
         player={"id": 1, "display_name": "AlphaOne", "server": "738"},
         user_id=OUTSIDER_ID,
         can_write=False,
     )
-    writes = [b for b in view.children if b.label != claim_lib.CLAIM_BTN]
+    free = {claim_lib.CLAIM_BTN, hub.CD_BTN_GUIDE}
+    writes = [b for b in view.children if b.label not in free]
     assert writes, "the card lost its write actions"
     assert all(b.disabled for b in writes)
     assert all(b.label.startswith("🔒") for b in writes)
@@ -319,7 +336,9 @@ async def test_a_missing_player_carries_the_add_button_not_a_route_back(cd_db):
     await modal.on_submit(interaction)
 
     view = interaction.followup.send.await_args.kwargs["view"]
-    assert [b.label for b in view.children] == [hub.CD_BTN_ADD]
+    # And the guide beside it since session 6: the modal this opens asks for
+    # three squad powers and their types, and the guide is where to read them.
+    assert [b.label for b in view.children] == [hub.CD_BTN_ADD, hub.CD_BTN_GUIDE]
     assert not view.children[0].disabled
 
 
@@ -840,16 +859,32 @@ async def test_saying_none_alone_is_still_worth_recording(cd_db):
     assert [s["mixed"] for s in _squads_of("AlphaOne")] == [0, 0, 0]
 
 
-def test_the_capture_guide_is_never_locked():
-    """Documentation, not a paid surface. Someone deciding whether to pay
-    should be able to see what contributing involves, and withholding a picture
-    of a game screen protects nothing."""
-    view = hub.ChampionDuelHubView(
+def test_the_capture_guide_sits_with_the_flows_it_explains_and_never_locks():
+    """Documentation, not a paid surface, and not a hub button either.
+
+    Session 6 takes it off the root and attaches it to the two entry flows it
+    explains: its two screens are the deployment order and one squad's power
+    and type, which is exactly what the controls beside it here ask for. Never
+    locked, because someone deciding whether to pay should be able to see what
+    contributing involves and withholding a picture of a game screen protects
+    nothing.
+    """
+    on_root = hub.ChampionDuelHubView(
         user_id=OUTSIDER_ID, is_admin=False, can_write=False, engine_ok=False
     )
-    guide = [b for b in view.children if b.label == hub.CD_BTN_GUIDE]
-    assert guide, "the guide button should be on the grid"
-    assert guide[0].disabled is False
+    assert hub.CD_BTN_GUIDE not in [b.label for b in on_root.children]
+
+    for view in (
+        hub.PlayerActionsView(
+            player={"id": 1, "display_name": "AlphaOne", "server": "738"},
+            user_id=OUTSIDER_ID,
+            can_write=False,
+        ),
+        hub._MissView(can_write=False, user_id=OUTSIDER_ID, name="NobodyAtAll", server="738"),
+    ):
+        guide = [b for b in view.children if b.label == hub.CD_BTN_GUIDE]
+        assert guide, f"{type(view).__name__} lost the guide"
+        assert guide[0].disabled is False
 
 
 def test_the_guide_ships_both_annotated_screens():
@@ -1014,14 +1049,28 @@ def test_hub_embed_counts_players_without_a_group(cd_db):
 def test_hub_embed_invites_a_player_from_a_server_we_do_not_have(cd_db):
     """The listed servers are the ones we hold, not the ones we accept, and a
     member facing someone from an unimported server has to read the line as an
-    invitation rather than a rejection."""
+    invitation rather than a rejection.
+
+    **It names a control that is on this surface.** The line named
+    `➕ Add a player` until session 6 took that off the root, and prose naming
+    a button the reader cannot see is the dead end `UX.md` principle 3 exists
+    to stop. `🔍 Find a player` is the door now, and the miss it produces
+    carries the add.
+    """
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
+    on_root = [
+        b.label
+        for b in hub.ChampionDuelHubView(
+            user_id=ADMIN_ID, is_admin=False, can_write=True, engine_ok=True
+        ).children
+    ]
 
     assert "Missing someone?" in embed.description
     # Named by its words: the button's leading emoji is a near-black glyph that
     # disappears against the embed background.
-    assert "**Add a player**" in embed.description
-    assert "➕" not in embed.description
+    assert "**Find a player**" in embed.description
+    assert "🔍" not in embed.description
+    assert hub.CD_BTN_FIND in on_root
 
 
 def test_hub_embed_carries_no_source_legend(cd_db):
@@ -3024,7 +3073,12 @@ def test_the_standing_offers_the_edit_control_only_where_a_claim_is_held(standin
         user_id=ADMIN_ID, can_write=True, grouping=standing_db["grouping"]
     )
 
+    # `🏅 Your group` rides with the claim pair: it is a promise about the
+    # reader, so it renders wherever we know who they are and nowhere else.
+    # No odds beside it here, because this view was built with no standing to
+    # say which group they are in.
     assert [getattr(i, "label", None) for i in held.children] == [
+        hub.CD_BTN_GROUP,
         hub.CD_BTN_WHO_AM_I,
         hub.CD_BTN_EDIT_ME,
     ]
@@ -3095,3 +3149,386 @@ async def test_the_edit_control_refuses_where_the_claim_has_gone(standing_db):
     inter.response.send_modal.assert_not_awaited()
     inter.response.send_message.assert_awaited_once()
     assert inter.response.send_message.await_args.args[0] == claim_lib.CLAIM_NOT_LINKED
+
+
+# ── The root, after session 6 ─────────────────────────────────────────────────
+#
+# `notes/PLAN_champion_duel_ia.md`, *Session 6 - The hub, and the rename*. The
+# assertions here are that file's table, read as a grid.
+
+
+def _root(grouping=None, **kw):
+    kw.setdefault("user_id", ADMIN_ID)
+    kw.setdefault("is_admin", False)
+    kw.setdefault("can_write", True)
+    kw.setdefault("engine_ok", True)
+    # Entitled by default, so the four entries read as their four labels. The
+    # padlock is a Premium question and has its own tests.
+    kw.setdefault("can_intel", True)
+    return hub.ChampionDuelHubView(grouping=grouping, **kw)
+
+
+def _row(view, n):
+    return [i.label for i in view.children if getattr(i, "row", None) == n]
+
+
+def test_the_front_row_is_the_four_questions_and_nothing_else():
+    """Eight controls become four entries plus settings.
+
+    The four are the four questions `PROPOSAL_champion_duel_ia.md` traced, in
+    the order it asks them, and they are the whole of the front row. Kevin
+    opened this hub, could not find the most valuable thing on it, and asked
+    for the information architecture to be revisited: the fix is that the four
+    things anybody comes here for are the first four things they see.
+    """
+    view = _root(grouping={"id": 1})
+
+    assert _row(view, 0) == [
+        hub.CD_BTN_WHO_AM_I,
+        hub.CD_BTN_INTEL,
+        hub.CD_BTN_PICKS,
+        hub.CD_BTN_ALLIANCE,
+    ]
+
+
+def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
+    """Demoted, not deleted. Finding a player is how you reach an opponent and
+    is the gap-fill door; recording a group is batch contribution; changing the
+    warzone is the settings half of "four entries plus settings"."""
+    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+
+    assert _row(view, 1) == [
+        hub.CD_BTN_FIND,
+        hub.CD_BTN_RECORD,
+        hub.CD_BTN_CHANGE_WARZONE,
+    ]
+
+
+def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
+    """Retiring a door is not the same act as taking a surface away.
+
+    `\U0001f3c5 Your group` is retired because you get to your own group by getting
+    to yourself first, and that is true the moment we know who somebody is:
+    `\U0001f3c5 Your standing` carries it, opened on their own letter. Before then
+    there is no standing to reach it from, and the group listing is a free read
+    carrying the round picker, the alliance filter and the door to recording a
+    round we hold nothing for. So the old control survives exactly as long as
+    it is the only one.
+    """
+    unknown = _root(grouping={"id": 1}, warzone="738")
+    known = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+
+    assert hub.CD_BTN_GROUP in _row(unknown, 1)
+    assert hub.CD_BTN_GROUP not in _labels(known)
+    # And never a front-row entry either way.
+    assert hub.CD_BTN_GROUP not in _row(unknown, 0)
+
+
+async def test_the_root_group_door_opens_what_it_always_opened(monkeypatch):
+    """No stage and no letter. We cannot place this reader in the event, so it
+    opens the round the guild is playing rather than guessing at a group."""
+    view = _root(grouping={"id": 1}, warzone="738")
+    press = next(b for b in view.children if b.label == hub.CD_BTN_GROUP)
+
+    seen = {}
+
+    async def _fake(interaction, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(hub, "send_group_view", _fake)
+    await press.callback(_interaction())
+
+    assert seen["grouping"] == {"id": 1}
+    assert seen["warzone"] == "738"
+    assert "stage" not in seen and "label" not in seen
+
+
+@pytest.mark.parametrize("standing", [None, {"state": "held"}])
+def test_no_row_is_over_discords_five(standing):
+    """Five buttons a row is Discord's cap and the old grid was at it, which is
+    why the picks control shipped alone on a row of its own. Both readers,
+    because the unknown one carries an extra control on row 1."""
+    view = _root(grouping={"id": 1}, warzone="738", is_admin=True, standing=standing)
+
+    for n in range(5):
+        assert len(_row(view, n)) <= 5, f"row {n} is over Discord's five"
+
+
+def test_the_operator_row_moves_up_with_everything_else():
+    """Row 2 rather than row 3, because row 2 emptied when the picks control
+    joined the front row. Still hidden entirely from everybody else."""
+    view = _root(grouping={"id": 1}, is_admin=True)
+
+    assert _row(view, 2) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
+    assert _row(view, 3) == []
+
+
+@pytest.mark.parametrize("standing", [None, {"state": "held"}])
+def test_no_two_controls_on_the_grid_share_a_glyph(standing):
+    """`notes/DESIGN.md` emoji rule 7: never repeat one glyph across a choice
+    set, because two identical marks side by side give the eye nothing to
+    navigate by.
+
+    This grid has two claims on \U0001f3c5 now, `\U0001f3c5 Your standing` and
+    `\U0001f3c5 Your group`, and they are never drawn together: knowing who the
+    reader is is exactly what swaps one for the other.
+    """
+    view = _root(grouping={"id": 1}, warzone="738", is_admin=True, standing=standing)
+    glyphs = [(b.label or "").replace("\U0001f512 ", "").split(" ", 1)[0] for b in view.children]
+
+    assert len(glyphs) == len(set(glyphs)), glyphs
+
+
+def test_the_identity_pair_still_swaps_on_the_front_row():
+    """A button reading "your standing" is a promise to somebody we cannot pick
+    out of a hundred rows, so the label follows the claim."""
+    known = _root(grouping={"id": 1}, standing={"state": "held"})
+
+    assert _row(known, 0)[0] == hub.CD_BTN_STANDING
+
+
+def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
+    """Nothing is deleted. The plan moves doors, and this walks each one to the
+    surface it moved to, because "eight buttons become four" is only true if
+    the other four still open something."""
+    view = _root(
+        grouping=standing_db["grouping"],
+        warzone=STANDING_WARZONES[0],
+        standing={"state": "held"},
+    )
+    root = _labels(view)
+
+    assert hub.CD_BTN_PREDICT not in root
+    assert hub.CD_BTN_ADD not in root
+    assert hub.CD_BTN_GUIDE not in root
+    assert hub.CD_BTN_GROUP not in root
+
+    # Predicting one match: on the card that absorbed it.
+    picks = hub._PicksView(
+        user_id=ADMIN_ID,
+        guild_id=999,
+        state=hub.read_picks(999, standing_db["grouping"]),
+    )
+    assert hub.CD_BTN_PREDICT in _labels(picks)
+
+    # Adding a player, and the capture guide: at the miss that finding one
+    # produces.
+    miss = hub._MissView(can_write=True, user_id=ADMIN_ID, name="Nobody", server="738")
+    assert {hub.CD_BTN_ADD, hub.CD_BTN_GUIDE} <= set(_labels(miss))
+
+    # The group: through the reader, on their own standing.
+    standing = hub._StandingClaimView(
+        user_id=ADMIN_ID, can_write=True, grouping=standing_db["grouping"], player={"id": 1}
+    )
+    assert hub.CD_BTN_GROUP in _labels(standing)
+
+
+def test_the_one_off_prediction_is_offered_where_the_card_cannot_be():
+    """Predicting one match is absorbed by the day's card and stays reachable
+    there for a one-off. A caller with no Champion Duel resolved has no card to
+    absorb it (a DM never gets one), and predicting two players who have never
+    met is exactly what that caller came for."""
+    assert hub.CD_BTN_PREDICT in _labels(_root(grouping=None))
+    assert hub.CD_BTN_PREDICT not in _labels(_root(grouping={"id": 1}))
+
+
+def test_the_days_card_is_a_read_and_does_not_lock():
+    """It is one of the four entries and the surface behind it draws its own
+    write controls locked. Gating the door would deny the read to keep back the
+    write, which is the opposite of the Premium rule."""
+    view = _root(grouping={"id": 1}, can_write=False)
+    picks = next(b for b in view.children if hub.CD_BTN_PICKS in (b.label or ""))
+
+    assert picks.label == hub.CD_BTN_PICKS
+    assert picks.disabled is False
+
+
+# ── The odds, on the standing ─────────────────────────────────────────────────
+
+
+def test_the_standing_carries_the_odds_press(standing_db):
+    """The move the plan calls for, and the thing that closes a dead end.
+
+    `_STANDING_NOT_WORKED_OUT` says we hold no projection for the reader's
+    group. Until this the message carried one button and it was the claim, so
+    there was nothing on screen that could produce one. The press computes it.
+    """
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        can_odds=True,
+    )
+
+    odds = next(b for b in view.children if hub.CD_BTN_ODDS in (b.label or ""))
+    assert odds.disabled is False
+    assert odds.style is discord.ButtonStyle.primary
+    # One primary per view (`notes/DESIGN.md`). The claim gives it up here: on
+    # a standing it is the identity footer rather than the point of the message.
+    assert [b.style for b in view.children].count(discord.ButtonStyle.primary) == 1
+
+
+def test_the_odds_lock_rather_than_vanish_on_a_standing(standing_db):
+    """The Premium rule, on the surface the embed above already applies it to
+    with its own locked odds field."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        can_odds=False,
+    )
+
+    odds = next(b for b in view.children if hub.CD_BTN_ODDS in (b.label or ""))
+    assert odds.disabled is True
+    assert odds.label.startswith("🔒")
+
+
+def test_the_landing_is_still_one_button_and_it_is_the_claim(standing_db):
+    """Both new controls are promises to somebody we cannot pick out of a
+    hundred rows, so neither renders until we know who the reader is."""
+    landing = hub._StandingClaimView(
+        user_id=ADMIN_ID, can_write=True, grouping=standing_db["grouping"]
+    )
+
+    assert _labels(landing) == [hub.CD_BTN_WHO_AM_I]
+    assert landing.children[0].style is discord.ButtonStyle.primary
+
+
+async def test_the_odds_press_runs_over_the_readers_own_group(standing_db, monkeypatch):
+    """Not the guild's first group. The reader reached this through themselves,
+    so the answer has to be about the group they are standing in."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        can_odds=True,
+    )
+
+    seen = {}
+
+    async def _fake(interaction, *, grouping, stage, label):
+        seen.update(grouping=grouping, stage=stage, label=label)
+
+    monkeypatch.setattr(hub, "send_group_odds", _fake)
+    await view._on_odds(_interaction())
+
+    assert seen["grouping"]["id"] == standing_db["grouping"]["id"]
+    assert seen["stage"] == "semifinals"
+    assert seen["label"] == "A"
+
+
+async def test_the_group_press_opens_on_the_readers_own_letter(standing_db, monkeypatch):
+    """The case the plan says stops being group-first once you reach it through
+    yourself: you never pick from a list."""
+    _claim(standing_db)
+    standing = hub.read_standing(ADMIN_ID, standing_db["grouping"], with_odds=False)
+    view = hub._StandingClaimView(
+        user_id=ADMIN_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        warzone=STANDING_WARZONES[0],
+    )
+
+    seen = {}
+
+    async def _fake(interaction, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(hub, "send_group_view", _fake)
+    await view._on_group(_interaction())
+
+    assert seen["stage"] == "semifinals"
+    assert seen["label"] == "A"
+    assert seen["grouping"]["id"] == standing_db["grouping"]["id"]
+
+
+async def test_the_group_press_follows_an_account_in_another_champion_duel(standing_db):
+    """`elsewhere`. Opening the guild's tournament would show somebody a group
+    they are not in, under a heading about their own standing."""
+    other = db.ensure_grouping([str(2000 + i) for i in range(16)], "2026-08-04")
+    mine = db.upsert_registrant(name="Away", server="2000", alliance="OGV", thp=1)
+    db.set_stage(mine["id"], "semifinals", grp="C", grouping_id=other["id"])
+    db.claim_registrant(mine["id"], str(OUTSIDER_ID), discord_name="Away", guild_id="999")
+
+    standing = hub.read_standing(OUTSIDER_ID, standing_db["grouping"], with_odds=False)
+    view = hub._StandingClaimView(
+        user_id=OUTSIDER_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+    )
+
+    assert standing["state"] == "elsewhere"
+    assert (await view._their_grouping())["id"] == other["id"]
+
+
+async def test_the_group_press_takes_the_readers_warzone_out_of_this_server(
+    standing_db, monkeypatch
+):
+    """The parsing prior follows the group, not the guild.
+
+    `warzone` is only what the record modal on that surface uses to decide
+    which number on a pasted line is the warzone. This guild's number is the
+    wrong prior for a paste out of a Champion Duel this guild is not in.
+    """
+    other = db.ensure_grouping([str(3000 + i) for i in range(16)], "2026-08-04")
+    mine = db.upsert_registrant(name="Faraway", server="3000", alliance="ZZQ", thp=1)
+    db.set_stage(mine["id"], "semifinals", grp="D", grouping_id=other["id"])
+    db.claim_registrant(mine["id"], str(OUTSIDER_ID), discord_name="Faraway", guild_id="999")
+    standing = hub.read_standing(
+        OUTSIDER_ID, standing_db["grouping"], warzone=STANDING_WARZONES[0], with_odds=False
+    )
+    view = hub._StandingClaimView(
+        user_id=OUTSIDER_ID,
+        can_write=True,
+        grouping=standing_db["grouping"],
+        player=standing["player"],
+        standing=standing,
+        warzone=STANDING_WARZONES[0],
+    )
+
+    seen = {}
+
+    async def _fake(interaction, **kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(hub, "send_group_view", _fake)
+    await view._on_group(_interaction(OUTSIDER_ID))
+
+    assert seen["grouping"]["id"] == other["id"]
+    assert seen["warzone"] == "3000"
+    assert seen["label"] == "D"
+
+
+async def test_the_group_view_opens_on_a_letter_it_is_given(standing_db):
+    """A hint rather than an instruction, both ways: a letter we no longer hold
+    falls back to what the surface would have opened on anyway, because a stale
+    pointer must not strand a live view."""
+    inter = _interaction()
+
+    await hub.send_group_view(
+        inter,
+        grouping=standing_db["grouping"],
+        warzone=STANDING_WARZONES[0],
+        user_id=ADMIN_ID,
+        stage="semifinals",
+        label="Z",
+    )
+
+    view = inter.followup.send.await_args.kwargs["view"]
+    assert view.label == "A", "an unheld letter falls back rather than stranding the view"

@@ -1031,3 +1031,148 @@ def test_a_slate_whose_guild_cannot_be_found_is_dropped_with_its_meetings(cd_db)
         assert conn.execute("SELECT COUNT(*) FROM pick_slates").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM pick_meetings").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+# ── Appending one meeting, without losing anybody else's ──────────────────────
+#
+# `db.add_to_slate` exists because the surface used to read a card and rewrite
+# it whole, on two connections. These pin the behaviour that made it worth
+# writing, and the refusals it inherits word for word from `set_slate`.
+
+
+def test_appending_keeps_what_is_already_on_the_card(cd_db):
+    _field()
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+
+    assert db.add_to_slate(GUILD, DAY, (c, d), actor=OTHER) == 1
+    slate = db.get_slate(GUILD, DAY)
+
+    assert [(m["a_id"], m["b_id"]) for m in slate["meetings"]] == [(a, b), (c, d)]
+    assert [m["position"] for m in slate["meetings"]] == [1, 2]
+
+
+def test_an_append_does_not_lose_a_meeting_written_under_it(cd_db):
+    """The bug this closes, played out.
+
+    A view reads the card, somebody else adds to it, and then the view writes
+    what it read back. `set_slate` is a full replace, so the second write used
+    to delete the first with no error to catch. Appending cannot: it never
+    holds a snapshot of the card to write back.
+    """
+    _field()
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    e, f = _ids("Kestrel", "Basalt")
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+
+    stale = db.get_slate(GUILD, DAY)
+    db.add_to_slate(GUILD, DAY, (c, d), actor=OTHER)
+    db.add_to_slate(GUILD, DAY, (e, f), actor=ACTOR)
+
+    assert len(stale["meetings"]) == 1
+    assert len(db.get_slate(GUILD, DAY)["meetings"]) == 3
+
+
+def test_an_append_opens_the_next_card_once_one_is_full(cd_db):
+    """`MAX_PICKS` is legibility rather than storage, so overflow rolls onto the
+    next card rather than being refused."""
+    names = tuple(f"Filler{i:02d}" for i in range(db.MAX_PICKS * 2 + 2))
+    _field(names)
+    ids = _ids(*names)
+    pairs = list(zip(ids[::2], ids[1::2]))
+
+    landed = [db.add_to_slate(GUILD, DAY, pair, actor=ACTOR) for pair in pairs]
+
+    assert landed[: db.MAX_PICKS] == [1] * db.MAX_PICKS
+    assert landed[db.MAX_PICKS] == 2
+    assert len(db.get_slate(GUILD, DAY)["meetings"]) == db.MAX_PICKS
+
+
+def test_an_append_wraps_to_a_card_with_room_rather_than_calling_the_day_full(cd_db):
+    """A full card only ever means a full day. A reader who opened the last
+    card and filled it still has room on card 1."""
+    names = tuple(f"Filler{i:02d}" for i in range(4))
+    _field(names)
+    a, b, c, d = _ids(*names)
+    db.set_slate(GUILD, DAY, [(a, b)] * 1, card_no=1, actor=ACTOR)
+
+    assert db.add_to_slate(GUILD, DAY, (c, d), card_no=db.MAX_CARDS_PER_DAY, actor=ACTOR) == (
+        db.MAX_CARDS_PER_DAY
+    )
+
+
+def test_a_full_day_reports_itself_rather_than_raising(cd_db):
+    """None, which the surface turns into the "every card is full" notice. A
+    raise here would read to the reader as something having gone wrong."""
+    per_card = db.MAX_PICKS
+    total = per_card * db.MAX_CARDS_PER_DAY
+    names = tuple(f"Filler{i:03d}" for i in range(total * 2 + 2))
+    _field(names)
+    ids = _ids(*names)
+    pairs = list(zip(ids[::2], ids[1::2]))
+    for pair in pairs[:total]:
+        assert db.add_to_slate(GUILD, DAY, pair, actor=ACTOR) is not None
+
+    assert db.add_to_slate(GUILD, DAY, pairs[total], actor=ACTOR) is None
+
+
+def test_an_append_refuses_a_pair_already_carded_anywhere_that_day(cd_db):
+    """`set_slate`'s rule and `set_slate`'s words. A reader seeing one meeting
+    twice is the same mistake whichever card it is on."""
+    _field()
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
+    db.set_slate(GUILD, DAY, [(c, d)], card_no=2, actor=ACTOR)
+
+    with pytest.raises(ValueError, match="already on card 2"):
+        db.add_to_slate(GUILD, DAY, (d, c), actor=ACTOR)
+
+
+def test_an_append_refuses_a_player_meeting_themselves(cd_db):
+    _field()
+    (a,) = _ids("Ravenshade")
+
+    with pytest.raises(ValueError, match="two different players"):
+        db.add_to_slate(GUILD, DAY, (a, a), actor=ACTOR)
+
+
+def test_an_append_refuses_a_registrant_we_do_not_hold(cd_db):
+    _field()
+    (a,) = _ids("Ravenshade")
+
+    with pytest.raises(ValueError, match="no registrant"):
+        db.add_to_slate(GUILD, DAY, (a, 99999), actor=ACTOR)
+
+
+def test_an_append_with_no_guild_is_refused(cd_db):
+    _field()
+    a, b = _ids("Ravenshade", "NightOwl")
+
+    for missing in (None, "", "   "):
+        with pytest.raises(ValueError, match="belongs to a guild"):
+            db.add_to_slate(missing, DAY, (a, b), actor=ACTOR)
+
+
+def test_a_refused_append_writes_nothing(cd_db):
+    """The transaction rolls back, so a refusal never leaves an empty card
+    behind: "nobody has built tomorrow's card yet" and "the card is empty" are
+    different things to say and only one of them is ever true."""
+    _field()
+    a, b = _ids("Ravenshade", "NightOwl")
+
+    with pytest.raises(ValueError):
+        db.add_to_slate(GUILD, DAY, (a, 99999), actor=ACTOR)
+
+    assert db.get_slate(GUILD, DAY) is None
+
+
+def test_an_append_stamps_the_stage_on_creation_and_leaves_it_alone_after(cd_db):
+    """A card re-rendered after the event moved on must still say which round
+    it was for, which is `set_slate`'s rule."""
+    _field()
+    a, b, c, d = _ids("Ravenshade", "NightOwl", "Ironclad", "Vesper")
+    db.set_slate(GUILD, DAY, [(a, b)], stage="knockouts", actor=ACTOR)
+
+    db.add_to_slate(GUILD, DAY, (c, d), actor=ACTOR)
+
+    assert db.get_slate(GUILD, DAY)["stage"] == "knockouts"

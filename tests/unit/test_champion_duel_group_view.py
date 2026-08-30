@@ -1520,10 +1520,12 @@ def test_an_empty_listing_is_about_the_reader_rather_than_their_alliance(cd_db):
     assert "738" in description, "which Champion Duel this server is in"
     assert [getattr(i, "label", None) for i in view.children] == [
         hub.CD_BTN_WHO_AM_I,
+        hub.CD_BTN_ADD,
         hub.CD_BTN_RECORD,
     ]
     assert view.children[0].style is discord.ButtonStyle.primary
     assert view.children[1].style is discord.ButtonStyle.secondary
+    assert view.children[2].style is discord.ButtonStyle.secondary
 
 
 def test_a_leader_who_switched_warzone_still_sees_the_alliance_they_left(cd_db):
@@ -1898,24 +1900,32 @@ def test_the_reads_control_locks_rather_than_hides_where_it_could_run(cd_db):
     assert locked.disabled is True
 
 
-def test_the_hub_offers_the_alliance_beside_the_group(cd_db):
-    """The plan splits `🏅 Your group` into `🏅 Your standing`, `🏰 Your
-    alliance` and the roster behind a filter, so the two sit together for
-    exactly as long as the old control survives."""
+def test_the_alliance_is_one_of_the_four_entries_and_the_group_is_not(cd_db):
+    """Session 6 finished the split the plan describes.
+
+    `🏅 Your group` sat beside `🏰 Your alliance` for exactly as long as
+    the old control survived, which was until here: it is retired off the root
+    and reached through the reader on `🏅 Your standing` instead.
+    """
     grouping, _groups, _players = _alliance_world()
     view = hub.ChampionDuelHubView(
-        user_id=1, is_admin=False, can_write=True, engine_ok=True, grouping=grouping
+        user_id=1,
+        is_admin=False,
+        can_write=True,
+        engine_ok=True,
+        grouping=grouping,
+        standing={"state": "held"},
     )
-    row = [getattr(i, "label", None) for i in view.children if getattr(i, "row", None) == 1]
+    front = [getattr(i, "label", None) for i in view.children if getattr(i, "row", None) == 0]
 
-    assert hub.CD_BTN_ALLIANCE in row
-    assert row.index(hub.CD_BTN_ALLIANCE) == row.index(hub.CD_BTN_GROUP) + 1
+    assert hub.CD_BTN_ALLIANCE in front
+    assert hub.CD_BTN_GROUP not in [getattr(i, "label", None) for i in view.children]
 
 
 def test_the_alliance_control_is_absent_without_a_champion_duel(cd_db):
-    """Same rule as `🏅 Your group` and `📥 Record a group`: with no grouping
-    resolved there is no event to read an alliance out of, and the caller is
-    being asked for their warzone instead."""
+    """Same rule as `📥 Record a group` and `🔮 Today's picks`: with no
+    grouping resolved there is no event to read an alliance out of, and the
+    caller is being asked for their warzone instead."""
     view = hub.ChampionDuelHubView(
         user_id=1, is_admin=False, can_write=True, engine_ok=True, grouping=None
     )

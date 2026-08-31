@@ -776,8 +776,11 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
         off a phone screen to fix one of them.
         """
         view = _RetryNewLeagueView(self.state, interaction.user.id, self._typed())
-        await interaction.followup.send(message, view=view, ephemeral=True)
-        view.message = await interaction.original_response()
+        # The followup, not `original_response`: this modal defers with
+        # `thinking=True`, so the original response is the placeholder Discord
+        # put up, and binding to it would strip the buttons off a message that
+        # never had any while leaving the retry button live forever.
+        view.message = await interaction.followup.send(message, view=view, ephemeral=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)

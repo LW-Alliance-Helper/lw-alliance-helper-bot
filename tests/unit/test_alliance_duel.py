@@ -798,3 +798,12 @@ def test_a_blocked_match_says_whether_scouting_would_help():
     assert ad.blocker_cause(match, profiles) == ad.BLOCKED_MISSING_INPUTS
     assert ad.missing_inputs(profiles.get(_key(1))) == (ad.COL_GIFT_LEVEL,)
     assert ad.missing_inputs(profiles.get(_key(0))) == ()
+
+
+def test_one_pasted_alliance_is_not_reported_as_1_alliances():
+    """A real case: someone corrects a single alliance and pastes only that."""
+    parsed = ad.parse_bracket("ZZZ 738 30000000000 30 99")
+
+    assert parsed.problems
+    assert "1 alliance." in parsed.problems[0]
+    assert "1 alliances" not in parsed.problems[0]

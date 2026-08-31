@@ -279,7 +279,8 @@ def known_rank(value) -> int | None:
 #
 # Addressed by header *name* via `transfer.header_index` / `transfer.cell_for`,
 # never by fixed position. These constants are the names the bot writes when it
-# writes when it creates the tab; a user who renames a header breaks only that
+# creates the tab; a user who renames a header breaks only that column, and
+# `config_health` reports it rather than the read failing silently.
 
 COL_SEASON = "Season"
 COL_TIER = "Tier"
@@ -3278,10 +3279,14 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
     # Count is checked last so a sheet full of typos reports the typos, not a
     # count that is only wrong because of them.
     if not problems and len(entries) != expect:
+        # One pasted line is a real case: someone corrects a single alliance
+        # and pastes only that. "That is 1 alliances" is how the bot would
+        # have greeted them.
+        counted = f"{len(entries)} alliance" + ("" if len(entries) == 1 else "s")
         problems.append(
-            f"That is {len(entries)} alliances. A League bracket holds {expect}."
+            f"That is {counted}. A League bracket holds {expect}."
             if expect == BRACKET_SIZE
-            else f"That is {len(entries)} alliances, and I need {expect}."
+            else f"That is {counted}, and I need {expect}."
         )
 
     return BracketParse(tuple(entries), tuple(problems))

@@ -174,13 +174,17 @@ class ScoreModal(discord.ui.Modal):
     real score by a million.
     """
 
-    def __init__(self, state, week: int, day: int, opponent: ad.AllianceKey | None):
+    def __init__(self, state, week: int, day: int, opponent: ad.AllianceKey | None, view=None):
         theme = ad.DUEL_DAY_BY_NUMBER[day].theme
         super().__init__(title=f"Day {day}: {theme}"[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.day = day
         self.opponent = opponent
+        #: The screen that opened this, if it shows anything the save changes.
+        #: The hub's own score button passes nothing, because its message is a
+        #: menu rather than a reading.
+        self.view = view
 
         self.ours = discord.ui.TextInput(
             label="Your score",
@@ -237,6 +241,11 @@ class ScoreModal(discord.ui.Modal):
         if problem:
             await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
             return
+
+        # The results screen behind this is now a week out of date on the very
+        # day it was opened to fill in.
+        if self.view is not None:
+            await self.view.refresh(interaction)
 
         await interaction.followup.send(
             embed=_score_ack(state, self.week, self.day), ephemeral=True
@@ -1858,11 +1867,12 @@ class DayPickerView(discord.ui.View):
     *which* day when today is not the one you are catching up on.
     """
 
-    def __init__(self, state, week: int, owner_id: int):
+    def __init__(self, state, week: int, owner_id: int, view=None):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.owner_id = owner_id
+        self.view = view
         self.message: discord.Message | None = None
 
         select = discord.ui.Select(
@@ -1886,7 +1896,7 @@ class DayPickerView(discord.ui.View):
     async def _picked(self, interaction: discord.Interaction):
         day = int((interaction.data.get("values") or ["1"])[0])
         await interaction.response.send_modal(
-            ScoreModal(self.state, self.week, day, self.state.own_match(self.week))
+            ScoreModal(self.state, self.week, day, self.state.own_match(self.week), view=self.view)
         )
 
 

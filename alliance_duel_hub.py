@@ -958,7 +958,7 @@ class ResultsView(discord.ui.View):
         await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
 
     async def _day_scores(self, interaction: discord.Interaction):
-        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id)
+        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id, view=self)
         await interaction.response.send_message(
             ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
         )

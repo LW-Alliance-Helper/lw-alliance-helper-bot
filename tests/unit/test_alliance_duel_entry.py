@@ -1349,3 +1349,40 @@ def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
     modal = entry.OtherResultsModal(state, 1)
 
     assert modal.box.default == entry.results_prefill(state, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
+    """The results screen is a reading of the week. Saving into it and leaving
+    it showing the old one is the same defect the predictions save had."""
+    refreshed = []
+
+    class _Screen:
+        async def refresh(self, interaction):
+            refreshed.append(interaction)
+
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"), view=_Screen())
+    modal.ours = type("F", (), {"value": "500"})()
+    modal.theirs = type("F", (), {"value": "400"})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+    assert refreshed, "the screen behind it was left showing the old week"
+
+
+@pytest.mark.asyncio
+async def test_the_hub_score_button_has_no_screen_to_refresh(_captured):
+    """Its message is a menu, not a reading, so `view` stays None and nothing
+    tries to re-render it."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"))
+    modal.ours = type("F", (), {"value": "500"})()
+    modal.theirs = type("F", (), {"value": "400"})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+    assert modal.view is None
+    assert _captured, "the write still happened"

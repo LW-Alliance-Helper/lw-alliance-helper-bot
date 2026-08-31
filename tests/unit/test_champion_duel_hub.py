@@ -2621,7 +2621,12 @@ async def test_the_finished_hub_is_the_hub(cd_db, no_mm_link):
     assert hub.CD_BTN_WHO_AM_I in labels
     assert hub.CD_BTN_PICKS in labels
     assert hub.CD_BTN_ALLIANCE in labels
-    assert f"🔒 {hub.CD_BTN_INTEL}" in labels, "locked, not absent: it needs no Champion Duel"
+    # Either half of the Premium pair. Which one renders is the entitlement's
+    # business and CI runs both lanes; what this test is about is that the one
+    # entry needing no Champion Duel at all was missing from the fork.
+    assert {hub.CD_BTN_INTEL, f"🔒 {hub.CD_BTN_INTEL}"} & set(labels), (
+        "locked or live, never absent"
+    )
 
 
 async def test_one_control_enters_a_champion_duel_of_either_kind(cd_db, no_mm_link):

@@ -1711,10 +1711,10 @@ VS_RESULTS_FOOTER = (
 )
 #: The day picker behind `Enter a day's scores`. The hub's own score button
 #: only ever offers *today*, which is no use on a screen showing four days
-#: nobody has entered. The picker is not in the mockups, so both of its
-#: strings are **awaiting copy sign-off**.
-VS_DAY_PICK_PROMPT = "PLACEHOLDER_DAY_PROMPT"
-VS_DAY_PICK_PLACEHOLDER = "PLACEHOLDER_DAY_SELECT"
+#: nobody has entered.
+VS_DAY_PICK_PROMPT = "Which day are you entering?"
+#: Short: the question is already on the line above it.
+VS_DAY_PICK_PLACEHOLDER = "Pick a day"
 
 
 def own_day_lines(state, week: int, own, opponent) -> list[str]:
@@ -1892,18 +1892,42 @@ class DayPickerView(discord.ui.View):
 
 # ── The rest of the league's results, one box (#404) ──────────────────────────
 
-#: Screen 3's second write path. Awaiting copy sign-off, all of it.
-VS_BTN_OTHER_RESULTS = "PLACEHOLDER_OTHER_RESULTS_BTN"
-VS_RESULTS_MODAL_TITLE = "PLACEHOLDER_RESULTS_TITLE"
-VS_RESULTS_FIELD_LABEL = "PLACEHOLDER_RESULTS_FIELD"
-RESULTS_SAVED = "PLACEHOLDER_RESULTS_SAVED({n})"
+#: Screen 3's second write path. Every string signed off 2026-08-30.
+
+#: **Not "the other results".** The mockups called it that, and it stopped
+#: being true when Kevin put the guild's own match in the same box.
+VS_BTN_OTHER_RESULTS = "Enter the week's results"
+
+#: Takes the week, because the box can be opened for one that is not live.
+VS_RESULTS_MODAL_TITLE = "Week {week} results"
+
+#: The only instruction anyone gets: a modal covers the screen behind it.
+#: Strictly the tag says whose score comes *first* rather than who won, and
+#: `parse_results` accepts either -- but leading with the winner is how the
+#: game lists them, and the forgiving parse is a safety net, not a rule worth
+#: spending 45 characters on.
+VS_RESULTS_FIELD_LABEL = "Winner first, then the split"
+
+#: Named back one by one, the shape settled for predictions: a count alone
+#: cannot show a mistyped line.
+RESULTS_SAVED = "✅ Saved {n} result{s}:"
+#: `beat`, not `over` -- the predictions wording is for something that has not
+#: happened yet. The split rides along because it is what was typed.
 RESULTS_SAVED_MATCH = "{winner} beat {loser} {high}-{low}"
-RESULTS_NOTHING_TO_SAVE = "PLACEHOLDER_RESULTS_NOTHING"
-RESULTS_REFUSED = "PLACEHOLDER_RESULTS_REFUSED"
-RESULTS_BAD_TAG = "PLACEHOLDER_BAD_TAG({label}, {tag}, {a}, {b})"
-RESULTS_BAD_TOTAL = "PLACEHOLDER_BAD_TOTAL({label}, {x}, {y}, {total})"
-RESULTS_BAD_LINE = "PLACEHOLDER_BAD_LINE({label}, {text})"
-RESULTS_UNKNOWN_MATCH = "PLACEHOLDER_UNKNOWN_MATCH({label})"
+#: Only reachable from a stale screen, so it acknowledges rather than scolds.
+RESULTS_NOTHING_TO_SAVE = "Nothing to save."
+
+#: One bad line refuses the whole box, the way the new-league paste does.
+#: Saying *nothing* was written is the load-bearing part: the alternative is
+#: wondering which half of the week landed.
+RESULTS_REFUSED = "⚠️ I didn't write anything. Fix these and try again:"
+#: Names the two answers the line accepts. This check is the whole reason the
+#: pair is prefilled rather than typed.
+RESULTS_BAD_TAG = "{label}: I don't know {tag}. Use {a} or {b}."
+RESULTS_BAD_TOTAL = "{label}: {x} and {y} don't make {total}."
+RESULTS_BAD_LINE = """{label}: I couldn't read "{text}". It needs a tag and a split, like 9-4."""
+#: No `{label}:` prefix here: the label is the broken part.
+RESULTS_UNKNOWN_MATCH = """I don't recognize "{label}" as a match this week."""
 
 #: Separates a line's match from its result. The prefill writes it; the person
 #: types after it.
@@ -2048,7 +2072,7 @@ class OtherResultsModal(discord.ui.Modal):
     """
 
     def __init__(self, state, week: int, view=None):
-        super().__init__(title=VS_RESULTS_MODAL_TITLE[:45], timeout=ENTRY_TIMEOUT)
+        super().__init__(title=VS_RESULTS_MODAL_TITLE.format(week=week)[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.view = view
@@ -2087,5 +2111,8 @@ class OtherResultsModal(discord.ui.Modal):
         if self.view is not None:
             await self.view.refresh(interaction)
         await interaction.followup.send(
-            RESULTS_SAVED.format(n=len(said)) + " " + ", ".join(said), ephemeral=True
+            RESULTS_SAVED.format(n=len(said), s="" if len(said) == 1 else "s")
+            + " "
+            + ", ".join(said),
+            ephemeral=True,
         )

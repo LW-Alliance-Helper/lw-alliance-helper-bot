@@ -1278,3 +1278,53 @@ def test_the_confirmation_names_each_winner_once_not_twice():
 
     assert len(rows) == 2
     assert said == [f"{a} beat {b} 9-4"]
+
+
+def test_the_signed_off_results_copy_renders_as_approved():
+    """Kevin approved these on 2026-08-30, each shown where it fires. Pinned
+    so a later refactor cannot quietly reword them."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    said = entry.results_saved_lines(state, rows)
+    assert entry.RESULTS_SAVED.format(n=1, s="") + " " + said[0] == (
+        f"✅ Saved 1 result: {a} beat {b} 9-4"
+    )
+    assert entry.RESULTS_SAVED.format(n=3, s="s") == "✅ Saved 3 results:"
+    assert entry.RESULTS_NOTHING_TO_SAVE == "Nothing to save."
+    assert entry.VS_BTN_OTHER_RESULTS == "Enter the week's results"
+    assert entry.VS_RESULTS_MODAL_TITLE.format(week=2) == "Week 2 results"
+
+
+def test_each_refusal_names_its_own_cause():
+    """Four distinct problems, four distinct sentences -- a single 'that line
+    is wrong' would send someone back to hunt for which part."""
+    state = _state(_bracket())
+    m0, m1 = entry.week_matches(state, 1)[:2]
+    a0, b0 = state.display_name(m0.a), state.display_name(m0.b)
+    a1, b1 = state.display_name(m1.a), state.display_name(m1.b)
+
+    _, problems = entry.parse_results(
+        state,
+        1,
+        f"{a0} v {b0}: ZQX 7-6\n{a1} v {b1}: {a1} 8-4\n{a0} v {b1}: {a0} 7-6",
+    )
+
+    assert problems == [
+        f"{a0} v {b0}: I don't know ZQX. Use {a0} or {b0}.",
+        f"{a1} v {b1}: 8 and 4 don't make 13.",
+        f"""I don't recognize "{a0} v {b1}" as a match this week.""",
+    ]
+
+
+def test_an_unreadable_line_quotes_back_what_was_typed():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    _, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} won")
+
+    assert problems == [
+        f"""{a} v {b}: I couldn't read "{a} won". It needs a tag and a split, like 9-4."""
+    ]

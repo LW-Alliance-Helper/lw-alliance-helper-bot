@@ -1927,6 +1927,9 @@ RESULTS_BAD_TAG = "{label}: I don't know {tag}. Use {a} or {b}."
 RESULTS_BAD_TOTAL = "{label}: {x} and {y} don't make {total}."
 RESULTS_BAD_LINE = """{label}: I couldn't read "{text}". It needs a tag and a split, like 9-4."""
 #: No `{label}:` prefix here: the label is the broken part.
+#: The way back into a refused box. Awaiting copy sign-off.
+VS_BTN_RETRY_RESULTS = "PLACEHOLDER_RETRY_RESULTS"
+
 RESULTS_UNKNOWN_MATCH = """I don't recognize "{label}" as a match this week."""
 
 #: Separates a line's match from its result. The prefill writes it; the person
@@ -2071,7 +2074,7 @@ class OtherResultsModal(discord.ui.Modal):
     for a week where a match-at-a-time flow is twenty-two.
     """
 
-    def __init__(self, state, week: int, view=None):
+    def __init__(self, state, week: int, view=None, typed: str | None = None):
         super().__init__(title=VS_RESULTS_MODAL_TITLE.format(week=week)[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
@@ -2080,7 +2083,10 @@ class OtherResultsModal(discord.ui.Modal):
         self.box = discord.ui.TextInput(
             label=VS_RESULTS_FIELD_LABEL[:45],
             style=discord.TextStyle.paragraph,
-            default=results_prefill(state, week),
+            # `typed` is what a refused submission held. Reopening on the
+            # sheet's version instead would throw a week of typing away to
+            # fix one line.
+            default=typed if typed is not None else results_prefill(state, week),
             required=False,
             max_length=1500,
         )
@@ -2090,10 +2096,16 @@ class OtherResultsModal(discord.ui.Modal):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        rows, problems = parse_results(self.state, self.week, self.box.value or "")
+        typed = self.box.value or ""
+        rows, problems = parse_results(self.state, self.week, typed)
         if problems:
-            await interaction.followup.send(
-                "\n".join([RESULTS_REFUSED, *problems])[:1900], ephemeral=True
+            # Discord will not open a modal off a modal submit, so the way
+            # back in has to be a button. Same shape as the new-league paste.
+            retry = _RetryResultsView(self.state, self.week, interaction.user.id, typed, self.view)
+            retry.message = await interaction.followup.send(
+                "\n".join([RESULTS_REFUSED, *problems])[:1900],
+                view=retry,
+                ephemeral=True,
             )
             return
         if not rows:
@@ -2115,4 +2127,40 @@ class OtherResultsModal(discord.ui.Modal):
             + " "
             + ", ".join(said),
             ephemeral=True,
+        )
+
+
+class _RetryResultsView(discord.ui.View):
+    """Reopen the results box holding what was refused, not what the sheet has.
+
+    A week is eight lines. Losing all of them because one said `8-4` would be
+    the screen punishing a typo, and Discord will not open a modal off a modal
+    submit, so the way back in has to be a button.
+    """
+
+    def __init__(self, state, week: int, user_id: int, typed: str, view=None):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.user_id = user_id
+        self.typed = typed
+        self.view = view
+        self.message: discord.Message | None = None
+
+        button = discord.ui.Button(label=VS_BTN_RETRY_RESULTS, style=discord.ButtonStyle.primary)
+        button.callback = self._retry
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await expire_view_message(self.message, command_hint="`/vs`")
+
+    async def _retry(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            OtherResultsModal(self.state, self.week, view=self.view, typed=self.typed)
         )

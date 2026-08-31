@@ -1328,3 +1328,24 @@ def test_an_unreadable_line_quotes_back_what_was_typed():
     assert problems == [
         f"""{a} v {b}: I couldn't read "{a} won". It needs a tag and a split, like 9-4."""
     ]
+
+
+def test_a_refused_box_reopens_holding_what_was_typed():
+    """A week is eight lines. Losing all of them because one said 8-4 would be
+    the screen punishing a typo."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    typed = f"{a} v {b}: {a} 8-4"
+
+    modal = entry.OtherResultsModal(state, 1, typed=typed)
+
+    assert modal.box.default == typed
+    assert modal.box.default != entry.results_prefill(state, 1)
+
+
+def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
+    state = _state(_bracket())
+    modal = entry.OtherResultsModal(state, 1)
+
+    assert modal.box.default == entry.results_prefill(state, 1)

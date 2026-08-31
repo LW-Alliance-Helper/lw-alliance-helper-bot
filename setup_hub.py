@@ -315,10 +315,26 @@ class _SetupHubView(discord.ui.View):
         """Reflect current opt-in state in the toggle button label so
         officers see the state at a glance without clicking. Called
         from `__init__` so each hub render picks up the latest value
-        from `guild_configs`."""
+        from `guild_configs`.
+
+        A read failure falls through to the same default as a guild with
+        no row yet. This runs inside `__init__`, so letting the error
+        escape would take the whole of `/setup` down over a transient
+        database problem, which is a bad trade for a button label. It
+        also made three tests environment-dependent: they only passed
+        where a real database file happened to exist, and went red the
+        moment CI started running on `dev`."""
         from config import get_config
 
-        cfg = get_config(self.guild_id)
+        try:
+            cfg = get_config(self.guild_id)
+        except Exception as e:
+            logger.warning(
+                "[SETUP HUB] release-announcement state unreadable for guild %s: %s",
+                self.guild_id,
+                e,
+            )
+            cfg = None
         enabled = bool(cfg.release_announcements_enabled) if cfg else True
         state = "ON" if enabled else "OFF"
         self.btn_release_announcements.label = f"📢 Release announcements: {state}"

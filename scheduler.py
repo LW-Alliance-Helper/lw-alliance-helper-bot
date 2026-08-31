@@ -978,7 +978,18 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
     # immediately instead of being silently dropped; anything still ahead
     # of `now` is folded into `pending_warnings` and picked up by the
     # normal trigger loop below.
-    from config import load_pending_warnings
+    from config import load_pending_warnings, purge_fired_pending_warnings
+
+    # Sweep claimed-but-never-deleted rows before recovering. Only an
+    # instance that died between claiming and posting leaves these, so the
+    # count is normally zero; the sweep just stops them accruing on the
+    # volume. `load_pending_warnings` already filters them out either way.
+    try:
+        swept = purge_fired_pending_warnings()
+        if swept:
+            print(f"[SCHEDULER] Swept {swept} settled pending-warning row(s)")
+    except Exception as e:  # noqa: BLE001 - housekeeping must not block startup
+        print(f"[SCHEDULER][WARN] Could not sweep settled warnings: {e}")
 
     restored = load_pending_warnings()
     if restored:
@@ -1164,6 +1175,22 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         print(
             f"[SCHEDULER][ERROR] Announcement channel {cfg.announcement_channel_id} "
             f"not found for guild {gid} — 5-min warning for {event_key} skipped"
+        )
+        return
+
+    # Claim before posting, never after. Railway overlaps the outgoing and
+    # incoming containers across a deploy, so for a few seconds two
+    # schedulers hold this same warning: the old one from its in-memory
+    # `pending_warnings`, the new one from restart recovery. Both used to
+    # reach `channel.send` and the alliance got the warning twice (1.8.8).
+    # The claim is a conditional UPDATE, so exactly one of them wins it.
+    from config import claim_pending_warning
+
+    if not claim_pending_warning(event_key):
+        pending_warnings.pop(event_key, None)
+        print(
+            f"[SCHEDULER] 5-minute warning {event_key} already claimed "
+            "elsewhere — skipping to avoid a duplicate post"
         )
         return
 

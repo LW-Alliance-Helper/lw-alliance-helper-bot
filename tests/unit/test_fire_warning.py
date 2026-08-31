@@ -68,6 +68,24 @@ def _event_list_with_blurb(blurb: str | None = None):
     ]
 
 
+# Every event_key this module fires. Each needs a persisted row: since the
+# 1.8.8 duplicate fix, `fire_warning` claims its row before posting and
+# treats a missing row as already-settled. That is the production contract
+# too — a warning only ever reaches `fire_warning` because ApprovalView
+# wrote its row via `save_pending_warning` at schedule time.
+_EVENT_KEYS = ("evt-1", "evt-2", "evt-3", "evt-x", "evt-y", "evt-content", "evt-empty")
+
+
+@pytest.fixture(autouse=True)
+def _seed_pending_rows(temp_db):
+    """Give every test a scheduled-but-unfired row to claim."""
+    import config
+
+    for key in _EVENT_KEYS:
+        config.save_pending_warning(key, GUILD_ID, datetime(2026, 5, 15, 21, 55, tzinfo=ET), [])
+    yield
+
+
 # ── Happy path ───────────────────────────────────────────────────────────────
 
 

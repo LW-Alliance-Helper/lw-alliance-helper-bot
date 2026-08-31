@@ -223,13 +223,24 @@ def test_the_round_the_view_lands_on_is_one_that_holds_data(loaded, grouping):
     assert landed == "knockouts"
 
 
-def test_a_single_round_renders_no_picker_to_escape_with(loaded, grouping):
-    """The navigation trap, stated as a fact rather than a complaint.
+def test_a_single_round_still_offers_every_round_to_escape_with(loaded, grouping):
+    """The navigation trap, and the fact that it is closed.
 
-    Each select renders only when it has something to choose between, so a
-    grouping holding one round shows none -- and the round it holds is then the
-    only round reachable. That is fine when it is the right round and a dead
-    end when it is not, which is the shape of the problem a member hits.
+    This test used to assert the trap itself: each select rendered only when it
+    had something to choose between, so a grouping holding one round showed
+    none, and that round became the only round reachable. Fine when it was the
+    right round and a dead end when it was not.
+
+    `bbd8ea7` closed it deliberately. The stage picker is now driven off
+    `db.STAGES` rather than `self.stages` and renders unconditionally, because
+    hiding it at one made *no other round exists* and *the picker is missing*
+    the same screen. The rounds the game plays are a fact about the game; the
+    rounds we hold are a fact about our record.
+
+    **The rule still holds for every other select.** The grouping picker and
+    the group picker both render only above one, which is what the counts
+    below assert -- so a regression that made everything unconditional would
+    fail here just as loudly as the trap coming back.
     """
     import champion_duel_hub as hub
 
@@ -246,7 +257,14 @@ def test_a_single_round_renders_no_picker_to_escape_with(loaded, grouping):
         can_odds=True,
     )
     selects = [i for i in view.children if i.__class__.__name__ == "Select"]
-    assert selects == [], "one round, one grouping, one group: nothing to choose"
+    placeholders = [s.placeholder for s in selects]
+    assert placeholders == [hub._PICK_STAGE], (
+        "one grouping and one group offer nothing to choose, so neither picker "
+        "renders -- but every round the game plays stays reachable"
+    )
+    assert len(selects[0].options) == len(db.STAGES), (
+        "the stage picker offers the rounds the GAME plays, not the ones we hold"
+    )
     odds = [i for i in view.children if getattr(i, "callback", None) == view._on_odds]
     assert len(odds) == 1, "the odds control must be reachable from the group view"
     assert not odds[0].disabled

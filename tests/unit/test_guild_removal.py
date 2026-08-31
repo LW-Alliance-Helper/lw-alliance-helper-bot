@@ -348,3 +348,27 @@ def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, mo
     assert result["guilds"] == [GUILD]
     assert rows("guild_configs", "guild_id = ?", (GUILD,)) == [], "config still purges"
     assert config.guild_removal_held_since(GUILD) is not None, "retry on the next sweep"
+
+
+def test_install_metadata_now_survives_the_removal_and_goes_with_the_purge(temp_db, cd_db):
+    """`on_guild_remove` used to delete this row immediately, which was the
+    only thing it did. Under a hold it has to outlive the removal, or support
+    loses the one record that identifies a guild from a logged id -- during
+    exactly the window someone might ask why the bot left."""
+    config.upsert_guild_install_metadata(GUILD, guild_name="Zebra Zone", owner_id=1)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    )
+
+    assert config.get_guild_install_metadata(GUILD) is not None, "held, not deleted"
+
+    config.record_guild_removal(GUILD)  # idempotent, does not restart the clock
+    with config._get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_removals SET removed_at = ? WHERE guild_id = ?",
+            ((datetime.now(timezone.utc) - timedelta(days=31)).isoformat(), GUILD),
+        )
+        conn.commit()
+    config.sweep_guild_removals(apply=True)
+
+    assert config.get_guild_install_metadata(GUILD) is None

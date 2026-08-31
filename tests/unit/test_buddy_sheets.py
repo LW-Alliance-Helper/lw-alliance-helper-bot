@@ -1,10 +1,14 @@
 """Unit tests for buddy.py — the Sheet I/O layer (#289).
 
 A FakeWS models the gspread surface buddy.py uses (get_all_values /
-batch_clear / update / update_cell / append_row). config.get_spreadsheet and
-config.get_or_create_worksheet are patched to hand back FakeWS instances so
-save → load round-trips through real module logic, and the single-cell
-profession write can be asserted against sibling cells.
+batch_clear / update / update_cell / append_row, plus the row-level
+insert_row / delete_rows / batch_update the targeted writer needs).
+config.get_spreadsheet and config.get_or_create_worksheet are patched to hand
+back FakeWS instances so save → load round-trips through real module logic, and
+the single-cell profession write can be asserted against sibling cells.
+
+FakeWS also records the calls it received, so the #289 F-02 tests can assert
+that a one-pairing change costs one write rather than a whole-tab rewrite.
 """
 
 from unittest.mock import patch
@@ -18,10 +22,15 @@ GID = 999
 
 
 class FakeWS:
-    """In-memory worksheet. Row 0 is the header."""
+    """In-memory worksheet. Row 0 is the header.
+
+    Records every call in `calls` so the targeted-write tests can assert *how*
+    the tab was written, not just what it ends up holding — the whole point of
+    the diff writer is that a small change costs a small number of calls."""
 
     def __init__(self, rows=None):
         self.rows = [list(r) for r in (rows or [])]
+        self.calls: list[str] = []
 
     def get_all_values(self):
         return [list(r) for r in self.rows]
@@ -30,13 +39,17 @@ class FakeWS:
         return list(self.rows[n - 1]) if 0 < n <= len(self.rows) else []
 
     def batch_clear(self, ranges):
+        self.calls.append("batch_clear")
+        self.clear_ranges = list(ranges)
         self.rows = self.rows[:1]  # keep header only
 
     def update(self, rng, values, value_input_option=None):
+        self.calls.append("update")
         start = 0 if str(rng).upper().startswith("A1") else 1
         self.rows = self.rows[:start] + [list(r) for r in values]
 
     def update_cell(self, row, col, value):
+        self.calls.append("update_cell")
         while len(self.rows) < row:
             self.rows.append([])
         r = self.rows[row - 1]
@@ -45,7 +58,37 @@ class FakeWS:
         r[col - 1] = value
 
     def append_row(self, row, value_input_option=None):
+        self.calls.append("append_row")
         self.rows.append(list(row))
+
+    # ── row-level ops the diff writer uses ────────────────────────────────
+    #
+    # Modelled on the real Sheets behaviour that makes them worth using: an
+    # insert or delete shifts whole rows, so cells beyond the written columns
+    # travel with their row instead of being orphaned.
+
+    def insert_row(self, values, index=1, value_input_option=None, inherit_from_before=False):
+        self.calls.append("insert_row")
+        self.rows.insert(index - 1, list(values))
+
+    def delete_rows(self, start_index, end_index=None):
+        self.calls.append("delete_rows")
+        end = start_index if end_index is None else end_index
+        del self.rows[start_index - 1 : end]
+
+    def batch_update(self, data, value_input_option=None, **kw):
+        self.calls.append("batch_update")
+        for entry in data:
+            rng = str(entry["range"])
+            rownum = int("".join(c for c in rng.split(":")[0] if c.isdigit()))
+            values = entry["values"][0]
+            while len(self.rows) < rownum:
+                self.rows.append([])
+            row = self.rows[rownum - 1]
+            while len(row) < len(values):
+                row.append("")
+            for i, v in enumerate(values):
+                row[i] = v
 
 
 @pytest.fixture
@@ -492,3 +535,477 @@ def test_roster_warning_silent_when_filter_off(sheets):
     import buddy_ui
 
     assert buddy_ui.roster_warning(GID, {"roster_filter_enabled": 0}) == ""
+
+
+# ── targeted writes (#289 F-02) ───────────────────────────────────────────────
+#
+# The tab stays alphabetical; getting there stops meaning a full rewrite. These
+# assert the *shape* of the write, because "the tab ends up correct" was always
+# true — what changed is the cost, and what survives alongside it.
+
+
+def _seed_two_pairs(sheets):
+    """Walt with Ed and Wanda with Eve, saved. Returns (worksheet, members)."""
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+    ws = sheets["Buddies"]
+    ws.calls.clear()
+    return ws, members
+
+
+def _swapped():
+    """The same two War Leaders holding each other's Engineer."""
+    return buddy.PairingResult(
+        pairs=[Pair("Walt", "2", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")],
+    )
+
+
+def test_swapping_two_engineers_costs_one_batch_update_and_no_clear(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_update"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "3"), ("1", "4")}
+
+
+def test_a_note_beside_the_list_survives_a_pairing_change(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    # An alliance parks its own column beyond the nine the bot owns.
+    for row, note in zip(ws.rows[1:], ["covers nights", "new recruit"]):
+        row.append(note)
+
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert [r[9] for r in ws.rows[1:]] == ["covers nights", "new recruit"]
+
+
+def test_unpairing_inserts_one_row_and_leaves_the_others_untouched(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    # Wanda and Eve broken: Wanda keeps her row, Eve moves to the unpaired block.
+    after = buddy.PairingResult(
+        pairs=[Pair("Walt", "2", "Ed", "4")],
+        unpaired_wl=[W("Wanda", "1")],
+        unpaired_eng=[E("Eve", "3")],
+    )
+    buddy.save_pairs(GID, "Buddies", after, "Squad Powers", "Profession")
+
+    # One row appears, one row's cells change. Nothing is cleared.
+    assert sorted(ws.calls) == ["batch_update", "insert_row"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "4")}
+    assert any(r[3] == "3" and not r[0] for r in ws.rows[1:]), "Eve has an unpaired row"
+
+
+def test_a_write_that_changes_nothing_touches_the_sheet_not_at_all(sheets):
+    ws, members = _seed_two_pairs(sheets)
+    same = assign_buddies(members, buddy.load_pairs(GID, "Buddies"))
+    buddy.save_pairs(GID, "Buddies", same, "Squad Powers", "Profession")
+
+    assert ws.calls == []
+
+
+def test_a_hand_reordered_tab_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    ws.rows[1], ws.rows[2] = ws.rows[2], ws.rows[1]  # someone dragged the rows
+    ws.calls.clear()
+
+    buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_clear", "update"]
+    assert pair_keys(buddy.load_pairs(GID, "Buddies")) == {("2", "3"), ("1", "4")}
+
+
+def test_a_change_too_big_to_patch_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    many = [W("WL%02d" % i, "1%02d" % i) for i in range(10)]
+    many += [E("Eng%02d" % i, "2%02d" % i) for i in range(10)]
+    buddy.save_pairs(GID, "Buddies", assign_buddies(many, []), "Squad Powers", "Profession")
+
+    assert ws.calls == ["batch_clear", "update"]
+    assert len(buddy.load_pairs(GID, "Buddies")) == 10
+
+
+def test_the_full_rewrite_no_longer_clears_thousands_of_rows(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+    ws.rows[1], ws.rows[2] = ws.rows[2], ws.rows[1]  # force the rewrite path
+    ws.calls.clear()
+
+    buddy.save_pairs(
+        GID,
+        "Buddies",
+        assign_buddies([W("Wanda", "1"), E("Eve", "3")], []),
+        "Squad Powers",
+        "Profession",
+    )
+
+    assert len(ws.clear_ranges) == 1
+    last_row = int("".join(c for c in ws.clear_ranges[0].split(":")[1] if c.isdigit()))
+    assert last_row < 100, "clear reached row %d" % last_row
+
+
+def test_an_unreadable_tab_falls_back_to_a_full_rewrite(sheets):
+    ws, _ = _seed_two_pairs(sheets)
+
+    def boom():
+        raise RuntimeError("Sheets is having a moment")
+
+    ws.get_all_values = boom
+    ok = buddy.save_pairs(GID, "Buddies", _swapped(), "Squad Powers", "Profession")
+
+    assert ok is True
+    assert ws.calls == ["batch_clear", "update"]
+
+
+def test_evaluated_profession_cells_do_not_make_every_row_look_changed(sheets):
+    """The load-bearing half of the diff: Sheets hands back what a formula
+    *evaluated to*, not the formula. Comparing the Profession columns would
+    therefore mark every row changed on every write, quietly restoring the
+    whole-tab rewrite this replaced. FakeWS can't evaluate, so the evaluation
+    is staged here by hand."""
+    sheets["Squad Powers"] = FakeWS([["Username", "Discord ID", "Profession"]])
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+
+    ws = sheets["Buddies"]
+    assert ws.rows[1][2].startswith("="), "precondition: formulas were written"
+    # What the real API would return once Sheets has evaluated them.
+    for row in ws.rows[1:]:
+        for col, value in ((2, buddy.WAR_LEADER), (5, buddy.ENGINEER)):
+            if row[col]:
+                row[col] = value
+    ws.calls.clear()
+
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+
+    assert ws.calls == [], "an unchanged tab was rewritten because of the formulas"
+
+
+# ── what changed (#289 F-05, F-06) ────────────────────────────────────────────
+
+
+def test_a_departed_member_is_reported_not_silently_dropped():
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    existing = [Pair("Wanda", "1", "Ed", "4")]  # Ed has left the alliance
+    result = assign_buddies(members, existing, fill=False)
+
+    assert result.pairs == []
+    assert [(d.war_leader, d.engineer, d.reason) for d in result.dropped] == [
+        ("Wanda", "Ed", buddy.DROP_MISSING_ENG)
+    ]
+
+
+def test_a_profession_change_is_reported_against_the_person_who_changed():
+    members = [W("Wanda", "1"), W("Ed", "4")]  # Ed is a War Leader now
+    result = assign_buddies(members, [Pair("Wanda", "1", "Ed", "4")], fill=False)
+
+    assert [d.reason for d in result.dropped] == [buddy.DROP_PROFESSION_ENG]
+
+
+def test_doubling_off_names_the_engineer_it_removes():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=False, fill=False)
+
+    assert len(result.pairs) == 1
+    assert [(d.engineer, d.reason) for d in result.dropped] == [("Ed", buddy.DROP_DOUBLING_OFF)]
+
+
+def test_doubling_on_keeps_both_and_reports_nothing():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3"), Pair("Wanda", "1", "Ed", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=False)
+
+    assert len(result.pairs) == 2
+    assert result.dropped == []
+
+
+def test_the_report_reads_as_sentences_and_survives_an_empty_result():
+    import buddy_ui
+
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    result = assign_buddies(members, [Pair("Wanda", "1", "Ed", "4")], fill=False)
+    text = buddy_ui.describe_dropped(result)
+
+    assert "Ed" in text and "Wanda" in text
+    assert "1 pairing was removed" in text
+    assert buddy_ui.describe_dropped(assign_buddies(members, [], fill=False)) == ""
+
+
+# ── scoped fill (#289 F-08) ───────────────────────────────────────────────────
+
+
+def test_fill_only_places_the_actor_and_leaves_everyone_else_unpaired():
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    # Walt is the one who just set their profession.
+    result = assign_buddies(members, [], fill=True, fill_only={"2"})
+
+    assert len(result.pairs) == 1
+    assert result.pairs[0].war_leader == "Walt"
+    assert {m.name for m in result.unpaired_wl} == {"Wanda"}
+
+
+def test_fill_only_finds_a_named_engineer_a_war_leader_with_room():
+    members = [W("Wanda", "1"), E("Eve", "3"), E("Ed", "4")]
+    existing = [Pair("Wanda", "1", "Eve", "3")]
+    # Ed just became an Engineer; doubling is on, so Wanda has room.
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=True, fill_only={"4"})
+
+    assert pair_keys(result.pairs) == {("1", "3"), ("1", "4")}
+
+
+def test_an_unscoped_fill_still_pairs_everyone():
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [], fill=True)
+
+    assert len(result.pairs) == 2
+    assert result.unpaired_wl == []
+
+
+# ── named presets (#289 Stage 3) ──────────────────────────────────────────────
+#
+# Presets live on the alliance's own sheet, keyed by name, the way Storm
+# strategy presets do — so the bot keeps no copy of who is paired with whom.
+
+
+PTAB = "Buddy Presets"
+
+
+def test_a_preset_round_trips_through_the_sheet(sheets):
+    members = [W("Wanda", "1"), W("Walt", "2"), E("Eve", "3"), E("Ed", "4")]
+    result = assign_buddies(members, [])
+    assert buddy.save_preset(GID, PTAB, "Season 4 Opener", result) is True
+
+    assert buddy.list_presets(GID, PTAB) == ["Season 4 Opener"]
+    loaded = buddy.load_preset(GID, PTAB, "Season 4 Opener")
+    assert pair_keys(loaded) == pair_keys(result.pairs)
+
+
+def test_a_preset_stores_names_and_ids_on_the_alliances_own_tab(sheets):
+    members = [W("Wanda", "1"), E("Eve", "3")]
+    buddy.save_preset(GID, PTAB, "Off Week", assign_buddies(members, []))
+
+    header, row = sheets[PTAB].rows[0], sheets[PTAB].rows[1]
+    assert header == buddy.PRESET_HEADER
+    assert row == ["Off Week", "1", "Wanda", "3", "Eve"]
+
+
+def test_saving_over_a_name_replaces_it_and_leaves_the_others_alone(sheets):
+    a = assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    b = assign_buddies([W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", a)
+    buddy.save_preset(GID, PTAB, "Off Week", b)
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", b)  # updated in place
+
+    assert sorted(buddy.list_presets(GID, PTAB)) == ["Off Week", "Season 4 Opener"]
+    assert pair_keys(buddy.load_preset(GID, PTAB, "Season 4 Opener")) == {("2", "4")}
+    assert pair_keys(buddy.load_preset(GID, PTAB, "Off Week")) == {("2", "4")}
+
+
+def test_matching_a_preset_name_ignores_case(sheets):
+    buddy.save_preset(
+        GID, PTAB, "Season 4 Opener", assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    )
+
+    assert pair_keys(buddy.load_preset(GID, PTAB, "SEASON 4 OPENER")) == {("1", "3")}
+
+
+def test_deleting_a_preset_removes_only_that_one(sheets):
+    a = assign_buddies([W("Wanda", "1"), E("Eve", "3")], [])
+    b = assign_buddies([W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", a)
+    buddy.save_preset(GID, PTAB, "Off Week", b)
+
+    assert buddy.delete_preset(GID, PTAB, "Season 4 Opener") is True
+    assert buddy.list_presets(GID, PTAB) == ["Off Week"]
+    assert buddy.delete_preset(GID, PTAB, "Season 4 Opener") is False
+
+
+def test_an_unknown_preset_loads_as_nothing_rather_than_erroring(sheets):
+    buddy.save_preset(GID, PTAB, "Off Week", assign_buddies([W("Wanda", "1"), E("Eve", "3")], []))
+
+    assert buddy.load_preset(GID, PTAB, "Never Saved") == []
+    assert buddy.save_preset(GID, PTAB, "   ", assign_buddies([], [])) is False
+
+
+def test_loading_a_preset_cannot_bring_back_someone_who_left(sheets):
+    import buddy_ui
+
+    # Saved while Ed was here.
+    was = assign_buddies([W("Wanda", "1"), E("Eve", "3"), W("Walt", "2"), E("Ed", "4")], [])
+    buddy.save_preset(GID, PTAB, "Season 4 Opener", was)
+
+    # Ed has since left: only three people are on Squad Powers now.
+    sheets["Squad Powers"] = FakeWS(
+        [
+            ["Username", "Discord ID", "Profession"],
+            ["Wanda", "1", "War Leader"],
+            ["Walt", "2", "War Leader"],
+            ["Eve", "3", "Engineer"],
+        ]
+    )
+    cfg = {
+        "buddy_tab": "Buddies",
+        "profession_tab": "Squad Powers",
+        "profession_col_header": "Profession",
+        "engineer_doubling": 0,
+    }
+    pairs = buddy.load_preset(GID, PTAB, "Season 4 Opener")
+    result = buddy_ui.apply_pairs(GID, cfg, pairs)
+
+    names = {p.engineer for p in result.pairs}
+    assert "Ed" not in names
+    assert buddy.DROP_MISSING_ENG in {d.reason for d in result.dropped}
+    assert "Ed" in buddy_ui.describe_dropped(result)
+
+
+# ── conflicts an officer settles (#289 F-04, F-05) ────────────────────────────
+#
+# Two situations leave two pairings that can't both stand. The list still
+# settles on a valid default, but which one survives is offered back rather
+# than decided alphabetically and reported as a fact.
+
+
+def test_one_engineer_two_war_leaders_is_a_conflict_not_a_removal():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Mid", "2"), E("Dana", "3")]
+    existing = [Pair("Alpha", "1", "Dana", "3"), Pair("Mid", "2", "Dana", "3")]
+    result = assign_buddies(members, existing, fill=False)
+
+    conflicts = buddy_ui.conflicts_in(result)
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.reason == buddy.DROP_ENGINEER_TAKEN
+    assert c.kept.war_leader == "Alpha" and c.dropped.war_leader == "Mid"
+
+    text = buddy_ui.describe_dropped(result)
+    assert "needs your decision" in text
+    assert "Dana" in text and "Alpha" in text and "Mid" in text
+    assert "were removed" not in text
+
+
+def test_doubling_off_is_a_conflict_and_points_at_the_setting():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), E("Testy", "3"), E("Dana", "4")]
+    existing = [Pair("Alpha", "1", "Testy", "3"), Pair("Alpha", "1", "Dana", "4")]
+    result = assign_buddies(members, existing, engineer_doubling=False, fill=False)
+
+    conflicts = buddy_ui.conflicts_in(result)
+    assert len(conflicts) == 1
+    assert conflicts[0].reason == buddy.DROP_DOUBLING_OFF
+    text = buddy_ui.describe_dropped(result)
+    assert "Choose which Engineer" in text
+    assert "/setup" in text
+
+
+def test_a_war_leader_at_the_cap_of_two_is_reported_not_offered():
+    """Three Engineers on one War Leader is not a choice: two is the ceiling."""
+    import buddy_ui
+
+    members = [W("Alpha", "1"), E("Testy", "3"), E("Dana", "4"), E("Sam", "5")]
+    existing = [
+        Pair("Alpha", "1", "Testy", "3"),
+        Pair("Alpha", "1", "Dana", "4"),
+        Pair("Alpha", "1", "Sam", "5"),
+    ]
+    result = assign_buddies(members, existing, engineer_doubling=True, fill=False)
+
+    assert buddy_ui.conflicts_in(result) == []
+    text = buddy_ui.describe_dropped(result)
+    assert "cannot have more than 2 Engineers" in text
+
+
+def test_resolving_a_conflict_swaps_which_pairing_survives():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Mid", "2"), E("Dana", "3")]
+    existing = [Pair("Alpha", "1", "Dana", "3"), Pair("Mid", "2", "Dana", "3")]
+    result = assign_buddies(members, existing, fill=False)
+    c = buddy_ui.conflicts_in(result)[0]
+
+    options = buddy_ui.conflict_options(c)
+    assert [label for label, _ in options] == ["Stay with Alpha", "Move to Mid"]
+
+    # The tab now holds only the surviving pairing.
+    on_tab = list(result.pairs)
+    assert pair_keys(on_tab) == {("1", "3")}
+
+    kept = buddy_ui.resolve_conflict(on_tab, c, options[0][1])
+    assert pair_keys(kept) == {("1", "3")}, "choosing what is already there changes nothing"
+
+    moved = buddy_ui.resolve_conflict(on_tab, c, options[1][1])
+    assert pair_keys(moved) == {("2", "3")}, "choosing the other side swaps them"
+
+
+def test_a_profession_change_names_what_they_changed_to():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), W("Testy", "4")]  # Testy is a War Leader now
+    result = assign_buddies(members, [Pair("Alpha", "1", "Testy", "4")], fill=False)
+
+    assert result.dropped[0].detail == buddy.WAR_LEADER
+    assert "changed to War Leader" in buddy_ui.describe_dropped(result)
+
+
+def test_a_blank_profession_falls_back_rather_than_reading_as_changed_to_nothing():
+    import buddy_ui
+
+    members = [W("Alpha", "1"), Member(name="Testy", discord_id="4", profession="")]
+    result = assign_buddies(members, [Pair("Alpha", "1", "Testy", "4")], fill=False)
+
+    text = buddy_ui.describe_dropped(result)
+    assert "changed profession" in text
+    assert "changed to ," not in text
+
+
+def test_the_removal_heading_agrees_with_its_count():
+    import buddy_ui
+
+    members = [W("Alpha", "1")]
+    one = assign_buddies(members, [Pair("Alpha", "1", "Gone", "9")], fill=False)
+    assert "1 pairing was removed" in buddy_ui.describe_dropped(one)
+
+    two = assign_buddies(
+        members, [Pair("Alpha", "1", "Gone", "9"), Pair("Alpha", "1", "Also", "8")], fill=False
+    )
+    assert "2 pairings were removed" in buddy_ui.describe_dropped(two)
+
+
+def test_no_string_a_member_reads_carries_an_em_dash():
+    """House rule, already enforced for Alliance Duel. Docstrings and comments
+    are exempt; anything that reaches Discord is not.
+
+    Exemptions are matched on content rather than line number so reformatting
+    can't silently widen them."""
+    import ast
+    import io as _io
+
+    for path in ("buddy.py", "buddy_ui.py", "buddy_hub.py"):
+        tree = ast.parse(_io.open(path, encoding="utf-8").read())
+        docs = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if ast.get_docstring(node, clean=False) is not None:
+                    docs.add(id(node.body[0].value))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if id(node) in docs or _predates_the_rule(node.value):
+                continue
+            assert "—" not in node.value, f"{path}:{node.lineno} {node.value[:60]!r}"
+
+
+# Em dashes in copy that predates this work, so they aren't ours to change
+# without sign-off. The bare dash is a stand-in for an empty cell in the list
+# embed, which is a different use of the glyph from punctuation.
+_PRE_EXISTING_EM_DASHES = (
+    "see your buddy sheet tab",
+    "You don't have a buddy yet",
+    "will be removed from the list",
+)
+
+
+def _predates_the_rule(value: str) -> bool:
+    return value.strip() == "—" or any(m in value for m in _PRE_EXISTING_EM_DASHES)

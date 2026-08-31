@@ -8,6 +8,12 @@ Three things live here:
   buttons let a member set/swap their profession in one click (Premium), plus
   ``register_persistent_buddy_views`` to re-attach it on startup.
 * ``BuddyManageView`` — the leadership manual editor (Unpair / Pair / Re-pair).
+  Re-pair swaps two War Leaders' Engineers as well as taking a free one, so an
+  alliance with no spare Engineers can still change a pairing (#289 F-04).
+* ``describe_dropped`` — the one place a cleared pairing is explained, shared by
+  refresh, auto-assign, undo and preset loading (#289 F-06).
+* ``BuddySession`` — an officer's sitting, holding the single-step undo in
+  memory only (#289 F-03).
 
 All Sheet I/O is in ``buddy`` and is driven off the event loop via
 ``asyncio.to_thread`` so a slow gspread call can't stall the bot.
@@ -114,6 +120,15 @@ def compute_current(guild_id: int, cfg: dict):
     )
 
 
+def snapshot_pairs(guild_id: int, cfg: dict) -> list:
+    """The pair list exactly as the tab holds it — sync, for to_thread.
+
+    Taken before an action that writes, so Undo has somewhere to go back to
+    (#289 F-03). One extra Sheets *read*, which is a separate and far more
+    generous quota than the writes this feature is careful about."""
+    return buddy.load_pairs(guild_id, cfg.get("buddy_tab"))
+
+
 def compute_autofill(guild_id: int, cfg: dict, *, from_scratch: bool = False):
     """Run the stability-first auto-assignment and return the result.
 
@@ -193,6 +208,251 @@ def save_result(guild_id: int, cfg: dict, result) -> bool:
         cfg.get("profession_tab"),
         cfg.get("profession_col_header"),
     )
+
+
+def apply_pairs(guild_id: int, cfg: dict, pairs: list):
+    """Validate an explicit pair list against the live pool, save it, return the
+    result — sync, for to_thread.
+
+    No gap-filling: what you hand in is what you get, minus anything that no
+    longer holds. Shared by the manual editor and by undo, so a restored
+    snapshot is validated exactly the way a hand edit is."""
+    members = _load_members(guild_id, cfg)
+    result = buddy.assign_buddies(
+        members,
+        pairs,
+        engineer_doubling=bool(cfg.get("engineer_doubling")),
+        wl_priority=_wl_priority(cfg),
+        eng_priority=_eng_priority(cfg),
+        fill=False,
+    )
+    save_result(guild_id, cfg, result)
+    return result
+
+
+# ── what changed (#289 F-06) ──────────────────────────────────────────────────
+#
+# Every buddy action that writes used to report "invalid pairs were cleared" as
+# a fixed sentence, naming nobody and explaining nothing. That single line is
+# why an alliance couldn't tell a departed member from a misconfigured roster
+# tab. One renderer, used by refresh, auto-assign, undo and preset loading, so
+# a dropped pairing reads the same wherever it surfaces.
+#
+# The block has two halves. Removals are finished business: the member left, or
+# their profession changed, and there is nothing to decide. Conflicts are not:
+# two pairings that can't both stand, where which one survives was being decided
+# alphabetically. Those are offered back to the officer (#289 F-04, F-05).
+#
+# House style, enforced by test: no em dashes in anything a member reads.
+
+# Enough names to see what happened without pushing the message past Discord's
+# limit; the count in the heading carries the rest.
+_MAX_NAMED_DROPS = 10
+
+_REMOVAL_TEMPLATES = {
+    buddy.DROP_MISSING_WL: (
+        "**{wl}** isn't on your list any more, so their pairing with {eng} was removed."
+    ),
+    buddy.DROP_MISSING_ENG: (
+        "**{eng}** isn't on your list any more, so their pairing with {wl} was removed."
+    ),
+    buddy.DROP_PROFESSION_WL: (
+        "**{wl}** changed to {detail}, so their pairing with {eng} was removed."
+    ),
+    buddy.DROP_PROFESSION_ENG: (
+        "**{eng}** changed to {detail}, so their pairing with {wl} was removed."
+    ),
+    buddy.DROP_WL_FULL: (
+        "**{wl}** already has two Engineers. We removed {eng} since War Leaders "
+        "cannot have more than 2 Engineers assigned."
+    ),
+    buddy.DROP_SELF: "**{wl}** was paired with themself, so that pairing was removed.",
+}
+
+# Used when a profession cell is blank or unreadable, so the sentence never
+# lands as "changed to ,".
+_PROFESSION_FALLBACK = {
+    buddy.DROP_PROFESSION_WL: (
+        "**{wl}** changed profession, so their pairing with {eng} was removed."
+    ),
+    buddy.DROP_PROFESSION_ENG: (
+        "**{eng}** changed profession, so their pairing with {wl} was removed."
+    ),
+}
+
+_CONFLICT_TEMPLATES = {
+    buddy.DROP_ENGINEER_TAKEN: (
+        "**{eng}** is paired with two War Leaders, {other} and {wl}. "
+        "Choose which one they should stay with."
+    ),
+    buddy.DROP_DOUBLING_OFF: (
+        "**{wl}** already has an Engineer. Choose which Engineer {wl} should be "
+        "paired with. If you wish to allow a War Leader to have two Engineers, "
+        "you can turn that on in `/setup` - Buddy System."
+    ),
+}
+
+
+def _drop_key(d) -> tuple:
+    return (buddy._norm(d.war_leader), buddy._norm(d.engineer), d.reason)
+
+
+def _dedup(drops: list) -> list:
+    """One entry per (pair, reason). A doubled Engineer otherwise produces the
+    same sentence from both of their rows."""
+    out, seen = [], set()
+    for d in drops:
+        k = _drop_key(d)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(d)
+    return out
+
+
+def conflicts_in(result) -> list:
+    """The drops an officer can overrule, deduplicated and in a stable order."""
+    return [d for d in _dedup(list(getattr(result, "dropped", None) or [])) if d.resolvable]
+
+
+def _removal_line(d) -> str:
+    if (
+        d.reason in (buddy.DROP_PROFESSION_WL, buddy.DROP_PROFESSION_ENG)
+        and not (d.detail or "").strip()
+    ):
+        template = _PROFESSION_FALLBACK[d.reason]
+    else:
+        template = _REMOVAL_TEMPLATES.get(d.reason)
+    if not template:
+        return ""
+    return template.format(
+        wl=d.war_leader or "?", eng=d.engineer or "?", detail=(d.detail or "").strip()
+    )
+
+
+def _conflict_line(d) -> str:
+    template = _CONFLICT_TEMPLATES.get(d.reason)
+    if not template:
+        return ""
+    other = ""
+    if d.kept is not None:
+        other = d.kept.war_leader if d.reason == buddy.DROP_ENGINEER_TAKEN else d.kept.engineer
+    return template.format(wl=d.war_leader or "?", eng=d.engineer or "?", other=other or "someone")
+
+
+def _bulleted(lines: list, heading: str) -> str:
+    shown = ["• " + ln for ln in lines[:_MAX_NAMED_DROPS]]
+    extra = len(lines) - len(shown)
+    if extra > 0:
+        shown.append(f"• ...and {extra} more.")
+    return heading + "\n" + "\n".join(shown)
+
+
+def describe_dropped(result) -> str:
+    """The what-changed block: what was removed, then what needs a decision.
+
+    Empty string when nothing was dropped, so callers can append it
+    unconditionally."""
+    drops = _dedup(list(getattr(result, "dropped", None) or []))
+    if not drops:
+        return ""
+
+    removals = [ln for ln in (_removal_line(d) for d in drops if not d.resolvable) if ln]
+    conflicts = [ln for ln in (_conflict_line(d) for d in drops if d.resolvable) if ln]
+
+    blocks = []
+    if removals:
+        n = len(removals)
+        verb = "was" if n == 1 else "were"
+        plural = "" if n == 1 else "s"
+        blocks.append(_bulleted(removals, f"⚠️ **{n} pairing{plural} {verb} removed:**"))
+    if conflicts:
+        n = len(conflicts)
+        verb = "needs" if n == 1 else "need"
+        plural = "" if n == 1 else "s"
+        blocks.append(_bulleted(conflicts, f"⚖️ **{n} pairing{plural} {verb} your decision:**"))
+    return "\n\n".join(blocks)
+
+
+def describe_conflict(d) -> str:
+    """The one-conflict sentence, used as the prompt above its picker."""
+    return _conflict_line(d)
+
+
+def conflict_options(d) -> list:
+    """``[(label, pair)]`` for one conflict: the pairing in place first, then
+    the one it displaced. Order is deliberate, so the option that changes
+    nothing is never the one you reach for by accident."""
+    if not d.resolvable:
+        return []
+    if d.reason == buddy.DROP_ENGINEER_TAKEN:
+        return [
+            (f"Stay with {d.kept.war_leader}", d.kept),
+            (f"Move to {d.dropped.war_leader}", d.dropped),
+        ]
+    return [
+        (f"Keep {d.kept.engineer}", d.kept),
+        (f"Switch to {d.dropped.engineer}", d.dropped),
+    ]
+
+
+def resolve_conflict(pairs: list, conflict, chosen) -> list:
+    """``pairs`` with the conflict settled in favour of ``chosen``.
+
+    Both sides of a conflict are ordinary pairings, so settling one is just
+    dropping the other. Matching is on the pair's identity rather than on
+    object identity, because ``pairs`` is re-read from the sheet between the
+    report and the officer's answer."""
+    loser = conflict.dropped if _pair_value(chosen) == _pair_value(conflict.kept) else conflict.kept
+    if loser is None:
+        return list(pairs)
+    key = _pair_value(loser)
+    out = [p for p in pairs if _pair_value(p) != key]
+    if not any(_pair_value(p) == _pair_value(chosen) for p in out):
+        out.append(chosen)
+    return out
+
+
+# ── undo (#289 F-03) ──────────────────────────────────────────────────────────
+
+
+class BuddySession:
+    """One officer's sitting with `/buddy`, holding the single-step undo.
+
+    Kept in memory on the view and nowhere else, deliberately: the pair list is
+    member names and Discord IDs, and this is working state rather than
+    something the alliance asked us to keep. It lives until the view times out
+    (or the bot restarts, which ends the sitting anyway) and is never written to
+    the database.
+
+    One step, not a history — enough to take back the button you just pressed,
+    which is the case that actually bites. Anything further back is what a
+    saved preset is for."""
+
+    __slots__ = ("_snapshot",)
+
+    def __init__(self):
+        self._snapshot: Optional[list] = None
+
+    def capture(self, pairs: list) -> None:
+        """Remember the pair list as it stands, before an action replaces it."""
+        self._snapshot = [
+            buddy.Pair(p.war_leader, p.wl_discord_id, p.engineer, p.eng_discord_id, p.source)
+            for p in (pairs or [])
+        ]
+
+    @property
+    def can_undo(self) -> bool:
+        return self._snapshot is not None
+
+    def take(self) -> Optional[list]:
+        """Hand back the snapshot and clear it — undo is a single step, so the
+        button stops offering itself once it has been used."""
+        snap, self._snapshot = self._snapshot, None
+        return snap
+
+    def clear(self) -> None:
+        self._snapshot = None
 
 
 def buddies_of(result, discord_id: str, name: str):
@@ -287,7 +547,7 @@ def build_buddy_list_embed(result, *, doubling: bool = False) -> discord.Embed:
         if dropped:
             embed.add_field(
                 name="​",
-                value=f"…and {dropped} more pairing(s) — see your buddy sheet tab.",
+                value=f"…and {dropped} more pairing(s). See your buddy sheet tab.",
                 inline=False,
             )
     else:
@@ -382,7 +642,16 @@ def _apply_profession_change(
 
     members_after = _load_members(guild_id, cfg)
     after = buddy.assign_buddies(
-        members_after, pairs, engineer_doubling=dbl, wl_priority=prio, eng_priority=eprio, fill=True
+        members_after,
+        pairs,
+        engineer_doubling=dbl,
+        wl_priority=prio,
+        eng_priority=eprio,
+        fill=True,
+        # Place the member who pressed the button and nobody else. This used to
+        # fill every gap in the alliance off one person's tap, handing buddies
+        # to people who never asked for one (#289 F-08).
+        fill_only={str(actor_id).strip() or buddy._norm(actor_name)},
     )
     save_result(guild_id, cfg, after)
 
@@ -502,8 +771,8 @@ async def _handle_profession_click(interaction: discord.Interaction, code: str):
         )
     else:
         await interaction.followup.send(
-            f"✅ You're set as a **{new_prof}**. You don't have a buddy yet — "
-            "leadership has been notified.",
+            f"✅ You're set as a **{new_prof}**. You don't have a buddy yet. "
+            "Leadership has been notified.",
             ephemeral=True,
         )
 
@@ -724,6 +993,11 @@ class _PickerView(discord.ui.View):
         self.stop()
 
 
+# Public alias: the hub builds its preset pickers with the same paginated,
+# owner-locked control the editor uses, rather than growing a second one.
+PickerView = _PickerView
+
+
 def _pair_value(p) -> str:
     """Stable token for a pair option: wl_id|eng_id (falls back to names)."""
     return f"{(p.wl_discord_id or p.war_leader)}|{(p.eng_discord_id or p.engineer)}"
@@ -736,11 +1010,14 @@ def _member_value(m) -> str:
 class BuddyManageView(discord.ui.View):
     """Owner-locked manual pairing editor: Unpair / Pair / Re-pair / Refresh."""
 
-    def __init__(self, bot, guild_id: int, owner_id: int):
+    def __init__(self, bot, guild_id: int, owner_id: int, session=None):
         super().__init__(timeout=300)
         self.bot = bot
         self.guild_id = guild_id
         self.owner_id = owner_id
+        # The hub's sitting, so an edit made here can be undone from there
+        # (#289 F-03). None when the editor is opened without one.
+        self.session = session
         self.message: Optional[discord.Message] = None
         self._add("🔗 Unpair", discord.ButtonStyle.danger, self._unpair)
         self._add("➕ Pair", discord.ButtonStyle.success, self._pair)
@@ -768,18 +1045,14 @@ class BuddyManageView(discord.ui.View):
 
         return config.get_buddy_config(self.guild_id)
 
-    async def _save_pairs_list(self, cfg, pairs: list):
-        """Persist an explicit pair list (no auto-fill) and refresh surfaces."""
-        members = await asyncio.to_thread(_load_members, self.guild_id, cfg)
-        result = buddy.assign_buddies(
-            members,
-            pairs,
-            engineer_doubling=bool(cfg.get("engineer_doubling")),
-            wl_priority=_wl_priority(cfg),
-            eng_priority=_eng_priority(cfg),
-            fill=False,
-        )
-        await asyncio.to_thread(save_result, self.guild_id, cfg, result)
+    async def _save_pairs_list(self, cfg, pairs: list, before: Optional[list] = None):
+        """Persist an explicit pair list (no auto-fill) and refresh surfaces.
+
+        ``before`` is the list as it stood, handed to the session so the hub's
+        Undo can put it back (#289 F-03)."""
+        if before is not None and self.session is not None:
+            self.session.capture(before)
+        result = await asyncio.to_thread(apply_pairs, self.guild_id, cfg, pairs)
         await refresh_persistent_message(self.bot, self.guild_id, cfg, result)
         return result
 
@@ -806,7 +1079,7 @@ class BuddyManageView(discord.ui.View):
         async def _pick(i: discord.Interaction, value: str):
             await i.response.defer(ephemeral=True, thinking=True)
             remaining = [p for p in pairs if _pair_value(p) != value]
-            result = await self._save_pairs_list(cfg, remaining)
+            result = await self._save_pairs_list(cfg, remaining, before=pairs)
             await i.followup.send("🔗 Unpaired.", ephemeral=True)
             await self._refresh_editor(i, result, cfg)
 
@@ -823,15 +1096,22 @@ class BuddyManageView(discord.ui.View):
         free_wl = result.unpaired_wl
         free_eng = result.unpaired_eng
         # War Leaders that still have capacity for another Engineer (doubling).
+        # Built from the pairs rather than from display names so the War
+        # Leader's Discord ID comes along: a doubled pairing made from a name
+        # alone was matched by name forever after, and broke the first time
+        # that member renamed (#289 F-09).
+        doublable = []
         if cfg.get("engineer_doubling"):
-            grouped = {wl: engs for wl, engs in _group_pairs(result)}
+            seen: dict[str, list] = {}
+            for p in result.pairs:
+                key = (p.wl_discord_id or "").strip() or buddy._norm(p.war_leader)
+                entry = seen.setdefault(key, [p.war_leader, p.wl_discord_id, 0])
+                entry[2] += 1
             doublable = [
-                buddy.Member(name=wl, profession=buddy.WAR_LEADER)
-                for wl, engs in grouped.items()
-                if len(engs) < 2
+                buddy.Member(name=name, discord_id=did, profession=buddy.WAR_LEADER)
+                for name, did, count in seen.values()
+                if count < 2
             ]
-        else:
-            doublable = []
         wl_choices = list(free_wl) + doublable
         if not wl_choices or not free_eng:
             await inter.followup.send(
@@ -855,10 +1135,11 @@ class BuddyManageView(discord.ui.View):
                 pairs = await asyncio.to_thread(
                     buddy.load_pairs, self.guild_id, cfg.get("buddy_tab")
                 )
+                before = list(pairs)
                 pairs.append(
                     buddy.Pair(wl.name, wl.discord_id, eng.name, eng.discord_id, source="manual")
                 )
-                res = await self._save_pairs_list(cfg, pairs)
+                res = await self._save_pairs_list(cfg, pairs, before=before)
                 await i2.followup.send(f"➕ Paired **{wl.name}** ↔ **{eng.name}**.", ephemeral=True)
                 await self._refresh_editor(i2, res, cfg)
 
@@ -886,11 +1167,6 @@ class BuddyManageView(discord.ui.View):
         if not pairs:
             await inter.followup.send("ℹ️ There are no pairings to change.", ephemeral=True)
             return
-        if not free_eng:
-            await inter.followup.send(
-                "ℹ️ No free Engineers to swap in. Unpair someone first.", ephemeral=True
-            )
-            return
         opts = [
             discord.SelectOption(label=f"{p.war_leader} ↔ {p.engineer}"[:100], value=_pair_value(p))
             for p in pairs
@@ -898,28 +1174,84 @@ class BuddyManageView(discord.ui.View):
 
         async def _pick_pair(i: discord.Interaction, value: str):
             target = next((p for p in pairs if _pair_value(p) == value), None)
+            # Two ways to change a pairing: take a free Engineer, or trade with
+            # another War Leader. Only the first used to exist, so an alliance
+            # with as many Engineers as War Leaders — where nobody is ever free
+            # — could not change a pairing at all (#289 F-04).
+            others = [p for p in pairs if _pair_value(p) != value]
             eng_opts = [
-                discord.SelectOption(label=m.name[:100], value=_member_value(m)) for m in free_eng
+                discord.SelectOption(label=m.name[:100], value=f"free|{_member_value(m)}")
+                for m in free_eng
+            ] + [
+                discord.SelectOption(
+                    label=f"{p.engineer} (currently with {p.war_leader})"[:100],
+                    value=f"swap|{_pair_value(p)}",
+                )
+                for p in others
             ]
+            if not eng_opts:
+                await i.response.send_message(
+                    "ℹ️ There's nobody to swap in. This is the only pairing.", ephemeral=True
+                )
+                return
 
             async def _pick_eng(i2: discord.Interaction, eng_value: str):
                 await i2.response.defer(ephemeral=True, thinking=True)
-                eng = next((m for m in free_eng if _member_value(m) == eng_value), None)
+                kind, rest = eng_value.split("|", 1)
                 new_pairs = [p for p in pairs if _pair_value(p) != value]
-                new_pairs.append(
-                    buddy.Pair(
-                        target.war_leader,
-                        target.wl_discord_id,
-                        eng.name,
-                        eng.discord_id,
-                        source="manual",
+                if kind == "swap":
+                    partner = next((p for p in others if _pair_value(p) == rest), None)
+                    if partner is None:
+                        await i2.followup.send(
+                            "⚠️ That pairing changed while you were choosing. "
+                            "Hit 🔄 Refresh and try again.",
+                            ephemeral=True,
+                        )
+                        return
+                    new_pairs = [p for p in new_pairs if _pair_value(p) != rest]
+                    new_pairs.append(
+                        buddy.Pair(
+                            target.war_leader,
+                            target.wl_discord_id,
+                            partner.engineer,
+                            partner.eng_discord_id,
+                            source="manual",
+                        )
                     )
-                )
-                res = await self._save_pairs_list(cfg, new_pairs)
-                await i2.followup.send(
-                    f"🔁 **{target.war_leader}** is now paired with **{eng.name}**.",
-                    ephemeral=True,
-                )
+                    new_pairs.append(
+                        buddy.Pair(
+                            partner.war_leader,
+                            partner.wl_discord_id,
+                            target.engineer,
+                            target.eng_discord_id,
+                            source="manual",
+                        )
+                    )
+                    note = (
+                        f"🔁 Buddies have been swapped. **{target.war_leader}** is now paired "
+                        f"with **{partner.engineer}** and **{partner.war_leader}** is now "
+                        f"paired with **{target.engineer}**."
+                    )
+                else:
+                    eng = next((m for m in free_eng if _member_value(m) == rest), None)
+                    if eng is None:
+                        await i2.followup.send(
+                            "⚠️ That Engineer is no longer free. Hit 🔄 Refresh and try again.",
+                            ephemeral=True,
+                        )
+                        return
+                    new_pairs.append(
+                        buddy.Pair(
+                            target.war_leader,
+                            target.wl_discord_id,
+                            eng.name,
+                            eng.discord_id,
+                            source="manual",
+                        )
+                    )
+                    note = f"🔁 **{target.war_leader}** is now paired with **{eng.name}**."
+                res = await self._save_pairs_list(cfg, new_pairs, before=pairs)
+                await i2.followup.send(note, ephemeral=True)
                 await self._refresh_editor(i2, res, cfg)
 
             # Opening the next picker is instant (no I/O), so a plain response is fine.

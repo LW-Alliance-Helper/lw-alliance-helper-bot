@@ -101,9 +101,12 @@ def test_the_spec_covers_every_guild_scoped_table(temp_db):
         ]
     guild_scoped = {t for t in live if "guild_id" in columns_of(t)}
     named = {t for t, _ in config._GUILD_REMOVAL_DELETES}
-    # `premium_assignments` is deliberately outside the spec: it belongs to the
-    # subscriber. Anything else appearing here is a table nobody sorted.
-    missed = guild_scoped - named - {"premium_assignments"}
+    # Two deliberate exclusions. `premium_assignments` belongs to the
+    # subscriber, not the server. `guild_removals` is the hold record itself:
+    # the sweep clears it after the purge, so putting it in the spec would
+    # have the purge delete its own bookkeeping mid-run.
+    # Anything else appearing here is a table nobody sorted.
+    missed = guild_scoped - named - {"premium_assignments", "guild_removals"}
     assert not missed, f"guild-scoped tables the removal ignores: {sorted(missed)}"
 
 
@@ -194,3 +197,154 @@ def test_a_reading_keeps_its_content_and_loses_its_server(cd_db):
 def test_a_session_does_not_keep_working_after_the_bot_is_removed():
     assert ("sessions", "writer_guild_id = :gid") in cd._GUILD_REMOVAL_DELETES
     assert ("auth_codes", "writer_guild_id = :gid") in cd._GUILD_REMOVAL_DELETES
+
+
+# ── The hold ──────────────────────────────────────────────────────────────────
+#
+# An admin who kicks the bot and re-adds it an hour later would otherwise lose
+# every wizard they ever ran, and that is far more common than a deliberate
+# goodbye.
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def test_a_removal_starts_a_hold_rather_than_deleting(temp_db):
+    seed_config(GUILD)
+
+    config.record_guild_removal(GUILD)
+
+    assert config.guild_removal_held_since(GUILD) is not None
+    assert rows("guild_configs", "guild_id = ?", (GUILD,)), "the hold must not delete"
+
+
+def test_coming_back_cancels_the_hold(temp_db):
+    config.record_guild_removal(GUILD)
+
+    assert config.clear_guild_removal(GUILD) is True
+    assert config.guild_removal_held_since(GUILD) is None
+
+
+def test_a_second_delivery_does_not_restart_the_clock(temp_db):
+    """Discord can deliver `GUILD_DELETE` more than once. A flapping
+    connection restarting the window would hold data indefinitely, which is
+    what a bounded window exists to prevent."""
+    old = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    config.record_guild_removal(GUILD, when=old)
+    config.record_guild_removal(GUILD)
+
+    assert config.guild_removal_held_since(GUILD) == old
+
+
+def test_nothing_is_due_inside_the_window(temp_db):
+    config.record_guild_removal(GUILD)
+
+    assert config.guild_removals_due() == []
+
+
+def test_a_hold_that_has_run_out_is_due(temp_db):
+    stale = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    config.record_guild_removal(GUILD, when=stale)
+
+    assert config.guild_removals_due() == [GUILD]
+
+
+def test_due_servers_come_back_oldest_first(temp_db):
+    older = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    newer = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    config.record_guild_removal(OTHER_GUILD, when=newer)
+    config.record_guild_removal(GUILD, when=older)
+
+    assert config.guild_removals_due() == [GUILD, OTHER_GUILD]
+
+
+def test_an_unreadable_stamp_is_due_rather_than_kept_forever(temp_db):
+    """Written by something that is gone. Keeping it would be the failure mode
+    the window exists to rule out."""
+    config.record_guild_removal(GUILD, when="not a date")
+
+    assert config.guild_removals_due() == [GUILD]
+
+
+def test_a_naive_stamp_is_read_as_utc(temp_db):
+    """Compared in Python rather than SQL precisely so this is a decision
+    rather than a lexicographic accident."""
+    naive = (datetime.now(timezone.utc) - timedelta(days=31)).replace(tzinfo=None).isoformat()
+    config.record_guild_removal(GUILD, when=naive)
+
+    assert config.guild_removals_due() == [GUILD]
+
+
+# ── The sweep ─────────────────────────────────────────────────────────────────
+
+
+def test_the_sweep_leaves_a_server_inside_its_window_alone(temp_db, cd_db):
+    seed_config(GUILD)
+    config.record_guild_removal(GUILD)
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == []
+    assert rows("guild_configs", "guild_id = ?", (GUILD,))
+
+
+def test_the_sweep_purges_a_server_past_its_window(temp_db, cd_db):
+    seed_config(GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == [GUILD]
+    assert result["config"]["deleted"].get("guild_configs")
+    assert rows("guild_configs", "guild_id = ?", (GUILD,)) == []
+
+
+def test_a_swept_server_is_not_swept_again(temp_db, cd_db):
+    """Both databases have to succeed before the hold is cleared, so this also
+    pins that a completed sweep is not retried."""
+    seed_config(GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+    config.sweep_guild_removals(apply=True)
+
+    assert config.sweep_guild_removals(apply=True)["guilds"] == []
+    assert config.guild_removal_held_since(GUILD) is None
+
+
+def test_a_dry_sweep_counts_and_keeps_the_hold(temp_db, cd_db):
+    """The hold row is cleared last and only on a real run, so a purge that
+    fails partway is retried rather than forgotten."""
+    seed_config(GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    preview = config.sweep_guild_removals()
+
+    assert preview["applied"] is False
+    assert preview["guilds"] == [GUILD]
+    assert rows("guild_configs", "guild_id = ?", (GUILD,)), "a preview must not write"
+    assert config.guild_removal_held_since(GUILD) is not None
+
+
+def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, monkeypatch):
+    """One database must not block the other, but a half-done purge must not
+    be recorded as done either. The hold survives so the next sweep retries."""
+    import champion_duel_db
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("champion duel database is unreachable")
+
+    monkeypatch.setattr(champion_duel_db, "purge_guild_data", _boom)
+    seed_config(GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == [GUILD]
+    assert rows("guild_configs", "guild_id = ?", (GUILD,)) == [], "config still purges"
+    assert config.guild_removal_held_since(GUILD) is not None, "retry on the next sweep"

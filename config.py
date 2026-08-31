@@ -720,6 +720,25 @@ def init_db():
             )
         """)
 
+        # guild_removals — the hold between a server removing the bot and its
+        # data actually going (#543).
+        #
+        # **The removal is recorded, not acted on.** An admin who kicks the bot
+        # and re-adds it an hour later would otherwise lose every wizard they
+        # ever ran, and that is a far more common event than a deliberate
+        # goodbye. `on_guild_join` clears the row, so coming back inside the
+        # window costs nothing at all.
+        #
+        # The window is bounded rather than open-ended: Discord's Developer
+        # Policy asks for deletion on removal, and "we keep it until someone
+        # notices" is not a retention position.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_removals (
+                guild_id   INTEGER PRIMARY KEY,
+                removed_at TEXT    NOT NULL
+            )
+        """)
+
         # storm_signup_history — append-only audit log for storm sign-up
         # votes. `storm_signups` UPSERTs on (guild_id, event_type,
         # event_date, target_member_id) so the prior vote, the prior
@@ -6624,6 +6643,86 @@ def _purge_user_from_roster_drafts(conn, member_key: str, *, apply: bool) -> tup
     return scrubbed, deleted
 
 
+# ── The hold before a guild removal takes effect (#543) ───────────────────────
+
+#: How long a removed server's data is kept before it goes. Bounded because
+#: the Developer Policy asks for deletion on removal, and long enough that an
+#: accidental kick, a permissions mishap or a server rebuild all fall inside
+#: it. Matches the 30-day age-out `shiny_task_servers` already uses, so the
+#: bot has one retention number rather than two.
+GUILD_REMOVAL_HOLD_DAYS = 30
+
+
+def record_guild_removal(guild_id: int, *, when: str | None = None) -> None:
+    """Mark a server as removed, starting its hold.
+
+    Idempotent on purpose: Discord can deliver `GUILD_DELETE` more than once,
+    and a second delivery must not restart the clock -- otherwise a flapping
+    connection could hold data indefinitely, which is the one outcome a
+    bounded window exists to prevent.
+    """
+    stamp = when or datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_removals (guild_id, removed_at) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO NOTHING",
+            (int(guild_id), stamp),
+        )
+        conn.commit()
+
+
+def clear_guild_removal(guild_id: int) -> bool:
+    """Cancel the hold because the bot is back in that server.
+
+    Returns True if a hold was cancelled. Called from `on_guild_join`, which
+    is why re-adding the bot inside the window costs nothing: the data was
+    never touched.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute("DELETE FROM guild_removals WHERE guild_id = ?", (int(guild_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def guild_removal_held_since(guild_id: int) -> str | None:
+    """When this server's hold started, or None if it is not held."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT removed_at FROM guild_removals WHERE guild_id = ?", (int(guild_id),)
+        ).fetchone()
+        return row["removed_at"] if row else None
+
+
+def guild_removals_due(
+    *, hold_days: int = GUILD_REMOVAL_HOLD_DAYS, now: "datetime | None" = None
+) -> list[int]:
+    """Servers whose hold has run out, oldest first.
+
+    Compared in Python rather than SQL: `removed_at` is an ISO string and a
+    lexicographic cutoff would quietly do the wrong thing the first time one
+    was written without a timezone.
+    """
+    import datetime as _dt
+
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - _dt.timedelta(days=hold_days)
+    due = []
+    with _get_conn() as conn:
+        for row in conn.execute("SELECT guild_id, removed_at FROM guild_removals").fetchall():
+            try:
+                stamp = datetime.fromisoformat(row["removed_at"])
+            except ValueError:
+                # Unparseable means it was written by something that is gone.
+                # Treat it as due rather than keeping it forever.
+                due.append((moment, int(row["guild_id"])))
+                continue
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if stamp <= cutoff:
+                due.append((stamp, int(row["guild_id"])))
+    return [gid for _, gid in sorted(due)]
+
+
 # ── Guild removal (#543) ──────────────────────────────────────────────────────
 #
 # The same mechanism as the personal removal above, with `guild_id` as the
@@ -6715,6 +6814,46 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
         if apply:
             conn.commit()
     return out
+
+
+def sweep_guild_removals(*, apply: bool = False, hold_days: int = GUILD_REMOVAL_HOLD_DAYS) -> dict:
+    """Purge every server whose hold has run out, across both databases.
+
+    The one entry point the scheduler calls, and the one place the two purges
+    are known to belong together. Returns
+    `{"guilds": [ids], "config": {...}, "champion_duel": {...},
+    "applied": bool}` with the per-table counts merged across servers, because
+    "we removed 3 servers" is not something anyone can check and
+    "we deleted 41 storm_signups rows" is.
+
+    The hold row is cleared **last and only on a real run**, so a purge that
+    fails partway is retried on the next sweep rather than being forgotten.
+    """
+    merged: dict = {
+        "guilds": [],
+        "config": {"deleted": {}, "scrubbed": {}},
+        "champion_duel": {"deleted": {}, "scrubbed": {}},
+        "applied": bool(apply),
+    }
+
+    def _fold(into: dict, result: dict) -> None:
+        for bucket in ("deleted", "scrubbed"):
+            for table, n in result.get(bucket, {}).items():
+                into[bucket][table] = into[bucket].get(table, 0) + n
+
+    for gid in guild_removals_due(hold_days=hold_days):
+        merged["guilds"].append(gid)
+        _fold(merged["config"], purge_guild_data(gid, apply=apply))
+        try:
+            import champion_duel_db
+
+            _fold(merged["champion_duel"], champion_duel_db.purge_guild_data(gid, apply=apply))
+        except Exception as exc:  # noqa: BLE001 - one database must not block the other
+            print(f"[REMOVAL] Champion Duel purge failed for guild={gid}: {exc}")
+            continue
+        if apply:
+            clear_guild_removal(gid)
+    return merged
 
 
 def purge_user_data(user_id: int, *, apply: bool = False) -> dict:

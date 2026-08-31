@@ -235,6 +235,21 @@ class ScoutPickerView(discord.ui.View):
         )
 
 
+#: Scout option descriptions. **Awaiting copy sign-off**: only the certain,
+#: branch-qualified form appears in the handoff, and the other three are mine.
+#: A description is capped at 100, and the longest of these lands near 50.
+VS_SCOUT_THIS_WEEK = "This week's opponent"
+VS_SCOUT_YOURS = "Your alliance"
+VS_SCOUT_RANKING = "Ranking {ranking}"
+VS_SCOUT_NO_RANKING = "No ranking recorded"
+VS_SCOUT_JOIN = " · "
+VS_SCOUT_MEET = "you meet them in week {week}"
+VS_SCOUT_MAYBE = "they could be your week {week}"
+VS_SCOUT_IF = " if you {branch}"
+VS_SCOUT_WIN = "win"
+VS_SCOUT_LOSE = "lose"
+
+
 def _scout_options(state) -> list[discord.SelectOption]:
     """Alliances worth offering, most useful first.
 
@@ -258,16 +273,37 @@ def _scout_options(state) -> list[discord.SelectOption]:
         ),
     )
 
+    # Both branches of this week's fork, so an option can say *when* it matters
+    # rather than only who it is. Someone opens Scout because the path told
+    # them an alliance decides their week; the picker should not make them
+    # remember which one.
+    meetings = (
+        ad.meetings_ahead(state.own, rows, state.week, estimate=ad.make_estimator(state.profiles))
+        if state.own is not None and state.week is not None
+        else {}
+    )
+
     options = []
     for alliance in alliances[:MAX_SELECT_OPTIONS]:
         label = state.display_name(alliance)[:100]
         if alliance == opponent:
-            description = "This week's opponent"
+            description = VS_SCOUT_THIS_WEEK
         elif alliance == state.own:
-            description = "Your alliance"
+            description = VS_SCOUT_YOURS
         else:
             ranking = rankings.get(alliance)
-            description = f"Ranking {ranking}" if ranking else "No ranking recorded"
+            description = (
+                VS_SCOUT_RANKING.format(ranking=ranking) if ranking else VS_SCOUT_NO_RANKING
+            )
+            meeting = meetings.get(alliance)
+            if meeting is not None:
+                template = VS_SCOUT_MEET if meeting.certain else VS_SCOUT_MAYBE
+                phrase = template.format(week=meeting.week)
+                if meeting.branch:
+                    phrase += VS_SCOUT_IF.format(
+                        branch=VS_SCOUT_WIN if meeting.branch == "W" else VS_SCOUT_LOSE
+                    )
+                description = f"{description}{VS_SCOUT_JOIN}{phrase}"
         options.append(
             discord.SelectOption(
                 label=label,

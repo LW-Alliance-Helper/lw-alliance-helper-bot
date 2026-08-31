@@ -1454,6 +1454,66 @@ class PathProjection:
         return tuple(out)
 
 
+@dataclass(frozen=True)
+class FutureMeeting:
+    """When `target` could meet one alliance, and on which branch.
+
+    Not to be confused with :class:`Meeting`, which is a match already played.
+
+    `branch` is ``"W"`` or ``"L"`` where the meeting only happens on that side
+    of this week's fork, and ``""`` where it happens either way. `certain` is
+    False when the alliance is one of several who could fill the slot.
+    """
+
+    week: int
+    branch: str
+    certain: bool
+
+
+def meetings_ahead(
+    target: AllianceKey,
+    alliances: Iterable[AllianceWeek],
+    week: int,
+    *,
+    estimate: Estimator | None = None,
+) -> dict[AllianceKey, FutureMeeting]:
+    """Who `target` could still meet after `week`, keyed by alliance.
+
+    Both branches of this week's fork are walked, because "you meet them in
+    week 2 if you win" is the useful sentence and it needs both. An alliance
+    reachable the same week either way loses the qualifier: saying *if you
+    win* about something that happens regardless is worse than saying nothing.
+
+    Earliest week wins where an alliance appears more than once, since that is
+    the one worth scouting for.
+    """
+    rows = list(alliances)
+    found: dict[AllianceKey, FutureMeeting] = {}
+
+    for branch in ("W", "L"):
+        walk = project_own_path(target, rows, estimate=estimate, assume={week: (target, branch)})
+        if isinstance(walk, BracketIncomplete):
+            continue
+        for step in walk.steps:
+            if step.week <= week:
+                continue
+            named = (step.opponent,) if step.opponent is not None else step.candidates
+            for side in named:
+                if side is None or side == target:
+                    continue
+                fresh = FutureMeeting(step.week, branch, step.opponent is not None)
+                seen = found.get(side)
+                if seen is None:
+                    found[side] = fresh
+                elif seen.week == fresh.week and seen.branch != fresh.branch:
+                    # Reachable that week whichever way this week goes, so the
+                    # branch stops being worth mentioning.
+                    found[side] = FutureMeeting(seen.week, "", seen.certain or fresh.certain)
+                elif fresh.week < seen.week:
+                    found[side] = fresh
+    return found
+
+
 #: An estimator supplied by the prediction model (#401): given the two sides
 #: and the week, return the projected winner, or ``None`` when it can't call
 #: it. Kept as a callback so this module stays free of the voting model.

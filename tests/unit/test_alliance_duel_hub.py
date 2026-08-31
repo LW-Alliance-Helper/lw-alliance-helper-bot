@@ -468,6 +468,42 @@ def test_the_picker_offers_this_weeks_opponent_first():
     assert options[0].description == "This week's opponent"
 
 
+def test_the_picker_says_when_you_meet_them_and_on_which_branch():
+    """Someone opens Scout because the path told them an alliance decides
+    their week. The picker should not make them remember which one."""
+    rows = _bracket_rows()
+    by = {r.alliance: r for r in rows}
+    tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
+    # Settle every week-1 match but the guild's own, so its result forks the
+    # bracket and the two branches name different week-2 opponents.
+    for a, b in zip(tags[0::2], tags[1::2]):
+        if OWN_TAG in (a, b):
+            by[_key(a)].opponent, by[_key(b)].opponent = _key(b), _key(a)
+            continue
+        by[_key(a)].week_outcome, by[_key(a)].week_score = "W", 9
+        by[_key(b)].week_outcome, by[_key(b)].week_score = "L", 4
+        by[_key(a)].opponent, by[_key(b)].opponent = _key(b), _key(a)
+
+    described = {o.label: o.description for o in ad_ui._scout_options(_state(rows))}
+    week_two = [d for d in described.values() if "week 2" in d]
+
+    assert any(d.endswith("you meet them in week 2 if you win") for d in week_two)
+    assert any(d.endswith("you meet them in week 2 if you lose") for d in week_two)
+    assert all(d.startswith("Ranking ") for d in week_two)
+
+
+def test_the_branch_drops_off_when_both_sides_reach_them_the_same_week():
+    """`if you win` about something that happens either way is worse than
+    saying nothing. With week 1 unrecorded the pool is the same on both
+    branches, which is the S36 board's own finding."""
+    rows = _bracket_rows()
+    rows[0].opponent = _key("A02")
+    described = [o.description for o in ad_ui._scout_options(_state(rows))]
+
+    assert any("could be your week" in d for d in described)
+    assert not any("if you win" in d or "if you lose" in d for d in described)
+
+
 def test_the_picker_never_exceeds_discords_select_limit():
     rows = _bracket_rows() + _bracket_rows(week=2)
     options = ad_ui._scout_options(_state(rows))

@@ -235,9 +235,8 @@ class ScoutPickerView(discord.ui.View):
         )
 
 
-#: Scout option descriptions. **Awaiting copy sign-off**: only the certain,
-#: branch-qualified form appears in the handoff, and the other three are mine.
-#: A description is capped at 100, and the longest of these lands near 50.
+#: Scout option descriptions, signed off 2026-08-30. A description is capped
+#: at 100 and the longest of these lands near 50.
 VS_SCOUT_THIS_WEEK = "This week's opponent"
 VS_SCOUT_YOURS = "Your alliance"
 VS_SCOUT_RANKING = "Ranking {ranking}"

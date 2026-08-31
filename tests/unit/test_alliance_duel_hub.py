@@ -618,3 +618,50 @@ def test_scout_stops_saying_if_you_win_about_a_week_already_played():
     # Week 1 is settled, so nothing may hang a branch off it.
     assert not any("week 1" in d for d in described)
     assert all("if you win" not in d or "week 1" not in d for d in described)
+
+
+def test_an_opponent_the_bot_guessed_is_labelled_above_the_fork_too():
+    """`This week: A03` was rendering bare when nobody had recorded the match
+    that decides it, one line above a branch where a guess carries
+    `Bot prediction`. The disclaimer skips this week, so nothing said so.
+
+    Own wins week 1 and joins the winners, who pair by seed as (1,3)(5,7)...
+    Leaving seeds 3 v 4 unrecorded makes own's week-2 opponent an estimate,
+    which is exactly the state the finding describes.
+    """
+    tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
+    # The undecided pair needs a gap the model will actually call. All three
+    # metrics have thresholds, and a few percent reads as even -- which would
+    # leave the opponent *unknown* rather than estimated, and prove nothing.
+    profiles = {t: {"power": 30_000_000_000, "members": 98, "gift_level": 30} for t in tags}
+    profiles[tags[2]] = {"power": 60_000_000_000, "members": 100, "gift_level": 40}
+    profiles[tags[3]] = {"power": 15_000_000_000, "members": 70, "gift_level": 12}
+    rows = _bracket_rows(**profiles) + _bracket_rows(week=2, **profiles)
+    by = {(r.week, r.alliance): r for r in rows}
+    undecided = (tags[2], tags[3])
+    for a, b in zip(tags[0::2], tags[1::2]):
+        by[(1, _key(a))].opponent, by[(1, _key(b))].opponent = _key(b), _key(a)
+        if (a, b) == undecided:
+            continue
+        by[(1, _key(a))].week_outcome, by[(1, _key(a))].week_score = "W", 9
+        by[(1, _key(b))].week_outcome, by[(1, _key(b))].week_score = "L", 4
+
+    text = _text(hub.path_embed(_state(rows)))
+
+    assert hub.VS_LABEL_BOT in text, "the guessed opponent has to say so"
+
+
+def test_a_recorded_week_does_not_say_recorded_result_twice():
+    """The score line already carries it. Labelling the opponent as well reads
+    as a stutter, which is why the played block leaves confirmed bare."""
+    rows = _bracket_rows()
+    tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
+    by = {r.alliance: r for r in rows}
+    for a, b in zip(tags[0::2], tags[1::2]):
+        by[_key(a)].week_outcome, by[_key(a)].week_score = "W", 9
+        by[_key(b)].week_outcome, by[_key(b)].week_score = "L", 4
+        by[_key(a)].opponent, by[_key(b)].opponent = _key(b), _key(a)
+
+    played = hub._played_block(_state(rows), ad.project_own_path(OWN, rows), None)
+    for line in played:
+        assert line.count(hub.VS_LABEL_RECORDED) <= 1

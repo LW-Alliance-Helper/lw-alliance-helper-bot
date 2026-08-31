@@ -1960,8 +1960,9 @@ RESULTS_BAD_TAG = "{label}: I don't know {tag}. Use {a} or {b}."
 RESULTS_BAD_TOTAL = "{label}: {x} and {y} don't make {total}."
 RESULTS_BAD_LINE = """{label}: I couldn't read "{text}". It needs a tag and a split, like 9-4."""
 #: No `{label}:` prefix here: the label is the broken part.
-#: The way back into a refused box. Awaiting copy sign-off.
-VS_BTN_RETRY_RESULTS = "PLACEHOLDER_RETRY_RESULTS"
+#: Word for word what the new-league paste says, because it is the same
+#: situation: a refused paste with a way back into it.
+VS_BTN_RETRY_RESULTS = VS_BTN_RETRY_NEW_LEAGUE
 
 RESULTS_UNKNOWN_MATCH = """I don't recognize "{label}" as a match this week."""
 

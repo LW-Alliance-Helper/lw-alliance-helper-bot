@@ -541,17 +541,21 @@ def _played_block(state: HubState, projection: ad.PathProjection, week: int | No
             # to say why it has no result. Alone at the top of the screen the
             # number says nothing the reader does not know, and "this week"
             # carries the same fact in the label.
+            label = _source_label(step.source, bare_when_confirmed=True)
             if lines:
-                lines.append(f"**Week {step.week}:** {state.display_name(step.opponent)}")
+                lines.append(f"**Week {step.week}:** {state.display_name(step.opponent)}{label}")
                 if step.outcome_source != ad.SOURCE_CONFIRMED:
                     lines.append("Playing now.")
                     continue
             else:
-                lines.append(f"**This week:** {state.display_name(step.opponent)}")
+                lines.append(f"**This week:** {state.display_name(step.opponent)}{label}")
                 if step.outcome_source != ad.SOURCE_CONFIRMED:
                     continue
         else:
-            lines.append(f"**Week {step.week}:** {state.display_name(step.opponent)}")
+            lines.append(
+                f"**Week {step.week}:** {state.display_name(step.opponent)}"
+                + _source_label(step.source, bare_when_confirmed=True)
+            )
         row = state.row_for(state.own, step.week)
         split = _week_split(row)
         verdict = "Won" if step.outcome == "W" else "Lost"
@@ -580,12 +584,27 @@ def _step_line(state: HubState, step: ad.PathStep) -> str:
         count = len(step.candidates)
         who = f"one of {count} alliances" if count else "not worked out yet"
         return f"**Week {step.week}:** {who} `{VS_LABEL_NONE}`"
-    line = f"**Week {step.week}:** {state.display_name(step.opponent)}"
-    if step.source == ad.SOURCE_ESTIMATED:
-        line += f" `{VS_LABEL_BOT}`"
-    elif step.source == ad.SOURCE_CONFIRMED:
-        line += f" `{VS_LABEL_RECORDED}`"
-    return line
+    return f"**Week {step.week}:** {state.display_name(step.opponent)}" + _source_label(
+        step.source, bare_when_confirmed=False
+    )
+
+
+def _source_label(source: str | None, *, bare_when_confirmed: bool) -> str:
+    """The evidence chip for an opponent's identity, or nothing.
+
+    `bare_when_confirmed` is for the played block, where the line underneath
+    already says `Recorded result` against the score. Labelling it twice in two
+    lines reads as a stutter; leaving the *unconfirmed* case bare reads as a
+    fact, which is what this exists to stop.
+
+    Picked and Known stay bare either way: no label means somebody in the
+    alliance entered it, which is the rule the whole label set follows.
+    """
+    if source == ad.SOURCE_ESTIMATED:
+        return f" `{VS_LABEL_BOT}`"
+    if source == ad.SOURCE_CONFIRMED:
+        return "" if bare_when_confirmed else f" `{VS_LABEL_RECORDED}`"
+    return ""
 
 
 def _record_line(state: HubState, projection: ad.PathProjection) -> str:

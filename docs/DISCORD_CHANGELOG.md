@@ -125,6 +125,13 @@ accident.
 
 ---
 
+**1.8.8** — 2026-08-31
+- Changing one pairing no longer rewrites your whole Buddies tab
+- Buddy pairings can be saved as named presets on your sheet
+- The Buddy System management screen has a single-step undo
+
+---
+
 **1.8.7** — 2026-08-11
 NO POST: two log-noise fixes. Neither was ever visible to an alliance, and
 the setup problem behind the second one is already reported to leadership

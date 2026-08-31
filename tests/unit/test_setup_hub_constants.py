@@ -6,6 +6,8 @@ something cute, etc.) that would silently propagate everywhere these
 constants are imported.
 """
 
+import sqlite3
+
 from setup_hub import (
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
@@ -67,3 +69,27 @@ def test_storm_setup_nav_builds_correctly():
     # Always exactly two keys — guards against accidentally adding a
     # third storm type without a deliberate refactor.
     assert set(STORM_SETUP_NAV) == {"DS", "CS"}
+
+
+# ── the hub survives an unreadable database ───────────────────────────────────
+
+
+def test_the_hub_still_builds_when_the_config_database_cannot_be_read():
+    """`_SetupHubView.__init__` reads `guild_configs` for one button label.
+    Letting that failure escape takes the whole of `/setup` down over a
+    transient database problem, which is a bad trade for a label.
+
+    It also made three VS tests environment-dependent: they constructed the
+    hub directly and only passed where a real database file happened to
+    exist, so they went red the moment CI started running on `dev`.
+    """
+    from unittest.mock import patch
+
+    import setup_hub
+
+    boom = sqlite3.OperationalError("unable to open database file")
+    with patch("config.get_config", side_effect=boom):
+        view = setup_hub._SetupHubView(None, 1, 1, is_premium=True)
+
+    # Falls through to the same default a guild with no row yet gets.
+    assert view.btn_release_announcements.label.endswith("ON")

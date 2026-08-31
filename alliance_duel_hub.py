@@ -433,7 +433,7 @@ def path_embed(state: HubState) -> discord.Embed:
         return embed
 
     week = state.week or 1
-    fork = _fork_week(settled, week)
+    fork = ad.first_open_week(settled, week)
     lines = [
         f"**{state.league.season} · {state.league.tier} {state.league.group}** · week {week} of {ad.LEAGUE_WEEKS}"
     ]
@@ -499,24 +499,6 @@ def _counted(n: int, *, lead: bool) -> str:
     if not lead:
         return f"{n} {verb}"
     return f"{n} {'match' if n == 1 else 'matches'} {verb}"
-
-
-def _fork_week(projection: ad.PathProjection, live: int) -> int | None:
-    """The first week whose own result is not already recorded.
-
-    That is what the fork is *about*: a week already played is not a branch,
-    it is history, and offering "if you win" on it invites the reader to plan
-    around a result the game has already handed down. ``None`` once every week
-    is recorded, which is a league with nothing left to project.
-
-    Not simply the live week. A guild that records late can have this week's
-    result in before the week turns over, and a guild that records ahead can
-    have next week's; both should fork on the first genuinely open week.
-    """
-    for step in projection.steps:
-        if step.outcome_source != ad.SOURCE_CONFIRMED:
-            return step.week
-    return live if not projection.steps else None
 
 
 def _disclaimer(week: int) -> str:

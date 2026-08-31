@@ -1422,3 +1422,18 @@ def test_a_recorded_week_one_unlocks_week_two():
     matches = entry.week_matches(_state(rows), 2)
 
     assert matches, "week 1 is decided, so week 2's pairing is computable"
+
+
+def test_your_own_match_shows_even_with_the_opponent_column_blank():
+    """`start_new_league` leaves Opponent blank on the rows it writes. Screen 3
+    read the own matchup from that column alone while excluding the computed
+    one from the rest of the league, so the guild's own match vanished from
+    the screen while still appearing in the box that writes to it."""
+    state = _state(_bracket())
+    assert state.own_match(1) is None, "the column really is blank"
+
+    opponent = entry.own_opponent(state, 1)
+    assert opponent is not None
+
+    text = _text(entry.results_embed(state, 1))
+    assert state.display_name(opponent) in text

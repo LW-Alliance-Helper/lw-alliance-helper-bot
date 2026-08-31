@@ -1509,6 +1509,24 @@ class FutureMeeting:
     certain: bool
 
 
+def first_open_week(projection: "PathProjection", live: int) -> int | None:
+    """The first week whose own result is not already recorded.
+
+    That is what a fork is *about*: a week already played is not a branch, it
+    is history, and offering "if you win" on it invites the reader to plan
+    around a result the game has already handed down. ``None`` once every week
+    is recorded, which is a league with nothing left to project.
+
+    Not simply the live week. A guild that records late can have this week's
+    result in before the week turns over, and one that records ahead can have
+    next week's; both should fork on the first genuinely open week.
+    """
+    for step in projection.steps:
+        if step.outcome_source != SOURCE_CONFIRMED:
+            return step.week
+    return live if not projection.steps else None
+
+
 def meetings_ahead(
     target: AllianceKey,
     alliances: Iterable[AllianceWeek],
@@ -1529,12 +1547,23 @@ def meetings_ahead(
     rows = list(alliances)
     found: dict[AllianceKey, FutureMeeting] = {}
 
+    # Fork on the first *open* week, not blindly on the live one. A week whose
+    # result is already recorded is not a branch, and forking there would
+    # override a confirmed result -- assumptions outrank confirmed by design --
+    # and describe a route that cannot happen.
+    plain = project_own_path(target, rows, estimate=estimate)
+    if isinstance(plain, BracketIncomplete):
+        return {}
+    fork = first_open_week(plain, week)
+    if fork is None:
+        return {}
+
     for branch in ("W", "L"):
         walk = project_own_path(target, rows, estimate=estimate, assume={week: (target, branch)})
         if isinstance(walk, BracketIncomplete):
             continue
         for step in walk.steps:
-            if step.week <= week:
+            if step.week <= fork:
                 continue
             named = (step.opponent,) if step.opponent is not None else step.candidates
             for side in named:

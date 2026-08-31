@@ -1831,7 +1831,7 @@ def results_embed(state, week: int) -> discord.Embed:
     embed.description = f"**{league.season} · {league.tier} {league.group}**"
 
     own = state.own
-    opponent = state.own_match(week)
+    opponent = own_opponent(state, week)
     if own is not None and opponent is not None:
         embed.add_field(
             name=f"{state.display_name(own)} v {state.display_name(opponent)}",
@@ -1983,6 +1983,26 @@ def results_prefill(state, week: int) -> str:
         )
         lines.append(f"{label}{_RESULT_SEP} {state.display_name(side)} {high}-{low}")
     return "\n".join(lines)
+
+
+def own_opponent(state, week: int) -> ad.AllianceKey | None:
+    """Who the guild faces in `week`, recorded first, computed second.
+
+    `state.own_match` reads the Opponent column alone, and `start_new_league`
+    deliberately leaves that blank on the rows it writes. Screen 3 was taking
+    the own matchup from it while excluding the *computed* one from the rest
+    of the league, so with the column blank the guild's own match vanished
+    from the screen while still appearing in the box that writes to it.
+    """
+    recorded = state.own_match(week)
+    if recorded is not None:
+        return recorded
+    if state.own is None:
+        return None
+    for match in all_week_matches(state, week):
+        if state.own in (match.a, match.b):
+            return match.other(state.own)
+    return None
 
 
 def all_week_matches(state, week: int) -> list[ad.Match]:

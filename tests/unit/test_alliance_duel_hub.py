@@ -595,3 +595,26 @@ def test_no_surface_leaks_an_internal_name_or_an_em_dash():
         assert "guild" not in text.lower()
         for leak in ("tracking_mode", "AllianceWeek", "AllianceKey", "COL_", "SOURCE_"):
             assert leak not in text
+
+
+def test_scout_stops_saying_if_you_win_about_a_week_already_played():
+    """A week whose result is recorded is not a branch. Forking there would
+    override a confirmed result, since assumptions outrank confirmed by
+    design, and describe a route that cannot happen."""
+    rows = _bracket_rows() + _bracket_rows(week=2)
+    tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
+    by = {(r.week, r.alliance): r for r in rows}
+    for a, b in zip(tags[0::2], tags[1::2]):
+        for outcome, (x, y) in (("W", (a, b)), ("L", (b, a))):
+            row = by[(1, _key(x))]
+            row.week_outcome, row.week_score, row.opponent = (
+                outcome,
+                9 if outcome == "W" else 4,
+                _key(y),
+            )
+
+    described = [o.description for o in ad_ui._scout_options(_state(rows))]
+
+    # Week 1 is settled, so nothing may hang a branch off it.
+    assert not any("week 1" in d for d in described)
+    assert all("if you win" not in d or "week 1" not in d for d in described)

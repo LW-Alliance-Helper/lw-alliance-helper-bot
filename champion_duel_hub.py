@@ -441,10 +441,8 @@ _STANDING_UNCLAIMED = (
 #: catalog's link between two things.
 CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
 
-#: ⚠️ NOT SIGNED OFF. Kevin asked for the control on 2026-08-26 and suggested
-#: the words; the variants are enumerated in the pull request body rather than
-#: here, which is the rule this project has now paid for twice
-#: (`CHAMPION_DUEL_INDEX.md`).
+#: Kevin asked for the control on 2026-08-26 and suggested the words, and
+#: settled this wording on 2026-08-30.
 #:
 #: **What it fixes.** `_ALLIANCE_NO_TAG` fires when we hold somebody's account
 #: and no alliance tag, and the only route to fix that was `➕ Add a player`.
@@ -462,7 +460,7 @@ CD_BTN_WHO_AM_I = "🔗 Tell us which account is yours"
 #: which is Create and is the word that made the old route read wrong.
 CD_BTN_EDIT_ME = "✏️ Edit my information"
 
-#: ⚠️ NOT SIGNED OFF, on the same terms as the button above it.
+#: Kevin settled this on 2026-08-30. Same terms as the button above it.
 #:
 #: **It takes the button's own noun**, which is the rule Kevin set on the
 #: claiming acknowledgements: the modal a control opens says what the control
@@ -476,8 +474,7 @@ CD_BTN_EDIT_ME = "✏️ Edit my information"
 #: buttons that open them, which are `🔗 This is my account` and this.
 _EDIT_ME_TITLE = "Your information"
 
-#: ⚠️ NOT SIGNED OFF, on the same terms as the two above. Variants in the pull
-#: request body.
+#: Kevin settled this on 2026-08-30. Same terms as the two above.
 #:
 #: **The add flow's own note is wrong here and `/code-review` found it.** It
 #: says *"was already here. Opening them instead of adding a duplicate"*, which
@@ -485,23 +482,37 @@ _EDIT_ME_TITLE = "Your information"
 #: somebody the write was declined when it landed.
 _EDIT_ME_DONE = "✅ Updated **{player}**."
 
-#: ⚠️ NOT SIGNED OFF, and it reports a real outcome rather than refusing one.
+#: ✅ SIGNED OFF by Kevin on 2026-08-30. He took **variant A**, the one
+#: shipped as the placeholder, off the four enumerated in #556's body.
 #:
-#: **A registrant is keyed on (name, warzone) and cannot be renamed.** Both are
-#: editable boxes on this modal, so a member whose in-game name changed types
-#: the new one and `upsert_registrant` INSERTs a second account -- their claim
-#: stays on the first, and anything they just entered lands on a row nobody
-#: holds. Silently is how that becomes an orphan nobody can trace.
+#: **None of the four say "someone else's account", deliberately.** The row
+#: it collides with may be unclaimed, or may be this member's own duplicate,
+#: so naming an owner would be a guess stated as a fact.
 #:
-#: **It names no exit and does not need to.** The card this rides on carries
-#: the claim pair already, so `🔗 This is my account` is on screen underneath
-#: for somebody who really has moved.
-_EDIT_ME_NEW = (
-    "ℹ️ **{player}** is a new account, because the name or warzone changed. "
-    "**{held}** is still your account."
+#: **It replaces `_EDIT_ME_NEW`, which described a bug.** That string announced
+#: the second account a rename used to create. `✏️ Edit my information` now
+#: renames the row the member already owns, so the normal case is
+#: `_EDIT_ME_DONE` and there is nothing to announce.
+#:
+#: **What is left is the one case a rename cannot be.** The name and warzone
+#: submitted are already a *different* registrant -- a real record with its own
+#: squads and history -- so there are two accounts and choosing between them is
+#: the member's call, not ours. `upsert_registrant` writes nothing
+#: (`db.RenameCollision`), and this says so rather than picking for them.
+#:
+#: **Refusing rather than moving their claim, which was the alternative.** A
+#: silent move abandons whatever sits on the row they were on; this costs one
+#: press and they can see what they are choosing.
+#:
+#: **It names its exit**, unlike the string it replaces: the card this rides on
+#: carries the claim pair, so `🔗 This is my account` is on screen underneath.
+_EDIT_ME_COLLISION = (
+    "⚠️ **{other}** is already a different account we hold, with its own "
+    "squads and history. Nothing was changed. If that account is really yours, "
+    "claim it with **🔗 This is my account**."
 )
 
-#: ⚠️ NOT SIGNED OFF. The hub's second line, under the warzone counts.
+#: Kevin settled this on 2026-08-30. The hub's second line, under the warzone counts.
 #:
 #: **It had to change and it is session 6 that broke it.** The line said
 #: *"Predict a match, or look up a player to see their squads and power.
@@ -1122,9 +1133,10 @@ _PICKS_CARD_COUNT = "{n} on this day"
 # inputting that info about this."*
 _PICKS_TODAY = "{day} (today)"
 
-# ⚠️ NOT SIGNED OFF. New copy, so the variants are enumerated in the pull
-# request body and it is a placeholder until Kevin picks one -- the rule this
-# project has now paid for twice (`CHAMPION_DUEL_INDEX.md`).
+# Kevin settled this on 2026-08-29, and the marker calling it a placeholder
+# outlived that by a day and a merge. **A stale marker is worse than none** --
+# it is what teaches the next reader that these can be skipped, which is how
+# this one survived being merged.
 #
 # **The note is on the entry surface and nowhere else, and that split is his.**
 # The person CHOOSING a day needs to know which clock decides it. The person
@@ -2916,10 +2928,14 @@ def _edit_me_modal(player: dict, *, can_write: bool, grouping: dict | None):
     """`✏️ Edit my information`: the add modal, opened on the reader's own row.
 
     NOT A SECOND MODAL, and that is the point rather than a saving. The fields
-    are the same five, `upsert_registrant` is keyed on (name, warzone) and
-    fills blanks on the row already held, and a member correcting their own
-    entry is the same write as somebody entering it -- so a parallel modal
-    would be two screens that have to be kept saying the same thing.
+    are the same five and a member correcting their own entry is the same write
+    as somebody entering it, so a parallel modal would be two screens that have
+    to be kept saying the same thing.
+
+    **The one difference is which row the write lands on**, and it is a single
+    argument rather than a second screen: this passes `rename_id`, so a name or
+    warzone the member changes is written onto the row they already own instead
+    of creating a second account.
 
     **Only from a claim.** Without one there is no "my", which is why every
     call site here sits behind a state that already resolved a claimed player.
@@ -2986,8 +3002,9 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
     ):
         # `editing` is the registrant this was opened on, and it carries the
         # whole difference between the two flows: the title, the
-        # acknowledgement, and whether landing on a different account is the
-        # point or an accident. None is the add flow, which is the default.
+        # acknowledgement, whether a blank box clears, and -- through
+        # `rename_id` -- whether a changed name renames that row or creates a
+        # new one. None is the add flow, which is the default.
         super().__init__(**({"title": _EDIT_ME_TITLE[:45]} if editing else {}))
         self.can_write = can_write
         self.grouping = grouping
@@ -3053,7 +3070,7 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         ),
     )
 
-    def _blank_means(self, existing: list[dict]):
+    def _blank_means(self):
         """What an empty box on THIS submission means: nothing, or `db.CLEAR`.
 
         **The add flow is unchanged and stays unchanged.** Somebody adding a
@@ -3069,19 +3086,17 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         save silently declined to hear it. Kevin, 2026-08-29, on whether *Edit*
         may empty a box: yes.
 
-        **And only on the account it opened on.** Name and warzone are both
-        editable here, and changing either lands the write on a DIFFERENT
-        registrant (`_EDIT_ME_NEW` is the acknowledgement for exactly that) --
-        where the boxes were filled from somebody else's row and a cleared one
-        says nothing about theirs. So clearing needs the submitted identity to
-        resolve back to the row this modal was opened on. Without the check, a
-        member correcting their own warzone could empty an imported alliance
-        tag on an account they have never seen.
+        **It used to need the submitted identity checked back against the row
+        this opened on, and no longer does.** Name and warzone are both
+        editable here, and changing either used to land the write on a
+        DIFFERENT registrant -- where the boxes were filled from somebody
+        else's row, so a cleared one said nothing about theirs. `rename_id`
+        removes that case at the root: the write lands on the row this modal
+        opened on or it does not happen at all (`db.RenameCollision`, which
+        writes nothing). So there is no longer a submission where the boxes
+        came from one row and the clear would reach another.
         """
-        held = (self.editing or {}).get("id")
-        if held is None:
-            return None
-        return db.CLEAR if any(row.get("id") == held for row in existing) else None
+        return db.CLEAR if self.editing else None
 
     def _note(self, player: dict, *, existing: bool) -> str:
         """What just happened, in the terms of the flow that opened this.
@@ -3097,11 +3112,10 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
                 if existing
                 else f"✅ Added **{_label(player)}**."
             )
-        if player.get("id") != self.editing.get("id"):
-            return _EDIT_ME_NEW.format(
-                player=discord.utils.escape_markdown(_label(player)),
-                held=discord.utils.escape_markdown(_label(self.editing)),
-            )
+        # No second branch any more. A rename lands on the row this opened on
+        # or raises, so by the time there is a `player` to acknowledge it is
+        # always theirs -- `on_submit` answers the collision and returns before
+        # reaching here.
         return _EDIT_ME_DONE.format(player=discord.utils.escape_markdown(_label(player)))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -3134,16 +3148,39 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
         chosen = self.troop_level.component.values
         level = int(chosen[0]) if chosen else None
 
+        if self.editing is not None:
+            # **RE-READ THE CLAIM, do not trust the snapshot this opened on.**
+            # `_open_edit_me` reads it fresh, and then this modal sits open for
+            # as long as the member leaves it open -- during which
+            # `ClaimResultView` can release it or move it from another message.
+            # Without this, `rename_id` would rename, and CLEAR fields on, an
+            # account they no longer hold, using boxes filled from it.
+            #
+            # `champion_duel_claim._pressed` settles the identical window the
+            # identical way: re-read, and if it has moved say `CLAIM_NOT_LINKED`
+            # and change nothing. Found by `/code-review`.
+            claim_now = await asyncio.to_thread(db.get_claimed_registrant, interaction.user.id)
+            if claim_now is None or claim_now["id"] != self.editing.get("id"):
+                await interaction.followup.send(claim_lib.CLAIM_NOT_LINKED, ephemeral=True)
+                return
+
         existing = await asyncio.to_thread(db.find_registrants, name, server)
         # See `_blank_means`. `None` on the add flow, which writes nothing for
-        # an empty box; `db.CLEAR` on an edit of the account this was opened
-        # on, which empties the column.
-        blank = self._blank_means(existing)
+        # an empty box; `db.CLEAR` on the edit flow, which empties the column.
+        blank = self._blank_means()
         try:
             player = await asyncio.to_thread(
                 db.upsert_registrant,
                 name,
                 server=server,
+                # **The whole of the rename, and it is opt-in on purpose.**
+                # `➕ Add a player` passes nothing here and still creates,
+                # which is what it is for -- somebody entering an opponent
+                # must get a new row, and renaming there would overwrite a
+                # different player. `✏️ Edit my information` names the row
+                # the member already owns, so a new name and warzone are
+                # written onto it rather than INSERTing a second account.
+                rename_id=(self.editing or {}).get("id"),
                 alliance=(self.alliance.value or "").strip() or blank,
                 thp=thp if thp is not None else blank,
                 # **NOT `blank`, and that is deliberate.** The other two are
@@ -3161,6 +3198,22 @@ class _AddPlayerModal(discord.ui.Modal, title="Add a player we don't have"):
                 origin="self_reported",
                 actor=_actor(interaction),
             )
+        except db.RenameCollision as exc:
+            # Two real records, so this is a merge question rather than a
+            # rename and it is not ours to decide. Nothing was written.
+            await interaction.followup.send(
+                _EDIT_ME_COLLISION.format(
+                    other=discord.utils.escape_markdown(_label(exc.existing))
+                ),
+                ephemeral=True,
+            )
+            return
+        except db.NoSuchRegistrant:
+            # The row this opened on is gone -- merged away or removed while
+            # the modal sat open. Nothing was written, and the claim copy is
+            # the one that already describes holding no account.
+            await interaction.followup.send(claim_lib.CLAIM_NOT_LINKED, ephemeral=True)
+            return
         except ValueError as exc:
             await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
             return
@@ -5651,7 +5704,7 @@ def build_group_embed(
 
     shown = _by_alliance(members, alliance)
     if not shown:
-        # ⚠️ NOT SIGNED OFF. Unreachable through the view, which builds its
+        # Kevin settled this on 2026-08-30. Unreachable through the view, which builds its
         # options out of the alliances actually present, and written anyway:
         # the parameter is public and a caller that passes a name nobody in the
         # group carries gets an answer rather than a blank list under a header

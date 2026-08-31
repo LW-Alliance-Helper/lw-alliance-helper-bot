@@ -219,6 +219,80 @@ async def test_adding_a_player_marks_them_self_reported(cd_db):
     assert "Added" in _sent(interaction)
 
 
+async def test_editing_your_own_name_renames_your_row_rather_than_adding_one(cd_db):
+    """**End to end through `on_submit`, because the argument is the point.**
+    `rename_id` is one keyword and deleting it restores the bug this fixes --
+    a member whose in-game name changed got a second account, their claim
+    stayed on the first, and everything they had just typed landed on a row
+    nobody held.
+
+    Kevin, 2026-08-30: *"if someone is EDITING their own information, it needs
+    to update them."*"""
+    held = db.get_player("AlphaOne", server="738")
+    db.claim_registrant(held["id"], ADMIN_ID)
+
+    modal = hub._edit_me_modal(held, can_write=True, grouping=None)
+    modal.name._value = "AlphaOneRenamed"
+    modal.server._value = "738"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    after = db.get_registrant(held["id"])
+    assert after["display_name"] == "AlphaOneRenamed", "the row they own was renamed"
+    assert db.get_player("AlphaOne", server="738") is None, "no row left under the old name"
+    assert db.get_claimed_registrant(ADMIN_ID)["id"] == held["id"], "the claim followed"
+    assert "Updated" in _sent(interaction)
+
+
+async def test_a_rename_onto_somebody_elses_account_is_refused_and_writes_nothing(cd_db):
+    """The one case a rename cannot be: the name and warzone submitted are
+    already a DIFFERENT registrant. Two real records with their own squads and
+    history, so choosing between them is the member's call -- and **nothing is
+    written**, which is the assertion with teeth."""
+    held = db.get_player("AlphaOne", server="738")
+    other = db.get_player("BetaTwo", server="738")
+    db.claim_registrant(held["id"], ADMIN_ID)
+
+    modal = hub._edit_me_modal(held, can_write=True, grouping=None)
+    modal.name._value = "BetaTwo"
+    modal.server._value = "738"
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert db.get_registrant(held["id"])["display_name"] == "AlphaOne", "not renamed"
+    assert db.get_registrant(other["id"])["display_name"] == "BetaTwo", "not overwritten"
+    assert db.get_claimed_registrant(ADMIN_ID)["id"] == held["id"], "the claim did not move"
+    sent = _sent(interaction)
+    assert "BetaTwo" in sent, "the other account is named"
+    assert claim_lib.CLAIM_BTN in sent, "and the way out is on the message"
+
+
+async def test_a_claim_released_while_the_modal_sat_open_writes_nothing(cd_db):
+    """**The snapshot window, and `/code-review` found it.** `_open_edit_me`
+    reads the claim fresh, and then the modal sits open for as long as the
+    member leaves it -- during which `ClaimResultView` can release or move the
+    claim from another message. Without a re-read, `rename_id` renames, and
+    clears fields on, an account they no longer hold.
+
+    `champion_duel_claim._pressed` settles the identical window the identical
+    way, which is why this needs no new copy."""
+    held = db.get_player("AlphaOne", server="738")
+    db.claim_registrant(held["id"], ADMIN_ID)
+    modal = hub._edit_me_modal(held, can_write=True, grouping=None)
+    modal.name._value = "AlphaOneRenamed"
+    modal.server._value = "738"
+
+    db.release_claim(ADMIN_ID)  # from another message, while the modal is open
+
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+
+    assert db.get_registrant(held["id"])["display_name"] == "AlphaOne", "nothing was written"
+    assert _sent(interaction) == claim_lib.CLAIM_NOT_LINKED
+
+
 def test_a_group_letter_from_another_grouping_is_qualified_on_the_card(cd_db):
     """A letter is meaningful inside a grouping and nowhere else, so a bare
     "Group D" on a player from another draw reads as a claim it is not."""
@@ -256,6 +330,11 @@ async def test_the_edit_flow_empties_a_box_the_member_cleared(cd_db):
     silent no-op, which told them it had saved."""
     db.upsert_registrant("AlphaOne", server="738", alliance="OGV", thp=5, origin="imported")
     held = db.get_player("AlphaOne", server="738")
+    # The claim is not decoration here. `_open_edit_me` refuses without one, so
+    # a modal opened on an unclaimed row is a state the surface cannot reach --
+    # and `on_submit` now re-reads the claim rather than trusting the snapshot
+    # it opened on, so the test has to hold the account it is editing.
+    db.claim_registrant(held["id"], ADMIN_ID)
     modal = hub._edit_me_modal(held, can_write=True, grouping=None)
     modal.name._value = "AlphaOne"
     modal.server._value = "738"

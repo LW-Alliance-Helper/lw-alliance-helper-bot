@@ -407,7 +407,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "commands": [
             (
                 "/champion_duel",
-                # ⚠️ NOT SIGNED OFF. Rewritten for the hub session 6
+                # Kevin settled this on 2026-08-30. Rewritten for the hub session 6
                 # built: the root is four entries plus settings, and this
                 # described the eight-button grid it replaced. Two of its
                 # three lines named controls that are no longer on the root,

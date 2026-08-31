@@ -6624,6 +6624,99 @@ def _purge_user_from_roster_drafts(conn, member_key: str, *, apply: bool) -> tup
     return scrubbed, deleted
 
 
+# ── Guild removal (#543) ──────────────────────────────────────────────────────
+#
+# The same mechanism as the personal removal above, with `guild_id` as the
+# predicate instead of a Discord user id. The rule is different, though, and
+# the difference is the whole design:
+#
+# **A personal removal strips who did it and keeps what they contributed**,
+# because a reading of the game outlives its author. **A guild removal deletes**,
+# because everything below is *about that server* -- its configuration, its
+# events, its sign-ups -- and none of it means anything once the bot is gone
+# from it. Discord's Developer Policy asks for exactly that on `GUILD_DELETE`.
+#
+# Two deliberate exceptions:
+#
+# - `premium_assignments` is **not touched**. It is keyed on the subscriber,
+#   not the server: the row records that a paying person pinned their one
+#   licence here. Deleting it would take something from someone who did
+#   nothing, and `/premium assign` already copes with a guild it cannot see
+#   (`donate._resolve_guild_name`).
+# - Champion Duel's game records are scrubbed rather than deleted, in
+#   `champion_duel_db.purge_guild_data`. They are readings of a tournament
+#   other alliances also contributed to, and only the attribution is this
+#   server's.
+
+_GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    # Configuration, one table per feature.
+    ("guild_configs", "guild_id = :gid"),
+    ("guild_alliance_mappings", "guild_id = :gid"),
+    ("guild_birthday_config", "guild_id = :gid"),
+    ("guild_buddy_config", "guild_id = :gid"),
+    ("guild_config_health", "guild_id = :gid"),
+    ("guild_events", "guild_id = :gid"),
+    ("guild_extra_surveys", "guild_id = :gid"),
+    ("guild_growth_config", "guild_id = :gid"),
+    ("guild_install_metadata", "guild_id = :gid"),
+    ("guild_member_roster_config", "guild_id = :gid"),
+    ("guild_shiny_tasks_config", "guild_id = :gid"),
+    ("guild_storm_config", "guild_id = :gid"),
+    ("guild_survey_config", "guild_id = :gid"),
+    ("guild_train_config", "guild_id = :gid"),
+    ("guild_transfer_config", "guild_id = :gid"),
+    ("guild_vs_config", "guild_id = :gid"),
+    # Member-submitted state. Deleted rather than scrubbed: a sign-up is a
+    # choice about one server's event, and there is no second server it still
+    # means anything to.
+    ("storm_signups", "guild_id = :gid"),
+    ("storm_signup_history", "guild_id = :gid"),
+    ("storm_team_plans", "guild_id = :gid"),
+    ("storm_session_state", "guild_id = :gid"),
+    ("storm_roster_drafts", "guild_id = :gid"),
+    ("storm_roster_images", "guild_id = :gid"),
+    ("storm_registration_posts", "guild_id = :gid"),
+    ("storm_power_refresh_dms_sent", "guild_id = :gid"),
+    ("walkthrough_dismissals", "guild_id = :gid"),
+    # Scheduled work and posted-message bookkeeping, all of it pointing at
+    # channels the bot can no longer reach.
+    ("scheduler_pending_warnings", "guild_id = :gid"),
+    ("vs_event_posts", "guild_id = :gid"),
+    ("vs_score_prompt_posts", "guild_id = :gid"),
+)
+
+
+def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
+    """Remove one server from the guild-config database.
+
+    Mirrors :func:`purge_user_data` exactly -- same shape in, same shape out,
+    same `apply=False` dry run -- because a removal nobody can audit is a
+    removal nobody can trust, and the preview has to run the same predicates
+    the real thing does.
+
+    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool}`.
+    `scrubbed` is always empty here and kept only so the two purges return the
+    same shape; the Champion Duel side is where a guild removal scrubs.
+    """
+    gid = int(guild_id)
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"gid": gid}
+    with _get_conn() as conn:
+        for table, where in _GUILD_REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        if apply:
+            conn.commit()
+    return out
+
+
 def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
     """Remove one person from the guild-config database.
 

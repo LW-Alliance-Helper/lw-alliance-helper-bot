@@ -5346,6 +5346,84 @@ def consume_auth_code(code: str) -> dict | None:
 # and the run it previews cannot disagree about a row: nothing is counted by one
 # pass and removed by another.
 
+# ── Guild removal (#543) ──────────────────────────────────────────────────────
+#
+# **This is where a guild removal scrubs rather than deletes**, and it is the
+# only place. Everything in `config.purge_guild_data` is about one server and
+# means nothing without it. What is here is a reading of a tournament other
+# alliances also contributed to: the grouping, the standings, the results, the
+# line-ups. Only the *attribution* is this server's, so only the attribution
+# goes -- the same rule the personal removal follows, and the footing #544
+# puts VS scores on.
+#
+# Deleted rather than scrubbed, for the same reason as in the personal spec:
+# a row that is only about the connection between this server and the bot has
+# nothing left once the server is gone.
+
+_GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    # API credentials issued to a writer in that guild. A session that keeps
+    # working after the bot is removed is the one outcome nobody wants.
+    ("sessions", "writer_guild_id = :gid"),
+    ("auth_codes", "writer_guild_id = :gid"),
+    # Which warzone this server plays in. Pure server configuration.
+    ("guild_warzone", "guild_id = :gid"),
+    # This server's own prediction cards. Not a reading of the game: the game
+    # never showed these to anybody, the guild made them up. `pick_meetings`
+    # cascades from here, and `foreign_keys` is ON for this connection.
+    ("pick_slates", "guild_id = :gid"),
+)
+
+_GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    ("edits", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("disagreements", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("import_log", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("groupings", "created_by_guild_id = NULL", "created_by_guild_id = :gid"),
+    ("groups", "created_by_guild_id = NULL", "created_by_guild_id = :gid"),
+    # A claim is the link between a person and the account they play. Where
+    # they happened to claim it from is the only part of that this server owns.
+    ("registrant_claims", "guild_id = NULL", "guild_id = :gid"),
+)
+
+
+def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
+    """Remove one server's traces from the Champion Duel database.
+
+    Same shape as :func:`purge_user_data`, including the `apply=False` dry run,
+    for the same reason: the preview has to run the predicates the real thing
+    runs or it is worth less than no preview.
+    """
+    gid = str(int(guild_id))
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"gid": gid}
+    with _get_conn() as conn:
+        for table, where in _GUILD_REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        for table, sets, where in _GUILD_REMOVAL_SCRUBS:
+            if apply:
+                n = conn.execute(
+                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    params,
+                ).rowcount
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["scrubbed"][table] = n
+        if apply:
+            conn.commit()
+    return out
+
+
 _REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("sessions", "discord_user_id = :sid"),
     ("auth_codes", "discord_user_id = :sid"),

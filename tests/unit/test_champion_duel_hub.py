@@ -2123,6 +2123,19 @@ async def test_joining_one_already_entered_is_still_reachable(cd_db, no_mm_link)
     assert [g["id"] for g in db.groupings_readable_by("700", "999")] == [already["id"]]
 
 
+async def test_an_empty_answer_does_not_become_the_onboarding_form(cd_db, no_mm_link):
+    """The defensive half of `_is_mine`. A select Discord hands back empty must
+    fall to what the form opened on, not to `mine`: the hub-root form opens on
+    the sent answer, and defaulting the other way would refuse the entry for not
+    holding a warzone the caller never claimed it did."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700", picked=None)
+
+    assert db.find_grouping_by_warzone("900") is not None, "recorded, not refused"
+    assert "Recorded a Champion Duel" in _sent(interaction)
+
+
 async def test_the_sixteen_are_still_checked_on_one_you_were_sent(cd_db, no_mm_link):
     """Only the warzone guard and the pin differ. A mistyped list is a grouping
     nobody can untangle whoever it belongs to."""

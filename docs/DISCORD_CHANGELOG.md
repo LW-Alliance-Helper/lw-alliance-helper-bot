@@ -125,6 +125,11 @@ accident.
 
 ---
 
+**1.8.9** — 2026-08-31
+- Event 5-minute warnings no longer post twice when the bot restarts
+
+---
+
 **1.8.8** — 2026-08-31
 - Changing one pairing no longer rewrites your whole Buddies tab
 - Buddy pairings can be saved as named presets on your sheet

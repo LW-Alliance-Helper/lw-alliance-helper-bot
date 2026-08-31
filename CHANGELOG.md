@@ -9,6 +9,22 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.9] — 2026-08-31
+
+### Fixed
+- An event's 5-minute warning posted twice when a deploy landed inside its window; the queued row is now claimed before the send so exactly one instance posts it.
+- The config database ran on SQLite's default rollback journal, which climbed the Railway volume's reported usage ~55 MB/day; it now runs `journal_mode=WAL`.
+
+### Added
+- `/admin volume` — files on the Railway volume, the filesystem view, and per database the journal mode, page counts and largest tables.
+- `/admin loops` — last heartbeat of every background loop, marking which ones outage detection watches.
+- `/admin deploy` — running version, commit, uptime and live runtime settings.
+- `/admin config_backup` — `guild_configs.db` as a gzipped attachment, the first copy of it the bot has ever written.
+- A `volume_health` watchdog that alarms on a database not in WAL or a `-journal` file on the volume.
+
+A one-shot migration marks every already-past-due pending warning as fired, so
+the warnings the 1.8.8 deploy sent are not posted a third time by this one.
+
 ## [1.8.8] — 2026-08-31
 
 ### Added

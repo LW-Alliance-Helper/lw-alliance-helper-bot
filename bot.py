@@ -306,6 +306,11 @@ async def on_ready():
     if "config_health_cog" not in bot.extensions:
         await bot.load_extension("config_health_cog")
         print("[INFO] Config health cog loaded")
+    # Watches the Railway volume for the zvol failure that climbed ~55 MB/day
+    # unnoticed until it had taken 3.7 GB of 5 GB. See volume_health.py.
+    if "volume_health" not in bot.extensions:
+        await bot.load_extension("volume_health")
+        print("[INFO] Volume health cog loaded")
     # The Map Manager command surfaces (`/map_manager` + the /setup button)
     # are gated behind MAP_MANAGER_COMMANDS_ENABLED so the integration can ship
     # to production with its HTTP endpoints live for testing while the commands

@@ -53,6 +53,27 @@ logger = logging.getLogger(__name__)
 # scheduler is intentionally absent (variable sleep — see module docstring).
 HEARTBEAT_LOOPS = ("shiny_post", "survey_reminder", "train_reminder", "storm_signup")
 
+# Every loop that stamps a heartbeat, including the ones HEARTBEAT_LOOPS
+# deliberately excludes. Those exclusions are correct for *outage detection*
+# — a variable-sleep or long-interval loop cannot bound an outage window —
+# but it left them unobservable: `config_health`, `scheduler`,
+# `transfer_poll` and `volume_health` all stamp a heartbeat that nothing
+# ever read. `/admin loops` reads this list so a loop that quietly stopped
+# is visible even when it can't be an outage signal.
+#
+# Interval is what the view uses to decide whether a gap is suspicious, so
+# a long-interval loop isn't flagged for a gap that is simply its period.
+ALL_HEARTBEAT_LOOPS: tuple[tuple[str, timedelta, bool], ...] = (
+    ("shiny_post", timedelta(minutes=1), True),
+    ("survey_reminder", timedelta(minutes=1), True),
+    ("train_reminder", timedelta(minutes=1), True),
+    ("storm_signup", timedelta(minutes=1), True),
+    ("transfer_poll", timedelta(minutes=1), False),
+    ("config_health", timedelta(minutes=15), False),
+    ("scheduler", timedelta(hours=1), False),
+    ("volume_health", timedelta(hours=6), False),
+)
+
 # A gap larger than this marks a loop as having been offline. Sized so a
 # normal Railway redeploy (sub-2-minute) never trips it — only real outages do.
 OUTAGE_THRESHOLD = timedelta(minutes=5)

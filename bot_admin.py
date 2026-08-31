@@ -56,6 +56,12 @@ bot = bot_state.bot
 ET = bot_state.ET
 _try_assign_verified = bot_state.try_assign_verified
 
+# Import time stands in for process start: bot.py imports this module at the
+# bottom of its own module body, so the two are within a second of each
+# other. Used by `/admin deploy` to answer "how long has THIS build been up",
+# which is how you tell a deploy that landed from one that silently rolled back.
+_BOOT_AT = datetime.now(timezone.utc)
+
 # ── Owner-only diagnostic commands ─────────────────────────────────────────────
 #
 # Bot-operational metadata + cleanup. Gated by `bot.is_owner` so they're only
@@ -1061,6 +1067,233 @@ async def admin_changelog_slash(
         lines.append(f"This version: marked `{changelog_post.NO_POST_MARKER}`")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+# ── Infrastructure diagnostics ───────────────────────────────────────────────
+#
+# The commands above answer "what is this alliance's configuration doing".
+# These four answer "what is the deployment doing", which until 1.8.9 was
+# only answerable from a Railway shell — so in practice it went unanswered,
+# and the volume quietly climbed to 3.7 GB of 5 GB before anyone looked.
+
+
+async def _send_long(interaction: discord.Interaction, text: str, filename: str):
+    """Post `text`, falling back to a file attachment past Discord's 2000
+    character limit. A truncated diagnostic is worse than a file to open:
+    the tail is usually where the offending row is."""
+    if len(text) <= 1900:
+        await interaction.followup.send(text, ephemeral=True)
+        return
+    buf = io.BytesIO(text.encode("utf-8"))
+    await interaction.followup.send(
+        "Report is past Discord's message limit — attached in full.",
+        file=discord.File(buf, filename=filename),
+        ephemeral=True,
+    )
+
+
+@admin_group.command(
+    name="volume",
+    description="(Bot owner only) What the Railway volume is holding, and whether WAL is on.",
+)
+async def admin_volume_slash(interaction: discord.Interaction):
+    """Files on the volume, the container's own filesystem view, and per
+    database the journal mode, page counts and largest tables.
+
+    The journal mode is the line that matters. Railway's volume is a
+    thin-provisioned ZFS zvol that never returns freed blocks, so SQLite's
+    default rollback journal — which creates and deletes a `-journal` file
+    on every write — climbs the *reported* usage ~55 MB/day while the
+    filesystem itself stays nearly empty. That gap is invisible to `df`,
+    which is why it ran unnoticed for weeks."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import volume_health  # noqa: PLC0415
+
+    try:
+        report = await asyncio.to_thread(volume_health.format_report)
+    except Exception as e:  # noqa: BLE001
+        await interaction.followup.send(f"⚠️ Could not read the volume: `{e}`", ephemeral=True)
+        return
+    await _send_long(interaction, report, "volume_report.txt")
+
+
+@admin_group.command(
+    name="loops",
+    description="(Bot owner only) Last tick of every background loop, and which are unwatched.",
+)
+async def admin_loops_slash(interaction: discord.Interaction):
+    """Every loop that stamps `loop_heartbeat`, with how long ago it ticked.
+
+    Four of these feed outage detection; the rest stamp a heartbeat that
+    nothing reads, because a variable-sleep or long-interval loop cannot
+    bound an outage window. That exclusion is correct for catch-up and
+    wrong for observability — a loop that quietly stopped looked identical
+    to a healthy one until this view existed."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import config as _config  # noqa: PLC0415
+    from outage_catchup import ALL_HEARTBEAT_LOOPS  # noqa: PLC0415
+
+    now = datetime.now(timezone.utc)
+    lines = ["**Background loops**", ""]
+    for name, interval, monitored in ALL_HEARTBEAT_LOOPS:
+        last = _config.get_loop_heartbeat(name)
+        watch = "outage-watched" if monitored else "unwatched"
+        if last is None:
+            lines.append(f"❔ `{name}` — never stamped ({watch})")
+            continue
+        age = now - last
+        # Three intervals of slack: one missed tick is a redeploy or a slow
+        # sheet call, three in a row is a loop that has actually stopped.
+        icon = "✅" if age <= interval * 3 else "🚨"
+        mins = age.total_seconds() / 60
+        ago = f"{mins:.0f}m ago" if mins < 120 else f"{mins / 60:.1f}h ago"
+        lines.append(f"{icon} `{name}` — {ago} (every {interval}, {watch})")
+
+    lines += [
+        "",
+        "_`unwatched` loops still stamp a heartbeat but are deliberately_",
+        "_excluded from outage detection — their gap can't bound a window._",
+    ]
+    await _send_long(interaction, "\n".join(lines), "loops.txt")
+
+
+@admin_group.command(
+    name="deploy",
+    description="(Bot owner only) Running version, commit, uptime, and live runtime settings.",
+)
+async def admin_deploy_slash(interaction: discord.Interaction):
+    """What is actually running, versus what you think shipped.
+
+    This exists because the WAL fix sat on `dev` for weeks while production
+    ran without it and nothing surfaced the difference. A setting that is
+    supposed to be on is worth reading from the live process, not from the
+    branch you remember merging."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import platform  # noqa: PLC0415
+    import sqlite3 as _sqlite3  # noqa: PLC0415
+
+    import volume_health  # noqa: PLC0415
+    from bot import __version__  # noqa: PLC0415
+
+    uptime = datetime.now(timezone.utc) - _BOOT_AT
+    hours = uptime.total_seconds() / 3600
+    lines = [
+        "**Deployment**",
+        f"Version: **{__version__}**",
+        f"Uptime: {hours:.1f}h",
+        f"Python {platform.python_version()} · SQLite {_sqlite3.sqlite_version}",
+    ]
+
+    for var, label in (
+        ("RAILWAY_GIT_COMMIT_SHA", "Commit"),
+        ("RAILWAY_ENVIRONMENT_NAME", "Environment"),
+        ("RAILWAY_SERVICE_NAME", "Service"),
+    ):
+        value = os.environ.get(var, "")
+        if value:
+            lines.append(f"{label}: `{value[:12] if var.endswith('SHA') else value}`")
+
+    lines += ["", "**Live runtime settings**"]
+    try:
+        for path in await asyncio.to_thread(
+            volume_health.database_paths, volume_health.volume_dir()
+        ):
+            stats = await asyncio.to_thread(volume_health.database_stats, path)
+            mode = stats.get("journal_mode", "?")
+            icon = "✅" if str(mode).lower() == "wal" else "🚨"
+            lines.append(f"{icon} `{os.path.basename(path)}` journal_mode = `{mode}`")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"⚠️ could not read the volume: `{e}`")
+
+    lines += ["", "**Config present** _(names only, never values)_"]
+    for var in (
+        "DISCORD_TOKEN",
+        "CONFIG_DB_PATH",
+        "BOT_ADMIN_GUILD_IDS",
+        "CHANGELOG_CHANNEL_ID",
+        "OPS_ALERT_CHANNEL_ID",
+        "SENTRY_DSN",
+        "GOOGLE_SERVICE_ACCOUNT_FILE",
+    ):
+        lines.append(f"{'✅' if os.environ.get(var, '').strip() else '—'} `{var}`")
+
+    await _send_long(interaction, "\n".join(lines), "deploy.txt")
+
+
+@admin_group.command(
+    name="config_backup",
+    description="(Bot owner only) Download guild_configs.db — every alliance's saved setup.",
+)
+async def admin_config_backup_slash(interaction: discord.Interaction):
+    """A point-in-time copy of the config database, as a gzipped attachment.
+
+    Nothing else in the bot writes a copy of this file, so until now the
+    only copy of every alliance's `/setup` was the one on the Railway
+    volume. Losing it means every alliance re-runs setup from scratch and
+    every Premium holder re-runs `/premium_assign` — none of it is
+    recoverable from their Google Sheets, which the config points *at*
+    rather than lives in.
+
+    Taken through SQLite's online backup API rather than by copying the
+    file, so a concurrent write can't produce a torn snapshot. The response
+    is ephemeral: the payload is every alliance's configuration."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import gzip  # noqa: PLC0415
+    import sqlite3 as _sqlite3  # noqa: PLC0415
+
+    import config as _config  # noqa: PLC0415
+
+    def _snapshot() -> bytes:
+        try:
+            src = _sqlite3.connect(f"file:{_config.DB_PATH}?mode=ro", uri=True)
+        except _sqlite3.OperationalError:
+            src = _sqlite3.connect(_config.DB_PATH)
+        try:
+            mem = _sqlite3.connect(":memory:")
+            try:
+                src.backup(mem)
+                return gzip.compress(mem.serialize())
+            finally:
+                mem.close()
+        finally:
+            src.close()
+
+    try:
+        blob = await asyncio.to_thread(_snapshot)
+    except Exception as e:  # noqa: BLE001
+        await interaction.followup.send(f"⚠️ Backup failed: `{e}`", ephemeral=True)
+        return
+
+    # Discord refuses attachments past 25 MB. A config database that large
+    # is itself the finding, so say so rather than failing on upload.
+    if len(blob) > 24 * 1024 * 1024:
+        await interaction.followup.send(
+            f"⚠️ Snapshot is {len(blob) / 1024 / 1024:.1f} MB gzipped — past what "
+            "Discord will take. That size is worth investigating on its own; "
+            "`/admin volume` will show which table is responsible.",
+            ephemeral=True,
+        )
+        return
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    await interaction.followup.send(
+        f"🗄️ `guild_configs.db` at {stamp} — {len(blob) / 1024:,.0f} KB gzipped.\n"
+        "Every alliance's saved setup. Keep it somewhere you'd trust with it.",
+        file=discord.File(io.BytesIO(blob), filename=f"guild_configs-{stamp}.db.gz"),
+        ephemeral=True,
+    )
 
 
 # Register the /admin Group on the tree once every subcommand has been

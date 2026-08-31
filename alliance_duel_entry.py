@@ -959,6 +959,15 @@ async def start_new_league(
     # would save a bracket and land back on a hub that still says there is no
     # league, which reads as a failed write.
     state.league = league
+    # And the live week with it. Mid-league setup writes every week up to the
+    # current one, so a league started at week 3 left the session believing
+    # week 1 -- and every screen that takes `state.week` would have offered
+    # the wrong week's matches to write into.
+    #
+    # Resolved over the rows just written, not `state.rows`: this is a brand
+    # new league, so those are the only rows that can carry its live week, and
+    # an older league still in the snapshot must not win the vote.
+    state.live = ad.resolve_live_week(rows) or state.live
 
     added = len([r for r in rows if (r.league, r.week, r.alliance) not in existing])
     noun = "row" if added == 1 else "rows"

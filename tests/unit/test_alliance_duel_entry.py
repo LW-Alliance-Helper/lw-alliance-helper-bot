@@ -730,6 +730,18 @@ async def test_a_mid_league_setup_leaves_the_hub_on_a_live_week(_captured):
     assert live.week == 3
 
 
+async def test_the_session_believes_the_week_it_just_started_on(_captured):
+    """The rows resolved to week 3 already; the *session* did not follow them.
+    Every screen taking `state.week` would have offered week 1's matches to
+    write into."""
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+
+    assert state.week == 3
+
+
 async def test_no_week_carries_a_pairing_it_could_not_know(_captured):
     # Week 1's follows from the rankings. A later week's cannot be known until the
     # week before it is recorded, so a written guess would be a confident lie.

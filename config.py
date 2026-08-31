@@ -6816,7 +6816,12 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
     return out
 
 
-def sweep_guild_removals(*, apply: bool = False, hold_days: int = GUILD_REMOVAL_HOLD_DAYS) -> dict:
+def sweep_guild_removals(
+    *,
+    apply: bool = False,
+    hold_days: int = GUILD_REMOVAL_HOLD_DAYS,
+    installed: "set[int] | None" = None,
+) -> dict:
     """Purge every server whose hold has run out, across both databases.
 
     The one entry point the scheduler calls, and the one place the two purges
@@ -6828,11 +6833,19 @@ def sweep_guild_removals(*, apply: bool = False, hold_days: int = GUILD_REMOVAL_
 
     The hold row is cleared **last and only on a real run**, so a purge that
     fails partway is retried on the next sweep rather than being forgotten.
+
+    `installed` is the set of guild ids the bot is currently in, and a due
+    guild that appears in it has its hold **cancelled rather than actioned**.
+    `on_guild_join` is not dispatched for a server re-added while the bot was
+    disconnected -- that arrives in the READY burst instead -- so without this
+    a live server's data would be deleted thirty days after it came back.
     """
     merged: dict = {
         "guilds": [],
         "config": {"deleted": {}, "scrubbed": {}},
         "champion_duel": {"deleted": {}, "scrubbed": {}},
+        "rejoined": [],
+        "failed": [],
         "applied": bool(apply),
     }
 
@@ -6842,15 +6855,31 @@ def sweep_guild_removals(*, apply: bool = False, hold_days: int = GUILD_REMOVAL_
                 into[bucket][table] = into[bucket].get(table, 0) + n
 
     for gid in guild_removals_due(hold_days=hold_days):
-        merged["guilds"].append(gid)
-        _fold(merged["config"], purge_guild_data(gid, apply=apply))
+        if installed is not None and gid in installed:
+            # The bot is in this server right now, so whatever recorded the
+            # removal is stale. Purging a live server is the worst thing this
+            # code could do.
+            merged["rejoined"].append(gid)
+            if apply:
+                clear_guild_removal(gid)
+            continue
+
+        # Both purges are guarded. An unguarded one throws out of the loop,
+        # and because due guilds come oldest first, one deterministic failure
+        # would block every other server every day.
         try:
+            _fold(merged["config"], purge_guild_data(gid, apply=apply))
             import champion_duel_db
 
             _fold(merged["champion_duel"], champion_duel_db.purge_guild_data(gid, apply=apply))
-        except Exception as exc:  # noqa: BLE001 - one database must not block the other
-            print(f"[REMOVAL] Champion Duel purge failed for guild={gid}: {exc}")
+        except Exception as exc:  # noqa: BLE001 - one server must not block the rest
+            print(f"[REMOVAL] Purge failed for guild={gid}: {exc}")
+            merged["failed"].append(gid)
             continue
+
+        # Counted only once it actually happened: reporting a purge that threw
+        # would say "purged 1 server" while nothing had moved.
+        merged["guilds"].append(gid)
         if apply:
             clear_guild_removal(gid)
     return merged

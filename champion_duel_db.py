@@ -5360,9 +5360,30 @@ def consume_auth_code(code: str) -> dict | None:
 # a row that is only about the connection between this server and the bot has
 # nothing left once the server is gone.
 
+
+def revoke_guild_sessions(guild_id: int) -> int:
+    """Kill a server's API sessions **now**, not at the end of the hold.
+
+    `SESSION_TTL` is itself 30 days and `identify()` reads `can_write`
+    straight off the stored row, so leaving this to the purge means a
+    write-capable session outlives the removal for as long as it would have
+    lived anyway. The hold exists so a rejoin costs nothing; it was never
+    meant to keep credentials alive. Re-issuing them is one sign-in.
+
+    Returns the number of rows removed. Called from `on_guild_remove`, and the
+    tables stay in the purge spec as a backstop for anything issued between.
+    """
+    gid = str(int(guild_id))
+    with _get_conn() as conn:
+        n = conn.execute("DELETE FROM sessions WHERE writer_guild_id = ?", (gid,)).rowcount
+        n += conn.execute("DELETE FROM auth_codes WHERE writer_guild_id = ?", (gid,)).rowcount
+        conn.commit()
+    return n
+
+
 _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
-    # API credentials issued to a writer in that guild. A session that keeps
-    # working after the bot is removed is the one outcome nobody wants.
+    # Backstop only. `revoke_guild_sessions` takes these at removal time,
+    # because a write-capable session must not outlive the removal by a month.
     ("sessions", "writer_guild_id = :gid"),
     ("auth_codes", "writer_guild_id = :gid"),
     # Which warzone this server plays in. Pure server configuration.
@@ -5396,6 +5417,19 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
     out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
     params = {"gid": gid}
     with _get_conn() as conn:
+        # Counted **before** the loop runs. `pick_meetings` has no `guild_id`
+        # of its own -- it cascades off `pick_slates` -- so once those rows are
+        # gone there is nothing left to count, and a real run would report zero
+        # for the one table nobody would think to check. Reading it first is
+        # what keeps the preview and the run agreeing.
+        cascaded = conn.execute(
+            "SELECT COUNT(*) FROM pick_meetings WHERE slate_id IN "
+            "(SELECT id FROM pick_slates WHERE guild_id = :gid)",
+            params,
+        ).fetchone()[0]
+        if cascaded:
+            out["deleted"]["pick_meetings"] = cascaded
+
         for table, where in _GUILD_REMOVAL_DELETES:
             if apply:
                 n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
@@ -5406,6 +5440,7 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
                 ).fetchone()[0]
             if n:
                 out["deleted"][table] = n
+
         for table, sets, where in _GUILD_REMOVAL_SCRUBS:
             if apply:
                 n = conn.execute(

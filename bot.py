@@ -682,6 +682,19 @@ async def on_guild_remove(guild: discord.Guild):
     except Exception as e:
         print(f"[GUILD] Could not record removal for {guild.name}: {e}")
         sentry_sdk.capture_exception(e)
+
+    # Credentials go now rather than at the end of the hold. The hold is there
+    # so a rejoin costs nothing, not so a write-capable API session outlives
+    # the removal by a month.
+    try:
+        import champion_duel_db
+
+        revoked = champion_duel_db.revoke_guild_sessions(guild.id)
+        if revoked:
+            print(f"[GUILD] Revoked {revoked} API session(s) for {guild.name}")
+    except Exception as e:
+        print(f"[GUILD] Could not revoke API sessions for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
     await _update_presence()
 
 
@@ -1008,13 +1021,24 @@ async def guild_removal_sweep_task():
     from config import sweep_guild_removals
 
     try:
-        result = sweep_guild_removals(apply=True)
+        # The live membership set, not the hold table alone. `on_guild_join`
+        # is not dispatched for a server re-added while the bot was
+        # disconnected -- that arrives in the READY burst -- so a stale hold
+        # would otherwise delete a live server's data.
+        installed = {g.id for g in bot.guilds}
+        # SQLite writes off the event loop, the pattern `growth_task` adopted
+        # under #366 for exactly this shape of work.
+        result = await asyncio.to_thread(sweep_guild_removals, apply=True, installed=installed)
         if result["guilds"]:
             print(
                 f"[REMOVAL] Purged {len(result['guilds'])} held server(s): "
                 f"config={result['config']['deleted']} "
                 f"champion_duel={result['champion_duel']}"
             )
+        if result["rejoined"]:
+            print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")
+        if result["failed"]:
+            print(f"[REMOVAL] Purge failed, will retry tomorrow: {result['failed']}")
     except Exception as e:
         # Never let the loop die. A purge that fails today is retried
         # tomorrow, because the hold row is only cleared on success.

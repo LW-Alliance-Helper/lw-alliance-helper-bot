@@ -345,7 +345,8 @@ def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, mo
 
     result = config.sweep_guild_removals(apply=True)
 
-    assert result["guilds"] == [GUILD]
+    assert result["guilds"] == [], "a purge that threw is not a purge that happened"
+    assert result["failed"] == [GUILD]
     assert rows("guild_configs", "guild_id = ?", (GUILD,)) == [], "config still purges"
     assert config.guild_removal_held_since(GUILD) is not None, "retry on the next sweep"
 
@@ -372,3 +373,96 @@ def test_install_metadata_now_survives_the_removal_and_goes_with_the_purge(temp_
     config.sweep_guild_removals(apply=True)
 
     assert config.get_guild_install_metadata(GUILD) is None
+
+
+def test_a_server_the_bot_is_still_in_is_never_purged(temp_db, cd_db):
+    """`on_guild_join` is not dispatched for a server re-added while the bot
+    was disconnected -- that arrives in the READY burst. Without this a live
+    server's data goes thirty days after it came back."""
+    seed_config(GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True, installed={GUILD})
+
+    assert result["rejoined"] == [GUILD]
+    assert result["guilds"] == []
+    assert rows("guild_configs", "guild_id = ?", (GUILD,)), "a live server keeps its setup"
+    assert config.guild_removal_held_since(GUILD) is None, "and the stale hold is cancelled"
+
+
+def test_one_servers_failure_does_not_block_the_rest(temp_db, cd_db, monkeypatch):
+    """Due guilds come oldest first, so an unguarded failure on the oldest
+    would block every other server every day."""
+    real = config.purge_guild_data
+
+    def _selective(gid, **kw):
+        if gid == GUILD:
+            raise RuntimeError("database is locked")
+        return real(gid, **kw)
+
+    monkeypatch.setattr(config, "purge_guild_data", _selective)
+    seed_config(GUILD)
+    seed_config(OTHER_GUILD, 5678)
+    older = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    newer = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    config.record_guild_removal(GUILD, when=older)
+    config.record_guild_removal(OTHER_GUILD, when=newer)
+
+    result = config.sweep_guild_removals(apply=True, installed=set())
+
+    assert result["failed"] == [GUILD]
+    assert result["guilds"] == [OTHER_GUILD]
+    assert rows("guild_configs", "guild_id = ?", (OTHER_GUILD,)) == []
+
+
+def test_the_preview_and_the_run_agree_about_the_cascade(cd_db):
+    """`pick_meetings` cascades off `pick_slates` and has no `guild_id` of its
+    own, so it is the one table a count taken after the delete would miss."""
+    with cd._get_conn() as conn:
+        conn.execute(
+            "INSERT INTO pick_slates (guild_id, play_on, card_no, created_at, updated_at) "
+            "VALUES (?, '2026-08-31', 1, 'now', 'now')",
+            (str(GUILD),),
+        )
+        slate_id = conn.execute("SELECT id FROM pick_slates").fetchone()["id"]
+        players = []
+        for name in ("Zebra", "Quiet"):
+            conn.execute(
+                "INSERT INTO registrants (player_key, display_name, created_at, updated_at) "
+                "VALUES (?, ?, 'now', 'now')",
+                (name.lower(), name),
+            )
+            players.append(conn.execute("SELECT last_insert_rowid() AS i").fetchone()["i"])
+        conn.execute(
+            "INSERT INTO pick_meetings (slate_id, position, a_id, b_id) VALUES (?, 1, ?, ?)",
+            (slate_id, *players),
+        )
+        conn.commit()
+
+    preview = cd.purge_guild_data(GUILD)
+    applied = cd.purge_guild_data(GUILD, apply=True)
+
+    assert preview["deleted"]["pick_meetings"] == 1
+    assert applied["deleted"]["pick_meetings"] == 1, "a real run must report it too"
+    with cd._get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM pick_meetings").fetchone()[0] == 0
+
+
+def test_sessions_are_revoked_at_removal_not_at_the_end_of_the_hold(cd_db):
+    """`SESSION_TTL` is itself 30 days, so deferring this to the purge means a
+    write-capable session outlives the removal for as long as it would have
+    lived anyway."""
+    with cd._get_conn() as conn:
+        conn.execute(
+            "INSERT INTO sessions "
+            "(token_hash, discord_user_id, writer_guild_id, can_write, created_at, expires_at) "
+            "VALUES ('hash', '1', ?, 1, 'now', 'later')",
+            (str(GUILD),),
+        )
+        conn.commit()
+
+    assert cd.revoke_guild_sessions(GUILD) == 1
+    with cd._get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0

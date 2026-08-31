@@ -9,6 +9,23 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.8] — 2026-08-31
+
+### Added
+- Buddy pairings can be saved as named presets on the alliance's own spreadsheet, with saving gated to Premium and loading or deleting left free ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A single-step undo on the Buddy System management screen, covering refresh, auto-assign, re-pair and preset loading ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+
+### Fixed
+- Changing one pairing rewrote the whole Buddies tab; writes now issue only the rows that actually moved, so hand edits and notes kept in spare columns survive ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- The buddy list now names who it dropped and why, in place of the fixed "invalid pairs were cleared" notice that named nobody ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A contested Engineer, or a doubled War Leader when doubling is off, is now handed back to leadership as a decision rather than settled alphabetically and announced as a fact ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- "Re-pair from scratch" now swaps Engineers instead of refusing unless a spare one exists, which in a fully paired alliance is never ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A member setting their own profession now places only themselves, and a doubled pairing survives a War Leader renaming themselves ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+
+Cherry-picked from `dev` ([#551](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/551)) so the Buddy System rework ships without
+waiting on the 1.9.0 Alliance Duel tracker. The glyph catalog refactor those
+commits sat on stays on `dev`, so the buddy buttons keep 1.8.7's icons.
+
 ## [1.8.7] — 2026-08-11
 
 ### Fixed

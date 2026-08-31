@@ -179,8 +179,63 @@ def test_hub_leadership_sees_management_and_premium_buttons():
         "Open setup",
         "Auto-assign",
         "self-service",
+        "Undo last change",
+        "Save as preset",
+        "Load preset",
+        "Delete preset",
     ):
         assert any(needle in l for l in labels), needle
+
+
+def test_hub_buttons_fit_discords_five_per_row_limit():
+    view = _hub(is_leader=True, is_premium=True)
+    per_row = {}
+    for c in view.children:
+        per_row[c.row] = per_row.get(c.row, 0) + 1
+    assert per_row and max(per_row.values()) <= 5, per_row
+
+
+def test_a_member_never_sees_the_preset_or_undo_buttons():
+    labels = [c.label for c in _hub(is_leader=False, is_premium=True).children]
+    assert not any("preset" in l.lower() for l in labels)
+    assert not any("Undo" in l for l in labels)
+
+
+def test_saving_a_preset_is_gated_but_loading_and_deleting_are_not():
+    """A lapse must not strand a lineup the alliance made while paying, so the
+    gate sits on Save alone."""
+    import inspect
+
+    src = {
+        name: inspect.getsource(getattr(buddy_hub._BuddyHubView, name))
+        for name in ("_save_preset", "_load_preset", "_delete_preset")
+    }
+    assert "buddy_presets" in src["_save_preset"]
+    assert "_premium_guard" not in src["_load_preset"]
+    assert "_premium_guard" not in src["_delete_preset"]
+    for name in ("_load_preset", "_delete_preset"):
+        assert "_leader_ok" in src[name], name
+
+
+def test_the_buddy_wizard_asks_where_presets_live_and_counts_its_steps():
+    """The preset tab is the alliance's to name, so setup has to offer it. The
+    step count is asserted because adding a step means renumbering every later
+    one, and an off-by-one there is invisible until a user reads it."""
+    import inspect
+    import re
+
+    import setup_cog
+
+    src = inspect.getsource(setup_cog.run_buddy_setup)
+    assert 'exclude_field="preset_tab"' in src
+    assert 'update_buddy_config_field(guild_id, "preset_tab", preset_tab)' in src
+    assert "**Preset tab:** {preset_tab}" in src
+
+    steps = re.findall(r"\*\*Step (\d+)[a-z]? of (\d+)", src)
+    assert steps, "no step headings found"
+    totals = {total for _, total in steps}
+    assert totals == {"10"}, totals
+    assert max(int(n) for n, _ in steps) == 10
 
 
 # ── persistent click handler ──────────────────────────────────────────────────

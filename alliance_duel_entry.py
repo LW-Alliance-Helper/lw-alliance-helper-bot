@@ -1339,13 +1339,24 @@ def week_matches(state, week: int, *, exclude_own: bool = True) -> list[ad.Match
     Takes the whole league, never one week's rows. `compute_week_pairing`
     weighs every prior result to order the bracket, so handing it a slice
     silently reproduces week 1's pairing for every later week.
+
+    **Guarded on the previous week being recorded.** Without that, week 2's
+    computed pairing is not merely unknown, it is confidently wrong -- and
+    unlike the hub, these screens *write* what they offer, so an unguarded
+    pairing puts invented opponents in the sheet. With no pairing to trust,
+    fall back to the Opponent column: recorded matchups are real data, an
+    empty list is honest, and neither is a fabrication.
     """
-    pairing = ad.compute_week_pairing(state.league_rows(), week)
-    if isinstance(pairing, ad.BracketIncomplete):
-        return []
-    return [
-        match for match in pairing.matches if not (exclude_own and state.own in (match.a, match.b))
-    ]
+    league_rows = state.league_rows()
+    if ad.prior_week_decided(league_rows, week):
+        pairing = ad.compute_week_pairing(league_rows, week)
+    else:
+        pairing = None
+    if pairing is None or isinstance(pairing, ad.BracketIncomplete):
+        matches = ad.matches_from_recorded_opponents(state.league_rows(week))
+    else:
+        matches = list(pairing.matches)
+    return [match for match in matches if not (exclude_own and state.own in (match.a, match.b))]
 
 
 def predicted_winner(state, match: ad.Match) -> tuple[ad.AllianceKey | None, str]:

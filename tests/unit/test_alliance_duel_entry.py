@@ -1386,3 +1386,39 @@ async def test_the_hub_score_button_has_no_screen_to_refresh(_captured):
 
     assert modal.view is None
     assert _captured, "the write still happened"
+
+
+def test_week_two_offers_nothing_until_week_one_is_recorded():
+    """With no results to weigh, `compute_week_pairing` scores everyone zero
+    and falls back to ranking order, reproducing week 1's pairs. These screens
+    *write* what they offer, so an unguarded pairing puts invented opponents
+    in the sheet."""
+    rows = _bracket() + _bracket(week=2)
+    state = _state(rows)
+
+    week_one = entry.week_matches(state, 1)
+    week_two = entry.week_matches(state, 2)
+
+    assert week_one, "week 1 follows from the rankings and needs nothing"
+    assert week_two == [], "week 2 cannot be known until week 1 is recorded"
+
+
+def test_week_two_falls_back_to_what_the_sheet_recorded():
+    """Recorded matchups are real data. Own-alliance tracking mode has no
+    bracket to pair, and refusing to show what was written would be the
+    tracker arguing with a deliberate choice."""
+    rows = _bracket() + _bracket(
+        week=2, **{OWN_TAG: {"opponent": _key("A05")}, "A05": {"opponent": OWN}}
+    )
+    matches = entry.week_matches(_state(rows), 2, exclude_own=False)
+
+    assert len(matches) == 1
+    assert {matches[0].a, matches[0].b} == {OWN, _key("A05")}
+
+
+def test_a_recorded_week_one_unlocks_week_two():
+    rows = _bracket() + _bracket(week=2)
+    _play_week(rows, 1, lambda m: m.a)
+    matches = entry.week_matches(_state(rows), 2)
+
+    assert matches, "week 1 is decided, so week 2's pairing is computable"

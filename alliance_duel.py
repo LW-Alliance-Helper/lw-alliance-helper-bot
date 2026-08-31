@@ -1454,6 +1454,45 @@ class PathProjection:
         return tuple(out)
 
 
+def prior_week_decided(alliances: Iterable[AllianceWeek], week: int) -> bool:
+    """Whether `week`'s pairing can be worked out at all.
+
+    Week 1 follows from the rankings and needs nothing. Every later week is a
+    reshuffle of the week before it, so an **unrecorded predecessor makes the
+    computed pairing meaningless rather than approximate**: with no results to
+    weigh, `compute_week_pairing` scores every alliance zero and falls back to
+    ranking order, which silently reproduces week 1's pairs for every later
+    week.
+
+    Every surface that computes a pairing has to ask this first. A read that
+    skips it shows invented matchups; a *write* that skips it records them.
+    """
+    if week <= 1:
+        return True
+    played = [r for r in alliances if r.week == week - 1]
+    return bool(played) and all(r.week_outcome is not None for r in played)
+
+
+def matches_from_recorded_opponents(alliances: Iterable[AllianceWeek]) -> list[Match]:
+    """Fall back to the Opponent column when the bracket cannot be computed.
+
+    In own-alliance tracking mode (#448) there is no bracket to pair, but the
+    guild still recorded who they faced, and refusing to show that would be
+    the tracker arguing with a deliberate choice.
+    """
+    seen: set = set()
+    matches: list[Match] = []
+    for row in alliances:
+        if row.opponent is None:
+            continue
+        key = tuple(sorted((row.alliance, row.opponent)))
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(Match(row.week, row.alliance, row.opponent))
+    return matches
+
+
 @dataclass(frozen=True)
 class FutureMeeting:
     """When `target` could meet one alliance, and on which branch.

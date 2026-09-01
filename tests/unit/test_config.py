@@ -1123,9 +1123,14 @@ class TestStormSignups:
         import config
         import datetime as _dt
 
-        today = _dt.date.today().isoformat()
-        recent = (_dt.date.today() - _dt.timedelta(days=5)).isoformat()
-        old = (_dt.date.today() - _dt.timedelta(days=30)).isoformat()
+        # UTC, matching the code: `get_recent_storm_registration_posts` bounds
+        # its window against `datetime.now(timezone.utc).date()` on purpose, so
+        # the Railway host's local clock cannot move the cutoff. A naive
+        # `date.today()` here would be a different clock from the one under test.
+        today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+        today = today_utc.isoformat()
+        recent = (today_utc - _dt.timedelta(days=5)).isoformat()
+        old = (today_utc - _dt.timedelta(days=30)).isoformat()
         config.record_storm_registration_post(TEST_GUILD_ID, "DS", today, 100, 1)
         config.record_storm_registration_post(TEST_GUILD_ID, "DS", recent, 100, 2)
         config.record_storm_registration_post(TEST_GUILD_ID, "DS", old, 100, 3)

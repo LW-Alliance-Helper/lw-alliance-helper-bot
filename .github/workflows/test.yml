@@ -66,13 +66,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-mock pytest-timeout
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff
 
+      # Lint runs here as well as in pre-commit because pre-commit is local and
+      # skippable, and `tests/ruff.toml` carries a rule that only earns its
+      # keep if it cannot be walked past: DTZ003/005/011, which ban reading the
+      # machine's wall clock in a test. That is the bug that took `dev` red on
+      # 1 September.
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: |
+          ruff check .
+          ruff format --check .
+
+      # Lint and the three suites below each `continue-on-error` and are gated
+      # together at the end, so one failure no longer hides the rest.
+      #
+      # Every run on `dev` between 30 Aug and 1 Sep stopped at the first
+      # failing step, so the queue was only ever visible one deep: the sqlite
+      # failures hid an integration failure, which hid a date-dependent one.
+      # `FORCE_PREMIUM=1` never ran at all in six consecutive runs. Fixing one
+      # thing and watching a different failure appear reads as new breakage
+      # when it is excavation.
+      #
+      # `continue-on-error` alone would make the JOB green while a suite is
+      # red, so `Gate` re-fails it. Do not remove that step.
       - name: Run unit tests
+        id: unit
+        continue-on-error: true
         run: |
           pytest tests/unit/ -v --tb=short -m "not sheets"
 
       - name: Run integration tests
+        id: integration
+        continue-on-error: true
         run: |
           pytest tests/integration/ -v --tb=short -m "not sheets" --timeout=30
 
@@ -81,10 +109,31 @@ jobs:
       # the multi-template manager, the FORCE_PREMIUM short-circuit, the
       # `<@id>` mention-or-name path, and the new survey question types.
       - name: Run suite with FORCE_PREMIUM=1
+        id: premium
+        continue-on-error: true
         env:
           FORCE_PREMIUM: "1"
         run: |
           pytest tests/unit/ tests/integration/ --tb=short -m "not sheets" --timeout=30
+
+      # The gate. Without this the job reports success on a red suite.
+      - name: Gate
+        if: always()
+        run: |
+          LINT='${{ steps.lint.outcome }}'
+          UNIT='${{ steps.unit.outcome }}'
+          INTEGRATION='${{ steps.integration.outcome }}'
+          PREMIUM='${{ steps.premium.outcome }}'
+          echo "lint=$LINT unit=$UNIT integration=$INTEGRATION premium=$PREMIUM"
+          FAILED=0
+          for RESULT in "$LINT" "$UNIT" "$INTEGRATION" "$PREMIUM"; do
+            if [ "$RESULT" != "success" ]; then FAILED=1; fi
+          done
+          if [ "$FAILED" = "1" ]; then
+            echo "::error::A step above failed. Every step ran to completion -- read all the red ones, not just the first."
+            exit 1
+          fi
+          echo "Lint and all three suites passed."
 
   # ── Sheet Integration Tests (main branch only) ──────────────────────────────
   sheet-tests:

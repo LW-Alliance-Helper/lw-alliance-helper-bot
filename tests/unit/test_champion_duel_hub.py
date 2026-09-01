@@ -2659,7 +2659,7 @@ async def test_the_finished_hub_is_the_hub(cd_db, no_mm_link):
 async def test_one_control_enters_a_champion_duel_of_either_kind(cd_db, no_mm_link):
     """Two jobs, one control, because `notes/DESIGN.md` rule 7 says so: entering
     your own sixteen and entering a set you were sent are the same act, so both
-    wanted the same glyph and neither had one free. The form asks whose."""
+    wanted the same glyph and neither had one free."""
     _finish_the_champion_duel()
 
     interaction = _interaction()

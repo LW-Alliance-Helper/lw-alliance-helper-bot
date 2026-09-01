@@ -1996,6 +1996,7 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
         "unchanged": 0,
         "guilds": 0,
         "unpinned": 0,
+        "readers": 0,
         "dropped_warzones": sorted(set(source["warzones"]) - set(target["warzones"]), key=int),
     }
     with _get_conn() as conn:
@@ -2091,6 +2092,20 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
                     (now, row["guild_id"]),
                 )
                 moved["unpinned"] += 1
+
+        # Readers move rather than cascading away. A server that recorded a
+        # Champion Duel it was sent has no warzone in it, so this row is its
+        # ONLY path back -- losing it is the exact dead end the table exists to
+        # close, and the DELETE below would take it silently.
+        #
+        # `INSERT OR IGNORE` because a server can already read the target: it
+        # was sent both, or it is in one and was sent the other. Two sources,
+        # one row, the same rule `groupings_readable_by` reads them under.
+        moved["readers"] = conn.execute(
+            "INSERT OR IGNORE INTO grouping_readers (grouping_id, guild_id, created_at) "
+            "SELECT ?, guild_id, created_at FROM grouping_readers WHERE grouping_id = ?",
+            (target_id, source_id),
+        ).rowcount
 
         # CASCADE takes this grouping's own warzones, groups and members with
         # it. Everything worth keeping has already been copied across.

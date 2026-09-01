@@ -4667,10 +4667,8 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         self.warzone = warzone
         # Carried so a refusal reopens the form the caller was actually in.
         self.onboarding = onboarding
-        # The field labels are shared and stay shared. "The participating
-        # warzones, all 16" describes the input either way, and the question
-        # above it is what says whose Champion Duel this is -- `UX.md`'s rule
-        # that a label describes the control rather than the outcome.
+        # The field labels are shared and stay shared: "The participating
+        # warzones, all 16" describes the input whichever form is open.
         #
         # Safe to set on self: `Modal._init_children` deepcopies each declared
         # item onto the instance, so a default cannot leak to the next opener.
@@ -10523,17 +10521,27 @@ class ChampionDuelHubView(discord.ui.View):
     async def _on_add_cd(self, inter: discord.Interaction):
         """Sixteen warzones and a date, for a Champion Duel of either kind.
 
-        The form asks whose it is, and that answer decides the only two things
-        that differ: whether the sixteen have to contain your own warzone, and
-        whether the server is pinned to what it produces. Everything else is
-        the same either way -- the count, the duplicate check and the overlap
-        conflict are what stop a mistyped list becoming a grouping nobody can
-        untangle, and none of them depend on whose Champion Duel it is.
+        **It asks nothing about whose it is.** Kevin struck that question on
+        2026-08-31: *"we should not care who all it is - for all we know it
+        could be theirs from a past Duel and we don't have a reason to need to
+        know."* Nothing needed the answer -- the pin derives itself from
+        whether the hub will open on the result, and the acknowledgement reads
+        off that.
 
-        **Defaulted to a Champion Duel you were sent.** A server reaching this
-        already has one resolved, so entering its own is the rarer answer here:
-        it is the next season's, and that is a few days a year against a set
-        somebody can send you at any point.
+        So this passes `onboarding=False`, which drops one thing only: the
+        guard that the sixteen contain your own warzone. Everything else is
+        shared -- the count, the duplicate check and the overlap conflict are
+        what stop a mistyped list becoming a grouping nobody can untangle, and
+        none of them depend on whose Champion Duel it is.
+
+        **⚠️ That guard is now unreachable for a returning server**, which is
+        a known gap rather than an oversight: `ChampionDuelOnboardingView` is
+        the only caller that passes `onboarding=True`, and it draws only where
+        no Champion Duel is resolved. A one-digit typo in your own next set
+        therefore creates a grouping you are not in, reports success, and
+        leaves the hub where it was. Raised with Kevin 2026-09-01: it is a
+        typo catch rather than an identity question, so it may want to come
+        back as a note on the acknowledgement rather than as a refusal.
         """
         await inter.response.send_modal(
             _AddGroupingModal(

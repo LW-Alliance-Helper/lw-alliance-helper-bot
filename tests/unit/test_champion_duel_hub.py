@@ -2611,7 +2611,15 @@ async def test_a_finished_champion_duel_keeps_its_results_and_offers_the_next(cd
     assert "record past Champion Duel results" in said
     assert hub.CD_BTN_ADD_CD in _labels(view)
     # Predict and Find are global and useful between events.
+    #
+    # **Both, and the first one is why this line is spelled out.** Folding the
+    # standalone finished view into the hub dropped `CD_BTN_PREDICT` here,
+    # because a finished Champion Duel still has a grouping and the control was
+    # drawn only where there was none. This assertion was weakened to
+    # `CD_BTN_FIND` to match, under a comment that still said Predict, which is
+    # how it survived a review and two CI runs.
     assert hub.CD_BTN_FIND in _labels(view)
+    assert hub.CD_BTN_PREDICT in _labels(view)
 
 
 async def test_the_finished_hub_is_the_hub(cd_db, no_mm_link):

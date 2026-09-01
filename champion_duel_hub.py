@@ -10343,13 +10343,20 @@ class ChampionDuelHubView(discord.ui.View):
         # only one.
         if self.grouping and not known:
             self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
-        # ONLY WHERE `🔮 Today's picks` IS NOT. Predicting one match is
-        # absorbed by the day's card and is offered there for a one-off, so on
-        # every surface that has the card this would be a second front door to
-        # something that already has one. A caller with no Champion Duel
-        # resolved has no card, and a DM never gets one -- and predicting two
-        # players who have never met is exactly what that caller came for.
-        if not self.grouping:
+        # WHERE THE CARD IS NOT, **AND ON A FINISHED CHAMPION DUEL**. The
+        # first half is the IA plan's: predicting one match is offered on the
+        # day's card for a one-off, so on a surface that has the card this
+        # would be a second front door.
+        #
+        # The second half is a regression this file introduced on 2026-08-31
+        # and did not notice. `ChampionDuelFinishedView` carried this control
+        # deliberately -- *"Predict and Find stay live. They are global and
+        # useful between events, and the plan is explicit that scoping them
+        # would take something away"* -- and folding that view into this one
+        # dropped it, because a finished Champion Duel still has a grouping.
+        # The test that guarded it was edited to assert `CD_BTN_FIND` instead,
+        # which is how it went unseen.
+        if not self.grouping or self.finished:
             self._add(
                 CD_BTN_PREDICT,
                 discord.ButtonStyle.secondary,

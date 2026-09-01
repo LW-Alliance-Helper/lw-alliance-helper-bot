@@ -3582,36 +3582,46 @@ def _row(view, n):
     return [i.label for i in view.children if getattr(i, "row", None) == n]
 
 
-def test_the_front_row_is_the_four_questions_and_nothing_else():
-    """Eight controls become four entries plus settings.
+def test_the_front_row_is_yours():
+    """**Kevin's rows, 2026-09-01: row 0 is all of YOUR stuff.**
 
-    The four are the four questions `PROPOSAL_champion_duel_ia.md` traced, in
-    the order it asks them, and they are the whole of the front row. Kevin
-    opened this hub, could not find the most valuable thing on it, and asked
-    for the information architecture to be revisited: the fix is that the four
-    things anybody comes here for are the first four things they see.
+    It replaces "the four questions", which mixed the personal (`Your standing`,
+    `Your alliance`) with two surfaces about anybody (`Head to head`,
+    `Today's picks`). Row 0 is now the only dynamic row: what it draws depends
+    on whether we can pick the reader out of the roster.
     """
-    view = _root(grouping={"id": 1})
+    unknown = _root(grouping={"id": 1})
+    known = _root(grouping={"id": 1}, standing={"state": "held"})
 
-    assert _row(view, 0) == [
+    assert _row(unknown, 0) == [
         hub.CD_BTN_WHO_AM_I,
-        hub.CD_BTN_INTEL,
-        hub.CD_BTN_PICKS,
         hub.CD_BTN_ALLIANCE,
+        hub.CD_BTN_GROUP,
     ]
+    # The group goes when we know you, because you reach it through yourself.
+    assert _row(known, 0) == [hub.CD_BTN_STANDING, hub.CD_BTN_ALLIANCE]
 
 
-def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
-    """Demoted, not deleted. Finding a player is how you reach an opponent and
-    is the gap-fill door; recording a group is batch contribution; changing the
-    warzone is the settings half of "four entries plus settings"."""
-    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+def test_the_rows_are_kinds_of_thing_not_ranks_of_importance():
+    """Kevin's layout, 2026-09-01, and the rows are the reasoning: 1 is what
+    you open every day, 2 is global, 3 is adding and editing, 4 is the
+    operator.
 
-    assert _row(view, 1) == [
-        hub.CD_BTN_FIND,
+    **Row 1 is NOT the Premium row**, which was the first reading of it. Only
+    `Head to head` is gated at the door; `Today's picks` is free, and the odds
+    gate sits inside three of row 0's surfaces. Premium here is a field, not a
+    tier of buttons.
+    """
+    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"}, is_admin=True)
+
+    assert _row(view, 1) == [hub.CD_BTN_INTEL, hub.CD_BTN_PICKS]
+    assert _row(view, 2) == [hub.CD_BTN_FIND, hub.CD_BTN_PREDICT]
+    assert _row(view, 3) == [
         hub.CD_BTN_RECORD,
         hub.CD_BTN_CHANGE_WARZONE,
+        hub.CD_BTN_ADD_CD,
     ]
+    assert _row(view, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
 
 
 def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
@@ -3628,10 +3638,11 @@ def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
     unknown = _root(grouping={"id": 1}, warzone="738")
     known = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
 
-    assert hub.CD_BTN_GROUP in _row(unknown, 1)
+    # On row 0 since 2026-09-01, because it is one of *your* things. **The
+    # condition did not move with it** -- Kevin: *"You shouldn't change the
+    # logic for when something displays."*
+    assert hub.CD_BTN_GROUP in _row(unknown, 0)
     assert hub.CD_BTN_GROUP not in _labels(known)
-    # And never a front-row entry either way.
-    assert hub.CD_BTN_GROUP not in _row(unknown, 0)
 
 
 async def test_the_root_group_door_opens_what_it_always_opened(monkeypatch):
@@ -3664,18 +3675,22 @@ def test_no_row_is_over_discords_five(standing):
         assert len(_row(view, n)) <= 5, f"row {n} is over Discord's five"
 
 
-def test_the_operator_row_moves_up_with_everything_else():
-    """Row 2 rather than row 3, because row 2 emptied when the picks control
-    joined the front row. Still hidden entirely from everybody else.
+def test_the_operator_row_is_last_and_hidden_from_everybody_else():
+    """Kevin, 2026-09-01: row 4, *"all admin, least important by far"*.
 
-    Row 3 arrived later and stayed below it on purpose: a row that changes
-    position by state is the muscle-memory cost `notes/DESIGN.md` warns about,
-    and this one would move for the one person who has row 2.
+    It sat on row 2 from the IA rebuild until then, on the reasoning that row 2
+    had emptied. Under the new layout every other row is spoken for, and the
+    operator controls are the ones a member should never have between them and
+    anything they came for.
     """
-    view = _root(grouping={"id": 1}, is_admin=True)
+    admin = _root(grouping={"id": 1}, is_admin=True)
+    member = _root(grouping={"id": 1})
 
-    assert _row(view, 2) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
-    assert _row(view, 3) == [hub.CD_BTN_ADD_CD], "below the operator's, never above"
+    assert _row(admin, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
+    assert _row(member, 4) == [], "absent, not disabled"
+    assert not any(
+        b in _labels(member) for b in (hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT)
+    )
 
 
 @pytest.mark.parametrize("standing", [None, {"state": "held"}])
@@ -3713,18 +3728,19 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     )
     root = _labels(view)
 
-    assert hub.CD_BTN_PREDICT not in root
     assert hub.CD_BTN_ADD not in root
     assert hub.CD_BTN_GUIDE not in root
     assert hub.CD_BTN_GROUP not in root
 
-    # Predicting one match: on the card that absorbed it.
+    # **Simulating one match came BACK to the root on 2026-09-01** and is no
+    # longer on the picks bench, so this one is not a moved door at all.
+    assert hub.CD_BTN_PREDICT in root
     picks = hub._PicksView(
         user_id=ADMIN_ID,
         guild_id=999,
         state=hub.read_picks(999, standing_db["grouping"]),
     )
-    assert hub.CD_BTN_PREDICT in _labels(picks)
+    assert hub.CD_BTN_PREDICT not in _labels(picks)
 
     # Adding a player, and the capture guide: at the miss that finding one
     # produces.
@@ -3738,13 +3754,21 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     assert hub.CD_BTN_GROUP in _labels(standing)
 
 
-def test_the_one_off_prediction_is_offered_where_the_card_cannot_be():
-    """Predicting one match is absorbed by the day's card and stays reachable
-    there for a one-off. A caller with no Champion Duel resolved has no card to
-    absorb it (a DM never gets one), and predicting two players who have never
-    met is exactly what that caller came for."""
-    assert hub.CD_BTN_PREDICT in _labels(_root(grouping=None))
-    assert hub.CD_BTN_PREDICT not in _labels(_root(grouping={"id": 1}))
+def test_simulating_one_match_is_on_the_root_in_every_state():
+    """Kevin, 2026-09-01: *"I think that it should always be at that root
+    level."*
+
+    It used to be drawn only where `🔮 Today's picks` was not, on the reasoning
+    that the card *absorbs* it. **That reasoning was wrong**: the card answers
+    who to pick today out of this stage's field, and this answers what happens
+    if any two players meet. Same inputs, different questions.
+    """
+    for label, view in (
+        ("DM", _root(grouping=None)),
+        ("in a Duel", _root(grouping={"id": 1})),
+        ("finished", _root(grouping={"id": 1}, finished=True)),
+    ):
+        assert hub.CD_BTN_PREDICT in _labels(view), label
 
 
 def test_the_days_card_is_a_read_and_does_not_lock():

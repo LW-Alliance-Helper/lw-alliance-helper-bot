@@ -253,12 +253,24 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
     Build the 5-minute warning based on the first event.
 
     Resolution order for the message body:
-      1. The event's stored `warning_blurb` (if guild defined a custom 5-min
-         warning text in the events setup wizard).
-      2. The event's stored `announcement_blurb` (if defined) — adapted to
-         "in 5 minutes" by substituting the {time} placeholder.
-      3. Hardcoded special case for `marauder` (legacy compat).
-      4. Generic fallback: "<Name> in 5 minutes!" using the configured name.
+      1. The event's stored `warning_blurb` — a guild-authored 5-minute
+         warning text. Nothing writes this yet; see below.
+      2. Hardcoded special case for `marauder` (legacy compat).
+      3. Generic fallback: "<Name> in 5 minutes!" using the configured name.
+
+    The **announcement** blurb is deliberately not reused here (#565). Those
+    templates are written around a clock time — the events wizard's default
+    is "{name} at {time} ({server_time} Server Time)." — so substituting the
+    literal "5 minutes" into both slots rendered "Alliance Exercise: Plague
+    Marauder at 5 minutes (5 minutes Server Time)." Every alliance saves an
+    announcement blurb, so that path caught all of them; only `marauder` was
+    exempt. A duration cannot be dropped into a slot the alliance wrote "at"
+    in front of, so the reuse is unfixable in place — the warning needs its
+    own text.
+
+    Branch 1 is that text, and it has no column, no wizard step and no
+    export field yet, so it never fires today. Giving alliances their own
+    warning wording is #566; until then every event uses the generic line.
     """
     if not event_list:
         return "Event starting in 5 minutes! Make sure you're online!"
@@ -270,23 +282,15 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
     if custom_warn:
         return custom_warn.format(time="5 minutes", server_time="5 minutes", server="5 minutes")
 
-    custom_blurb = (first.get("blurb") or info.get("blurb") or "").strip()
-    if custom_blurb and key not in ("marauder",):
-        # Re-use the configured announcement blurb, swapping the time
-        # placeholder for "5 minutes" so the message reads "<event> in 5 minutes...".
-        try:
-            return custom_blurb.format(
-                time="5 minutes", server_time="5 minutes", server="5 minutes"
-            )
-        except (KeyError, IndexError):
-            pass
-
     if key == "marauder":
         return (
             "Marauder (AE) in 5 minutes! Make sure you hop online and get your points! "
             "Zombies right after, check your wall to make sure you have squads on it!"
         )
-    name = info.get("name") or key
+    # `first["name"]` is the name the draft was built with; `info` re-reads it
+    # from config. Prefer the former so a failed guild-event lookup downgrades
+    # to a stale display name rather than to the raw short_key.
+    name = first.get("name") or info.get("name") or key
     return f"{name} in 5 minutes! Make sure you're online!"
 
 

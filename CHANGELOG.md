@@ -9,6 +9,18 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.10] — 2026-09-01
+
+### Fixed
+- The auto-posted 5-minute event warning read "<Event> at 5 minutes (5 minutes Server Time)" and now reads "<Event> in 5 minutes!" ([#565](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/565)).
+
+The warning no longer carries anything an alliance wrote into its announcement
+blurb, so alliances lose the instructions some had put there. Giving them a
+5-minute warning text of their own is
+[#566](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/566).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.8.9] — 2026-08-31
 
 ### Fixed

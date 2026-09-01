@@ -125,6 +125,11 @@ accident.
 
 ---
 
+**1.8.10** — 2026-09-01
+- The 5-minute event warning now names your event and reads as a sentence, instead of "at 5 minutes (5 minutes Server Time)"
+
+---
+
 **1.8.9** — 2026-08-31
 - Event 5-minute warnings no longer post twice when the bot restarts
 

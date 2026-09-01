@@ -2056,10 +2056,9 @@ async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
 # must never re-point the server at itself.
 
 
-async def _add_sent(warzones, *, warzone="700", started="2026-08-04", picked="sent"):
-    """The hub-root form, which asks whose Champion Duel this is."""
-    modal = hub._AddGroupingModal(can_write=True, warzone=warzone, mine=False, offer_whose=True)
-    modal.whose.component._values = [picked] if picked else []
+async def _add_sent(warzones, *, warzone="700", started="2026-08-04"):
+    """The hub-root form. It does not ask whose Champion Duel this is."""
+    modal = hub._AddGroupingModal(can_write=True, warzone=warzone, onboarding=False)
     modal.warzones._value = warzones
     modal.started_on._value = started
     interaction = _interaction()
@@ -2123,17 +2122,38 @@ async def test_joining_one_already_entered_is_still_reachable(cd_db, no_mm_link)
     assert [g["id"] for g in db.groupings_readable_by("700", "999")] == [already["id"]]
 
 
-async def test_an_empty_answer_does_not_become_the_onboarding_form(cd_db, no_mm_link):
-    """The defensive half of `_is_mine`. A select Discord hands back empty must
-    fall to what the form opened on, not to `mine`: the hub-root form opens on
-    the sent answer, and defaulting the other way would refuse the entry for not
-    holding a warzone the caller never claimed it did."""
+async def test_the_acknowledgement_reports_what_happened_not_what_was_declared(cd_db, no_mm_link):
+    """**Why the form does not ask whose Champion Duel this is.** Kevin,
+    2026-08-31: *"we should not care who all it is - for all we know it could be
+    theirs from a past Duel and we don't have a reason to need to know."*
+
+    The only sense in which one is yours is that the hub now opens on it, and
+    the entry already works that out to decide the pin. So the same form and
+    the same answer produce both acknowledgements, off what was concluded.
+    """
+    db.set_guild_warzone("999", "700")
+    mine = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
     theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
 
-    interaction = await _add_sent(" ".join(theirs), warzone="700", picked=None)
+    ours = await _add_sent(" ".join(mine), warzone="700", started="2026-08-04")
+    assert "Added your Participating Warzones" in _sent(ours), "it is the one we open on"
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is not None
 
-    assert db.find_grouping_by_warzone("900") is not None, "recorded, not refused"
+    not_ours = await _add_sent(" ".join(theirs), warzone="700", started="2026-08-04")
+    assert "Recorded a Champion Duel" in _sent(not_ours), "our warzone is not in it"
+
+
+async def test_a_past_champion_duel_of_your_own_is_not_called_yours(cd_db, no_mm_link):
+    """The case Kevin named. It holds your warzone and is still not the one you
+    are playing, so it neither re-points the server nor claims to be yours."""
+    live = db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+    db.set_guild_warzone("999", "700", confirmed_grouping_id=live["id"])
+    earlier = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
+
+    interaction = await _add_sent(" ".join(earlier), warzone="700", started="2026-06-25")
+
     assert "Recorded a Champion Duel" in _sent(interaction)
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == live["id"], "unmoved"
 
 
 async def test_the_sixteen_are_still_checked_on_one_you_were_sent(cd_db, no_mm_link):
@@ -2157,8 +2177,7 @@ async def test_a_refusal_reopens_the_form_it_came_from(cd_db, no_mm_link):
     await _view(interaction)._on_retry(reopened)
 
     modal = reopened.response.send_modal.call_args.args[0]
-    assert modal.mine is False
-    assert modal.offer_whose is True
+    assert modal.onboarding is False
     assert modal.title == hub.CD_ADD_SENT_TITLE
 
 

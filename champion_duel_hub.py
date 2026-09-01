@@ -140,13 +140,12 @@ CD_BTN_ADD_CD = "➕ Add a Champion Duel"
 #: still opens.
 CD_ADD_GROUPING_TITLE = "Add your Participating Warzones"
 CD_ADD_SENT_TITLE = "Add a Champion Duel"
-#: The question that replaced the second button, and its two answers. Asked only
-#: where both are live: onboarding has already been asked which Champion Duel
-#: the alliance is in, and asking again inside the same form would be the
-#: surface not knowing what it just asked for.
-CD_WHOSE_LABEL = "Whose Champion Duel is this?"
-CD_WHOSE_MINE = "My alliance is in it"
-CD_WHOSE_SENT = "One I was sent"
+#: The two acknowledgements. **Chosen by what happened, not by an answer the
+#: form asked for.** A draft of this put a *whose Champion Duel is this?* select
+#: on the form; Kevin struck it, 2026-08-31: *"we should not care who all it is
+#: - for all we know it could be theirs from a past Duel and we don't have a
+#: reason to need to know."* The only sense in which one is *yours* is that the
+#: hub now opens on it, and the entry already works that out to decide the pin.
 #: The two acknowledgements. Sentences, not labels (`UX.md`), and they differ
 #: because the two acts differ: one tells us where your alliance is playing, the
 #: other adds a Champion Duel to what we hold.
@@ -4606,11 +4605,20 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
     repeated-warzone check, the overlap conflict, and joining an identical set
     somebody else already entered. Only the guard and the pin differ.
 
-    **`offer_whose` decides whether the question is asked or assumed.**
-    Onboarding has just been told we do not know which Champion Duel this
-    alliance is in, so asking again inside the form would be the surface not
-    knowing what it asked for one screen ago: it drops the select and takes
-    `mine`. The hub root asks, because there both answers are live.
+    **`onboarding` is the whole of the difference, and it is not a question.**
+    A draft asked the caller whose Champion Duel this was; Kevin struck it,
+    2026-08-31: *"we should not care who all it is - for all we know it could be
+    theirs from a past Duel and we don't have a reason to need to know."*
+
+    Nothing needed the answer. **The pin already derives itself** -- it fires
+    only where `resolve_grouping_for_guild` would hand this grouping back,
+    which is the only sense in which one is *yours* -- and the acknowledgement
+    reads off that. The guard is the one thing left, and which view opened the
+    form settles it without asking: on the onboarding screen the caller's whole
+    purpose is to place their own alliance, so a set missing their warzone is a
+    typo worth catching. From the hub they are recording a Champion Duel, and
+    refusing one for not holding their number is refusing the thing being
+    asked for.
     """
 
     def __init__(
@@ -4618,30 +4626,15 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         *,
         can_write: bool,
         warzone: str | None,
-        mine: bool = True,
-        offer_whose: bool = False,
+        onboarding: bool = True,
         warzones_default: str | None = None,
         started_default: str | None = None,
     ):
-        super().__init__(title=CD_ADD_GROUPING_TITLE if not offer_whose else CD_ADD_SENT_TITLE)
+        super().__init__(title=CD_ADD_GROUPING_TITLE if onboarding else CD_ADD_SENT_TITLE)
         self.can_write = can_write
         self.warzone = warzone
-        self.offer_whose = offer_whose
-        # What `mine` means differs by form, and this is the only subtle part.
-        # Without the select it is the answer; with it, it is only the default,
-        # and `on_submit` reads what was actually picked. Held either way so a
-        # refusal can reopen the form the caller was in.
-        self.mine = mine
-        # Removed rather than hidden when the answer is not in question, which
-        # is the same shape `_RecordGroupModal` uses for its own Champion Duel
-        # picker: a form should not ask a question with one answer.
-        if offer_whose:
-            self.whose.component.options = [
-                discord.SelectOption(label=CD_WHOSE_MINE, value="mine", default=mine),
-                discord.SelectOption(label=CD_WHOSE_SENT, value="sent", default=not mine),
-            ]
-        else:
-            self.remove_item(self.whose)
+        # Carried so a refusal reopens the form the caller was actually in.
+        self.onboarding = onboarding
         # The field labels are shared and stay shared. "The participating
         # warzones, all 16" describes the input either way, and the question
         # above it is what says whose Champion Duel this is -- `UX.md`'s rule
@@ -4654,12 +4647,6 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         if started_default:
             self.started_on.default = started_default[:20]
 
-    # Declared first and dropped in place so it stays above the two fields when
-    # it is there; `add_item` would append it after them.
-    whose = discord.ui.Label(
-        text=CD_WHOSE_LABEL,
-        component=discord.ui.Select(options=[discord.SelectOption(label="_", value="_")]),
-    )
     warzones = discord.ui.TextInput(
         label="The participating warzones, all 16",
         style=discord.TextStyle.paragraph,
@@ -4672,30 +4659,11 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         placeholder="e.g. 8/4, Aug 4, or 2026-08-04",
     )
 
-    def _is_mine(self) -> bool:
-        """What was picked, or what was assumed when nothing was asked.
-
-        Defaults to `self.mine` rather than to True: a select Discord returned
-        empty must not silently become the onboarding form, which would refuse
-        the entry for not holding a warzone the caller never claimed it did.
-        """
-        if not self.offer_whose:
-            return self.mine
-        values = self.whose.component.values
-        return (values[0] if values else ("mine" if self.mine else "sent")) == "mine"
-
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         if not interaction.guild_id:
             await interaction.followup.send(_WARZONE_NEEDS_A_SERVER, ephemeral=True)
             return
-
-        # Read once, and written back onto `self` so every refusal below reopens
-        # the form on the answer that was actually given rather than the one it
-        # opened with. Without that, correcting a typo on a Champion Duel you
-        # were sent hands back a form set to your own, which then refuses the
-        # same sixteen for not holding your warzone.
-        self.mine = self._is_mine()
 
         started = parse_start_date(self.started_on.value)
         if started is None:
@@ -4745,7 +4713,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         # what made the finished hub's offer to "record past Champion Duel
         # results" impossible to act on: the copy advertised contributing and
         # the control beside it was onboarding.
-        if self.mine and self.warzone and self.warzone not in zones:
+        if self.onboarding and self.warzone and self.warzone not in zones:
             await self._refuse(
                 interaction,
                 f"⚠️ Your alliance's warzone, **{self.warzone}**, is not in that list. "
@@ -4760,12 +4728,9 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             await self._report_conflict(interaction, overlaps[0], zones, started)
             return
 
-        if exact is not None:
+        joined = exact is not None
+        if joined:
             grouping = exact
-            note = (
-                f"ℹ️ Those Participating Warzones have already been entered.\n"
-                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(exact['warzones'])}."
-            )
         else:
             grouping = await asyncio.to_thread(
                 db.create_grouping,
@@ -4775,15 +4740,12 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
                 guild_id=str(interaction.guild_id),
                 discord_id=str(interaction.user.id),
             )
-            note = (CD_ADDED_MINE if self.mine else CD_ADDED_SENT).format(
-                date=_short_date(started)
-            ) + f"\nThe {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
 
         # **On both branches, and the join is the one that matters.** A Champion
         # Duel somebody was sent has usually already been entered by the
         # alliance that plays in it, so `exact` is the common path here -- and
         # on it nothing else records that this server can now read it. Written
-        # for `mine=True` too, where it is a no-op the warzone already answers:
+        # on the onboarding path too, where it is a no-op the warzone already answers:
         # one rule is cheaper to hold than a condition nobody can check.
         await asyncio.to_thread(db.note_grouping_reader, grouping["id"], str(interaction.guild_id))
 
@@ -4803,6 +4765,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         # Asking the resolver rather than reproducing its rule here is what
         # stops the two drifting: whatever it would hand back is by definition
         # the grouping the confirmation is about.
+        opens_on_it = False
         if self.warzone and self.warzone in zones:
             guild = str(interaction.guild_id)
             resolved, pinned = await asyncio.gather(
@@ -4832,6 +4795,27 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
                         else (pinned or {}).get("confirmed_grouping_id")
                     ),
                 )
+
+        # **The acknowledgement reports what happened rather than echoing what
+        # was declared**, which is what let the form stop asking whose Champion
+        # Duel this is. Kevin, 2026-08-31: *"we should not care who all it is -
+        # for all we know it could be theirs from a past Duel and we don't have
+        # a reason to need to know."*
+        #
+        # He is right, and the derivation is exact: `opens_on_it` is true only
+        # where this is the Champion Duel the hub will now open on, which is
+        # the only sense in which one is *yours*. A past event of your own and a
+        # set somebody sent you are both false, correctly -- neither is the one
+        # you are playing.
+        if joined:
+            note = (
+                f"ℹ️ Those Participating Warzones have already been entered.\n"
+                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(grouping['warzones'])}."
+            )
+        else:
+            note = (CD_ADDED_MINE if opens_on_it else CD_ADDED_SENT).format(
+                date=_short_date(started)
+            ) + f"\nThe {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
         await _open_hub(interaction, can_write=self.can_write, note=note)
 
     async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
@@ -4845,8 +4829,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             user_id=interaction.user.id,
             can_write=self.can_write,
             warzone=self.warzone,
-            mine=self.mine,
-            offer_whose=self.offer_whose,
+            onboarding=self.onboarding,
             warzones_default=self.warzones.value,
             started_default=self.started_on.value,
         )
@@ -4903,8 +4886,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             user_id=interaction.user.id,
             can_write=self.can_write,
             warzone=self.warzone,
-            mine=self.mine,
-            offer_whose=self.offer_whose,
+            onboarding=self.onboarding,
             warzones_default=self.warzones.value,
             started_default=self.started_on.value,
             offer_community=True,
@@ -4930,8 +4912,7 @@ class _RetryGroupingView(discord.ui.View):
         warzone: str | None,
         warzones_default: str | None,
         started_default: str | None,
-        mine: bool = True,
-        offer_whose: bool = False,
+        onboarding: bool = True,
         offer_community: bool = False,
     ):
         super().__init__(timeout=600)
@@ -4942,8 +4923,7 @@ class _RetryGroupingView(discord.ui.View):
         # Without it a refusal on a Champion Duel somebody was sent hands back
         # the onboarding form, which would then refuse the same entry for not
         # containing their warzone -- a retry button that cannot succeed.
-        self.mine = mine
-        self.offer_whose = offer_whose
+        self.onboarding = onboarding
         self.warzones_default = warzones_default
         self.started_default = started_default
         self.message: discord.Message | None = None
@@ -4975,8 +4955,7 @@ class _RetryGroupingView(discord.ui.View):
             _AddGroupingModal(
                 can_write=self.can_write,
                 warzone=self.warzone,
-                mine=self.mine,
-                offer_whose=self.offer_whose,
+                onboarding=self.onboarding,
                 warzones_default=self.warzones_default,
                 started_default=self.started_default,
             )
@@ -10569,8 +10548,7 @@ class ChampionDuelHubView(discord.ui.View):
             _AddGroupingModal(
                 can_write=self.can_write,
                 warzone=self.warzone,
-                mine=False,
-                offer_whose=True,
+                onboarding=False,
             )
         )
 

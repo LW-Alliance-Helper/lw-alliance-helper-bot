@@ -113,11 +113,10 @@ CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
 
-# ⚠️ NOT SIGNED OFF — the strings below are placeholders. Every one is new copy
-# on a surface where every other string is approved by Kevin by name, so they go
-# to him one block each, rendered where they fire.
+# Approved by Kevin, 2026-08-31, over two alternatives: *"Keep: Add a Champion
+# Duel."*
 #
-# What they are for: the finished hub's own copy has said *"You can also record
+# What it is for: the finished hub's own copy has said *"You can also record
 # past Champion Duel results"* since 2026-08-15, and until now the only control
 # beside it was `CD_BTN_ADD_GROUPING`, which is onboarding and refuses a
 # Champion Duel your warzone is not in.
@@ -137,23 +136,33 @@ CD_BTN_ADD_CD = "➕ Add a Champion Duel"
 #: The modal titles, hoisted so the two forms cannot drift apart in wording
 #: while claiming to be the same surface. `CD_ADD_GROUPING_TITLE` is the string
 #: that shipped as the class-level `title=`, unchanged, and is what onboarding
-#: still opens.
+#: still opens. `CD_ADD_SENT_TITLE` is `CD_BTN_ADD_CD` without its glyph, so it
+#: carries that button's 2026-08-31 sign-off rather than needing its own: a
+#: modal titled anything else would be a second name for one control.
 CD_ADD_GROUPING_TITLE = "Add your Participating Warzones"
 CD_ADD_SENT_TITLE = "Add a Champion Duel"
-#: The two acknowledgements. **Chosen by what happened, not by an answer the
-#: form asked for.** A draft of this put a *whose Champion Duel is this?* select
-#: on the form; Kevin struck it, 2026-08-31: *"we should not care who all it is
-#: - for all we know it could be theirs from a past Duel and we don't have a
-#: reason to need to know."* The only sense in which one is *yours* is that the
-#: hub now opens on it, and the entry already works that out to decide the pin.
 #: The two acknowledgements. Sentences, not labels (`UX.md`), and they differ
 #: because the two acts differ: one tells us where your alliance is playing, the
-#: other adds a Champion Duel to what we hold.
+#: other adds a Champion Duel to what we hold. `CD_ADDED_SENT` approved by
+#: Kevin, 2026-08-31: *"Fine as it is."* `CD_ADDED_MINE` is the string that
+#: already shipped, hoisted into a constant and unchanged.
+#:
+#: **Chosen by what happened, not by an answer the form asked for.** A draft put
+#: a *whose Champion Duel is this?* select on the form; Kevin struck it the same
+#: day: *"we should not care who all it is - for all we know it could be theirs
+#: from a past Duel and we don't have a reason to need to know."* The only sense
+#: in which one is *yours* is that the hub now opens on it, and the entry
+#: already works that out to decide the pin.
+#:
+#: **So `CD_ADDED_SENT` now fires wider than it did when it was approved**: a
+#: past Champion Duel of your own reaches it too, because that is also not the
+#: one you are playing. It reads correctly there, which is what the widening
+#: turned on.
 CD_ADDED_MINE = "✅ Added your Participating Warzones, starting **{date}**."
 CD_ADDED_SENT = "✅ Recorded a Champion Duel starting **{date}**."
-#: ⚠️ NOT SIGNED OFF. The finished state's own line, and the only string that
-#: differs between the finished hub and the live one now that they are one
-#: surface. Both sentences are lifted from the approved `build_finished_embed`
+#: Approved by Kevin, 2026-08-31: *"Keep the two-sentence version."* The
+#: finished state's own line, and the only string that differs between the
+#: finished hub and the live one now that they are one surface. Both sentences are lifted from the approved `build_finished_embed`
 #: copy of 2026-08-15, minus the paragraph break it needed as a standalone
 #: description: it now sits where the calendar line sits, so it is two
 #: sentences rather than two paragraphs. **The second sentence is the one that

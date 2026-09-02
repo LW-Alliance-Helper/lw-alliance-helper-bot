@@ -69,9 +69,9 @@ jobs:
   # 2026-07-02 and 2026-09-01, one needing three attempts and one never re-run
   # at all, so that deploy simply never happened.
   #
-  # A direct-to-main hotfix has no PR and so gets no sheet coverage. That is
-  # accepted: a hotfix touching sheet read/write code should be opened as a PR
-  # rather than pushed direct.
+  # This is why hotfixes are PR'd rather than pushed direct (see CLAUDE.md's
+  # hotfix exception): a direct push to `main` would get no sheet coverage at
+  # all, and nothing would gate it.
   sheet-tests:
     name: Sheet Integration Tests
     runs-on: ubuntu-latest

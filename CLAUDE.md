@@ -33,7 +33,8 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
     `main`.
   - **Small / doc changes:** feature → `release/X.Y.Z` → `main`,
     same as before. They skip `dev`.
-  - **Hotfixes:** still direct to `main` per the hotfix rule below.
+  - **Hotfixes:** straight at `main`, but via a PR, per the hotfix
+    rule below. They skip `dev` and the release branch, not review.
   - **Keep `dev` in sync:** when `main` moves forward and `dev`
     is *not* ahead with feature work in progress, fast-forward `dev`
     to `main`. If `dev` has uncommitted-to-main feature work, leave
@@ -60,7 +61,8 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   - `bug` — broken behavior or UX-clarity fixes (e.g. a confusing DM, a
     silent failure).
   - `documentation` — README / CLAUDE.md / docs/ / website copy changes.
-  - `hotfix` — urgent direct-to-main fix per the hotfix exception below.
+  - `hotfix` — urgent fix PR'd straight into `main` per the hotfix
+    exception below.
 - **Project status updates automatically** via
   `.github/workflows/project-status-sync.yml`. An issue's Status field
   walks `Up Next → In progress → In review → Ready for Release →
@@ -77,10 +79,30 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   default `GITHUB_TOKEN` can't touch org Project v2). For one-off
   bootstraps, run `scripts/sync_project_status.py --issue N --status
   "..."` locally with `GH_TOKEN` exported.
-- **Hotfix exception.** Direct-to-main is allowed for urgent one-line
-  fixes, but only with explicit approval before each push. After a
-  hotfix lands on main, fast-forward the active release branch to
-  include it.
+- **Hotfix exception.** Urgent fixes skip the release branch and go
+  straight at `main` — but through a **PR**, never a direct push. Taking
+  the hotfix path needs explicit approval; once it has that, the session
+  carries it to completion without checking back again:
+  1. Branch, fix, open the PR into `main`.
+  2. **Watch the checks through to the end.** `Sheet Integration Tests`
+     only runs on PRs into `main`, and only starts once the unit lane
+     has passed, so it appears late — a PR that looks green a minute
+     after opening usually has not run it yet. Opening the PR is not
+     the end of the task.
+  3. All checks green clears the merge. Merge it; no second approval.
+
+  A red check is never a merge, and step 3's clearance does not apply to
+  one. Re-run it if it looks transient, and if it fails again, bring it
+  back rather than merging past it.
+
+  Direct-to-main is what 1.8.10 did, and it is why this rule changed: a
+  direct push gets no sheet coverage and nothing gates the merge, so a
+  CI failure that withheld the Railway deploy went unnoticed until the
+  bug it was fixing fired again in production that evening
+  ([#569](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/569)).
+
+  After the hotfix lands on main, fast-forward the active release branch
+  to include it.
 - **Versioning is per-release.** Branch name encodes the version
   (`release/1.0.16` → version `1.0.16`); one CHANGELOG entry per
   release covering all merged issues. Bump `bot.py.__version__` and

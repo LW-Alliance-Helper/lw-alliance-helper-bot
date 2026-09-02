@@ -2516,6 +2516,25 @@ def set_guild_event_anchor(guild_id: int, short_key: str, anchor_date: str) -> b
         return cur.rowcount > 0
 
 
+def set_guild_event_five_min_warning(guild_id: int, short_key: str, on: bool) -> bool:
+    """Turn one event's 5-minute warning on or off.
+
+    This is the flag the scheduler actually reads. `guild_configs.
+    event_five_min_warning` is only the default a new event is created
+    with -- it is not a master switch, and nothing re-syncs the two, so
+    an event created while the default was on keeps warning after the
+    default is turned off. That was invisible until the per-event
+    control existed (#566). Returns False when no such event exists.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_events SET five_min_warning = ? WHERE guild_id = ? AND short_key = ?",
+            (1 if on else 0, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def set_guild_event_warning_blurb(guild_id: int, short_key: str, warning_blurb: str) -> bool:
     """Set (or clear) the text an event's 5-minute warning posts (#566).
 

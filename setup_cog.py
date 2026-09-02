@@ -10985,6 +10985,10 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     Individual events (add/edit/delete) live on the /events hub (#249)."""
     import wizard_registry
 
+    # Local: events_hub reaches back into this module for its time and date
+    # parsers, so a module-level import here would close the loop.
+    from events_hub import EVENTS_HUB_BTN_WARNING
+
     guild_id = interaction.guild_id
     channel = interaction.channel
     user = interaction.user
@@ -11107,11 +11111,18 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             return
         await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
 
+    # "This applies to all events" was never true. The scheduler reads each
+    # event's own `five_min_warning` column, and this field only seeds the
+    # value a NEW event is created with -- so turning it off here left every
+    # existing event still warning. The per-event control that makes the
+    # distinction visible arrived with #566; this copy stops promising the
+    # behaviour the code does not have.
     warn_view = YesNoView()
     await channel.send(
         "**Step 4 of 4 — 5-Minute Warning**\n"
-        "Should the bot automatically post a 5-minute warning before events?\n"
-        "*(This applies to all events)*",
+        "Should events you add from now on warn 5 minutes before they start?\n"
+        "*(Every event keeps its own switch. Change one in "
+        "`/events` → " + EVENTS_HUB_BTN_WARNING + ".)*",
         view=warn_view,
     )
     await wait_view_or_cancel(warn_view, cancel_event)
@@ -11134,7 +11145,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     embed.add_field(
         name="Draft Time", value=_format_time_with_tz(draft_time, timezone), inline=False
     )
-    embed.add_field(name="5-min Warning", value="Yes" if five_min_warning else "No", inline=False)
+    embed.add_field(
+        name="5-min Warning",
+        value=("Yes" if five_min_warning else "No") + ", for events you add from now on",
+        inline=False,
+    )
     embed.set_footer(text="Run /events to add, edit, or remove individual events.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

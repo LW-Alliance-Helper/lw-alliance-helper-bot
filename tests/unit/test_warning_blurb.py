@@ -391,54 +391,152 @@ class TestWarningBlurbEditFlow:
         assert WARNING_BLURB_DEFAULT.format(name="Alliance Exercise: Plague Marauder") in body
 
 
-class TestPickerWarningSummary:
-    """#566 sign-off, item 08. "Custom warning" answered the wrong
-    question: an officer opening the picker already knows some events are
-    worded, and what they need is which one is which.
+class TestPickerWarningLine:
+    """The one line under an event in the picker.
 
-    Kevin asked whether a preset name could go here. There are no named
-    warning presets - `AE_EVENT_PRESETS` prefills an event's name,
-    interval and *announcement* blurb at creation, and every one of them
-    carries the same `_DEFAULT_BLURB`, so a preset name would identify
-    nothing. The wording itself is the only thing that tells two custom
-    warnings apart.
+        5-minute warning: Active - Custom
+        5-minute warning: Active - Default
+        5-minute warning: Off
+
+    State first. An earlier version put the wording itself here, which
+    answered "which one is this" at the cost of "does this one even
+    fire" -- and the second question is the live one, because the flag
+    genuinely varies per event.
     """
 
-    def test_no_warning_reads_as_the_default(self):
+    def test_off_says_off(self):
         from events_hub import _warning_summary
 
-        assert _warning_summary("") == "Using the default"
-        assert _warning_summary(None) == "Using the default"
-        assert _warning_summary("   ") == "Using the default"
+        assert _warning_summary({"five_min_warning": 0}) == "5-minute warning: Off"
 
-    def test_a_short_warning_is_shown_whole(self):
+    def test_off_says_off_even_with_wording_saved(self):
+        """Turning a warning off keeps its wording, so an event can hold
+        text that does not post. The line has to lead with the state or it
+        would read as active."""
         from events_hub import _warning_summary
 
-        assert _warning_summary("Marauder in 5. Offline participation on.") == (
-            "Marauder in 5. Offline participation on."
+        line = _warning_summary({"five_min_warning": 0, "warning_blurb": "Marauder in 5."})
+        assert line == "5-minute warning: Off"
+
+    def test_active_with_custom_wording(self):
+        from events_hub import _warning_summary
+
+        line = _warning_summary({"five_min_warning": 1, "warning_blurb": "Marauder in 5."})
+        assert line == "5-minute warning: Active - Custom"
+
+    def test_active_on_the_default(self):
+        from events_hub import _warning_summary
+
+        assert (
+            _warning_summary({"five_min_warning": 1, "warning_blurb": ""})
+            == "5-minute warning: Active - Default"
+        )
+        assert _warning_summary({"five_min_warning": 1}) == "5-minute warning: Active - Default"
+
+    def test_whitespace_only_wording_is_not_custom(self):
+        from events_hub import _warning_summary
+
+        line = _warning_summary({"five_min_warning": 1, "warning_blurb": "   "})
+        assert line == "5-minute warning: Active - Default"
+
+    def test_every_line_fits_discords_description_cap(self):
+        """100 characters is Discord's hard cap on a SelectOption
+        description; an option over it is rejected by the API."""
+        from events_hub import _warning_summary
+
+        for ev in (
+            {"five_min_warning": 0},
+            {"five_min_warning": 1},
+            {"five_min_warning": 1, "warning_blurb": "x" * 5000},
+        ):
+            assert len(_warning_summary(ev)) <= 100
+
+
+class TestPerEventWarningToggle:
+    """#566: the warning is per event, so an alliance can want one for
+    Alliance Exercise and none at all for Glacieradon.
+
+    Before this the only control was `guild_configs.event_five_min_warning`,
+    which the wizard copied into each event once at creation. The scheduler
+    reads only the per-event column and never that one, so turning the
+    server setting off left every existing event still warning.
+    """
+
+    def test_setter_turns_a_warning_off_and_back_on(self, temp_db):
+        import config
+
+        config.save_guild_event(TEST_GUILD_ID, _base_event_row(five_min_warning=1))
+
+        assert config.set_guild_event_five_min_warning(TEST_GUILD_ID, "ae_plague_marauder", False)
+        assert config.get_guild_event(TEST_GUILD_ID, "ae_plague_marauder")["five_min_warning"] == 0
+
+        assert config.set_guild_event_five_min_warning(TEST_GUILD_ID, "ae_plague_marauder", True)
+        assert config.get_guild_event(TEST_GUILD_ID, "ae_plague_marauder")["five_min_warning"] == 1
+
+    def test_setter_reports_a_missing_event(self, temp_db):
+        import config
+
+        assert (
+            config.set_guild_event_five_min_warning(TEST_GUILD_ID, "no_such_event", True) is False
         )
 
-    def test_placeholders_are_shown_as_written(self):
-        """Not half-rendered. `{name}` could be substituted and `{time}`
-        could not (it needs a date), and a half-rendered preview reads as
-        a bug. This is also exactly what the modal hands back."""
-        from events_hub import _warning_summary
+    def test_turning_off_keeps_the_wording(self, temp_db):
+        """So turning it back on restores what they wrote, rather than
+        silently dropping it. The confirmation copy promises this."""
+        import config
 
-        assert _warning_summary("{name} at {time}. Get on.") == "{name} at {time}. Get on."
+        config.save_guild_event(
+            TEST_GUILD_ID, _base_event_row(warning_blurb="Marauder in 5. Offline on.")
+        )
+        config.set_guild_event_five_min_warning(TEST_GUILD_ID, "ae_plague_marauder", False)
 
-    def test_a_long_warning_fits_discords_description_limit(self):
-        """100 characters is Discord's hard cap on a SelectOption
-        description; an option over it is rejected by the API, so the
-        ellipsis has to fit inside the budget rather than push past it."""
-        from events_hub import _warning_summary
+        row = config.get_guild_event(TEST_GUILD_ID, "ae_plague_marauder")
+        assert row["five_min_warning"] == 0
+        assert row["warning_blurb"] == "Marauder in 5. Offline on."
 
-        out = _warning_summary("x" * 250)
-        assert len(out) <= 100
-        assert out.endswith("\u2026")
+    def test_two_events_can_disagree(self, temp_db):
+        """The whole point. One on, one off, in the same alliance."""
+        import config
 
-    def test_the_boundary_is_not_truncated(self):
-        from events_hub import _warning_summary
+        config.save_guild_event(
+            TEST_GUILD_ID,
+            _base_event_row(short_key="ae_plague_marauder", five_min_warning=1),
+        )
+        config.save_guild_event(
+            TEST_GUILD_ID,
+            _base_event_row(short_key="glacieradon", name="Glacieradon", five_min_warning=0),
+        )
 
-        exactly = "y" * 100
-        assert _warning_summary(exactly) == exactly
-        assert len(_warning_summary("z" * 101)) <= 100
+        rows = {e["short_key"]: e for e in config.get_guild_events(TEST_GUILD_ID)}
+        assert rows["ae_plague_marauder"]["five_min_warning"] == 1
+        assert rows["glacieradon"]["five_min_warning"] == 0
+
+
+class TestSetupCopyDoesNotPromiseAMasterSwitch:
+    """`/setup`'s step said "This applies to all events". It never did:
+    the scheduler reads each event's own column and never the guild one,
+    so turning it off there left every existing event warning."""
+
+    def test_the_false_claim_is_gone(self):
+        """Scoped to the warning step. Steps 1 and 2 still say "applies to
+        all events" about the draft and announcement channels, and there
+        the guild value really is the fallback every event falls back to,
+        so the claim holds well enough to leave alone."""
+        import inspect
+
+        import setup_cog
+
+        src = inspect.getsource(setup_cog)
+        assert "Should the bot automatically post a 5-minute warning before events?" not in src
+        assert "Should events you add from now on warn 5 minutes before they start?" in src
+
+    def test_the_scheduler_still_ignores_the_guild_switch(self):
+        """Pins the reason the copy changed rather than the code. Making
+        the guild field a real master switch would silence every warning
+        for an alliance that had only ever turned it off expecting it to
+        affect new events, so the copy moved instead."""
+        import inspect
+
+        import scheduler
+
+        assert "event_five_min_warning" not in inspect.getsource(scheduler)

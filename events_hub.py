@@ -1424,8 +1424,8 @@ async def _open_pause_picker(interaction: discord.Interaction) -> None:
 # Button labels for the pick-then-choose step. Module-level so the confirm
 # copy and the buttons cannot drift apart, matching the pause flow above.
 _WARN_BTN_EDIT = "✏️ Change the wording"
-_WARN_BTN_OFF = "🔕 No warning for this event"
-_WARN_BTN_ON = "🔔 Warn 5 minutes before"
+_WARN_BTN_OFF = "🔕 Disable warning for this event"
+_WARN_BTN_ON = "🔔 Enable 5-minute warning"
 
 
 def _default_warning_for(name: str) -> str:
@@ -1525,6 +1525,9 @@ async def _open_warning_picker(interaction: discord.Interaction) -> None:
 
     Paused events are listed too: settling an event's warning while it is
     off between seasons is exactly the sort of tidying that gets done then.
+    They carry no running/paused marker here, unlike the pause and delete
+    pickers. Two on/off states on one row -- the event's, and the
+    warning's -- read as one state and got the wrong one believed.
 
     The two controls sit behind one button on purpose. "Do I want a warning
     for this event" and "what should it say" are the same thought, and
@@ -1546,7 +1549,6 @@ async def _open_warning_picker(interaction: discord.Interaction) -> None:
         discord.SelectOption(
             label=e["name"][:100],
             value=e["short_key"],
-            emoji="▶️" if e.get("active") else "⏸️",
             description=_warning_summary(e)[:100],
         )
         for e in events[:25]

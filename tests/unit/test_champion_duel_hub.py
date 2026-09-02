@@ -1955,15 +1955,41 @@ async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no
     assert len(db.list_groupings()) == 1
 
 
-async def test_a_grouping_without_your_own_warzone_is_refused(cd_db, no_mm_link):
-    """One of the two answers is off and there is no way to tell which from
-    here. Neither half of that is stated as the user's mistake."""
+async def test_a_grouping_without_your_own_warzone_is_said_not_refused(cd_db, no_mm_link):
+    """**This was a refusal until 2026-09-01.** Kevin: *"I would just say that
+    their known warzone is not in the list but don't gate anything on it."*
+
+    The refusal existed to stop a server being pinned to a Champion Duel it is
+    not in, and the pin works that out for itself now. What was left refused the
+    thing the control is for: recording a Champion Duel you were sent.
+    """
     interaction = await _add_grouping(" ".join(SIXTEEN), warzone="1500")
 
     said = _sent(interaction)
-    assert "**1500**, is not in that list" in said
-    assert "wrong" not in said, "an incorrect stored value is not a user error"
-    assert len(db.list_groupings()) == 1
+    assert "**1500** is not in that list" in said
+    assert "Try again" not in said, "an aside, not a refusal"
+    assert db.find_grouping_by_warzone("700") is not None, "saved anyway"
+
+
+async def test_the_aside_is_absent_when_your_warzone_is_in_the_list(cd_db, no_mm_link):
+    """It is only for the reader who did not mean this. Printing it on every
+    entry would make the one case it exists for invisible."""
+    interaction = await _add_grouping(" ".join(SIXTEEN), warzone="700")
+
+    assert "is not in that list" not in _sent(interaction)
+
+
+async def test_the_aside_rides_under_a_champion_duel_you_were_sent_too(cd_db, no_mm_link):
+    """Joining a set somebody else entered says nothing about whether your own
+    warzone is in it, so both branches carry it."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+    db.create_grouping(theirs, "2026-08-04", origin="member")
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    said = _sent(interaction)
+    assert "already been entered" in said
+    assert "**700** is not in that list" in said
 
 
 async def test_the_game_formatting_goes_in_as_it_is_read(cd_db, no_mm_link):

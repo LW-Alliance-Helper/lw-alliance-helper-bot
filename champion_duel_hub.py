@@ -172,6 +172,22 @@ CD_ADD_SENT_TITLE = "Add a Champion Duel"
 #: turned on.
 CD_ADDED_MINE = "✅ Added your Participating Warzones, starting **{date}**."
 CD_ADDED_SENT = "✅ Recorded a Champion Duel starting **{date}**."
+#: ⚠️ NOT SIGNED OFF — Kevin gave the substance on 2026-09-01 and not the words:
+#: *"I would just say that their known warzone is not in the list but don't gate
+#: anything on it."*
+#:
+#: It rides under either acknowledgement. **It is not a warning and must not
+#: read as one**: entering a Champion Duel your alliance is not in is the whole
+#: point of the control, so the common reader of this line has done nothing
+#: wrong. The one it is for is the other one, who meant to enter their own next
+#: set and mistyped a digit -- and for them the only tell otherwise is that the
+#: acknowledgement said "Recorded" where they expected "Added your".
+#:
+#: ℹ️ rather than ⚠️ for exactly that reason.
+CD_NOT_YOUR_WARZONE = (
+    "ℹ️ Warzone **{warzone}** is not in that list, so this is not the Champion "
+    "Duel your alliance is in."
+)
 #: Approved by Kevin, 2026-08-31: *"Keep the two-sentence version."* The
 #: finished state's own line, and the only string that differs between the
 #: finished hub and the live one now that they are one surface. Both sentences are lifted from the approved `build_finished_embed`
@@ -4621,36 +4637,31 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
     numbers copied off a phone screen is not something anyone should retype
     because one of them was a digit out.
 
-    **Whose Champion Duel it is separates the two jobs this surface does**, and
-    it is one question rather than two controls:
+    **ONE FORM, ONE BEHAVIOUR.** This carried two modes for a day and has
+    neither now, and the two decisions that collapsed it are worth keeping:
 
-    - **mine** is onboarding. *Which Champion Duel is my alliance in?* Your own
-      warzone has to be in the sixteen, because the answer **pins the server**
-      to what it produces, and pinning a server to a Champion Duel it is not in
-      is the silent failure the grouping separation exists to stop.
-    - **sent** is contributing. *Somebody sent me a Champion Duel and I want it
-      recorded.* It has no relationship to your warzone, it pins nothing, and
-      refusing it for not containing your number would be refusing the thing
-      being asked for.
+    - *Whose Champion Duel is this?* was a select on the form. Kevin struck it,
+      2026-08-31: *"we should not care who all it is - for all we know it could
+      be theirs from a past Duel and we don't have a reason to need to know."*
+      Nothing needed the answer -- **the pin derives itself**, firing only where
+      `resolve_grouping_for_guild` would hand this grouping back, which is the
+      only sense in which one is *yours*, and the acknowledgement reads off
+      that.
+    - *Your warzone has to be in the sixteen* was a refusal, kept afterwards on
+      the onboarding path alone. Kevin struck that too, 2026-09-01: *"I would
+      just say that their known warzone is not in the list but don't gate
+      anything on it."* It is `CD_NOT_YOUR_WARZONE` now, an aside under the
+      acknowledgement.
 
-    Everything else is shared and stays shared: the date parser, the count, the
-    repeated-warzone check, the overlap conflict, and joining an identical set
-    somebody else already entered. Only the guard and the pin differ.
+    So every entry takes the same path: the date parser, the count, the
+    repeated-warzone check, the overlap conflict, joining an identical set
+    somebody else already entered, and a pin that decides itself.
 
-    **`onboarding` is the whole of the difference, and it is not a question.**
-    A draft asked the caller whose Champion Duel this was; Kevin struck it,
-    2026-08-31: *"we should not care who all it is - for all we know it could be
-    theirs from a past Duel and we don't have a reason to need to know."*
-
-    Nothing needed the answer. **The pin already derives itself** -- it fires
-    only where `resolve_grouping_for_guild` would hand this grouping back,
-    which is the only sense in which one is *yours* -- and the acknowledgement
-    reads off that. The guard is the one thing left, and which view opened the
-    form settles it without asking: on the onboarding screen the caller's whole
-    purpose is to place their own alliance, so a set missing their warzone is a
-    typo worth catching. From the hub they are recording a Champion Duel, and
-    refusing one for not holding their number is refusing the thing being
-    asked for.
+    **`onboarding` picks the title and nothing else.** It is named for the door
+    rather than for a behaviour because it no longer has one: a modal has to
+    carry the words of the button that opened it, and the two buttons differ
+    (`CD_BTN_ADD_GROUPING` on the onboarding view, `CD_BTN_ADD_CD` on the hub).
+    It is threaded through the retry view for that reason alone.
     """
 
     def __init__(
@@ -4743,15 +4754,6 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         # what made the finished hub's offer to "record past Champion Duel
         # results" impossible to act on: the copy advertised contributing and
         # the control beside it was onboarding.
-        if self.onboarding and self.warzone and self.warzone not in zones:
-            await self._refuse(
-                interaction,
-                f"⚠️ Your alliance's warzone, **{self.warzone}**, is not in that list. "
-                f"Either a warzone is missing from it or the warzone we have for your "
-                f"alliance is incorrect. Check both, then try again.",
-            )
-            return
-
         overlaps = await asyncio.to_thread(db.overlapping_groupings, zones, started)
         exact = next((g for g, _ in overlaps if set(g["warzones"]) == set(zones)), None)
         if exact is None and overlaps:
@@ -4837,6 +4839,23 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         # the only sense in which one is *yours*. A past event of your own and a
         # set somebody sent you are both false, correctly -- neither is the one
         # you are playing.
+        # **Said, never gated.** Kevin, 2026-09-01: *"I would just say that their
+        # known warzone is not in the list but don't gate anything on it."*
+        #
+        # This was a refusal until then, and it was right for the one flow it
+        # guarded and wrong everywhere else: what it stopped was a server being
+        # pinned to a Champion Duel it is not in, and the pin now works that out
+        # for itself. What was left is a typo catch, and a typo catch that
+        # refuses a legitimate entry costs more than it saves -- being sent a
+        # Champion Duel you are not in is the thing this control is *for*.
+        #
+        # It fires on both branches, because joining a set somebody else entered
+        # says nothing about whether your own warzone is in it.
+        aside = (
+            CD_NOT_YOUR_WARZONE.format(warzone=self.warzone)
+            if self.warzone and self.warzone not in zones
+            else ""
+        )
         if joined:
             note = (
                 f"ℹ️ Those Participating Warzones have already been entered.\n"
@@ -4846,6 +4865,8 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             note = (CD_ADDED_MINE if opens_on_it else CD_ADDED_SENT).format(
                 date=_short_date(started)
             ) + f"\nThe {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
+        if aside:
+            note = f"{note}\n{aside}"
         await _open_hub(interaction, can_write=self.can_write, note=note)
 
     async def _refuse(self, interaction: discord.Interaction, message: str) -> None:

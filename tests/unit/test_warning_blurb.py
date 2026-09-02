@@ -199,7 +199,7 @@ class TestWarningDefaultIsSharedNotRetyped:
         src = inspect.getsource(events_hub)
         assert "from scheduler import WARNING_BLURB_DEFAULT" in src
         # The literal must not be retyped anywhere in the wizard.
-        assert "in 5 minutes! Make sure you're online!" not in src
+        assert "in 5 minutes! Make sure you're online." not in src
 
     def test_default_names_the_event(self):
         from scheduler import WARNING_BLURB_DEFAULT
@@ -288,7 +288,7 @@ class TestWarningBlurbMigration:
 
 
 class TestWarningBlurbEditFlow:
-    """`✏️ Edit warning text` on the events hub.
+    """`✏️ Edit 5-minute warning` on the events hub.
 
     The create wizard asks the question once, and no alliance re-runs it
     for an event that already exists — which, when this shipped, was all
@@ -389,3 +389,56 @@ class TestWarningBlurbEditFlow:
         assert config.get_guild_event(TEST_GUILD_ID, "ae_plague_marauder")["warning_blurb"] == ""
         body = inter.response.edit_message.await_args.kwargs["content"]
         assert WARNING_BLURB_DEFAULT.format(name="Alliance Exercise: Plague Marauder") in body
+
+
+class TestPickerWarningSummary:
+    """#566 sign-off, item 08. "Custom warning" answered the wrong
+    question: an officer opening the picker already knows some events are
+    worded, and what they need is which one is which.
+
+    Kevin asked whether a preset name could go here. There are no named
+    warning presets - `AE_EVENT_PRESETS` prefills an event's name,
+    interval and *announcement* blurb at creation, and every one of them
+    carries the same `_DEFAULT_BLURB`, so a preset name would identify
+    nothing. The wording itself is the only thing that tells two custom
+    warnings apart.
+    """
+
+    def test_no_warning_reads_as_the_default(self):
+        from events_hub import _warning_summary
+
+        assert _warning_summary("") == "Using the default"
+        assert _warning_summary(None) == "Using the default"
+        assert _warning_summary("   ") == "Using the default"
+
+    def test_a_short_warning_is_shown_whole(self):
+        from events_hub import _warning_summary
+
+        assert _warning_summary("Marauder in 5. Offline participation on.") == (
+            "Marauder in 5. Offline participation on."
+        )
+
+    def test_placeholders_are_shown_as_written(self):
+        """Not half-rendered. `{name}` could be substituted and `{time}`
+        could not (it needs a date), and a half-rendered preview reads as
+        a bug. This is also exactly what the modal hands back."""
+        from events_hub import _warning_summary
+
+        assert _warning_summary("{name} at {time}. Get on.") == "{name} at {time}. Get on."
+
+    def test_a_long_warning_fits_discords_description_limit(self):
+        """100 characters is Discord's hard cap on a SelectOption
+        description; an option over it is rejected by the API, so the
+        ellipsis has to fit inside the budget rather than push past it."""
+        from events_hub import _warning_summary
+
+        out = _warning_summary("x" * 250)
+        assert len(out) <= 100
+        assert out.endswith("\u2026")
+
+    def test_the_boundary_is_not_truncated(self):
+        from events_hub import _warning_summary
+
+        exactly = "y" * 100
+        assert _warning_summary(exactly) == exactly
+        assert len(_warning_summary("z" * 101)) <= 100

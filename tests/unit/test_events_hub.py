@@ -81,7 +81,7 @@ def test_hub_button_labels_match_expected_text():
     assert EVENTS_HUB_BTN_UPCOMING == "🔜 Upcoming events"
     assert EVENTS_HUB_BTN_LOG == "📜 Event log"
     assert EVENTS_HUB_BTN_CREATE == "➕ Create an event"
-    assert EVENTS_HUB_BTN_WARNING == "✏️ Edit warning text"
+    assert EVENTS_HUB_BTN_WARNING == "✏️ Edit 5-minute warning"
     assert EVENTS_HUB_BTN_PAUSE == "⏸️ Pause or resume"
     assert EVENTS_HUB_BTN_DELETE == "🗑️ Delete an event"
 
@@ -94,7 +94,7 @@ def test_hub_view_has_seven_buttons_with_expected_labels():
     documented order. A failure here likely means a button got added,
     removed, or re-ordered without intent.
 
-    Went from six to seven in #566: Edit warning text sits after Create,
+    Went from six to seven in #566: Edit 5-minute warning sits after Create,
     which shifted Pause and Delete one position right. That was the
     deliberate trade — see the layout docstring on `_EventsHubView`."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)
@@ -129,7 +129,7 @@ def test_pause_button_sits_between_create_and_delete():
     """Pause is the reversible middle ground; placing it next to the red
     Delete button is what makes it discoverable as the alternative.
 
-    This is the constraint that decided where Edit warning text went:
+    This is the constraint that decided where Edit 5-minute warning went:
     Delete stays last and Pause stays its neighbour, so the new button
     had to go earlier in the row rather than on the end."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)

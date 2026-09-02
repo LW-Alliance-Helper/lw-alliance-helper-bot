@@ -92,7 +92,12 @@ pending_warnings: dict[str, tuple[datetime, list[dict], int]] = {}
 # wizard shows this as the default and stores '' when they accept it, so the
 # rendered text lives here and nowhere else — events_hub imports it rather
 # than retyping it, or the preview and the post drift apart (#566).
-WARNING_BLURB_DEFAULT = "{name} in 5 minutes! Make sure you're online!"
+#
+# One exclamation mark, not two. UX.md bans them outside genuine celebration;
+# the mark on the event is the urgency a five-minute warning is for, and the
+# instruction after it does not need to shout as well. Kevin, on the #566
+# sign-off: "drop the second mark".
+WARNING_BLURB_DEFAULT = "{name} in 5 minutes! Make sure you're online."
 
 
 # ── Event library ──────────────────────────────────────────────────────────────
@@ -316,7 +321,7 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
     mean the same thing they mean everywhere else.
     """
     if not event_list:
-        return "Event starting in 5 minutes! Make sure you're online!"
+        return "Event starting in 5 minutes! Make sure you're online."
     first = event_list[0]
     key = first["key"]
 

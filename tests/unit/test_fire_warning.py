@@ -242,7 +242,7 @@ class TestFireWarningMessageContent:
         await fire_warning(bot, "evt-content", evt_list, cfg=_make_cfg())
 
         body = announcements.send.await_args.args[0]
-        assert body == "Cool Raid in 5 minutes! Make sure you're online!"
+        assert body == "Cool Raid in 5 minutes! Make sure you're online."
         # The announcement blurb's clock-time phrasing must not leak in.
         assert "at 5 minutes" not in body
         assert "Server Time" not in body

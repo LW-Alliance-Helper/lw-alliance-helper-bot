@@ -75,7 +75,7 @@ EVENTS_HUB_BTN_TODAY = "📅 Today's events"
 EVENTS_HUB_BTN_UPCOMING = "🔜 Upcoming events"
 EVENTS_HUB_BTN_LOG = "📜 Event log"
 EVENTS_HUB_BTN_CREATE = "➕ Create an event"
-EVENTS_HUB_BTN_WARNING = "✏️ Edit warning text"
+EVENTS_HUB_BTN_WARNING = "✏️ Edit 5-minute warning"
 EVENTS_HUB_BTN_PAUSE = "⏸️ Pause or resume"
 EVENTS_HUB_BTN_DELETE = "🗑️ Delete an event"
 
@@ -286,7 +286,7 @@ class _EventsHubView(discord.ui.View):
           📅 Today's events (blue) | 🔜 Upcoming events (secondary) |
           📜 Event log (secondary)
         Row 1 (write surfaces):
-          ➕ Create an event (green) | ✏️ Edit warning text (secondary) |
+          ➕ Create an event (green) | ✏️ Edit 5-minute warning (secondary) |
           ⏸️ Pause or resume (secondary) | 🗑️ Delete an event (red)
 
     The write surfaces sit on their own row so they don't visually
@@ -296,7 +296,7 @@ class _EventsHubView(discord.ui.View):
     deliberately: it's the reversible middle ground, and putting it next
     to the red button makes it the obvious alternative to deleting.
 
-    Edit warning text (#566) went in after Create rather than at the end
+    Edit 5-minute warning (#566) went in after Create rather than at the end
     of the row, which does shift Pause and Delete one position right.
     The alternative was putting a routine action next to the red button,
     and DESIGN.md is explicit that a destructive control sits at the end
@@ -1048,7 +1048,9 @@ async def _run_create_event_wizard(
 
     blurb_view = _BlurbChoiceView()
     await channel.send(
-        f"**{name} — Announcement Blurb**\n"
+        # Colon, not an em dash: UX.md bans those in anything a user sees,
+        # and the 5-minute warning step below uses one (#566 sign-off).
+        f"**{name}: Announcement Blurb**\n"
         "This message gets posted when this event fires.\n"
         "Use `{time}` for the event time in your timezone and `{server_time}` for Server Time.\n\n"
         f"**Default:** `{preview_blurb}`",
@@ -1363,7 +1365,7 @@ async def _open_pause_picker(interaction: discord.Interaction) -> None:
     )
 
 
-# ── Edit warning text flow ───────────────────────────────────────────────────
+# ── Edit 5-minute warning flow ───────────────────────────────────────────────────
 #
 # The create wizard asks for a 5-minute warning, but an alliance only walks
 # that wizard once per event, and every event that existed before #566 shipped
@@ -1434,6 +1436,29 @@ class _WarningBlurbModal(discord.ui.Modal):
         )
 
 
+def _warning_summary(warning_blurb: str | None) -> str:
+    """One line for a select option: which warning this event posts.
+
+    "Custom warning" answered the wrong question. An officer opening the
+    picker already knows some events are worded; what they need is which
+    one is which, and the text is the only thing that identifies it (there
+    are no named warning presets to name instead). So the option carries
+    the wording itself, truncated to Discord's 100-character description
+    limit.
+
+    Shown as written, placeholders and all: it is what the officer typed,
+    it is what the modal will hand back to them, and half-rendering it
+    (substituting {name} but not {time}, which needs a date) would read as
+    a bug rather than a preview.
+    """
+    text = (warning_blurb or "").strip()
+    if not text:
+        return "Using the default"
+    # 100 is Discord's hard cap on a SelectOption description; the ellipsis
+    # has to fit inside it, not push past it.
+    return text if len(text) <= 100 else text[:99].rstrip() + "\u2026"
+
+
 async def _open_warning_picker(interaction: discord.Interaction) -> None:
     """Dropdown over every event, then a modal on the picked one.
 
@@ -1456,7 +1481,7 @@ async def _open_warning_picker(interaction: discord.Interaction) -> None:
             label=e["name"][:100],
             value=e["short_key"],
             emoji="▶️" if e.get("active") else "⏸️",
-            description=("Custom warning" if e.get("warning_blurb") else "Using the default")[:100],
+            description=_warning_summary(e.get("warning_blurb")),
         )
         for e in events[:25]
     ]

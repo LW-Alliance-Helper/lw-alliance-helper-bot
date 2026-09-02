@@ -80,7 +80,9 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 - **Hotfix exception.** Direct-to-main is allowed for urgent one-line
   fixes, but only with explicit approval before each push. After a
   hotfix lands on main, fast-forward the active release branch to
-  include it.
+  include it. **A hotfix that touches sheet read/write code gets a PR
+  instead** — the sheet integration lane runs only on pull requests into
+  `main`, so a direct push has no sheet coverage at all.
 - **Versioning is per-release.** Branch name encodes the version
   (`release/1.0.16` → version `1.0.16`); one CHANGELOG entry per
   release covering all merged issues. Bump `bot.py.__version__` and

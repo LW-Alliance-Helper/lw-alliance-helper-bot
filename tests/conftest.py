@@ -236,7 +236,17 @@ def sheets_client():
         )
 
     try:
-        return gspread.authorize(creds)
+        # `BackOffHTTPClient` retries 429s (and 5xx) inside the client with
+        # exponential backoff, instead of surfacing them as a failed test.
+        #
+        # The Sheets write quota is 60/minute per user and this suite spends
+        # most of it: the `save_*` helpers make ~5-7 calls each across ~18
+        # live-write tests, plus a tab create per fixture. Without backoff a
+        # single 429 fails a test, and the only recovery was re-running the
+        # WHOLE suite after a 65-second sleep — which still lost about one
+        # push to `main` in seven, and a lost sheet run blocks the deploy.
+        # Backing off one call is cheaper than replaying 18 tests.
+        return gspread.authorize(creds, http_client=gspread.BackOffHTTPClient)
     except Exception as e:
         pytest.skip(f"Could not create sheets client: {e}")
 

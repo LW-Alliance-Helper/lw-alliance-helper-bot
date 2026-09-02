@@ -2052,7 +2052,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         for e in events:
             ev_lines.append(
                 f"• {e['name']} (`{e['short_key']}`) — {e['default_time']} {e['timezone']} · "
-                f"blurb {_yn(e.get('announcement_blurb'))}"
+                f"blurb {_yn(e.get('announcement_blurb'))} · "
+                f"warning {'custom' if e.get('warning_blurb') else 'default'}"
             )
     else:
         ev_lines.append("**Events:** *none configured*")

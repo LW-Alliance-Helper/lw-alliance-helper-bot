@@ -14,6 +14,7 @@ from events_hub import (
     EVENTS_HUB_BTN_PAUSE,
     EVENTS_HUB_BTN_TODAY,
     EVENTS_HUB_BTN_UPCOMING,
+    EVENTS_HUB_BTN_WARNING,
     EVENTS_HUB_TITLE,
     _EventsHubView,
     _preset_by_key,
@@ -80,6 +81,7 @@ def test_hub_button_labels_match_expected_text():
     assert EVENTS_HUB_BTN_UPCOMING == "🔜 Upcoming events"
     assert EVENTS_HUB_BTN_LOG == "📜 Event log"
     assert EVENTS_HUB_BTN_CREATE == "➕ Create an event"
+    assert EVENTS_HUB_BTN_WARNING == "✏️ Edit warning text"
     assert EVENTS_HUB_BTN_PAUSE == "⏸️ Pause or resume"
     assert EVENTS_HUB_BTN_DELETE == "🗑️ Delete an event"
 
@@ -87,10 +89,14 @@ def test_hub_button_labels_match_expected_text():
 # ── Hub view smoke test ──────────────────────────────────────────────────────
 
 
-def test_hub_view_has_six_buttons_with_expected_labels():
-    """The view should always render exactly the 6 hub buttons in the
+def test_hub_view_has_seven_buttons_with_expected_labels():
+    """The view should always render exactly the 7 hub buttons in the
     documented order. A failure here likely means a button got added,
-    removed, or re-ordered without intent."""
+    removed, or re-ordered without intent.
+
+    Went from six to seven in #566: Edit warning text sits after Create,
+    which shifted Pause and Delete one position right. That was the
+    deliberate trade — see the layout docstring on `_EventsHubView`."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)
     labels = [item.label for item in view.children]
     assert labels == [
@@ -98,6 +104,7 @@ def test_hub_view_has_six_buttons_with_expected_labels():
         EVENTS_HUB_BTN_UPCOMING,
         EVENTS_HUB_BTN_LOG,
         EVENTS_HUB_BTN_CREATE,
+        EVENTS_HUB_BTN_WARNING,
         EVENTS_HUB_BTN_PAUSE,
         EVENTS_HUB_BTN_DELETE,
     ]
@@ -105,21 +112,26 @@ def test_hub_view_has_six_buttons_with_expected_labels():
 
 def test_hub_view_button_layout_two_rows():
     """Read-row (today/upcoming/log) sits on row 0; write-row
-    (create/pause/delete) sits on row 1. Layout decisions like this
-    affect the visual hierarchy; pin it explicitly."""
+    (create/edit warning/pause/delete) sits on row 1. Layout decisions
+    like this affect the visual hierarchy; pin it explicitly."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)
     rows = {item.label: item.row for item in view.children}
     assert rows[EVENTS_HUB_BTN_TODAY] == 0
     assert rows[EVENTS_HUB_BTN_UPCOMING] == 0
     assert rows[EVENTS_HUB_BTN_LOG] == 0
     assert rows[EVENTS_HUB_BTN_CREATE] == 1
+    assert rows[EVENTS_HUB_BTN_WARNING] == 1
     assert rows[EVENTS_HUB_BTN_PAUSE] == 1
     assert rows[EVENTS_HUB_BTN_DELETE] == 1
 
 
 def test_pause_button_sits_between_create_and_delete():
     """Pause is the reversible middle ground; placing it next to the red
-    Delete button is what makes it discoverable as the alternative."""
+    Delete button is what makes it discoverable as the alternative.
+
+    This is the constraint that decided where Edit warning text went:
+    Delete stays last and Pause stays its neighbour, so the new button
+    had to go earlier in the row rather than on the end."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)
     labels = [item.label for item in view.children]
     assert (

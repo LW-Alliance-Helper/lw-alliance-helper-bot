@@ -160,6 +160,7 @@ def init_db():
                 timezone                TEXT    NOT NULL DEFAULT 'America/New_York',
                 default_time            TEXT    NOT NULL DEFAULT '22:00',
                 announcement_blurb      TEXT    NOT NULL DEFAULT '',
+                warning_blurb           TEXT    NOT NULL DEFAULT '',
                 schedule_type           TEXT    NOT NULL DEFAULT 'repeating',
                 anchor_date             TEXT    DEFAULT '',
                 interval_days           INTEGER DEFAULT 3,
@@ -1291,6 +1292,26 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_storm_config DROP COLUMN {col}")
                 conn.commit()
                 print(f"[CONFIG] Dropped {col} from guild_storm_config")
+            except Exception:
+                pass
+
+        # ── guild_events migrations (per-event 5-minute warning text) ──────────
+        # `warning_blurb` is the text the 5-minute warning posts. It was read
+        # by scheduler.build_warning_message from the start but never had a
+        # column, so the branch was dead and every event fell through to the
+        # generic line (#566).
+        #
+        # It backfills to '' rather than to the generic line on purpose: ''
+        # means "this alliance has not chosen", which is what lets the wizard
+        # honestly label the generic line as the default instead of showing it
+        # back to them as a saved value they picked.
+        for col, definition in [
+            ("warning_blurb", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_events ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_events")
             except Exception:
                 pass
 
@@ -2490,6 +2511,23 @@ def set_guild_event_anchor(guild_id: int, short_key: str, anchor_date: str) -> b
         cur = conn.execute(
             "UPDATE guild_events SET anchor_date = ? WHERE guild_id = ? AND short_key = ?",
             (anchor_date, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def set_guild_event_warning_blurb(guild_id: int, short_key: str, warning_blurb: str) -> bool:
+    """Set (or clear) the text an event's 5-minute warning posts (#566).
+
+    An empty string is the meaningful "clear it" value, not a no-op: ''
+    means the alliance has not chosen, which is what sends the warning
+    back to `scheduler.WARNING_BLURB_DEFAULT`. Returns False when no such
+    event exists for the guild.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_events SET warning_blurb = ? WHERE guild_id = ? AND short_key = ?",
+            (warning_blurb, guild_id, short_key),
         )
         conn.commit()
         return cur.rowcount > 0

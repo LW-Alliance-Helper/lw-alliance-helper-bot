@@ -228,7 +228,6 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
     draft_id = cfg.event_draft_channel_id if cfg else 0
     announce_id = cfg.event_announce_channel_id if cfg else 0
     draft_time = cfg.event_draft_time if cfg else None
-    warn_on = cfg.event_five_min_warning if cfg else None
 
     config_lines = []
     config_lines.append(f"**Draft channel:** {f'<#{draft_id}>' if draft_id else '*not set*'}")
@@ -236,7 +235,10 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
         f"**Announcement channel:** {f'<#{announce_id}>' if announce_id else '*not set*'}"
     )
     config_lines.append(f"**Draft time:** {draft_time or '*not set*'}")
-    config_lines.append(f"**5-min warning:** {'on' if warn_on else 'off'}")
+    # No server-level 5-minute warning line here. It is per event (#566), and
+    # one on/off for the whole alliance could only ever be wrong for some of
+    # them. Each event's state is on its own row under
+    # `EVENTS_HUB_BTN_WARNING`.
     embed.add_field(name="Configuration", value="\n".join(config_lines), inline=False)
 
     # Event list with next-firing-date hint per repeating event.
@@ -836,14 +838,6 @@ async def _run_create_event_wizard(
     draft_channel_id = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
     draft_time = guild_cfg.event_draft_time or "12:00"
-    # The guild setting is the *suggestion* this wizard leads with, not the
-    # answer. The warning is per event (#566): an alliance can want one for
-    # Alliance Exercise and not for Glacieradon, and before this the only
-    # control was a server-wide switch that existing events did not even
-    # follow.
-    warning_default_on = bool(
-        guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
-    )
 
     if not draft_channel_id or not announce_channel_id:
         await channel.send(
@@ -1118,10 +1112,9 @@ async def _run_create_event_wizard(
             self.stop()
 
     onoff_view = _WarningOnOffView()
-    suggestion = "Most alliances want one." if warning_default_on else "Your server default is off."
     await channel.send(
         f"**{name}: 5-Minute Warning**\n"
-        f"Do you want a heads-up posted 5 minutes before this event starts? {suggestion}",
+        "Do you want a heads-up posted 5 minutes before this event starts?",
         view=onoff_view,
     )
     await wizard_registry.wait_view_or_cancel(onoff_view, cancel_event)
@@ -1572,14 +1565,12 @@ async def _open_warning_picker(interaction: discord.Interaction) -> None:
             )
 
         async def do_turn_off(c_inter: discord.Interaction):
+            # The wording is kept, and the confirmation deliberately does not
+            # say so (#566 sign-off): turning it back on shows what will post,
+            # which demonstrates it rather than promising it.
             set_guild_event_five_min_warning(guild_id, chosen_key, False)
-            kept = (
-                "\nIts wording is kept, so turning it back on restores what you wrote."
-                if current.strip()
-                else ""
-            )
             await c_inter.response.edit_message(
-                content=f"🔕 No 5-minute warning for **{name}** any more.{kept}",
+                content=f"🔕 No 5-minute warning for **{name}** any more.",
                 view=None,
             )
             logger.info(

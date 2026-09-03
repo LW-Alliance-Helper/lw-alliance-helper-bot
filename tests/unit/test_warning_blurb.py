@@ -512,31 +512,125 @@ class TestPerEventWarningToggle:
         assert rows["glacieradon"]["five_min_warning"] == 0
 
 
-class TestSetupCopyDoesNotPromiseAMasterSwitch:
-    """`/setup`'s step said "This applies to all events". It never did:
-    the scheduler reads each event's own column and never the guild one,
-    so turning it off there left every existing event warning."""
+class TestNoServerLevelWarningSetting:
+    """`/setup` used to ask one 5-minute warning question for every event
+    at once, and `/events` reported the answer as if it governed them.
 
-    def test_the_false_claim_is_gone(self):
-        """Scoped to the warning step. Steps 1 and 2 still say "applies to
-        all events" about the draft and announcement channels, and there
-        the guild value really is the fallback every event falls back to,
-        so the claim holds well enough to leave alone."""
+    It never did. The scheduler reads each event's own `five_min_warning`
+    column and never the server field, so the step could only seed newly
+    created events while presenting itself as a switch over all of them.
+    The question belongs to the event, so it moved there and the server
+    surfaces went (#566).
+    """
+
+    def test_setup_no_longer_asks_it(self):
         import inspect
 
         import setup_cog
 
         src = inspect.getsource(setup_cog)
-        assert "Should the bot automatically post a 5-minute warning before events?" not in src
-        assert "Should events you add from now on warn 5 minutes before they start?" in src
+        assert "5-Minute Warning**" not in src
+        assert "Should events you add from now on warn" not in src
+        assert "Should the bot automatically post a 5-minute warning" not in src
 
-    def test_the_scheduler_still_ignores_the_guild_switch(self):
-        """Pins the reason the copy changed rather than the code. Making
-        the guild field a real master switch would silence every warning
-        for an alliance that had only ever turned it off expecting it to
-        affect new events, so the copy moved instead."""
+    def test_setup_no_longer_writes_it(self):
+        import inspect
+
+        import setup_cog
+
+        src = inspect.getsource(setup_cog)
+        assert 'update_config_field(guild_id, "event_five_min_warning"' not in src
+
+    def test_the_events_setup_is_three_steps(self):
+        """Renumbered when the fourth went. A wizard that says "of 4" and
+        stops at three reads as a crash."""
+        import inspect
+
+        import setup_cog
+
+        src = inspect.getsource(setup_cog.run_event_setup)
+        assert "Step 1 of 3" in src
+        assert "Step 2 of 3" in src
+        assert "Step 3 of 3" in src
+        assert " of 4" not in src
+
+    def test_neither_hub_reports_a_server_level_answer(self):
+        """The `/events` configuration block and the `/setup` view-config
+        summary both printed it. One on/off for the whole alliance can
+        only ever be wrong for some of its events."""
+        import inspect
+
+        import events_hub
+        import setup_cog
+
+        assert "5-min warning:" not in inspect.getsource(events_hub)
+        assert "5-Min Warning:" not in inspect.getsource(setup_cog)
+
+    def test_the_scheduler_still_ignores_the_guild_field(self):
+        """Pins the reason the surfaces moved rather than the code. Making
+        the server field a real master switch would have silenced every
+        warning for an alliance that turned it off years ago, saw warnings
+        carry on, and shrugged."""
         import inspect
 
         import scheduler
 
         assert "event_five_min_warning" not in inspect.getsource(scheduler)
+
+    def test_the_column_survives_for_old_imports(self):
+        """Left in place, unread and unwritten. Dropping it would fail an
+        import of any config exported before this, for a field nothing
+        consults."""
+        import config
+
+        cfg = config.GuildConfig(guild_id=TEST_GUILD_ID)
+        assert hasattr(cfg, "event_five_min_warning")
+
+
+class TestWizardAsksWithoutSteering:
+    """The wizard asks per event and offers no lead. An earlier version
+    appended "Most alliances want one." or "Your server default is off.",
+    which both steered the answer and leaked a server setting that no
+    longer exists."""
+
+    def test_no_nudge_in_the_question(self):
+        import inspect
+
+        import events_hub
+
+        src = inspect.getsource(events_hub)
+        assert "Most alliances want one" not in src
+        assert "Your server default is off" not in src
+
+    def test_the_question_is_still_asked(self):
+        import inspect
+
+        import events_hub
+
+        src = inspect.getsource(events_hub)
+        assert "Do you want a heads-up posted 5 minutes before this event starts?" in src
+
+
+class TestTurnOffConfirmationIsShort:
+    """ "Just say it's off." The wording is still kept, and turning it back
+    on shows what will post, which demonstrates that rather than promising
+    it in a sentence nobody needs at the moment they are switching it off."""
+
+    def test_it_does_not_explain_the_storage(self):
+        import inspect
+
+        import events_hub
+
+        assert "Its wording is kept" not in inspect.getsource(events_hub)
+
+    def test_the_wording_really_is_still_kept(self, temp_db):
+        """The sentence went; the behaviour it described did not."""
+        import config
+
+        config.save_guild_event(TEST_GUILD_ID, _base_event_row(warning_blurb="Marauder in 5."))
+        config.set_guild_event_five_min_warning(TEST_GUILD_ID, "ae_plague_marauder", False)
+
+        assert (
+            config.get_guild_event(TEST_GUILD_ID, "ae_plague_marauder")["warning_blurb"]
+            == "Marauder in 5."
+        )

@@ -2045,7 +2045,6 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
         f"**Announcement Channel:** {_channel(cfg.event_announce_channel_id)}",
         f"**Draft Time:** {_format_time_with_tz(cfg.event_draft_time, cfg.timezone)}",
-        f"**5-Min Warning:** {_enabled(cfg.event_five_min_warning)}",
     ]
     if events:
         ev_lines.append(f"**Events ({len(events)}):**")
@@ -10980,14 +10979,15 @@ async def wait_for_msg_simple(
 
 
 async def run_event_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring the four shared event settings:
-    draft channel, announcement channel, draft time, and 5-minute warning.
+    """Walk an admin through configuring the three shared event settings:
+    draft channel, announcement channel and draft time.
+
+    The 5-minute warning used to be a fourth. It is per event now (#566),
+    asked by the events wizard, because one answer for every event at once
+    was never what the scheduler read.
+
     Individual events (add/edit/delete) live on the /events hub (#249)."""
     import wizard_registry
-
-    # Local: events_hub reaches back into this module for its time and date
-    # parsers, so a module-level import here would close the loop.
-    from events_hub import EVENTS_HUB_BTN_WARNING
 
     guild_id = interaction.guild_id
     channel = interaction.channel
@@ -11002,14 +11002,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     draft_channel_id = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
     draft_time = guild_cfg.event_draft_time or "12:00"
-    five_min_warning = (
-        guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
-    )
 
-    # Post-#249: this wizard owns only the four shared event settings
-    # (channels, draft time, 5-minute warning). Event creation, editing,
-    # and deletion moved to the /events hub, so officers managing
-    # individual events go there instead of crawling through this wizard.
+    # Post-#249: this wizard owns only the shared event settings (channels
+    # and draft time). Event creation, editing and deletion moved to the
+    # /events hub, so officers managing individual events go there instead
+    # of crawling through this wizard. The 5-minute warning followed them
+    # in #566: it is per event, so a server-wide question could not answer
+    # it.
 
     await channel.send(
         "⚙️ **Event Setup**\n"
@@ -11033,7 +11032,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     if draft_ch_view.is_current_stale:
         await channel.send(PREV_CHANNEL_GONE.format(channel_label="draft"))
     await channel.send(
-        "**Step 1 of 4 — Draft Channel**\n"
+        "**Step 1 of 3 — Draft Channel**\n"
         "Which channel should the bot post event announcement drafts for leadership to review?\n"
         "*(This applies to all events)*",
         view=draft_ch_view,
@@ -11057,7 +11056,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     if ann_ch_view.is_current_stale:
         await channel.send(PREV_CHANNEL_GONE.format(channel_label="announcement"))
     await channel.send(
-        "**Step 2 of 4 — Announcement Channel**\n"
+        "**Step 2 of 3 — Announcement Channel**\n"
         "Which channel should approved announcements be posted to?\n"
         "*(This applies to all events)*",
         view=ann_ch_view,
@@ -11078,7 +11077,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     while True:
         draft_time_raw = await ask_keep_or_change(
             channel,
-            f"**Step 3 of 4 — Draft Posting Time**\n"
+            f"**Step 3 of 3 — Draft Posting Time**\n"
             f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
             f"*(e.g. `12:00pm` for noon)*",
             default="12:00",
@@ -11111,32 +11110,20 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             return
         await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
 
-    # "This applies to all events" was never true. The scheduler reads each
-    # event's own `five_min_warning` column, and this field only seeds the
-    # value a NEW event is created with -- so turning it off here left every
-    # existing event still warning. The per-event control that makes the
-    # distinction visible arrived with #566; this copy stops promising the
-    # behaviour the code does not have.
-    warn_view = YesNoView()
-    await channel.send(
-        "**Step 4 of 4 — 5-Minute Warning**\n"
-        "Should events you add from now on warn 5 minutes before they start?\n"
-        "*(Every event keeps its own switch. Change one in "
-        "`/events` → " + EVENTS_HUB_BTN_WARNING + ".)*",
-        view=warn_view,
-    )
-    await wait_view_or_cancel(warn_view, cancel_event)
-    if warn_view.cancelled:
-        return
-    if warn_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
-        return
-    five_min_warning = 1 if warn_view.selected else 0
+    # There is no 5-minute warning step here any more (#566). It asked one
+    # question for every event at once, which is not how the warning works:
+    # the scheduler reads each event's own `five_min_warning` column and
+    # never the server field, so this step could only ever seed new events
+    # while claiming more. The question now belongs to the event, and the
+    # events wizard asks it per event.
+    #
+    # `guild_configs.event_five_min_warning` is left in place, unread and
+    # unwritten. Dropping it would break importing a config exported before
+    # this, for a column nothing consults.
 
     update_config_field(guild_id, "event_draft_channel_id", draft_channel_id)
     update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
     update_config_field(guild_id, "event_draft_time", draft_time)
-    update_config_field(guild_id, "event_five_min_warning", five_min_warning)
 
     # ── Summary ────────────────────────────────────────────────────────────────
     embed = discord.Embed(title="✅ Event Settings Saved", color=discord.Color.green())
@@ -11144,11 +11131,6 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
     embed.add_field(
         name="Draft Time", value=_format_time_with_tz(draft_time, timezone), inline=False
-    )
-    embed.add_field(
-        name="5-min Warning",
-        value=("Yes" if five_min_warning else "No") + ", for events you add from now on",
-        inline=False,
     )
     embed.set_footer(text="Run /events to add, edit, or remove individual events.")
     await channel.send(embed=embed)

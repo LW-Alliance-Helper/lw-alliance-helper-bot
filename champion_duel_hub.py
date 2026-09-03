@@ -89,6 +89,15 @@ HUB_BTN_CHAMPION_DUEL = "👑 Champion Duel"
 #:
 #: 🆚 is the game's own VS mark (`DESIGN.md` rule 5) and is unchanged.
 CD_BTN_PREDICT = "🆚 Simulate a match"
+#: The form that button opens, and it is the button's own words with the feature
+#: named. Kevin, 2026-09-02: *"Fix the modal title then."* It said **"Predict a
+#: Champion Duel match"** and had done since before the rename, so the door and
+#: the form behind it gave two names for one thing -- which is the fault this
+#: whole pass exists to clear.
+#:
+#: Hoisted to a constant rather than left as a class-level literal, because the
+#: two now have to move together and a literal is what let them drift apart.
+CD_SIMULATE_TITLE = "Simulate a Champion Duel match"
 CD_BTN_FIND = "🔍 Find a player"
 CD_BTN_ADD = "➕ Add a player"
 # The only squad entry screen. One open takes all three squads, their types
@@ -172,9 +181,9 @@ CD_ADD_SENT_TITLE = "Add a Champion Duel"
 #: turned on.
 CD_ADDED_MINE = "✅ Added your Participating Warzones, starting **{date}**."
 CD_ADDED_SENT = "✅ Recorded a Champion Duel starting **{date}**."
-#: ⚠️ NOT SIGNED OFF — Kevin gave the substance on 2026-09-01 and not the words:
-#: *"I would just say that their known warzone is not in the list but don't gate
-#: anything on it."*
+#: Kevin's words, 2026-09-02. He gave the substance the day before -- *"I would
+#: just say that their known warzone is not in the list but don't gate anything
+#: on it"* -- and then the line itself.
 #:
 #: It rides under either acknowledgement. **It is not a warning and must not
 #: read as one**: entering a Champion Duel your alliance is not in is the whole
@@ -184,10 +193,12 @@ CD_ADDED_SENT = "✅ Recorded a Champion Duel starting **{date}**."
 #: acknowledgement said "Recorded" where they expected "Added your".
 #:
 #: ℹ️ rather than ⚠️ for exactly that reason.
-CD_NOT_YOUR_WARZONE = (
-    "ℹ️ Warzone **{warzone}** is not in that list, so this is not the Champion "
-    "Duel your alliance is in."
-)
+#: **His is shorter than the draft and drops the consequence clause.** That was
+#: *"...so this is not the Champion Duel your alliance is in"*, which explains
+#: something the reader can already see: they are looking at an acknowledgement
+#: that says "Recorded a Champion Duel" rather than "Added your Participating
+#: Warzones". "Heads up" carries the whole job the sentence had.
+CD_NOT_YOUR_WARZONE = "ℹ️ Heads up, your warzone (**{warzone}**) is not in that list."
 #: Approved by Kevin, 2026-08-31: *"Keep the two-sentence version."* The
 #: finished state's own line, and the only string that differs between the
 #: finished hub and the live one now that they are one surface. Both sentences are lifted from the approved `build_finished_embed`
@@ -1665,7 +1676,7 @@ async def _send_prediction(
     view.message = await interaction.original_response()
 
 
-class _PredictModal(discord.ui.Modal, title="Predict a Champion Duel match"):
+class _PredictModal(discord.ui.Modal, title=CD_SIMULATE_TITLE):
     """Two players in, one probability out.
 
     Server is its own optional field rather than something parsed out of the

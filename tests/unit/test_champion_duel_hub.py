@@ -1966,7 +1966,7 @@ async def test_a_grouping_without_your_own_warzone_is_said_not_refused(cd_db, no
     interaction = await _add_grouping(" ".join(SIXTEEN), warzone="1500")
 
     said = _sent(interaction)
-    assert "**1500** is not in that list" in said
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="1500") in said
     assert "Try again" not in said, "an aside, not a refusal"
     assert db.find_grouping_by_warzone("700") is not None, "saved anyway"
 
@@ -1976,7 +1976,8 @@ async def test_the_aside_is_absent_when_your_warzone_is_in_the_list(cd_db, no_mm
     entry would make the one case it exists for invisible."""
     interaction = await _add_grouping(" ".join(SIXTEEN), warzone="700")
 
-    assert "is not in that list" not in _sent(interaction)
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") not in _sent(interaction)
+    assert "Heads up" not in _sent(interaction)
 
 
 async def test_the_aside_rides_under_a_champion_duel_you_were_sent_too(cd_db, no_mm_link):
@@ -1989,7 +1990,7 @@ async def test_the_aside_rides_under_a_champion_duel_you_were_sent_too(cd_db, no
 
     said = _sent(interaction)
     assert "already been entered" in said
-    assert "**700** is not in that list" in said
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") in said
 
 
 async def test_the_game_formatting_goes_in_as_it_is_read(cd_db, no_mm_link):

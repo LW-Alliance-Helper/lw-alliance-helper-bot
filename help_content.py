@@ -86,7 +86,9 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "🔜 Upcoming events (next firing dates), 📜 Event log "
                 "(recent approvals: free 7 days / 💎 Premium 30 days).\n"
                 "**Write row:** ➕ Create an event (pick a preset or define "
-                "your own), ⏸️ Pause or resume (stop an event for a season "
+                "your own), ✏️ Edit 5-minute warning (change what an "
+                "event's warning says, or clear it back to the default), "
+                "⏸️ Pause or resume (stop an event for a season "
                 "and turn it back on later, keeping every setting), "
                 "🗑️ Delete an event (permanent).",
             ),

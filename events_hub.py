@@ -75,6 +75,7 @@ EVENTS_HUB_BTN_TODAY = "📅 Today's events"
 EVENTS_HUB_BTN_UPCOMING = "🔜 Upcoming events"
 EVENTS_HUB_BTN_LOG = "📜 Event log"
 EVENTS_HUB_BTN_CREATE = "➕ Create an event"
+EVENTS_HUB_BTN_WARNING = "✏️ Edit 5-minute warning"
 EVENTS_HUB_BTN_PAUSE = "⏸️ Pause or resume"
 EVENTS_HUB_BTN_DELETE = "🗑️ Delete an event"
 
@@ -227,7 +228,6 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
     draft_id = cfg.event_draft_channel_id if cfg else 0
     announce_id = cfg.event_announce_channel_id if cfg else 0
     draft_time = cfg.event_draft_time if cfg else None
-    warn_on = cfg.event_five_min_warning if cfg else None
 
     config_lines = []
     config_lines.append(f"**Draft channel:** {f'<#{draft_id}>' if draft_id else '*not set*'}")
@@ -235,7 +235,10 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
         f"**Announcement channel:** {f'<#{announce_id}>' if announce_id else '*not set*'}"
     )
     config_lines.append(f"**Draft time:** {draft_time or '*not set*'}")
-    config_lines.append(f"**5-min warning:** {'on' if warn_on else 'off'}")
+    # No server-level 5-minute warning line here. It is per event (#566), and
+    # one on/off for the whole alliance could only ever be wrong for some of
+    # them. Each event's state is on its own row under
+    # `EVENTS_HUB_BTN_WARNING`.
     embed.add_field(name="Configuration", value="\n".join(config_lines), inline=False)
 
     # Event list with next-firing-date hint per repeating event.
@@ -285,15 +288,23 @@ class _EventsHubView(discord.ui.View):
           📅 Today's events (blue) | 🔜 Upcoming events (secondary) |
           📜 Event log (secondary)
         Row 1 (write surfaces):
-          ➕ Create an event (green) | ⏸️ Pause or resume (secondary) |
-          🗑️ Delete an event (red)
+          ➕ Create an event (green) | ✏️ Edit 5-minute warning (secondary) |
+          ⏸️ Pause or resume (secondary) | 🗑️ Delete an event (red)
 
     The write surfaces sit on their own row so they don't visually
     compete with the read-only buttons above. Today's events takes the
     primary-blue style since that's the most common "I'm about to
-    publish today's draft" action. Pause sits between Create and Delete
+    publish today's draft" action. Pause sits next to Delete
     deliberately: it's the reversible middle ground, and putting it next
     to the red button makes it the obvious alternative to deleting.
+
+    Edit 5-minute warning (#566) went in after Create rather than at the end
+    of the row, which does shift Pause and Delete one position right.
+    The alternative was putting a routine action next to the red button,
+    and DESIGN.md is explicit that a destructive control sits at the end
+    of its row and never adjacent to a frequently-clicked one. Keeping
+    Delete last, and keeping Pause as its neighbour, won over leaving
+    the other two positions untouched.
     """
 
     def __init__(self, bot, guild_id: int, owner_user_id: int):
@@ -325,6 +336,7 @@ class _EventsHubView(discord.ui.View):
         self._add(EVENTS_HUB_BTN_LOG, discord.ButtonStyle.secondary, 0, self._on_log)
         # Row 1: write surfaces
         self._add(EVENTS_HUB_BTN_CREATE, discord.ButtonStyle.success, 1, self._on_create)
+        self._add(EVENTS_HUB_BTN_WARNING, discord.ButtonStyle.secondary, 1, self._on_warning)
         self._add(EVENTS_HUB_BTN_PAUSE, discord.ButtonStyle.secondary, 1, self._on_pause)
         self._add(EVENTS_HUB_BTN_DELETE, discord.ButtonStyle.danger, 1, self._on_delete)
 
@@ -346,6 +358,9 @@ class _EventsHubView(discord.ui.View):
 
     async def _on_create(self, inter: discord.Interaction) -> None:
         await _open_create_picker(self.bot, inter)
+
+    async def _on_warning(self, inter: discord.Interaction) -> None:
+        await _open_warning_picker(inter)
 
     async def _on_pause(self, inter: discord.Interaction) -> None:
         await _open_pause_picker(inter)
@@ -472,6 +487,7 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
                         "name": ev["name"],
                         "dt": ev_dt,
                         "blurb": ev["announcement_blurb"],
+                        "warning_blurb": ev["warning_blurb"],
                     }
                 )
                 draft_channel_id = ev["draft_channel_id"] or draft_channel_id
@@ -804,6 +820,7 @@ async def _run_create_event_wizard(
         save_guild_event,
         get_guild_events,
     )
+    from scheduler import WARNING_BLURB_DEFAULT
     from setup_cog import _parse_12h_time, _parse_month_day
 
     guild_id = interaction.guild_id
@@ -821,9 +838,6 @@ async def _run_create_event_wizard(
     draft_channel_id = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
     draft_time = guild_cfg.event_draft_time or "12:00"
-    five_min_warning = (
-        guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
-    )
 
     if not draft_channel_id or not announce_channel_id:
         await channel.send(
@@ -1033,7 +1047,9 @@ async def _run_create_event_wizard(
 
     blurb_view = _BlurbChoiceView()
     await channel.send(
-        f"**{name} — Announcement Blurb**\n"
+        # Colon, not an em dash: UX.md bans those in anything a user sees,
+        # and the 5-minute warning step below uses one (#566 sign-off).
+        f"**{name}: Announcement Blurb**\n"
         "This message gets posted when this event fires.\n"
         "Use `{time}` for the event time in your timezone and `{server_time}` for Server Time.\n\n"
         f"**Default:** `{preview_blurb}`",
@@ -1058,6 +1074,113 @@ async def _run_create_event_wizard(
             return
         blurb = blurb_raw.strip() or preview_blurb
 
+    # ── 5-minute warning ────────────────────────────────────────────────────
+    # Two questions, in the order the officer thinks them: do I want one for
+    # this event, and if so what should it say. The wording question is
+    # skipped entirely on a no -- asking someone to word a post that will
+    # never fire is a question about nothing.
+    #
+    # Taking the default wording stores '' rather than the rendered line.
+    # '' means "has not chosen", which is what lets this step honestly label
+    # the generic line as the default instead of showing it back as a saved
+    # value they picked, and it means a future change to
+    # WARNING_BLURB_DEFAULT reaches everyone who never overrode it.
+
+    class _WarningOnOffView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.choice: Optional[bool] = None
+
+        @discord.ui.button(label=_WARN_BTN_ON, style=discord.ButtonStyle.success)
+        async def want_it(self, inter: discord.Interaction, _b: discord.ui.Button):
+            self.choice = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label=_WARN_BTN_OFF, style=discord.ButtonStyle.secondary)
+        async def skip_it(self, inter: discord.Interaction, _b: discord.ui.Button):
+            self.choice = False
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ No 5-minute warning for **{name}**.",
+                view=self,
+            )
+            self.stop()
+
+    onoff_view = _WarningOnOffView()
+    await channel.send(
+        f"**{name}: 5-Minute Warning**\n"
+        "Do you want a heads-up posted 5 minutes before this event starts?",
+        view=onoff_view,
+    )
+    await wizard_registry.wait_view_or_cancel(onoff_view, cancel_event)
+    if cancel_event.is_set():
+        return
+    if onoff_view.choice is None:
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    five_min_warning = 1 if onoff_view.choice else 0
+    warning_blurb = ""
+    if five_min_warning:
+        preview_warning = WARNING_BLURB_DEFAULT.format(name=name)
+
+        class _WarningChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.choice: Optional[str] = None
+
+            @discord.ui.button(label="✅ Use default warning", style=discord.ButtonStyle.success)
+            async def use_default(self, inter: discord.Interaction, _b: discord.ui.Button):
+                self.choice = "default"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Using default warning:\n`{preview_warning}`",
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(label="✏️ Enter my own", style=discord.ButtonStyle.secondary)
+            async def enter_own(self, inter: discord.Interaction, _b: discord.ui.Button):
+                self.choice = "custom"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+        warning_view = _WarningChoiceView()
+        await channel.send(
+            f"**{name}: What the warning says**\n"
+            "Use `{time}` for the event time in your timezone and `{server_time}` "
+            "for Server Time.\n\n"
+            f"**Default:** `{preview_warning}`",
+            view=warning_view,
+        )
+        await wizard_registry.wait_view_or_cancel(warning_view, cancel_event)
+        if cancel_event.is_set():
+            return
+        if not warning_view.choice:
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        if warning_view.choice == "custom":
+            warning_raw = await ask_text(
+                "Enter your 5-minute warning:\n"
+                "*(Use `{time}` and `{server_time}` as placeholders)*",
+                max_chars=1000,
+            )
+            if warning_raw is None:
+                return
+            warning_blurb = warning_raw.strip()
+
     # ── Save ────────────────────────────────────────────────────────────────
     event = {
         "short_key": short_key,
@@ -1065,6 +1188,7 @@ async def _run_create_event_wizard(
         "timezone": tz,
         "default_time": default_time,
         "announcement_blurb": blurb,
+        "warning_blurb": warning_blurb,
         "schedule_type": schedule_type,
         "anchor_date": anchor_date,
         "interval_days": interval_days,
@@ -1276,6 +1400,235 @@ async def _open_pause_picker(interaction: discord.Interaction) -> None:
     select.callback = on_pick
     await interaction.response.send_message(
         "Pick an event to pause or resume:",
+        view=view,
+        ephemeral=True,
+    )
+
+
+# ── Edit 5-minute warning flow ───────────────────────────────────────────────────
+#
+# The create wizard asks for a 5-minute warning, but an alliance only walks
+# that wizard once per event, and every event that existed before #566 shipped
+# never saw the question. Without this surface the feature would be reachable
+# only by deleting an event and rebuilding it, which costs the alliance its
+# anchor date and its announcement wording to change one line of text.
+
+
+# Button labels for the pick-then-choose step. Module-level so the confirm
+# copy and the buttons cannot drift apart, matching the pause flow above.
+_WARN_BTN_EDIT = "✏️ Change the wording"
+_WARN_BTN_OFF = "🔕 Disable warning for this event"
+_WARN_BTN_ON = "🔔 Enable 5-minute warning"
+
+
+def _default_warning_for(name: str) -> str:
+    """The default line, rendered for one event. Local import because
+    scheduler imports this module at module level."""
+    from scheduler import WARNING_BLURB_DEFAULT
+
+    return WARNING_BLURB_DEFAULT.format(name=name)
+
+
+class _WarningBlurbModal(discord.ui.Modal):
+    """Edit one event's 5-minute warning text.
+
+    A modal rather than a channel prompt, for the same reason
+    `_AnchorDateModal` is one: the flow stays inside the ephemeral hub, with
+    no public wizard messages and no `wait_for` timeout to lose it to.
+
+    Submitting an empty field is a real action, not a cancel. It clears the
+    row back to '' and the warning returns to the default, which is the only
+    way back once an alliance has written their own.
+    """
+
+    def __init__(self, guild_id: int, short_key: str, name: str, current: str):
+        # Local, like every other scheduler import in this module: scheduler
+        # imports events_hub at module level, so the reverse cannot be.
+        from scheduler import WARNING_BLURB_DEFAULT
+
+        super().__init__(title=f"5-minute warning: {name}"[:45])
+        self.guild_id = guild_id
+        self.short_key = short_key
+        self.event_name = name
+        self.field = discord.ui.TextInput(
+            label="What should the warning say?",
+            style=discord.TextStyle.paragraph,
+            # The default line as placeholder, so the officer can see what
+            # they get by leaving it blank without it looking like a value
+            # they already chose.
+            placeholder=WARNING_BLURB_DEFAULT.format(name=name)[:100],
+            default=current or None,
+            required=False,
+            max_length=1000,
+        )
+        self.add_item(self.field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from config import set_guild_event_warning_blurb
+        from scheduler import WARNING_BLURB_DEFAULT
+
+        text = (self.field.value or "").strip()
+        set_guild_event_warning_blurb(self.guild_id, self.short_key, text)
+
+        if text:
+            preview = text.replace("{name}", self.event_name)
+            body = (
+                f"✅ Updated the 5-minute warning for **{self.event_name}**.\n"
+                f"It will post: `{preview}`"
+            )
+        else:
+            body = (
+                f"✅ Cleared the custom warning for **{self.event_name}**.\n"
+                "It goes back to: "
+                f"`{WARNING_BLURB_DEFAULT.format(name=self.event_name)}`"
+            )
+        await interaction.response.edit_message(content=body, view=None)
+        logger.info(
+            "[EVENTS HUB] Warning blurb %s for event %s, guild %s",
+            "set" if text else "cleared",
+            self.short_key,
+            self.guild_id,
+        )
+
+
+def _warning_summary(event: dict) -> str:
+    """The one line under an event in the picker.
+
+        5-minute warning: Active - Custom
+        5-minute warning: Active - Default
+        5-minute warning: Off
+
+    State first, because state is the thing that varies and the thing
+    that decides whether wording it is worth doing at all. An earlier
+    version put the wording itself here; it answered "which one is this"
+    at the cost of the answer to "does this one even fire", and for an
+    alliance with a handful of events the second question is the live one.
+
+    Custom against Default stays because it is cheap and still says which
+    events have been worded.
+    """
+    if not event.get("five_min_warning"):
+        return "5-minute warning: Off"
+    worded = "Custom" if (event.get("warning_blurb") or "").strip() else "Default"
+    return f"5-minute warning: Active - {worded}"
+
+
+async def _open_warning_picker(interaction: discord.Interaction) -> None:
+    """Dropdown over every event, then on/off and wording for the picked one.
+
+    Paused events are listed too: settling an event's warning while it is
+    off between seasons is exactly the sort of tidying that gets done then.
+    They carry no running/paused marker here, unlike the pause and delete
+    pickers. Two on/off states on one row -- the event's, and the
+    warning's -- read as one state and got the wrong one believed.
+
+    The two controls sit behind one button on purpose. "Do I want a warning
+    for this event" and "what should it say" are the same thought, and
+    splitting them would put the on/off switch on a surface an officer only
+    reaches by first deciding they want to edit wording.
+    """
+    from config import get_guild_event, get_guild_events, set_guild_event_five_min_warning
+
+    guild_id = interaction.guild_id
+    events = get_guild_events(guild_id, active_only=False)
+    if not events:
+        await interaction.response.send_message(
+            f"ℹ️ No events yet. Click **{EVENTS_HUB_BTN_CREATE}** to add one first.",
+            ephemeral=True,
+        )
+        return
+
+    options = [
+        discord.SelectOption(
+            label=e["name"][:100],
+            value=e["short_key"],
+            description=_warning_summary(e)[:100],
+        )
+        for e in events[:25]
+    ]
+    select = discord.ui.Select(placeholder="Pick an event", options=options)
+    view = discord.ui.View(timeout=180)
+    view.add_item(select)
+
+    async def on_pick(inter: discord.Interaction):
+        chosen_key = inter.data["values"][0]
+        ev = get_guild_event(guild_id, chosen_key) or {}
+        name = ev.get("name") or chosen_key
+        warning_on = bool(ev.get("five_min_warning"))
+        current = ev.get("warning_blurb") or ""
+
+        choice = discord.ui.View(timeout=180)
+
+        async def do_edit(c_inter: discord.Interaction):
+            await c_inter.response.send_modal(
+                _WarningBlurbModal(guild_id, chosen_key, name, current)
+            )
+
+        async def do_turn_off(c_inter: discord.Interaction):
+            # The wording is kept, and the confirmation deliberately does not
+            # say so (#566 sign-off): turning it back on shows what will post,
+            # which demonstrates it rather than promising it.
+            set_guild_event_five_min_warning(guild_id, chosen_key, False)
+            await c_inter.response.edit_message(
+                content=f"🔕 No 5-minute warning for **{name}** any more.",
+                view=None,
+            )
+            logger.info(
+                "[EVENTS HUB] 5-min warning off for event %s, guild %s", chosen_key, guild_id
+            )
+
+        async def do_turn_on(c_inter: discord.Interaction):
+            set_guild_event_five_min_warning(guild_id, chosen_key, True)
+            from scheduler import WARNING_BLURB_DEFAULT
+
+            posts = current.strip() or WARNING_BLURB_DEFAULT.format(name=name)
+            await c_inter.response.edit_message(
+                content=(
+                    f"🔔 **{name}** warns 5 minutes before it starts.\nIt will post: `{posts}`"
+                ),
+                view=None,
+            )
+            logger.info(
+                "[EVENTS HUB] 5-min warning on for event %s, guild %s", chosen_key, guild_id
+            )
+
+        async def do_cancel(c_inter: discord.Interaction):
+            await c_inter.response.edit_message(
+                content=CANCEL_BACKPEDAL.format(detail=f"**{name}** is unchanged."),
+                view=None,
+            )
+
+        if warning_on:
+            worded = "your own wording" if current.strip() else "the default wording"
+            prompt = (
+                f"**{name}** warns 5 minutes before it starts, using {worded}.\n"
+                f"`{current.strip() or _default_warning_for(name)}`"
+            )
+            buttons = [
+                (_WARN_BTN_EDIT, discord.ButtonStyle.primary, do_edit),
+                (_WARN_BTN_OFF, discord.ButtonStyle.secondary, do_turn_off),
+                ("↩️ Cancel", discord.ButtonStyle.secondary, do_cancel),
+            ]
+        else:
+            prompt = (
+                f"**{name}** has no 5-minute warning. Turning it on posts "
+                f"5 minutes before it starts."
+            )
+            buttons = [
+                (_WARN_BTN_ON, discord.ButtonStyle.success, do_turn_on),
+                ("↩️ Cancel", discord.ButtonStyle.secondary, do_cancel),
+            ]
+
+        for label, style, callback in buttons:
+            btn = discord.ui.Button(label=label[:80], style=style)
+            btn.callback = callback
+            choice.add_item(btn)
+
+        await inter.response.edit_message(content=prompt, view=choice)
+
+    select.callback = on_pick
+    await interaction.response.send_message(
+        "Pick an event to change its 5-minute warning:",
         view=view,
         ephemeral=True,
     )

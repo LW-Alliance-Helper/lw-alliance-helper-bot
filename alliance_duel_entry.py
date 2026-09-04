@@ -941,14 +941,22 @@ async def start_new_league(
     # left off a line stays None, which `row_values` omits from the write, so
     # the skeleton keeps its "leave whatever is there" behaviour.
     typed = {e.alliance: e for e in entries}
+    # Identity rides onto every week; a tag is not a measurement. Power, gift
+    # level and member count are readings taken today, and stamping today's
+    # onto the weeks already played invents a history: `power_history` pairs
+    # each with its own week date, so Scout would report "Power flat across N
+    # days of recorded rows" about days nobody recorded. They go on the latest
+    # week only, and the earlier rows stay None, which `row_values` omits.
+    latest = max(r.week for r in rows)
     for row in rows:
         entry = typed.get(row.alliance)
         if entry is not None:
             row.tag_display = entry.tag_display
             row.warzone_display = entry.warzone_display
-            row.power = entry.power
-            row.gift_level = entry.gift_level
-            row.members = entry.members
+            if row.week == latest:
+                row.power = entry.power
+                row.gift_level = entry.gift_level
+                row.members = entry.members
 
     problem = await save_rows(state, rows)
     if problem:
@@ -1680,6 +1688,26 @@ class PredictionsView(discord.ui.View):
             row.picked_by = str(interaction.user.id)
             row.opponent = loser
             rows.append(row)
+            # Overwrite a pick the call moved off. A pick saved earlier on the
+            # loser still says "W", and `predicted_winner` reads `match.a`
+            # first, so without this a correction silently reverts on the next
+            # render and rule 7 reports both sides picked to win.
+            #
+            # Written as "L" rather than blanked: `row_values` omits empty
+            # values on purpose, which is what makes the upsert non-clobbering,
+            # so there is no way to clear a cell and no reason to add one. "L"
+            # is a first-class Picked value that both `predicted_winner` and
+            # rule 7 already read, and it says the same thing.
+            #
+            # Only on a correction, so the ordinary save still writes the one
+            # row the design intends.
+            stale = self.state.row_for(loser, self.week)
+            if stale is not None and stale.picked:
+                moved = _row_for_write(self.state, loser, self.week)
+                moved.picked = "L"
+                moved.picked_by = str(interaction.user.id)
+                moved.opponent = winner
+                rows.append(moved)
             called.append(
                 PREDICT_SAVED_MATCH.format(
                     winner=self.state.display_name(winner),
@@ -2028,13 +2056,20 @@ def all_week_matches(state, week: int) -> list[ad.Match]:
 
 
 def _match_by_label(state, week: int, label: str) -> ad.Match | None:
-    """Find the match a prefilled label names, whichever way round it reads."""
-    wanted = {part.strip().casefold() for part in label.split(" v ") if part.strip()}
-    if len(wanted) != 2:
+    """Find the match a prefilled label names, whichever way round it reads.
+
+    Compared as an ordered pair, not a set. `display_name` is the tag alone, and
+    a bracket draws from more than one warzone, so two different alliances can
+    share one. A set turned the bot's own `KTI v KTI:` line into a single name,
+    failed to match any pairing, and refused the whole box -- which nobody could
+    fix, because the line they were being refused for was prefilled.
+    """
+    parts = [part.strip().casefold() for part in label.split(" v ")]
+    if len(parts) != 2 or not all(parts):
         return None
     for match in all_week_matches(state, week):
-        names = {state.display_name(match.a).casefold(), state.display_name(match.b).casefold()}
-        if names == wanted:
+        names = [state.display_name(match.a).casefold(), state.display_name(match.b).casefold()]
+        if names == parts or names[::-1] == parts:
             return match
     return None
 
@@ -2066,13 +2101,19 @@ def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], l
             continue
 
         name_a, name_b = state.display_name(match.a), state.display_name(match.b)
-        parts = value.split()
-        digits = re.findall(r"\d+", parts[-1] if parts else "")
-        if len(parts) < 2 or len(digits) != 2:
+        # The split is whatever trails the tag, and the spaces around its
+        # separator are the typist's business: `9 - 4` is `9-4`. Reading only
+        # the last whitespace-delimited token missed that, and because one bad
+        # line refuses the whole box it threw away the rest of the week's
+        # typing with it. A separator is still required, so `9 4` and `94` are
+        # refused exactly as before.
+        split = re.match(r"^(?P<tag>.*?)\s*(?P<x>\d+)\s*[^\d\s]\s*(?P<y>\d+)$", value.strip())
+        if split is None or not split.group("tag").strip():
             problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
             continue
+        digits = (split.group("x"), split.group("y"))
 
-        tag = " ".join(parts[:-1]).strip()
+        tag = split.group("tag").strip()
         if tag.casefold() == name_a.casefold():
             first, second = match.a, match.b
         elif tag.casefold() == name_b.casefold():

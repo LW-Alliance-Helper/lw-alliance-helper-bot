@@ -651,17 +651,35 @@ def path_preview_embed(state: HubState, outcome: str) -> discord.Embed:
     )
 
     week = state.week or 1
+    estimate = ad.make_estimator(state.profiles)
+    # Fork on the same week `path_embed` forked on, not on the live week. The
+    # button that opens this screen sits under that fork, so branching anywhere
+    # else describes a route the screen behind it never offered, and a week
+    # whose result is already recorded is not a branch at all.
+    settled = ad.project_own_path(state.own, state.league_rows(), estimate=estimate)
+    if isinstance(settled, ad.BracketIncomplete):
+        embed.description = settled.detail
+        return embed
+    fork = ad.first_open_week(settled, week)
+    if fork is None:
+        # Every week is recorded, so there is no branch to preview. The buttons
+        # that open this screen only exist while there is one, so getting here
+        # means the last result landed while the screen was open. Hand back the
+        # settled path rather than an empty branch: it is what they now want,
+        # and it needs no string that only this dead end would ever use.
+        return path_embed(state)
+
     projection = ad.project_own_path(
         state.own,
         state.league_rows(),
-        estimate=ad.make_estimator(state.profiles),
-        assume={week: (state.own, outcome)},
+        estimate=estimate,
+        assume={fork: (state.own, outcome)},
     )
     if isinstance(projection, ad.BracketIncomplete):
         embed.description = projection.detail
         return embed
 
-    ahead = [step for step in projection.steps if step.week > week]
+    ahead = [step for step in projection.steps if step.week > fork]
     embed.description = (
         f"**{state.league.season} · {state.league.tier} {state.league.group}**\n"
         + "\n".join(_preview_line(state, step) for step in ahead)
@@ -1135,11 +1153,14 @@ class VSHubView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        view = VSPathView(self.state, interaction.user.id)
         await interaction.response.send_message(
-            embed=path_embed(self.state),
-            view=VSPathView(self.state, interaction.user.id),
-            ephemeral=True,
+            embed=path_embed(self.state), view=view, ephemeral=True
         )
+        # Without this `on_timeout` has nothing to edit, so the buttons keep
+        # looking live long after they stopped working. Every other view opened
+        # from this hub sets it.
+        view.message = await interaction.original_response()
 
     async def _log_score(self, interaction: discord.Interaction):
         target = ad_entry.target_day(self.state)

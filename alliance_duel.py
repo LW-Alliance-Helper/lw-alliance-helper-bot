@@ -1560,7 +1560,7 @@ def meetings_ahead(
         return {}
 
     for branch in ("W", "L"):
-        walk = project_own_path(target, rows, estimate=estimate, assume={week: (target, branch)})
+        walk = project_own_path(target, rows, estimate=estimate, assume={fork: (target, branch)})
         if isinstance(walk, BracketIncomplete):
             continue
         for step in walk.steps:

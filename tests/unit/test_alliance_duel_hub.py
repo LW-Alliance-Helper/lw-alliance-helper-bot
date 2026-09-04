@@ -665,3 +665,42 @@ def test_a_recorded_week_does_not_say_recorded_result_twice():
     played = hub._played_block(_state(rows), ad.project_own_path(OWN, rows), None)
     for line in played:
         assert line.count(hub.VS_LABEL_RECORDED) <= 1
+
+
+# -- Timeouts, found by `/code-review` on the rebase, 2026-09-04 --------------
+
+
+def test_every_view_the_hub_opens_records_the_message_it_lives_on():
+    """`on_timeout` edits `self.message`, so a view that never records it times
+    out silently and leaves buttons looking live long after they stopped
+    working. Asserted across the module rather than against one call site: this
+    was already right in five places and wrong in the sixth, which is exactly
+    the shape a per-site test misses.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(hub))
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        sends_a_view = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("send_message", "send")
+            and any(kw.arg == "view" for kw in node.keywords)
+            for node in ast.walk(fn)
+        )
+        if not sends_a_view:
+            continue
+        records = any(
+            isinstance(target, ast.Attribute) and target.attr == "message"
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+        )
+        if not records:
+            offenders.append(fn.name)
+
+    assert not offenders, f"views sent without recording their message: {offenders}"

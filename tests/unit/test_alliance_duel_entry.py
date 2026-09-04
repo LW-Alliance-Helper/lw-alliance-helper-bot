@@ -1449,3 +1449,173 @@ def test_your_own_match_shows_even_with_the_opponent_column_blank():
 
     text = _text(entry.results_embed(state, 1))
     assert state.display_name(opponent) in text
+
+
+# -- What `/code-review` found on the rebase, 2026-09-04 ----------------------
+#
+# Six findings, none of which the 620 tests above could see. Each one is pinned
+# here against the behaviour, not against the implementation, so a rewrite that
+# reintroduces the bug still fails.
+
+
+def _record(rows, week, winner_tag):
+    """Record week `week` outright, so it stops being an open fork."""
+    _play_week(rows, week, winner_of=lambda m: m.a if m.a == _key(winner_tag) else m.b)
+
+
+def test_meetings_ahead_forks_on_the_open_week_not_the_live_one():
+    """A week already recorded is history, not a branch. Assuming a result onto
+    it overrides what the game handed down, and drops the next open week from
+    the answer entirely."""
+    rows = _bracket()
+    for week in range(2, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    # Week 1 is played and recorded; the live week is still 1.
+    _record(rows, 1, OWN_TAG)
+
+    # The fork comes off the rows, not off the live week, so once week 1 is
+    # recorded it makes no difference which of the two the caller names. Under
+    # the bug these disagreed: naming week 1 assumed a result onto a week the
+    # game had already decided, and every meeting behind it was computed from a
+    # bracket that cannot happen.
+    from_live = ad.meetings_ahead(OWN, rows, 1, estimate=None)
+    from_open = ad.meetings_ahead(OWN, rows, 2, estimate=None)
+
+    assert from_live, "every future meeting was dropped"
+    assert from_live == from_open
+    # And a settled week is never offered as somewhere you might still meet.
+    assert all(m.week > 1 for m in from_live.values())
+
+
+def test_the_preview_screen_forks_where_the_path_screen_forked():
+    """The Preview buttons sit under the path screen's fork. Branching on the
+    live week instead describes a route the screen behind them never offered."""
+    rows = _bracket()
+    for week in range(2, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    _record(rows, 1, OWN_TAG)
+    state = _state(rows)
+
+    preview = _text(hub.path_preview_embed(state, "W"))
+
+    # Week 1 is recorded and week 2 is the fork itself, so the branch starts at
+    # week 3. Under the bug the fork was the live week, which put week 2 in the
+    # list and assumed a result onto a week the game had already decided.
+    assert "Week 1:" not in preview
+    assert "Week 2:" not in preview
+    assert "Week 3:" in preview
+
+
+@pytest.mark.asyncio
+async def test_changing_a_prediction_does_not_leave_the_old_winner_picked(_captured):
+    """`predicted_winner` reads `match.a` first, so a stale "W" on the side the
+    call moved off silently reverts the correction and makes rule 7 report both
+    sides picked to win."""
+    rows = _bracket()
+    state = _state(rows)
+    match = entry.week_matches(state, 1)[0]
+    a_tag, b_tag = state.display_name(match.a), state.display_name(match.b)
+    # An earlier call on side A, already in the sheet.
+    _picked(rows, a_tag, a_tag, b_tag, by="7")
+
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:b"]))
+    await view._save(_FakeInteraction(user_id=7))
+
+    written = {row.alliance: row.picked for row in _captured}
+    assert written[match.b] == "W"
+    assert written.get(match.a) == "L", "the side the call moved off still says W"
+    # And the two sides no longer agree, which is what rule 7 fires on.
+    assert written[match.a] != written[match.b]
+
+
+def test_two_alliances_sharing_a_tag_are_still_two_alliances():
+    """`display_name` is the tag alone and a bracket draws from more than one
+    warzone. A set collapsed the bot's own prefilled `X v X:` line into a single
+    name, matched no pairing, and refused the whole box -- which nobody could
+    fix, because they had not typed the line being refused."""
+    rows = _bracket()
+    match = entry.week_matches(_state(rows), 1)[0]
+    # Give both sides of a real pairing the same display tag.
+    for row in rows:
+        if row.alliance in (match.a, match.b):
+            row.tag_display = "KTI"
+    state = _state(rows)
+
+    found = entry._match_by_label(state, 1, "KTI v KTI")
+
+    assert found is not None, "a same-tag pairing could not be located at all"
+    assert {found.a, found.b} == {match.a, match.b}
+
+
+def test_a_split_typed_with_spaces_round_the_dash_is_read():
+    """`9 - 4` is `9-4`. Reading only the last whitespace-delimited token missed
+    it, and because one bad line refuses the whole box it threw the rest of the
+    week's typing away with it."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    spaced, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 9 - 4")
+    tight, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+
+    assert problems == []
+    assert [(r.alliance, r.week_score) for r in spaced] == [
+        (r.alliance, r.week_score) for r in tight
+    ]
+
+
+def test_a_split_still_needs_a_separator():
+    """The fix widened what counts as a separator, not what counts as a split.
+    `9 4` and `94` were refused before and stay refused."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    for value in (f"{a} 9 4", f"{a} 94", a):
+        rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {value}")
+        assert rows == [] and len(problems) == 1, f"{value!r} was accepted"
+
+
+@pytest.mark.asyncio
+async def test_a_mid_season_start_does_not_stamp_todays_power_onto_past_weeks(_captured):
+    """`power_history` pairs each power reading with its own week date, so
+    copying today's onto the weeks already played invents a flat trajectory and
+    Scout reports "Power flat across N days of recorded rows" about days nobody
+    recorded. Identity still rides onto every week: a tag is not a measurement.
+    """
+    state = _state([])
+    entries = tuple(
+        ad.BracketEntry(
+            alliance=e.alliance,
+            ranking=e.ranking,
+            tag_display=e.tag_display,
+            warzone_display=e.warzone_display,
+            power=5_000_000,
+            members=100,
+            gift_level=40,
+        )
+        for e in _entries()
+    )
+
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, entries, upto_week=3)
+    assert ok, message
+
+    by_week = {}
+    for row in _captured:
+        by_week.setdefault(row.week, []).append(row)
+    assert set(by_week) == {1, 2, 3}
+
+    for week in (1, 2):
+        assert all(r.power is None for r in by_week[week]), f"week {week} carries a power read"
+        assert all(r.members is None for r in by_week[week])
+        assert all(r.gift_level is None for r in by_week[week])
+        # Identity is not a measurement and belongs on every row.
+        assert all(r.tag_display for r in by_week[week])
+
+    assert all(r.power == 5_000_000 for r in by_week[3])
+
+    # And the result is a trajectory nobody can read a trend out of, rather than
+    # a fabricated flat one.
+    profile = ad.build_profile(_captured, _captured[0].alliance)
+    assert len([p for _, p in profile.power_history if p]) < 2

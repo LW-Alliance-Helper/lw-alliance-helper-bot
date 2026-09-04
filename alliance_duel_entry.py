@@ -61,13 +61,23 @@ VS_BTN_NEXT_WEEK = "➕ Start next week's rows"
 # ── Writing ───────────────────────────────────────────────────────────────────
 
 
-async def save_rows(state, rows: list[ad.AllianceWeek]) -> str:
-    """Upsert `rows` into the guild's tab and patch the loaded snapshot.
+async def save_rows(state, rows: list[ad.AllianceWeek], *, actor=None) -> str:
+    """Upsert `rows` into the guild's tab, mirror them centrally, and patch the
+    loaded snapshot.
 
     Returns an empty string on success, or a sentence naming what went wrong.
     Errors come back as text rather than raising because every caller is a
     modal submit that has already deferred, and the user needs a reply either
     way.
+
+    **The sheet goes first and the sheet decides.** The central store (#544) is
+    a second copy for the benefit of alliances who never played each other, not
+    the source of truth, so it is written only after the tab has taken the rows
+    and its failure is never the officer's problem.
+
+    `actor` is the interaction whose user typed this, when there is one. The
+    guild is stamped regardless: it is what a removal scrubs on, so a row
+    written without it could never be found again.
     """
     tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"
 
@@ -97,8 +107,37 @@ async def save_rows(state, rows: list[ad.AllianceWeek]) -> str:
             f"**{ad_setup.VS_SETUP_NAV}** for the column guide."
         )
 
+    await _mirror_centrally(state, rows, actor=actor)
     _patch_snapshot(state, rows)
     return ""
+
+
+async def _mirror_centrally(state, rows: list[ad.AllianceWeek], *, actor=None) -> None:
+    """Copy what was just written into the alliance-keyed store (#544).
+
+    Every VS write goes through `save_rows`, so this is the one place the
+    mirror belongs: a second call site is how one surface starts contributing
+    to the shared record and another silently stops.
+
+    **Never raises, never reports.** The tab already has the rows and the
+    officer has already been told it worked; a central store that will not open
+    costs other alliances a scouting row, which is not something to interrupt
+    somebody's evening over. It is logged rather than Sentry-captured for the
+    same reason `save_rows` does not capture a sheet failure.
+    """
+    try:
+        import alliance_duel_db as vsdb
+
+        who = {"guild_id": state.guild_id}
+        user = getattr(actor, "user", None)
+        if user is not None:
+            who["discord_user_id"] = getattr(user, "id", None)
+            who["discord_name"] = getattr(user, "display_name", None) or getattr(user, "name", None)
+
+        # SQLite blocks, and this runs on the gateway thread (#366).
+        await asyncio.to_thread(vsdb.record_weeks, rows, actor=who)
+    except Exception as e:  # noqa: BLE001 - the sheet has it; this is the copy
+        logger.warning("[VS] central score write failed for guild=%s: %s", state.guild_id, e)
 
 
 def _patch_snapshot(state, rows: list[ad.AllianceWeek]) -> None:

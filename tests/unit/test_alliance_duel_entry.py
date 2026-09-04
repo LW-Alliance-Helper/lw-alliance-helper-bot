@@ -1619,3 +1619,116 @@ async def test_a_mid_season_start_does_not_stamp_todays_power_onto_past_weeks(_c
     # a fabricated flat one.
     profile = ad.build_profile(_captured, _captured[0].alliance)
     assert len([p for _, p in profile.power_history if p]) < 2
+
+
+# -- The central store (#544) --------------------------------------------------
+#
+# Every VS write goes through `save_rows`, so the mirror lives there and these
+# exercise the real one rather than the `_captured` stub above.
+
+
+@pytest.fixture
+def _sheet_takes_it(monkeypatch):
+    """Let `save_rows` reach the end without a Google Sheet behind it."""
+    import config as _config
+
+    monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+    monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: _FakeSheet())
+    monkeypatch.setattr(entry.ad, "plan_upsert", lambda *a, **k: _FakePlan())
+    monkeypatch.setattr(entry.ad, "apply_upsert", lambda *a, **k: None)
+
+
+class _FakeSheet:
+    def get_all_values(self):
+        return []
+
+
+class _FakePlan:
+    unmapped_columns = ()
+
+
+@pytest.fixture
+def _central(tmp_path, monkeypatch):
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vsdb.init_db()
+    return vsdb
+
+
+@pytest.mark.asyncio
+async def test_a_saved_score_reaches_the_central_store(_sheet_takes_it, _central):
+    """The whole point of #544: what one alliance records has to become
+    readable by the fifteen who never played them."""
+    state = _state(_bracket())
+    row = _row(OWN_TAG, week_score=7, week_outcome="W")
+
+    problem = await entry.save_rows(state, [row])
+
+    assert problem == ""
+    stored = _central.weeks_for_alliance(OWN)
+    assert len(stored) == 1
+    assert stored[0]["week_score"] == 7 and stored[0]["week_outcome"] == "W"
+
+
+@pytest.mark.asyncio
+async def test_the_guild_is_stamped_even_with_nobody_named(_sheet_takes_it, _central):
+    """`actor_guild_id` is what a removal scrubs on. A row written without it
+    could never be found again, so it does not depend on having an
+    interaction."""
+    state = _state(_bracket())
+
+    await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    stored = _central.weeks_for_alliance(OWN)
+    assert stored[0]["actor_guild_id"] == str(state.guild_id)
+    assert stored[0]["actor_discord_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_person_is_recorded_when_there_is_an_interaction(_sheet_takes_it, _central):
+    state = _state(_bracket())
+    who = _FakeInteraction(user_id=4242)
+
+    await entry.save_rows(state, [_row(OWN_TAG, week_score=7)], actor=who)
+
+    stored = _central.weeks_for_alliance(OWN)
+    assert stored[0]["actor_discord_id"] == "4242"
+
+
+@pytest.mark.asyncio
+async def test_a_central_store_failure_is_never_the_officers_problem(
+    _sheet_takes_it, _central, monkeypatch
+):
+    """The tab already has the rows and the officer has already been told it
+    worked. A second copy that will not open costs another alliance a scouting
+    row; it does not cost this one their evening."""
+
+    def _boom(*a, **k):
+        raise RuntimeError("volume gone")
+
+    monkeypatch.setattr(_central, "record_weeks", _boom)
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem == "", "a mirror failure was reported as a save failure"
+
+
+@pytest.mark.asyncio
+async def test_a_sheet_that_refused_the_write_contributes_nothing(_central, monkeypatch):
+    """The sheet decides. Mirroring a write the tab rejected would put a number
+    into fifteen other alliances' scouting that its own alliance cannot see."""
+    import config as _config
+
+    monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+    monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: _FakeSheet())
+    monkeypatch.setattr(
+        entry.ad, "plan_upsert", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("tab gone"))
+    )
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem, "the sheet failure was swallowed"
+    assert _central.weeks_for_alliance(OWN) == []

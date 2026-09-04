@@ -704,3 +704,115 @@ def test_every_view_the_hub_opens_records_the_message_it_lives_on():
             offenders.append(fn.name)
 
     assert not offenders, f"views sent without recording their message: {offenders}"
+
+
+# ── Shared scouting (#544) ────────────────────────────────────────────────────
+#
+# The payoff half: an alliance can see what fifteen others recorded, not just
+# the four they played. The rules these hold are provenance and precedence.
+
+
+@pytest.fixture
+def shared_store(tmp_path, monkeypatch):
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vsdb.init_db()
+    return vsdb
+
+
+def _record_shared(vsdb, state, tag, **kw):
+    """Somebody else's guild recorded this alliance."""
+    vsdb.record_weeks(
+        [
+            ad.AllianceWeek(
+                league=state.league,
+                week=1,
+                alliance=ad.AllianceKey.of(tag, "1234"),
+                tag_display=tag,
+                **kw,
+            )
+        ],
+        actor={"guild_id": 999999},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_scout_card_falls_back_to_what_other_alliances_recorded(shared_store):
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000, members=100, gift_level=40)
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+
+    assert "Nothing recorded yet" not in text
+    assert "5M" in text and "100 members" in text
+
+
+@pytest.mark.asyncio
+async def test_a_borrowed_record_says_so(shared_store):
+    """A number another alliance recorded must never read as though this
+    alliance recorded it."""
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000)
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+
+    assert ad_ui.VS_SHARED_HEADING in text
+    names = [f.name for f in ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")).fields]
+    assert "Recorded" not in names, "somebody else's numbers were labelled as ours"
+
+
+@pytest.mark.asyncio
+async def test_our_own_sheet_wins_over_the_shared_record(shared_store):
+    """The sheet is authoritative. Quietly preferring somebody else's number
+    over the one the officer typed would leave them no way to tell which they
+    were reading."""
+    state = _state([_row("ZZZ", week=1, power=1_000_000)])
+    _record_shared(shared_store, state, "ZZZ", power=9_000_000)
+    await hub.attach_shared(state)
+
+    assert state.shared_only(ad.AllianceKey.of("ZZZ", "1234")) is None
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+    assert "1M" in text and "9M" not in text
+
+
+@pytest.mark.asyncio
+async def test_shared_rows_never_reach_the_rows_a_write_reads(shared_store):
+    """`row_for` feeds `_row_for_write`, which builds what goes back to this
+    guild's own tab. A shared row reaching it would copy another alliance's
+    record into this alliance's sheet as though they had typed it."""
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000)
+    await hub.attach_shared(state)
+
+    assert state.shared, "nothing was loaded, so this proves nothing"
+    assert state.row_for(ad.AllianceKey.of("ZZZ", "1234"), 1) is None
+    assert all(r.alliance != ad.AllianceKey.of("ZZZ", "1234") for r in state.rows)
+    assert all(r.alliance != ad.AllianceKey.of("ZZZ", "1234") for r in state.league_rows())
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_store_costs_a_card_and_not_the_hub(monkeypatch):
+    """A second copy that will not open is not worth interrupting somebody for.
+    Their own sheet is unaffected by it."""
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", "/nowhere/that/exists/x.sqlite3")
+    state = _state([_row("US", week=1)])
+
+    await hub.attach_shared(state)
+
+    assert state.shared == []
+    assert _text(hub.hub_embed(state))
+
+
+@pytest.mark.asyncio
+async def test_nothing_anywhere_still_says_so(shared_store):
+    state = _state([_row("US", week=1)])
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("NOPE", "1234")))
+
+    assert ad_ui.VS_SHARED_NOTHING in text

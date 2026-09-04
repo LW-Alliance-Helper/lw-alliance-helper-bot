@@ -39,6 +39,22 @@ MAX_SELECT_OPTIONS = 25
 #: stale picker is more confusing than an expired one.
 PICKER_TIMEOUT = 180
 
+# ── PLACEHOLDER COPY, awaiting sign-off ───────────────────────────────────────
+#
+# The shared-scouting lines (#544). Written to be replaced: the mechanism is
+# built and tested behind these, and the wording is Kevin's. Candidates are on
+# the pull request. Two rules they already follow, so a replacement has to as
+# well:
+#
+#   * `UX.md` forbids an em dash anywhere a user can see, and prescribes a
+#     colon to introduce a detail.
+#   * The provenance is the point. A number another alliance recorded must
+#     never read as though this alliance recorded it, which is the same rule
+#     `champion_duel_db.VALID_SOURCES` exists for.
+VS_SHARED_HEADING = "From other alliances"
+VS_SHARED_ATTRIBUTION = "Nobody here has scouted them. This is what other alliances recorded."
+VS_SHARED_NOTHING = "Nothing recorded yet, here or anywhere else."
+
 
 # ── Scout profile ─────────────────────────────────────────────────────────────
 
@@ -56,7 +72,15 @@ def scout_embed(state, target: ad.AllianceKey) -> discord.Embed:
         color=discord.Color.blurple(),
     )
 
-    embed.add_field(name="Recorded", value=_recorded_block(state, target, profile), inline=False)
+    # The field name follows where the numbers came from. Calling another
+    # alliance's record "Recorded" on our own card is the quiet version of
+    # presenting it as ours, and provenance is the whole point of #544.
+    borrowed = profile is None and state.shared_only(target) is not None
+    embed.add_field(
+        name=VS_SHARED_HEADING if borrowed else "Recorded",
+        value=_recorded_block(state, target, profile),
+        inline=False,
+    )
 
     if state.own is not None and target != state.own:
         history = ad.head_to_head(state.rows, state.own, target)
@@ -79,12 +103,15 @@ def _recorded_block(state, target: ad.AllianceKey, profile) -> str:
     whether they are looking at last week or last season.
     """
     if profile is None:
-        return "Nothing recorded yet."
+        # Nothing of our own. This is the case central storage (#544) exists
+        # for: fifteen other alliances played this league too, and one of them
+        # has very likely met this alliance even if we never have.
+        shared = state.shared_only(target)
+        if shared is None:
+            return VS_SHARED_NOTHING
+        return f"*{VS_SHARED_ATTRIBUTION}*\n" + _numbers_block(shared)
 
-    power = f"{profile.power / 1_000_000:,.0f}M" if profile.power else ad_setup.NOT_ENTERED
-    members = str(profile.members) if profile.members is not None else ad_setup.NOT_ENTERED
-    gift = str(profile.gift_level) if profile.gift_level is not None else ad_setup.NOT_ENTERED
-    lines = [f"Power {power} · {members} members · gift level {gift}"]
+    lines = [_numbers_block(profile)]
 
     age = ad.input_age_days(profile)
     if age is not None:
@@ -105,6 +132,19 @@ def _recorded_block(state, target: ad.AllianceKey, profile) -> str:
     if trajectory:
         lines.append(trajectory)
     return "\n".join(lines)[:1024]
+
+
+def _numbers_block(profile) -> str:
+    """Power, members and gift level, however we came by them.
+
+    One formatter for our own record and for another alliance's, so the two can
+    never start disagreeing about how a blank or a million renders. What
+    differs between them is the label above, not the numbers.
+    """
+    power = f"{profile.power / 1_000_000:,.0f}M" if profile.power else ad_setup.NOT_ENTERED
+    members = str(profile.members) if profile.members is not None else ad_setup.NOT_ENTERED
+    gift = str(profile.gift_level) if profile.gift_level is not None else ad_setup.NOT_ENTERED
+    return f"Power {power} · {members} members · gift level {gift}"
 
 
 def _trajectory_line(profile) -> str:

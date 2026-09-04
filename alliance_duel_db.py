@@ -422,6 +422,62 @@ def _with_days(sql: str, params: list) -> list[dict]:
     return rows
 
 
+def _to_row(record: dict):
+    """One stored record as the `AllianceWeek` every VS surface already reads.
+
+    The screens are built on that dataclass and on `build_profiles`, so handing
+    them the same type is what lets shared knowledge reach a card without every
+    renderer learning a second shape.
+    """
+    import alliance_duel as ad
+    import datetime as _dt
+
+    week_date = None
+    if record.get("week_date"):
+        try:
+            week_date = _dt.date.fromisoformat(record["week_date"])
+        except ValueError:
+            week_date = None
+
+    opponent = None
+    if record.get("opponent_tag"):
+        opponent = ad.AllianceKey.of(record["opponent_tag"], record.get("opponent_warzone"))
+
+    return ad.AllianceWeek(
+        league=ad.LeagueKey(record["season"], record["tier"], record["grp"]),
+        week=record["week"],
+        alliance=ad.AllianceKey(record["tag"], record["warzone"]),
+        week_date=week_date,
+        ranking=record.get("ranking"),
+        tag_display=record.get("tag_display") or "",
+        warzone_display=record.get("warzone_display") or "",
+        power=record.get("power"),
+        members=record.get("members"),
+        gift_level=record.get("gift_level"),
+        opponent=opponent,
+        day_scores=dict(record.get("day_scores") or {}),
+        day_outcomes=dict(record.get("day_outcomes") or {}),
+        week_score=record.get("week_score"),
+        week_outcome=record.get("week_outcome"),
+    )
+
+
+def rows_for_alliance(alliance, *, season: str | None = None) -> list:
+    """`weeks_for_alliance`, as `AllianceWeek` objects."""
+    return [_to_row(r) for r in weeks_for_alliance(alliance, season=season)]
+
+
+def rows_for_league(league, *, week: int | None = None) -> list:
+    """`weeks_for_league`, as `AllianceWeek` objects.
+
+    **Never mix these into the rows a write reads.** `_row_for_write` builds
+    what goes back to the guild's own tab, and a shared row reaching it would
+    copy another alliance's record into this alliance's sheet as if they had
+    typed it. They are kept on their own attribute for exactly that reason.
+    """
+    return [_to_row(r) for r in weeks_for_league(league, week=week)]
+
+
 # ── Guild removal (#543) ──────────────────────────────────────────────────────
 #
 # Nothing here is deleted. A score is a reading of what the game showed sixteen

@@ -91,6 +91,33 @@ FOOTER_SCOUTABLE = "{subject} power, members and gift level."
 NOT_ENTERED = ad_setup.NOT_ENTERED
 
 
+async def attach_shared(state: "HubState") -> None:
+    """Load what other alliances recorded about this league onto `state`.
+
+    Called once per `/vs`, next to the one sheet read, for the same reason that
+    one exists: the hub renders every screen from a single snapshot, and a
+    button that went back to a database would put the read-quota rule (#269)
+    back where it started.
+
+    Never raises. The store is a second copy; a guild's own sheet is unaffected
+    by it being unreadable, and a scouting card with less on it is not worth
+    interrupting somebody for.
+    """
+    if state.league is None:
+        return
+    try:
+        import alliance_duel_db as vsdb
+
+        # SQLite blocks, and this runs on the gateway thread (#366).
+        shared = await asyncio.to_thread(vsdb.rows_for_league, state.league)
+    except Exception as e:  # noqa: BLE001 - the sheet is unaffected
+        logger.warning("[VS] shared scouting unavailable for guild=%s: %s", state.guild_id, e)
+        return
+
+    state.shared = shared
+    state.shared_profiles = ad.build_profiles(shared)
+
+
 # ── Loaded state ──────────────────────────────────────────────────────────────
 
 
@@ -113,9 +140,33 @@ class HubState:
         self.live = ad.resolve_live_week(rows)
         self.league = self.live.league if self.live else ad.latest_league(rows)
 
+        # What other alliances recorded about this league (#544), filled by
+        # `attach_shared` after construction because reading it is IO.
+        #
+        # **A separate attribute, never folded into `self.rows`.** `row_for`
+        # feeds `_row_for_write`, which builds what goes back to this guild's
+        # own tab; a shared row reaching it would copy another alliance's
+        # record into this alliance's sheet as though they had typed it. Every
+        # screen that wants shared knowledge asks for it by name.
+        self.shared: list[ad.AllianceWeek] = []
+        self.shared_profiles: dict = {}
+
     @property
     def full_bracket(self) -> bool:
         return self.tracking_mode == ad.MODE_FULL_BRACKET
+
+    def shared_only(self, alliance: ad.AllianceKey):
+        """What other alliances recorded about `alliance`, when we have not.
+
+        Returns `None` whenever this guild's own sheet has anything at all
+        about them. The sheet wins, and a card that quietly preferred somebody
+        else's number over the one the officer typed would be worse than a card
+        with a gap in it: they would have no way to tell which they were
+        reading.
+        """
+        if self.profiles.get(alliance) is not None:
+            return None
+        return self.shared_profiles.get(alliance)
 
     @property
     def week(self) -> int | None:
@@ -1313,6 +1364,7 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
         return
 
     state = HubState(interaction.guild_id, vs_cfg, rows)
+    await attach_shared(state)
     view = VSHubView(bot, state, interaction.user.id)
     await interaction.followup.send(embed=hub_embed(state), view=view, ephemeral=True)
     view.message = await interaction.original_response()

@@ -322,3 +322,81 @@ def test_init_db_is_rerunnable():
     vsdb.init_db()
 
     assert _stored("QQQ")["week_score"] == 7
+
+
+# ── A person's own removal (#517), which is not a server's ────────────────────
+
+
+def test_a_personal_removal_takes_the_person_and_leaves_the_server():
+    """A guild removal takes all three attribution columns because the server
+    is what is leaving. A personal removal takes only the two that name a
+    human: which server recorded a league result is not this person's to take
+    with them."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(discord_id="99"))
+
+    result = vsdb.purge_user_data("99", apply=True)
+
+    assert result["scrubbed"].get("alliance_weeks") == 1
+    row = _stored("QQQ")
+    assert row["week_score"] == 7, "the league went with the person"
+    assert row["actor_discord_id"] is None
+    assert row["actor_name"] is None
+    assert row["actor_guild_id"] == str(GUILD), "the server was taken too"
+
+
+def test_a_personal_removal_leaves_other_people_alone():
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(discord_id="99"))
+    vsdb.record_weeks([_row("ZZZ", week_score=6)], actor=_actor(discord_id="11"))
+
+    vsdb.purge_user_data("99", apply=True)
+
+    assert _stored("ZZZ")["actor_discord_id"] == "11"
+
+
+def test_a_personal_dry_run_counts_and_changes_nothing():
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(discord_id="99"))
+
+    preview = vsdb.purge_user_data("99", apply=False)
+
+    assert preview["scrubbed"].get("alliance_weeks") == 1
+    assert _stored("QQQ")["actor_discord_id"] == "99"
+
+
+def test_an_empty_id_removes_nothing_rather_than_everything():
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(discord_id="99"))
+
+    assert vsdb.purge_user_data("", apply=True) == {
+        "deleted": {},
+        "scrubbed": {},
+        "applied": True,
+    }
+    assert _stored("QQQ")["actor_discord_id"] == "99"
+
+
+def test_the_personal_spec_covers_every_column_naming_a_person():
+    """The mirror of the guild coverage test. A column holding a Discord id or
+    a name that no personal removal touches is one somebody is told was
+    removed."""
+    with vsdb._get_conn() as conn:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(alliance_weeks)").fetchall()}
+    personal = {c for c in columns if c in ("actor_discord_id", "actor_name")}
+    named = " ".join(sets for _, sets, _ in vsdb._REMOVAL_SCRUBS)
+
+    missed = {c for c in personal if c not in named}
+    assert not missed, f"columns naming a person the removal ignores: {sorted(missed)}"
+
+
+# ── Attribution follows the non-clobbering rule too ───────────────────────────
+
+
+def test_a_save_that_knows_the_guild_but_not_the_person_keeps_the_person():
+    """Most saves know the guild and not the person. Writing all three columns
+    together would erase a name somebody else's save recorded, which is the one
+    rule this module exists to keep."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(discord_id="99", name="Kev"))
+    vsdb.record_weeks([_row("QQQ", week_outcome="W")], actor={"guild_id": GUILD})
+
+    row = _stored("QQQ")
+    assert row["actor_discord_id"] == "99", "the person was erased by a guild-only save"
+    assert row["actor_name"] == "Kev"
+    assert row["week_outcome"] == "W"

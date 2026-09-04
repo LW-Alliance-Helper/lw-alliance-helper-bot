@@ -235,12 +235,17 @@ def record_weeks(rows, *, actor=None) -> dict:
             ).fetchone()
 
             values = _week_columns(row)
-            if aid or aname or aguild:
-                values.update(
-                    actor_discord_id=aid,
-                    actor_name=aname,
-                    actor_guild_id=aguild,
-                )
+            # Column by column, not all three together. A save that knows the
+            # guild but not the person -- which is most of them -- would
+            # otherwise NULL a name somebody else's save had recorded, and that
+            # is the one rule this module exists to keep.
+            for column, value in (
+                ("actor_discord_id", aid),
+                ("actor_name", aname),
+                ("actor_guild_id", aguild),
+            ):
+                if value is not None:
+                    values[column] = value
 
             if existing is None:
                 columns = (
@@ -440,18 +445,16 @@ _GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
-    """Remove one server's traces from the VS scores.
+def _run_spec(out: dict, params: dict, deletes, scrubs, *, apply: bool) -> dict:
+    """Walk a delete spec and a scrub spec, counting or doing.
 
-    Same shape and same return as the other two purges, including the
-    `apply=False` dry run, for the same reason: a preview that ran a different
-    query from the run would be worth less than no preview at all.
+    One implementation for both removals, so the guild path and the personal
+    path cannot drift into answering differently. `apply=False` runs the same
+    predicates and counts instead: a preview that ran a different query from
+    the run would be worth less than no preview at all.
     """
-    gid = str(int(guild_id))
-    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
-    params = {"gid": gid}
     with _get_conn() as conn:
-        for table, where in _GUILD_REMOVAL_DELETES:
+        for table, where in deletes:
             if apply:
                 n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
             else:
@@ -462,7 +465,7 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
             if n:
                 out["deleted"][table] = n
 
-        for table, sets, where in _GUILD_REMOVAL_SCRUBS:
+        for table, sets, where in scrubs:
             if apply:
                 n = conn.execute(
                     f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
@@ -478,3 +481,47 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
         if apply:
             conn.commit()
     return out
+
+
+# A person's own removal (#517), which is a different rule from a server's.
+# A guild removal takes the three attribution columns because the *server* is
+# what is leaving. A personal removal takes only the two that name a human: the
+# guild id is a fact about which server recorded a league result, and it is not
+# this person's to take with them.
+#
+# The reading itself stays either way. Sixteen alliances played that league.
+_REMOVAL_DELETES: tuple[tuple[str, str], ...] = ()
+
+_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    (
+        "alliance_weeks",
+        "actor_discord_id = NULL, actor_name = NULL",
+        "actor_discord_id = :sid",
+    ),
+)
+
+
+def purge_user_data(discord_user_id, *, apply: bool = False) -> dict:
+    """Remove one person from the VS scores.
+
+    Same shape and same return as the guild purge and as both other databases'
+    personal removals, including the `apply=False` dry run: a preview that ran
+    a different query from the run would be worth less than no preview at all.
+    """
+    sid = str(discord_user_id).strip()
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    if not sid:
+        return out
+    return _run_spec(out, {"sid": sid}, _REMOVAL_DELETES, _REMOVAL_SCRUBS, apply=apply)
+
+
+def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
+    """Remove one server's traces from the VS scores.
+
+    Same shape and same return as the other two purges, including the
+    `apply=False` dry run, and it walks the specs through the same `_run_spec`
+    the personal removal does.
+    """
+    gid = str(int(guild_id))
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    return _run_spec(out, {"gid": gid}, _GUILD_REMOVAL_DELETES, _GUILD_REMOVAL_SCRUBS, apply=apply)

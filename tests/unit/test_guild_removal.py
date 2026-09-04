@@ -163,6 +163,11 @@ def test_premium_is_not_even_named_in_the_spec(temp_db):
 # ── The Champion Duel side scrubs rather than deletes ─────────────────────────
 
 
+def cd_columns_of(table):
+    with cd._get_conn() as conn:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def test_the_champion_duel_spec_matches_its_schema(cd_db):
     with cd._get_conn() as conn:
         live = {
@@ -171,6 +176,31 @@ def test_the_champion_duel_spec_matches_its_schema(cd_db):
         }
     named = {t for t, _ in cd._GUILD_REMOVAL_DELETES} | {t for t, _, _ in cd._GUILD_REMOVAL_SCRUBS}
     assert named <= live, f"names tables that do not exist: {sorted(named - live)}"
+
+
+def test_the_champion_duel_spec_covers_every_table_that_names_a_server(cd_db):
+    """The mirror of the `config` coverage test, which this side never had.
+
+    That one asks the live schema which tables carry a `guild_id` and fails if
+    one is unsorted. This one only ever checked the other direction -- that
+    every *named* table exists -- so a new table carrying a server's id would
+    have passed it in silence, and the attribution would have survived a
+    removal with nothing to say so.
+
+    The spec covers everything today; this is what keeps it that way. The
+    column is matched by suffix because this side names them for their role
+    (`actor_guild_id`, `writer_guild_id`) rather than plain `guild_id`.
+    """
+    with cd._get_conn() as conn:
+        live = [
+            r["name"]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        ]
+    attributed = {t for t in live if any(c.endswith("guild_id") for c in cd_columns_of(t))}
+    named = {t for t, _ in cd._GUILD_REMOVAL_DELETES} | {t for t, _, _ in cd._GUILD_REMOVAL_SCRUBS}
+
+    missed = attributed - named
+    assert not missed, f"tables naming a server that the removal ignores: {sorted(missed)}"
 
 
 def test_a_reading_keeps_its_content_and_loses_its_server(cd_db):

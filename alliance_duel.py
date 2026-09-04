@@ -19,7 +19,7 @@ ground truth for this feature):
   Gold / Silver, ordered) and group (``12 - 2``). Not date-derived. Many
   brackets run in parallel per season, and promotion/relegation moves
   alliances between tiers, so tier travels with every record.
-- **Seed is per league, not per alliance.** It is constant across that
+- **Ranking is per league, not per alliance.** It is constant across that
   league's four weeks and is only the tie-break anchor. What reshuffles
   weekly is the weighted score ranking.
 - **Header-name column addressing**, reusing ``transfer.py``'s helpers.
@@ -279,17 +279,17 @@ def known_rank(value) -> int | None:
 #
 # Addressed by header *name* via `transfer.header_index` / `transfer.cell_for`,
 # never by fixed position. These constants are the names the bot writes when it
-# seeds the tab; a user who renames a header breaks only that column's binding.
+# creates the tab; a user who renames a header breaks only that column, and
+# `config_health` reports it rather than the read failing silently.
 
 COL_SEASON = "Season"
 COL_TIER = "Tier"
 COL_GROUP = "Group"
 COL_WEEK_DATE = "Week Date"
 COL_WEEK = "Week"
-COL_SEED = "Seed"
+COL_RANKING = "Ranking"
 COL_TAG = "Tag"
 COL_WARZONE = "Warzone"
-COL_NAME = "Name"
 COL_POWER = "Power"
 COL_MEMBERS = "Members"
 COL_GIFT_LEVEL = "Gift Level"
@@ -313,7 +313,7 @@ def day_outcome_col(day: int) -> str:
     return f"Day {day} Outcome"
 
 
-#: Header row the bot seeds the tab with, in order. Users may reorder or insert
+#: Header row the bot writes when it creates the tab, in order. Users may reorder
 #: columns afterwards; everything resolves by name.
 SHEET_COLUMNS: tuple[str, ...] = (
     COL_SEASON,
@@ -321,10 +321,9 @@ SHEET_COLUMNS: tuple[str, ...] = (
     COL_GROUP,
     COL_WEEK_DATE,
     COL_WEEK,
-    COL_SEED,
+    COL_RANKING,
     COL_TAG,
     COL_WARZONE,
-    COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
@@ -347,7 +346,6 @@ SHEET_COLUMNS: tuple[str, ...] = (
 #: these cells stay empty and the ones that do get filled become the
 #: power-trajectory history for free.
 PERSISTENT_COLUMNS: tuple[str, ...] = (
-    COL_NAME,
     COL_POWER,
     COL_MEMBERS,
     COL_GIFT_LEVEL,
@@ -379,7 +377,7 @@ def _parse_magnitude(value, magnitude: str | None) -> int | None:
 
 
 def parse_int(value) -> int | None:
-    """Tolerant integer read of a plain count cell (week, seed, members, gift
+    """Tolerant integer read of a plain count cell (week, ranking, members, gift
     level). No implicit magnitude — a bare ``12`` means twelve."""
     return _parse_magnitude(value, None)
 
@@ -566,8 +564,7 @@ class AllianceWeek:
     alliance: AllianceKey
 
     week_date: _dt.date | None = None
-    seed: int | None = None
-    name: str = ""
+    ranking: int | None = None
     tag_display: str = ""
     warzone_display: str = ""
 
@@ -637,7 +634,6 @@ class AllianceProfile:
     """
 
     alliance: AllianceKey
-    name: str = ""
     power: int | None = None
     members: int | None = None
     gift_level: int | None = None
@@ -819,8 +815,7 @@ def parse_rows(values: Sequence[Sequence], *, today: _dt.date | None = None) -> 
                 week=week,
                 alliance=alliance,
                 week_date=parse_week_date(cell(COL_WEEK_DATE), today=today),
-                seed=parse_int(cell(COL_SEED)),
-                name=cell(COL_NAME) or "",
+                ranking=parse_int(cell(COL_RANKING)),
                 tag_display=cell(COL_TAG) or "",
                 warzone_display=cell(COL_WARZONE) or "",
                 power=parse_power(cell(COL_POWER)),
@@ -860,10 +855,8 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
     }
     if row.week_date:
         out[COL_WEEK_DATE] = row.week_date.isoformat()
-    if row.seed is not None:
-        out[COL_SEED] = str(row.seed)
-    if row.name:
-        out[COL_NAME] = row.name
+    if row.ranking is not None:
+        out[COL_RANKING] = str(row.ranking)
     if row.power is not None:
         out[COL_POWER] = str(row.power)
     if row.members is not None:
@@ -1013,7 +1006,6 @@ def build_profile(rows: Iterable[AllianceWeek], alliance: AllianceKey) -> Allian
     """
     mine = sorted((r for r in rows if r.alliance == alliance), key=_row_sort_key)
     profile = {
-        "name": "",
         "power": None,
         "members": None,
         "gift_level": None,
@@ -1208,7 +1200,7 @@ class Standing:
 
     alliance: AllianceKey
     score: int  # weighted score over confirmed results only
-    seed: int | None
+    ranking: int | None
     wins: int
     losses: int
 
@@ -1223,7 +1215,7 @@ class BracketIncomplete:
     sheet is the tracker arguing with its user.
     """
 
-    reason: str  # "own_alliance_mode" | "roster_size" | "missing_seeds"
+    reason: str  # "own_alliance_mode" | "roster_size" | "missing_rankings"
     detail: str
     found: int = 0
     expected: int = BRACKET_SIZE
@@ -1289,7 +1281,7 @@ def compute_week_pairing(
     """The literal spec pairing algorithm for one week of one league.
 
     Weighted score ``[8, 4, 2, 1]`` over confirmed results only, sorted
-    descending with **seed as the tie-break**, then a greedy adjacent-pair walk
+    descending with **ranking as the tie-break**, then a greedy adjacent-pair walk
     down that order. When the next alliance in the order has already been
     faced, the walk skips ahead to the first one that hasn't; if every
     remaining candidate has been faced, it falls back to the adjacent one and
@@ -1304,22 +1296,24 @@ def compute_week_pairing(
     deliberate choice, not an error.
     """
     rows = list(alliances)
-    seeds: dict[AllianceKey, int | None] = {}
+    rankings: dict[AllianceKey, int | None] = {}
     for row in rows:
-        # First sighting registers the alliance; a later non-blank seed fills a
-        # blank one, since seed is constant across a league's four weeks and the
+        # First sighting registers the alliance; a later non-blank ranking fills a
+        # blank one, since ranking is constant across a league's four weeks and the
         # user may only have typed it on the week-1 rows.
-        if row.alliance not in seeds or (seeds[row.alliance] is None and row.seed is not None):
-            seeds[row.alliance] = row.seed
+        if row.alliance not in rankings or (
+            rankings[row.alliance] is None and row.ranking is not None
+        ):
+            rankings[row.alliance] = row.ranking
 
-    if len(seeds) < BRACKET_SIZE:
+    if len(rankings) < BRACKET_SIZE:
         return BracketIncomplete(
             reason="roster_size",
             detail=(
                 f"Pairing needs all {BRACKET_SIZE} alliances in the bracket; "
-                f"{len(seeds)} are recorded."
+                f"{len(rankings)} are recorded."
             ),
-            found=len(seeds),
+            found=len(rankings),
         )
 
     standings = tuple(
@@ -1328,17 +1322,17 @@ def compute_week_pairing(
                 Standing(
                     alliance=key,
                     score=weighted_score(rows, key, week),
-                    seed=seed,
+                    ranking=ranking,
                     wins=sum(1 for r in rows if r.alliance == key and r.week < week and r.won),
                     losses=sum(
                         1 for r in rows if r.alliance == key and r.week < week and r.won is False
                     ),
                 )
-                for key, seed in seeds.items()
+                for key, ranking in rankings.items()
             ),
             key=lambda s: (
                 -s.score,
-                s.seed if s.seed is not None else BRACKET_SIZE + 1,
+                s.ranking if s.ranking is not None else BRACKET_SIZE + 1,
                 s.alliance,
             ),
         )
@@ -1427,6 +1421,12 @@ class PathStep:
     #: known. ``None`` while the match itself is unresolved.
     outcome: str | None = None
     outcome_source: str | None = None
+    #: Who could occupy the slot while `opponent` is ``None`` — every alliance
+    #: still alive in the sub-bracket feeding it. Empty once the opponent is
+    #: named, because then there is exactly one of these and `opponent` is it.
+    #: This is what lets a week the path cannot name still say *one of four
+    #: alliances* rather than nothing at all.
+    candidates: tuple[AllianceKey, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1455,10 +1455,185 @@ class PathProjection:
         return tuple(out)
 
 
+def prior_week_decided(alliances: Iterable[AllianceWeek], week: int) -> bool:
+    """Whether `week`'s pairing can be worked out at all.
+
+    Week 1 follows from the rankings and needs nothing. Every later week is a
+    reshuffle of the week before it, so an **unrecorded predecessor makes the
+    computed pairing meaningless rather than approximate**: with no results to
+    weigh, `compute_week_pairing` scores every alliance zero and falls back to
+    ranking order, which silently reproduces week 1's pairs for every later
+    week.
+
+    Every surface that computes a pairing has to ask this first. A read that
+    skips it shows invented matchups; a *write* that skips it records them.
+    """
+    if week <= 1:
+        return True
+    played = [r for r in alliances if r.week == week - 1]
+    return bool(played) and all(r.week_outcome is not None for r in played)
+
+
+def matches_from_recorded_opponents(alliances: Iterable[AllianceWeek]) -> list[Match]:
+    """Fall back to the Opponent column when the bracket cannot be computed.
+
+    In own-alliance tracking mode (#448) there is no bracket to pair, but the
+    guild still recorded who they faced, and refusing to show that would be
+    the tracker arguing with a deliberate choice.
+    """
+    seen: set = set()
+    matches: list[Match] = []
+    for row in alliances:
+        if row.opponent is None:
+            continue
+        key = tuple(sorted((row.alliance, row.opponent)))
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(Match(row.week, row.alliance, row.opponent))
+    return matches
+
+
+@dataclass(frozen=True)
+class FutureMeeting:
+    """When `target` could meet one alliance, and on which branch.
+
+    Not to be confused with :class:`Meeting`, which is a match already played.
+
+    `branch` is ``"W"`` or ``"L"`` where the meeting only happens on that side
+    of this week's fork, and ``""`` where it happens either way. `certain` is
+    False when the alliance is one of several who could fill the slot.
+    """
+
+    week: int
+    branch: str
+    certain: bool
+
+
+def first_open_week(projection: "PathProjection", live: int) -> int | None:
+    """The first week whose own result is not already recorded.
+
+    That is what a fork is *about*: a week already played is not a branch, it
+    is history, and offering "if you win" on it invites the reader to plan
+    around a result the game has already handed down. ``None`` once every week
+    is recorded, which is a league with nothing left to project.
+
+    Not simply the live week. A guild that records late can have this week's
+    result in before the week turns over, and one that records ahead can have
+    next week's; both should fork on the first genuinely open week.
+    """
+    for step in projection.steps:
+        if step.outcome_source != SOURCE_CONFIRMED:
+            return step.week
+    return live if not projection.steps else None
+
+
+def meetings_ahead(
+    target: AllianceKey,
+    alliances: Iterable[AllianceWeek],
+    week: int,
+    *,
+    estimate: Estimator | None = None,
+) -> dict[AllianceKey, FutureMeeting]:
+    """Who `target` could still meet after `week`, keyed by alliance.
+
+    Both branches of this week's fork are walked, because "you meet them in
+    week 2 if you win" is the useful sentence and it needs both. An alliance
+    reachable the same week either way loses the qualifier: saying *if you
+    win* about something that happens regardless is worse than saying nothing.
+
+    Earliest week wins where an alliance appears more than once, since that is
+    the one worth scouting for.
+    """
+    rows = list(alliances)
+    found: dict[AllianceKey, FutureMeeting] = {}
+
+    # Fork on the first *open* week, not blindly on the live one. A week whose
+    # result is already recorded is not a branch, and forking there would
+    # override a confirmed result -- assumptions outrank confirmed by design --
+    # and describe a route that cannot happen.
+    plain = project_own_path(target, rows, estimate=estimate)
+    if isinstance(plain, BracketIncomplete):
+        return {}
+    fork = first_open_week(plain, week)
+    if fork is None:
+        return {}
+
+    for branch in ("W", "L"):
+        walk = project_own_path(target, rows, estimate=estimate, assume={fork: (target, branch)})
+        if isinstance(walk, BracketIncomplete):
+            continue
+        for step in walk.steps:
+            if step.week <= fork:
+                continue
+            named = (step.opponent,) if step.opponent is not None else step.candidates
+            for side in named:
+                if side is None or side == target:
+                    continue
+                fresh = FutureMeeting(step.week, branch, step.opponent is not None)
+                seen = found.get(side)
+                if seen is None:
+                    found[side] = fresh
+                elif seen.week == fresh.week and seen.branch != fresh.branch:
+                    # Reachable that week whichever way this week goes, so the
+                    # branch stops being worth mentioning.
+                    found[side] = FutureMeeting(seen.week, "", seen.certain or fresh.certain)
+                elif fresh.week < seen.week:
+                    found[side] = fresh
+    return found
+
+
 #: An estimator supplied by the prediction model (#401): given the two sides
 #: and the week, return the projected winner, or ``None`` when it can't call
 #: it. Kept as a callback so this module stays free of the voting model.
 Estimator = Callable[[AllianceKey, AllianceKey, int], "AllianceKey | None"]
+
+
+#: A blocked match is waiting on numbers nobody has entered. Scouting either
+#: side clears it, and the bot predicts it unprompted once they land.
+BLOCKED_MISSING_INPUTS = "missing_inputs"
+
+#: A blocked match has everything and the model still will not call it: the
+#: three metrics point in directions that cancel. **Scouting cannot clear
+#: this one** — every input already exists — so the only thing that resolves
+#: it is somebody deciding it themselves.
+BLOCKED_NO_AGREEMENT = "no_agreement"
+
+
+def blocker_cause(match: "Match", profiles: Mapping[AllianceKey, AllianceProfile]) -> str:
+    """Why `match` will not resolve, which is what decides how to offer it.
+
+    The two causes want opposite things from the reader and must never be
+    presented as one list. A match missing inputs is a scouting job; a match
+    the model declines is a judgement call, and telling someone to go scout an
+    alliance whose power, members and gift level are all already recorded
+    sends them to do the one thing that cannot help.
+
+    Reads the Tier 1 gate rather than asking the estimator, because
+    :func:`assess` returns ``None`` on exactly that condition and the callback
+    has no channel to explain a decline through.
+    """
+    for side in (match.a, match.b):
+        profile = profiles.get(side)
+        if profile is None or not profile.is_tier_1:
+            return BLOCKED_MISSING_INPUTS
+    return BLOCKED_NO_AGREEMENT
+
+
+def missing_inputs(profile: AllianceProfile | None) -> tuple[str, ...]:
+    """Which of the three Tier 1 inputs `profile` is short of, in column order.
+
+    Empty for a Tier 1 alliance. Named rather than counted so a scouting line
+    can ask for the two things it actually needs instead of all three.
+    """
+    if profile is None:
+        return (COL_POWER, COL_MEMBERS, COL_GIFT_LEVEL)
+    absent = (
+        (COL_POWER, profile.power),
+        (COL_MEMBERS, profile.members),
+        (COL_GIFT_LEVEL, profile.gift_level),
+    )
+    return tuple(column for column, value in absent if value is None)
 
 
 def project_own_path(
@@ -1473,7 +1648,7 @@ def project_own_path(
 
     Because each week's weight exceeds the sum of all later weights
     (8 > 4+2+1), the week-1 winner/loser split is **permanent**: the two
-    cohorts never re-merge, and each resolves as its own seed-preserving
+    cohorts never re-merge, and each resolves as its own ranking-preserving
     single-elimination bracket. So an alliance's future opponents are
     computable in advance rather than guessed at — walking the lineage is
     equivalent to re-running :func:`compute_week_pairing` every week, which the
@@ -1494,23 +1669,23 @@ def project_own_path(
     opponents. Steps resolved this way carry :data:`SOURCE_ASSUMED`, so a
     hypothetical can never be rendered as a projection.
 
-    Returns :class:`BracketIncomplete` when the roster isn't a full seeded
+    Returns :class:`BracketIncomplete` when the roster isn't a full ranked
     bracket — in own-alliance tracking mode (#448) that is a choice, not an
     error, and the caller shows the upsell rather than a failure.
     """
     rows = list(alliances)
 
-    seeded = _seeded_bracket(rows)
-    if isinstance(seeded, BracketIncomplete):
-        return seeded
-    if target not in seeded:
+    ranked = _ranked_bracket(rows)
+    if isinstance(ranked, BracketIncomplete):
+        return ranked
+    if target not in ranked:
         return BracketIncomplete(
             reason="roster_size",
             detail="The tracked alliance doesn't appear in this league's bracket.",
-            found=len(seeded),
+            found=len(ranked),
         )
 
-    seed_index = seeded.index(target)
+    ranking_index = ranked.index(target)
     blocked: list[Match] = []
     resolver = _MatchResolver(rows, estimate, blocked, assume=assume)
     memo: dict[tuple, tuple[AllianceKey | None, str]] = {}
@@ -1519,9 +1694,9 @@ def project_own_path(
         """Who sits at `pos` in the cohort reached by `path` at `week`, and how
         strongly that identity is established.
 
-        Week 1's cohort is the seeded bracket itself. Every later cohort is
+        Week 1's cohort is the ranked bracket itself. Every later cohort is
         formed from its parent by taking the winners (or losers) of the
-        parent's adjacent-pair matches *in place*, which preserves seed order —
+        parent's adjacent-pair matches *in place*, which preserves ranking order —
         the winner of match i always outranks the winner of match i+1, because
         their whole feeder brackets do. That is why walking the lineage and
         re-sorting by weighted score land on the same pairing.
@@ -1534,7 +1709,7 @@ def project_own_path(
         if (week, path, pos) in memo:
             return memo[(week, path, pos)]
         if week <= 1:
-            result = (seeded[pos] if 0 <= pos < len(seeded) else None, SOURCE_CONFIRMED)
+            result = (ranked[pos] if 0 <= pos < len(ranked) else None, SOURCE_CONFIRMED)
         else:
             a, src_a = occupant(week - 1, path[:-1], 2 * pos)
             b, src_b = occupant(week - 1, path[:-1], 2 * pos + 1)
@@ -1550,43 +1725,91 @@ def project_own_path(
         memo[(week, path, pos)] = result
         return result
 
+    def candidates(week: int, path: tuple[str, ...], pos: int) -> tuple[AllianceKey, ...]:
+        """Every alliance that could still occupy `pos` at `week`.
+
+        One entry once the slot resolves, because then there is exactly one.
+        Otherwise the sub-bracket feeding it is walked down to the alliances
+        still alive in it, folding out every match along the way that *does*
+        resolve. That fold is what makes the set shrink as a league is played:
+        a week-4 slot draws on eight alliances before anything is recorded and
+        four once week 1 is in, which is the difference between "not worked out
+        yet" and "one of four".
+        """
+        who, _ = occupant(week, path, pos)
+        if who is not None:
+            return (who,)
+        if week <= 1:
+            return ()
+        out: list[AllianceKey] = []
+        for half in (2 * pos, 2 * pos + 1):
+            for alliance in candidates(week - 1, path[:-1], half):
+                if alliance not in out:
+                    out.append(alliance)
+        return tuple(out)
+
     steps: list[PathStep] = []
-    path: tuple[str, ...] = ()
+    #: Every own-outcome sequence still live. One entry while our own results
+    #: are known; it forks the first week our own match will not resolve.
+    #:
+    #: **The walk continues through that fork rather than stopping at it.** The
+    #: two branches share most of their sub-bracket, so a later week often has
+    #: the same candidate set either way — which is how a path that cannot say
+    #: who you play in week 3 can still narrow week 4 to four alliances. It
+    #: only *names* an opponent when every live branch agrees on one, so a fork
+    #: can never turn one branch's guess into a stated fact.
+    live: list[tuple[str, ...]] = [()]
 
     for week in range(1, min(upto_week, LEAGUE_WEEKS) + 1):
-        pos = seed_index >> (week - 1)
-        opponent, source = occupant(week, path, pos ^ 1)
+        pos = ranking_index >> (week - 1)
+        resolved = [occupant(week, path, pos ^ 1) for path in live]
+        named = {who for who, _ in resolved}
+
+        if len(named) == 1 and None not in named:
+            opponent = resolved[0][0]
+            source = _weakest_source(*(src for _, src in resolved))
+        else:
+            opponent = source = None
+
         if opponent is None:
-            steps.append(PathStep(week, None, None))
-            break
+            pool: list[AllianceKey] = []
+            for path in live:
+                for alliance in candidates(week, path, pos ^ 1):
+                    if alliance not in pool:
+                        pool.append(alliance)
+            steps.append(PathStep(week, None, None, candidates=tuple(pool)))
+            live = [path + (result,) for path in live for result in ("W", "L")]
+            continue
 
         own = resolver.resolve(week, target, opponent)
         if own is None:
             steps.append(PathStep(week, opponent, source))
-            break
+            live = [path + (result,) for path in live for result in ("W", "L")]
+            continue
 
+        result = "W" if own.winner == target else "L"
         steps.append(
             PathStep(
                 week=week,
                 opponent=opponent,
                 source=source,
-                outcome="W" if own.winner == target else "L",
+                outcome=result,
                 outcome_source=own.source,
             )
         )
-        path += ("W" if own.winner == target else "L",)
+        live = [path + (result,) for path in live]
 
     return PathProjection(target, tuple(steps), tuple(blocked))
 
 
-def _seeded_bracket(rows: Sequence[AllianceWeek]) -> list[AllianceKey] | BracketIncomplete:
-    """The league's sixteen alliances in seed order, or why they aren't."""
-    seeds: dict[AllianceKey, int] = {}
+def _ranked_bracket(rows: Sequence[AllianceWeek]) -> list[AllianceKey] | BracketIncomplete:
+    """The league's sixteen alliances in ranking order, or why they aren't."""
+    rankings: dict[AllianceKey, int] = {}
     seen: set[AllianceKey] = set()
     for row in rows:
         seen.add(row.alliance)
-        if row.seed is not None:
-            seeds[row.alliance] = row.seed
+        if row.ranking is not None:
+            rankings[row.alliance] = row.ranking
 
     if len(seen) < BRACKET_SIZE:
         return BracketIncomplete(
@@ -1597,20 +1820,20 @@ def _seeded_bracket(rows: Sequence[AllianceWeek]) -> list[AllianceKey] | Bracket
             ),
             found=len(seen),
         )
-    missing = seen - set(seeds)
+    missing = seen - set(rankings)
     if missing:
         return BracketIncomplete(
-            reason="missing_seeds",
-            detail=f"{len(missing)} alliance(s) have no seed recorded.",
-            found=len(seeds),
+            reason="missing_rankings",
+            detail=f"{len(missing)} alliance(s) have no ranking recorded.",
+            found=len(rankings),
         )
-    if sorted(seeds.values()) != list(range(1, BRACKET_SIZE + 1)):
+    if sorted(rankings.values()) != list(range(1, BRACKET_SIZE + 1)):
         return BracketIncomplete(
-            reason="missing_seeds",
-            detail=f"Seeds within a league must be 1-{BRACKET_SIZE} and unique.",
-            found=len(seeds),
+            reason="missing_rankings",
+            detail=f"Rankings within a league must be 1-{BRACKET_SIZE} and unique.",
+            found=len(rankings),
         )
-    return sorted(seeds, key=lambda k: seeds[k])
+    return sorted(rankings, key=lambda k: rankings[k])
 
 
 #: Evidence strength, best first. Used to take the weakest link across a chain
@@ -2687,32 +2910,32 @@ def _check_reciprocal_opponents(group: Sequence[AllianceWeek]) -> list[Finding]:
     return out
 
 
-def _check_seeds(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Finding]:
-    """Rule 5 (full bracket only): seeds in a league are 1-16 and unique."""
-    seeds: dict[AllianceKey, int] = {}
+def _check_rankings(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Finding]:
+    """Rule 5 (full bracket only): rankings in a league are 1-16 and unique."""
+    rankings: dict[AllianceKey, int] = {}
     first_row: dict[AllianceKey, AllianceWeek] = {}
     for row in rows:
-        if row.league != league or row.seed is None:
+        if row.league != league or row.ranking is None:
             continue
-        seeds.setdefault(row.alliance, row.seed)
+        rankings.setdefault(row.alliance, row.ranking)
         first_row.setdefault(row.alliance, row)
 
     out: list[Finding] = []
     counts: dict[int, list[AllianceKey]] = {}
-    for alliance, seed in seeds.items():
-        counts.setdefault(seed, []).append(alliance)
-        if not 1 <= seed <= BRACKET_SIZE:
+    for alliance, ranking in rankings.items():
+        counts.setdefault(ranking, []).append(alliance)
+        if not 1 <= ranking <= BRACKET_SIZE:
             out.append(
                 Finding(
                     rule=5,
                     severity=SEVERITY_ERROR,
-                    message=f"Seed {seed} is outside 1-{BRACKET_SIZE}.",
+                    message=f"Ranking {ranking} is outside 1-{BRACKET_SIZE}.",
                     row_number=first_row[alliance].row_number,
-                    column=COL_SEED,
+                    column=COL_RANKING,
                     alliance=alliance,
                 )
             )
-    for seed, holders in counts.items():
+    for ranking, holders in counts.items():
         if len(holders) > 1:
             for alliance in holders:
                 out.append(
@@ -2720,14 +2943,55 @@ def _check_seeds(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Findin
                         rule=5,
                         severity=SEVERITY_ERROR,
                         message=(
-                            f"Seed {seed} is used by {len(holders)} alliances in this league."
+                            f"Ranking {ranking} is used by {len(holders)} alliances in this league."
                         ),
                         row_number=first_row[alliance].row_number,
-                        column=COL_SEED,
+                        column=COL_RANKING,
                         alliance=alliance,
                     )
                 )
     return out
+
+
+def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Finding]:
+    """Rule 9 (full bracket only): a league holds sixteen alliances, never more.
+
+    **Only ever fires on too many**, never on too few. A part-filled sheet is
+    the normal state during entry, and the bracket and path surfaces already
+    say so through :class:`BracketIncomplete`. Repeating it here would turn
+    "Check my sheet" into a nag about work in progress.
+
+    Too many is a different thing: sixteen is the shape of the competition, so
+    a seventeenth alliance is always a mistake. The one that matters in
+    practice is a **near-duplicate tag** (`KTI` typed once as a capital i and
+    once as a lowercase L), which :func:`compute_week_pairing` cannot see,
+    because seventeen alliances still clears its ``< BRACKET_SIZE`` guard and
+    it simply pairs the wrong sixteen.
+
+    Rule 5 misses that case too: a row written through Discord carries no Ranking,
+    and rule 5 skips unranked rows. So this is the only check that sees it.
+
+    **It reports the count and names nobody.** The bot can rank which row looks
+    likeliest to be the extra (a unranked one, usually), but it cannot know,
+    and pointing at a row would be the bot having an opinion about which of the
+    alliance's own entries is the wrong one (`UX.md` principle 6). One finding
+    per league, and the reader does the picking.
+    """
+    alliances = {row.alliance for row in rows if row.league == league}
+    if len(alliances) <= BRACKET_SIZE:
+        return []
+
+    return [
+        Finding(
+            rule=9,
+            severity=SEVERITY_ERROR,
+            message=(
+                f"An Alliance Duel (VS) League has {BRACKET_SIZE} alliances and you have "
+                f"entered {len(alliances)}. Please review and remove the extra alliance."
+            ),
+            column=COL_TAG,
+        )
+    ]
 
 
 def _check_own_alliance_present(
@@ -2871,13 +3135,161 @@ def validate(
 
     if full_bracket:
         for league in {r.league for r in rows}:
-            out += _check_seeds(rows, league)
+            out += _check_rankings(rows, league)
+            out += _check_roster_size(rows, league)
             if own_alliance is not None:
                 out += _check_own_alliance_present(rows, league, own_alliance)
 
     out += _check_day_score_magnitude(rows)
 
     return sorted(out, key=lambda f: (f.rule, f.row_number or 0, f.column))
+
+
+# ── Reading a typed-in bracket ────────────────────────────────────────────────
+
+#: What a bracket line may be separated by. Officers copy from several places
+#: and the game renders a tag in brackets, so `[kTZ] 714`, `kTZ,714` and
+#: `kTZ 714` all arrive rather than being retyped into one shape.
+_BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
+
+
+@dataclass(frozen=True)
+class BracketEntry:
+    """One line of a typed-in bracket: an alliance, its ranking, and what is known.
+
+    The three prediction inputs ride along optionally. Whoever is reading the
+    League screen to type the bracket has every alliance's profile a tap away
+    on that same screen, and making them come back through "Add or edit
+    alliance" sixteen more times to enter what they were already looking at is
+    the kind of second trip the sheet path does not ask for.
+    """
+
+    alliance: AllianceKey
+    ranking: int
+    tag_display: str
+    warzone_display: str
+    power: int | None = None
+    gift_level: int | None = None
+    members: int | None = None
+
+
+@dataclass(frozen=True)
+class BracketParse:
+    """The outcome of reading a pasted bracket, problems and all."""
+
+    entries: tuple[BracketEntry, ...] = ()
+    problems: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
+    """Read a pasted bracket into ranked alliances.
+
+    **Line order is the ranking.** The League screen lists all sixteen in ranking
+    order at league start, and reading straight down it is the entire reason
+    setup is one sitting. A line may state its own ranking as a leading number
+    instead, which is *checked* against its position rather than trusted: a
+    paste that arrived out of order is exactly the mistake worth catching here,
+    and silently honouring the number would hide it.
+
+    **Power, gift level and members ride along, optionally**, in that order
+    after the warzone. They are on the same League screen as the tags, so
+    taking them here saves fifteen more trips through "Add or edit alliance".
+    Trailing fields may simply stop: a line is a tag and a warzone, then as
+    many of the three as the reader had.
+
+    Power keeps the survey convention (a bare ``301`` means 301M, and anything
+    at or above a million is read as already-raw), because these are the same
+    numbers :func:`parse_power` reads everywhere else.
+
+    Problems are collected rather than raised, and each names the line it came
+    from, because the caller renders them into a reply where "line 7" is the
+    only route back to the typo.
+    """
+    lines = [ln.strip() for ln in str(text or "").splitlines()]
+    lines = [ln for ln in lines if ln]
+
+    entries: list[BracketEntry] = []
+    problems: list[str] = []
+    seen: dict[AllianceKey, int] = {}
+    shape = "a tag and a warzone, then power, gift level and members if you have them"
+
+    for index, line in enumerate(lines, start=1):
+        parts = [p for p in _BRACKET_SPLIT.split(line.replace("[", " ").replace("]", " ")) if p]
+
+        # A leading ranking number is allowed but never trusted. It is told apart
+        # from a power figure by what follows it: a tag carries at least one
+        # non-digit, so `1 kTZ 714` is a numbered line and `1 714 26.8b` is an
+        # alliance whose tag happens to be "1".
+        if len(parts) >= 3 and parts[0].isdigit() and not parts[1].isdigit():
+            stated = int(parts[0])
+            if stated != index:
+                problems.append(
+                    f"Line {index} is numbered {stated}. Lines are read in ranking order, "
+                    f"so this one is ranking {index}. Reorder them or drop the numbers."
+                )
+                continue
+            parts = parts[1:]
+
+        if not 2 <= len(parts) <= 5:
+            problems.append(f"Line {index} (`{line}`) needs {shape}.")
+            continue
+
+        alliance = AllianceKey.of(parts[0], parts[1])
+        if alliance is None:
+            problems.append(f"Line {index} (`{line}`) needs {shape}.")
+            continue
+        if alliance in seen:
+            problems.append(
+                f"Line {index} repeats {parts[0].upper()} in warzone {parts[1]}, "
+                f"already on line {seen[alliance]}."
+            )
+            continue
+
+        extras = parts[2:]
+        values: list[int | None] = [None, None, None]
+        readers = (parse_power, parse_int, parse_int)
+        labels = ("power", "gift level", "members")
+        bad = None
+        for slot, raw in enumerate(extras):
+            values[slot] = readers[slot](raw)
+            if values[slot] is None:
+                bad = f"Line {index}: I could not read `{raw}` as {labels[slot]}."
+                break
+        if bad:
+            problems.append(bad)
+            continue
+
+        seen[alliance] = index
+        entries.append(
+            BracketEntry(
+                alliance=alliance,
+                ranking=index,
+                tag_display=parts[0].strip("[]#").upper(),
+                warzone_display=parts[1],
+                power=values[0],
+                gift_level=values[1],
+                members=values[2],
+            )
+        )
+
+    # Count is checked last so a sheet full of typos reports the typos, not a
+    # count that is only wrong because of them.
+    if not problems and len(entries) != expect:
+        # One pasted line is a real case: someone corrects a single alliance
+        # and pastes only that. "That is 1 alliances" is how the bot would
+        # have greeted them.
+        counted = f"{len(entries)} alliance" + ("" if len(entries) == 1 else "s")
+        problems.append(
+            f"That is {counted}. A League bracket holds {expect}."
+            if expect == BRACKET_SIZE
+            else f"That is {counted}, and I need {expect}."
+        )
+
+    return BracketParse(tuple(entries), tuple(problems))
 
 
 # ── Skeleton rows ─────────────────────────────────────────────────────────────
@@ -2892,11 +3304,11 @@ def skeleton_rows(
     tracking_mode: str = MODE_FULL_BRACKET,
     own_alliance: AllianceKey | None = None,
 ) -> list[AllianceWeek]:
-    """Empty rows stamped with league identity, week and seed, ready to fill.
+    """Empty rows stamped with league identity, week and ranking, ready to fill.
 
     Setup is one sitting: the League screen shows all 16 alliances and their
-    seeds at league start, so the bot writes the rows and the user fills tag,
-    warzone and seed straight off that screen.
+    rankings at league start, so the bot writes the rows and the user fills tag,
+    warzone and ranking straight off that screen.
 
     **Branches on tracking mode** (#448). Full-bracket mode writes a row per
     alliance given. Own-alliance mode writes only the configured own
@@ -2906,7 +3318,7 @@ def skeleton_rows(
     if tracking_mode == MODE_OWN_ALLIANCE:
         if own_alliance is None:
             return []
-        alliances = [(key, seed) for key, seed in alliances if key == own_alliance]
+        alliances = [(key, ranking) for key, ranking in alliances if key == own_alliance]
 
     return [
         AllianceWeek(
@@ -2914,11 +3326,11 @@ def skeleton_rows(
             week=week,
             alliance=key,
             week_date=week_date,
-            seed=seed,
+            ranking=ranking,
             tag_display=key.tag.upper(),
             warzone_display=key.warzone,
         )
-        for key, seed in alliances
+        for key, ranking in alliances
     ]
 
 
@@ -2927,7 +3339,7 @@ def next_week_rows(rows: Iterable[AllianceWeek], week: int) -> list[AllianceWeek
 
     Once a week's outcomes are in, the next week's pairing follows from the
     rules, so the only thing left for a human to type is what actually
-    happened. Season, tier, group, seed, tag and warzone come forward from the
+    happened. Season, tier, group, ranking, tag and warzone come forward from the
     week just played; the Opponent column is filled with the **prediction**.
 
     Writing the prediction rather than leaving it blank is deliberate. If the
@@ -2944,7 +3356,7 @@ def next_week_rows(rows: Iterable[AllianceWeek], week: int) -> list[AllianceWeek
 
     # The prior week has to be *decided*, not merely present. With no outcomes
     # recorded, the weighted score is zero for everyone and the pairing falls
-    # back to seed order, which would confidently reproduce week 1's matchups
+    # back to ranking order, which would confidently reproduce week 1's matchups
     # for week 2. Sixteen rows carrying a wrong opponent are worse than none:
     # the whole reason the prediction is written is that a correction means
     # something, and it means nothing if the prediction was never informed.
@@ -2966,14 +3378,14 @@ def next_week_rows(rows: Iterable[AllianceWeek], week: int) -> list[AllianceWeek
     week_date = previous_date + _dt.timedelta(weeks=1) if previous_date else None
 
     out = []
-    for alliance, row in sorted(source.items(), key=lambda kv: kv[1].seed or BRACKET_SIZE + 1):
+    for alliance, row in sorted(source.items(), key=lambda kv: kv[1].ranking or BRACKET_SIZE + 1):
         out.append(
             AllianceWeek(
                 league=row.league,
                 week=week + 1,
                 alliance=alliance,
                 week_date=week_date,
-                seed=row.seed,
+                ranking=row.ranking,
                 tag_display=row.tag_display,
                 warzone_display=row.warzone_display,
                 opponent=opponents.get(alliance),
@@ -3052,19 +3464,19 @@ def blank_bracket_values(
     return line
 
 
-def week_one_pairing_from_seeds(
+def week_one_pairing_from_rankings(
     alliances: Sequence[tuple[AllianceKey, int | None]],
 ) -> dict[AllianceKey, AllianceKey]:
-    """Week 1 opponents, straight off the seeds: (1,2)(3,4)…(15,16).
+    """Week 1 opponents, straight off the rankings: (1,2)(3,4)…(15,16).
 
     Week 1 needs no results to pair, so the bot fills Opponent at setup rather
     than waiting for a result. Returns the mapping both ways. Alliances with no
-    seed are left out rather than guessed at.
+    ranking are left out rather than guessed at.
     """
-    seeded = sorted(((k, s) for k, s in alliances if s is not None), key=lambda p: p[1])
+    ranked = sorted(((k, s) for k, s in alliances if s is not None), key=lambda p: p[1])
     out: dict[AllianceKey, AllianceKey] = {}
-    for i in range(0, len(seeded) - 1, 2):
-        a, b = seeded[i][0], seeded[i + 1][0]
+    for i in range(0, len(ranked) - 1, 2):
+        a, b = ranked[i][0], ranked[i + 1][0]
         out[a] = b
         out[b] = a
     return out

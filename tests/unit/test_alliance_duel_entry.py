@@ -10,6 +10,7 @@ is not that gspread was called but that the *rules around* the call hold:
 - the day a score is filed under comes from server time, not guild-local
 """
 
+import asyncio
 import datetime as _dt
 import inspect
 
@@ -37,12 +38,12 @@ def _key(tag: str) -> ad.AllianceKey:
     return ad.AllianceKey.of(tag, OWN_WZ)
 
 
-def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
+def _row(tag, week=1, ranking=None, week_date=MONDAY, **kw):
     return ad.AllianceWeek(
         league=LEAGUE,
         week=week,
         alliance=_key(tag),
-        seed=seed,
+        ranking=ranking,
         week_date=week_date,
         tag_display=tag,
         **kw,
@@ -52,8 +53,8 @@ def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
 def _bracket(week=1, **per_alliance):
     tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
     return [
-        _row(tag, week=week, seed=seed, **per_alliance.get(tag, {}))
-        for seed, tag in enumerate(tags, start=1)
+        _row(tag, week=week, ranking=ranking, **per_alliance.get(tag, {}))
+        for ranking, tag in enumerate(tags, start=1)
     ]
 
 
@@ -104,20 +105,26 @@ def test_the_path_names_every_opponent_once_the_league_is_played_out():
     for week in range(1, ad.LEAGUE_WEEKS + 1):
         _play_week(rows, week, winner_of=lambda m: m.a)
 
-    text = _text(hub.path_embed(_state(rows)))
+    embed = hub.path_embed(_state(rows))
+    text = _text(embed)
     assert "Week 1:" in text and "Week 4:" in text
-    assert "recorded result" in text
-    assert "What is blocking it" not in text
+    assert hub.VS_LABEL_RECORDED in text
+    # Every week is recorded, so there is no open week to fork on and
+    # nothing outstanding for the footer to ask for. Offering "if you win"
+    # on a week the game has already decided invites planning around a
+    # result that has already landed.
+    assert hub.VS_PATH_IF_WIN not in text
+    assert embed.footer.text is None
 
 
 def test_a_blocked_path_names_the_matches_never_says_not_enough_data():
+    """The blockers live on the preview now: they are per-branch, and a
+    combined list would send someone to scout for a route they are not on."""
     rows = _bracket() + _bracket(week=2)
     _play_week(rows, 1, winner_of=lambda m: m.a)
-    text = _text(hub.path_embed(_state(rows)))
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
 
-    assert "What is blocking it" in text
     assert " vs " in text
-    assert "week 2" in text
     for vague in ("not enough data", "insufficient", "unavailable"):
         assert vague not in text.lower()
 
@@ -125,28 +132,85 @@ def test_a_blocked_path_names_the_matches_never_says_not_enough_data():
 def test_the_blocking_set_becomes_the_scouting_list():
     rows = _bracket() + _bracket(week=2)
     _play_week(rows, 1, winner_of=lambda m: m.a)
-    text = _text(hub.path_embed(_state(rows)))
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
 
-    assert "Scout these first" in text
-    assert "needs power, members and gift level" in text
+    assert hub.VS_PATH_BLOCKED_SCOUTABLE in text
+    # Match-shaped, and each line asks for what that match is short of. Both
+    # sides short of the same three collapses rather than saying it twice.
+    assert "both need power, members and gift level" in text
+    assert " vs " in text
     # Not "go scout fifteen alliances": the lineage produces a short set.
-    listed = [line for line in text.splitlines() if line.startswith("· [")]
+    listed = [line for line in text.splitlines() if line.startswith("· ")]
     assert 0 < len(listed) <= 8
 
 
 def test_the_path_says_how_firmly_each_step_is_known():
     """A confirmed result and a coin-flip estimate reaching the same
     conclusion are not the same claim and must not render alike."""
-    rows = _bracket(
-        **{
-            OWN_TAG: {"power": 900_000_000, "members": 100, "gift_level": 25},
-            "A02": {"power": 100_000_000, "members": 40, "gift_level": 5},
-        }
-    ) + _bracket(week=2)
+    strong = {"power": 900_000_000, "members": 100, "gift_level": 25}
+    weak = {"power": 100_000_000, "members": 40, "gift_level": 5}
+    # Our own pair plus the two feeding week 2, so the opponent that week
+    # is reachable by estimate rather than left unnamed.
+    rows = _bracket(**{OWN_TAG: strong, "A02": weak, "A03": strong, "A04": weak}) + _bracket(week=2)
     text = _text(hub.path_embed(_state(rows)))
-    assert "estimated from stats" in text
+    assert hub.VS_LABEL_BOT in text
     for leak in ("SOURCE_", "confirmed'", "estimated'"):
         assert leak not in text
+
+
+def test_the_path_forks_on_this_week_and_shows_both_branches():
+    """The fork is the screen: "who do we play if we lose" is the question it
+    exists to answer, so both branches are projected, not described."""
+    rows = _bracket() + _bracket(week=2)
+    text = _text(hub.path_embed(_state(rows)))
+    assert hub.VS_PATH_IF_WIN in text
+    assert hub.VS_PATH_IF_LOSE in text
+
+
+def test_an_unnamed_week_is_counted_on_the_path_and_named_on_the_preview():
+    """The path has two branches to fit and no room, so it counts. The preview
+    has one branch and room for the answer itself."""
+    rows = _bracket() + _bracket(week=2)
+    assert "one of 2 alliances" in _text(hub.path_embed(_state(rows)))
+
+    preview = _text(hub.path_preview_embed(_state(rows), "W"))
+    assert "one of 2 alliances" not in preview
+    assert "one of A03, A04" in preview
+
+
+def test_the_footer_asks_for_the_right_work_per_cause():
+    """A single "enter them" would send somebody to the predictions screen to
+    find a match the bot would happily have predicted off numbers nobody typed."""
+    rows = _bracket() + _bracket(week=2)
+    footer = hub.path_embed(_state(rows)).footer.text
+    # Nothing is scouted, so every blocker is waiting on numbers and the
+    # prediction half has nothing to ask for.
+    assert "power, members and gift level" in footer
+    assert "your prediction" not in footer
+
+
+def test_a_fully_recorded_alliance_is_never_sent_to_scout_it_again():
+    """The defect the split exists to fix: a match blocked because the model
+    declined used to land both its sides on a list headed "Scout these first",
+    each marked already recorded, pointing at the one action that cannot help."""
+    level = {"power": 500_000_000, "members": 80, "gift_level": 20}
+    rows = _bracket(**{tag: dict(level) for tag in ("A03", "A04")}) + _bracket(week=2)
+    text = _text(hub.path_preview_embed(_state(rows), "W"))
+
+    block = text.split(hub.VS_PATH_BLOCKED_SCOUTABLE)[-1]
+    scouting = block.split(hub.VS_PATH_BLOCKED_UNDECIDED)[0]
+    assert "A03 vs A04" not in scouting
+    assert "A03 vs A04" in text.split(hub.VS_PATH_BLOCKED_UNDECIDED)[-1]
+
+
+def test_the_path_view_offers_both_previews_and_a_way_to_scout():
+    view = hub.VSPathView(_state(_bracket()), owner_id=7)
+    labels = {item.label for item in view.children}
+    assert hub.VS_BTN_PREVIEW_WIN in labels
+    assert hub.VS_BTN_PREVIEW_LOSE in labels
+    # Scout hangs off the path because the path is where someone finds out an
+    # alliance decides their week and knows nothing about them.
+    assert hub.VS_BTN_SCOUT in labels
 
 
 def test_own_alliance_mode_gets_the_upsell_not_an_error():
@@ -171,10 +235,10 @@ def test_next_week_rows_carry_identity_forward_and_predict_the_opponent():
     generated = ad.next_week_rows(rows, 1)
     assert len(generated) == ad.BRACKET_SIZE
     assert {r.week for r in generated} == {2}
-    # Season, tier, group, seed, tag and warzone all come forward, so the only
+    # Season, tier, group, ranking, tag and warzone all come forward, so the only
     # thing left to type is what actually happened.
     assert all(r.league == LEAGUE for r in generated)
-    assert sorted(r.seed for r in generated) == list(range(1, ad.BRACKET_SIZE + 1))
+    assert sorted(r.ranking for r in generated) == list(range(1, ad.BRACKET_SIZE + 1))
     assert all(r.tag_display for r in generated)
     # The predicted pairing is written rather than left blank: a correction is
     # the signal that the pairing algorithm needs a look.
@@ -300,7 +364,7 @@ def test_row_for_write_carries_identity_without_dragging_stale_values():
     rows = _bracket(**{OWN_TAG: {"power": 400_000_000, "members": 92}})
     row = entry._row_for_write(_state(rows), OWN, 1)
     assert row.alliance == OWN
-    assert row.seed == 1
+    assert row.ranking == 1
     assert row.week_date == MONDAY
     assert row.power is None
     assert row.members is None
@@ -382,3 +446,1176 @@ def test_entry_copy_carries_no_em_dashes_and_no_internals():
     for text in strings:
         assert "—" not in text
         assert "guild" not in text.lower()
+
+
+# ── Starting a new league ─────────────────────────────────────────────────────
+
+
+def _entries(tags=None):
+    tags = tags or ([OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)])
+    return tuple(
+        ad.BracketEntry(alliance=_key(t), ranking=i, tag_display=t, warzone_display=OWN_WZ)
+        for i, t in enumerate(tags, start=1)
+    )
+
+
+@pytest.fixture
+def _captured(monkeypatch):
+    """Swallow the write and hand back what would have been written."""
+    written = []
+
+    async def _fake(state, rows):
+        written.extend(rows)
+        return ""
+
+    monkeypatch.setattr(entry, "save_rows", _fake)
+    return written
+
+
+def test_the_button_offers_itself_when_nothing_is_recorded():
+    assert entry.pending_new_league(_state([])) is True
+
+
+def test_the_button_stays_away_mid_league():
+    # The rows exist and "Start next week's rows" is the control that moves
+    # them on. A second bracket does not belong in a league being played.
+    assert entry.pending_new_league(_state(_bracket())) is False
+
+
+def test_the_button_returns_once_the_league_is_played_out():
+    rows = []
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        _play_week(rows, week, lambda m: m.a)
+    assert entry.pending_new_league(_state(rows)) is True
+
+
+def test_starting_and_advancing_never_want_the_same_slot():
+    """They share a place on the button row, so one has to be off whenever the
+    other is on. Advancing declines at week 4 (there is no week 5), which is
+    exactly where starting a league becomes available again."""
+    rows = []
+    for week in range(1, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+        for played in range(1, week + 1):
+            _play_week(rows, played, lambda m: m.a)
+        state = _state(rows)
+        assert not (
+            entry.pending_next_week(state) is not None and entry.pending_new_league(state)
+        ), f"both offered after week {week}"
+
+
+async def test_a_new_league_is_written_stamped_and_ranked(_captured):
+    state = _state([])
+    league = ad.LeagueKey("S36", "Diamond", "12 - 1")
+    ok, message = await entry.start_new_league(state, league, MONDAY, _entries())
+
+    assert ok, message
+    assert len(_captured) == ad.BRACKET_SIZE
+    assert {r.league for r in _captured} == {league}
+    assert {r.week for r in _captured} == {1}
+    assert {r.week_date for r in _captured} == {MONDAY}
+    assert sorted(r.ranking for r in _captured) == list(range(1, ad.BRACKET_SIZE + 1))
+
+
+async def test_week_1_opponents_are_left_for_the_rankings_to_say(_captured):
+    # Sixteen cells restating what the rankings already imply. `compute_week_pairing`
+    # derives them on every read, so writing them would buy nothing and could
+    # disagree with itself.
+    state = _state([])
+    await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert all(r.opponent is None for r in _captured)
+    pairing = ad.compute_week_pairing(_captured, 1)
+    assert isinstance(pairing, ad.WeekPairing)
+    assert len(pairing.matches) == ad.BRACKET_SIZE // 2
+
+
+async def test_a_bracket_without_your_own_alliance_is_refused(_captured):
+    # Rule 6 would report this every time "Check my sheet" ran. Better to catch
+    # it at the point of entry, while the League screen is still open.
+    state = _state([])
+    others = [f"A{i:02d}" for i in range(1, ad.BRACKET_SIZE + 1)]
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, _entries(others))
+    assert not ok
+    assert "not in that bracket" in message
+    assert _captured == []
+
+
+async def test_the_hub_sees_the_league_it_just_wrote(_captured):
+    # The hub reads the sheet once per invocation, so without this the officer
+    # saves a bracket and lands back on a hub still saying there is no league.
+    state = _state([])
+    assert state.league is None
+    league = ad.LeagueKey("S36", "Diamond", "12 - 1")
+    await entry.start_new_league(state, league, MONDAY, _entries())
+    assert state.league == league
+
+
+async def test_own_alliance_mode_writes_only_your_row(_captured):
+    state = _state([], tracking_mode=ad.MODE_OWN_ALLIANCE)
+    ok, _ = await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert ok
+    assert [r.alliance for r in _captured] == [OWN]
+
+
+async def test_a_sunday_start_date_lands_on_the_week_it_opens(_captured):
+    """`week_monday` sends Sunday back rather than forward, so an officer who
+    types the Sunday before would otherwise stamp the week that just ended."""
+    state = _state([])
+    monday = ad.week_monday(MONDAY)
+    await entry.start_new_league(state, LEAGUE, monday, _entries())
+    assert {r.week_date for r in _captured} == {monday}
+
+
+async def test_the_bracket_lines_carry_power_gift_and_members_onto_the_rows(_captured):
+    state = _state([])
+    entries = (
+        ad.BracketEntry(
+            alliance=OWN,
+            ranking=1,
+            tag_display=OWN_TAG,
+            warzone_display=OWN_WZ,
+            power=26853240157,
+            gift_level=25,
+            members=100,
+        ),
+    ) + _entries()[1:]
+    await entry.start_new_league(state, LEAGUE, MONDAY, entries)
+    mine = next(r for r in _captured if r.alliance == OWN)
+    assert (mine.power, mine.gift_level, mine.members) == (26853240157, 25, 100)
+
+
+async def test_a_line_without_the_extras_leaves_them_unset(_captured):
+    # None is what `row_values` omits, which is what keeps the skeleton's
+    # "leave whatever is there" behaviour on a re-run.
+    state = _state([])
+    await entry.start_new_league(state, LEAGUE, MONDAY, _entries())
+    assert all(r.power is None and r.members is None for r in _captured)
+
+
+async def test_the_acknowledgement_stops_asking_once_nothing_is_missing(_captured):
+    state = _state([])
+    full = tuple(
+        ad.BracketEntry(
+            alliance=e.alliance,
+            ranking=e.ranking,
+            tag_display=e.tag_display,
+            warzone_display=e.warzone_display,
+            power=30_000_000_000,
+            gift_level=25,
+            members=100,
+        )
+        for e in _entries()
+    )
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, full)
+    assert ok
+    assert "Record each day as it lands." in message
+    assert "still need" not in message
+    assert "Add power" not in message
+
+
+async def test_a_part_filled_bracket_says_how_many_are_short(_captured):
+    state = _state([])
+    entries = list(_entries())
+    entries[0] = ad.BracketEntry(
+        alliance=entries[0].alliance,
+        ranking=1,
+        tag_display=OWN_TAG,
+        warzone_display=OWN_WZ,
+        power=30_000_000_000,
+        gift_level=25,
+        members=100,
+    )
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, tuple(entries))
+    assert ok
+    assert f"{ad.BRACKET_SIZE - 1} of them still need" in message
+
+
+def test_a_refusal_hands_back_a_retry_rather_than_a_command_to_re_run():
+    """UX.md: a validation failure costs one step, not the whole flow. Without
+    the button, "try again" means retyping sixteen lines to fix one of them."""
+    source = inspect.getsource(entry.NewLeagueModal)
+    assert "_RetryNewLeagueView" in source
+    assert "Run `/vs`" not in source, "a refusal must not send them back to the command"
+
+    view = entry._RetryNewLeagueView(_state([]), 1, {"season": "S36"})
+    assert [b.label for b in view.children] == [entry.VS_BTN_RETRY_NEW_LEAGUE]
+
+
+def test_the_retry_modal_still_holds_what_was_typed():
+    typed = {
+        "season": "S36",
+        "tier": "Diamond",
+        "group": "12 - 1",
+        "week_date": "8/24",
+        "bracket": "kTZ 714",
+    }
+    modal = entry.NewLeagueModal(_state([]), defaults=typed)
+    assert modal.season.default == "S36"
+    assert modal.bracket.default == "kTZ 714"
+
+
+def test_the_league_week_is_asked_for_instead_of_a_date():
+    """The League screen shows a countdown and a Week 1-4 header. Which week it
+    is on is readable; the Monday week 1 began on has to be worked out."""
+    modal = entry.NewLeagueModal(_state([]))
+    assert modal.week_now.required is False
+    assert "1, 2, 3 or 4" in modal.week_now.placeholder
+    assert not hasattr(modal, "week_date")
+
+
+def test_every_modal_field_fits_what_discord_will_accept():
+    """Discord rejects an oversized label or placeholder at send time, not at
+    construction, so a too-long one ships green and fails in front of a user.
+    Limits: label 45, placeholder 100."""
+    import discord
+
+    modals = [
+        obj
+        for obj in vars(entry).values()
+        if inspect.isclass(obj) and issubclass(obj, discord.ui.Modal)
+    ]
+    built = [
+        entry.NewLeagueModal(_state([])),
+        entry.NewLeagueModal(_state([], tracking_mode=ad.MODE_OWN_ALLIANCE)),
+    ]
+    for modal in modals:
+        for item in getattr(modal, "__discord_ui_modal_children__", []) or []:
+            built.append(item)
+    fields = []
+    for m in built:
+        fields.extend(getattr(m, "children", [m]))
+    assert fields
+    for field in fields:
+        label = getattr(field, "label", "") or ""
+        placeholder = getattr(field, "placeholder", "") or ""
+        assert len(label) <= 45, f"{label!r} is {len(label)} characters"
+        assert len(placeholder) <= 100, f"{placeholder!r} is {len(placeholder)} characters"
+
+
+async def test_a_mid_league_setup_writes_every_week_up_to_this_one(_captured):
+    # An alliance that finds the feature in week 3 would otherwise get rows
+    # dated a fortnight ago, nothing covering today, and a hub reporting itself
+    # as between leagues.
+    state = _state([])
+    week_1_monday = MONDAY - _dt.timedelta(weeks=2)
+    ok, message = await entry.start_new_league(
+        state, LEAGUE, week_1_monday, _entries(), upto_week=3
+    )
+    assert ok, message
+    assert sorted({r.week for r in _captured}) == [1, 2, 3]
+    assert len(_captured) == ad.BRACKET_SIZE * 3
+    assert "weeks 1 to 3" in message
+
+
+async def test_each_generated_week_carries_its_own_monday(_captured):
+    state = _state([])
+    week_1_monday = MONDAY - _dt.timedelta(weeks=2)
+    await entry.start_new_league(state, LEAGUE, week_1_monday, _entries(), upto_week=3)
+    by_week = {r.week: r.week_date for r in _captured}
+    assert by_week[1] == week_1_monday
+    assert by_week[2] == week_1_monday + _dt.timedelta(weeks=1)
+    assert by_week[3] == week_1_monday + _dt.timedelta(weeks=2)
+
+
+async def test_a_mid_league_setup_leaves_the_hub_on_a_live_week(_captured):
+    # The point of writing the intervening weeks at all.
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    live = ad.resolve_live_week(_captured)
+    assert live is not None
+    assert live.week == 3
+
+
+async def test_the_session_believes_the_week_it_just_started_on(_captured):
+    """The rows resolved to week 3 already; the *session* did not follow them.
+    Every screen taking `state.week` would have offered week 1's matches to
+    write into."""
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+
+    assert state.week == 3
+
+
+async def test_no_week_carries_a_pairing_it_could_not_know(_captured):
+    # Week 1's follows from the rankings. A later week's cannot be known until the
+    # week before it is recorded, so a written guess would be a confident lie.
+    state = _state([])
+    await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    assert all(r.opponent is None for r in _captured)
+
+
+async def test_the_alliances_short_of_data_are_counted_once_not_once_a_week(_captured):
+    state = _state([])
+    ok, message = await entry.start_new_league(
+        state, LEAGUE, MONDAY - _dt.timedelta(weeks=2), _entries(), upto_week=3
+    )
+    assert ok
+    # 16 alliances across 3 weeks is 48 rows, but only 16 things to go and find.
+    assert f"{ad.BRACKET_SIZE * 3} of them" not in message
+    assert "Add power, gift level and members" in message
+
+
+def test_the_week_view_pairs_from_the_whole_league_not_one_week():
+    """`compute_week_pairing` weighs every prior result, so handing it a single
+    week scores everyone zero and reproduces week 1's ranking order for every week
+    of the league."""
+    rows = _bracket(week=1)
+    _play_week(rows, 1, lambda m: m.b)
+    rows += ad.next_week_rows(rows, 1)
+    state = _state(rows)
+
+    truth = ad.compute_week_pairing(rows, 2)
+    assert isinstance(truth, ad.WeekPairing)
+    real = state.display_name(truth.match_for(OWN).other(OWN))
+    ranking_order = state.display_name(_key("A02"))
+    assert real != ranking_order, "fixture is not exercising a reshuffle"
+
+    # The line naming your own matchup, not the tag appearing anywhere in a
+    # list of eight. The stale version put the ranking-order opponent here.
+    own_line = next(
+        ln for ln in _text(hub.week_embed(state, 2)).splitlines() if state.display_name(OWN) in ln
+    )
+    assert real in own_line
+    assert ranking_order not in own_line
+
+
+def test_a_week_whose_predecessor_is_unrecorded_says_so_rather_than_guessing():
+    rows = _bracket(week=1) + _bracket(week=2)
+    state = _state(rows)
+    text = _text(hub.week_embed(state, 2))
+    assert "Week 1's results decide who plays who in week 2" in text
+
+
+# ── Predictions on the rest of the league (#403, screen 2) ────────────────────
+
+
+class _FakeMember:
+    def __init__(self, display_name):
+        self.display_name = display_name
+
+
+class _FakeGuild:
+    def __init__(self, members=None):
+        self._members = members or {}
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+
+class _FakeResponse:
+    def __init__(self):
+        self.edited = None
+        self.sent = None
+
+    async def edit_message(self, **kw):
+        self.edited = kw
+
+    async def send_message(self, content=None, **kw):
+        self.sent = content
+
+    async def defer(self, **kw):
+        pass
+
+
+class _FakeInteraction:
+    def __init__(self, values=None, user_id=99, guild=None):
+        self.data = {"values": values or []}
+        self.user = type("U", (), {"id": user_id})()
+        self.guild = guild
+        self.response = _FakeResponse()
+        self.followed = []
+
+        async def _send(content=None, **kw):
+            self.followed.append(content)
+
+        self.followup = type("F", (), {"send": staticmethod(_send)})()
+
+
+def _picked(rows, tag, winner_tag, opponent_tag, by="", week=1):
+    for row in rows:
+        if row.week == week and row.alliance == _key(tag):
+            row.picked = "W" if tag == winner_tag else "L"
+            row.picked_by = by
+            row.opponent = _key(opponent_tag)
+
+
+def test_your_own_match_is_not_on_the_predictions_screen():
+    """It has a Picked flow on the scout card, where the head-to-head and the
+    opponent's numbers are already on screen. Asking twice splits one answer."""
+    state = _state(_bracket())
+    matches = entry.week_matches(state, 1)
+    assert matches
+    assert all(OWN not in (m.a, m.b) for m in matches)
+
+
+def test_a_discord_prediction_credits_a_live_mention_and_a_sheet_one_its_text():
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="123456789012345678")
+    _picked(rows, "A05", "A05", "A06", by="Sarah")
+    text = _text(entry.predictions_embed(_state(rows), 1, {}))
+
+    assert "<@123456789012345678>" in text
+    assert "Sarah" in text
+
+
+def test_a_prediction_with_nobody_named_shows_nothing_rather_than_an_apology():
+    """Kevin's rule, 2026-08-27. `Picked By` is a column most people never
+    fill in, so this is the common case for anything typed into the sheet."""
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="")
+    text = _text(entry.predictions_embed(_state(rows), 1, {}))
+
+    assert "A03 v A04" in text
+    for apology in ("from the sheet", "unknown", "someone"):
+        assert apology not in text.lower()
+
+
+def test_every_match_offers_both_directions():
+    state = _state(_bracket())
+    options = entry.prediction_options(state, 1, {})
+    assert len(options) == 2 * len(entry.week_matches(state, 1))
+    assert len(options) <= 25
+
+
+def test_the_option_matching_a_prediction_names_who_made_it():
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="42")
+    guild = _FakeGuild({42: _FakeMember("Kevin")})
+    described = {
+        o.label: o.description for o in entry.prediction_options(_state(rows), 1, {}, guild)
+    }
+    assert described["A03 beats A04"] == "Predicted by Kevin"
+    assert described["A04 beats A03"] == "Replaces the prediction of A03"
+
+
+def test_a_predictor_who_has_left_says_nothing_never_no_prediction_yet():
+    """There *is* a prediction; we just cannot name who made it. Saying "no
+    prediction yet" would be flatly false."""
+    rows = _bracket()
+    _picked(rows, "A03", "A03", "A04", by="42")
+    described = {
+        o.label: o.description for o in entry.prediction_options(_state(rows), 1, {}, _FakeGuild())
+    }
+    assert described["A03 beats A04"] is None
+
+
+@pytest.mark.asyncio
+async def test_staging_writes_nothing_until_save(_captured):
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+
+    assert view.staged
+    assert _captured == []
+
+
+@pytest.mark.asyncio
+async def test_saving_writes_one_row_per_match_not_two(_captured):
+    """`_MatchResolver` reads a Picked call off either side, so a second row
+    would double the sheet traffic and give rule 7 two cells to disagree
+    about."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+    await view._save(_FakeInteraction(user_id=7))
+
+    assert len(_captured) == 2
+    assert all(row.picked == "W" for row in _captured)
+    assert all(row.picked_by == "7" for row in _captured)
+    assert len({row.alliance for row in _captured}) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_confirmation_names_every_call_in_week_order(_captured):
+    """Kevin's call, 2026-08-29. A count alone hides a mis-tap, so each winner
+    is spelled out. Week order, not tap order, so the list reads down the embed
+    the person is looking at rather than replaying how they got there."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    # Staged later-match-first on purpose, so tap order and week order differ.
+    await view._staged(_FakeInteraction(values=["2:a", "0:b"]))
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    matches = entry.week_matches(state, 1)
+    first = f"{state.display_name(matches[0].b)} over {state.display_name(matches[0].a)}"
+    third = f"{state.display_name(matches[2].a)} over {state.display_name(matches[2].b)}"
+    said = interaction.followed[0]
+
+    assert "Saved 2 predictions" in said
+    assert first in said and third in said
+    assert said.index(first) < said.index(third)
+
+
+@pytest.mark.asyncio
+async def test_one_prediction_is_not_pluralised(_captured):
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    match = entry.week_matches(state, 1)[0]
+    assert interaction.followed[0] == (
+        f"✅ Saved 1 prediction: {state.display_name(match.a)} over {state.display_name(match.b)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_second_press_writes_nothing_and_says_so(_captured):
+    """The screen is edited on save, so Save goes dead — but component state
+    can be stale, and a dead-end acknowledgment beats `Saved 0 predictions:`."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    await view._save(_FakeInteraction(user_id=7))
+    written_once = list(_captured)
+
+    second = _FakeInteraction(user_id=7)
+    await view._save(second)
+
+    assert list(_captured) == written_once
+    assert second.followed == [entry.PREDICT_NOTHING_TO_SAVE]
+
+
+@pytest.mark.asyncio
+async def test_two_presses_racing_write_one_set_of_rows(monkeypatch):
+    """`save_rows` awaits on a thread. Staging is taken and cleared before the
+    write precisely so the press that lands during it finds nothing to do."""
+    written = []
+    started = asyncio.Event()
+
+    async def _slow(state, rows):
+        written.extend(rows)
+        started.set()
+        await asyncio.sleep(0.05)
+        return ""
+
+    monkeypatch.setattr(entry, "save_rows", _slow)
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+
+    first = asyncio.create_task(view._save(_FakeInteraction(user_id=7)))
+    await started.wait()
+    second = _FakeInteraction(user_id=7)
+    await view._save(second)
+    await first
+
+    assert len(written) == 2
+    assert second.followed == [entry.PREDICT_NOTHING_TO_SAVE]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_hands_the_staging_back(monkeypatch):
+    """Nothing was written, so the screen is still true. Losing the staging
+    would make the retry cost every tap again."""
+
+    async def _refuse(state, rows):
+        return "I couldn't write to your tab: nope"
+
+    monkeypatch.setattr(entry, "save_rows", _refuse)
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:a", "1:b"]))
+    before = dict(view.staged)
+
+    interaction = _FakeInteraction(user_id=7)
+    await view._save(interaction)
+
+    assert view.staged == before
+    assert "couldn't write" in (interaction.followed[0] or "")
+
+
+@pytest.mark.asyncio
+async def test_picking_both_directions_is_refused_and_names_the_match(_captured):
+    """Discord does not report which was tapped last, so guessing would be
+    inventing an answer."""
+    state = _state(_bracket())
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    interaction = _FakeInteraction(values=["0:a", "0:b"])
+    await view._staged(interaction)
+
+    assert not view.staged
+    assert _captured == []
+    match = entry.week_matches(state, 1)[0]
+    assert state.display_name(match.a) in (interaction.response.sent or "")
+
+
+@pytest.mark.asyncio
+async def test_save_is_dead_until_something_is_staged(_captured):
+    view = entry.PredictionsView(_state(_bracket()), 1, owner_id=99)
+    saves = [i for i in view.children if getattr(i, "label", "") == entry.VS_BTN_SAVE_PREDICTIONS]
+    assert saves and saves[0].disabled
+
+    await view._staged(_FakeInteraction(values=["0:a"]))
+    saves = [i for i in view.children if getattr(i, "label", "") == entry.VS_BTN_SAVE_PREDICTIONS]
+    assert saves and not saves[0].disabled
+
+
+# ── Screen 3: entering results (#404) ─────────────────────────────────────────
+
+
+def test_every_duel_day_shows_even_the_ones_nobody_entered():
+    """The gaps are the point of the screen: four blank days is the thing it
+    exists to tell you."""
+    rows = _bracket(**{OWN_TAG: {"opponent": _key("A02")}})
+    text = _text(entry.results_embed(_state(rows), 1))
+
+    for day in range(1, 7):
+        assert f"Day {day} " in text
+    for theme in ("Radar Training", "Base Expansion", "Enemy Buster"):
+        assert theme in text
+
+
+def test_a_played_day_names_the_verdict_and_never_abbreviates_a_score():
+    """The game prints these in full, so we do -- the same rule power follows."""
+    rows = _bracket(
+        **{
+            OWN_TAG: {
+                "opponent": _key("A02"),
+                "day_scores": {1: 1204000000},
+                "day_outcomes": {1: "W"},
+            },
+            "A02": {"opponent": OWN, "day_scores": {1: 980000000}},
+        }
+    )
+    text = _text(entry.results_embed(_state(rows), 1))
+
+    assert "1,204,000,000" in text
+    assert "980,000,000" in text
+    assert entry.VS_RESULTS_WON in text
+    assert "1.2b" not in text
+
+
+def test_a_day_with_scores_but_no_verdict_says_nothing_rather_than_guessing():
+    """`ScoreModal` only calls a day once it has both sides."""
+    rows = _bracket(**{OWN_TAG: {"opponent": _key("A02"), "day_scores": {1: 500}}})
+    lines = entry.own_day_lines(_state(rows), 1, OWN, _key("A02"))
+
+    assert lines[0] == "Day 1 Radar Training"
+    assert entry.VS_RESULTS_WON not in lines[0]
+    assert entry.VS_RESULTS_LOST not in lines[0]
+
+
+def test_a_half_recorded_week_split_fills_in_from_thirteen():
+    """A matchup's two week scores total 13, which is already a validation
+    rule, so one side is enough and the match reads whole."""
+    match = entry.week_matches(_state(_bracket()), 1)[0]
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == match.a:
+            row.week_score = 5
+    lines = entry.rest_of_league_lines(_state(rows), 1)
+
+    # 5 for one side derives 8 for the other, and 8 won, so 8 leads.
+    assert any(" 8 - 5 " in line for line in lines)
+
+
+def test_a_recorded_match_puts_its_winner_first():
+    """Match Record leads with the winner -- all eight rows of a real week,
+    three of them against seed order. Reading the two screens side by side is
+    the job, and a line needing a mental flip is a line that gets misread."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    loser, winner = match.a, match.b  # seed order puts the loser first
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == winner:
+            row.week_score = 9
+        elif row.alliance == loser:
+            row.week_score = 4
+    line = entry.rest_of_league_lines(_state(rows), 1)[0]
+
+    assert line == (f"{state.display_name(winner)} 9 - 4 {state.display_name(loser)}")
+
+
+def test_an_unrecorded_match_keeps_seed_order():
+    """No winner yet, so there is nothing to lead with."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    line = entry.rest_of_league_lines(state, 1)[0]
+
+    assert line.startswith(state.display_name(match.a))
+
+
+def test_your_own_match_is_not_in_the_rest_of_the_league():
+    """It is the field above, at a completely different grain."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    own = state.display_name(OWN)
+
+    assert all(own not in line.split() for line in entry.rest_of_league_lines(state, 1))
+
+
+def test_the_day_picker_carries_what_each_day_already_holds():
+    """The hub's score button only ever offers today, which is no use on a
+    screen showing four days nobody entered."""
+    rows = _bracket(
+        **{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": {1: "W"}, "day_scores": {1: 5}}}
+    )
+    options = entry.day_options(_state(rows), 1)
+
+    assert len(options) == 6
+    assert options[0].description == entry.VS_RESULTS_WON
+    assert options[1].description == entry.VS_RESULTS_NOT_ENTERED
+
+
+def test_scored_days_get_air_and_empty_ones_stay_packed():
+    """Straight off the mockup: a three-line block is separated, a list of
+    what is missing is not."""
+    rows = _bracket(
+        **{
+            OWN_TAG: {"opponent": _key("A02"), "day_scores": {1: 5}, "day_outcomes": {1: "W"}},
+        }
+    )
+    lines = entry.own_day_lines(_state(rows), 1, OWN, _key("A02"))
+
+    assert lines[2] == ""
+    assert "" not in lines[3:]
+
+    bare = entry.own_day_lines(
+        _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}})), 1, OWN, _key("A02")
+    )
+    assert "" not in bare
+
+
+# ── The other results, one box (#404) ─────────────────────────────────────────
+
+
+def _own_v(tag):
+    """A bracket where the guild's own match is against `tag`."""
+    return _bracket(**{OWN_TAG: {"opponent": _key(tag)}, tag: {"opponent": OWN}})
+
+
+def test_the_box_opens_holding_every_match_including_your_own():
+    """Kevin's call: the whole week comes off one game screen, so sending one
+    row of eight somewhere else would argue with how the data arrives."""
+    state = _state(_own_v("A02"))
+    text = entry.results_prefill(state, 1)
+
+    assert len(text.splitlines()) == ad.BRACKET_SIZE // 2
+    assert any(state.display_name(OWN) in line for line in text.splitlines())
+
+
+def test_a_recorded_match_comes_back_filled_so_it_can_be_corrected():
+    match = entry.week_matches(_state(_bracket()), 1)[0]
+    rows = _bracket()
+    for row in rows:
+        if row.alliance == match.b:
+            row.week_score = 9
+        elif row.alliance == match.a:
+            row.week_score = 4
+    state = _state(rows)
+    line = next(
+        line
+        for line in entry.results_prefill(state, 1).splitlines()
+        if state.display_name(match.b) in line
+    )
+
+    assert line.endswith(f"{state.display_name(match.b)} 9-4")
+
+
+def test_the_leading_tag_says_whose_score_is_first_not_who_won():
+    """`QQQ 7-6` and `ZZZ 6-7` are the same result. 13 is odd, so no tie."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    forward, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 6-7")
+    backward, _ = entry.parse_results(state, 1, f"{a} v {b}: {b} 7-6")
+
+    winners = {
+        tuple(r.alliance for r in rows if r.week_outcome == "W") for rows in (forward, backward)
+    }
+    assert winners == {(match.b,)}
+
+
+def test_a_split_that_is_not_thirteen_is_refused():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 8-4")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_a_tag_on_neither_side_is_refused():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: ZQX 7-6")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_a_blank_line_records_nothing_and_is_not_a_problem():
+    """The box opens with eight empty lines. Leaving one alone is the normal
+    case, not an error."""
+    state = _state(_bracket())
+    rows, problems = entry.parse_results(state, 1, entry.results_prefill(state, 1))
+
+    assert rows == [] and problems == []
+
+
+def test_one_bad_line_stops_the_whole_write():
+    """All or nothing, matching the new-league paste. Half-saving a week and
+    leaving someone to work out which half landed is worse than refusing."""
+    state = _state(_bracket())
+    m0, m1 = entry.week_matches(state, 1)[:2]
+    good = (
+        f"{state.display_name(m0.a)} v {state.display_name(m0.b)}: {state.display_name(m0.a)} 9-4"
+    )
+    bad = f"{state.display_name(m1.a)} v {state.display_name(m1.b)}: {state.display_name(m1.a)} 8-4"
+    rows, problems = entry.parse_results(state, 1, f"{good}\n{bad}")
+
+    assert problems, "the bad line must be reported"
+    assert len(rows) == 2, "the good line still parses; the caller is what refuses"
+
+
+def test_the_confirmation_names_each_winner_once_not_twice():
+    """Two rows are written per match, one per side."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    said = entry.results_saved_lines(state, rows)
+
+    assert len(rows) == 2
+    assert said == [f"{a} beat {b} 9-4"]
+
+
+def test_the_signed_off_results_copy_renders_as_approved():
+    """Kevin approved these on 2026-08-30, each shown where it fires. Pinned
+    so a later refactor cannot quietly reword them."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    said = entry.results_saved_lines(state, rows)
+    assert entry.RESULTS_SAVED.format(n=1, s="") + " " + said[0] == (
+        f"✅ Saved 1 result: {a} beat {b} 9-4"
+    )
+    assert entry.RESULTS_SAVED.format(n=3, s="s") == "✅ Saved 3 results:"
+    assert entry.RESULTS_NOTHING_TO_SAVE == "Nothing to save."
+    assert entry.VS_BTN_OTHER_RESULTS == "Enter the week's results"
+    assert entry.VS_RESULTS_MODAL_TITLE.format(week=2) == "Week 2 results"
+
+
+def test_each_refusal_names_its_own_cause():
+    """Four distinct problems, four distinct sentences -- a single 'that line
+    is wrong' would send someone back to hunt for which part."""
+    state = _state(_bracket())
+    m0, m1 = entry.week_matches(state, 1)[:2]
+    a0, b0 = state.display_name(m0.a), state.display_name(m0.b)
+    a1, b1 = state.display_name(m1.a), state.display_name(m1.b)
+
+    _, problems = entry.parse_results(
+        state,
+        1,
+        f"{a0} v {b0}: ZQX 7-6\n{a1} v {b1}: {a1} 8-4\n{a0} v {b1}: {a0} 7-6",
+    )
+
+    assert problems == [
+        f"{a0} v {b0}: I don't know ZQX. Use {a0} or {b0}.",
+        f"{a1} v {b1}: 8 and 4 don't make 13.",
+        f"""I don't recognize "{a0} v {b1}" as a match this week.""",
+    ]
+
+
+def test_an_unreadable_line_quotes_back_what_was_typed():
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    _, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} won")
+
+    assert problems == [
+        f"""{a} v {b}: I couldn't read "{a} won". It needs a tag and a split, like 9-4."""
+    ]
+
+
+def test_a_refused_box_reopens_holding_what_was_typed():
+    """A week is eight lines. Losing all of them because one said 8-4 would be
+    the screen punishing a typo."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+    typed = f"{a} v {b}: {a} 8-4"
+
+    modal = entry.OtherResultsModal(state, 1, typed=typed)
+
+    assert modal.box.default == typed
+    assert modal.box.default != entry.results_prefill(state, 1)
+
+
+def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
+    state = _state(_bracket())
+    modal = entry.OtherResultsModal(state, 1)
+
+    assert modal.box.default == entry.results_prefill(state, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
+    """The results screen is a reading of the week. Saving into it and leaving
+    it showing the old one is the same defect the predictions save had."""
+    refreshed = []
+
+    class _Screen:
+        async def refresh(self, interaction):
+            refreshed.append(interaction)
+
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"), view=_Screen())
+    modal.ours = type("F", (), {"value": "500"})()
+    modal.theirs = type("F", (), {"value": "400"})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+    assert refreshed, "the screen behind it was left showing the old week"
+
+
+@pytest.mark.asyncio
+async def test_the_hub_score_button_has_no_screen_to_refresh(_captured):
+    """Its message is a menu, not a reading, so `view` stays None and nothing
+    tries to re-render it."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"))
+    modal.ours = type("F", (), {"value": "500"})()
+    modal.theirs = type("F", (), {"value": "400"})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+    assert modal.view is None
+    assert _captured, "the write still happened"
+
+
+def test_week_two_offers_nothing_until_week_one_is_recorded():
+    """With no results to weigh, `compute_week_pairing` scores everyone zero
+    and falls back to ranking order, reproducing week 1's pairs. These screens
+    *write* what they offer, so an unguarded pairing puts invented opponents
+    in the sheet."""
+    rows = _bracket() + _bracket(week=2)
+    state = _state(rows)
+
+    week_one = entry.week_matches(state, 1)
+    week_two = entry.week_matches(state, 2)
+
+    assert week_one, "week 1 follows from the rankings and needs nothing"
+    assert week_two == [], "week 2 cannot be known until week 1 is recorded"
+
+
+def test_week_two_falls_back_to_what_the_sheet_recorded():
+    """Recorded matchups are real data. Own-alliance tracking mode has no
+    bracket to pair, and refusing to show what was written would be the
+    tracker arguing with a deliberate choice."""
+    rows = _bracket() + _bracket(
+        week=2, **{OWN_TAG: {"opponent": _key("A05")}, "A05": {"opponent": OWN}}
+    )
+    matches = entry.week_matches(_state(rows), 2, exclude_own=False)
+
+    assert len(matches) == 1
+    assert {matches[0].a, matches[0].b} == {OWN, _key("A05")}
+
+
+def test_a_recorded_week_one_unlocks_week_two():
+    rows = _bracket() + _bracket(week=2)
+    _play_week(rows, 1, lambda m: m.a)
+    matches = entry.week_matches(_state(rows), 2)
+
+    assert matches, "week 1 is decided, so week 2's pairing is computable"
+
+
+def test_your_own_match_shows_even_with_the_opponent_column_blank():
+    """`start_new_league` leaves Opponent blank on the rows it writes. Screen 3
+    read the own matchup from that column alone while excluding the computed
+    one from the rest of the league, so the guild's own match vanished from
+    the screen while still appearing in the box that writes to it."""
+    state = _state(_bracket())
+    assert state.own_match(1) is None, "the column really is blank"
+
+    opponent = entry.own_opponent(state, 1)
+    assert opponent is not None
+
+    text = _text(entry.results_embed(state, 1))
+    assert state.display_name(opponent) in text
+
+
+# -- What `/code-review` found on the rebase, 2026-09-04 ----------------------
+#
+# Six findings, none of which the 620 tests above could see. Each one is pinned
+# here against the behaviour, not against the implementation, so a rewrite that
+# reintroduces the bug still fails.
+
+
+def _record(rows, week, winner_tag):
+    """Record week `week` outright, so it stops being an open fork."""
+    _play_week(rows, week, winner_of=lambda m: m.a if m.a == _key(winner_tag) else m.b)
+
+
+def test_meetings_ahead_forks_on_the_open_week_not_the_live_one():
+    """A week already recorded is history, not a branch. Assuming a result onto
+    it overrides what the game handed down, and drops the next open week from
+    the answer entirely."""
+    rows = _bracket()
+    for week in range(2, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    # Week 1 is played and recorded; the live week is still 1.
+    _record(rows, 1, OWN_TAG)
+
+    # The fork comes off the rows, not off the live week, so once week 1 is
+    # recorded it makes no difference which of the two the caller names. Under
+    # the bug these disagreed: naming week 1 assumed a result onto a week the
+    # game had already decided, and every meeting behind it was computed from a
+    # bracket that cannot happen.
+    from_live = ad.meetings_ahead(OWN, rows, 1, estimate=None)
+    from_open = ad.meetings_ahead(OWN, rows, 2, estimate=None)
+
+    assert from_live, "every future meeting was dropped"
+    assert from_live == from_open
+    # And a settled week is never offered as somewhere you might still meet.
+    assert all(m.week > 1 for m in from_live.values())
+
+
+def test_the_preview_screen_forks_where_the_path_screen_forked():
+    """The Preview buttons sit under the path screen's fork. Branching on the
+    live week instead describes a route the screen behind them never offered."""
+    rows = _bracket()
+    for week in range(2, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    _record(rows, 1, OWN_TAG)
+    state = _state(rows)
+
+    preview = _text(hub.path_preview_embed(state, "W"))
+
+    # Week 1 is recorded and week 2 is the fork itself, so the branch starts at
+    # week 3. Under the bug the fork was the live week, which put week 2 in the
+    # list and assumed a result onto a week the game had already decided.
+    assert "Week 1:" not in preview
+    assert "Week 2:" not in preview
+    assert "Week 3:" in preview
+
+
+@pytest.mark.asyncio
+async def test_changing_a_prediction_does_not_leave_the_old_winner_picked(_captured):
+    """`predicted_winner` reads `match.a` first, so a stale "W" on the side the
+    call moved off silently reverts the correction and makes rule 7 report both
+    sides picked to win."""
+    rows = _bracket()
+    state = _state(rows)
+    match = entry.week_matches(state, 1)[0]
+    a_tag, b_tag = state.display_name(match.a), state.display_name(match.b)
+    # An earlier call on side A, already in the sheet.
+    _picked(rows, a_tag, a_tag, b_tag, by="7")
+
+    view = entry.PredictionsView(state, 1, owner_id=99)
+    await view._staged(_FakeInteraction(values=["0:b"]))
+    await view._save(_FakeInteraction(user_id=7))
+
+    written = {row.alliance: row.picked for row in _captured}
+    assert written[match.b] == "W"
+    assert written.get(match.a) == "L", "the side the call moved off still says W"
+    # And the two sides no longer agree, which is what rule 7 fires on.
+    assert written[match.a] != written[match.b]
+
+
+def test_two_alliances_sharing_a_tag_are_still_two_alliances():
+    """`display_name` is the tag alone and a bracket draws from more than one
+    warzone. A set collapsed the bot's own prefilled `X v X:` line into a single
+    name, matched no pairing, and refused the whole box -- which nobody could
+    fix, because they had not typed the line being refused."""
+    rows = _bracket()
+    match = entry.week_matches(_state(rows), 1)[0]
+    # Give both sides of a real pairing the same display tag.
+    for row in rows:
+        if row.alliance in (match.a, match.b):
+            row.tag_display = "KTI"
+    state = _state(rows)
+
+    found = entry._match_by_label(state, 1, "KTI v KTI")
+
+    assert found is not None, "a same-tag pairing could not be located at all"
+    assert {found.a, found.b} == {match.a, match.b}
+
+
+def test_a_split_typed_with_spaces_round_the_dash_is_read():
+    """`9 - 4` is `9-4`. Reading only the last whitespace-delimited token missed
+    it, and because one bad line refuses the whole box it threw the rest of the
+    week's typing away with it."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    spaced, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 9 - 4")
+    tight, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+
+    assert problems == []
+    assert [(r.alliance, r.week_score) for r in spaced] == [
+        (r.alliance, r.week_score) for r in tight
+    ]
+
+
+def test_a_split_still_needs_a_separator():
+    """The fix widened what counts as a separator, not what counts as a split.
+    `9 4` and `94` were refused before and stay refused."""
+    state = _state(_bracket())
+    match = entry.week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    for value in (f"{a} 9 4", f"{a} 94", a):
+        rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {value}")
+        assert rows == [] and len(problems) == 1, f"{value!r} was accepted"
+
+
+@pytest.mark.asyncio
+async def test_a_mid_season_start_does_not_stamp_todays_power_onto_past_weeks(_captured):
+    """`power_history` pairs each power reading with its own week date, so
+    copying today's onto the weeks already played invents a flat trajectory and
+    Scout reports "Power flat across N days of recorded rows" about days nobody
+    recorded. Identity still rides onto every week: a tag is not a measurement.
+    """
+    state = _state([])
+    entries = tuple(
+        ad.BracketEntry(
+            alliance=e.alliance,
+            ranking=e.ranking,
+            tag_display=e.tag_display,
+            warzone_display=e.warzone_display,
+            power=5_000_000,
+            members=100,
+            gift_level=40,
+        )
+        for e in _entries()
+    )
+
+    ok, message = await entry.start_new_league(state, LEAGUE, MONDAY, entries, upto_week=3)
+    assert ok, message
+
+    by_week = {}
+    for row in _captured:
+        by_week.setdefault(row.week, []).append(row)
+    assert set(by_week) == {1, 2, 3}
+
+    for week in (1, 2):
+        assert all(r.power is None for r in by_week[week]), f"week {week} carries a power read"
+        assert all(r.members is None for r in by_week[week])
+        assert all(r.gift_level is None for r in by_week[week])
+        # Identity is not a measurement and belongs on every row.
+        assert all(r.tag_display for r in by_week[week])
+
+    assert all(r.power == 5_000_000 for r in by_week[3])
+
+    # And the result is a trajectory nobody can read a trend out of, rather than
+    # a fabricated flat one.
+    profile = ad.build_profile(_captured, _captured[0].alliance)
+    assert len([p for _, p in profile.power_history if p]) < 2

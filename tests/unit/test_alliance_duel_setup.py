@@ -451,7 +451,7 @@ def test_the_offer_is_honest_about_what_the_rows_contain():
     text = _all_text(ads.fill_bracket_embed(league, _missing()))
     # It must not read as though the bot will fill the bracket in for them.
     assert "blank rows" in text
-    assert "tag, warzone and seed" in text
+    assert "tag, warzone and ranking" in text
     # One screen, one name. The game titles it "Alliance Duel League", so
     # every surface says League screen.
     assert "in-game League screen" in text

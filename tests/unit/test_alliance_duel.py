@@ -26,8 +26,8 @@ def _key(i: int) -> ad.AllianceKey:
     return ad.AllianceKey.of(f"AL{i:02d}", "1234")
 
 
-def _row(week: int, i: int, seed: int | None = None, **kw) -> ad.AllianceWeek:
-    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), seed=seed, **kw)
+def _row(week: int, i: int, ranking: int | None = None, **kw) -> ad.AllianceWeek:
+    return ad.AllianceWeek(league=LEAGUE, week=week, alliance=_key(i), ranking=ranking, **kw)
 
 
 # ── Fixed game constants ──────────────────────────────────────────────────────
@@ -351,7 +351,7 @@ def test_plan_upsert_never_writes_a_column_the_caller_has_nothing_for():
     # than being written as blanks over whatever the user might have there.
     assert appended[headers.index(ad.COL_POWER)] == ""
     assert appended[headers.index(ad.COL_NOTES)] == ""
-    assert appended[headers.index(ad.COL_SEED)] == "1"
+    assert appended[headers.index(ad.COL_RANKING)] == "1"
 
 
 def test_plan_upsert_appends_each_new_key_once():
@@ -409,11 +409,11 @@ def test_build_profile_takes_the_latest_non_blank_value():
 
 
 def _full_bracket(weeks=1):
-    """Sixteen seeded alliances with skeleton rows for `weeks` weeks."""
+    """Sixteen ranked alliances with skeleton rows for `weeks` weeks."""
     return [_row(w, i, i + 1) for w in range(1, weeks + 1) for i in range(ad.BRACKET_SIZE)]
 
 
-def test_week_one_pairs_straight_off_the_seeds():
+def test_week_one_pairs_straight_off_the_rankings():
     pairing = ad.compute_week_pairing(_full_bracket(), 1)
     assert isinstance(pairing, ad.WeekPairing)
     assert [(m.a, m.b) for m in pairing.matches] == [
@@ -658,30 +658,30 @@ def test_projection_reports_an_incomplete_bracket_rather_than_raising():
     assert result.reason == "roster_size"
 
 
-def test_projection_requires_unique_seeds_one_to_sixteen():
+def test_projection_requires_unique_rankings_one_to_sixteen():
     rows = _full_bracket()
-    rows[0].seed = 2  # duplicate
+    rows[0].ranking = 2  # duplicate
     result = ad.project_own_path(_key(1), rows)
     assert isinstance(result, ad.BracketIncomplete)
-    assert result.reason == "missing_seeds"
+    assert result.reason == "missing_rankings"
 
     rows = _full_bracket()
-    rows[5].seed = None
+    rows[5].ranking = None
     result = ad.project_own_path(_key(1), rows)
     assert isinstance(result, ad.BracketIncomplete)
-    assert result.reason == "missing_seeds"
+    assert result.reason == "missing_rankings"
 
 
 # ── The cross-check ───────────────────────────────────────────────────────────
 
 
 def _simulate_league(rng: random.Random) -> list[ad.AllianceWeek]:
-    """A fully-resolved randomized league: seeds shuffled, winners random."""
-    seeds = list(range(1, ad.BRACKET_SIZE + 1))
-    rng.shuffle(seeds)
+    """A fully-resolved randomized league: rankings shuffled, winners random."""
+    rankings = list(range(1, ad.BRACKET_SIZE + 1))
+    rng.shuffle(rankings)
     rows: list[ad.AllianceWeek] = []
     for week in range(1, ad.LEAGUE_WEEKS + 1):
-        rows += [_row(week, i, seeds[i]) for i in range(ad.BRACKET_SIZE)]
+        rows += [_row(week, i, rankings[i]) for i in range(ad.BRACKET_SIZE)]
         _play_out(rows, week, winner_of=lambda m: rng.choice([m.a, m.b]))
     return rows
 
@@ -729,3 +729,81 @@ def test_recorded_opponents_match_the_algorithm_on_a_clean_league(trial):
     rows = _simulate_league(random.Random(100 + trial))
     for week in range(1, ad.LEAGUE_WEEKS + 1):
         assert ad.pairing_disagreements(rows, week) == ()
+
+
+def test_an_unnamed_week_still_narrows_to_the_alliances_that_could_fill_it():
+    """ "One of four" is a different claim from "not worked out yet", and the
+    difference is what makes the week worth scouting."""
+    rows = _full_bracket(weeks=4)
+    projection = ad.project_own_path(_key(0), rows)
+
+    # Nothing is recorded, so only week 1 pairs straight off the rankings.
+    assert projection.steps[0].opponent == _key(1)
+    assert projection.steps[0].candidates == ()
+
+    by_week = {s.week: s for s in projection.steps}
+    # A week-w slot is fed by 2^(w-1) alliances until results fold them out.
+    assert len(by_week[2].candidates) == 2
+    assert len(by_week[3].candidates) == 4
+    assert len(by_week[4].candidates) == 8
+    assert all(s.opponent is None for s in (by_week[2], by_week[3], by_week[4]))
+
+
+def test_recording_a_week_folds_the_candidate_set_down():
+    rows = _full_bracket(weeks=4)
+    _play_out(rows, 1, winner_of=lambda m: m.a)
+
+    by_week = {s.week: s for s in ad.project_own_path(_key(0), rows).steps}
+    # Week 1 is in, so every week-1 match below has collapsed to its winner.
+    assert by_week[2].opponent == _key(2)
+    assert len(by_week[3].candidates) == 2
+    assert len(by_week[4].candidates) == 4
+
+
+def test_the_walk_carries_past_a_week_it_cannot_name():
+    """It used to stop dead there, which cost every later week -- including
+    ones both branches of the fork agree on."""
+    rows = _full_bracket(weeks=4)
+    projection = ad.project_own_path(_key(0), rows)
+    assert [s.week for s in projection.steps] == [1, 2, 3, 4]
+
+
+def test_a_forked_walk_never_states_an_opponent_one_branch_only_reaches():
+    """Past the fork an opponent is named only where every live branch lands
+    on the same one. Otherwise the step carries candidates and no opponent."""
+    rows = _full_bracket(weeks=4)
+    for step in ad.project_own_path(_key(0), rows).steps:
+        if step.opponent is not None:
+            assert step.candidates == ()
+        else:
+            assert step.source is None
+
+
+def test_a_blocked_match_says_whether_scouting_would_help():
+    complete = _full_bracket(weeks=2)
+    for row in complete:
+        row.power, row.members, row.gift_level = 1_000_000_000, 100, 30
+    profiles = ad.build_profiles(complete)
+    match = ad.Match(1, _key(0), _key(1))
+    # Everything recorded and the metrics dead level: scouting cannot help.
+    assert ad.blocker_cause(match, profiles) == ad.BLOCKED_NO_AGREEMENT
+
+    thin = _full_bracket(weeks=2)
+    for row in thin:
+        row.power, row.members, row.gift_level = 1_000_000_000, 100, 30
+    for row in thin:
+        if row.alliance == _key(1):
+            row.gift_level = None
+    profiles = ad.build_profiles(thin)
+    assert ad.blocker_cause(match, profiles) == ad.BLOCKED_MISSING_INPUTS
+    assert ad.missing_inputs(profiles.get(_key(1))) == (ad.COL_GIFT_LEVEL,)
+    assert ad.missing_inputs(profiles.get(_key(0))) == ()
+
+
+def test_one_pasted_alliance_is_not_reported_as_1_alliances():
+    """A real case: someone corrects a single alliance and pastes only that."""
+    parsed = ad.parse_bracket("ZZZ 738 30000000000 30 99")
+
+    assert parsed.problems
+    assert "1 alliance." in parsed.problems[0]
+    assert "1 alliances" not in parsed.problems[0]

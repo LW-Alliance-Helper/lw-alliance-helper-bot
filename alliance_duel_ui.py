@@ -226,6 +226,12 @@ def _projection_block(state, target: ad.AllianceKey) -> str:
     # Only ever for the *target*, never for us: `shared_only` returns
     # nothing the moment our own sheet says anything, and our own alliance
     # is the one row we always have.
+    # **The projection carries no provenance marker of its own, and that is
+    # settled.** Kevin, 2026-09-04: the card leads with the `From other
+    # alliances` heading, and a projection printed underneath it is read in
+    # that context. A second label here would be the same repetition that got
+    # the attribution sentence cut. Do not add one.
+    #
     # `shared_only` first, not `or` the other way round: a skeleton profile
     # is a truthy object with no numbers in it, so the obvious ordering
     # never reaches the shared record at all. It already returns nothing

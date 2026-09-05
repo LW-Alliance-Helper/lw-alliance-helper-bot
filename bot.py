@@ -23,7 +23,8 @@ from config import (
     get_config,
     upsert_guild_install_metadata,
     get_guild_install_metadata,
-    delete_guild_install_metadata,
+    record_guild_removal,
+    clear_guild_removal,
     get_app_setting,
     set_app_setting,
 )
@@ -545,6 +546,8 @@ async def on_ready():
         print("[INFO] Growth tracker started")
         stats_publish_task.start()
         print("[INFO] Stats publisher started")
+        guild_removal_sweep_task.start()
+        print("[INFO] Guild removal sweep started")
         shiny_tasks_refresh_task.start()
         print("[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
@@ -615,6 +618,15 @@ async def on_guild_join(guild: discord.Guild):
     """
     print(f"[GUILD] Joined {guild.name} (ID: {guild.id}) — {guild.member_count} members")
 
+    # Cancel any pending removal: the data was held, not deleted, so
+    # coming back inside the window costs nothing at all (#543).
+    try:
+        if clear_guild_removal(guild.id):
+            print(f"[GUILD] Cancelled the pending data removal for {guild.name}")
+    except Exception as e:
+        print(f"[GUILD] Could not cancel the removal hold for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Try to identify the inviter via the audit log (requires View Audit Log
     # permission, which the bot's default role normally gets).
     inviter: discord.User | discord.Member | None = None
@@ -662,13 +674,26 @@ async def on_guild_join(guild: discord.Guild):
 @bot.event
 async def on_guild_remove(guild: discord.Guild):
     """Refresh the presence count when the bot is removed from a server,
-    and drop the install metadata row so kicked guilds aren't retained.
+    and start the hold before its data is purged (#543).
     """
     print(f"[GUILD] Removed from {guild.name} (ID: {guild.id})")
     try:
-        delete_guild_install_metadata(guild.id)
+        record_guild_removal(guild.id)
     except Exception as e:
-        print(f"[GUILD] Could not clear install metadata for {guild.name}: {e}")
+        print(f"[GUILD] Could not record removal for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
+
+    # Credentials go now rather than at the end of the hold. The hold is there
+    # so a rejoin costs nothing, not so a write-capable API session outlives
+    # the removal by a month.
+    try:
+        import champion_duel_db
+
+        revoked = champion_duel_db.revoke_guild_sessions(guild.id)
+        if revoked:
+            print(f"[GUILD] Revoked {revoked} API session(s) for {guild.name}")
+    except Exception as e:
+        print(f"[GUILD] Could not revoke API sessions for {guild.name}: {e}")
         sentry_sdk.capture_exception(e)
     await _update_presence()
 
@@ -982,6 +1007,47 @@ async def stats_publish_task():
 
 @stats_publish_task.before_loop
 async def before_stats_publish_task():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(hours=24)
+async def guild_removal_sweep_task():
+    """Purge servers whose removal hold has run out (#543).
+
+    Daily rather than on the removal itself, because the hold is the point: an
+    admin who kicks the bot and re-adds it an hour later keeps everything. A
+    day's granularity on a thirty-day window costs nothing.
+    """
+    from config import sweep_guild_removals
+
+    try:
+        # The live membership set, not the hold table alone. `on_guild_join`
+        # is not dispatched for a server re-added while the bot was
+        # disconnected -- that arrives in the READY burst -- so a stale hold
+        # would otherwise delete a live server's data.
+        installed = {g.id for g in bot.guilds}
+        # SQLite writes off the event loop, the pattern `growth_task` adopted
+        # under #366 for exactly this shape of work.
+        result = await asyncio.to_thread(sweep_guild_removals, apply=True, installed=installed)
+        if result["guilds"]:
+            print(
+                f"[REMOVAL] Purged {len(result['guilds'])} held server(s): "
+                f"config={result['config']['deleted']} "
+                f"champion_duel={result['champion_duel']}"
+            )
+        if result["rejoined"]:
+            print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")
+        if result["failed"]:
+            print(f"[REMOVAL] Purge failed, will retry tomorrow: {result['failed']}")
+    except Exception as e:
+        # Never let the loop die. A purge that fails today is retried
+        # tomorrow, because the hold row is only cleared on success.
+        print(f"[REMOVAL] Sweep failed: {e}")
+        sentry_sdk.capture_exception(e)
+
+
+@guild_removal_sweep_task.before_loop
+async def before_guild_removal_sweep_task():
     await bot.wait_until_ready()
 
 

@@ -28,6 +28,23 @@ OUTSIDER_ID = 222
 
 KEV = {"discord_user_id": str(ADMIN_ID), "discord_name": "Kevin", "guild_id": "999"}
 
+# The game's clock, pinned. This file dates its groupings `2026-08-04` -- the
+# real Champion Duel the feature was built against -- and several assertions
+# read that date back as copy (`**8/4**`, `Started 8/4`), so the literal cannot
+# simply be made relative. Left against the wall clock those dates age out from
+# under the tests: on 2026-08-31 a 8/4 grouping passed `EVENT_DAYS`,
+# `db.is_finished` turned True, and the hub started answering with
+# `ChampionDuelFinishedView` -- which took `dev` red with nothing behind it.
+# Pinning inside the window keeps every literal date meaning what it says.
+CD_TODAY = date(2026, 8, 15)  # day 11 of 27 -- Qualifier Detail
+
+
+@pytest.fixture(autouse=True)
+def _server_clock(monkeypatch):
+    """Both readings of "today", so the two never disagree mid-test."""
+    monkeypatch.setattr(db, "_server_today", lambda: CD_TODAY)
+    monkeypatch.setattr(hub, "_server_today", lambda: CD_TODAY)
+
 
 @pytest.fixture
 def cd_db(tmp_path, monkeypatch):

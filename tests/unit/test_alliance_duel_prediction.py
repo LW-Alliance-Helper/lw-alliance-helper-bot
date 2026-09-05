@@ -513,14 +513,14 @@ def test_enemy_buster_can_reverse_a_grind_day_advantage():
 
 
 def _bracket_rows():
-    """Sixteen seeded alliances, each clearly stronger than the next."""
+    """Sixteen ranked alliances, each clearly stronger than the next."""
     league = ad.LeagueKey("S35", "Diamond", "12 - 2")
     return [
         ad.AllianceWeek(
             league=league,
             week=week,
             alliance=ad.AllianceKey.of(f"AL{i:02d}", "1234"),
-            seed=i + 1,
+            ranking=i + 1,
             power=1_000_000 * (2 ** (ad.BRACKET_SIZE - i)),
             members=MEMBERS_BASE,
             gift_level=GIFT_BASE,
@@ -579,7 +579,7 @@ def test_the_estimator_unblocks_a_path_that_results_alone_cannot_resolve():
     )
     assert projected.is_blocked is False
     assert projected.steps[1].outcome_source == ad.SOURCE_ESTIMATED
-    # Seed 1 is the strongest alliance in the bracket, so the model calls it.
+    # Ranking 1 is the strongest alliance in the bracket, so the model calls it.
     assert projected.steps[1].outcome == "W"
 
 

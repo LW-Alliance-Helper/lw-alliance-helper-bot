@@ -46,12 +46,12 @@ def _key(tag: str) -> ad.AllianceKey:
     return ad.AllianceKey.of(tag, OWN_WZ)
 
 
-def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
+def _row(tag, week=1, ranking=None, week_date=MONDAY, **kw):
     return ad.AllianceWeek(
         league=LEAGUE,
         week=week,
         alliance=_key(tag),
-        seed=seed,
+        ranking=ranking,
         week_date=week_date,
         tag_display=tag,
         **kw,
@@ -61,13 +61,13 @@ def _row(tag, week=1, seed=None, week_date=MONDAY, **kw):
 def _bracket(week=1, **per_alliance):
     tags = [OWN_TAG] + [f"A{i:02d}" for i in range(2, ad.BRACKET_SIZE + 1)]
     return [
-        _row(tag, week=week, seed=seed, **per_alliance.get(tag, {}))
-        for seed, tag in enumerate(tags, start=1)
+        _row(tag, week=week, ranking=ranking, **per_alliance.get(tag, {}))
+        for ranking, tag in enumerate(tags, start=1)
     ]
 
 
 def _week_one_played_around_us(rows):
-    """Record every week-1 result except our own, higher seed winning.
+    """Record every week-1 result except our own, higher ranking winning.
 
     Our own match is left open on purpose: that is the state an alliance is
     actually in when it asks "what happens if we save this week?", and it is
@@ -76,13 +76,13 @@ def _week_one_played_around_us(rows):
     pairing = ad.compute_week_pairing(rows, 1)
     assert isinstance(pairing, ad.WeekPairing), pairing
     by_key = {r.alliance: r for r in rows if r.week == 1}
-    seeds = {r.alliance: r.seed for r in rows if r.week == 1}
+    rankings = {r.alliance: r.ranking for r in rows if r.week == 1}
     for match in pairing.matches:
         if OWN in (match.a, match.b):
             by_key[match.a].opponent = match.b
             by_key[match.b].opponent = match.a
             continue
-        winner = match.a if seeds[match.a] < seeds[match.b] else match.b
+        winner = match.a if rankings[match.a] < rankings[match.b] else match.b
         loser = match.other(winner)
         by_key[winner].opponent, by_key[loser].opponent = loser, winner
         by_key[winner].week_outcome, by_key[loser].week_outcome = "W", "L"
@@ -206,7 +206,7 @@ def test_the_surface_says_nothing_is_announced_without_asking():
 
 
 def test_own_alliance_mode_shows_no_consequence_rather_than_a_second_upsell():
-    rows = [_row(OWN_TAG, seed=1)]
+    rows = [_row(OWN_TAG, ranking=1)]
     embed = entry.declaration_embed(_state(rows, tracking_mode=ad.MODE_OWN_ALLIANCE), 1)
     assert not any(f.name == "If you save this week" for f in embed.fields)
 
@@ -298,7 +298,7 @@ def test_the_announcement_tells_members_what_to_do_with_their_own_resources():
 def test_the_announcement_carries_no_jargon_a_member_would_not_know():
     for intent in (ad.INTENT_PUSH, ad.INTENT_SAVE):
         text = _text(entry.announcement_embed(2, intent)).lower()
-        for jargon in ("cohort", "bracket", "seed", "projection", "intent"):
+        for jargon in ("cohort", "bracket", "ranking", "projection", "intent"):
             assert jargon not in text
 
 

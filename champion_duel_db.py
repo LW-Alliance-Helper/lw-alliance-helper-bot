@@ -5448,6 +5448,119 @@ def consume_auth_code(code: str) -> dict | None:
 # and the run it previews cannot disagree about a row: nothing is counted by one
 # pass and removed by another.
 
+# ── Guild removal (#543) ──────────────────────────────────────────────────────
+#
+# **This is where a guild removal scrubs rather than deletes**, and it is the
+# only place. Everything in `config.purge_guild_data` is about one server and
+# means nothing without it. What is here is a reading of a tournament other
+# alliances also contributed to: the grouping, the standings, the results, the
+# line-ups. Only the *attribution* is this server's, so only the attribution
+# goes -- the same rule the personal removal follows, and the footing #544
+# puts VS scores on.
+#
+# Deleted rather than scrubbed, for the same reason as in the personal spec:
+# a row that is only about the connection between this server and the bot has
+# nothing left once the server is gone.
+
+
+def revoke_guild_sessions(guild_id: int) -> int:
+    """Kill a server's API sessions **now**, not at the end of the hold.
+
+    `SESSION_TTL` is itself 30 days and `identify()` reads `can_write`
+    straight off the stored row, so leaving this to the purge means a
+    write-capable session outlives the removal for as long as it would have
+    lived anyway. The hold exists so a rejoin costs nothing; it was never
+    meant to keep credentials alive. Re-issuing them is one sign-in.
+
+    Returns the number of rows removed. Called from `on_guild_remove`, and the
+    tables stay in the purge spec as a backstop for anything issued between.
+    """
+    gid = str(int(guild_id))
+    with _get_conn() as conn:
+        n = conn.execute("DELETE FROM sessions WHERE writer_guild_id = ?", (gid,)).rowcount
+        n += conn.execute("DELETE FROM auth_codes WHERE writer_guild_id = ?", (gid,)).rowcount
+        conn.commit()
+    return n
+
+
+_GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    # Backstop only. `revoke_guild_sessions` takes these at removal time,
+    # because a write-capable session must not outlive the removal by a month.
+    ("sessions", "writer_guild_id = :gid"),
+    ("auth_codes", "writer_guild_id = :gid"),
+    # Which warzone this server plays in. Pure server configuration.
+    ("guild_warzone", "guild_id = :gid"),
+    # This server's own prediction cards. Not a reading of the game: the game
+    # never showed these to anybody, the guild made them up. `pick_meetings`
+    # cascades from here, and `foreign_keys` is ON for this connection.
+    ("pick_slates", "guild_id = :gid"),
+)
+
+_GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    ("edits", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("disagreements", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("import_log", "actor_guild_id = NULL", "actor_guild_id = :gid"),
+    ("groupings", "created_by_guild_id = NULL", "created_by_guild_id = :gid"),
+    ("groups", "created_by_guild_id = NULL", "created_by_guild_id = :gid"),
+    # A claim is the link between a person and the account they play. Where
+    # they happened to claim it from is the only part of that this server owns.
+    ("registrant_claims", "guild_id = NULL", "guild_id = :gid"),
+)
+
+
+def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
+    """Remove one server's traces from the Champion Duel database.
+
+    Same shape as :func:`purge_user_data`, including the `apply=False` dry run,
+    for the same reason: the preview has to run the predicates the real thing
+    runs or it is worth less than no preview.
+    """
+    gid = str(int(guild_id))
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"gid": gid}
+    with _get_conn() as conn:
+        # Counted **before** the loop runs. `pick_meetings` has no `guild_id`
+        # of its own -- it cascades off `pick_slates` -- so once those rows are
+        # gone there is nothing left to count, and a real run would report zero
+        # for the one table nobody would think to check. Reading it first is
+        # what keeps the preview and the run agreeing.
+        cascaded = conn.execute(
+            "SELECT COUNT(*) FROM pick_meetings WHERE slate_id IN "
+            "(SELECT id FROM pick_slates WHERE guild_id = :gid)",
+            params,
+        ).fetchone()[0]
+        if cascaded:
+            out["deleted"]["pick_meetings"] = cascaded
+
+        for table, where in _GUILD_REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+
+        for table, sets, where in _GUILD_REMOVAL_SCRUBS:
+            if apply:
+                n = conn.execute(
+                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    params,
+                ).rowcount
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["scrubbed"][table] = n
+        if apply:
+            conn.commit()
+    return out
+
+
 _REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("sessions", "discord_user_id = :sid"),
     ("auth_codes", "discord_user_id = :sid"),

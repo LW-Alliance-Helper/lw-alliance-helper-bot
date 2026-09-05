@@ -53,6 +53,40 @@ VS_BTN_SCOUT = "🔍 Scout"
 VS_BTN_PATH = "🛣️ My path"
 VS_BTN_SETUP = "⚙️ Sheet setup and check"
 
+#: The path screen's own title. "My path" on the button that opens it, "Your
+#: path" once open: the button is the reader picking a thing off a menu, the
+#: screen is the bot handing it to them.
+VS_PATH_TITLE = "🛣️ Your path"
+VS_PATH_IF_WIN = "If you win"
+VS_PATH_IF_LOSE = "If you lose"
+
+#: What a line's claim rests on. Rendered as inline code, which is the closest
+#: thing Discord has to a chip -- an embed body is one colour throughout, so a
+#: label cannot be tinted and has to be shaped instead.
+#:
+#: **There is deliberately no label for a call somebody here made.** What gets
+#: labelled is what the reader did not do themselves, so a bare line reads as
+#: "one of us decided this" without a word spent saying so.
+VS_LABEL_RECORDED = "Recorded result"
+VS_LABEL_BOT = "Bot prediction"
+VS_LABEL_NONE = "No prediction"
+
+#: The two halves a blocked match falls into, headed by what clears it. Split
+#: because they ask the reader for opposite things: one wants numbers off the
+#: League screen, the other wants somebody to make a call.
+VS_PATH_BLOCKED_SCOUTABLE = "Scout these first"
+VS_PATH_BLOCKED_UNDECIDED = "Too close for me to predict"
+
+#: The path footer: two counts, two actions, nothing else. A footer is grey
+#: and small and gets skimmed, so it says what is outstanding and what
+#: clears it, and leaves the payoff to the fork above -- the reader is
+#: already looking at the weeks that would fill in.
+#:
+#: Either half can appear alone, so the second names "matches" when it
+#: leads and elides the noun when it follows.
+FOOTER_UNDECIDED = "{subject} your prediction."
+FOOTER_SCOUTABLE = "{subject} power, members and gift level."
+
 #: The not-entered glyph, shared with every other VS surface.
 NOT_ENTERED = ad_setup.NOT_ENTERED
 
@@ -102,22 +136,20 @@ class HubState:
         return None
 
     def display_name(self, alliance: ad.AllianceKey) -> str:
-        """How an alliance reads on screen: its tag, plus its name when one was
-        typed. Falls back to the normalised key so a row is never nameless.
+        """How an alliance reads on screen: its tag, as the game prints it.
 
-        Clamped, because both halves are alliance-supplied cells. This lands in
-        embed titles (256) and select option labels (100), and one long name
-        pasted into a sheet would otherwise take a whole surface down.
+        **No brackets.** The game shows `nWA`, so we do. They were decoration
+        around an identifier that is already unambiguous, and on a path screen
+        listing eight of them in a column they were eight rows of noise.
+
+        Falls back to the normalised key so a row is never nameless. Clamped
+        because the tag is an alliance-supplied cell, and this lands in embed
+        titles (256) and select option labels (100).
         """
-        profile = self.profiles.get(alliance)
         for row in self.rows:
             if row.alliance == alliance and row.tag_display:
-                tag = f"[{row.tag_display[:16]}]"
-                break
-        else:
-            tag = f"[{alliance.tag.upper()[:16]}]"
-        name = ((profile.name if profile else "") or "")[:48]
-        return f"{tag} {name}".strip() if name else tag
+                return row.tag_display[:16]
+        return alliance.tag.upper()[:16]
 
     def own_match(self, week: int | None) -> ad.AllianceKey | None:
         """Who the guild faces in `week`, from the recorded Opponent column."""
@@ -236,7 +268,7 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     Raw, not derived: this is the "what have we actually typed in" view, and a
     blank cell renders as unknown rather than as a zero or an estimate. Sorted
-    by seed, because that is the order the in-game League screen shows and the
+    by ranking, because that is the order the in-game League screen shows and the
     order someone copying off it will be reading in.
     """
     league = state.league
@@ -251,7 +283,7 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     rows = sorted(
         state.league_rows(week),
-        key=lambda r: (r.seed if r.seed is not None else ad.BRACKET_SIZE + 1, r.alliance),
+        key=lambda r: (r.ranking if r.ranking is not None else ad.BRACKET_SIZE + 1, r.alliance),
     )
     if not rows:
         embed.description += "\n\n*No rows recorded for this week yet.*"
@@ -259,13 +291,13 @@ def bracket_embed(state: HubState, week: int | None = None) -> discord.Embed:
 
     lines = []
     for row in rows:
-        seed = f"`{row.seed:>2}`" if row.seed is not None else "` ?`"
+        ranking = f"`{row.ranking:>2}`" if row.ranking is not None else "` ?`"
         power = f"{row.power / 1_000_000:,.0f}M" if row.power else NOT_ENTERED
         members = str(row.members) if row.members is not None else NOT_ENTERED
         gift = str(row.gift_level) if row.gift_level is not None else NOT_ENTERED
         mine = " ⬅️" if row.alliance == state.own else ""
         lines.append(
-            f"{seed} **{state.display_name(row.alliance)}** · {power} · "
+            f"{ranking} **{state.display_name(row.alliance)}** · {power} · "
             f"{members} members · gift {gift}{mine}"
         )
     embed.description += "\n\n" + "\n".join(lines)[:3800]
@@ -289,9 +321,27 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
     )
 
     rows = state.league_rows(week)
-    pairing = ad.compute_week_pairing(rows, week)
+
+    # `compute_week_pairing` weighs every prior week's result, so it takes the
+    # whole league and not one week of it. Handed a single week it sees no
+    # confirmed results at all, scores everyone zero, and falls back to ranking
+    # order, which reproduces week 1's matchups for every week of the league.
+    league_rows = state.league_rows()
+    if ad.prior_week_decided(league_rows, week):
+        pairing = ad.compute_week_pairing(league_rows, week)
+    else:
+        # The same guard `next_week_rows` holds: with the previous week
+        # unrecorded the pairing is not merely unknown, it is confidently wrong.
+        pairing = ad.BracketIncomplete(
+            reason="undecided",
+            detail=(
+                f"Week {week - 1}'s results decide who plays who in week {week}. "
+                f"Record them and this fills in."
+            ),
+            found=0,
+        )
     if isinstance(pairing, ad.BracketIncomplete):
-        matches = _matches_from_recorded_opponents(rows)
+        matches = ad.matches_from_recorded_opponents(rows)
         if not matches:
             embed.description += f"\n\n*{pairing.detail}*"
             return embed
@@ -314,26 +364,6 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
         )
     embed.description += "\n\n" + "\n".join(lines)[:3800]
     return embed
-
-
-def _matches_from_recorded_opponents(rows) -> list[ad.Match]:
-    """Fall back to the Opponent column when the bracket can't be computed.
-
-    In own-alliance tracking mode there is no bracket to pair, but the guild
-    still recorded who they faced, and refusing to show that would be the
-    tracker arguing with a deliberate choice (#448).
-    """
-    seen: set = set()
-    matches = []
-    for row in rows:
-        if row.opponent is None:
-            continue
-        key = tuple(sorted((row.alliance, row.opponent)))
-        if key in seen:
-            continue
-        seen.add(key)
-        matches.append(ad.Match(row.week, row.alliance, row.opponent))
-    return matches
 
 
 def _match_status(state: HubState, left, right, week: int, estimate) -> str:
@@ -387,7 +417,7 @@ def path_embed(state: HubState) -> discord.Embed:
     coin-flip estimate reaching the same conclusion are not the same claim and
     must not render as though they were.
     """
-    embed = discord.Embed(title=f"{VS_BTN_PATH.split()[0]} My path", color=discord.Color.blurple())
+    embed = discord.Embed(title=VS_PATH_TITLE, color=discord.Color.blurple())
 
     if state.own is None:
         embed.description = (
@@ -396,48 +426,200 @@ def path_embed(state: HubState) -> discord.Embed:
         )
         return embed
 
-    projection = ad.project_own_path(
-        state.own,
-        state.league_rows(),
-        estimate=ad.make_estimator(state.profiles),
-    )
-    if isinstance(projection, ad.BracketIncomplete):
-        embed.description = projection.detail
+    estimate = ad.make_estimator(state.profiles)
+    settled = ad.project_own_path(state.own, state.league_rows(), estimate=estimate)
+    if isinstance(settled, ad.BracketIncomplete):
+        embed.description = settled.detail
         return embed
 
-    embed.description = (
-        f"**{state.league.season} · {state.league.tier} {state.league.group}**\n"
-        f"Week 1 pairs off the seeds, and each later week follows from the results "
-        f"before it."
+    week = state.week or 1
+    fork = ad.first_open_week(settled, week)
+    lines = [
+        f"**{state.league.season} · {state.league.tier} {state.league.group}** · week {week} of {ad.LEAGUE_WEEKS}"
+    ]
+    lines += _played_block(state, settled, fork)
+    if fork is not None:
+        lines.append(_disclaimer(fork))
+    embed.description = "\n".join(line for line in lines if line)
+
+    # The fork is on the first week we do not already know, so each branch is
+    # one `assume` away. Both are projected in full rather than described,
+    # because "who do we play if we lose" is the question the screen exists to
+    # answer.
+    for outcome, heading in () if fork is None else (("W", VS_PATH_IF_WIN), ("L", VS_PATH_IF_LOSE)):
+        branch = ad.project_own_path(
+            state.own,
+            state.league_rows(),
+            estimate=estimate,
+            assume={fork: (state.own, outcome)},
+        )
+        if isinstance(branch, ad.BracketIncomplete):
+            continue
+        ahead = [step for step in branch.steps if step.week > fork]
+        if ahead:
+            embed.add_field(
+                name=heading,
+                value="\n".join(_step_line(state, step) for step in ahead)[:1024],
+                inline=False,
+            )
+
+    embed.add_field(name="Your record", value=_record_line(state, settled), inline=False)
+    footer = _path_footer(state, settled)
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
+
+
+def _path_footer(state: HubState, projection: ad.PathProjection) -> str:
+    """What would have to happen for the unnamed weeks to fill in.
+
+    Split by cause, because the two halves ask for different work and a single
+    "enter them" would send somebody to the predictions screen to find a match
+    the bot would happily have predicted for them off numbers nobody typed.
+    """
+    scoutable, undecided = _split_blockers(state, projection)
+    if not scoutable and not undecided:
+        return ""
+    parts = []
+    if undecided:
+        parts.append(FOOTER_UNDECIDED.format(subject=_counted(len(undecided), lead=True)))
+    if scoutable:
+        parts.append(FOOTER_SCOUTABLE.format(subject=_counted(len(scoutable), lead=not undecided)))
+    return " ".join(parts)
+
+
+def _counted(n: int, *, lead: bool) -> str:
+    """The subject of one footer half: "3 matches need", "5 need".
+
+    The noun drops on a following clause -- "3 matches need your prediction.
+    5 need power, members and gift level." -- but comes back when that clause
+    leads, because then there is no antecedent to elide to.
+    """
+    verb = "needs" if n == 1 else "need"
+    if not lead:
+        return f"{n} {verb}"
+    return f"{n} {'match' if n == 1 else 'matches'} {verb}"
+
+
+def _disclaimer(week: int) -> str:
+    """Names the weeks the caveat covers, because it does not cover all of them.
+
+    Once a week is recorded it is not a prediction any more, and a blanket
+    "these are predictions" over a screen whose top half is recorded results
+    would be the bot disclaiming something it actually knows.
+    """
+    ahead = [w for w in range(week + 1, ad.LEAGUE_WEEKS + 1)]
+    if not ahead:
+        return ""
+    if week == 1:
+        subject = "These are predictions"
+    elif len(ahead) == 1:
+        subject = f"Week {ahead[0]} is a prediction"
+    else:
+        subject = f"Weeks {ahead[0]} and {ahead[-1]} are predictions"
+    return (
+        f"{subject} from what has been entered here. They are not a guarantee "
+        "of how any match will go."
     )
 
+
+def _played_block(state: HubState, projection: ad.PathProjection, week: int | None) -> list[str]:
+    """The weeks up to and including this one, which are not predictions.
+
+    A recorded week says what happened and stops being a projection; the week
+    being played says so rather than claiming a result it cannot have.
+    """
     lines = []
     for step in projection.steps:
+        if week is not None and step.week > week:
+            break
         if step.opponent is None:
-            lines.append(f"**Week {step.week}:** not worked out yet.")
             continue
-        line = f"**Week {step.week}:** {state.display_name(step.opponent)}"
-        if step.source and step.source != ad.SOURCE_CONFIRMED:
-            line += f" ({_SOURCE_WORDS[step.source]})"
-        if step.outcome:
-            verdict = "you win" if step.outcome == "W" else "they win"
-            line += f"\n  {verdict.capitalize()}, {_SOURCE_WORDS[step.outcome_source]}."
-        lines.append(line)
-    if lines:
-        embed.add_field(name="Route", value="\n".join(lines)[:1024], inline=False)
+        if step.week == week:
+            # With recorded weeks above it, this line has to carry its number
+            # to sit in the same column as them, and then needs "Playing now"
+            # to say why it has no result. Alone at the top of the screen the
+            # number says nothing the reader does not know, and "this week"
+            # carries the same fact in the label.
+            label = _source_label(step.source, bare_when_confirmed=True)
+            if lines:
+                lines.append(f"**Week {step.week}:** {state.display_name(step.opponent)}{label}")
+                if step.outcome_source != ad.SOURCE_CONFIRMED:
+                    lines.append("Playing now.")
+                    continue
+            else:
+                lines.append(f"**This week:** {state.display_name(step.opponent)}{label}")
+                if step.outcome_source != ad.SOURCE_CONFIRMED:
+                    continue
+        else:
+            lines.append(
+                f"**Week {step.week}:** {state.display_name(step.opponent)}"
+                + _source_label(step.source, bare_when_confirmed=True)
+            )
+        row = state.row_for(state.own, step.week)
+        split = _week_split(row)
+        verdict = "Won" if step.outcome == "W" else "Lost"
+        lines.append(f"Result: {verdict}{split} `{VS_LABEL_RECORDED}`")
+    return lines
 
-    if projection.is_blocked:
-        embed.add_field(
-            name="What is blocking it",
-            value=_blockers_block(state, projection),
-            inline=False,
-        )
-        embed.add_field(
-            name="Scout these first",
-            value=_priority_block(state, projection),
-            inline=False,
-        )
-    return embed
+
+def _week_split(row: ad.AllianceWeek | None) -> str:
+    """The week score as the game prints it, or nothing when it wasn't typed.
+
+    Every week adds to 13, so one side's score gives both.
+    """
+    if row is None or row.week_score is None:
+        return ""
+    return f" {row.week_score} to {ad.WEEK_POINTS_TOTAL - row.week_score}"
+
+
+def _step_line(state: HubState, step: ad.PathStep) -> str:
+    """One week of a branch, labelled by what the claim rests on.
+
+    A week nobody has called is narrowed to the alliances that could fill it
+    rather than left blank, because "one of four" is a scouting job and "not
+    worked out yet" is a dead end.
+    """
+    if step.opponent is None:
+        count = len(step.candidates)
+        who = f"one of {count} alliances" if count else "not worked out yet"
+        return f"**Week {step.week}:** {who} `{VS_LABEL_NONE}`"
+    return f"**Week {step.week}:** {state.display_name(step.opponent)}" + _source_label(
+        step.source, bare_when_confirmed=False
+    )
+
+
+def _source_label(source: str | None, *, bare_when_confirmed: bool) -> str:
+    """The evidence chip for an opponent's identity, or nothing.
+
+    `bare_when_confirmed` is for the played block, where the line underneath
+    already says `Recorded result` against the score. Labelling it twice in two
+    lines reads as a stutter; leaving the *unconfirmed* case bare reads as a
+    fact, which is what this exists to stop.
+
+    Picked and Known stay bare either way: no label means somebody in the
+    alliance entered it, which is the rule the whole label set follows.
+    """
+    if source == ad.SOURCE_ESTIMATED:
+        return f" `{VS_LABEL_BOT}`"
+    if source == ad.SOURCE_CONFIRMED:
+        return "" if bare_when_confirmed else f" `{VS_LABEL_RECORDED}`"
+    return ""
+
+
+def _record_line(state: HubState, projection: ad.PathProjection) -> str:
+    """Wins and losses actually recorded. A week nobody typed in is neither."""
+    wins = losses = 0
+    for step in projection.steps:
+        if step.outcome_source != ad.SOURCE_CONFIRMED:
+            continue
+        if step.outcome == "W":
+            wins += 1
+        elif step.outcome == "L":
+            losses += 1
+    return (
+        f"{wins} {'win' if wins == 1 else 'wins'}, {losses} {'loss' if losses == 1 else 'losses'}"
+    )
 
 
 #: How each evidence source reads in the path. Plain words, because the reader
@@ -451,48 +633,344 @@ _SOURCE_WORDS = {
 }
 
 
-def _blockers_block(state: HubState, projection: ad.PathProjection) -> str:
-    """Name the exact matches that have to resolve, never "not enough data".
+def path_preview_embed(state: HubState, outcome: str) -> discord.Embed:
+    """One branch of the fork, expanded as far as the bracket allows.
 
-    Naming them is what turns a dead end into a task. The bot deliberately
-    does not say which way they will go: an unresolved match is unresolved,
-    and picking a side to keep the path moving would be inventing a result.
+    The path screen can only say "one of four alliances", because it has two
+    branches to fit and no room. This names the four, says which matches
+    decide between them, and splits those by what would actually clear them.
+
+    Both blocks live here rather than on the path screen for a second reason:
+    they are per-branch. A match that gates the winning route may not gate the
+    losing one, and a combined list would send someone to scout for a route
+    they are not on.
+    """
+    heading = VS_PATH_IF_WIN if outcome == "W" else VS_PATH_IF_LOSE
+    embed = discord.Embed(
+        title=f"{VS_PATH_TITLE.split()[0]} {heading}", color=discord.Color.blurple()
+    )
+
+    week = state.week or 1
+    estimate = ad.make_estimator(state.profiles)
+    # Fork on the same week `path_embed` forked on, not on the live week. The
+    # button that opens this screen sits under that fork, so branching anywhere
+    # else describes a route the screen behind it never offered, and a week
+    # whose result is already recorded is not a branch at all.
+    settled = ad.project_own_path(state.own, state.league_rows(), estimate=estimate)
+    if isinstance(settled, ad.BracketIncomplete):
+        embed.description = settled.detail
+        return embed
+    fork = ad.first_open_week(settled, week)
+    if fork is None:
+        # Every week is recorded, so there is no branch to preview. The buttons
+        # that open this screen only exist while there is one, so getting here
+        # means the last result landed while the screen was open. Hand back the
+        # settled path rather than an empty branch: it is what they now want,
+        # and it needs no string that only this dead end would ever use.
+        return path_embed(state)
+
+    projection = ad.project_own_path(
+        state.own,
+        state.league_rows(),
+        estimate=estimate,
+        assume={fork: (state.own, outcome)},
+    )
+    if isinstance(projection, ad.BracketIncomplete):
+        embed.description = projection.detail
+        return embed
+
+    ahead = [step for step in projection.steps if step.week > fork]
+    embed.description = (
+        f"**{state.league.season} · {state.league.tier} {state.league.group}**\n"
+        + "\n".join(_preview_line(state, step) for step in ahead)
+    )
+
+    scoutable, undecided = _split_blockers(state, projection)
+    if scoutable:
+        embed.add_field(
+            name=VS_PATH_BLOCKED_SCOUTABLE,
+            value=_priority_block(state, scoutable),
+            inline=False,
+        )
+    if undecided:
+        embed.add_field(
+            name=VS_PATH_BLOCKED_UNDECIDED,
+            value=_undecided_block(state, undecided),
+            inline=False,
+        )
+    return embed
+
+
+def _preview_line(state: HubState, step: ad.PathStep) -> str:
+    """One week of the branch, with the candidates named rather than counted.
+
+    Counting them is the path screen's job, where two branches have to fit at
+    once. Here there is room for the answer itself.
+    """
+    if step.opponent is not None:
+        return _step_line(state, step)
+    if not step.candidates:
+        return f"**Week {step.week}:** not worked out yet. `{VS_LABEL_NONE}`"
+    named = ", ".join(state.display_name(a) for a in step.candidates[:8])
+    if len(step.candidates) > 8:
+        named += f" *…and {len(step.candidates) - 8} more*"
+    return f"**Week {step.week}:** one of {named} `{VS_LABEL_NONE}`"
+
+
+def _split_blockers(
+    state: HubState, projection: ad.PathProjection
+) -> tuple[list[ad.Match], list[ad.Match]]:
+    """The blocked matches, in two piles: scoutable, and down to a human.
+
+    They want opposite things from the reader, so they can never share a list.
+    Sending someone to scout an alliance whose power, members and gift level
+    are all already recorded points them at the one action that cannot help.
+    """
+    scoutable: list[ad.Match] = []
+    undecided: list[ad.Match] = []
+    for match in projection.blocked_on:
+        cause = ad.blocker_cause(match, state.profiles)
+        if cause == ad.BLOCKED_MISSING_INPUTS:
+            scoutable.append(match)
+        else:
+            undecided.append(match)
+    return scoutable, undecided
+
+
+def _priority_block(state: HubState, matches: list[ad.Match]) -> str:
+    """The scouting list, which is the payoff for the manual entry burden.
+
+    **Match-shaped, not alliance-shaped.** Naming the match is what turns a
+    dead end into a task -- it says which fixture in the league is holding the
+    path up, and the reader can see it on their own League screen. A bare list
+    of alliances loses that and reads like homework.
+
+    Each line asks for the inputs that match is actually short of rather than
+    all three, so an alliance missing only a gift level is asked for a gift
+    level.
+    """
+    lines = []
+    for match in matches[:6]:
+        lines.append(
+            f"· {state.display_name(match.a)} vs {state.display_name(match.b)} "
+            f"(week {match.week}): {_wanted(state, match)}"
+        )
+    if len(matches) > 6:
+        lines.append(f"*…and {len(matches) - 6} more.*")
+    return "\n".join(lines)[:1024]
+
+
+def _wanted(state: HubState, match: ad.Match) -> str:
+    """What one blocked match is short of, said the shortest true way.
+
+    Both sides short of the same things collapses to "both need ..." rather
+    than repeating the list twice, which is the common case on a league nobody
+    has scouted yet.
+    """
+    short = {
+        side: ad.missing_inputs(state.profiles.get(side))
+        for side in (match.a, match.b)
+        if ad.missing_inputs(state.profiles.get(side))
+    }
+    if len(short) == 2 and len(set(short.values())) == 1:
+        return f"both need {_english_list(next(iter(short.values())))}"
+    return "; ".join(
+        f"{state.display_name(side)} needs {_english_list(wanted)}"
+        for side, wanted in short.items()
+    )
+
+
+def _undecided_block(state: HubState, matches: list[ad.Match]) -> str:
+    """The matches the model will not predict, which no scouting fixes.
+
+    Every input already exists; the three metrics point in directions that
+    cancel. So this list asks for a judgement rather than a number, and says
+    nothing about what is missing, because nothing is.
     """
     lines = [
         f"· {state.display_name(match.a)} vs {state.display_name(match.b)} (week {match.week})"
-        for match in projection.blocked_on[:6]
+        for match in matches[:6]
     ]
-    if len(projection.blocked_on) > 6:
-        lines.append(f"*…and {len(projection.blocked_on) - 6} more.*")
+    if len(matches) > 6:
+        lines.append(f"*…and {len(matches) - 6} more.*")
     return "\n".join(lines)[:1024]
 
 
-def _priority_block(state: HubState, projection: ad.PathProjection) -> str:
-    """The scouting list, which is the payoff for the manual entry burden.
-
-    Not "go scout 15 alliances" but the specific few whose results decide who
-    you meet. Alliances already recorded well enough to project are marked, so
-    the reader spends their typing on the ones that would actually move the
-    answer.
-    """
-    priority = projection.scouting_priority
-    if not priority:
-        return "Nothing to scout: the blocking matches are all yours to play."
-
-    lines = []
-    for alliance in priority[:8]:
-        profile = state.profiles.get(alliance)
-        if profile is not None and profile.is_tier_1:
-            note = "already recorded"
-        else:
-            note = "needs power, members and gift level"
-        lines.append(f"· {state.display_name(alliance)}: {note}")
-    if len(priority) > 8:
-        lines.append(f"*…and {len(priority) - 8} more.*")
-    return "\n".join(lines)[:1024]
+def _english_list(items: tuple[str, ...]) -> str:
+    """`a`, `a and b`, `a, b and c` — lowercased, since these are column names
+    landing mid-sentence."""
+    words = [item.lower() for item in items]
+    if len(words) <= 1:
+        return "".join(words)
+    return f"{', '.join(words[:-1])} and {words[-1]}"
 
 
 # ── Hub view ──────────────────────────────────────────────────────────────────
+
+
+#: The path screen's own controls. The two previews sit on their own row above
+#: the writes, matching the hub's reads-above-writes rule: a mis-tap on a phone
+#: should land on something read-only.
+VS_BTN_PREVIEW_WIN = "Preview winning path"
+VS_BTN_PREVIEW_LOSE = "Preview losing path"
+
+
+class VSPathView(discord.ui.View):
+    """The controls under the path. Renders from `state`, never re-reads."""
+
+    def __init__(self, state: HubState, owner_id: int):
+        super().__init__(timeout=900)
+        self.state = state
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+        for label, outcome in ((VS_BTN_PREVIEW_WIN, "W"), (VS_BTN_PREVIEW_LOSE, "L")):
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=0)
+            button.callback = self._preview(outcome)
+            self.add_item(button)
+
+        # Scout hangs off the path because the path is where someone finds out
+        # an alliance decides their week and knows nothing about them. Without
+        # it they would have to go back to `/vs` and start again.
+        scout = discord.ui.Button(label=VS_BTN_SCOUT, style=discord.ButtonStyle.secondary, row=0)
+        scout.callback = self._scout
+        self.add_item(scout)
+
+        # Row 1 is the write row, matching the hub: reads above, writes below,
+        # so a mis-tap on a phone lands on something read-only.
+        predict = discord.ui.Button(
+            label=ad_entry.VS_BTN_PREDICT_WEEK,
+            style=discord.ButtonStyle.secondary,
+            disabled=not ad_entry.week_matches(state, state.week or 1),
+            row=1,
+        )
+        predict.callback = self._predict
+        self.add_item(predict)
+
+        results = discord.ui.Button(
+            label=ad_entry.VS_BTN_RESULTS_WEEK,
+            style=discord.ButtonStyle.secondary,
+            disabled=state.own is None or state.week is None,
+            row=1,
+        )
+        results.callback = self._results
+        self.add_item(results)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
+
+    def _preview(self, outcome: str):
+        async def _open(interaction: discord.Interaction):
+            await interaction.response.send_message(
+                embed=path_preview_embed(self.state, outcome), ephemeral=True
+            )
+
+        return _open
+
+    async def _scout(self, interaction: discord.Interaction):
+        await ad_ui.open_scout_picker(interaction, self.state)
+
+    async def _predict(self, interaction: discord.Interaction):
+        week = self.state.week or 1
+        view = ad_entry.PredictionsView(self.state, week, interaction.user.id, interaction.guild)
+        await interaction.response.send_message(
+            embed=ad_entry.predictions_embed(
+                self.state, week, {}, interaction.guild, interaction.user.id
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        # The view edits this message on save and strips it on timeout, and it
+        # can do neither without the handle. Same pattern as the hub's own.
+        view.message = await interaction.original_response()
+
+    async def _results(self, interaction: discord.Interaction):
+        week = self.state.week or 1
+        view = ResultsView(self.state, week, interaction.user.id)
+        await interaction.response.send_message(
+            embed=ad_entry.results_embed(self.state, week), view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+
+class ResultsView(discord.ui.View):
+    """Screen 3's controls. Lives here rather than in `alliance_duel_entry`
+    because Back re-renders the path, and entry cannot import the hub."""
+
+    def __init__(self, state: HubState, week: int, owner_id: int):
+        super().__init__(timeout=900)
+        self.state = state
+        self.week = week
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+        day = discord.ui.Button(
+            label=ad_entry.VS_BTN_DAY_SCORES,
+            style=discord.ButtonStyle.primary,
+            disabled=state.own is None,
+            row=0,
+        )
+        day.callback = self._day_scores
+        self.add_item(day)
+
+        others = discord.ui.Button(
+            label=ad_entry.VS_BTN_OTHER_RESULTS,
+            style=discord.ButtonStyle.secondary,
+            disabled=not ad_entry.all_week_matches(state, week),
+            row=0,
+        )
+        others.callback = self._other_results
+        self.add_item(others)
+
+        back = discord.ui.Button(
+            label=ad_entry.VS_BTN_BACK_TO_PATH, style=discord.ButtonStyle.secondary, row=0
+        )
+        back.callback = self._back
+        self.add_item(back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
+
+    async def _day_scores(self, interaction: discord.Interaction):
+        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id, view=self)
+        await interaction.response.send_message(
+            ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+    async def _other_results(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            ad_entry.OtherResultsModal(self.state, self.week, view=self)
+        )
+
+    async def refresh(self, interaction: discord.Interaction) -> None:
+        """Re-render after a write. The modal defers with `thinking=True`, so
+        `edit_original_response` would edit that placeholder rather than the
+        screen -- the view's own message is the one that has to change."""
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(embed=ad_entry.results_embed(self.state, self.week), view=self)
+        except discord.HTTPException:
+            pass
+
+    async def _back(self, interaction: discord.Interaction):
+        view = VSPathView(self.state, self.owner_id)
+        await interaction.response.edit_message(embed=path_embed(self.state), view=view)
+        view.message = self.message
+        self.stop()
 
 
 class VSHubView(discord.ui.View):
@@ -601,6 +1079,23 @@ class VSHubView(discord.ui.View):
             advance.callback = self._next_week
             self.add_item(advance)
 
+        # Same slot, same rule, and the two can never both apply: advancing
+        # needs a week to advance from, and starting a league needs there to be
+        # no live one. With nothing recorded at all this is the only control on
+        # the hub that does anything, so it is `primary` in that state.
+        elif ad_entry.pending_new_league(state):
+            fresh = discord.ui.Button(
+                label=ad_entry.VS_BTN_NEW_LEAGUE,
+                style=(
+                    discord.ButtonStyle.primary
+                    if state.league is None
+                    else discord.ButtonStyle.secondary
+                ),
+                row=1,
+            )
+            fresh.callback = self._new_league
+            self.add_item(fresh)
+
         setup = discord.ui.Button(label=VS_BTN_SETUP, style=discord.ButtonStyle.secondary, row=1)
         setup.callback = self._setup
         self.add_item(setup)
@@ -658,7 +1153,14 @@ class VSHubView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        await interaction.response.send_message(embed=path_embed(self.state), ephemeral=True)
+        view = VSPathView(self.state, interaction.user.id)
+        await interaction.response.send_message(
+            embed=path_embed(self.state), view=view, ephemeral=True
+        )
+        # Without this `on_timeout` has nothing to edit, so the buttons keep
+        # looking live long after they stopped working. Every other view opened
+        # from this hub sets it.
+        view.message = await interaction.original_response()
 
     async def _log_score(self, interaction: discord.Interaction):
         target = ad_entry.target_day(self.state)
@@ -706,6 +1208,9 @@ class VSHubView(discord.ui.View):
             self.state, self.next_week, bot=interaction.client
         )
         await interaction.followup.send(f"{'✅' if ok else '⚠️'} {detail}", ephemeral=True)
+
+    async def _new_league(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ad_entry.NewLeagueModal(self.state))
 
     async def _setup(self, interaction: discord.Interaction):
         from alliance_duel_wizard import run_vs_setup

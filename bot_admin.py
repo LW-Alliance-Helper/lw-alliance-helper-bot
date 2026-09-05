@@ -145,8 +145,18 @@ async def admin_overview_slash(interaction: discord.Interaction):
 
     from config import _get_conn  # noqa: PLC0415 — module-level imports already loaded
 
+    # Metadata rows now outlive a removal by the length of the hold (#543), so
+    # every count here has to exclude servers that are on their way out.
+    # Without this the fleet size over-reports, and because `on_ready` only
+    # refreshes `last_seen_at` for servers the bot is in, every removed one
+    # lands in Stale stragglers.
+    held = "guild_id NOT IN (SELECT guild_id FROM guild_removals)"
+
     with _get_conn() as conn:
-        total_guilds = conn.execute("SELECT COUNT(*) FROM guild_install_metadata").fetchone()[0]
+        total_guilds = conn.execute(
+            f"SELECT COUNT(*) FROM guild_install_metadata WHERE {held}"  # noqa: S608
+        ).fetchone()[0]
+        awaiting_removal = conn.execute("SELECT COUNT(*) FROM guild_removals").fetchone()[0]
         with_setup_complete = conn.execute(
             "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
         ).fetchone()[0]
@@ -156,14 +166,14 @@ async def admin_overview_slash(interaction: discord.Interaction):
         cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         recent_rows = conn.execute(
             "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
-            "WHERE installed_at >= ? ORDER BY installed_at DESC LIMIT 10",
+            f"WHERE installed_at >= ? AND {held} ORDER BY installed_at DESC LIMIT 10",  # noqa: S608
             (cutoff_recent,),
         ).fetchall()
         # Stale stragglers: no on_ready ping in 14+ days.
         cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
         stale_rows = conn.execute(
             "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
-            "WHERE last_seen_at < ? ORDER BY last_seen_at ASC LIMIT 10",
+            f"WHERE last_seen_at < ? AND {held} ORDER BY last_seen_at ASC LIMIT 10",  # noqa: S608
             (cutoff_stale,),
         ).fetchall()
 
@@ -177,6 +187,7 @@ async def admin_overview_slash(interaction: discord.Interaction):
             f"**Installed guilds:** {total_guilds}\n"
             f"**Completed setup:** {with_setup_complete}\n"
             f"**Premium assignments:** {premium_assignments}"
+            + (f"\n**Awaiting removal:** {awaiting_removal}" if awaiting_removal else "")
         ),
         inline=False,
     )

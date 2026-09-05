@@ -58,12 +58,12 @@ def _key(tag: str) -> ad.AllianceKey:
     return ad.AllianceKey.of(tag, OWN_WZ)
 
 
-def _row(tag, week=1, seed=None, league=LEAGUE, week_date=MONDAY, **kw):
+def _row(tag, week=1, ranking=None, league=LEAGUE, week_date=MONDAY, **kw):
     return ad.AllianceWeek(
         league=league,
         week=week,
         alliance=_key(tag),
-        seed=seed,
+        ranking=ranking,
         week_date=week_date,
         tag_display=tag,
         **kw,
@@ -73,8 +73,8 @@ def _row(tag, week=1, seed=None, league=LEAGUE, week_date=MONDAY, **kw):
 def _rows(**own_fields):
     """Own alliance plus the opponent it is recorded as facing in week 1."""
     return [
-        _row(OWN_TAG, seed=1, opponent=_key("A02"), **own_fields),
-        _row("A02", seed=2, opponent=OWN),
+        _row(OWN_TAG, ranking=1, opponent=_key("A02"), **own_fields),
+        _row("A02", ranking=2, opponent=OWN),
     ]
 
 
@@ -218,7 +218,7 @@ def test_a_one_point_day_is_not_pluralised():
 
 
 def test_an_unknown_opponent_still_asks_rather_than_failing():
-    rows = [_row(OWN_TAG, seed=1)]
+    rows = [_row(OWN_TAG, ranking=1)]
     text = _text(ad_views.score_prompt_embed(_state(rows), 1, 2, None))
     assert "your opponent" in text
 
@@ -392,7 +392,7 @@ async def test_no_live_week_means_no_post():
     """Between leagues there is nothing to ask about, so the prompt does not
     invent a week."""
     channel = _Channel()
-    stale = [_row(OWN_TAG, seed=1, week_date=_dt.date(2026, 3, 2))]
+    stale = [_row(OWN_TAG, ranking=1, week_date=_dt.date(2026, 3, 2))]
     posted, _ = await _post(stale, channel)
     assert posted is False
 
@@ -450,7 +450,7 @@ def _post_row(league):
 
 
 def test_a_prompt_from_a_finished_league_refuses_rather_than_writing():
-    rows = [_row(OWN_TAG, seed=1, league=NEXT_LEAGUE, week_date=MONDAY)]
+    rows = [_row(OWN_TAG, ranking=1, league=NEXT_LEAGUE, week_date=MONDAY)]
     refusal = _stale_check(_post_row(LEAGUE), _state(rows))
     assert refusal is not None
     assert "S35" in refusal

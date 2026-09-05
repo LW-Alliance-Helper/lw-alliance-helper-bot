@@ -87,6 +87,19 @@ BUTTON_TIMEOUT = 3600
 pending_warnings: dict[str, tuple[datetime, list[dict], int]] = {}
 
 
+# ── 5-minute warning default ───────────────────────────────────────────────────
+# What the warning posts when an alliance has not written its own. The events
+# wizard shows this as the default and stores '' when they accept it, so the
+# rendered text lives here and nowhere else — events_hub imports it rather
+# than retyping it, or the preview and the post drift apart (#566).
+#
+# One exclamation mark, not two. UX.md bans them outside genuine celebration;
+# the mark on the event is the urgency a five-minute warning is for, and the
+# instruction after it does not need to shout as well. Kevin, on the #566
+# sign-off: "drop the second mark".
+WARNING_BLURB_DEFAULT = "{name} in 5 minutes! Make sure you're online."
+
+
 # ── Event library ──────────────────────────────────────────────────────────────
 # Each event has:
 #   key      — internal identifier
@@ -137,6 +150,7 @@ def _resolve_event_info(key: str, guild_id: int = None) -> dict:
                 "name": ev.get("name", key),
                 "blurb": ev.get("announcement_blurb", "")
                 or EVENT_LIBRARY.get(key, {}).get("blurb", ""),
+                "warning_blurb": ev.get("warning_blurb", ""),
                 "optional": True,
             }
     return EVENT_LIBRARY.get(key, {"name": key, "blurb": "", "optional": True})
@@ -160,6 +174,7 @@ def _available_events_for_guild(guild_id: int = None) -> dict:
                 e["short_key"]: {
                     "name": e.get("name", e["short_key"]),
                     "blurb": e.get("announcement_blurb", ""),
+                    "warning_blurb": e.get("warning_blurb", ""),
                     "optional": True,
                 }
                 for e in events
@@ -287,32 +302,50 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
     Build the 5-minute warning based on the first event.
 
     Resolution order for the message body:
-      1. The event's stored `warning_blurb` (if guild defined a custom 5-min
-         warning text in the events setup wizard).
-      2. The event's stored `announcement_blurb` (if defined) — adapted to
-         "in 5 minutes" by substituting the {time} placeholder.
-      3. Hardcoded special case for `marauder` (legacy compat).
-      4. Generic fallback: "<Name> in 5 minutes!" using the configured name.
+      1. The event's stored `warning_blurb`, the text the alliance wrote for
+         this event's 5-minute warning in the events wizard (#566).
+      2. Hardcoded special case for `marauder` (legacy compat).
+      3. `WARNING_BLURB_DEFAULT`, for the alliances that took the default.
+
+    Placeholders in a warning blurb resolve to the event's **real clock
+    time**, exactly as they do in the announcement: {name}, {time} in the
+    event's timezone, {server_time} in Server Time.
+
+    They deliberately do NOT resolve to "5 minutes". That was #565: the
+    warning used to reuse the *announcement* blurb with the literal string
+    "5 minutes" pushed into both slots, and since the wizard's default
+    announcement is "{name} at {time} ({server_time} Server Time)." every
+    alliance got "Alliance Exercise: Plague Marauder at 5 minutes (5 minutes
+    Server Time)." A duration cannot go in a slot the alliance wrote "at" in
+    front of. The warning gets its own text instead, and its placeholders
+    mean the same thing they mean everywhere else.
     """
     if not event_list:
-        return "Event starting in 5 minutes! Make sure you're online!"
+        return "Event starting in 5 minutes! Make sure you're online."
     first = event_list[0]
     key = first["key"]
 
     info = _resolve_event_info(key, guild_id)
-    custom_warn = (first.get("warning_blurb") or "").strip()
-    if custom_warn:
-        return custom_warn.format(time="5 minutes", server_time="5 minutes", server="5 minutes")
+    # `first` is the draft the scheduler built; `info` re-reads config. Prefer
+    # the draft so a failed guild-event lookup degrades to a stale display
+    # name rather than to the raw short_key.
+    name = first.get("name") or info.get("name") or key
 
-    custom_blurb = (first.get("blurb") or info.get("blurb") or "").strip()
-    if custom_blurb and key not in ("marauder",):
-        # Re-use the configured announcement blurb, swapping the time
-        # placeholder for "5 minutes" so the message reads "<event> in 5 minutes...".
+    custom_warn = (first.get("warning_blurb") or info.get("warning_blurb") or "").strip()
+    dt = first.get("dt")
+    if custom_warn and dt is not None:
         try:
-            return custom_blurb.format(
-                time="5 minutes", server_time="5 minutes", server="5 minutes"
+            sv_str = to_server_time_str(dt)
+            return custom_warn.format(
+                name=name,
+                time=format_et(dt),
+                server_time=sv_str,
+                server=sv_str,
             )
         except (KeyError, IndexError):
+            # An unknown placeholder is the alliance's typo, not a reason to
+            # post nothing. Fall through to the default rather than raising
+            # inside the scheduler loop.
             pass
 
     if key == "marauder":
@@ -320,8 +353,7 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
             "Marauder (AE) in 5 minutes! Make sure you hop online and get your points! "
             "Zombies right after, check your wall to make sure you have squads on it!"
         )
-    name = info.get("name") or key
-    return f"{name} in 5 minutes! Make sure you're online!"
+    return WARNING_BLURB_DEFAULT.format(name=name)
 
 
 # ── Time parsing ───────────────────────────────────────────────────────────────
@@ -998,6 +1030,7 @@ def iter_guild_event_drafts(cfg, today: date) -> list[dict]:
                             "name": ev["name"],
                             "dt": ev_dt,
                             "blurb": ev["announcement_blurb"],
+                            "warning_blurb": ev["warning_blurb"],
                         }
                     )
                     draft_channel_id = ev["draft_channel_id"] or draft_channel_id

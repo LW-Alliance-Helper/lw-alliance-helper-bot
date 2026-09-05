@@ -660,7 +660,7 @@ class FillBracketView(discord.ui.View):
             inter,
             content=(
                 f"✅ Added {added} blank row{'s' if added != 1 else ''} to your "
-                f"**{self._tab}** tab. Fill in the tag, warzone and seed for each "
+                f"**{self._tab}** tab. Fill in the tag, warzone and ranking for each "
                 "from the in-game League screen."
             ),
             embed=None,

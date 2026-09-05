@@ -495,10 +495,40 @@ _ODDS_BASIS = (
 #: moved *round* to *stage* and the test guarding them carried its own copy of
 #: the words -- the `_ODDS_AS_OF` failure, one surface along.
 _ODDS_OVER = "Over {trials:,} simulations of the stage."
-_ODDS_COLUMNS = (
-    "The first column gives the odds of finishing in the top **{advance}** and "
-    "going through, the second the odds of winning the group outright."
-)
+#: Approved by Kevin, 2026-09-05, and it replaced `_ODDS_COLUMNS`, which read
+#: *"The first column gives the odds of finishing in the top {advance} and going
+#: through, the second the odds of winning the group outright."*
+#:
+#: **He rejected the shape, not the sentence:** *"I don't know what any of those
+#: numbers mean here. You say it in text but that is not how you structure data
+#: in a sort of table column thing."* A paragraph above a table is a key the
+#: reader has to hold while looking away from it.
+#:
+#: So the labels moved into the rows and this says only what the numbers are
+#: **of**, which no row can carry: the size of the top the model is counting.
+_ODDS_THRESHOLD = "A player goes through by finishing in the top **{advance}**."
+#: The row, and the two labels are Kevin's own: *"Maybe it's Name - Advancing
+#: Odds: 92% - Placement: 1st."* Title case is his too, against `DESIGN.md`'s
+#: sentence case, and kept rather than quietly lowercased.
+#:
+#: **Two lines, which is the bracket's shape** (`build_bracket_embed`) and is
+#: measured rather than copied: these labels put a one-line row at 42 to 62
+#: characters and a phone embed in portrait fits about 34. One line would wrap
+#: anyway, in a different place on every row. Two breaks in the same place every
+#: time, after the name.
+_ODDS_ROW = "**{name}**\n{parts}"
+_ODDS_ADVANCE = "Advancing Odds: {odds}"
+#: **Dropped, then restored the same day.** It went when the shape under
+#: consideration was three inline embed fields, where three was a hard cap and
+#: this was the weakest of four. Labelled lines have no cap, so Kevin put it
+#: back: *"Add it back in then."*
+#:
+#: ⚠️ *Winning* here means winning the group outright, not winning a match. The
+#: label carries Kevin's own word for the column and the sense is the intro
+#: line's to hold.
+_ODDS_WIN = "Winning Odds: {odds}"
+#: Dropped whole when nobody has finished yet, rather than printed empty.
+_ODDS_PLACEMENT = "Placement: {place}"
 
 #: The same, for the bracket, which is averaged over seedings rather than run
 #: against the one anybody will get.
@@ -8508,6 +8538,39 @@ def build_bracket_embed(result, grouping, *, as_of: str | None = None) -> discor
     return embed
 
 
+def _odds_line(row, scouted) -> str:
+    """One player: their name, then every figure with its own label beside it.
+
+    **The labels ride with the numbers rather than sitting in a heading**, which
+    is the pattern `build_bracket_embed` already uses for its five rungs and the
+    group listing uses for warzone and alliance. It is also the only shape that
+    survives here: Discord has no table component, embed fields lose their row
+    correspondence the moment one wraps, and a monospace block would have to pad
+    a name that runs to sixty-four characters.
+
+    The placement clause is dropped entirely mid-stage. `words.placement`
+    returns None where there is no rank, and a label with nothing after it is
+    worse than a shorter line.
+
+    `row.key` is the row's position in `scouted`, which is what
+    `champion_duel_odds._specs` keys the engine on and carries out for exactly
+    this join. Guarded rather than trusted: it is None on anything built before
+    that was added.
+    """
+    parts = [
+        _ODDS_ADVANCE.format(odds=words.probability(row.advance)),
+        _ODDS_WIN.format(odds=words.probability(row.win_group)),
+    ]
+    place = None
+    if row.key is not None and str(row.key).isdigit():
+        index = int(row.key)
+        if 0 <= index < len(scouted):
+            place = words.placement(scouted[index].get("rank"))
+    if place:
+        parts.append(_ODDS_PLACEMENT.format(place=place))
+    return _ODDS_ROW.format(name=discord.utils.escape_markdown(row.name), parts=" · ".join(parts))
+
+
 def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord.Embed:
     """The odds, or the reason there are none.
 
@@ -8628,18 +8691,14 @@ def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord
     # same overclaim, in the same direction, that the prediction card refuses
     # at the other end of the scale. Same strings, same formatter, one fewer
     # false claim.
-    lines = [
-        f"`{words.probability(row.advance):>4}` `{words.probability(row.win_group):>4}`  "
-        f"**{discord.utils.escape_markdown(row.name)}**"
-        for row in shown
-    ]
+    lines = [_odds_line(row, scouted) for row in shown]
     more = len(result.rows) - len(shown)
     tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
     embed.description = (
         (f"{as_of}\n\n" if as_of else "")
         + _ODDS_OVER.format(trials=result.trials)
         + " "
-        + _ODDS_COLUMNS.format(advance=result.advance)
+        + _ODDS_THRESHOLD.format(advance=result.advance)
         + "\n\n"
         + "\n".join(lines)
         + tail

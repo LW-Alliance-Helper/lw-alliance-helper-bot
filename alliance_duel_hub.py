@@ -158,15 +158,29 @@ class HubState:
     def shared_only(self, alliance: ad.AllianceKey):
         """What other alliances recorded about `alliance`, when we have not.
 
-        Returns `None` whenever this guild's own sheet has anything at all
-        about them. The sheet wins, and a card that quietly preferred somebody
-        else's number over the one the officer typed would be worse than a card
-        with a gap in it: they would have no way to tell which they were
-        reading.
+        **"We have not" means no scouting numbers, not no row.**
+        `start_new_league` writes a skeleton row for all sixteen alliances the
+        moment a league opens, so a profile object exists for every one of them
+        from day one and testing for its absence would make this dead code: the
+        officer would keep reading `Power ? - ? members - gift level ?` while
+        another alliance had the numbers all along.
+
+        Still `None` the moment we have any of the three ourselves. The sheet
+        wins, and a card that quietly preferred somebody else's number over one
+        the officer typed would be worse than a card with a gap in it: they
+        would have no way to tell which they were reading.
         """
-        if self.profiles.get(alliance) is not None:
+        mine = self.profiles.get(alliance)
+        if mine is not None and (
+            mine.power is not None or mine.members is not None or mine.gift_level is not None
+        ):
             return None
-        return self.shared_profiles.get(alliance)
+        theirs = self.shared_profiles.get(alliance)
+        if theirs is None or not (
+            theirs.power is not None or theirs.members is not None or theirs.gift_level is not None
+        ):
+            return None
+        return theirs
 
     @property
     def week(self) -> int | None:

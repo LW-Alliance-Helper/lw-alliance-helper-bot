@@ -119,7 +119,15 @@ CD_BTN_EDITS = "📜 Recent edits"
 CD_BTN_REVERT = "⏪ Revert an edit"
 CD_BTN_EXPORT = "📤 Export edits"
 CD_BTN_FILTER = "🔍 Filter these"
-CD_BTN_SHARE = "📤 Share this prediction to current channel"
+#: Approved by Kevin, 2026-09-05: *"Post this prediction to current channel."*
+#:
+#: **The verb changed, not the noun.** It said *Share* while its two siblings
+#: said *Post*, and both of their comments claimed to follow this one **to the
+#: word** -- which neither did until now. The noun stays because renaming the
+#: button that produces this card to `Simulate a match` did not stop the output
+#: being a prediction: *simulate* is what the engine does, *prediction* is what
+#: comes out.
+CD_BTN_SHARE = "📤 Post this prediction to current channel"
 
 #: What a share button says when the bot cannot post in this channel. One
 #: string rather than one per share button: it is the same refusal about the

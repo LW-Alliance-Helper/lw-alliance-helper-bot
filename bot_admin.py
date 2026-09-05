@@ -1662,6 +1662,11 @@ class _MergeGroupingsView(discord.ui.View):
                 f"{moved['unchanged']} already complete in #{keep_id}, "
                 f"{moved['groups']} groups touched, {moved['guilds']} guilds repointed"
                 + (f", {moved['unpinned']} unpinned" if moved["unpinned"] else "")
+                + (
+                    f", {moved['readers']} servers that could read it carried over"
+                    if moved.get("readers")
+                    else ""
+                )
                 + f". #{drop_id} is gone, and its warzones went with it"
                 + (
                     f" ({', '.join(moved['dropped_warzones'])})"

@@ -4725,7 +4725,8 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         super().__init__(title=CD_ADD_GROUPING_TITLE if onboarding else CD_ADD_SENT_TITLE)
         self.can_write = can_write
         self.warzone = warzone
-        # Carried so a refusal reopens the form the caller was actually in.
+        # Carried so the retry reopens the form the caller was in, which is
+        # only its title now -- see `_AddGroupingModal`.
         self.onboarding = onboarding
         # The field labels are shared and stay shared: "The participating
         # warzones, all 16" describes the input whichever form is open.
@@ -4793,16 +4794,10 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             )
             return
 
-        # The caller's own warzone has to be in the set. If it is not, one of the
-        # two answers is off and there is no way to tell which from here -- and
-        # pinning a guild to a grouping it is not in is the exact silent failure
-        # the grouping separation exists to stop.
-        #
-        # **Only when this is the caller's own Champion Duel.** A grouping they
-        # were sent has no reason to contain their warzone, and this guard is
-        # what made the finished hub's offer to "record past Champion Duel
-        # results" impossible to act on: the copy advertised contributing and
-        # the control beside it was onboarding.
+        # A warzone is only ever drawn into one set per Champion Duel, so an
+        # overlap that is not the whole set means one of the two entries is
+        # wrong. An exact match is agreement rather than a contradiction and is
+        # joined below.
         overlaps = await asyncio.to_thread(db.overlapping_groupings, zones, started)
         exact = next((g for g, _ in overlaps if set(g["warzones"]) == set(zones)), None)
         if exact is None and overlaps:
@@ -10627,20 +10622,12 @@ class ChampionDuelHubView(discord.ui.View):
         whether the hub will open on the result, and the acknowledgement reads
         off that.
 
-        So this passes `onboarding=False`, which drops one thing only: the
-        guard that the sixteen contain your own warzone. Everything else is
-        shared -- the count, the duplicate check and the overlap conflict are
-        what stop a mistyped list becoming a grouping nobody can untangle, and
-        none of them depend on whose Champion Duel it is.
-
-        **⚠️ That guard is now unreachable for a returning server**, which is
-        a known gap rather than an oversight: `ChampionDuelOnboardingView` is
-        the only caller that passes `onboarding=True`, and it draws only where
-        no Champion Duel is resolved. A one-digit typo in your own next set
-        therefore creates a grouping you are not in, reports success, and
-        leaves the hub where it was. Raised with Kevin 2026-09-01: it is a
-        typo catch rather than an identity question, so it may want to come
-        back as a note on the acknowledgement rather than as a refusal.
+        The warzone guard that used to differ between the two forms is gone
+        from both, on Kevin's call of 2026-09-05: *"I would just say that their
+        known warzone is not in the list but don't gate anything on it."* So
+        `onboarding` picks the modal title and nothing else, and every entry
+        takes the same path -- the count, the duplicate check, the overlap
+        conflict and a pin that decides itself.
         """
         await inter.response.send_modal(
             _AddGroupingModal(

@@ -992,6 +992,8 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
             "CREATE INDEX IF NOT EXISTS ix_stages_stage ON registrant_stages(stage, grp)",
             "CREATE INDEX IF NOT EXISTS ix_gw_warzone ON grouping_warzones(warzone)",
+            # The table's only read, and its only write predicate on removal.
+            "CREATE INDEX IF NOT EXISTS ix_readers_guild ON grouping_readers(guild_id)",
             "CREATE INDEX IF NOT EXISTS ix_groups_lookup ON groups(grouping_id, stage, label)",
             "CREATE INDEX IF NOT EXISTS ix_gm_registrant ON group_members(registrant_id)",
         ):

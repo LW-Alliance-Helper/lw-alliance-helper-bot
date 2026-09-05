@@ -265,7 +265,7 @@ async def test_declaring_writes_only_the_intent():
     state = _state(_bracket())
     captured = {}
 
-    async def _fake_save(_state, rows):
+    async def _fake_save(_state, rows, **kw):
         captured["rows"] = rows
         return ""
 

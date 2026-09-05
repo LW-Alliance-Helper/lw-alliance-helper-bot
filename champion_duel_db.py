@@ -2,8 +2,16 @@
 
 Separate from `config.py`'s `guild_configs.db` on purpose. That database is
 per-guild and private; this one is global tournament data contributed across
-alliances and servers, with its own lifecycle â€” it can be wiped between
-qualifiers and semifinals without touching a single alliance's configuration.
+alliances and servers, so it can be replaced wholesale without touching a
+single alliance's configuration.
+
+That sentence used to read "it can be wiped between qualifiers and
+semifinals". It cannot, and has not been able to since #495:
+`import_registrants` writes a row's group and rank to one round of one
+grouping precisely so loading the semifinal draw leaves every qualifier group
+intact, and there is no wipe path in this module. The old wording was read as
+a lifecycle guarantee while deciding where VS scores should live (#544), so it
+is corrected rather than left to mislead the next reader.
 
 **Identity is (name, server), never name alone.** Last War names are not unique
 across servers, so keying on the normalized name would merge two different

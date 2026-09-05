@@ -5494,6 +5494,15 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     # never showed these to anybody, the guild made them up. `pick_meetings`
     # cascades from here, and `foreign_keys` is ON for this connection.
     ("pick_slates", "guild_id = :gid"),
+    # Which Champion Duels this server holds a record of beyond its own. Pure
+    # server bookkeeping -- the row is (grouping, guild) and says nothing about
+    # any person -- and it is the server's, so it goes when the server does.
+    #
+    # **Deleted rather than scrubbed**, unlike the rows above it: those keep a
+    # fact about the tournament and drop only who entered it, and there is no
+    # such fact here. A reader row with its guild nulled would be a link from a
+    # Champion Duel to nobody.
+    ("grouping_readers", "guild_id = :gid"),
 )
 
 _GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (

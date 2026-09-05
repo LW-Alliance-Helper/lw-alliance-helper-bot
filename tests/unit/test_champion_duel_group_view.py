@@ -474,6 +474,89 @@ def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
     assert "Total Hero Power" not in embed.description
 
 
+# ── The odds row ──────────────────────────────────────────────────────────────
+#
+# Kevin, 2026-09-05: *"I don't know what any of those numbers mean here. You say
+# it in text but that is not how you structure data in a sort of table column
+# thing."* The labels moved off a paragraph above the table and into the rows.
+
+
+def _odds_of(cd_db, ranks):
+    """A full, modellable group of eight with the given finishing ranks."""
+    grouping, group = _group_of(cd_db, [(f"P{i}", i, ranks.get(i)) for i in range(1, 9)])
+    for i in range(1, 9):
+        db.upsert_registrant(f"P{i}", server="738", thp=300_000_000 + i * 9_000_000)
+    return grouping, db.get_group_scouting(group["id"])
+
+
+def test_every_figure_carries_its_own_label(cd_db):
+    """The whole point of the rewrite. A number with a word beside it needs no
+    heading, which is what makes this survive a surface with no table
+    component, no reliable column alignment and names running to 64
+    characters."""
+    grouping, scouted = _odds_of(cd_db, {i: i for i in range(1, 9)})
+
+    said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
+
+    assert "Advancing Odds:" in said
+    assert "Winning Odds:" in said
+    assert "Placement:" in said
+    # The paragraph that used to carry all three is gone. What is left says only
+    # what no row can: the size of the top the model is counting.
+    assert "The first column" not in said
+    assert hub._ODDS_THRESHOLD.format(advance=2) in said
+
+
+def test_the_name_is_on_its_own_line(cd_db):
+    """Two lines, which is `build_bracket_embed`'s shape and is measured rather
+    than copied: these labels put a one-line row past 40 characters and a phone
+    embed in portrait fits about 34."""
+    grouping, scouted = _odds_of(cd_db, {i: i for i in range(1, 9)})
+
+    said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
+
+    assert "**P1**\nAdvancing Odds:" in said
+
+
+def test_the_placement_clause_is_absent_before_anybody_has_finished(cd_db):
+    """Mid-stage there is no finishing order. A label with nothing after it is
+    worse than a shorter line, so the whole clause goes rather than printing
+    `Placement: -`."""
+    grouping, scouted = _odds_of(cd_db, {})
+
+    said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
+
+    assert "Advancing Odds:" in said and "Winning Odds:" in said
+    assert "Placement:" not in said
+
+
+def test_a_placement_lands_on_the_player_who_earned_it(cd_db):
+    """`row.key` is the row's position in `scouted`, not a name, because two
+    players in one group can share a display name. Joining on anything else
+    would print one player's finish beside another's odds."""
+    grouping, scouted = _odds_of(cd_db, {1: 8, 8: 1})
+
+    said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
+    p1 = said.split("**P1**\n")[1].splitlines()[0]
+    p8 = said.split("**P8**\n")[1].splitlines()[0]
+
+    assert p1.endswith("Placement: 8th"), p1
+    assert p8.endswith("Placement: 1st"), p8
+
+
+def test_the_footer_still_says_what_the_answer_is_ranked_on(cd_db):
+    """**Nothing asserted this until 2026-09-05**, and a rename collided with
+    `_ODDS_BASIS` and silently replaced it on three surfaces without a single
+    test failing. It exists to stop this table and `Your standing` drifting
+    apart, so it is pinned here."""
+    grouping, scouted = _odds_of(cd_db, {i: i for i in range(1, 9)})
+
+    embed = hub.build_odds_embed(scouted, "semifinals", "H", grouping)
+
+    assert embed.footer.text == hub._ODDS_BASIS
+    assert "not matches won" in hub._ODDS_BASIS
+
+
 # ── Putting one player in a group ─────────────────────────────────────────────
 
 

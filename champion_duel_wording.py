@@ -59,6 +59,27 @@ def probability(prob: float) -> str:
     return f"{prob:.0%}"
 
 
+def placement(rank) -> str | None:
+    """A finishing position as an ordinal, or None when nobody has one yet.
+
+    None rather than a dash or a blank, so a caller drops the whole clause
+    instead of printing a label with nothing after it. A group mid-stage has no
+    finishing order at all, and "Placement: -" is a worse answer than silence.
+
+    **The full rule, not `1st 2nd 3rd`.** `db.KNOCKOUT_RESULTS` stops at three
+    because a bracket only needs those, and a qualifier group runs to a hundred
+    players -- where 11th, 12th and 13th are the ones a shortcut gets wrong.
+    """
+    try:
+        n = int(rank)
+    except (TypeError, ValueError):
+        return None
+    if n < 1:
+        return None
+    suffix = "th" if n % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def lineup_summary(side) -> str:
     """Where the line-up shown for one player came from.
 

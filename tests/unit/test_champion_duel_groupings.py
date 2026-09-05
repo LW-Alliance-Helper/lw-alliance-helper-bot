@@ -99,6 +99,91 @@ def test_an_overlap_stands_when_either_side_has_no_dates(cd_db):
     assert [z for _, z in overlaps] == ["773"]
 
 
+# ── What a server can read ────────────────────────────────────────────────────
+
+
+def test_a_server_can_read_a_champion_duel_it_is_not_in(cd_db):
+    """Somebody is sent a Champion Duel and records it. It holds none of their
+    warzones, so the warzone lookup alone would leave it stored and reachable
+    from nowhere, which is the dead end recording it exists to close."""
+    theirs = db.create_grouping("900, 901, 902", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+
+    assert db.groupings_for_warzone("738") == [], "not drawn into it"
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [theirs["id"]]
+
+
+def test_reading_one_you_entered_is_not_the_same_as_resolving_to_it(cd_db):
+    """The line the whole separation rests on. Entering somebody else's
+    Champion Duel is a contribution, and it must never re-point the hub."""
+    theirs = db.create_grouping("900, 901, 902", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+    db.set_guild_warzone("999", "738")
+
+    assert db.groupings_readable_by("738", "999"), "readable"
+    assert db.resolve_grouping_for_guild("999") is None, "and still not ours"
+
+
+def test_both_sources_come_back_as_one_timeline(cd_db):
+    """Newest first across both, rather than one list appended to the other:
+    the picker is read as a history and an interleaved date order is what makes
+    it one."""
+    ours_old = db.create_grouping("738, 800", "2026-06-01")
+    theirs = db.create_grouping("900, 901", "2026-07-01")
+    db.note_grouping_reader(theirs["id"], "999")
+    ours_new = db.create_grouping("738, 801", "2026-08-01")
+
+    ids = [g["id"] for g in db.groupings_readable_by("738", "999")]
+
+    assert ids == [ours_new["id"], theirs["id"], ours_old["id"]]
+
+
+def test_a_server_that_entered_nothing_reads_exactly_what_it_did_before(cd_db):
+    """The common case, and it must not gain rows. Every alliance but the one
+    that was sent something is in it."""
+    mine = db.create_grouping("738, 800", "2026-08-04")
+    theirs = db.create_grouping("900, 901", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "other")
+
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [mine["id"]]
+    assert db.groupings_readable_by("738", None) == db.groupings_for_warzone("738")
+
+
+def test_a_champion_duel_is_listed_once_when_it_is_both(cd_db):
+    """Entering your own sixteen records you as a reader as well as putting you
+    in it by warzone. Two sources, one row."""
+    mine = db.create_grouping("738, 800", "2026-08-04")
+    db.note_grouping_reader(mine["id"], "999")
+
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [mine["id"]]
+
+
+def test_two_servers_can_both_hold_a_record_of_one_champion_duel(cd_db):
+    """`created_by_guild_id` is single-valued, so a second server joining a set
+    somebody else already entered had nowhere to be recorded. That is why this
+    is its own table rather than a column on `groupings`."""
+    theirs = db.create_grouping("900, 901", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+    db.note_grouping_reader(theirs["id"], "888")
+    db.note_grouping_reader(theirs["id"], "999")  # the same person, twice
+
+    for guild in ("999", "888"):
+        assert [g["id"] for g in db.groupings_readable_by(None, guild)] == [theirs["id"]]
+
+
+def test_forgetting_a_person_does_not_take_a_servers_records_with_them(cd_db):
+    """`_REMOVAL_SCRUBS` nulls `created_by_guild_id` when the person who entered
+    a grouping is forgotten. Hanging reachability off that column would have
+    orphaned every Champion Duel their alliance was sent."""
+    theirs = db.create_grouping("900, 901", "2026-08-04", guild_id="999", discord_id="42")
+    db.note_grouping_reader(theirs["id"], "999")
+
+    db.purge_user_data("42", apply=True)
+
+    assert db.get_grouping(theirs["id"])["created_by_guild_id"] is None, "scrubbed"
+    assert [g["id"] for g in db.groupings_readable_by(None, "999")] == [theirs["id"]]
+
+
 # ── Reading a pasted group listing ────────────────────────────────────────────
 
 

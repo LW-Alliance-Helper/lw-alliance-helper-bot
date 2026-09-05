@@ -1972,15 +1972,42 @@ async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no
     assert len(db.list_groupings()) == 1
 
 
-async def test_a_grouping_without_your_own_warzone_is_refused(cd_db, no_mm_link):
-    """One of the two answers is off and there is no way to tell which from
-    here. Neither half of that is stated as the user's mistake."""
+async def test_a_grouping_without_your_own_warzone_is_said_not_refused(cd_db, no_mm_link):
+    """**This was a refusal until 2026-09-01.** Kevin: *"I would just say that
+    their known warzone is not in the list but don't gate anything on it."*
+
+    The refusal existed to stop a server being pinned to a Champion Duel it is
+    not in, and the pin works that out for itself now. What was left refused the
+    thing the control is for: recording a Champion Duel you were sent.
+    """
     interaction = await _add_grouping(" ".join(SIXTEEN), warzone="1500")
 
     said = _sent(interaction)
-    assert "**1500**, is not in that list" in said
-    assert "wrong" not in said, "an incorrect stored value is not a user error"
-    assert len(db.list_groupings()) == 1
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="1500") in said
+    assert "Try again" not in said, "an aside, not a refusal"
+    assert db.find_grouping_by_warzone("700") is not None, "saved anyway"
+
+
+async def test_the_aside_is_absent_when_your_warzone_is_in_the_list(cd_db, no_mm_link):
+    """It is only for the reader who did not mean this. Printing it on every
+    entry would make the one case it exists for invisible."""
+    interaction = await _add_grouping(" ".join(SIXTEEN), warzone="700")
+
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") not in _sent(interaction)
+    assert "Heads up" not in _sent(interaction)
+
+
+async def test_the_aside_rides_under_a_champion_duel_you_were_sent_too(cd_db, no_mm_link):
+    """Joining a set somebody else entered says nothing about whether your own
+    warzone is in it, so both branches carry it."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+    db.create_grouping(theirs, "2026-08-04", origin="member")
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    said = _sent(interaction)
+    assert "already been entered" in said
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") in said
 
 
 async def test_the_game_formatting_goes_in_as_it_is_read(cd_db, no_mm_link):
@@ -2015,6 +2042,41 @@ async def test_creating_a_grouping_pins_the_guild(cd_db, no_mm_link):
     assert pinned["confirmed_grouping_id"] == db.find_grouping_by_warzone("700")["id"]
 
 
+async def test_recording_an_older_champion_duel_does_not_reask_the_warzone(cd_db, no_mm_link):
+    """**A defect on its own terms.** `resolve_grouping_for_guild` takes the
+    NEWEST grouping holding your warzone, and this used to write
+    `confirmed_grouping_id` for whichever one was just entered. Enter a past
+    Champion Duel of your own and the two disagree, so `needs_warzone_
+    confirmation` fires and the hub throws you onto "is warzone 700 yours?" --
+    a question this server answered when it onboarded.
+    """
+    live = db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+    db.set_guild_warzone("999", "700", confirmed_grouping_id=live["id"])
+    earlier = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
+
+    interaction = await _add_grouping(" ".join(earlier), started="2026-06-25")
+
+    assert db.find_grouping_by_warzone("800")["started_on"] == "2026-06-25", "stored"
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == live["id"], (
+        "still the Champion Duel the hub opens on"
+    )
+    assert not isinstance(_view(interaction), hub._ConfirmWarzoneView)
+
+
+async def test_a_newer_champion_duel_still_confirms_the_warzone(cd_db, no_mm_link):
+    """The other side of the same rule, and the behaviour that must not move:
+    a server whose warzone was drawn into a new event does re-confirm, once."""
+    old = db.create_grouping(SIXTEEN, "2026-06-25", origin="member")
+    db.set_guild_warzone("999", "700", confirmed_grouping_id=old["id"])
+    newer = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
+
+    await _add_grouping(" ".join(newer), started="2026-08-04")
+
+    made = db.find_grouping_by_warzone("700")
+    assert made["started_on"] == "2026-08-04", "the newest is what resolves"
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == made["id"]
+
+
 async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
     """Two people entering the same sixteen is not a conflict, and the order the
     game lists them in is arbitrary."""
@@ -2028,6 +2090,139 @@ async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
     assert "already been entered" in said
     for zone in SIXTEEN:
         assert zone in said, "they did not enter this one, so they need to see it"
+
+
+# ── A Champion Duel somebody sent you ─────────────────────────────────────────
+#
+# The other half of what `_AddGroupingModal` does. Onboarding asks which
+# Champion Duel your alliance is in and pins the server to the answer; this
+# records one you were sent, which has no reason to contain your warzone and
+# must never re-point the server at itself.
+
+
+async def _add_sent(warzones, *, warzone="700", started="2026-08-04"):
+    """The hub-root form. It does not ask whose Champion Duel this is."""
+    modal = hub._AddGroupingModal(can_write=True, warzone=warzone, onboarding=False)
+    modal.warzones._value = warzones
+    modal.started_on._value = started
+    interaction = _interaction()
+    await modal.on_submit(interaction)
+    return interaction
+
+
+async def test_a_champion_duel_you_are_not_in_is_recorded_rather_than_refused(cd_db, no_mm_link):
+    """Kevin, 2026-08-31: *"what if I want to record another grouping because I
+    got sent that information?"* The onboarding control refuses this by design,
+    and the finished hub's copy has been offering it since 15 August."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    made = db.find_grouping_by_warzone("900")
+    assert made is not None, "recorded, not refused"
+    assert made["warzones"] == theirs
+    assert "Recorded a Champion Duel" in _sent(interaction)
+
+
+async def test_recording_one_you_were_sent_never_repoints_your_server(cd_db, no_mm_link):
+    """The guard it drops is the one that stops a server being pinned to a
+    Champion Duel it is not in, so the pin has to go with it."""
+    db.set_guild_warzone("999", "700", confirmed_grouping_id=None)
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+
+    await _add_sent(" ".join(theirs), warzone="700")
+
+    pinned = db.get_guild_warzone("999")
+    assert pinned["warzone"] == "700", "still their own"
+    assert pinned["confirmed_grouping_id"] is None
+    assert db.resolve_grouping_for_guild("999") is None, "not somebody else's event"
+
+
+async def test_one_you_were_sent_is_still_reachable_afterwards(cd_db, no_mm_link):
+    """Recording something and then being unable to find it again is the dead
+    end this surface exists to close. Their sixteen hold none of ours, so the
+    warzone lookup alone would never list it."""
+    db.set_guild_warzone("999", "700")
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+    await _add_sent(" ".join(theirs), warzone="700")
+
+    assert db.groupings_for_warzone("700") == [], "not drawn into it, correctly"
+    readable = db.groupings_readable_by("700", "999")
+    assert [g["warzones"] for g in readable] == [theirs]
+
+
+async def test_joining_one_already_entered_is_still_reachable(cd_db, no_mm_link):
+    """**The common path, not the edge.** A Champion Duel somebody was sent has
+    usually already been entered by the alliance that plays in it, so this hits
+    the join rather than the create -- and the join is where nothing else
+    records that this server can read it."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+    already = db.create_grouping(theirs, "2026-08-04", origin="member", guild_id="777")
+    db.set_guild_warzone("999", "700")
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    assert "already been entered" in _sent(interaction)
+    assert [g["id"] for g in db.groupings_readable_by("700", "999")] == [already["id"]]
+
+
+async def test_the_acknowledgement_reports_what_happened_not_what_was_declared(cd_db, no_mm_link):
+    """**Why the form does not ask whose Champion Duel this is.** Kevin,
+    2026-08-31: *"we should not care who all it is - for all we know it could be
+    theirs from a past Duel and we don't have a reason to need to know."*
+
+    The only sense in which one is yours is that the hub now opens on it, and
+    the entry already works that out to decide the pin. So the same form and
+    the same answer produce both acknowledgements, off what was concluded.
+    """
+    db.set_guild_warzone("999", "700")
+    mine = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+
+    ours = await _add_sent(" ".join(mine), warzone="700", started="2026-08-04")
+    assert "Added your Participating Warzones" in _sent(ours), "it is the one we open on"
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is not None
+
+    not_ours = await _add_sent(" ".join(theirs), warzone="700", started="2026-08-04")
+    assert "Recorded a Champion Duel" in _sent(not_ours), "our warzone is not in it"
+
+
+async def test_a_past_champion_duel_of_your_own_is_not_called_yours(cd_db, no_mm_link):
+    """The case Kevin named. It holds your warzone and is still not the one you
+    are playing, so it neither re-points the server nor claims to be yours."""
+    live = db.create_grouping(SIXTEEN, "2026-08-04", origin="member")
+    db.set_guild_warzone("999", "700", confirmed_grouping_id=live["id"])
+    earlier = SIXTEEN[:8] + [str(800 + i) for i in range(8)]
+
+    interaction = await _add_sent(" ".join(earlier), warzone="700", started="2026-06-25")
+
+    assert "Recorded a Champion Duel" in _sent(interaction)
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == live["id"], "unmoved"
+
+
+async def test_the_sixteen_are_still_checked_on_one_you_were_sent(cd_db, no_mm_link):
+    """Only the warzone guard and the pin differ. A mistyped list is a grouping
+    nobody can untangle whoever it belongs to."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE - 1)]
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    assert "**15 warzones**" in _sent(interaction)
+    assert db.find_grouping_by_warzone("900") is None, "nothing saved"
+
+
+async def test_a_refusal_reopens_the_form_it_came_from(cd_db, no_mm_link):
+    """Handing back the onboarding form would refuse the same entry again for
+    not containing their warzone: a retry button that cannot succeed."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE - 1)]
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    reopened = _interaction()
+    await _view(interaction)._on_retry(reopened)
+
+    modal = reopened.response.send_modal.call_args.args[0]
+    assert modal.onboarding is False
+    assert modal.title == hub.CD_ADD_SENT_TITLE
 
 
 # ── Recording a group ─────────────────────────────────────────────────────────
@@ -2432,31 +2627,120 @@ def test_a_grouping_we_hold_nothing_for_says_so_rather_than_nothing(cd_db):
 # ── Finished ──────────────────────────────────────────────────────────────────
 
 
-async def test_a_finished_champion_duel_keeps_its_results_and_offers_the_next(cd_db, no_mm_link):
+def _finish_the_champion_duel(warzone="738"):
+    """Push the only grouping past its last day, and pin the guild to it."""
     from datetime import timedelta
 
-    db.set_guild_warzone("999", "738", confirmed_grouping_id=db.default_grouping_id())
+    db.set_guild_warzone("999", warzone, confirmed_grouping_id=db.default_grouping_id())
     over = (db._server_today() - timedelta(days=db.EVENT_DAYS + 1)).isoformat()
     with db._get_conn() as conn:
         conn.execute("UPDATE groupings SET started_on = ?", (over,))
+
+
+async def test_a_finished_champion_duel_keeps_its_results_and_offers_the_next(cd_db, no_mm_link):
+    _finish_the_champion_duel()
 
     interaction = _interaction()
     await hub._open_hub(interaction, can_write=True)
 
     view = _view(interaction)
-    assert isinstance(view, hub.ChampionDuelFinishedView)
     said = _embed(interaction).description
     assert "has finished" in said
     assert "**738**" in said, "whose Champion Duel this was"
     # The offer has to survive the gap before the next draw is visible in game,
     # so it states the condition rather than an instruction nobody can act on.
-    assert "When the next Champion Duel happens" in said
+    assert "as soon as the draw is visible in game" in said
     # Recording past results is the other half: the data is still worth having
     # once the event is over, and that is not obvious without being told.
     assert "record past Champion Duel results" in said
-    assert hub.CD_BTN_ADD_GROUPING in _labels(view)
+    assert hub.CD_BTN_ADD_CD in _labels(view)
     # Predict and Find are global and useful between events.
+    #
+    # **Both, and the first one is why this line is spelled out.** Folding the
+    # standalone finished view into the hub dropped `CD_BTN_PREDICT` here,
+    # because a finished Champion Duel still has a grouping and the control was
+    # drawn only where there was none. This assertion was weakened to
+    # `CD_BTN_FIND` to match, under a comment that still said Predict, which is
+    # how it survived a review and two CI runs.
+    assert hub.CD_BTN_FIND in _labels(view)
     assert hub.CD_BTN_PREDICT in _labels(view)
+
+
+async def test_the_finished_hub_is_the_hub(cd_db, no_mm_link):
+    """**The regression this whole change exists for.** The finished state used
+    to be a second view written 2026-08-15 and never touched again, so every
+    surface built after that date went into the live hub and not into it. A
+    member opening the hub between events got a fortnight-old shape, and between
+    events is where this feature sits by default.
+
+    Asserted as one class rather than as a list of labels, because the list is
+    what went stale: a sixth control added below has to appear here without
+    anybody remembering to come back and add it.
+    """
+    _finish_the_champion_duel()
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    assert isinstance(view, hub.ChampionDuelHubView)
+    assert view.finished is True
+    labels = _labels(view)
+    # The four entries, which is the whole of what the fork was missing. The
+    # identity control renders as the unclaimed half here, which is the reader
+    # we cannot place -- the pair is one control, not two.
+    assert hub.CD_BTN_WHO_AM_I in labels
+    assert hub.CD_BTN_PICKS in labels
+    assert hub.CD_BTN_ALLIANCE in labels
+    # Either half of the Premium pair. Which one renders is the entitlement's
+    # business and CI runs both lanes; what this test is about is that the one
+    # entry needing no Champion Duel at all was missing from the fork.
+    assert {hub.CD_BTN_INTEL, f"🔒 {hub.CD_BTN_INTEL}"} & set(labels), (
+        "locked or live, never absent"
+    )
+
+
+async def test_one_control_enters_a_champion_duel_of_either_kind(cd_db, no_mm_link):
+    """Two jobs, one control, because `notes/DESIGN.md` rule 7 says so: entering
+    your own sixteen and entering a set you were sent are the same act, so both
+    wanted the same glyph and neither had one free."""
+    _finish_the_champion_duel()
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    labels = _labels(_view(interaction))
+    assert hub.CD_BTN_ADD_CD in labels
+    assert hub.CD_BTN_ADD_GROUPING not in labels, "that one is onboarding's"
+
+
+async def test_adding_a_champion_duel_does_not_wait_for_yours_to_end(cd_db, no_mm_link):
+    """Nothing about being sent a Champion Duel is tied to your own being over.
+    Gating it on `finished` rebuilds a smaller version of the problem this
+    change fixes: a thing you can only do in one state, for no visible reason,
+    and a set somebody sends you mid-event is the freshest data we can get."""
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=db.default_grouping_id())
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    assert view.finished is False, "mid-event"
+    assert hub.CD_BTN_ADD_CD in _labels(view)
+
+
+async def test_only_one_control_is_primary_on_a_finished_hub(cd_db, no_mm_link):
+    """`notes/DESIGN.md`: at most one primary per view, and row 0 spends it on
+    the identity control. The standalone finished view had `Add your
+    Participating Warzones` primary, which would be a second one here."""
+    _finish_the_champion_duel()
+
+    interaction = _interaction()
+    await hub._open_hub(interaction, can_write=True)
+
+    view = _view(interaction)
+    primaries = [c.label for c in view.children if c.style is discord.ButtonStyle.primary]
+    assert primaries == [hub.CD_BTN_WHO_AM_I], primaries
 
 
 async def test_a_conflict_shows_both_lists_so_the_reader_can_tell_which_is_off(cd_db, no_mm_link):
@@ -3342,36 +3626,46 @@ def _row(view, n):
     return [i.label for i in view.children if getattr(i, "row", None) == n]
 
 
-def test_the_front_row_is_the_four_questions_and_nothing_else():
-    """Eight controls become four entries plus settings.
+def test_the_front_row_is_yours():
+    """**Kevin's rows, 2026-09-01: row 0 is all of YOUR stuff.**
 
-    The four are the four questions `PROPOSAL_champion_duel_ia.md` traced, in
-    the order it asks them, and they are the whole of the front row. Kevin
-    opened this hub, could not find the most valuable thing on it, and asked
-    for the information architecture to be revisited: the fix is that the four
-    things anybody comes here for are the first four things they see.
+    It replaces "the four questions", which mixed the personal (`Your standing`,
+    `Your alliance`) with two surfaces about anybody (`Head to head`,
+    `Today's picks`). Row 0 is now the only dynamic row: what it draws depends
+    on whether we can pick the reader out of the roster.
     """
-    view = _root(grouping={"id": 1})
+    unknown = _root(grouping={"id": 1})
+    known = _root(grouping={"id": 1}, standing={"state": "held"})
 
-    assert _row(view, 0) == [
+    assert _row(unknown, 0) == [
         hub.CD_BTN_WHO_AM_I,
-        hub.CD_BTN_INTEL,
-        hub.CD_BTN_PICKS,
         hub.CD_BTN_ALLIANCE,
+        hub.CD_BTN_GROUP,
     ]
+    # The group goes when we know you, because you reach it through yourself.
+    assert _row(known, 0) == [hub.CD_BTN_STANDING, hub.CD_BTN_ALLIANCE]
 
 
-def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
-    """Demoted, not deleted. Finding a player is how you reach an opponent and
-    is the gap-fill door; recording a group is batch contribution; changing the
-    warzone is the settings half of "four entries plus settings"."""
-    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+def test_the_rows_are_kinds_of_thing_not_ranks_of_importance():
+    """Kevin's layout, 2026-09-01, and the rows are the reasoning: 1 is what
+    you open every day, 2 is global, 3 is adding and editing, 4 is the
+    operator.
 
-    assert _row(view, 1) == [
-        hub.CD_BTN_FIND,
+    **Row 1 is NOT the Premium row**, which was the first reading of it. Only
+    `Head to head` is gated at the door; `Today's picks` is free, and the odds
+    gate sits inside three of row 0's surfaces. Premium here is a field, not a
+    tier of buttons.
+    """
+    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"}, is_admin=True)
+
+    assert _row(view, 1) == [hub.CD_BTN_INTEL, hub.CD_BTN_PICKS]
+    assert _row(view, 2) == [hub.CD_BTN_FIND, hub.CD_BTN_PREDICT]
+    assert _row(view, 3) == [
         hub.CD_BTN_RECORD,
         hub.CD_BTN_CHANGE_WARZONE,
+        hub.CD_BTN_ADD_CD,
     ]
+    assert _row(view, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
 
 
 def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
@@ -3388,10 +3682,11 @@ def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
     unknown = _root(grouping={"id": 1}, warzone="738")
     known = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
 
-    assert hub.CD_BTN_GROUP in _row(unknown, 1)
+    # On row 0 since 2026-09-01, because it is one of *your* things. **The
+    # condition did not move with it** -- Kevin: *"You shouldn't change the
+    # logic for when something displays."*
+    assert hub.CD_BTN_GROUP in _row(unknown, 0)
     assert hub.CD_BTN_GROUP not in _labels(known)
-    # And never a front-row entry either way.
-    assert hub.CD_BTN_GROUP not in _row(unknown, 0)
 
 
 async def test_the_root_group_door_opens_what_it_always_opened(monkeypatch):
@@ -3424,13 +3719,22 @@ def test_no_row_is_over_discords_five(standing):
         assert len(_row(view, n)) <= 5, f"row {n} is over Discord's five"
 
 
-def test_the_operator_row_moves_up_with_everything_else():
-    """Row 2 rather than row 3, because row 2 emptied when the picks control
-    joined the front row. Still hidden entirely from everybody else."""
-    view = _root(grouping={"id": 1}, is_admin=True)
+def test_the_operator_row_is_last_and_hidden_from_everybody_else():
+    """Kevin, 2026-09-01: row 4, *"all admin, least important by far"*.
 
-    assert _row(view, 2) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
-    assert _row(view, 3) == []
+    It sat on row 2 from the IA rebuild until then, on the reasoning that row 2
+    had emptied. Under the new layout every other row is spoken for, and the
+    operator controls are the ones a member should never have between them and
+    anything they came for.
+    """
+    admin = _root(grouping={"id": 1}, is_admin=True)
+    member = _root(grouping={"id": 1})
+
+    assert _row(admin, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
+    assert _row(member, 4) == [], "absent, not disabled"
+    assert not any(
+        b in _labels(member) for b in (hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT)
+    )
 
 
 @pytest.mark.parametrize("standing", [None, {"state": "held"}])
@@ -3468,18 +3772,19 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     )
     root = _labels(view)
 
-    assert hub.CD_BTN_PREDICT not in root
     assert hub.CD_BTN_ADD not in root
     assert hub.CD_BTN_GUIDE not in root
     assert hub.CD_BTN_GROUP not in root
 
-    # Predicting one match: on the card that absorbed it.
+    # **Simulating one match came BACK to the root on 2026-09-01** and is no
+    # longer on the picks bench, so this one is not a moved door at all.
+    assert hub.CD_BTN_PREDICT in root
     picks = hub._PicksView(
         user_id=ADMIN_ID,
         guild_id=999,
         state=hub.read_picks(999, standing_db["grouping"]),
     )
-    assert hub.CD_BTN_PREDICT in _labels(picks)
+    assert hub.CD_BTN_PREDICT not in _labels(picks)
 
     # Adding a player, and the capture guide: at the miss that finding one
     # produces.
@@ -3493,13 +3798,21 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     assert hub.CD_BTN_GROUP in _labels(standing)
 
 
-def test_the_one_off_prediction_is_offered_where_the_card_cannot_be():
-    """Predicting one match is absorbed by the day's card and stays reachable
-    there for a one-off. A caller with no Champion Duel resolved has no card to
-    absorb it (a DM never gets one), and predicting two players who have never
-    met is exactly what that caller came for."""
-    assert hub.CD_BTN_PREDICT in _labels(_root(grouping=None))
-    assert hub.CD_BTN_PREDICT not in _labels(_root(grouping={"id": 1}))
+def test_simulating_one_match_is_on_the_root_in_every_state():
+    """Kevin, 2026-09-01: *"I think that it should always be at that root
+    level."*
+
+    It used to be drawn only where `🔮 Today's picks` was not, on the reasoning
+    that the card *absorbs* it. **That reasoning was wrong**: the card answers
+    who to pick today out of this stage's field, and this answers what happens
+    if any two players meet. Same inputs, different questions.
+    """
+    for label, view in (
+        ("DM", _root(grouping=None)),
+        ("in a Duel", _root(grouping={"id": 1})),
+        ("finished", _root(grouping={"id": 1}, finished=True)),
+    ):
+        assert hub.CD_BTN_PREDICT in _labels(view), label
 
 
 def test_the_days_card_is_a_read_and_does_not_lock():

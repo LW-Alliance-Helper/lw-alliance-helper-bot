@@ -523,6 +523,34 @@ def init_db() -> None:
                 updated_at            TEXT    NOT NULL
             )
         """)
+        # Which servers can read a Champion Duel they are not in.
+        #
+        # A server normally reaches a grouping through its own warzone, which is
+        # the durable fact and needs no table. This is for the other case: a
+        # member is sent a Champion Duel their alliance was never drawn into and
+        # records it. Nothing about it references any of their warzones, so
+        # without this it is stored and reachable from nowhere -- which is the
+        # dead end recording it exists to close.
+        #
+        # **Not `groupings.created_by_guild_id`, which is audit and is scrubbed.**
+        # That column answers who first entered a row and is nulled by
+        # `_REMOVAL_SCRUBS` when the person who did is forgotten, which would
+        # take a whole alliance's history with it. It is also single-valued, so
+        # a second server joining a set somebody else already entered has
+        # nowhere to be recorded. Both are reasons this is its own table.
+        #
+        # Guild only, never a discord id: this is a fact about a server's
+        # records, not about a person, so nothing here is personal data to
+        # remove.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS grouping_readers (
+                grouping_id INTEGER NOT NULL,
+                guild_id    TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                PRIMARY KEY (grouping_id, guild_id),
+                FOREIGN KEY (grouping_id) REFERENCES groupings(id) ON DELETE CASCADE
+            )
+        """)
         # The set is the grouping's identity. TEXT to join `registrants.server`,
         # which is TEXT because a server arrives from a modal.
         conn.execute("""
@@ -972,6 +1000,8 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
             "CREATE INDEX IF NOT EXISTS ix_stages_stage ON registrant_stages(stage, grp)",
             "CREATE INDEX IF NOT EXISTS ix_gw_warzone ON grouping_warzones(warzone)",
+            # The table's only read, and its only write predicate on removal.
+            "CREATE INDEX IF NOT EXISTS ix_readers_guild ON grouping_readers(guild_id)",
             "CREATE INDEX IF NOT EXISTS ix_groups_lookup ON groups(grouping_id, stage, label)",
             "CREATE INDEX IF NOT EXISTS ix_gm_registrant ON group_members(registrant_id)",
         ):
@@ -1976,6 +2006,7 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
         "unchanged": 0,
         "guilds": 0,
         "unpinned": 0,
+        "readers": 0,
         "dropped_warzones": sorted(set(source["warzones"]) - set(target["warzones"]), key=int),
     }
     with _get_conn() as conn:
@@ -2072,6 +2103,20 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
                 )
                 moved["unpinned"] += 1
 
+        # Readers move rather than cascading away. A server that recorded a
+        # Champion Duel it was sent has no warzone in it, so this row is its
+        # ONLY path back -- losing it is the exact dead end the table exists to
+        # close, and the DELETE below would take it silently.
+        #
+        # `INSERT OR IGNORE` because a server can already read the target: it
+        # was sent both, or it is in one and was sent the other. Two sources,
+        # one row, the same rule `groupings_readable_by` reads them under.
+        moved["readers"] = conn.execute(
+            "INSERT OR IGNORE INTO grouping_readers (grouping_id, guild_id, created_at) "
+            "SELECT ?, guild_id, created_at FROM grouping_readers WHERE grouping_id = ?",
+            (target_id, source_id),
+        ).rowcount
+
         # CASCADE takes this grouping's own warzones, groups and members with
         # it. Everything worth keeping has already been copied across.
         conn.execute("DELETE FROM groupings WHERE id = ?", (source_id,))
@@ -2107,6 +2152,65 @@ def groupings_for_warzone(warzone) -> list[dict]:
             ).fetchall()
         ]
     return [g for g in (get_grouping(i) for i in ids) if g]
+
+
+def note_grouping_reader(grouping_id, guild_id) -> None:
+    """Remember that this server holds a record of this Champion Duel.
+
+    Called wherever a server enters one it may not be in, and idempotent: two
+    people in the same alliance entering the same sixteen is agreement, not a
+    second row. Silently does nothing without a guild, which is the DM case.
+
+    Written on joining an existing set as well as on creating one. A Champion
+    Duel somebody was sent has usually already been entered by the alliance
+    that plays in it, so the join is the *common* path here, not the edge --
+    and it is the one where nothing else records that this server can read it.
+    """
+    if grouping_id is None or not guild_id:
+        return
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO grouping_readers (grouping_id, guild_id, created_at) "
+            "VALUES (?, ?, ?)",
+            (grouping_id, _text(guild_id), _now()),
+        )
+
+
+def groupings_readable_by(warzone, guild_id=None) -> list[dict]:
+    """Every Champion Duel this server can look at, newest start first.
+
+    Two sources, and the second is why this exists. `groupings_for_warzone`
+    answers "which ones was my warzone drawn into", which is every Champion Duel
+    an alliance played. It is not every one they hold a record of: somebody can
+    be sent a grouping they were never in and enter it, and a grouping that
+    contains none of your warzones is reachable from nowhere -- the picker would
+    not list it and `find_grouping_by_warzone` would not resolve to it.
+
+    So `grouping_readers` is the second source. See its table comment for why it
+    is not `groupings.created_by_guild_id`.
+
+    Deliberately NOT what a guild resolves *to*. `resolve_grouping_for_guild`
+    still answers off the warzone alone: entering somebody else's Champion Duel
+    is a contribution, and it must never re-point the server's own hub at it.
+    """
+    out = list(groupings_for_warzone(warzone)) if warzone else []
+    if not guild_id:
+        return out
+    seen = {g["id"] for g in out}
+    with _get_conn() as conn:
+        ids = [
+            r["grouping_id"]
+            for r in conn.execute(
+                "SELECT grouping_id FROM grouping_readers WHERE guild_id = ?",
+                (_text(guild_id),),
+            ).fetchall()
+        ]
+    out.extend(g for i in ids if i not in seen for g in (get_grouping(i),) if g)
+    # One order over both sources rather than one list appended to the other,
+    # so the picker reads as a timeline. `started_on` is nullable, and None
+    # sorts last: a grouping nobody has dated is the one with least to say.
+    out.sort(key=lambda g: (g.get("started_on") or "", g["id"]), reverse=True)
+    return out
 
 
 def default_grouping_id() -> int | None:
@@ -5400,6 +5504,15 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     # never showed these to anybody, the guild made them up. `pick_meetings`
     # cascades from here, and `foreign_keys` is ON for this connection.
     ("pick_slates", "guild_id = :gid"),
+    # Which Champion Duels this server holds a record of beyond its own. Pure
+    # server bookkeeping -- the row is (grouping, guild) and says nothing about
+    # any person -- and it is the server's, so it goes when the server does.
+    #
+    # **Deleted rather than scrubbed**, unlike the rows above it: those keep a
+    # fact about the tournament and drop only who entered it, and there is no
+    # such fact here. A reader row with its guild nulled would be a link from a
+    # Champion Duel to nobody.
+    ("grouping_readers", "guild_id = :gid"),
 )
 
 _GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (

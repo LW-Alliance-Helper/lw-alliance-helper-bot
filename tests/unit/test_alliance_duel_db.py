@@ -400,3 +400,71 @@ def test_a_save_that_knows_the_guild_but_not_the_person_keeps_the_person():
     assert row["actor_discord_id"] == "99", "the person was erased by a guild-only save"
     assert row["actor_name"] == "Kev"
     assert row["week_outcome"] == "W"
+
+
+# ── Reading it back onto a screen (#544) ──────────────────────────────────────
+
+
+def test_a_stored_record_reads_back_as_the_type_every_screen_already_takes():
+    """The surfaces are built on `AllianceWeek` and `build_profiles`. Handing
+    them a second shape would make every renderer learn it."""
+    vsdb.record_weeks(
+        [
+            _row(
+                "QQQ",
+                week_score=7,
+                week_outcome="W",
+                power=5_000_000,
+                members=100,
+                gift_level=40,
+                ranking=3,
+                day_scores={1: 120},
+                day_outcomes={1: "W"},
+            )
+        ],
+        actor=_actor(),
+    )
+
+    rows = vsdb.rows_for_alliance(_key("QQQ"))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert isinstance(row, ad.AllianceWeek)
+    assert row.alliance == _key("QQQ")
+    assert row.league == LEAGUE
+    assert row.week_score == 7 and row.week_outcome == "W"
+    assert row.power == 5_000_000 and row.members == 100 and row.gift_level == 40
+    assert row.ranking == 3
+    assert row.day_scores == {1: 120} and row.day_outcomes == {1: "W"}
+    assert row.week_date == MONDAY
+
+
+def test_a_read_back_row_builds_a_profile():
+    """The end of the chain: what another alliance recorded has to become a
+    profile, because that is what the scout card renders."""
+    vsdb.record_weeks([_row("QQQ", power=5_000_000, members=100)], actor=_actor())
+
+    profiles = ad.build_profiles(vsdb.rows_for_league(LEAGUE))
+
+    assert profiles[_key("QQQ")].power == 5_000_000
+    assert profiles[_key("QQQ")].members == 100
+
+
+def test_an_opponent_survives_the_round_trip():
+    vsdb.record_weeks([_row("QQQ", opponent=_key("ZZZ"))], actor=_actor())
+
+    assert vsdb.rows_for_alliance(_key("QQQ"))[0].opponent == _key("ZZZ")
+
+
+def test_an_unreadable_week_date_does_not_take_the_row_with_it():
+    """A date is the one stored field that can be malformed without anybody
+    noticing, and losing the whole row over it would lose the scores."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor())
+    with vsdb._get_conn() as conn:
+        conn.execute("UPDATE alliance_weeks SET week_date = 'not a date'")
+        conn.commit()
+
+    rows = vsdb.rows_for_alliance(_key("QQQ"))
+
+    assert rows[0].week_score == 7
+    assert rows[0].week_date is None

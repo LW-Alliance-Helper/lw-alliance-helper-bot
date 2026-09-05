@@ -704,3 +704,229 @@ def test_every_view_the_hub_opens_records_the_message_it_lives_on():
             offenders.append(fn.name)
 
     assert not offenders, f"views sent without recording their message: {offenders}"
+
+
+# ── Shared scouting (#544) ────────────────────────────────────────────────────
+#
+# The payoff half: an alliance can see what fifteen others recorded, not just
+# the four they played. The rules these hold are provenance and precedence.
+
+
+@pytest.fixture
+def shared_store(tmp_path, monkeypatch):
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vsdb.init_db()
+    return vsdb
+
+
+def _record_shared(vsdb, state, tag, **kw):
+    """Somebody else's guild recorded this alliance."""
+    vsdb.record_weeks(
+        [
+            ad.AllianceWeek(
+                league=state.league,
+                week=1,
+                alliance=ad.AllianceKey.of(tag, "1234"),
+                tag_display=tag,
+                **kw,
+            )
+        ],
+        actor={"guild_id": 999999},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_scout_card_falls_back_to_what_other_alliances_recorded(shared_store):
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000, members=100, gift_level=40)
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+
+    assert "Nothing recorded yet" not in text
+    assert "5M" in text and "100 members" in text
+
+
+@pytest.mark.asyncio
+async def test_a_borrowed_record_says_so(shared_store):
+    """A number another alliance recorded must never read as though this
+    alliance recorded it."""
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000)
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+
+    assert ad_ui.VS_SHARED_HEADING in text
+    names = [f.name for f in ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")).fields]
+    assert "Recorded" not in names, "somebody else's numbers were labelled as ours"
+
+
+@pytest.mark.asyncio
+async def test_our_own_sheet_wins_over_the_shared_record(shared_store):
+    """The sheet is authoritative. Quietly preferring somebody else's number
+    over the one the officer typed would leave them no way to tell which they
+    were reading."""
+    state = _state([_row("ZZZ", week=1, power=1_000_000)])
+    _record_shared(shared_store, state, "ZZZ", power=9_000_000)
+    await hub.attach_shared(state)
+
+    assert state.shared_only(ad.AllianceKey.of("ZZZ", "1234")) is None
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")))
+    assert "1M" in text and "9M" not in text
+
+
+@pytest.mark.asyncio
+async def test_shared_rows_never_reach_the_rows_a_write_reads(shared_store):
+    """`row_for` feeds `_row_for_write`, which builds what goes back to this
+    guild's own tab. A shared row reaching it would copy another alliance's
+    record into this alliance's sheet as though they had typed it."""
+    state = _state([_row("US", week=1)])
+    _record_shared(shared_store, state, "ZZZ", power=5_000_000)
+    await hub.attach_shared(state)
+
+    assert state.shared, "nothing was loaded, so this proves nothing"
+    assert state.row_for(ad.AllianceKey.of("ZZZ", "1234"), 1) is None
+    assert all(r.alliance != ad.AllianceKey.of("ZZZ", "1234") for r in state.rows)
+    assert all(r.alliance != ad.AllianceKey.of("ZZZ", "1234") for r in state.league_rows())
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_store_costs_a_card_and_not_the_hub(monkeypatch):
+    """A second copy that will not open is not worth interrupting somebody for.
+    Their own sheet is unaffected by it."""
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", "/nowhere/that/exists/x.sqlite3")
+    state = _state([_row("US", week=1)])
+
+    await hub.attach_shared(state)
+
+    assert state.shared == []
+    assert _text(hub.hub_embed(state))
+
+
+@pytest.mark.asyncio
+async def test_nothing_anywhere_still_says_so(shared_store):
+    state = _state([_row("US", week=1)])
+    await hub.attach_shared(state)
+
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("NOPE", "1234")))
+
+    assert ad_ui.VS_SHARED_NOTHING in text
+
+
+@pytest.mark.asyncio
+async def test_a_skeleton_row_does_not_count_as_having_scouted_them(shared_store):
+    """`start_new_league` writes a row for all sixteen alliances the moment a
+    league opens, so a profile exists for every one of them from day one.
+    Testing for its absence made the whole fallback dead code: the officer kept
+    reading `Power ? - ? members - gift level ?` while another alliance had the
+    numbers all along. Found by rendering the card rather than by a test, which
+    is why this one exists."""
+    # Sixteen skeleton rows with no numbers on any of them, which is exactly
+    # what `start_new_league` writes the moment a league opens.
+    rows = [
+        _row(t, ranking=i)
+        for i, t in enumerate([OWN_TAG] + [f"A{n:02d}" for n in range(2, 17)], start=1)
+    ]
+    state = _state(rows)
+    _record_shared(shared_store, state, "A03", power=6_100_000, members=100, gift_level=38)
+    await hub.attach_shared(state)
+
+    target = ad.AllianceKey.of("A03", "1234")
+    assert state.profiles.get(target) is not None, "the fixture is not exercising the case"
+    assert state.shared_only(target) is not None, "a skeleton row hid the shared record"
+
+    text = _text(ad_ui.scout_embed(state, target))
+    assert "6M" in text
+    assert "Power ?" not in text
+
+
+@pytest.mark.asyncio
+async def test_one_number_of_our_own_is_enough_for_the_sheet_to_win(shared_store):
+    """The sheet wins on anything it actually says. Partial is still ours."""
+    rows = [
+        _row(t, ranking=i)
+        for i, t in enumerate([OWN_TAG] + [f"A{n:02d}" for n in range(2, 17)], start=1)
+    ]
+    for row in rows:
+        if row.alliance == ad.AllianceKey.of("A03", "1234"):
+            row.members = 88
+    state = _state(rows)
+    _record_shared(shared_store, state, "A03", power=6_100_000, members=100, gift_level=38)
+    await hub.attach_shared(state)
+
+    assert state.shared_only(ad.AllianceKey.of("A03", "1234")) is None
+    text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("A03", "1234")))
+    assert "88 members" in text and "100 members" not in text
+
+
+@pytest.mark.asyncio
+async def test_the_heading_carries_the_provenance_and_nothing_repeats_it(shared_store):
+    """Kevin, 2026-09-04: "This already has a heading 'from other alliances',
+    I don't see why we even need this." A first cut put an italic sentence
+    above the numbers saying the same thing the field name says. Saying it
+    twice on one card is what a reader learns to skip, so the sentence is gone
+    and this is what keeps it gone."""
+    rows = [
+        _row(t, ranking=i)
+        for i, t in enumerate([OWN_TAG] + [f"A{n:02d}" for n in range(2, 17)], start=1)
+    ]
+    state = _state(rows)
+    _record_shared(shared_store, state, "A03", power=6_100_000, members=100, gift_level=38)
+    await hub.attach_shared(state)
+
+    embed = ad_ui.scout_embed(state, ad.AllianceKey.of("A03", "1234"))
+    borrowed = next(f for f in embed.fields if f.name == ad_ui.VS_SHARED_HEADING)
+
+    assert "6M" in borrowed.value
+    assert "scouted" not in borrowed.value.lower(), "the provenance is stated twice"
+    assert not hasattr(ad_ui, "VS_SHARED_ATTRIBUTION"), "the cut sentence came back"
+
+
+@pytest.mark.asyncio
+async def test_borrowed_numbers_project(shared_store):
+    """Kevin's call, 2026-09-04. An alliance nobody here has scouted used to be
+    unprojectable even when fifteen others had the numbers, and the card said
+    so directly under the numbers it was showing."""
+    rows = [
+        _row(t, ranking=i)
+        for i, t in enumerate([OWN_TAG] + [f"A{n:02d}" for n in range(2, 17)], start=1)
+    ]
+    for row in rows:
+        if row.alliance == OWN:
+            row.power, row.members, row.gift_level = 5_800_000, 100, 40
+    state = _state(rows)
+    _record_shared(shared_store, state, "A03", power=6_100_000, members=100, gift_level=38)
+    await hub.attach_shared(state)
+
+    embed = ad_ui.scout_embed(state, ad.AllianceKey.of("A03", "1234"))
+    projection = next(f for f in embed.fields if f.name == "Projection")
+
+    assert "Not projected" not in projection.value
+    assert "needs power, members and gift level" not in projection.value
+    assert "contested" in projection.value, "the model did not run on the borrowed numbers"
+
+
+@pytest.mark.asyncio
+async def test_a_borrowed_number_never_stands_in_for_our_own_alliance(shared_store):
+    """The target may be read from somebody else's record. We may not: our own
+    row is the one we always have, and an estimate resting on another guild's
+    idea of our power is not an estimate anybody asked for."""
+    rows = [
+        _row(t, ranking=i)
+        for i, t in enumerate([OWN_TAG] + [f"A{n:02d}" for n in range(2, 17)], start=1)
+    ]
+    state = _state(rows)  # nothing scouted, including us
+    _record_shared(shared_store, state, OWN_TAG, power=9_900_000, members=100, gift_level=40)
+    _record_shared(shared_store, state, "A03", power=6_100_000, members=100, gift_level=38)
+    await hub.attach_shared(state)
+
+    embed = ad_ui.scout_embed(state, ad.AllianceKey.of("A03", "1234"))
+    projection = next(f for f in embed.fields if f.name == "Projection")
+
+    assert "9.9M" not in projection.value and "10M" not in projection.value
+    assert "Not enough recorded" in projection.value or "Not projected" in projection.value

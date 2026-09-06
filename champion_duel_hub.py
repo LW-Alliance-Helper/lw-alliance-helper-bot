@@ -141,11 +141,13 @@ CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
-#: ⚠️ NOT SIGNED OFF. The way out of a conflict with your own typo, which had no
+#: Approved by Kevin, 2026-09-06. The way out of a conflict with your own typo,
+#: which had no
 #: exit at all until 2026-09-05: the wrong sixteen was stored, every correct
 #: re-entry collided with it, and only an operator could clear it. Kevin's call
 #: on the shape -- *"Yes take the second option"* -- and these words are mine.
-#: ⚠️ NOT SIGNED OFF. Kevin, 2026-09-06: *"the highest server is 2308 and the
+#: Approved by Kevin, 2026-09-06, naming the ceiling over the shorter version
+#: that would never go stale: *"the highest server is 2308 and the
 #: game devs have said they are holding to that as the last server."*
 #:
 #: **Names the number rather than the rule.** "Warzones go up to 2308" tells the
@@ -183,7 +185,8 @@ CD_REPLACED = "✅ Replaced the Participating Warzones that were added previousl
 #: the better one: a member who reads "we do not edit these once there is data"
 #: understands the refusal will hold, where "it is not empty any more" invites
 #: a retry that cannot work.
-#: ⚠️ NOT SIGNED OFF. The other reason a replace can refuse, and it is about the
+#: Approved by Kevin, 2026-09-06. The other reason a replace can refuse, and it
+#: is about the
 #: list rather than the row: correcting one conflict into a set that overlaps a
 #: third Champion Duel would leave a contradiction with no button on it.
 _CONFLICT_CLASHES_ELSEWHERE = (

@@ -118,6 +118,49 @@ async def attach_shared(state: "HubState") -> None:
     state.shared_profiles = ad.build_profiles(shared)
 
 
+async def contribute_snapshot(state: "HubState") -> None:
+    """Put this tab's observations into the shared store (#544).
+
+    **This is the backfill, and it is why there is no migration step.** An
+    alliance with three seasons in their tab contributes all of it the first
+    time somebody opens `/vs` after this ships, and every league they have ever
+    recorded reaches the alliances who never played them. There is nothing to
+    run, nothing to press and nothing to remember, which is the only shape of
+    migration worth having: the officer opens the hub they were going to open
+    anyway.
+
+    Idempotent by construction. `record_weeks` upserts on
+    (alliance, league, week) and never writes a blank over a value, so running
+    this on every hub load costs a few milliseconds and changes nothing on the
+    second pass. Measured at 21ms for three full seasons of a sixteen-alliance
+    bracket, which is why it is not gated on a marker: a marker is state that
+    can be wrong, and this cannot.
+
+    `ad.shareable` is what keeps the bot's own predicted pairings out of it.
+
+    Never raises. A store that will not open costs other alliances a scouting
+    row; the guild's own tab is untouched either way.
+    """
+    rows = ad.shareable(state.rows)
+    if not rows:
+        return
+    try:
+        import alliance_duel_db as vsdb
+
+        # SQLite blocks, and this runs on the gateway thread (#366).
+        result = await asyncio.to_thread(
+            vsdb.record_weeks, rows, actor={"guild_id": state.guild_id}
+        )
+        if result.get("skipped"):
+            logger.warning(
+                "[VS] %s tab row(s) had no storable identity for guild=%s",
+                result["skipped"],
+                state.guild_id,
+            )
+    except Exception as e:  # noqa: BLE001 - the tab is unaffected
+        logger.warning("[VS] snapshot contribute failed for guild=%s: %s", state.guild_id, e)
+
+
 # ── Loaded state ──────────────────────────────────────────────────────────────
 
 
@@ -1378,7 +1421,11 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
         return
 
     state = HubState(interaction.guild_id, vs_cfg, rows)
+    # Read before write. What this guild contributes is its own, and
+    # `shared_only` ignores it anyway, so reading first saves the store handing
+    # us back an echo of the tab we just read.
     await attach_shared(state)
+    await contribute_snapshot(state)
     view = VSHubView(bot, state, interaction.user.id)
     await interaction.followup.send(embed=hub_embed(state), view=view, ephemeral=True)
     view.message = await interaction.original_response()

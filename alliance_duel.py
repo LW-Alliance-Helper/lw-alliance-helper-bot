@@ -1036,6 +1036,41 @@ def build_profile(rows: Iterable[AllianceWeek], alliance: AllianceKey) -> Allian
     )
 
 
+def shareable(rows: Iterable[AllianceWeek]) -> list[AllianceWeek]:
+    """The rows in a tab that are safe to contribute to the shared store (#544).
+
+    An alliance's tab is not all observation. `generate_next_week` writes the
+    pairings the model *expects* a week ahead, and once written they sit in the
+    same columns as a recorded one. The live write path keeps those out with
+    `save_rows(observed=False)`, but a backfill reads the tab and cannot ask how
+    a cell got there, so the test has to be what the row now says.
+
+    Two rules, and the second is the one that matters:
+
+    - **A row is worth contributing when it carries an observation**: a day
+      score or outcome, a week score or outcome, or a scouting number somebody
+      read off the game. A row with nothing but identity and a ranking is the
+      skeleton `start_new_league` wrote and says nothing.
+    - **An opponent only comes with a result.** A pairing on a week nobody has
+      recorded may be the one we guessed. Fifteen other alliances have no way
+      to tell our guess from the draw, so an unresolved week contributes its
+      scouting numbers and no opponent.
+
+    Returns copies. The caller's rows are the hub's live snapshot and stripping
+    an opponent out of that would blank it on the officer's own screen.
+    """
+    out: list[AllianceWeek] = []
+    for row in rows:
+        resolved = bool(
+            row.week_outcome or row.week_score is not None or row.day_outcomes or row.day_scores
+        )
+        scouted = row.power is not None or row.members is not None or row.gift_level is not None
+        if not resolved and not scouted:
+            continue
+        out.append(row if resolved else replace(row, opponent=None))
+    return out
+
+
 def build_profiles(rows: Iterable[AllianceWeek]) -> dict[AllianceKey, AllianceProfile]:
     """Latest-non-blank profile for every alliance appearing in `rows`."""
     rows = list(rows)

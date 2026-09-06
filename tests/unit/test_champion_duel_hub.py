@@ -1963,6 +1963,59 @@ async def test_fifteen_warzones_is_refused_naming_the_count(cd_db, no_mm_link):
     assert len(db.list_groupings()) == 1
 
 
+async def test_a_warzone_the_game_does_not_have_is_refused(cd_db, no_mm_link):
+    """Kevin, 2026-09-06: *"the highest server is 2308 and the game devs have
+    said they are holding to that as the last server."* A number above it is a
+    certain typo, not a warzone we have not seen."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15] + ["2309"]))
+
+    said = _sent(interaction)
+    assert "**2309**" in said
+    assert f"**{db.MAX_WARZONE}**" in said
+    assert db.find_grouping_by_warzone("700") is None, "nothing saved"
+
+
+async def test_the_impossible_check_runs_before_the_count(cd_db, no_mm_link):
+    """A number the game cannot have is the real fault, and the count is only a
+    symptom: telling somebody they typed seventeen warzones when one of them is
+    23088 sends them counting rather than looking."""
+    interaction = await _add_grouping(" ".join(SIXTEEN + ["23088"]))
+
+    said = _sent(interaction)
+    assert "**23088**" in said
+    assert "17 warzones" not in said
+
+
+async def test_every_impossible_number_is_named_not_just_the_first(cd_db, no_mm_link):
+    """One wrong digit among sixteen is hard enough to find without being told
+    only that one of them is wrong."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:14] + ["2400", "9001"]))
+
+    said = _sent(interaction)
+    assert "**2400**" in said and "**9001**" in said
+    assert "are higher" in said, "the verb agrees"
+
+
+async def test_the_boundary_itself_is_a_real_warzone(cd_db, no_mm_link):
+    """2308 is the last one the game has, not the first one it does not."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15] + ["2308"]))
+
+    assert "higher than any warzone" not in _sent(interaction)
+    assert db.find_grouping_by_warzone("2308") is not None
+
+
+async def test_your_own_warzone_is_checked_too(cd_db, no_mm_link):
+    """The other place a person types one on purpose."""
+    modal = hub._WarzoneModal(can_write=True, current=None)
+    modal.warzone._value = "2309"
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    assert "**2309**" in _sent(interaction)
+    assert db.get_guild_warzone("999") is None
+
+
 async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no_mm_link):
     """Sixteen numbers with one typed twice dedupe to sixteen, and would
     otherwise be accepted as a complete grouping that is short one warzone."""
@@ -2075,6 +2128,209 @@ async def test_a_newer_champion_duel_still_confirms_the_warzone(cd_db, no_mm_lin
     made = db.find_grouping_by_warzone("700")
     assert made["started_on"] == "2026-08-04", "the newest is what resolves"
     assert db.get_guild_warzone("999")["confirmed_grouping_id"] == made["id"]
+
+
+async def test_a_typo_on_your_own_sixteen_can_be_undone(cd_db, no_mm_link):
+    """**The trap this closes, walked end to end.** One digit wrong stored a
+    grouping the member was not in; every correct re-entry then collided with
+    it, `Edit and try again` resubmitted into the same conflict, and the only
+    stated exit was an operator running the merge tool.
+
+    Kevin, 2026-09-05, choosing the fix over restoring the old refusal:
+    *"Yes take the second option."*
+    """
+    db.set_guild_warzone("999", "700")
+    # A dropped digit, not an impossible number: `MAX_WARZONE` refuses anything
+    # over 2308 before this branch is reached, so the typo a member can actually
+    # store is one that still looks like a warzone.
+    typo = ["70"] + SIXTEEN[1:]
+
+    await _add_grouping(" ".join(typo))
+    assert db.find_grouping_by_warzone("70") is not None, "the typo is stored"
+
+    # The correct sixteen now collide with it.
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING in _labels(view)
+    assert hub.CD_BTN_COMMUNITY not in _labels(view), "not an operator's job"
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert db.find_grouping_by_warzone("70") is None, "the typo is gone"
+    assert db.find_grouping_by_warzone("700")["warzones"] == SIXTEEN
+    assert len(db.list_groupings()) == 2, "corrected in place, not forked"
+
+
+async def test_the_common_typo_is_the_one_in_somebody_elses_number(cd_db, no_mm_link):
+    """**The case the first version of this could not fix**, and it is the
+    likelier one: the digit that goes wrong is usually not your own warzone.
+
+    Entering a set that contains your warzone pins your server to it, so the
+    typo row carried your own pin -- and counting pins at all made it look
+    occupied to the one person entitled to replace it. Somebody else's pin is a
+    reason to refuse. Your own is the thing you are undoing.
+    """
+    db.set_guild_warzone("999", "700")
+    typo = SIXTEEN[:5] + ["750"] + SIXTEEN[6:]  # 705 transposed
+
+    await _add_grouping(" ".join(typo))
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is not None, "pinned to the typo"
+
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING in _labels(view)
+
+    await view._on_replace(_interaction())
+
+    assert db.find_grouping_by_warzone("700")["warzones"] == SIXTEEN
+    assert db.find_grouping_by_warzone("750") is None
+
+
+async def test_the_replace_leaves_the_server_confirmed_on_it(cd_db, no_mm_link):
+    """Correcting the sixteen makes this the Champion Duel the hub resolves to,
+    so it has to be confirmed as well as written. Without it the member lands
+    on "is warzone 700 yours?", which is the re-ask #560 exists to stop.
+
+    **The typo has to be in the caller's OWN warzone for this to bite**, and
+    the first version of this test used one of the other fifteen -- where the
+    entry pinned the server on the way in, the correction is in place, and the
+    pin therefore already points at the right row. It passed with the fix
+    removed. Here 700 was never in the stored set, so nothing pinned it.
+    """
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is None, "never pinned"
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    resolved = db.resolve_grouping_for_guild("999")
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == resolved["id"]
+    assert not db.needs_warzone_confirmation("999", resolved["id"])
+    assert not isinstance(_view(pressed), hub._ConfirmWarzoneView)
+
+
+async def test_a_replace_that_would_collide_with_a_third_list_is_refused(cd_db, no_mm_link):
+    """Correcting one conflict into another leaves a contradiction with no
+    button on it: `_report_conflict` only ever forwards the first overlap it
+    found, so the surface cannot warn about the rest."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN))
+    mine = db.find_grouping_by_warzone("700")
+    theirs = db.create_grouping(
+        [str(900 + i) for i in range(db.GROUPING_SIZE)], "2026-08-04", origin="member"
+    )
+
+    with pytest.raises(db.NotCorrectable):
+        db.correct_grouping(
+            mine["id"], theirs["warzones"][:15] + ["999"], "2026-08-04", guild_id="999"
+        )
+
+    assert db.get_grouping(mine["id"])["warzones"] == SIXTEEN, "nothing was written"
+
+
+async def test_the_replace_button_is_spent_after_it_works(cd_db, no_mm_link):
+    """The write is not idempotent: a second press re-runs it and posts a second
+    hub. `notes/DESIGN.md` says a control that can no longer change anything is
+    worse than none."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN[:5] + ["750"] + SIXTEEN[6:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    await view._on_replace(_interaction())
+
+    assert view.is_finished(), "stopped, so a double tap cannot re-run the write"
+
+
+async def test_a_third_list_clash_does_not_claim_your_data_changed(cd_db, no_mm_link):
+    """Two refusals, two messages. Saying "somebody recorded into it" when the
+    real problem is the list they typed tells a member their data changed when
+    it did not, which is worse than saying nothing."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+    mine = db.find_grouping_by_warzone("70")
+    db.create_grouping(["900", "901", "902"], "2026-08-04", origin="member")
+
+    # A PARTIAL overlap. An exact set match is agreement rather than a clash and
+    # is deliberately exempt, so replacing into one would simply succeed.
+    view.replace = (mine["id"], ["900", "901", "999"], "2026-08-04")
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert _sent(pressed) == hub._CONFLICT_CLASHES_ELSEWHERE
+    assert _sent(pressed) != hub._CONFLICT_NO_LONGER_EMPTY
+
+
+async def test_one_bad_number_typed_twice_is_named_once(cd_db, no_mm_link):
+    """It is one wrong number. Naming it twice made the verb agree with the
+    duplicate rather than with the fault."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:14] + ["9001", "9001"]))
+
+    said = _sent(interaction)
+    assert said.count("**9001**") == 1
+    assert " is higher" in said, "one number, singular verb"
+
+
+async def test_the_spent_replace_button_is_visibly_dead(cd_db, no_mm_link):
+    """`stop()` alone leaves both buttons looking live and failing on press,
+    which `notes/DESIGN.md` calls a bug rather than cosmetics."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN[:5] + ["750"] + SIXTEEN[6:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    await view._on_replace(_interaction())
+
+    assert view.is_finished()
+    assert all(child.disabled for child in view.children), "no live control left"
+
+
+async def test_another_alliances_list_is_still_not_yours_to_replace(cd_db, no_mm_link):
+    """The narrowness is the whole safety. A conflict with a set somebody else
+    entered stays refused, and the exit stays the operator."""
+    db.create_grouping(SIXTEEN, "2026-08-04", origin="member", guild_id="777")
+    db.set_guild_warzone("999", "800")
+
+    interaction = await _add_grouping(", ".join(["800"] + SIXTEEN[:15]), warzone="800")
+
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING not in _labels(view)
+    assert hub.CD_BTN_COMMUNITY in _labels(view)
+
+
+async def test_a_grouping_with_anything_in_it_is_not_replaceable(cd_db, no_mm_link):
+    """Empty is the test, not authorship. A server can enter a set and then
+    record into it, and at that point it is data rather than a typo."""
+    theirs = db.create_grouping(SIXTEEN, "2026-08-04", origin="member", guild_id="999")
+    group = db.get_or_create_group(theirs["id"], "semifinals", "A")
+    db.set_placement(group["id"], db.upsert_registrant("Alpha", server="700")["id"], seed_rank=1)
+    db.set_guild_warzone("999", "800")
+
+    interaction = await _add_grouping(", ".join(["800"] + SIXTEEN[:15]), warzone="800")
+
+    assert hub.CD_BTN_REPLACE_GROUPING not in _labels(_view(interaction))
+
+
+async def test_a_group_recorded_while_the_conflict_sat_there_stops_the_replace(cd_db, no_mm_link):
+    """The view lives ten minutes. `correct_grouping` re-reads rather than
+    trusting what the embed was built from, so a row that stopped being empty
+    in that window is not overwritten."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+
+    stale = db.find_grouping_by_warzone("70")
+    group = db.get_or_create_group(stale["id"], "semifinals", "A")
+    db.set_placement(group["id"], db.upsert_registrant("Alpha", server="70")["id"], seed_rank=1)
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert _sent(pressed) == hub._CONFLICT_NO_LONGER_EMPTY
+    assert db.find_grouping_by_warzone("70") is not None, "nothing was changed"
 
 
 async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):

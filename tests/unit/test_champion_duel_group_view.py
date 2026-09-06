@@ -481,6 +481,16 @@ def test_a_full_group_with_power_actually_reaches_the_odds(cd_db):
 # thing."* The labels moved off a paragraph above the table and into the rows.
 
 
+def _label(template):
+    """The label half of a row clause, read off the constant.
+
+    **Not a literal copy.** Two assertions here kept their own and drifted the
+    moment the labels went sentence case, which is the same failure the aside
+    strings hit on this branch a day earlier.
+    """
+    return template.split(":")[0] + ":"
+
+
 def _odds_of(cd_db, ranks):
     """A full, modellable group of eight with the given finishing ranks."""
     grouping, group = _group_of(cd_db, [(f"P{i}", i, ranks.get(i)) for i in range(1, 9)])
@@ -498,9 +508,9 @@ def test_every_figure_carries_its_own_label(cd_db):
 
     said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
 
-    assert "Advancing Odds:" in said
-    assert "Winning Odds:" in said
-    assert "Placement:" in said
+    assert _label(hub._ODDS_ADVANCE) in said
+    assert _label(hub._ODDS_WIN) in said
+    assert _label(hub._ODDS_PLACEMENT) in said
     # The paragraph that used to carry all three is gone. What is left says only
     # what no row can: the size of the top the model is counting.
     assert "The first column" not in said
@@ -515,7 +525,7 @@ def test_the_name_is_on_its_own_line(cd_db):
 
     said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
 
-    assert "**P1**\nAdvancing Odds:" in said
+    assert "**P1**" + chr(10) + _label(hub._ODDS_ADVANCE) in said
 
 
 def test_the_placement_clause_is_absent_before_anybody_has_finished(cd_db):
@@ -526,8 +536,8 @@ def test_the_placement_clause_is_absent_before_anybody_has_finished(cd_db):
 
     said = hub.build_odds_embed(scouted, "semifinals", "H", grouping).description
 
-    assert "Advancing Odds:" in said and "Winning Odds:" in said
-    assert "Placement:" not in said
+    assert _label(hub._ODDS_ADVANCE) in said and _label(hub._ODDS_WIN) in said
+    assert _label(hub._ODDS_PLACEMENT) not in said
 
 
 def test_a_placement_lands_on_the_player_who_earned_it(cd_db):

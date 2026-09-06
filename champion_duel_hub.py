@@ -141,6 +141,60 @@ CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
+#: ⚠️ NOT SIGNED OFF. The way out of a conflict with your own typo, which had no
+#: exit at all until 2026-09-05: the wrong sixteen was stored, every correct
+#: re-entry collided with it, and only an operator could clear it. Kevin's call
+#: on the shape -- *"Yes take the second option"* -- and these words are mine.
+#: ⚠️ NOT SIGNED OFF. Kevin, 2026-09-06: *"the highest server is 2308 and the
+#: game devs have said they are holding to that as the last server."*
+#:
+#: **Names the number rather than the rule.** "Warzones go up to 2308" tells the
+#: reader what to compare against; "that is out of range" makes them guess.
+#: Plural-aware because the sixteen can carry more than one.
+CD_IMPOSSIBLE_WARZONE = (
+    "⚠️ {list} {verb} higher than any warzone the game has. They go up to "
+    "**{max}**. Check what you typed and try again."
+)
+CD_BTN_REPLACE_GROUPING = "♻️ Replace what is stored"
+#: Kevin's words, 2026-09-05, and **his rewrite collapsed two fields into one**:
+#: it names both buttons, so the "If your list is the one to fix" field beside
+#: it became a second, quieter statement of half the same thing. That one is
+#: dropped on this branch and kept on the other, where the two halves really are
+#: two answers with two owners.
+CD_CONFLICT_YOURS = "Fix conflicting information"
+#: Kevin's words. **It says "their information" about a member of the reader's
+#: own server**, which is exact: `correctable_by` matches on
+#: `created_by_guild_id`, so the person who typed it is somebody in this
+#: Discord, and it is theirs rather than the reader's to have written.
+CD_CONFLICT_REPLACE = (
+    "Someone from your server added the conflicting information. You can choose "
+    "to replace their information by using **{replace}**. If you do not wish to "
+    "replace, you can edit your own with **{retry}**."
+)
+#: Kevin's words, with the ✅ kept and the tense his own on 2026-09-06:
+#: *"yes make it replaced."* It read "Replace" and fires after the press, which
+#: made it the only acknowledgement on this feature not in the past tense that
+#: `messages.py`'s success rule and every sibling here use.
+CD_REPLACED = "✅ Replaced the Participating Warzones that were added previously with your list."
+#: Kevin's words, with the ⚠️ kept. The race it closes: somebody recorded a
+#: group into that entry while the conflict sat on screen.
+#:
+#: **It states the policy rather than the incident**, which is his framing and
+#: the better one: a member who reads "we do not edit these once there is data"
+#: understands the refusal will hold, where "it is not empty any more" invites
+#: a retry that cannot work.
+#: ⚠️ NOT SIGNED OFF. The other reason a replace can refuse, and it is about the
+#: list rather than the row: correcting one conflict into a set that overlaps a
+#: third Champion Duel would leave a contradiction with no button on it.
+_CONFLICT_CLASHES_ELSEWHERE = (
+    "⚠️ Those warzones overlap a different Champion Duel, so replacing would "
+    "trade one conflict for another. Nothing was changed."
+)
+_CONFLICT_NO_LONGER_EMPTY = (
+    "⚠️ Information has been recorded in this Champion Duel while you were "
+    "working. We do not edit Participating Warzone lists if there is data added. "
+    "No changes were made."
+)
 
 # Approved by Kevin, 2026-08-31, over two alternatives: *"Keep: Add a Champion
 # Duel."*
@@ -517,7 +571,7 @@ _ODDS_THRESHOLD = "A player goes through by finishing in the top **{advance}**."
 #: anyway, in a different place on every row. Two breaks in the same place every
 #: time, after the name.
 _ODDS_ROW = "**{name}**\n{parts}"
-_ODDS_ADVANCE = "Advancing Odds: {odds}"
+_ODDS_ADVANCE = "Advancing odds: {odds}"
 #: **Dropped, then restored the same day.** It went when the shape under
 #: consideration was three inline embed fields, where three was a hard cap and
 #: this was the weakest of four. Labelled lines have no cap, so Kevin put it
@@ -526,7 +580,11 @@ _ODDS_ADVANCE = "Advancing Odds: {odds}"
 #: ⚠️ *Winning* here means winning the group outright, not winning a match. The
 #: label carries Kevin's own word for the column and the sense is the intro
 #: line's to hold.
-_ODDS_WIN = "Winning Odds: {odds}"
+#: Kevin, 2026-09-05: *"Let's say '1st place odds' since that's the same thing
+#: honestly."* It was `Winning Odds`, which on a surface that also carries head
+#: to head and single-match simulation could be read as winning a match. This
+#: says the thing itself.
+_ODDS_WIN = "1st place odds: {odds}"
 #: Dropped whole when nobody has finished yet, rather than printed empty.
 _ODDS_PLACEMENT = "Placement: {place}"
 
@@ -2308,25 +2366,7 @@ class _IntelRetryView(discord.ui.View):
         them is the stale one where a vanished control would just leave the
         member looking for it.
         """
-        if self.is_finished():
-            return
-        for item in self.children:
-            item.disabled = True
-        self.stop()
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except Exception:
-                # Deleted, expired, or the connection went while we asked.
-                # Deliberately everything, not just `HTTPException`: this is a
-                # cosmetic edit standing between the member and their answer,
-                # and a dropped connection here would otherwise raise straight
-                # out of `on_submit` after the defer and cost them the whole
-                # submission over a greyed button. The view is stopped either
-                # way, so the button is already dead wherever it still draws.
-                # `wizard_registry.expire_view_message` swallows the same for
-                # the same reason.
-                pass
+        await _retire(self)
 
     async def _on_retry(self, inter: discord.Interaction):
         # Deliberately does NOT retire this view. Dismissing a modal without
@@ -4284,6 +4324,44 @@ def _server_today():
     return server_date_for(datetime.now(timezone.utc))
 
 
+async def _retire(view) -> None:
+    """Grey every control out and stop the view. Never raises.
+
+    **One implementation, because the `try` is the whole point.** The edit is a
+    cosmetic touch standing between a member and their answer: a dropped
+    connection here would otherwise raise straight out of a handler after the
+    defer and cost them the submission over a greyed button. The view is
+    stopped either way, so the control is already dead wherever it still draws.
+    `wizard_registry.expire_view_message` swallows the same for the same reason.
+
+    Deliberately catches everything rather than `HTTPException`.
+    """
+    if view.is_finished():
+        return
+    for item in view.children:
+        item.disabled = True
+    view.stop()
+    if getattr(view, "message", None) is None:
+        return
+    try:
+        await view.message.edit(view=view)
+    except Exception:  # noqa: BLE001 - see above
+        pass
+
+
+def _impossible(beyond: list[str]) -> str:
+    """The refusal, with the offending numbers named and the verb agreeing.
+
+    Named rather than counted: a member who typed one wrong digit among sixteen
+    should not have to find it themselves, and `impossible_warzones` keeps the
+    order they were given so the list reads against the line they pasted.
+    """
+    listed = ", ".join(f"**{z}**" for z in beyond)
+    return CD_IMPOSSIBLE_WARZONE.format(
+        list=listed, verb="is" if len(beyond) == 1 else "are", max=db.MAX_WARZONE
+    )
+
+
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
     """`1 warzone`, `16 warzones`. The count and its noun, agreeing.
 
@@ -4489,6 +4567,11 @@ class _WarzoneModal(discord.ui.Modal, title="Your alliance's warzone"):
                 f"warzone is the number your alliance plays on, like 738. Try again.",
                 ephemeral=True,
             )
+            return
+
+        beyond = db.impossible_warzones(zones)
+        if beyond:
+            await interaction.followup.send(_impossible(beyond), ephemeral=True)
             return
 
         zone = zones[0]
@@ -4776,6 +4859,17 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             return
 
         typed = db.parse_warzones(self.warzones.value, unique=False)
+        # **Before the count**, because a number the game cannot have is a
+        # certain typo and the count is only a symptom of it: telling somebody
+        # they typed seventeen warzones when one of them is 23088 sends them
+        # counting rather than looking.
+        # Deduped, unlike the count check below it, which needs the repeats.
+        # A number typed twice is one wrong number, and naming it twice made
+        # the verb agree with the duplicate rather than with the fault.
+        beyond = db.impossible_warzones(dict.fromkeys(typed))
+        if beyond:
+            await self._refuse(interaction, _impossible(beyond))
+            return
         zones = sorted(set(typed), key=int)
         repeated = next((z for z in zones if typed.count(z) > 1), None)
         if repeated is not None:
@@ -4969,14 +5063,43 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             value=f"Press **{_btn_words(CD_BTN_RETRY_GROUPING)}**. What you typed is kept.",
             inline=False,
         )
-        embed.add_field(
-            name="If the list already here is wrong",
-            value=(
-                f"Another alliance entered it, so it is not yours to change. Tell us on "
-                f"the {COMMUNITY_SERVER_NAME} and we will correct it."
-            ),
-            inline=False,
+        # **The one case where the other list IS yours to change**, and without
+        # it a mistyped entry is a trap: the wrong sixteen is stored, every
+        # correct re-entry collides with it, and the only exit is an operator.
+        # Reproduced end to end before this existed.
+        #
+        # `correctable_by` is deliberately narrow -- this server entered it, a
+        # member entered it, and it holds no group, player, result or other
+        # server's pin. Anything else is a real conflict between two alliances
+        # and stays refused.
+        mine_to_fix = await asyncio.to_thread(
+            db.correctable_by, other["id"], str(interaction.guild_id)
         )
+        if mine_to_fix:
+            # **ONE FIELD, NOT TWO, AND THAT IS KEVIN'S REWRITE.** His replacement
+            # names both buttons in one block, which makes the "If your list is
+            # the one to fix" field above it a second, quieter statement of half
+            # the same thing. So it is dropped on this branch and kept on the
+            # other, where the two halves really are two different answers with
+            # two different owners.
+            embed.clear_fields()
+            embed.add_field(
+                name=CD_CONFLICT_YOURS,
+                value=CD_CONFLICT_REPLACE.format(
+                    replace=_btn_words(CD_BTN_REPLACE_GROUPING),
+                    retry=_btn_words(CD_BTN_RETRY_GROUPING),
+                )[:1024],
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="If the list already here is wrong",
+                value=(
+                    f"Another alliance entered it, so it is not yours to change. Tell us on "
+                    f"the {COMMUNITY_SERVER_NAME} and we will correct it."
+                ),
+                inline=False,
+            )
         view = _RetryGroupingView(
             user_id=interaction.user.id,
             can_write=self.can_write,
@@ -4984,7 +5107,8 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             onboarding=self.onboarding,
             warzones_default=self.warzones.value,
             started_default=self.started_on.value,
-            offer_community=True,
+            offer_community=not mine_to_fix,
+            replace=(other["id"], zones, started) if mine_to_fix else None,
         )
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
@@ -5009,6 +5133,7 @@ class _RetryGroupingView(discord.ui.View):
         started_default: str | None,
         onboarding: bool = True,
         offer_community: bool = False,
+        replace: tuple | None = None,
     ):
         super().__init__(timeout=600)
         self.user_id = user_id
@@ -5019,6 +5144,10 @@ class _RetryGroupingView(discord.ui.View):
         # the onboarding form, which would then refuse the same entry for not
         # containing their warzone -- a retry button that cannot succeed.
         self.onboarding = onboarding
+        # `(grouping_id, zones, started)` where the conflict is with this
+        # server's own empty entry, None otherwise. Held rather than re-derived
+        # so the press writes exactly what the embed described.
+        self.replace = replace
         self.warzones_default = warzones_default
         self.started_default = started_default
         self.message: discord.Message | None = None
@@ -5028,6 +5157,17 @@ class _RetryGroupingView(discord.ui.View):
         )
         button.callback = self._on_retry
         self.add_item(button)
+        if replace is not None:
+            # Not `danger`. `notes/DESIGN.md` reserves that for irreversible
+            # loss and there is nothing here to lose: `correctable_by` has
+            # already established the row holds no group, player, result or
+            # pin. Dressing a correction as a destruction is how a member
+            # learns to fear the button that fixes their typo.
+            button = discord.ui.Button(
+                label=CD_BTN_REPLACE_GROUPING[:80], style=discord.ButtonStyle.secondary
+            )
+            button.callback = self._on_replace
+            self.add_item(button)
         if offer_community:
             # A link button rather than the URL in the field text: an invite is
             # one tap here and a thing to read and copy there, and this is a
@@ -5054,6 +5194,68 @@ class _RetryGroupingView(discord.ui.View):
                 warzones_default=self.warzones_default,
                 started_default=self.started_default,
             )
+        )
+
+    async def _on_replace(self, inter: discord.Interaction):
+        """Put what they just typed in place of their own empty entry.
+
+        **`correct_grouping` re-checks the state itself**, and the refusal is
+        handled rather than assumed away: this view lives ten minutes and a
+        group can be recorded into that window, at which point the row stops
+        being an empty typo and becomes somebody's data. `NotCorrectable` then
+        lands the caller back on the conflict, which is the honest answer.
+        """
+        await inter.response.defer(ephemeral=True, thinking=True)
+        grouping_id, zones, started = self.replace
+        try:
+            await asyncio.to_thread(
+                db.correct_grouping,
+                grouping_id,
+                zones,
+                started,
+                guild_id=str(inter.guild_id),
+            )
+        except db.NotCorrectable as refused:
+            # **Two refusals, two messages.** Reporting a third-list collision as
+            # "somebody recorded into it" tells a member their data changed when
+            # it did not, which is worse than saying nothing.
+            said = (
+                _CONFLICT_CLASHES_ELSEWHERE
+                if db.CLASHES_ELSEWHERE in str(refused)
+                else _CONFLICT_NO_LONGER_EMPTY
+            )
+            await inter.followup.send(said, ephemeral=True)
+            return
+
+        # **The pin, which `_AddGroupingModal` does on its own path and this one
+        # did not.** Correcting the sixteen makes this the Champion Duel the hub
+        # resolves to, and without confirming it `needs_warzone_confirmation`
+        # fires and the member lands on "is warzone 700 yours?" -- the exact
+        # re-ask this branch's own pin logic was fixed to stop.
+        if self.warzone and self.warzone in zones:
+            guild = str(inter.guild_id)
+            resolved = await asyncio.to_thread(
+                db.resolve_grouping_for_guild, guild, fallback_warzone=self.warzone
+            )
+            if resolved and resolved["id"] == grouping_id:
+                await asyncio.to_thread(
+                    db.set_guild_warzone,
+                    guild,
+                    self.warzone,
+                    discord_id=str(inter.user.id),
+                    confirmed_grouping_id=grouping_id,
+                )
+
+        # Spent, and **visibly**. `self.stop()` alone leaves both buttons
+        # looking live and failing on press, which `notes/DESIGN.md` calls a bug
+        # rather than cosmetics. `_retire` is `_IntelRetryView.retire` word for
+        # word -- lifted rather than copied, because a second implementation of
+        # "grey this out and stop" is a second place to forget the `try`.
+        await _retire(self)
+        await _open_hub(
+            inter,
+            can_write=self.can_write,
+            note=CD_REPLACED,
         )
 
 

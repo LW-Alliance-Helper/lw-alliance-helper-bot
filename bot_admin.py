@@ -424,17 +424,23 @@ def _removal_lines(counts: dict) -> str:
 def _removal_embed(
     uid: int,
     label: str,
-    config_result: dict,
-    cd_result: dict,
+    results: list[dict],
     errors: list[tuple[str, str]],
 ) -> discord.Embed:
     """One removal report. Same shape for the preview and the receipt, because
-    the operator reads the second against the first."""
-    deleted = dict(config_result["deleted"])
-    deleted.update(cd_result.get("deleted", {}))
-    scrubbed = dict(config_result["scrubbed"])
-    scrubbed.update(cd_result.get("scrubbed", {}))
-    applied = bool(config_result.get("applied"))
+    the operator reads the second against the first.
+
+    Takes a list rather than one argument per database. There are three now
+    (#544) and the count is the sort of thing that grows: a signature with a
+    slot per store is how a fourth one gets added to the runner and quietly
+    left out of the receipt somebody is handed as proof.
+    """
+    deleted: dict = {}
+    scrubbed: dict = {}
+    for result in results:
+        deleted.update(result.get("deleted", {}))
+        scrubbed.update(result.get("scrubbed", {}))
+    applied = any(r.get("applied") for r in results)
     n_deleted = sum(deleted.values())
     n_scrubbed = sum(scrubbed.values())
 
@@ -465,34 +471,40 @@ def _removal_embed(
     return embed
 
 
-def _run_user_removal(uid: int, *, apply: bool) -> tuple[dict, dict, list[tuple[str, str]]]:
-    """Both databases, one call. Returns `(config_result, cd_result, errors)`,
-    where each error is the database that could not be reached and why.
+#: Every database a person can appear in, and the name the operator sees when
+#: one of them cannot be reached. A store missing from this list is a store a
+#: removal silently skips while reporting itself as done, so it is a list rather
+#: than three hand-written blocks.
+_USER_REMOVAL_STORES = (
+    ("Guild config database", "config"),
+    ("Champion Duel database", "champion_duel_db"),
+    ("VS score database", "alliance_duel_db"),
+)
 
-    Each half is caught on its own so a failure in one cannot leave the operator
-    believing the other did not run either. A removal that half-happened and
-    reported nothing is the worst outcome available here, and it is the one that
-    gets written back to a person as "done".
+
+def _run_user_removal(uid: int, *, apply: bool) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Every database, one call. Returns `(results, errors)`, where each error
+    is the database that could not be reached and why.
+
+    Each store is caught on its own so a failure in one cannot leave the
+    operator believing the others did not run either. A removal that
+    half-happened and reported nothing is the worst outcome available here, and
+    it is the one that gets written back to a person as "done".
     """
+    import importlib  # noqa: PLC0415
+
+    results: list[dict] = []
     errors: list[tuple[str, str]] = []
 
-    import config  # noqa: PLC0415
+    for label, module_name in _USER_REMOVAL_STORES:
+        try:
+            module = importlib.import_module(module_name)
+            results.append(module.purge_user_data(uid, apply=apply))
+        except Exception as exc:
+            results.append({"deleted": {}, "scrubbed": {}, "applied": apply})
+            errors.append((label, str(exc)))
 
-    try:
-        config_result = config.purge_user_data(uid, apply=apply)
-    except Exception as exc:
-        config_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
-        errors.append(("Guild config database", str(exc)))
-
-    import champion_duel_db as cd_db  # noqa: PLC0415
-
-    try:
-        cd_result = cd_db.purge_user_data(uid, apply=apply)
-    except Exception as exc:
-        cd_result = {"deleted": {}, "scrubbed": {}, "applied": apply}
-        errors.append(("Champion Duel database", str(exc)))
-
-    return config_result, cd_result, errors
+    return results, errors
 
 
 class _ForgetUserConfirm(discord.ui.View):
@@ -524,7 +536,7 @@ class _ForgetUserConfirm(discord.ui.View):
         # and invites a second press.
         await inter.response.edit_message(view=self)
 
-        config_result, cd_result, errors = _run_user_removal(self._user_id, apply=True)
+        results, errors = _run_user_removal(self._user_id, apply=True)
 
         # Premium is cached per guild and per user and the assignment row may
         # have just gone. Clearing the whole cache is blunt, but a removal
@@ -536,7 +548,7 @@ class _ForgetUserConfirm(discord.ui.View):
 
         await inter.edit_original_response(
             content=f"🗑️ Ran data removal for `{self._user_id}`.",
-            embed=_removal_embed(self._user_id, self._label, config_result, cd_result, errors),
+            embed=_removal_embed(self._user_id, self._label, results, errors),
             view=self,
         )
         self.stop()
@@ -591,13 +603,12 @@ async def admin_forget_user_slash(interaction: discord.Interaction, user_id: str
             user = None
     label = user.name if user is not None else ""
 
-    config_result, cd_result, errors = _run_user_removal(uid, apply=False)
-    embed = _removal_embed(uid, label, config_result, cd_result, errors)
-    total = (
-        sum(config_result["deleted"].values())
-        + sum(config_result["scrubbed"].values())
-        + sum(cd_result.get("deleted", {}).values())
-        + sum(cd_result.get("scrubbed", {}).values())
+    results, errors = _run_user_removal(uid, apply=False)
+    embed = _removal_embed(uid, label, results, errors)
+    total = sum(
+        sum(result.get(bucket, {}).values())
+        for result in results
+        for bucket in ("deleted", "scrubbed")
     )
     # A database that could not be read has not said this person is absent from
     # it. Withholding the confirm on a blank preview would make an outage look

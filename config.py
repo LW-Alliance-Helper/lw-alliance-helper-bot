@@ -6822,12 +6822,13 @@ def sweep_guild_removals(
     hold_days: int = GUILD_REMOVAL_HOLD_DAYS,
     installed: "set[int] | None" = None,
 ) -> dict:
-    """Purge every server whose hold has run out, across both databases.
+    """Purge every server whose hold has run out, across all three databases.
 
-    The one entry point the scheduler calls, and the one place the two purges
-    are known to belong together. Returns
+    The one entry point the scheduler calls, and the one place the purges are
+    known to belong together. Returns
     `{"guilds": [ids], "config": {...}, "champion_duel": {...},
-    "applied": bool}` with the per-table counts merged across servers, because
+    "alliance_duel": {...}, "applied": bool}` with the per-table counts merged
+    across servers, because
     "we removed 3 servers" is not something anyone can check and
     "we deleted 41 storm_signups rows" is.
 
@@ -6844,6 +6845,7 @@ def sweep_guild_removals(
         "guilds": [],
         "config": {"deleted": {}, "scrubbed": {}},
         "champion_duel": {"deleted": {}, "scrubbed": {}},
+        "alliance_duel": {"deleted": {}, "scrubbed": {}},
         "rejoined": [],
         "failed": [],
         "applied": bool(apply),
@@ -6869,9 +6871,14 @@ def sweep_guild_removals(
         # would block every other server every day.
         try:
             _fold(merged["config"], purge_guild_data(gid, apply=apply))
+            import alliance_duel_db
             import champion_duel_db
 
             _fold(merged["champion_duel"], champion_duel_db.purge_guild_data(gid, apply=apply))
+            # VS scores (#544). A third store rather than a third mechanism:
+            # the spec-table shape and this call are the same as the line
+            # above, and everything it touches is scrubbed rather than deleted.
+            _fold(merged["alliance_duel"], alliance_duel_db.purge_guild_data(gid, apply=apply))
         except Exception as exc:  # noqa: BLE001 - one server must not block the rest
             print(f"[REMOVAL] Purge failed for guild={gid}: {exc}")
             merged["failed"].append(gid)

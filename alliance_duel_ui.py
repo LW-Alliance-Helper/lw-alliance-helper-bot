@@ -39,6 +39,16 @@ MAX_SELECT_OPTIONS = 25
 #: stale picker is more confusing than an expired one.
 PICKER_TIMEOUT = 180
 
+# The shared-scouting strings (#544), signed off 2026-09-04.
+#
+# **There is no attribution sentence, and that is the decision.** A first cut
+# put an italic line above the numbers saying nobody here had scouted them.
+# Kevin: "This already has a heading 'from other alliances', I don't see why
+# we even need this." The field name carries the provenance on its own, and
+# saying it twice on one card is the sort of thing a reader learns to skip.
+VS_SHARED_HEADING = "From other alliances"
+VS_SHARED_NOTHING = "No information about this alliance has been recorded yet."
+
 
 # ── Scout profile ─────────────────────────────────────────────────────────────
 
@@ -56,7 +66,15 @@ def scout_embed(state, target: ad.AllianceKey) -> discord.Embed:
         color=discord.Color.blurple(),
     )
 
-    embed.add_field(name="Recorded", value=_recorded_block(state, target, profile), inline=False)
+    # The field name follows where the numbers came from. Calling another
+    # alliance's record "Recorded" on our own card is the quiet version of
+    # presenting it as ours, and provenance is the whole point of #544.
+    borrowed = state.shared_only(target) is not None
+    embed.add_field(
+        name=VS_SHARED_HEADING if borrowed else "Recorded",
+        value=_recorded_block(state, target, profile),
+        inline=False,
+    )
 
     if state.own is not None and target != state.own:
         history = ad.head_to_head(state.rows, state.own, target)
@@ -78,13 +96,24 @@ def _recorded_block(state, target: ad.AllianceKey, profile) -> str:
     weekly, so most of these cells were filled once, and a reader has to know
     whether they are looking at last week or last season.
     """
-    if profile is None:
-        return "Nothing recorded yet."
+    # Nothing of our own. This is the case central storage (#544) exists for:
+    # fifteen other alliances played this league too, and one of them has very
+    # likely met this alliance even if we never have.
+    #
+    # Checked before the `profile is None` branch, because a profile almost
+    # always exists: `start_new_league` writes a skeleton row for all sixteen.
+    shared = state.shared_only(target)
+    if shared is not None:
+        lines = [_numbers_block(shared)]
+        age = ad.input_age_days(shared)
+        if age is not None:
+            lines.append(f"Last updated {age} day{'' if age == 1 else 's'} ago.")
+        return "\n".join(lines)[:1024]
 
-    power = f"{profile.power / 1_000_000:,.0f}M" if profile.power else ad_setup.NOT_ENTERED
-    members = str(profile.members) if profile.members is not None else ad_setup.NOT_ENTERED
-    gift = str(profile.gift_level) if profile.gift_level is not None else ad_setup.NOT_ENTERED
-    lines = [f"Power {power} · {members} members · gift level {gift}"]
+    if profile is None:
+        return VS_SHARED_NOTHING
+
+    lines = [_numbers_block(profile)]
 
     age = ad.input_age_days(profile)
     if age is not None:
@@ -105,6 +134,19 @@ def _recorded_block(state, target: ad.AllianceKey, profile) -> str:
     if trajectory:
         lines.append(trajectory)
     return "\n".join(lines)[:1024]
+
+
+def _numbers_block(profile) -> str:
+    """Power, members and gift level, however we came by them.
+
+    One formatter for our own record and for another alliance's, so the two can
+    never start disagreeing about how a blank or a million renders. What
+    differs between them is the label above, not the numbers.
+    """
+    power = f"{profile.power / 1_000_000:,.0f}M" if profile.power else ad_setup.NOT_ENTERED
+    members = str(profile.members) if profile.members is not None else ad_setup.NOT_ENTERED
+    gift = str(profile.gift_level) if profile.gift_level is not None else ad_setup.NOT_ENTERED
+    return f"Power {power} · {members} members · gift level {gift}"
 
 
 def _trajectory_line(profile) -> str:
@@ -176,7 +218,26 @@ def _projection_block(state, target: ad.AllianceKey) -> str:
     them.
     """
     own_profile = state.profiles.get(state.own)
-    target_profile = state.profiles.get(target)
+    # Kevin, 2026-09-04: borrowed numbers may feed the projection. An
+    # alliance nobody here has scouted was previously unprojectable even
+    # when fifteen others had the numbers, and the card said so directly
+    # under the numbers it was showing.
+    #
+    # Only ever for the *target*, never for us: `shared_only` returns
+    # nothing the moment our own sheet says anything, and our own alliance
+    # is the one row we always have.
+    # **The projection carries no provenance marker of its own, and that is
+    # settled.** Kevin, 2026-09-04: the card leads with the `From other
+    # alliances` heading, and a projection printed underneath it is read in
+    # that context. A second label here would be the same repetition that got
+    # the attribution sentence cut. Do not add one.
+    #
+    # `shared_only` first, not `or` the other way round: a skeleton profile
+    # is a truthy object with no numbers in it, so the obvious ordering
+    # never reaches the shared record at all. It already returns nothing
+    # the moment our own sheet says anything, so this reads "theirs only
+    # when we have none".
+    target_profile = state.shared_only(target) or state.profiles.get(target)
     if own_profile is None or target_profile is None:
         return "Not enough recorded to project this matchup."
 

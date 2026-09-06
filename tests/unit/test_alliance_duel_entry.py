@@ -464,7 +464,7 @@ def _captured(monkeypatch):
     """Swallow the write and hand back what would have been written."""
     written = []
 
-    async def _fake(state, rows):
+    async def _fake(state, rows, **kw):
         written.extend(rows)
         return ""
 
@@ -993,7 +993,7 @@ async def test_two_presses_racing_write_one_set_of_rows(monkeypatch):
     written = []
     started = asyncio.Event()
 
-    async def _slow(state, rows):
+    async def _slow(state, rows, **kw):
         written.extend(rows)
         started.set()
         await asyncio.sleep(0.05)
@@ -1019,7 +1019,7 @@ async def test_a_failed_write_hands_the_staging_back(monkeypatch):
     """Nothing was written, so the screen is still true. Losing the staging
     would make the retry cost every tap again."""
 
-    async def _refuse(state, rows):
+    async def _refuse(state, rows, **kw):
         return "I couldn't write to your tab: nope"
 
     monkeypatch.setattr(entry, "save_rows", _refuse)
@@ -1619,3 +1619,165 @@ async def test_a_mid_season_start_does_not_stamp_todays_power_onto_past_weeks(_c
     # a fabricated flat one.
     profile = ad.build_profile(_captured, _captured[0].alliance)
     assert len([p for _, p in profile.power_history if p]) < 2
+
+
+# -- The central store (#544) --------------------------------------------------
+#
+# Every VS write goes through `save_rows`, so the mirror lives there and these
+# exercise the real one rather than the `_captured` stub above.
+
+
+@pytest.fixture
+def _sheet_takes_it(monkeypatch):
+    """Let `save_rows` reach the end without a Google Sheet behind it."""
+    import config as _config
+
+    monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+    monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: _FakeSheet())
+    monkeypatch.setattr(entry.ad, "plan_upsert", lambda *a, **k: _FakePlan())
+    monkeypatch.setattr(entry.ad, "apply_upsert", lambda *a, **k: None)
+
+
+class _FakeSheet:
+    def get_all_values(self):
+        return []
+
+
+class _FakePlan:
+    unmapped_columns = ()
+
+
+@pytest.fixture
+def _central(tmp_path, monkeypatch):
+    import alliance_duel_db as vsdb
+
+    monkeypatch.setattr(vsdb, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vsdb.init_db()
+    return vsdb
+
+
+@pytest.mark.asyncio
+async def test_a_saved_score_reaches_the_central_store(_sheet_takes_it, _central):
+    """The whole point of #544: what one alliance records has to become
+    readable by the fifteen who never played them."""
+    state = _state(_bracket())
+    row = _row(OWN_TAG, week_score=7, week_outcome="W")
+
+    problem = await entry.save_rows(state, [row])
+
+    assert problem == ""
+    stored = _central.weeks_for_alliance(OWN)
+    assert len(stored) == 1
+    assert stored[0]["week_score"] == 7 and stored[0]["week_outcome"] == "W"
+
+
+@pytest.mark.asyncio
+async def test_the_guild_is_stamped_even_with_nobody_named(_sheet_takes_it, _central):
+    """`actor_guild_id` is what a removal scrubs on. A row written without it
+    could never be found again, so it does not depend on having an
+    interaction."""
+    state = _state(_bracket())
+
+    await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    stored = _central.weeks_for_alliance(OWN)
+    assert stored[0]["actor_guild_id"] == str(state.guild_id)
+    assert stored[0]["actor_discord_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_person_is_recorded_when_there_is_an_interaction(_sheet_takes_it, _central):
+    state = _state(_bracket())
+    who = _FakeInteraction(user_id=4242)
+
+    await entry.save_rows(state, [_row(OWN_TAG, week_score=7)], actor=who)
+
+    stored = _central.weeks_for_alliance(OWN)
+    assert stored[0]["actor_discord_id"] == "4242"
+
+
+@pytest.mark.asyncio
+async def test_a_central_store_failure_is_never_the_officers_problem(
+    _sheet_takes_it, _central, monkeypatch
+):
+    """The tab already has the rows and the officer has already been told it
+    worked. A second copy that will not open costs another alliance a scouting
+    row; it does not cost this one their evening."""
+
+    def _boom(*a, **k):
+        raise RuntimeError("volume gone")
+
+    monkeypatch.setattr(_central, "record_weeks", _boom)
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem == "", "a mirror failure was reported as a save failure"
+
+
+@pytest.mark.asyncio
+async def test_a_sheet_that_refused_the_write_contributes_nothing(_central, monkeypatch):
+    """The sheet decides. Mirroring a write the tab rejected would put a number
+    into fifteen other alliances' scouting that its own alliance cannot see."""
+    import config as _config
+
+    monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+    monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: _FakeSheet())
+    monkeypatch.setattr(
+        entry.ad, "plan_upsert", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("tab gone"))
+    )
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem, "the sheet failure was swallowed"
+    assert _central.weeks_for_alliance(OWN) == []
+
+
+@pytest.mark.asyncio
+async def test_a_tab_missing_a_column_still_contributes_to_the_shared_record(
+    _sheet_takes_it, _central, monkeypatch
+):
+    """That branch is reached when the tab took the rows and one column had
+    nowhere to go, so the observation is good and only this guild's own view of
+    it is short. Behind the return, a guild with one missing column contributed
+    nothing, silently and forever."""
+
+    class _Partial:
+        unmapped_columns = ("Gift Level",)
+
+    monkeypatch.setattr(entry.ad, "plan_upsert", lambda *a, **k: _Partial())
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem, "the officer was not told about the missing column"
+    assert _central.weeks_for_alliance(OWN)[0]["week_score"] == 7
+
+
+@pytest.mark.asyncio
+async def test_a_predicted_pairing_never_reaches_the_shared_record(_sheet_takes_it, _central):
+    """The bot writes next week's *expected* opponents forward. That belongs in
+    the alliance's own tab where the officer can correct it. Fifteen other
+    alliances have no way to tell our guess from what the game did."""
+    rows = _bracket()
+    for week in range(2, ad.LEAGUE_WEEKS + 1):
+        rows += _bracket(week=week)
+    _play_week(rows, 1, winner_of=lambda m: m.a)
+    state = _state(rows)
+
+    ok, message = await entry.generate_next_week(state, 1)
+
+    assert ok, message
+    assert _central.weeks_for_league(LEAGUE, week=2) == [], "a guess was shared as fact"
+
+
+@pytest.mark.asyncio
+async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
+    """The other half of the rule above: what somebody actually recorded is
+    exactly what the shared record is for."""
+    state = _state(_bracket())
+
+    await entry.save_rows(state, [_row(OWN_TAG, week=2, week_score=7)])
+
+    assert len(_central.weeks_for_league(LEAGUE, week=2)) == 1

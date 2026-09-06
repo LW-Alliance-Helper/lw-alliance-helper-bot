@@ -91,6 +91,76 @@ FOOTER_SCOUTABLE = "{subject} power, members and gift level."
 NOT_ENTERED = ad_setup.NOT_ENTERED
 
 
+async def attach_shared(state: "HubState") -> None:
+    """Load what other alliances recorded about this league onto `state`.
+
+    Called once per `/vs`, next to the one sheet read, for the same reason that
+    one exists: the hub renders every screen from a single snapshot, and a
+    button that went back to a database would put the read-quota rule (#269)
+    back where it started.
+
+    Never raises. The store is a second copy; a guild's own sheet is unaffected
+    by it being unreadable, and a scouting card with less on it is not worth
+    interrupting somebody for.
+    """
+    if state.league is None:
+        return
+    try:
+        import alliance_duel_db as vsdb
+
+        # SQLite blocks, and this runs on the gateway thread (#366).
+        shared = await asyncio.to_thread(vsdb.rows_for_league, state.league)
+    except Exception as e:  # noqa: BLE001 - the sheet is unaffected
+        logger.warning("[VS] shared scouting unavailable for guild=%s: %s", state.guild_id, e)
+        return
+
+    state.shared = shared
+    state.shared_profiles = ad.build_profiles(shared)
+
+
+async def contribute_snapshot(state: "HubState") -> None:
+    """Put this tab's observations into the shared store (#544).
+
+    **This is the backfill, and it is why there is no migration step.** An
+    alliance with three seasons in their tab contributes all of it the first
+    time somebody opens `/vs` after this ships, and every league they have ever
+    recorded reaches the alliances who never played them. There is nothing to
+    run, nothing to press and nothing to remember, which is the only shape of
+    migration worth having: the officer opens the hub they were going to open
+    anyway.
+
+    Idempotent by construction. `record_weeks` upserts on
+    (alliance, league, week) and never writes a blank over a value, so running
+    this on every hub load costs a few milliseconds and changes nothing on the
+    second pass. Measured at 21ms for three full seasons of a sixteen-alliance
+    bracket, which is why it is not gated on a marker: a marker is state that
+    can be wrong, and this cannot.
+
+    `ad.shareable` is what keeps the bot's own predicted pairings out of it.
+
+    Never raises. A store that will not open costs other alliances a scouting
+    row; the guild's own tab is untouched either way.
+    """
+    rows = ad.shareable(state.rows)
+    if not rows:
+        return
+    try:
+        import alliance_duel_db as vsdb
+
+        # SQLite blocks, and this runs on the gateway thread (#366).
+        result = await asyncio.to_thread(
+            vsdb.record_weeks, rows, actor={"guild_id": state.guild_id}
+        )
+        if result.get("skipped"):
+            logger.warning(
+                "[VS] %s tab row(s) had no storable identity for guild=%s",
+                result["skipped"],
+                state.guild_id,
+            )
+    except Exception as e:  # noqa: BLE001 - the tab is unaffected
+        logger.warning("[VS] snapshot contribute failed for guild=%s: %s", state.guild_id, e)
+
+
 # ── Loaded state ──────────────────────────────────────────────────────────────
 
 
@@ -113,9 +183,47 @@ class HubState:
         self.live = ad.resolve_live_week(rows)
         self.league = self.live.league if self.live else ad.latest_league(rows)
 
+        # What other alliances recorded about this league (#544), filled by
+        # `attach_shared` after construction because reading it is IO.
+        #
+        # **A separate attribute, never folded into `self.rows`.** `row_for`
+        # feeds `_row_for_write`, which builds what goes back to this guild's
+        # own tab; a shared row reaching it would copy another alliance's
+        # record into this alliance's sheet as though they had typed it. Every
+        # screen that wants shared knowledge asks for it by name.
+        self.shared: list[ad.AllianceWeek] = []
+        self.shared_profiles: dict = {}
+
     @property
     def full_bracket(self) -> bool:
         return self.tracking_mode == ad.MODE_FULL_BRACKET
+
+    def shared_only(self, alliance: ad.AllianceKey):
+        """What other alliances recorded about `alliance`, when we have not.
+
+        **"We have not" means no scouting numbers, not no row.**
+        `start_new_league` writes a skeleton row for all sixteen alliances the
+        moment a league opens, so a profile object exists for every one of them
+        from day one and testing for its absence would make this dead code: the
+        officer would keep reading `Power ? - ? members - gift level ?` while
+        another alliance had the numbers all along.
+
+        Still `None` the moment we have any of the three ourselves. The sheet
+        wins, and a card that quietly preferred somebody else's number over one
+        the officer typed would be worse than a card with a gap in it: they
+        would have no way to tell which they were reading.
+        """
+        mine = self.profiles.get(alliance)
+        if mine is not None and (
+            mine.power is not None or mine.members is not None or mine.gift_level is not None
+        ):
+            return None
+        theirs = self.shared_profiles.get(alliance)
+        if theirs is None or not (
+            theirs.power is not None or theirs.members is not None or theirs.gift_level is not None
+        ):
+            return None
+        return theirs
 
     @property
     def week(self) -> int | None:
@@ -1313,6 +1421,11 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
         return
 
     state = HubState(interaction.guild_id, vs_cfg, rows)
+    # Read before write. What this guild contributes is its own, and
+    # `shared_only` ignores it anyway, so reading first saves the store handing
+    # us back an echo of the tab we just read.
+    await attach_shared(state)
+    await contribute_snapshot(state)
     view = VSHubView(bot, state, interaction.user.id)
     await interaction.followup.send(embed=hub_embed(state), view=view, ephemeral=True)
     view.message = await interaction.original_response()

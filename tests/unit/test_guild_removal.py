@@ -25,6 +25,7 @@ import re
 
 import pytest
 
+import alliance_duel_db as vsdb
 import champion_duel_db as cd
 import config
 from config import GuildConfig
@@ -39,6 +40,15 @@ def cd_db(tmp_path, monkeypatch):
     """The Champion Duel database is a separate file with its own init."""
     monkeypatch.setattr(cd, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
     cd.init_db()
+    return None
+
+
+@pytest.fixture
+def vs_db(tmp_path, monkeypatch):
+    """VS scores are a third file again (#544). The sweep spans all three, so
+    a sweep test that stubs two of them is testing a purge that cannot run."""
+    monkeypatch.setattr(vsdb, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vsdb.init_db()
     return None
 
 
@@ -307,7 +317,7 @@ def test_a_naive_stamp_is_read_as_utc(temp_db):
 # ── The sweep ─────────────────────────────────────────────────────────────────
 
 
-def test_the_sweep_leaves_a_server_inside_its_window_alone(temp_db, cd_db):
+def test_the_sweep_leaves_a_server_inside_its_window_alone(temp_db, cd_db, vs_db):
     seed_config(GUILD)
     config.record_guild_removal(GUILD)
 
@@ -317,7 +327,7 @@ def test_the_sweep_leaves_a_server_inside_its_window_alone(temp_db, cd_db):
     assert rows("guild_configs", "guild_id = ?", (GUILD,))
 
 
-def test_the_sweep_purges_a_server_past_its_window(temp_db, cd_db):
+def test_the_sweep_purges_a_server_past_its_window(temp_db, cd_db, vs_db):
     seed_config(GUILD)
     config.record_guild_removal(
         GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
@@ -330,7 +340,7 @@ def test_the_sweep_purges_a_server_past_its_window(temp_db, cd_db):
     assert rows("guild_configs", "guild_id = ?", (GUILD,)) == []
 
 
-def test_a_swept_server_is_not_swept_again(temp_db, cd_db):
+def test_a_swept_server_is_not_swept_again(temp_db, cd_db, vs_db):
     """Both databases have to succeed before the hold is cleared, so this also
     pins that a completed sweep is not retried."""
     seed_config(GUILD)
@@ -343,7 +353,7 @@ def test_a_swept_server_is_not_swept_again(temp_db, cd_db):
     assert config.guild_removal_held_since(GUILD) is None
 
 
-def test_a_dry_sweep_counts_and_keeps_the_hold(temp_db, cd_db):
+def test_a_dry_sweep_counts_and_keeps_the_hold(temp_db, cd_db, vs_db):
     """The hold row is cleared last and only on a real run, so a purge that
     fails partway is retried rather than forgotten."""
     seed_config(GUILD)
@@ -359,7 +369,7 @@ def test_a_dry_sweep_counts_and_keeps_the_hold(temp_db, cd_db):
     assert config.guild_removal_held_since(GUILD) is not None
 
 
-def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, monkeypatch):
+def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, vs_db, monkeypatch):
     """One database must not block the other, but a half-done purge must not
     be recorded as done either. The hold survives so the next sweep retries."""
     import champion_duel_db
@@ -381,7 +391,7 @@ def test_a_failing_second_database_keeps_the_hold_for_a_retry(temp_db, cd_db, mo
     assert config.guild_removal_held_since(GUILD) is not None, "retry on the next sweep"
 
 
-def test_install_metadata_now_survives_the_removal_and_goes_with_the_purge(temp_db, cd_db):
+def test_install_metadata_now_survives_the_removal_and_goes_with_the_purge(temp_db, cd_db, vs_db):
     """`on_guild_remove` used to delete this row immediately, which was the
     only thing it did. Under a hold it has to outlive the removal, or support
     loses the one record that identifies a guild from a logged id -- during
@@ -405,7 +415,7 @@ def test_install_metadata_now_survives_the_removal_and_goes_with_the_purge(temp_
     assert config.get_guild_install_metadata(GUILD) is None
 
 
-def test_a_server_the_bot_is_still_in_is_never_purged(temp_db, cd_db):
+def test_a_server_the_bot_is_still_in_is_never_purged(temp_db, cd_db, vs_db):
     """`on_guild_join` is not dispatched for a server re-added while the bot
     was disconnected -- that arrives in the READY burst. Without this a live
     server's data goes thirty days after it came back."""
@@ -422,7 +432,7 @@ def test_a_server_the_bot_is_still_in_is_never_purged(temp_db, cd_db):
     assert config.guild_removal_held_since(GUILD) is None, "and the stale hold is cancelled"
 
 
-def test_one_servers_failure_does_not_block_the_rest(temp_db, cd_db, monkeypatch):
+def test_one_servers_failure_does_not_block_the_rest(temp_db, cd_db, vs_db, monkeypatch):
     """Due guilds come oldest first, so an unguarded failure on the oldest
     would block every other server every day."""
     real = config.purge_guild_data
@@ -496,3 +506,34 @@ def test_sessions_are_revoked_at_removal_not_at_the_end_of_the_hold(cd_db):
     assert cd.revoke_guild_sessions(GUILD) == 1
     with cd._get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_the_sweep_scrubs_the_vs_scores_and_keeps_them(temp_db, cd_db, vs_db):
+    """The third store (#544) has to be reached by the same one entry point.
+    A purge nobody wired in is the failure this whole sweep exists to stop, and
+    it would not announce itself: the guild would be reported as purged."""
+    import alliance_duel as ad
+
+    seed_config(GUILD)
+    vsdb.record_weeks(
+        [
+            ad.AllianceWeek(
+                league=ad.LeagueKey("S35", "Diamond", "12 - 2"),
+                week=1,
+                alliance=ad.AllianceKey.of("QQQ", "1234"),
+                week_score=7,
+            )
+        ],
+        actor={"discord_user_id": "42", "discord_name": "Someone", "guild_id": GUILD},
+    )
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == [GUILD]
+    assert result["alliance_duel"]["scrubbed"].get("alliance_weeks") == 1
+    stored = vsdb.weeks_for_alliance(ad.AllianceKey.of("QQQ", "1234"))
+    assert stored[0]["week_score"] == 7, "the league went with the attribution"
+    assert stored[0]["actor_guild_id"] is None

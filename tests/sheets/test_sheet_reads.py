@@ -171,6 +171,7 @@ class TestGrowthSnapshotWrites:
         from config import save_growth_config, get_config, save_config
         from unittest.mock import patch
         from datetime import datetime
+        from growth import ET
 
         source_ws = fresh_tab
         growth_ws, g_name = growth_tab
@@ -209,7 +210,11 @@ class TestGrowthSnapshotWrites:
         assert len(all_vals) >= 1, "Growth tab should have data"
 
         header = all_vals[0]
-        month_label = datetime.now().strftime("%b %Y")
+        # ET, because that is the clock `growth.py` labels the column on.
+        # A naive read here is the runner's, and the two disagree for the
+        # four hours after 00:00 UTC -- which on the first of a month is a
+        # different label entirely.
+        month_label = datetime.now(tz=ET).strftime("%b %Y")
         col_name = f"Power ({month_label})"
 
         assert "Name" in header, f"Header should contain Name: {header}"
@@ -225,6 +230,7 @@ class TestGrowthSnapshotWrites:
         from config import save_growth_config
         from unittest.mock import patch
         from datetime import datetime
+        from growth import ET
 
         source_ws = fresh_tab
         growth_ws, g_name = growth_tab
@@ -259,7 +265,11 @@ class TestGrowthSnapshotWrites:
             _run_growth_snapshot_inner(TEST_GUILD_ID)
 
         time.sleep(1)
-        month_label = datetime.now().strftime("%b %Y")
+        # ET, because that is the clock `growth.py` labels the column on.
+        # A naive read here is the runner's, and the two disagree for the
+        # four hours after 00:00 UTC -- which on the first of a month is a
+        # different label entirely.
+        month_label = datetime.now(tz=ET).strftime("%b %Y")
         header = growth_ws.row_values(1)
         col_name = f"Power ({month_label})"
         count = header.count(col_name)

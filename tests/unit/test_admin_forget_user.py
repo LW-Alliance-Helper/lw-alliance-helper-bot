@@ -36,6 +36,23 @@ def cd_temp_db(tmp_path, monkeypatch):
     return None
 
 
+@pytest.fixture(autouse=True)
+def vs_temp_db(tmp_path, monkeypatch):
+    """VS scores are the third store a person can appear in (#544).
+
+    Autouse, unlike the two above. A removal test that leaves one store on its
+    real path does not fail loudly -- the store reports an error, the operator
+    is told a database could not be reached, and the assertion that breaks is
+    about a button rather than about the database. Every test in this file
+    wants all three stubbed.
+    """
+    import alliance_duel_db as vs_db
+
+    monkeypatch.setattr(vs_db, "DB_PATH", str(tmp_path / "alliance_duel.sqlite3"))
+    vs_db.init_db()
+    return None
+
+
 @pytest.fixture
 def admin_module():
     """`bot_admin`, which binds `bot_state.bot` at import time.

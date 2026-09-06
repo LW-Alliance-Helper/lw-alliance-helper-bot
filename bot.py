@@ -265,15 +265,33 @@ async def on_ready():
     init_db()
 
     # Champion Duel keeps its own database file on the same volume — global
-    # tournament data rather than per-guild config, with its own lifecycle
-    # (it can be wiped between qualifiers and semifinals). Failure here must
-    # not stop the bot: it is one feature, and everything else still works.
+    # tournament data rather than per-guild config. Failure here must not stop
+    # the bot: it is one feature, and everything else still works.
+    #
+    # It used to say this file "can be wiped between qualifiers and semifinals".
+    # That has not been true since #495: `import_registrants` writes a row's
+    # group and rank to one round of one grouping precisely so loading the
+    # semifinal draw leaves every qualifier group intact, and there is no wipe
+    # path in the module. The line was read as a lifecycle guarantee while
+    # deciding where VS scores should live (#544), so it is corrected here
+    # rather than left to mislead the next reader.
     try:
         import champion_duel_db
 
         champion_duel_db.init_db()
     except Exception as e:  # noqa: BLE001 - one feature must not block startup
         print(f"[CHAMPION_DUEL] Database init failed, feature degraded: {e}")
+
+    # VS scores (#544). Its own file for the same reason Champion Duel has one:
+    # game-world records keyed to the in-game alliance rather than per-guild
+    # config. Separate from Champion Duel's because a league season and a
+    # tournament are different grains, not because either gets wiped.
+    try:
+        import alliance_duel_db
+
+        alliance_duel_db.init_db()
+    except Exception as e:  # noqa: BLE001 - one feature must not block startup
+        print(f"[VS] Score database init failed, central scores degraded: {e}")
 
     # Precomputed odds. Its own try/except rather than sharing the one above:
     # every row in that table is derivable from the rows next to it, so a store
@@ -1033,7 +1051,8 @@ async def guild_removal_sweep_task():
             print(
                 f"[REMOVAL] Purged {len(result['guilds'])} held server(s): "
                 f"config={result['config']['deleted']} "
-                f"champion_duel={result['champion_duel']}"
+                f"champion_duel={result['champion_duel']} "
+                f"alliance_duel={result['alliance_duel']}"
             )
         if result["rejoined"]:
             print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")

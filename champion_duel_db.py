@@ -262,6 +262,22 @@ PHASES = (
 # How long a whole Champion Duel runs, from the first day of sign-up.
 EVENT_DAYS = PHASES[-1][2]
 
+#: The highest warzone the game has, and the reason it is a constant rather than
+#: a magic number. Kevin, 2026-09-06: *"the highest server is 2308 and the game
+#: devs have said they are holding to that as the last server while trying to
+#: backfill older ones."*
+#:
+#: **It moves when the game does, and nothing here will notice.** A cap that is
+#: one behind the game refuses real data, so this is the first thing to check if
+#: a member ever reports that a legitimate warzone was rejected.
+#:
+#: **Deliberately not enforced in `_server` or `parse_warzones`.** Both are on
+#: the import path and the paste parser, where an out-of-range number means a
+#: misread line rather than a wrong answer, and silently dropping one there
+#: loses data instead of refusing it. The check belongs where a person types a
+#: warzone on purpose.
+MAX_WARZONE = 2308
+
 # A grouping is exactly this many warzones. The game shows them as one line
 # ("Participating Warzone: #773, #800, ...") and the set is the grouping's
 # identity -- the order the game lists them in is arbitrary.
@@ -340,6 +356,26 @@ def _server(value) -> str | None:
         return None
     s = str(value).strip().lstrip("#")
     return s or None
+
+
+def impossible_warzones(warzones) -> list[str]:
+    """The ones the game cannot have, in the order they were given.
+
+    A list rather than a boolean, because a refusal that cannot say *which* of
+    sixteen numbers is wrong leaves the reader checking all of them.
+
+    Non-numeric input is not impossible, it is unreadable, and `parse_warzones`
+    has already dropped it by the time this is asked. Zero and below are, and
+    they arrive from a stray minus or a lone `0` as easily as a big number does.
+    """
+    out = []
+    for warzone in warzones or []:
+        zone = _server(warzone)
+        if not zone or not zone.isdigit():
+            continue
+        if not 1 <= int(zone) <= MAX_WARZONE:
+            out.append(zone)
+    return out
 
 
 def warzone_key(value) -> str | None:
@@ -1000,6 +1036,8 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(discord_user_id)",
             "CREATE INDEX IF NOT EXISTS ix_stages_stage ON registrant_stages(stage, grp)",
             "CREATE INDEX IF NOT EXISTS ix_gw_warzone ON grouping_warzones(warzone)",
+            # The table's only read, and its only write predicate on removal.
+            "CREATE INDEX IF NOT EXISTS ix_readers_guild ON grouping_readers(guild_id)",
             "CREATE INDEX IF NOT EXISTS ix_groups_lookup ON groups(grouping_id, stage, label)",
             "CREATE INDEX IF NOT EXISTS ix_gm_registrant ON group_members(registrant_id)",
         ):
@@ -1373,7 +1411,12 @@ def parse_warzones(text, *, unique: bool = True) -> list[str]:
 #: one is better, not just that both are allowed.
 _IMPOSSIBLE, _POSSIBLE, _TYPICAL, _KNOWN, _OURS = 0, 2, 4, 6, 8
 
-_WARZONE_MAX = 9_999
+#: **Was 9,999, and is `MAX_WARZONE` since 2026-09-06.** This is the paste
+#: parser's own plausibility bound and it predates knowing the real ceiling, so
+#: it guessed high on purpose. Now that the game's last server is a fact rather
+#: than an inference, guessing high only means a five-digit score can still
+#: score as a warzone.
+_WARZONE_MAX = MAX_WARZONE
 #: Every warzone in every grouping we hold is three digits, and the only four
 #: digit one on record is a test case. One and two digit warzones exist in the
 #: game, so they are possible; they are just not what a Champion Duel line
@@ -1960,6 +2003,142 @@ class MergeRefused(Exception):
     """The merge was not attempted, because the two are not a conflict."""
 
 
+#: Why a correction was refused, where the caller has to tell the two apart.
+#: **They are not the same refusal and must not read as one**: the first is
+#: "somebody recorded into it", the second is "the list you typed collides with
+#: a third Champion Duel", and reporting the second as the first tells a member
+#: their data changed when it did not.
+CLASHES_ELSEWHERE = "clashes-elsewhere"
+
+
+class NotCorrectable(Exception):
+    """This grouping is not one its enterer may still fix.
+
+    Carries `CLASHES_ELSEWHERE` as its only argument where the refusal is about
+    the replacement rather than the row, so the surface can say which.
+    """
+
+
+def correctable_by(grouping_id: int, guild_id) -> bool:
+    """Is this a set this server entered and nobody has recorded anything into?
+
+    **The narrowest possible yes.** A member who mistypes one digit of their own
+    sixteen creates a grouping they are not in, and every correct re-entry then
+    collides with it forever -- `overlapping_groupings` sees a real conflict and
+    `_report_conflict` correctly refuses, because the bot has no opinion about
+    whose list is wrong (`UX.md` principle 6).
+
+    It has one here, and only here. Where the colliding set was entered **by
+    this same server** and holds no group, no player, no result and no other
+    server's pin, there is no second alliance and no data: it is one member's
+    typo and it is theirs to fix. Anything else stays a conflict.
+    """
+    with _get_conn() as conn:
+        return _correctable(conn, grouping_id, guild_id)
+
+
+def _correctable(conn, grouping_id, guild_id) -> bool:
+    """`correctable_by`'s body, on a caller's connection.
+
+    Split out so `correct_grouping` can ask the same question **inside its own
+    write lock** rather than through a second connection that commits first.
+    `add_to_slate` takes the identical shape for the identical reason.
+    """
+    if grouping_id is None or not guild_id:
+        return False
+    row = conn.execute(
+        "SELECT created_by_guild_id, origin FROM groupings WHERE id = ?", (grouping_id,)
+    ).fetchone()
+    gid = _text(guild_id)
+    if row is None or row["created_by_guild_id"] != gid or row["origin"] != "member":
+        return False
+    held = conn.execute(
+        "SELECT ("
+        "  SELECT COUNT(*) FROM groups WHERE grouping_id = :g"
+        ") + ("
+        "  SELECT COUNT(*) FROM group_members m JOIN groups g ON g.id = m.group_id"
+        "  WHERE g.grouping_id = :g"
+        ") + ("
+        # **Every pin BUT the caller's own.** `grouping_counts` counts them all,
+        # and using it here was a hole rather than a nicety: entering your
+        # sixteen pins your server to what it produces, so a typo in any of the
+        # other fifteen -- the common case -- left your own pin sitting on the
+        # row and made it look occupied to you alone. Somebody else's pin is a
+        # real reason to refuse; your own is the thing you are trying to undo.
+        "  SELECT COUNT(*) FROM guild_warzone"
+        "  WHERE confirmed_grouping_id = :g AND guild_id <> :gid"
+        ") AS n",
+        {"g": grouping_id, "gid": gid},
+    ).fetchone()["n"]
+    return held == 0
+
+
+def correct_grouping(grouping_id: int, warzones, started_on=None, *, guild_id=None) -> dict:
+    """Replace an empty grouping's sixteen with the ones that were meant.
+
+    **An UPDATE, never a delete and a create.** The row's id is referenced by
+    `grouping_readers` and can be referenced by `guild_warzone
+    .confirmed_grouping_id`, and both of those are about *this server's own
+    Champion Duel* -- which is what this still is, correctly spelled. Keeping
+    the id keeps them true; deleting would cascade one away and strand the
+    other.
+
+    Re-checks `correctable_by` itself rather than trusting the caller. The
+    surface that offers this reads the state, renders a button and waits for a
+    press, and a group can be recorded into that window.
+    """
+    zones = sorted(
+        {
+            z
+            for z in (
+                parse_warzones(warzones)
+                if isinstance(warzones, str)
+                else [_server(w) for w in warzones]
+            )
+            if z
+        },
+        key=int,
+    )
+    if not zones:
+        raise ValueError("a grouping needs at least one warzone")
+
+    # **The replacement must not create the next conflict.** Correcting one
+    # typo into a set that overlaps a THIRD grouping would leave a contradiction
+    # nobody can reach a button for, and `_report_conflict` only ever forwards
+    # the first overlap it found -- so the surface cannot know about the others.
+    # Checked here rather than there because this is the write.
+    clash = next(
+        (
+            g
+            for g, _ in overlapping_groupings(zones, started_on)
+            if g["id"] != grouping_id and set(g["warzones"]) != set(zones)
+        ),
+        None,
+    )
+    if clash is not None:
+        raise NotCorrectable(CLASHES_ELSEWHERE)
+
+    now = _now()
+    with _get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # Re-asked INSIDE the lock. The surface read this, drew a button and
+        # waited, and a group can be recorded into that window -- at which point
+        # the row stops being an empty typo and becomes somebody's data.
+        if not _correctable(conn, grouping_id, guild_id):
+            raise NotCorrectable("that Champion Duel is not one this server can still correct")
+        conn.execute("DELETE FROM grouping_warzones WHERE grouping_id = ?", (grouping_id,))
+        conn.executemany(
+            "INSERT INTO grouping_warzones (grouping_id, warzone, source) VALUES (?, ?, 'claim')",
+            [(grouping_id, z) for z in zones],
+        )
+        conn.execute(
+            "UPDATE groupings SET started_on = ?, updated_at = ? WHERE id = ?",
+            (started_on, now, grouping_id),
+        )
+    print(f"[CHAMPION_DUEL] corrected grouping {grouping_id} for guild {guild_id}")
+    return get_grouping(grouping_id)
+
+
 def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
     """Fold `source` into `target` and delete it. Not revertable.
 
@@ -2004,6 +2183,7 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
         "unchanged": 0,
         "guilds": 0,
         "unpinned": 0,
+        "readers": 0,
         "dropped_warzones": sorted(set(source["warzones"]) - set(target["warzones"]), key=int),
     }
     with _get_conn() as conn:
@@ -2099,6 +2279,20 @@ def merge_groupings(source_id: int, target_id: int, *, actor=None) -> dict:
                     (now, row["guild_id"]),
                 )
                 moved["unpinned"] += 1
+
+        # Readers move rather than cascading away. A server that recorded a
+        # Champion Duel it was sent has no warzone in it, so this row is its
+        # ONLY path back -- losing it is the exact dead end the table exists to
+        # close, and the DELETE below would take it silently.
+        #
+        # `INSERT OR IGNORE` because a server can already read the target: it
+        # was sent both, or it is in one and was sent the other. Two sources,
+        # one row, the same rule `groupings_readable_by` reads them under.
+        moved["readers"] = conn.execute(
+            "INSERT OR IGNORE INTO grouping_readers (grouping_id, guild_id, created_at) "
+            "SELECT ?, guild_id, created_at FROM grouping_readers WHERE grouping_id = ?",
+            (target_id, source_id),
+        ).rowcount
 
         # CASCADE takes this grouping's own warzones, groups and members with
         # it. Everything worth keeping has already been copied across.
@@ -5487,6 +5681,15 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     # never showed these to anybody, the guild made them up. `pick_meetings`
     # cascades from here, and `foreign_keys` is ON for this connection.
     ("pick_slates", "guild_id = :gid"),
+    # Which Champion Duels this server holds a record of beyond its own. Pure
+    # server bookkeeping -- the row is (grouping, guild) and says nothing about
+    # any person -- and it is the server's, so it goes when the server does.
+    #
+    # **Deleted rather than scrubbed**, unlike the rows above it: those keep a
+    # fact about the tournament and drop only who entered it, and there is no
+    # such fact here. A reader row with its guild nulled would be a link from a
+    # Champion Duel to nobody.
+    ("grouping_readers", "guild_id = :gid"),
 )
 
 _GUILD_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (

@@ -1963,6 +1963,59 @@ async def test_fifteen_warzones_is_refused_naming_the_count(cd_db, no_mm_link):
     assert len(db.list_groupings()) == 1
 
 
+async def test_a_warzone_the_game_does_not_have_is_refused(cd_db, no_mm_link):
+    """Kevin, 2026-09-06: *"the highest server is 2308 and the game devs have
+    said they are holding to that as the last server."* A number above it is a
+    certain typo, not a warzone we have not seen."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15] + ["2309"]))
+
+    said = _sent(interaction)
+    assert "**2309**" in said
+    assert f"**{db.MAX_WARZONE}**" in said
+    assert db.find_grouping_by_warzone("700") is None, "nothing saved"
+
+
+async def test_the_impossible_check_runs_before_the_count(cd_db, no_mm_link):
+    """A number the game cannot have is the real fault, and the count is only a
+    symptom: telling somebody they typed seventeen warzones when one of them is
+    23088 sends them counting rather than looking."""
+    interaction = await _add_grouping(" ".join(SIXTEEN + ["23088"]))
+
+    said = _sent(interaction)
+    assert "**23088**" in said
+    assert "17 warzones" not in said
+
+
+async def test_every_impossible_number_is_named_not_just_the_first(cd_db, no_mm_link):
+    """One wrong digit among sixteen is hard enough to find without being told
+    only that one of them is wrong."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:14] + ["2400", "9001"]))
+
+    said = _sent(interaction)
+    assert "**2400**" in said and "**9001**" in said
+    assert "are higher" in said, "the verb agrees"
+
+
+async def test_the_boundary_itself_is_a_real_warzone(cd_db, no_mm_link):
+    """2308 is the last one the game has, not the first one it does not."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:15] + ["2308"]))
+
+    assert "higher than any warzone" not in _sent(interaction)
+    assert db.find_grouping_by_warzone("2308") is not None
+
+
+async def test_your_own_warzone_is_checked_too(cd_db, no_mm_link):
+    """The other place a person types one on purpose."""
+    modal = hub._WarzoneModal(can_write=True, current=None)
+    modal.warzone._value = "2309"
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)
+
+    assert "**2309**" in _sent(interaction)
+    assert db.get_guild_warzone("999") is None
+
+
 async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no_mm_link):
     """Sixteen numbers with one typed twice dedupe to sixteen, and would
     otherwise be accepted as a complete grouping that is short one warzone."""
@@ -1972,15 +2025,42 @@ async def test_a_repeated_warzone_is_named_rather_than_quietly_deduped(cd_db, no
     assert len(db.list_groupings()) == 1
 
 
-async def test_a_grouping_without_your_own_warzone_is_refused(cd_db, no_mm_link):
-    """One of the two answers is off and there is no way to tell which from
-    here. Neither half of that is stated as the user's mistake."""
+async def test_a_grouping_without_your_own_warzone_is_said_not_refused(cd_db, no_mm_link):
+    """**This was a refusal until 2026-09-01.** Kevin: *"I would just say that
+    their known warzone is not in the list but don't gate anything on it."*
+
+    The refusal existed to stop a server being pinned to a Champion Duel it is
+    not in, and the pin works that out for itself now. What was left refused the
+    thing the control is for: recording a Champion Duel you were sent.
+    """
     interaction = await _add_grouping(" ".join(SIXTEEN), warzone="1500")
 
     said = _sent(interaction)
-    assert "**1500**, is not in that list" in said
-    assert "wrong" not in said, "an incorrect stored value is not a user error"
-    assert len(db.list_groupings()) == 1
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="1500") in said
+    assert "Try again" not in said, "an aside, not a refusal"
+    assert db.find_grouping_by_warzone("700") is not None, "saved anyway"
+
+
+async def test_the_aside_is_absent_when_your_warzone_is_in_the_list(cd_db, no_mm_link):
+    """It is only for the reader who did not mean this. Printing it on every
+    entry would make the one case it exists for invisible."""
+    interaction = await _add_grouping(" ".join(SIXTEEN), warzone="700")
+
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") not in _sent(interaction)
+    assert "Heads up" not in _sent(interaction)
+
+
+async def test_the_aside_rides_under_a_champion_duel_you_were_sent_too(cd_db, no_mm_link):
+    """Joining a set somebody else entered says nothing about whether your own
+    warzone is in it, so both branches carry it."""
+    theirs = [str(900 + i) for i in range(db.GROUPING_SIZE)]
+    db.create_grouping(theirs, "2026-08-04", origin="member")
+
+    interaction = await _add_sent(" ".join(theirs), warzone="700")
+
+    said = _sent(interaction)
+    assert "already been entered" in said
+    assert hub.CD_NOT_YOUR_WARZONE.format(warzone="700") in said
 
 
 async def test_the_game_formatting_goes_in_as_it_is_read(cd_db, no_mm_link):
@@ -2048,6 +2128,209 @@ async def test_a_newer_champion_duel_still_confirms_the_warzone(cd_db, no_mm_lin
     made = db.find_grouping_by_warzone("700")
     assert made["started_on"] == "2026-08-04", "the newest is what resolves"
     assert db.get_guild_warzone("999")["confirmed_grouping_id"] == made["id"]
+
+
+async def test_a_typo_on_your_own_sixteen_can_be_undone(cd_db, no_mm_link):
+    """**The trap this closes, walked end to end.** One digit wrong stored a
+    grouping the member was not in; every correct re-entry then collided with
+    it, `Edit and try again` resubmitted into the same conflict, and the only
+    stated exit was an operator running the merge tool.
+
+    Kevin, 2026-09-05, choosing the fix over restoring the old refusal:
+    *"Yes take the second option."*
+    """
+    db.set_guild_warzone("999", "700")
+    # A dropped digit, not an impossible number: `MAX_WARZONE` refuses anything
+    # over 2308 before this branch is reached, so the typo a member can actually
+    # store is one that still looks like a warzone.
+    typo = ["70"] + SIXTEEN[1:]
+
+    await _add_grouping(" ".join(typo))
+    assert db.find_grouping_by_warzone("70") is not None, "the typo is stored"
+
+    # The correct sixteen now collide with it.
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING in _labels(view)
+    assert hub.CD_BTN_COMMUNITY not in _labels(view), "not an operator's job"
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert db.find_grouping_by_warzone("70") is None, "the typo is gone"
+    assert db.find_grouping_by_warzone("700")["warzones"] == SIXTEEN
+    assert len(db.list_groupings()) == 2, "corrected in place, not forked"
+
+
+async def test_the_common_typo_is_the_one_in_somebody_elses_number(cd_db, no_mm_link):
+    """**The case the first version of this could not fix**, and it is the
+    likelier one: the digit that goes wrong is usually not your own warzone.
+
+    Entering a set that contains your warzone pins your server to it, so the
+    typo row carried your own pin -- and counting pins at all made it look
+    occupied to the one person entitled to replace it. Somebody else's pin is a
+    reason to refuse. Your own is the thing you are undoing.
+    """
+    db.set_guild_warzone("999", "700")
+    typo = SIXTEEN[:5] + ["750"] + SIXTEEN[6:]  # 705 transposed
+
+    await _add_grouping(" ".join(typo))
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is not None, "pinned to the typo"
+
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING in _labels(view)
+
+    await view._on_replace(_interaction())
+
+    assert db.find_grouping_by_warzone("700")["warzones"] == SIXTEEN
+    assert db.find_grouping_by_warzone("750") is None
+
+
+async def test_the_replace_leaves_the_server_confirmed_on_it(cd_db, no_mm_link):
+    """Correcting the sixteen makes this the Champion Duel the hub resolves to,
+    so it has to be confirmed as well as written. Without it the member lands
+    on "is warzone 700 yours?", which is the re-ask #560 exists to stop.
+
+    **The typo has to be in the caller's OWN warzone for this to bite**, and
+    the first version of this test used one of the other fifteen -- where the
+    entry pinned the server on the way in, the correction is in place, and the
+    pin therefore already points at the right row. It passed with the fix
+    removed. Here 700 was never in the stored set, so nothing pinned it.
+    """
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] is None, "never pinned"
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    resolved = db.resolve_grouping_for_guild("999")
+    assert db.get_guild_warzone("999")["confirmed_grouping_id"] == resolved["id"]
+    assert not db.needs_warzone_confirmation("999", resolved["id"])
+    assert not isinstance(_view(pressed), hub._ConfirmWarzoneView)
+
+
+async def test_a_replace_that_would_collide_with_a_third_list_is_refused(cd_db, no_mm_link):
+    """Correcting one conflict into another leaves a contradiction with no
+    button on it: `_report_conflict` only ever forwards the first overlap it
+    found, so the surface cannot warn about the rest."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN))
+    mine = db.find_grouping_by_warzone("700")
+    theirs = db.create_grouping(
+        [str(900 + i) for i in range(db.GROUPING_SIZE)], "2026-08-04", origin="member"
+    )
+
+    with pytest.raises(db.NotCorrectable):
+        db.correct_grouping(
+            mine["id"], theirs["warzones"][:15] + ["999"], "2026-08-04", guild_id="999"
+        )
+
+    assert db.get_grouping(mine["id"])["warzones"] == SIXTEEN, "nothing was written"
+
+
+async def test_the_replace_button_is_spent_after_it_works(cd_db, no_mm_link):
+    """The write is not idempotent: a second press re-runs it and posts a second
+    hub. `notes/DESIGN.md` says a control that can no longer change anything is
+    worse than none."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN[:5] + ["750"] + SIXTEEN[6:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    await view._on_replace(_interaction())
+
+    assert view.is_finished(), "stopped, so a double tap cannot re-run the write"
+
+
+async def test_a_third_list_clash_does_not_claim_your_data_changed(cd_db, no_mm_link):
+    """Two refusals, two messages. Saying "somebody recorded into it" when the
+    real problem is the list they typed tells a member their data changed when
+    it did not, which is worse than saying nothing."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+    mine = db.find_grouping_by_warzone("70")
+    db.create_grouping(["900", "901", "902"], "2026-08-04", origin="member")
+
+    # A PARTIAL overlap. An exact set match is agreement rather than a clash and
+    # is deliberately exempt, so replacing into one would simply succeed.
+    view.replace = (mine["id"], ["900", "901", "999"], "2026-08-04")
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert _sent(pressed) == hub._CONFLICT_CLASHES_ELSEWHERE
+    assert _sent(pressed) != hub._CONFLICT_NO_LONGER_EMPTY
+
+
+async def test_one_bad_number_typed_twice_is_named_once(cd_db, no_mm_link):
+    """It is one wrong number. Naming it twice made the verb agree with the
+    duplicate rather than with the fault."""
+    interaction = await _add_grouping(" ".join(SIXTEEN[:14] + ["9001", "9001"]))
+
+    said = _sent(interaction)
+    assert said.count("**9001**") == 1
+    assert " is higher" in said, "one number, singular verb"
+
+
+async def test_the_spent_replace_button_is_visibly_dead(cd_db, no_mm_link):
+    """`stop()` alone leaves both buttons looking live and failing on press,
+    which `notes/DESIGN.md` calls a bug rather than cosmetics."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(SIXTEEN[:5] + ["750"] + SIXTEEN[6:]))
+    view = _view(await _add_grouping(" ".join(SIXTEEN)))
+
+    await view._on_replace(_interaction())
+
+    assert view.is_finished()
+    assert all(child.disabled for child in view.children), "no live control left"
+
+
+async def test_another_alliances_list_is_still_not_yours_to_replace(cd_db, no_mm_link):
+    """The narrowness is the whole safety. A conflict with a set somebody else
+    entered stays refused, and the exit stays the operator."""
+    db.create_grouping(SIXTEEN, "2026-08-04", origin="member", guild_id="777")
+    db.set_guild_warzone("999", "800")
+
+    interaction = await _add_grouping(", ".join(["800"] + SIXTEEN[:15]), warzone="800")
+
+    view = _view(interaction)
+    assert hub.CD_BTN_REPLACE_GROUPING not in _labels(view)
+    assert hub.CD_BTN_COMMUNITY in _labels(view)
+
+
+async def test_a_grouping_with_anything_in_it_is_not_replaceable(cd_db, no_mm_link):
+    """Empty is the test, not authorship. A server can enter a set and then
+    record into it, and at that point it is data rather than a typo."""
+    theirs = db.create_grouping(SIXTEEN, "2026-08-04", origin="member", guild_id="999")
+    group = db.get_or_create_group(theirs["id"], "semifinals", "A")
+    db.set_placement(group["id"], db.upsert_registrant("Alpha", server="700")["id"], seed_rank=1)
+    db.set_guild_warzone("999", "800")
+
+    interaction = await _add_grouping(", ".join(["800"] + SIXTEEN[:15]), warzone="800")
+
+    assert hub.CD_BTN_REPLACE_GROUPING not in _labels(_view(interaction))
+
+
+async def test_a_group_recorded_while_the_conflict_sat_there_stops_the_replace(cd_db, no_mm_link):
+    """The view lives ten minutes. `correct_grouping` re-reads rather than
+    trusting what the embed was built from, so a row that stopped being empty
+    in that window is not overwritten."""
+    db.set_guild_warzone("999", "700")
+    await _add_grouping(" ".join(["70"] + SIXTEEN[1:]))
+    interaction = await _add_grouping(" ".join(SIXTEEN))
+    view = _view(interaction)
+
+    stale = db.find_grouping_by_warzone("70")
+    group = db.get_or_create_group(stale["id"], "semifinals", "A")
+    db.set_placement(group["id"], db.upsert_registrant("Alpha", server="70")["id"], seed_rank=1)
+
+    pressed = _interaction()
+    await view._on_replace(pressed)
+
+    assert _sent(pressed) == hub._CONFLICT_NO_LONGER_EMPTY
+    assert db.find_grouping_by_warzone("70") is not None, "nothing was changed"
 
 
 async def test_an_exact_set_match_joins_rather_than_forking(cd_db, no_mm_link):
@@ -2676,7 +2959,7 @@ async def test_the_finished_hub_is_the_hub(cd_db, no_mm_link):
 async def test_one_control_enters_a_champion_duel_of_either_kind(cd_db, no_mm_link):
     """Two jobs, one control, because `notes/DESIGN.md` rule 7 says so: entering
     your own sixteen and entering a set you were sent are the same act, so both
-    wanted the same glyph and neither had one free. The form asks whose."""
+    wanted the same glyph and neither had one free."""
     _finish_the_champion_duel()
 
     interaction = _interaction()
@@ -3599,36 +3882,46 @@ def _row(view, n):
     return [i.label for i in view.children if getattr(i, "row", None) == n]
 
 
-def test_the_front_row_is_the_four_questions_and_nothing_else():
-    """Eight controls become four entries plus settings.
+def test_the_front_row_is_yours():
+    """**Kevin's rows, 2026-09-01: row 0 is all of YOUR stuff.**
 
-    The four are the four questions `PROPOSAL_champion_duel_ia.md` traced, in
-    the order it asks them, and they are the whole of the front row. Kevin
-    opened this hub, could not find the most valuable thing on it, and asked
-    for the information architecture to be revisited: the fix is that the four
-    things anybody comes here for are the first four things they see.
+    It replaces "the four questions", which mixed the personal (`Your standing`,
+    `Your alliance`) with two surfaces about anybody (`Head to head`,
+    `Today's picks`). Row 0 is now the only dynamic row: what it draws depends
+    on whether we can pick the reader out of the roster.
     """
-    view = _root(grouping={"id": 1})
+    unknown = _root(grouping={"id": 1})
+    known = _root(grouping={"id": 1}, standing={"state": "held"})
 
-    assert _row(view, 0) == [
+    assert _row(unknown, 0) == [
         hub.CD_BTN_WHO_AM_I,
-        hub.CD_BTN_INTEL,
-        hub.CD_BTN_PICKS,
         hub.CD_BTN_ALLIANCE,
+        hub.CD_BTN_GROUP,
     ]
+    # The group goes when we know you, because you reach it through yourself.
+    assert _row(known, 0) == [hub.CD_BTN_STANDING, hub.CD_BTN_ALLIANCE]
 
 
-def test_the_second_row_is_looking_someone_up_contributing_and_the_settings():
-    """Demoted, not deleted. Finding a player is how you reach an opponent and
-    is the gap-fill door; recording a group is batch contribution; changing the
-    warzone is the settings half of "four entries plus settings"."""
-    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
+def test_the_rows_are_kinds_of_thing_not_ranks_of_importance():
+    """Kevin's layout, 2026-09-01, and the rows are the reasoning: 1 is what
+    you open every day, 2 is global, 3 is adding and editing, 4 is the
+    operator.
 
-    assert _row(view, 1) == [
-        hub.CD_BTN_FIND,
+    **Row 1 is NOT the Premium row**, which was the first reading of it. Only
+    `Head to head` is gated at the door; `Today's picks` is free, and the odds
+    gate sits inside three of row 0's surfaces. Premium here is a field, not a
+    tier of buttons.
+    """
+    view = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"}, is_admin=True)
+
+    assert _row(view, 1) == [hub.CD_BTN_INTEL, hub.CD_BTN_PICKS]
+    assert _row(view, 2) == [hub.CD_BTN_FIND, hub.CD_BTN_PREDICT]
+    assert _row(view, 3) == [
         hub.CD_BTN_RECORD,
         hub.CD_BTN_CHANGE_WARZONE,
+        hub.CD_BTN_ADD_CD,
     ]
+    assert _row(view, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
 
 
 def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
@@ -3645,10 +3938,11 @@ def test_the_group_listing_stays_on_the_root_until_the_reader_can_reach_it():
     unknown = _root(grouping={"id": 1}, warzone="738")
     known = _root(grouping={"id": 1}, warzone="738", standing={"state": "held"})
 
-    assert hub.CD_BTN_GROUP in _row(unknown, 1)
+    # On row 0 since 2026-09-01, because it is one of *your* things. **The
+    # condition did not move with it** -- Kevin: *"You shouldn't change the
+    # logic for when something displays."*
+    assert hub.CD_BTN_GROUP in _row(unknown, 0)
     assert hub.CD_BTN_GROUP not in _labels(known)
-    # And never a front-row entry either way.
-    assert hub.CD_BTN_GROUP not in _row(unknown, 0)
 
 
 async def test_the_root_group_door_opens_what_it_always_opened(monkeypatch):
@@ -3681,18 +3975,22 @@ def test_no_row_is_over_discords_five(standing):
         assert len(_row(view, n)) <= 5, f"row {n} is over Discord's five"
 
 
-def test_the_operator_row_moves_up_with_everything_else():
-    """Row 2 rather than row 3, because row 2 emptied when the picks control
-    joined the front row. Still hidden entirely from everybody else.
+def test_the_operator_row_is_last_and_hidden_from_everybody_else():
+    """Kevin, 2026-09-01: row 4, *"all admin, least important by far"*.
 
-    Row 3 arrived later and stayed below it on purpose: a row that changes
-    position by state is the muscle-memory cost `notes/DESIGN.md` warns about,
-    and this one would move for the one person who has row 2.
+    It sat on row 2 from the IA rebuild until then, on the reasoning that row 2
+    had emptied. Under the new layout every other row is spoken for, and the
+    operator controls are the ones a member should never have between them and
+    anything they came for.
     """
-    view = _root(grouping={"id": 1}, is_admin=True)
+    admin = _root(grouping={"id": 1}, is_admin=True)
+    member = _root(grouping={"id": 1})
 
-    assert _row(view, 2) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
-    assert _row(view, 3) == [hub.CD_BTN_ADD_CD], "below the operator's, never above"
+    assert _row(admin, 4) == [hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT]
+    assert _row(member, 4) == [], "absent, not disabled"
+    assert not any(
+        b in _labels(member) for b in (hub.CD_BTN_EDITS, hub.CD_BTN_REVERT, hub.CD_BTN_EXPORT)
+    )
 
 
 @pytest.mark.parametrize("standing", [None, {"state": "held"}])
@@ -3730,18 +4028,19 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     )
     root = _labels(view)
 
-    assert hub.CD_BTN_PREDICT not in root
     assert hub.CD_BTN_ADD not in root
     assert hub.CD_BTN_GUIDE not in root
     assert hub.CD_BTN_GROUP not in root
 
-    # Predicting one match: on the card that absorbed it.
+    # **Simulating one match came BACK to the root on 2026-09-01** and is no
+    # longer on the picks bench, so this one is not a moved door at all.
+    assert hub.CD_BTN_PREDICT in root
     picks = hub._PicksView(
         user_id=ADMIN_ID,
         guild_id=999,
         state=hub.read_picks(999, standing_db["grouping"]),
     )
-    assert hub.CD_BTN_PREDICT in _labels(picks)
+    assert hub.CD_BTN_PREDICT not in _labels(picks)
 
     # Adding a player, and the capture guide: at the miss that finding one
     # produces.
@@ -3755,13 +4054,21 @@ def test_every_control_the_old_root_carried_is_still_reachable(standing_db):
     assert hub.CD_BTN_GROUP in _labels(standing)
 
 
-def test_the_one_off_prediction_is_offered_where_the_card_cannot_be():
-    """Predicting one match is absorbed by the day's card and stays reachable
-    there for a one-off. A caller with no Champion Duel resolved has no card to
-    absorb it (a DM never gets one), and predicting two players who have never
-    met is exactly what that caller came for."""
-    assert hub.CD_BTN_PREDICT in _labels(_root(grouping=None))
-    assert hub.CD_BTN_PREDICT not in _labels(_root(grouping={"id": 1}))
+def test_simulating_one_match_is_on_the_root_in_every_state():
+    """Kevin, 2026-09-01: *"I think that it should always be at that root
+    level."*
+
+    It used to be drawn only where `🔮 Today's picks` was not, on the reasoning
+    that the card *absorbs* it. **That reasoning was wrong**: the card answers
+    who to pick today out of this stage's field, and this answers what happens
+    if any two players meet. Same inputs, different questions.
+    """
+    for label, view in (
+        ("DM", _root(grouping=None)),
+        ("in a Duel", _root(grouping={"id": 1})),
+        ("finished", _root(grouping={"id": 1}, finished=True)),
+    ):
+        assert hub.CD_BTN_PREDICT in _labels(view), label
 
 
 def test_the_days_card_is_a_read_and_does_not_lock():

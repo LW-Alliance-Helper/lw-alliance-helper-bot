@@ -223,6 +223,33 @@ def test_a_merge_leaves_nothing_of_the_grouping_it_folded(cd_db):
     assert db.get_group_members(fold["id"]) == []
 
 
+def test_a_merge_carries_the_servers_that_can_read_it(cd_db):
+    """A server that was sent a Champion Duel has no warzone in it, so its
+    `grouping_readers` row is the only path back. `ON DELETE CASCADE` would
+    take that silently, which is the dead end the table exists to close."""
+    a, b = _conflicting_pair()
+    db.note_grouping_reader(b["id"], "999")
+    db.note_grouping_reader(a["id"], "888")
+
+    moved = db.merge_groupings(b["id"], a["id"], actor="tester")
+
+    assert moved["readers"] == 1
+    assert [g["id"] for g in db.groupings_readable_by(None, "999")] == [a["id"]]
+    assert [g["id"] for g in db.groupings_readable_by(None, "888")] == [a["id"]]
+
+
+def test_a_merge_does_not_duplicate_a_server_that_could_read_both(cd_db):
+    """Sent both, or in one and sent the other. Two sources, one row."""
+    a, b = _conflicting_pair()
+    db.note_grouping_reader(a["id"], "999")
+    db.note_grouping_reader(b["id"], "999")
+
+    moved = db.merge_groupings(b["id"], a["id"], actor="tester")
+
+    assert moved["readers"] == 0, "already a reader of the survivor"
+    assert [g["id"] for g in db.groupings_readable_by(None, "999")] == [a["id"]]
+
+
 def test_a_merge_resolves_the_conflict_it_was_called_for(cd_db):
     a, b = _conflicting_pair()
 

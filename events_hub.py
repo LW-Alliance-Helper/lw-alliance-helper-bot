@@ -530,18 +530,29 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
 
 # ── Upcoming events: lifted from the old /events overview ────────────────────
 
+UPCOMING_WINDOW_DAYS = 30
+UPCOMING_MAX_DATES_SHOWN = 12
+
 
 async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
-    """Render the configured event types + their next firing dates.
-    Lifted from the pre-hub /events overview slash so the read-only
-    pre-flight content stays accessible without the subcommand."""
+    """Render the configured event types + every occurrence due in the next
+    UPCOMING_WINDOW_DAYS, so leadership can see what weekday each one lands
+    on (repeating events whose interval isn't a multiple of 7 drift across
+    weekdays cycle to cycle). Lifted from the pre-hub /events overview slash
+    so the read-only pre-flight content stays accessible without the
+    subcommand."""
     from config import get_guild_events
     from scheduler import next_event_dates
 
     events = get_guild_events(interaction.guild_id, active_only=True)
     today = date_cls.today()
+    window_end = today + timedelta(days=UPCOMING_WINDOW_DAYS)
 
-    embed = discord.Embed(title="🔜 Upcoming events", color=discord.Color.blurple())
+    embed = discord.Embed(
+        title="🔜 Upcoming events",
+        description=f"Next {UPCOMING_WINDOW_DAYS} days",
+        color=discord.Color.blurple(),
+    )
 
     if not events:
         embed.description = (
@@ -561,32 +572,36 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
             except (ValueError, TypeError):
                 repeating_lines.append(f"• **{name}** — schedule invalid")
                 continue
-            upcoming = (
-                next_event_dates(
-                    from_date=today,
-                    count=1,
-                    anchor=anchor,
-                    cycle=interval,
-                )
-                if interval > 0
-                else []
+            if interval <= 0:
+                repeating_lines.append(f"• **{name}** — every {interval}d")
+                continue
+
+            fetch_count = UPCOMING_WINDOW_DAYS // interval + 2
+            upcoming = next_event_dates(
+                from_date=today, count=fetch_count, anchor=anchor, cycle=interval
             )
-            if upcoming:
+            in_window = [d for d in upcoming if d <= window_end]
+
+            if in_window:
+                shown = in_window[:UPCOMING_MAX_DATES_SHOWN]
+                date_lines = "\n".join(f"  {d:%a %b} {d.day}" for d in shown)
+                if len(in_window) > UPCOMING_MAX_DATES_SHOWN:
+                    date_lines += f"\n  … +{len(in_window) - UPCOMING_MAX_DATES_SHOWN} more"
+                repeating_lines.append(f"• **{name}** — every {interval}d\n{date_lines}")
+            else:
                 nxt = upcoming[0]
                 days = (nxt - today).days
                 when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
                 repeating_lines.append(
                     f"• **{name}** — every {interval}d, next on {nxt:%a %b} {nxt.day} ({when})"
                 )
-            else:
-                repeating_lines.append(f"• **{name}** — every {interval}d")
         else:
             manual_lines.append(f"• **{name}** — manual entries only")
 
     if repeating_lines:
         embed.add_field(
             name=f"Repeating ({len(repeating_lines)})",
-            value="\n".join(repeating_lines)[:1024],
+            value="\n\n".join(repeating_lines)[:1024],
             inline=False,
         )
     if manual_lines:

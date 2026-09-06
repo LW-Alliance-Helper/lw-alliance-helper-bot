@@ -468,3 +468,74 @@ def test_an_unreadable_week_date_does_not_take_the_row_with_it():
 
     assert rows[0].week_score == 7
     assert rows[0].week_date is None
+
+
+# ── Attribution on a shared row, found by /code-review on the backfill ────────
+#
+# These rows belong to no single guild. Sixteen alliances are in a bracket and
+# any of their servers may hold a row about the same alliance-week, so "who
+# recorded this" cannot be "whoever wrote last".
+
+
+def test_another_servers_attribution_is_not_taken_by_a_passer_by():
+    """The backfill runs on every hub load. A guild merely opening `/vs` used to
+    stamp its own id over the guild that actually recorded the week, and that
+    guild's removal then scrubbed nothing: a Discord id and a display name left
+    behind permanently, which is the obligation #543 exists to meet."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(guild_id=GUILD, discord_id="99"))
+
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor={"guild_id": OTHER_GUILD})
+
+    row = _stored("QQQ")
+    assert row["actor_guild_id"] == str(GUILD), "a passer-by took the attribution"
+    assert row["actor_discord_id"] == "99"
+
+
+def test_the_recording_guilds_removal_still_reaches_the_row():
+    """The half that made the theft serious."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=_actor(guild_id=GUILD, discord_id="99"))
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor={"guild_id": OTHER_GUILD})
+
+    result = vsdb.purge_guild_data(GUILD, apply=True)
+
+    assert result["scrubbed"].get("alliance_weeks") == 1
+    row = _stored("QQQ")
+    assert row["actor_discord_id"] is None and row["actor_name"] is None
+    assert row["week_score"] == 7, "the reading went with the attribution"
+
+
+def test_a_row_nobody_is_attributed_on_can_be_claimed():
+    """A scrubbed or backfilled row has no holder, so the next contributor is
+    free to take it. Otherwise a scrub would make a row permanently
+    unattributable."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor=None)
+
+    vsdb.record_weeks([_row("QQQ", week_outcome="W")], actor=_actor(guild_id=GUILD))
+
+    assert _stored("QQQ")["actor_guild_id"] == str(GUILD)
+
+
+def test_a_guild_can_still_fill_in_the_person_on_its_own_row():
+    """The backfill writes guild-only attribution. When that guild's officer
+    later records through the hub, their id has to land: otherwise the backfill
+    running first would mean the person was never recorded at all."""
+    vsdb.record_weeks([_row("QQQ", week_score=7)], actor={"guild_id": GUILD})
+
+    vsdb.record_weeks(
+        [_row("QQQ", week_outcome="W")], actor=_actor(guild_id=GUILD, discord_id="99", name="Kev")
+    )
+
+    row = _stored("QQQ")
+    assert row["actor_discord_id"] == "99" and row["actor_name"] == "Kev"
+
+
+def test_a_repeat_pass_writes_nothing():
+    """Every hub load runs the backfill over the whole tab. An UPDATE that
+    changes nothing still takes the write lock for the length of the
+    transaction, so a no-op pass has to actually be one."""
+    vsdb.record_weeks([_row("QQQ", week_score=7, power=5_000_000)], actor=_actor())
+    before = _stored("QQQ")["updated_at"]
+
+    vsdb.record_weeks([_row("QQQ", week_score=7, power=5_000_000)], actor=_actor())
+
+    assert _stored("QQQ")["updated_at"] == before, "an unchanged row was rewritten"

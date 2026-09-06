@@ -229,7 +229,7 @@ def record_weeks(rows, *, actor=None) -> dict:
             where = (tag, warzone, season, tier, grp, int(week))
 
             existing = conn.execute(
-                "SELECT id FROM alliance_weeks WHERE tag = ? AND warzone = ? "
+                "SELECT * FROM alliance_weeks WHERE tag = ? AND warzone = ? "
                 "AND season = ? AND tier = ? AND grp = ? AND week = ?",
                 where,
             ).fetchone()
@@ -239,13 +239,27 @@ def record_weeks(rows, *, actor=None) -> dict:
             # guild but not the person -- which is most of them -- would
             # otherwise NULL a name somebody else's save had recorded, and that
             # is the one rule this module exists to keep.
-            for column, value in (
-                ("actor_discord_id", aid),
-                ("actor_name", aname),
-                ("actor_guild_id", aguild),
-            ):
-                if value is not None:
-                    values[column] = value
+            #
+            # **And never over another server's attribution.** These rows are
+            # shared: sixteen alliances are in a bracket and any of their guilds
+            # may hold a row about the same alliance-week. Letting the last
+            # writer take the columns meant a guild merely opening `/vs` stamped
+            # its own id over the guild that actually recorded it, and that
+            # guild's removal then scrubbed nothing -- leaving a Discord id and
+            # a display name behind permanently, which is the exact obligation
+            # #543 exists to meet.
+            #
+            # So: claim an unattributed row, enrich our own, never touch anyone
+            # else's.
+            held = existing["actor_guild_id"] if existing is not None else None
+            if held is None or aguild is None or held == aguild:
+                for column, value in (
+                    ("actor_discord_id", aid),
+                    ("actor_name", aname),
+                    ("actor_guild_id", aguild),
+                ):
+                    if value is not None:
+                        values[column] = value
 
             if existing is None:
                 columns = (
@@ -262,6 +276,11 @@ def record_weeks(rows, *, actor=None) -> dict:
                 week_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             else:
                 week_id = existing["id"]
+                # Drop anything already stored with this value. A repeat pass
+                # over a whole tab is the common case -- every hub load runs the
+                # backfill -- and an UPDATE that changes nothing still takes the
+                # write lock for the length of the transaction.
+                values = {c: v for c, v in values.items() if existing[c] != v}
                 if values:
                     assignments = ", ".join(f"{c} = ?" for c in values)
                     conn.execute(

@@ -1051,23 +1051,37 @@ def shareable(rows: Iterable[AllianceWeek]) -> list[AllianceWeek]:
       score or outcome, a week score or outcome, or a scouting number somebody
       read off the game. A row with nothing but identity and a ranking is the
       skeleton `start_new_league` wrote and says nothing.
-    - **An opponent only comes with a result.** A pairing on a week nobody has
-      recorded may be the one we guessed. Fifteen other alliances have no way
-      to tell our guess from the draw, so an unresolved week contributes its
-      scouting numbers and no opponent.
+    - **An opponent only comes with the week's own result.** A pairing on a week
+      nobody has settled may be the one we guessed, and fifteen other alliances
+      have no way to tell our guess from the draw.
 
-    Returns copies. The caller's rows are the hub's live snapshot and stripping
-    an opponent out of that would blank it on the officer's own screen.
+    **Day data does not settle a pairing, and that is deliberate.** `ScoreModal`
+    opens against `own_match(week)`, which reads the Opponent column -- the
+    model's guess on any week `generate_next_week` wrote. So the first day score
+    of a guessed week would otherwise ship that guess as the draw. Only Week
+    Outcome or Week Score counts, because those are typed after the week
+    finished by somebody who saw who they actually played.
+
+    Returns copies, always, including the day dicts. The caller's rows are the
+    hub's live snapshot: stripping an opponent out of one would blank it on the
+    officer's own screen, and handing out the same dict would let a later write
+    mutate what the hub is rendering from.
     """
     out: list[AllianceWeek] = []
     for row in rows:
-        resolved = bool(
-            row.week_outcome or row.week_score is not None or row.day_outcomes or row.day_scores
-        )
+        settled = bool(row.week_outcome or row.week_score is not None)
+        observed = settled or bool(row.day_outcomes or row.day_scores)
         scouted = row.power is not None or row.members is not None or row.gift_level is not None
-        if not resolved and not scouted:
+        if not observed and not scouted:
             continue
-        out.append(row if resolved else replace(row, opponent=None))
+        out.append(
+            replace(
+                row,
+                opponent=row.opponent if settled else None,
+                day_scores=dict(row.day_scores),
+                day_outcomes=dict(row.day_outcomes),
+            )
+        )
     return out
 
 

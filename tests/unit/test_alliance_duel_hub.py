@@ -1088,3 +1088,38 @@ async def test_a_store_that_will_not_open_does_not_cost_the_hub(monkeypatch):
     ]
 
     await hub.contribute_snapshot(_state(rows))  # must not raise
+
+
+def test_a_day_score_does_not_settle_the_pairing():
+    """`ScoreModal` opens against `own_match(week)`, which reads the Opponent
+    column: the model's guess on any week `generate_next_week` wrote. So the
+    first day score of a guessed week would ship that guess as the draw. Only a
+    week result settles it, because that is typed after the week finished by
+    somebody who saw who they actually played."""
+    rows = _skeleton()
+    for row in rows:
+        if row.alliance == ad.AllianceKey.of("A03", "1234"):
+            row.day_scores = {1: 120}
+            row.opponent = ad.AllianceKey.of("A04", "1234")  # still the guess
+
+    shared = ad.shareable(rows)
+
+    assert len(shared) == 1
+    assert shared[0].day_scores == {1: 120}, "the score was thrown out with the guess"
+    assert shared[0].opponent is None, "a day score promoted a guess to the draw"
+
+
+def test_shareable_hands_back_copies_all_the_way_down():
+    """Every row, not just the ones it edits, and the day dicts with them. The
+    caller's list is the hub's live snapshot."""
+    rows = _skeleton()
+    target = next(r for r in rows if r.alliance == ad.AllianceKey.of("A03", "1234"))
+    target.week_outcome = "W"
+    target.day_scores = {1: 120}
+
+    shared = ad.shareable(rows)
+
+    assert shared[0] is not target, "a settled row came back by reference"
+    assert shared[0].day_scores is not target.day_scores, "the day dict is shared"
+    shared[0].day_scores[2] = 999
+    assert target.day_scores == {1: 120}, "mutating the copy reached the snapshot"

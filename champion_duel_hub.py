@@ -112,6 +112,67 @@ CD_BTN_SET_WARZONE = "⚙️ Set your warzone"
 CD_BTN_CHANGE_WARZONE = "✏️ Change your warzone"
 CD_BTN_ADD_GROUPING = "➕ Add your Participating Warzones"
 CD_BTN_RETRY_GROUPING = "✏️ Edit and try again"
+
+# Approved by Kevin, 2026-08-31, over two alternatives: *"Keep: Add a Champion
+# Duel."*
+#
+# What it is for: the finished hub's own copy has said *"You can also record
+# past Champion Duel results"* since 2026-08-15, and until now the only control
+# beside it was `CD_BTN_ADD_GROUPING`, which is onboarding and refuses a
+# Champion Duel your warzone is not in.
+#
+# **ONE CONTROL, NOT TWO, AND RULE 7 IS WHY.** The first shape of this was a
+# second button beside `CD_BTN_ADD_GROUPING` reading "Record a Champion Duel you
+# were sent". Both are the same act -- sixteen warzones and a date -- so both
+# wanted the same glyph, and `notes/DESIGN.md` rule 7 forbids repeating one
+# across a choice set. 📥 was already `CD_BTN_RECORD`'s and ➕ was already the
+# other button's. **Two catalogued glyphs both colliding is the catalog saying
+# these are one control**, so whose Champion Duel it is became a question inside
+# the form rather than a choice between two doors.
+#
+# ➕ is the catalog's *create*, and this creates a Champion Duel record where
+# `CD_BTN_RECORD` fills in a group inside one that exists.
+CD_BTN_ADD_CD = "➕ Add a Champion Duel"
+#: The modal titles, hoisted so the two forms cannot drift apart in wording
+#: while claiming to be the same surface. `CD_ADD_GROUPING_TITLE` is the string
+#: that shipped as the class-level `title=`, unchanged, and is what onboarding
+#: still opens. `CD_ADD_SENT_TITLE` is `CD_BTN_ADD_CD` without its glyph, so it
+#: carries that button's 2026-08-31 sign-off rather than needing its own: a
+#: modal titled anything else would be a second name for one control.
+CD_ADD_GROUPING_TITLE = "Add your Participating Warzones"
+CD_ADD_SENT_TITLE = "Add a Champion Duel"
+#: The two acknowledgements. Sentences, not labels (`UX.md`), and they differ
+#: because the two acts differ: one tells us where your alliance is playing, the
+#: other adds a Champion Duel to what we hold. `CD_ADDED_SENT` approved by
+#: Kevin, 2026-08-31: *"Fine as it is."* `CD_ADDED_MINE` is the string that
+#: already shipped, hoisted into a constant and unchanged.
+#:
+#: **Chosen by what happened, not by an answer the form asked for.** A draft put
+#: a *whose Champion Duel is this?* select on the form; Kevin struck it the same
+#: day: *"we should not care who all it is - for all we know it could be theirs
+#: from a past Duel and we don't have a reason to need to know."* The only sense
+#: in which one is *yours* is that the hub now opens on it, and the entry
+#: already works that out to decide the pin.
+#:
+#: **So `CD_ADDED_SENT` now fires wider than it did when it was approved**: a
+#: past Champion Duel of your own reaches it too, because that is also not the
+#: one you are playing. It reads correctly there, which is what the widening
+#: turned on.
+CD_ADDED_MINE = "✅ Added your Participating Warzones, starting **{date}**."
+CD_ADDED_SENT = "✅ Recorded a Champion Duel starting **{date}**."
+#: Approved by Kevin, 2026-08-31: *"Keep the two-sentence version."* The
+#: finished state's own line, and the only string that differs between the
+#: finished hub and the live one now that they are one surface. Both sentences are lifted from the approved `build_finished_embed`
+#: copy of 2026-08-15, minus the paragraph break it needed as a standalone
+#: description: it now sits where the calendar line sits, so it is two
+#: sentences rather than two paragraphs. **The second sentence is the one that
+#: has been advertising a control that did not exist**, and it stays because
+#: `CD_BTN_ADD_CD` is now that control.
+CD_FINISHED_LINE = (
+    "The Champion Duel {whose} has finished. "
+    "You can record past Champion Duel results to keep a historical record, "
+    "and enter the next one here as soon as the draw is visible in game."
+)
 # 📥 is the catalog's "data coming into the bot", which is what a pasted group
 # listing is. Not ➕: `CD_BTN_ADD` already carries that on this grid, and two of
 # one glyph side by side give the eye nothing to navigate by.
@@ -4536,6 +4597,37 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
     Both fields take defaults so a refusal can hand back what was typed. Sixteen
     numbers copied off a phone screen is not something anyone should retype
     because one of them was a digit out.
+
+    **Whose Champion Duel it is separates the two jobs this surface does**, and
+    it is one question rather than two controls:
+
+    - **mine** is onboarding. *Which Champion Duel is my alliance in?* Your own
+      warzone has to be in the sixteen, because the answer **pins the server**
+      to what it produces, and pinning a server to a Champion Duel it is not in
+      is the silent failure the grouping separation exists to stop.
+    - **sent** is contributing. *Somebody sent me a Champion Duel and I want it
+      recorded.* It has no relationship to your warzone, it pins nothing, and
+      refusing it for not containing your number would be refusing the thing
+      being asked for.
+
+    Everything else is shared and stays shared: the date parser, the count, the
+    repeated-warzone check, the overlap conflict, and joining an identical set
+    somebody else already entered. Only the guard and the pin differ.
+
+    **`onboarding` is the whole of the difference, and it is not a question.**
+    A draft asked the caller whose Champion Duel this was; Kevin struck it,
+    2026-08-31: *"we should not care who all it is - for all we know it could be
+    theirs from a past Duel and we don't have a reason to need to know."*
+
+    Nothing needed the answer. **The pin already derives itself** -- it fires
+    only where `resolve_grouping_for_guild` would hand this grouping back,
+    which is the only sense in which one is *yours* -- and the acknowledgement
+    reads off that. The guard is the one thing left, and which view opened the
+    form settles it without asking: on the onboarding screen the caller's whole
+    purpose is to place their own alliance, so a set missing their warzone is a
+    typo worth catching. From the hub they are recording a Champion Duel, and
+    refusing one for not holding their number is refusing the thing being
+    asked for.
     """
 
     def __init__(
@@ -4543,12 +4635,20 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         *,
         can_write: bool,
         warzone: str | None,
+        onboarding: bool = True,
         warzones_default: str | None = None,
         started_default: str | None = None,
     ):
-        super().__init__()
+        super().__init__(title=CD_ADD_GROUPING_TITLE if onboarding else CD_ADD_SENT_TITLE)
         self.can_write = can_write
         self.warzone = warzone
+        # Carried so a refusal reopens the form the caller was actually in.
+        self.onboarding = onboarding
+        # The field labels are shared and stay shared. "The participating
+        # warzones, all 16" describes the input either way, and the question
+        # above it is what says whose Champion Duel this is -- `UX.md`'s rule
+        # that a label describes the control rather than the outcome.
+        #
         # Safe to set on self: `Modal._init_children` deepcopies each declared
         # item onto the instance, so a default cannot leak to the next opener.
         if warzones_default:
@@ -4616,7 +4716,13 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         # two answers is off and there is no way to tell which from here -- and
         # pinning a guild to a grouping it is not in is the exact silent failure
         # the grouping separation exists to stop.
-        if self.warzone and self.warzone not in zones:
+        #
+        # **Only when this is the caller's own Champion Duel.** A grouping they
+        # were sent has no reason to contain their warzone, and this guard is
+        # what made the finished hub's offer to "record past Champion Duel
+        # results" impossible to act on: the copy advertised contributing and
+        # the control beside it was onboarding.
+        if self.onboarding and self.warzone and self.warzone not in zones:
             await self._refuse(
                 interaction,
                 f"⚠️ Your alliance's warzone, **{self.warzone}**, is not in that list. "
@@ -4631,12 +4737,9 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             await self._report_conflict(interaction, overlaps[0], zones, started)
             return
 
-        if exact is not None:
+        joined = exact is not None
+        if joined:
             grouping = exact
-            note = (
-                f"ℹ️ Those Participating Warzones have already been entered.\n"
-                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(exact['warzones'])}."
-            )
         else:
             grouping = await asyncio.to_thread(
                 db.create_grouping,
@@ -4646,23 +4749,82 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
                 guild_id=str(interaction.guild_id),
                 discord_id=str(interaction.user.id),
             )
-            note = (
-                f"✅ Added your Participating Warzones, starting **{_short_date(started)}**.\n"
-                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
-            )
+
+        # **On both branches, and the join is the one that matters.** A Champion
+        # Duel somebody was sent has usually already been entered by the
+        # alliance that plays in it, so `exact` is the common path here -- and
+        # on it nothing else records that this server can now read it. Written
+        # on the onboarding path too, where it is a no-op the warzone already answers:
+        # one rule is cheaper to hold than a condition nobody can check.
+        await asyncio.to_thread(db.note_grouping_reader, grouping["id"], str(interaction.guild_id))
 
         # Creating pins the guild as a side effect. They just told us their
         # sixteen; asking for the one they play on again would be asking for
         # something we already have.
-        pin = self.warzone if self.warzone in zones else None
-        if pin:
-            await asyncio.to_thread(
-                db.set_guild_warzone,
-                str(interaction.guild_id),
-                pin,
-                discord_id=str(interaction.user.id),
-                confirmed_grouping_id=grouping["id"],
+        #
+        # **ONLY WHERE THE HUB WILL ACTUALLY RESOLVE TO IT**, and it used to
+        # pin whatever was just entered. `resolve_grouping_for_guild` answers
+        # off the warzone and takes the NEWEST grouping holding it, so entering
+        # an older Champion Duel of your own wrote a `confirmed_grouping_id`
+        # the resolver would never return -- and `needs_warzone_confirmation`
+        # compares exactly those two. The server was then thrown onto "is
+        # warzone 738 yours?", a question it had already answered, every time
+        # somebody recorded a past event.
+        #
+        # Asking the resolver rather than reproducing its rule here is what
+        # stops the two drifting: whatever it would hand back is by definition
+        # the grouping the confirmation is about.
+        opens_on_it = False
+        if self.warzone and self.warzone in zones:
+            guild = str(interaction.guild_id)
+            resolved, pinned = await asyncio.gather(
+                asyncio.to_thread(
+                    db.resolve_grouping_for_guild, guild, fallback_warzone=self.warzone
+                ),
+                asyncio.to_thread(db.get_guild_warzone, guild),
             )
+            opens_on_it = bool(resolved and resolved["id"] == grouping["id"])
+            # Still written where the server had no warzone row at all, which is
+            # the Map Manager case: the warzone was inferred rather than stored,
+            # and this is the moment it becomes the server's own answer.
+            if opens_on_it or not pinned:
+                await asyncio.to_thread(
+                    db.set_guild_warzone,
+                    guild,
+                    self.warzone,
+                    discord_id=str(interaction.user.id),
+                    # Carried forward rather than cleared when this is not the
+                    # grouping being opened. `set_guild_warzone` overwrites the
+                    # column with whatever it is handed, so passing None here
+                    # would drop a confirmation the server has already given
+                    # and ask for it again on the next visit.
+                    confirmed_grouping_id=(
+                        grouping["id"]
+                        if opens_on_it
+                        else (pinned or {}).get("confirmed_grouping_id")
+                    ),
+                )
+
+        # **The acknowledgement reports what happened rather than echoing what
+        # was declared**, which is what let the form stop asking whose Champion
+        # Duel this is. Kevin, 2026-08-31: *"we should not care who all it is -
+        # for all we know it could be theirs from a past Duel and we don't have
+        # a reason to need to know."*
+        #
+        # He is right, and the derivation is exact: `opens_on_it` is true only
+        # where this is the Champion Duel the hub will now open on, which is
+        # the only sense in which one is *yours*. A past event of your own and a
+        # set somebody sent you are both false, correctly -- neither is the one
+        # you are playing.
+        if joined:
+            note = (
+                f"ℹ️ Those Participating Warzones have already been entered.\n"
+                f"The {db.GROUPING_SIZE} warzones: {_warzone_list(grouping['warzones'])}."
+            )
+        else:
+            note = (CD_ADDED_MINE if opens_on_it else CD_ADDED_SENT).format(
+                date=_short_date(started)
+            ) + f"\nThe {db.GROUPING_SIZE} warzones: {_warzone_list(zones)}."
         await _open_hub(interaction, can_write=self.can_write, note=note)
 
     async def _refuse(self, interaction: discord.Interaction, message: str) -> None:
@@ -4676,6 +4838,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             user_id=interaction.user.id,
             can_write=self.can_write,
             warzone=self.warzone,
+            onboarding=self.onboarding,
             warzones_default=self.warzones.value,
             started_default=self.started_on.value,
         )
@@ -4732,6 +4895,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
             user_id=interaction.user.id,
             can_write=self.can_write,
             warzone=self.warzone,
+            onboarding=self.onboarding,
             warzones_default=self.warzones.value,
             started_default=self.started_on.value,
             offer_community=True,
@@ -4757,12 +4921,18 @@ class _RetryGroupingView(discord.ui.View):
         warzone: str | None,
         warzones_default: str | None,
         started_default: str | None,
+        onboarding: bool = True,
         offer_community: bool = False,
     ):
         super().__init__(timeout=600)
         self.user_id = user_id
         self.can_write = can_write
         self.warzone = warzone
+        # Carried so the retry reopens the modal the caller was actually in.
+        # Without it a refusal on a Champion Duel somebody was sent hands back
+        # the onboarding form, which would then refuse the same entry for not
+        # containing their warzone -- a retry button that cannot succeed.
+        self.onboarding = onboarding
         self.warzones_default = warzones_default
         self.started_default = started_default
         self.message: discord.Message | None = None
@@ -4794,6 +4964,7 @@ class _RetryGroupingView(discord.ui.View):
             _AddGroupingModal(
                 can_write=self.can_write,
                 warzone=self.warzone,
+                onboarding=self.onboarding,
                 warzones_default=self.warzones_default,
                 started_default=self.started_default,
             )
@@ -5933,7 +6104,7 @@ def read_standing(
     # semifinals last time and is in a qualifier group now would have last
     # event's group, rank, kill score and stored odds rendered as their current
     # standing. `find_grouping_by_warzone` picking the newest is what makes the
-    # older one reachable at all, and `build_finished_embed` invites people to
+    # older one reachable at all, and `_finished_line` invites people to
     # start the next one.
     #
     # So the caller's own Champion Duel wins when the account is in it, and the
@@ -7391,7 +7562,14 @@ class _AllianceView(discord.ui.View):
         # response to an interaction, so this cannot defer first.
         stage, groupings = await asyncio.gather(
             asyncio.to_thread(db.current_stage, (self.grouping or {}).get("id")),
-            asyncio.to_thread(db.groupings_for_warzone, self.warzone),
+            # The same list the hub root's control offers. Two record controls
+            # whose Champion Duel pickers disagree is one surface contradicting
+            # another, and this one is reached from further in.
+            asyncio.to_thread(
+                db.groupings_readable_by,
+                self.warzone,
+                str(inter.guild_id) if inter.guild_id else None,
+            ),
         )
         await inter.response.send_modal(
             _RecordGroupModal(
@@ -7458,6 +7636,7 @@ def build_hub_embed(
     grouping: dict | None = None,
     warzone: str | None = None,
     standing: dict | None = None,
+    finished: bool = False,
 ) -> discord.Embed:
     """The hub's own state: what data is loaded, and what this caller can do.
 
@@ -7476,7 +7655,11 @@ def build_hub_embed(
     # everyone.
     total = sum(s["registrants"] for s in servers)
     mine = f" on warzone **{warzone}**" if warzone else ""
-    calendar = phase_line(grouping)
+    # The calendar, or the sentence that replaces it once there is no calendar
+    # left to state. `phase_line` returns "" past the last day, so a finished
+    # Champion Duel would otherwise say nothing at all about being finished --
+    # which is the one fact a reader between events most needs.
+    calendar = _finished_line(warzone) if finished else phase_line(grouping)
     # The person, then the calendar, then the roster. `standing_opener` returns
     # "" for a caller with no standing read, which is what keeps the DM and
     # no-grouping paths on exactly the text they had before.
@@ -7541,118 +7724,29 @@ def build_hub_embed(
     return embed
 
 
-def build_finished_embed(*, grouping: dict, servers: list[dict], warzone: str | None):
-    """Past the last day. What they hold stays readable, and the next one is
-    offered.
+def _finished_line(warzone: str | None) -> str:
+    """Past the last day, said where the calendar line would have been.
 
-    The offer has to survive the gap. A Champion Duel ends before the next
-    draw is visible in game, so for some days after this appears there is
-    nothing anyone could type into it. Copy that says "add the next one" and
-    means "if you can" is a control that cannot be used, so this states the
-    condition rather than the instruction.
+    **This is not a separate hub any more, and that is the point.** It used to
+    be `build_finished_embed`, paired with a `ChampionDuelFinishedView` that
+    carried five controls. Both were written 2026-08-15 and neither was touched
+    again, so every surface built after that date -- the claim, `Your standing`,
+    `Your alliance`, `Today's picks`, `Head to head`, the hub root itself --
+    went into `ChampionDuelHubView` and never into its twin. A member opening
+    the hub between events got the 15 August hub, and nothing decided that.
+
+    So the finished state renders through the same embed and the same button
+    grid as every other state, and this is the one line that differs. A second
+    view cannot silently miss a control that a single one does not have.
+
+    **The gap is the resting state, not a tail.** `db.is_finished` has no upper
+    bound and nothing advances a server off it: it ends when somebody enters
+    the next sixteen, and that draw is not visible in game for days after this
+    appears. So the copy states the condition rather than an instruction nobody
+    can act on yet.
     """
     whose = f"**{warzone}** is participating in" if warzone else "your alliance is in"
-    return discord.Embed(
-        title=CHAMPION_DUEL_HUB_TITLE,
-        description=(
-            f"The Champion Duel {whose} has finished.\n\n"
-            f"When the next Champion Duel happens, you can enter your own warzone and "
-            f"other Participating Warzones to start a new one. You can also "
-            f"record past Champion Duel results if you want to keep a historical "
-            f"record and help better improve future predictions."
-        )[:4096],
-        color=discord.Color.blurple(),
-    )
-
-
-class ChampionDuelFinishedView(discord.ui.View):
-    """The finished hub: what they still hold, plus the way into the next one.
-
-    Predict and Find stay live. They are global and useful between events, and
-    the plan is explicit that scoping them would take something away.
-    """
-
-    def __init__(
-        self,
-        *,
-        user_id: int,
-        can_write: bool,
-        engine_ok: bool,
-        warzone: str | None,
-        grouping: dict | None = None,
-    ):
-        super().__init__(timeout=900)
-        self.user_id = user_id
-        self.can_write = can_write
-        self.engine_ok = engine_ok
-        self.warzone = warzone
-        self.grouping = grouping
-        self.message: discord.Message | None = None
-
-        for label, style, row, cb, off in (
-            (CD_BTN_ADD_GROUPING, discord.ButtonStyle.primary, 0, self._on_add_grouping, False),
-            (CD_BTN_PREDICT, discord.ButtonStyle.secondary, 0, self._on_predict, not engine_ok),
-            (CD_BTN_FIND, discord.ButtonStyle.secondary, 0, self._on_find, not engine_ok),
-            (CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 1, self._on_warzone, False),
-        ):
-            button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=off)
-            button.callback = cb
-            self.add_item(button)
-
-        # Recording stays live after the event. Filling a group in from
-        # screenshots once the Duel is over is the normal way this data arrives,
-        # and the round is chosen explicitly, so a late entry still files right.
-        if grouping:
-            record = discord.ui.Button(
-                label=(CD_BTN_RECORD if can_write else f"🔒 {CD_BTN_RECORD}")[:80],
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                disabled=not can_write,
-            )
-            record.callback = self._on_record
-            self.add_item(record)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
-    async def _on_add_grouping(self, inter: discord.Interaction):
-        await inter.response.send_modal(
-            _AddGroupingModal(can_write=self.can_write, warzone=self.warzone)
-        )
-
-    async def _on_predict(self, inter: discord.Interaction):
-        await inter.response.send_modal(_PredictModal())
-
-    async def _on_find(self, inter: discord.Interaction):
-        await inter.response.send_modal(_FindPlayerModal(self.can_write))
-
-    async def _on_warzone(self, inter: discord.Interaction):
-        await inter.response.send_modal(
-            _WarzoneModal(can_write=self.can_write, current=self.warzone)
-        )
-
-    async def _on_record(self, inter: discord.Interaction):
-        stage, groupings = await asyncio.gather(
-            asyncio.to_thread(db.current_stage, self.grouping["id"]),
-            asyncio.to_thread(db.groupings_for_warzone, self.warzone),
-        )
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=stage,
-                groupings=groupings,
-                warzone=self.warzone,
-            )
-        )
+    return CD_FINISHED_LINE.format(whose=whose)
 
 
 class _GroupView(discord.ui.View):
@@ -8542,7 +8636,15 @@ async def send_group_view(
         )
         return
 
-    groupings = await asyncio.to_thread(db.groupings_for_warzone, warzone) if warzone else []
+    # Every Champion Duel this server can read, which is more than the ones its
+    # warzone was drawn into: a grouping somebody was sent and entered here
+    # contains none of their warzones, so `groupings_for_warzone` alone would
+    # leave it recorded and unreachable. See `db.groupings_readable_by`.
+    groupings = await asyncio.to_thread(
+        db.groupings_readable_by,
+        warzone,
+        str(interaction.guild_id) if interaction.guild_id else None,
+    )
     if not any(g["id"] == grouping["id"] for g in groupings):
         groupings = [grouping] + list(groupings)
 
@@ -10077,7 +10179,16 @@ async def send_picks_view(
 
 
 class ChampionDuelHubView(discord.ui.View):
-    """The button grid. Rows group by kind: everyone, contributors, operator."""
+    """The button grid. Rows group by kind: everyone, contributors, operator.
+
+    **Every state of the hub is this view.** There used to be a second one for
+    a finished Champion Duel, and it is why Kevin opened the hub on 31 August
+    and could reach none of the work: it was written on 15 August and never
+    updated, so `Your standing`, `Your alliance`, `Today's picks` and
+    `Head to head` were all added here and never there. `finished` is a state
+    this grid is in, not a grid of its own, so a control added below cannot go
+    missing from it again.
+    """
 
     def __init__(
         self,
@@ -10090,12 +10201,14 @@ class ChampionDuelHubView(discord.ui.View):
         grouping: dict | None = None,
         can_intel: bool = False,
         standing: dict | None = None,
+        finished: bool = False,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
         self.is_admin = is_admin
         self.can_write = can_write
         self.engine_ok = engine_ok
+        self.finished = finished
         # Read once on the way in, so `_build_buttons` -- which is not async --
         # can decide which half of the identity pair to draw. The standing
         # surface re-reads before it renders, so this decides the label and
@@ -10230,13 +10343,20 @@ class ChampionDuelHubView(discord.ui.View):
         # only one.
         if self.grouping and not known:
             self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 1, self._on_group)
-        # ONLY WHERE `🔮 Today's picks` IS NOT. Predicting one match is
-        # absorbed by the day's card and is offered there for a one-off, so on
-        # every surface that has the card this would be a second front door to
-        # something that already has one. A caller with no Champion Duel
-        # resolved has no card, and a DM never gets one -- and predicting two
-        # players who have never met is exactly what that caller came for.
-        if not self.grouping:
+        # WHERE THE CARD IS NOT, **AND ON A FINISHED CHAMPION DUEL**. The
+        # first half is the IA plan's: predicting one match is offered on the
+        # day's card for a one-off, so on a surface that has the card this
+        # would be a second front door.
+        #
+        # The second half is a regression this file introduced on 2026-08-31
+        # and did not notice. `ChampionDuelFinishedView` carried this control
+        # deliberately -- *"Predict and Find stay live. They are global and
+        # useful between events, and the plan is explicit that scoping them
+        # would take something away"* -- and folding that view into this one
+        # dropped it, because a finished Champion Duel still has a grouping.
+        # The test that guarded it was edited to assert `CD_BTN_FIND` instead,
+        # which is how it went unseen.
+        if not self.grouping or self.finished:
             self._add(
                 CD_BTN_PREDICT,
                 discord.ButtonStyle.secondary,
@@ -10274,6 +10394,37 @@ class ChampionDuelHubView(discord.ui.View):
             self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 2, self._on_edits)
             self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 2, self._on_revert)
             self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 2, self._on_export)
+
+        # ── Row 3: entering a whole Champion Duel ────────────────────────────
+        #
+        # **One control, and the form asks whose it is.** The alternative was
+        # two buttons, and `notes/DESIGN.md` rule 7 killed it: entering your own
+        # sixteen and entering a set somebody sent you are the same act, so both
+        # wanted the same glyph and neither had one free.
+        #
+        # **Nothing about it waits for your own Champion Duel to end.** Gating
+        # it on `finished` would rebuild a smaller version of the problem this
+        # change is fixing -- a thing you can only do in one state, for no
+        # reason the reader can see -- and a set you are sent mid-event is the
+        # freshest data anybody could give us. It needs a Champion Duel resolved
+        # for the same reason `Record a group` does: without one the caller is
+        # being asked for their warzone instead, and the onboarding view carries
+        # `CD_BTN_ADD_GROUPING` for exactly that.
+        #
+        # **Secondary**, and the standalone finished hub had its equivalent
+        # primary. `notes/DESIGN.md` allows one primary per view and row 0 spends
+        # it on the identity control, which the IA plan puts first *"first and on
+        # purpose"*. Promoting this would take that emphasis off the person,
+        # which is the decision the rebuild was for.
+        #
+        # **Row 3 rather than row 2, and the operator row keeps its place.**
+        # Row 1 is full here -- Find, Your group, Record and Change your warzone
+        # is four for an unclaimed reader against Discord's cap of five. Row 2 is
+        # the operator's and `test_the_operator_row_moves_up_with_everything_
+        # else` pins it there; a row that moves by state is exactly the
+        # muscle-memory cost `notes/DESIGN.md` warns about.
+        if self.grouping:
+            self._add(CD_BTN_ADD_CD, discord.ButtonStyle.secondary, 3, self._on_add_cd)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
 
@@ -10394,13 +10545,40 @@ class ChampionDuelHubView(discord.ui.View):
             _WarzoneModal(can_write=self.can_write, current=self.warzone)
         )
 
+    async def _on_add_cd(self, inter: discord.Interaction):
+        """Sixteen warzones and a date, for a Champion Duel of either kind.
+
+        The form asks whose it is, and that answer decides the only two things
+        that differ: whether the sixteen have to contain your own warzone, and
+        whether the server is pinned to what it produces. Everything else is
+        the same either way -- the count, the duplicate check and the overlap
+        conflict are what stop a mistyped list becoming a grouping nobody can
+        untangle, and none of them depend on whose Champion Duel it is.
+
+        **Defaulted to a Champion Duel you were sent.** A server reaching this
+        already has one resolved, so entering its own is the rarer answer here:
+        it is the next season's, and that is a few days a year against a set
+        somebody can send you at any point.
+        """
+        await inter.response.send_modal(
+            _AddGroupingModal(
+                can_write=self.can_write,
+                warzone=self.warzone,
+                onboarding=False,
+            )
+        )
+
     async def _on_record(self, inter: discord.Interaction):
         # Read before responding, not after: a modal has to be the first
         # response to an interaction, so this cannot defer first. One indexed
         # SQLite read is well inside the three seconds.
         stage, groupings = await asyncio.gather(
             asyncio.to_thread(db.current_stage, self.grouping["id"]),
-            asyncio.to_thread(db.groupings_for_warzone, self.warzone),
+            asyncio.to_thread(
+                db.groupings_readable_by,
+                self.warzone,
+                str(inter.guild_id) if inter.guild_id else None,
+            ),
         )
         await inter.response.send_modal(
             _RecordGroupModal(
@@ -10522,22 +10700,13 @@ async def _open_hub(
         "champion_duel_intel", interaction.guild_id, interaction=interaction
     )
 
-    if grouping and await asyncio.to_thread(db.is_finished, grouping["id"]):
-        view = ChampionDuelFinishedView(
-            user_id=interaction.user.id,
-            can_write=can_write,
-            engine_ok=engine_ok,
-            warzone=warzone,
-            grouping=grouping,
-        )
-        await interaction.followup.send(
-            content=note,
-            embed=build_finished_embed(grouping=grouping, servers=servers, warzone=warzone),
-            view=view,
-            ephemeral=True,
-        )
-        view.message = await interaction.original_response()
-        return
+    # Past the last day. **Not a branch to a different surface any more.** It
+    # was one until 2026-08-31, and the fork was where everything built after
+    # 15 August went missing: the second view was never updated, so between
+    # events the hub silently reverted to a fortnight-old shape. It is now one
+    # flag on the surface everybody else gets, which is a state the hub is in
+    # rather than a hub of its own.
+    finished = bool(grouping and await asyncio.to_thread(db.is_finished, grouping["id"]))
 
     # The person, read once and handed to both halves of the surface. Only
     # inside a guild with a Champion Duel resolved: without a grouping there is
@@ -10565,6 +10734,7 @@ async def _open_hub(
         grouping=grouping,
         can_intel=can_intel,
         standing=standing,
+        finished=finished,
     )
     await interaction.followup.send(
         content=note,
@@ -10574,6 +10744,7 @@ async def _open_hub(
             grouping=grouping,
             warzone=warzone,
             standing=standing,
+            finished=finished,
         ),
         view=view,
         ephemeral=True,

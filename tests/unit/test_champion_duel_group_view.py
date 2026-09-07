@@ -2077,8 +2077,8 @@ async def test_a_page_turn_re_enables_the_share_button(cd_db):
 
 
 async def test_sharing_posts_only_the_page_on_screen(cd_db):
-    """`📤 Post this read to current channel` hands out the one member
-    currently displayed, not the whole team the old bulk post sent."""
+    """`📤 Post this to current channel` hands out the one member currently
+    displayed, not the whole team the old bulk post sent."""
     view = _reads_view(cd_db)
     inter = _reads_interaction()
     await view._on_next(inter)  # Merlin

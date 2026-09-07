@@ -1105,21 +1105,27 @@ _READ_RANGE = "Runs from {floor} to {ceiling}, depending on what the two of them
 #: head` -- the one-to-one command -- still spells this out in full; a leader
 #: paging through a whole team does not need the ask repeated per opponent,
 #: only the fact that one exists, the same way a missing rank prints `-`
-#: rather than a paragraph about how ranks are recorded. ⚠️ Wording flagged for
-#: Kevin's sign-off in the PR that introduced this -- copy on this feature
-#: normally goes through him and this one was approved at the structural
-#: level, not word for word.
+#: rather than a paragraph about how ranks are recorded. Signed off by
+#: Kevin, 2026-09-07.
 _READ_UNSCOUTED_TAG = "No line-up on record"
 
-#: Same rule, same flag, for the two "what to set" refusals that used to spell
-#: out what was missing. `_READ_UNSCOUTED_TAG` is the one that replaces a
-#: whole block; these replace one clause inside it, beside a headline and a
-#: deployment habit that stay exactly as they were.
-_READ_NEEDS_SQUADS_TAG = "Needs your squads"
-_READ_TYPES_UNKNOWN_TAG = "Types unknown"
+#: Same rule, for the two "what to set" refusals that used to spell out what
+#: was missing. `_READ_UNSCOUTED_TAG` is the one that replaces a whole block;
+#: these replace one clause inside it, beside a headline and a deployment
+#: habit that stay exactly as they were. Signed off by Kevin, 2026-09-07,
+#: who reworded both from the first draft's bare tags to a short sentence.
+_READ_NEEDS_SQUADS_TAG = "Your squads not on record."
+_READ_TYPES_UNKNOWN_TAG = "No squad types on record."
 
-#: The leader's own copy of a read carries this; the one `📤 Post this read to
-#: current channel` posts does not (`_shared_read_embed`). ⚠️ Also flagged.
+#: The leader's own copy of a read carries this; the one `📤 Post this to
+#: current channel` posts does not (`_shared_read_embed`). Wording signed off
+#: by Kevin, 2026-09-07 -- who also flagged that in the sign-off mock this
+#: line read as though it belonged to the last opponent listed rather than to
+#: the page as a whole. The embed's real footer (`set_footer`, not a trailing
+#: paragraph) is Discord's own visually distinct region, separated from the
+#: fields by more than the mock's flat HTML could show -- confirm this
+#: actually reads as separate once tested live, since the mock could not
+#: settle it either way.
 _READS_UNSCOUTED_FOOTER = "{count} without a line-up on record."
 
 #: What every figure on a read is, said once at the bottom.
@@ -1158,9 +1164,10 @@ _READS_JUMP_MISS = "No **{alliance}** player named **{name}** in the **{round}**
 #: to make public. Private by default is `PROPOSAL_champion_duel_ia.md`
 #: principle 5, and posting is the deliberate leadership half of it.
 #:
-#: ⚠️ Renamed from "📤 Post these to current channel" for the new one-at-a-time
-#: pager, flagged for Kevin's sign-off with the rest of this PR's wording.
-CD_BTN_SHARE_READS = "📤 Post this read to current channel"
+#: Renamed from "📤 Post these to current channel" for the new one-at-a-time
+#: pager. Signed off by Kevin, 2026-09-07, who dropped "read" from the first
+#: draft's label.
+CD_BTN_SHARE_READS = "📤 Post this to current channel"
 
 #: How many characters of embed one message may carry.
 #:

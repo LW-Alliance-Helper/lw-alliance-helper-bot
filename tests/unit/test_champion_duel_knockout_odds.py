@@ -338,7 +338,7 @@ def _ladders(embed):
             continue
         figures = []
         for cell in line.split(" · "):
-            text = cell.rsplit(" ", 1)[1]
+            text = cell.rsplit(" ", 1)[1].strip("*")
             figures.append(
                 0.5 if text == "<1%" else 99.5 if text == ">99%" else float(text.rstrip("%"))
             )
@@ -498,7 +498,12 @@ def test_every_one_of_the_32_is_accounted_for_under_the_stale_line():
     # Both halves of a row, not just the name. A truncation lands mid-ladder
     # and leaves the name above it standing, so counting names alone would call
     # a player present who has no figures under them.
-    ladders = len(re.findall(r"Top 16 \d+% . Top 8 \d+% . Top 4 \d+% . Champion \d+%", description))
+    ladders = len(
+        re.findall(
+            r"Top 16 \*\*\d+%\*\* . Top 8 \*\*\d+%\*\* . Top 4 \*\*\d+%\*\* . Champion \*\*\d+%\*\*",
+            description,
+        )
+    )
     assert ladders == printed, (
         f"{printed} names are printed and {ladders} of them have a full ladder; "
         "somebody's figures were cut in half"

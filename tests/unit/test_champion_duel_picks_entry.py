@@ -453,6 +453,30 @@ async def test_three_taps_put_a_meeting_on_the_card(cd_db):
     assert [(m["a_id"], m["b_id"]) for m in stored["meetings"]] == [(_rid("Alfa"), _rid("Charlie"))]
 
 
+async def test_the_card_can_be_shown_right_after_adding_a_match(cd_db):
+    """The old way back was `Cancel and go back`, then `Create the card` from
+    card mode. Having just added a match with nothing else queued is the exact
+    moment somebody wants to see what they have built, so the same button is
+    reachable from here too."""
+    grouping = _grouping()
+    _semifinal_field(grouping)
+    view = _view(grouping)
+
+    await _press(view, hub.CD_BTN_PICKS_ADD)
+    assert not [i for i in view.children if getattr(i, "label", None) == hub.CD_BTN_PICKS_SHOW], (
+        "nothing on the card yet"
+    )
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_WARZONE), "738")
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P1), _rid("Alfa"))
+    await _pick(view, _select_by_placeholder(view, hub._PICKS_PICK_P2), _rid("Charlie"))
+    await _press(view, hub.CD_BTN_PICKS_SAVE)
+
+    assert view.adding, "still building, not sent back to card mode"
+    with patch.object(hub.champion_duel_image, "render_slate", return_value=b"not really a webp"):
+        inter = await _press(view, hub.CD_BTN_PICKS_SHOW)
+    assert inter.followup.send.called
+
+
 async def test_player_one_at_the_round_of_32_offers_the_bracket_partner_first(cd_db):
     """**Offered, never chosen.** Session C set Player 2 from the fold here, and
     Kevin took that out on 29 Aug: *"I do not know how this actually works out

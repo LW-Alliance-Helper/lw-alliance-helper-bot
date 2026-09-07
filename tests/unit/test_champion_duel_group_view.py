@@ -550,8 +550,8 @@ def test_a_placement_lands_on_the_player_who_earned_it(cd_db):
     p1 = said.split("**P1**\n")[1].splitlines()[0]
     p8 = said.split("**P8**\n")[1].splitlines()[0]
 
-    assert p1.endswith("Placement: 8th"), p1
-    assert p8.endswith("Placement: 1st"), p8
+    assert p1.endswith("Placement: **8th**"), p1
+    assert p8.endswith("Placement: **1st**"), p8
 
 
 def test_the_footer_still_says_what_the_answer_is_ranked_on(cd_db):
@@ -1354,9 +1354,14 @@ def test_a_padded_warzone_is_still_inside_its_own_champion_duel(cd_db):
 
 
 def test_the_listing_leads_on_whoever_got_deepest(cd_db):
-    """The shape is the rounds, furthest first. For an alliance that rarely
-    gets more than one player through, that section has one name in it and that
-    name is the point -- which one flat sorted grid would bury."""
+    """The default round is furthest reached. For an alliance that rarely gets
+    more than one player through, that round has one name in it and that name
+    is the point -- which one flat sorted grid would bury.
+
+    The other round reached is one select away rather than stacked underneath
+    it (#Task-1); the accounts we hold no round for still ride along regardless,
+    because they are a gap in the record rather than a fact about a round.
+    """
     grouping, groups, players = _alliance_world()
     quals = db.get_or_create_group(grouping["id"], "qualifiers", "D")
     early = db.upsert_registrant("Wader", server="738", alliance="OGV", thp=200_000_000)
@@ -1367,8 +1372,60 @@ def test_the_listing_leads_on_whoever_got_deepest(cd_db):
     named = [f.name for f in embed.fields if not f.name.startswith("🔒")]
 
     assert named[0] == db.STAGE_LABELS["semifinals"]
-    assert named.index(db.STAGE_LABELS["qualifiers"]) < named.index(hub._ALLIANCE_UNPLACED)
+    assert db.STAGE_LABELS["qualifiers"] not in named, "one round at a time now"
     assert "Benched" in embed.fields[named.index(hub._ALLIANCE_UNPLACED)].value
+
+
+def test_a_multi_stage_alliance_offers_the_pick_between_them(cd_db):
+    """More than one round reached is the one case worth a select over. The
+    default is the furthest, matching what used to lead the stacked screen."""
+    grouping, _groups, players = _alliance_world()
+    quals = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    early = db.upsert_registrant("Wader", server="738", alliance="OGV", thp=200_000_000)
+    db.set_placement(quals["id"], early["id"], rank=40)
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    view = hub._AllianceView(
+        user_id=1, grouping=grouping, state=state, can_odds=False, can_intel=True, can_write=True
+    )
+    select = next(i for i in view.children if isinstance(i, discord.ui.Select))
+    chosen = [o.value for o in select.options if o.default]
+
+    assert [o.label for o in select.options] == [
+        db.STAGE_LABELS["semifinals"],
+        db.STAGE_LABELS["qualifiers"],
+    ]
+    assert chosen == ["semifinals"], "furthest reached is the default"
+
+
+def test_a_single_stage_alliance_offers_no_pick_at_all(cd_db):
+    """Nothing to choose between is nothing offered. The accounts we hold no
+    round for do not count as a second round on their own."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    view = hub._AllianceView(
+        user_id=1, grouping=grouping, state=state, can_odds=False, can_intel=True, can_write=True
+    )
+
+    assert not [i for i in view.children if isinstance(i, discord.ui.Select)]
+
+
+def test_switching_the_round_scopes_the_listing_to_just_that_one(cd_db):
+    """Selecting a round narrows to it; the unplaced tail still rides along."""
+    grouping, _groups, players = _alliance_world()
+    quals = db.get_or_create_group(grouping["id"], "qualifiers", "D")
+    early = db.upsert_registrant("Wader", server="738", alliance="OGV", thp=200_000_000)
+    db.set_placement(quals["id"], early["id"], rank=40)
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping)
+
+    default_embed = hub.build_alliance_embed(state, can_odds=False)
+    quals_embed = hub.build_alliance_embed(state, can_odds=False, stage="qualifiers")
+
+    assert "Wader" not in _text_of(default_embed)
+    assert "Kestrel" not in _text_of(quals_embed)
+    assert "Wader" in _text_of(quals_embed)
+    assert "Benched" in _text_of(quals_embed), "the unplaced tail rides along regardless"
 
 
 def test_an_account_in_no_round_is_held_rather_than_missing(cd_db):
@@ -1752,6 +1809,23 @@ def test_a_stale_answer_we_cannot_date_is_withheld_rather_than_shown_bare(cd_db)
 # ── Handing out the personal reads ───────────────────────────────────────────
 
 
+def _reads_interaction(user_id=1):
+    """A stand-in for discord.Interaction covering only what `_ReadsView` and
+    `_ReadsJumpModal` touch."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    inter = MagicMock()
+    inter.user.id = user_id
+    inter.guild_id = 999
+    inter.response.defer = AsyncMock()
+    inter.response.send_message = AsyncMock()
+    inter.response.edit_message = AsyncMock()
+    inter.edit_original_response = AsyncMock()
+    inter.followup.send = AsyncMock()
+    inter.channel.send = AsyncMock()
+    return inter
+
+
 def test_the_reads_cover_the_round_where_a_group_is_everyone_you_play(cd_db):
     """A semi-final group of 8 meets every other once, so the seven names
     beside somebody are exactly the seven they play. The qualifiers are a
@@ -1844,7 +1918,9 @@ def test_an_opponent_we_cannot_build_stays_on_the_page(cd_db):
     ghost = next(f.value for f in kestrel.fields if f.name == "Ghost")
 
     assert "Ghost" in [f.name for f in kestrel.fields]
-    assert "1, 2, 3" in ghost
+    assert ghost == hub._READ_UNSCOUTED_TAG, (
+        "a short tag on this bulk surface, not the full sentence"
+    )
 
 
 def test_a_player_we_cannot_build_is_said_once_rather_than_seven_times(cd_db):
@@ -1864,10 +1940,11 @@ def test_a_player_we_cannot_build_is_said_once_rather_than_seven_times(cd_db):
 
 
 def test_the_batch_names_whoever_did_not_fit(cd_db):
-    """One press is bounded so it cannot become several seconds of engine. A
-    cut that is a count rather than names leaves a leader unable to go and get
-    the people it dropped -- the same rule the alliance select's own cut line
-    follows."""
+    """`team_reads` keeps its own cap and cut for whoever calls it with an
+    explicit `limit` -- a bounded batch is still a real thing to want -- even
+    though the interactive surface no longer does (`_ReadsView` pages the
+    whole roster one member at a time instead, so nothing there needs a cut
+    line any more; see `test_the_pager_covers_the_whole_roster`)."""
     grouping, _big = _two_full_groups()
     lead = db.upsert_registrant("A0", server="738")
     state = hub.read_alliance(_leader(lead), grouping, with_odds=False)
@@ -1876,7 +1953,7 @@ def test_the_batch_names_whoever_did_not_fit(cd_db):
 
     assert result["shown"] == 3
     assert len(result["cut"]) == 13
-    assert hub.READS_PER_PRESS == 10
+    assert hub.team_reads(state)["cut"] == [], "no limit is no cut"
 
 
 def test_a_full_group_of_reads_fits_a_discord_message(cd_db):
@@ -1942,16 +2019,203 @@ def test_a_read_says_it_is_one_match_rather_than_a_meeting(cd_db):
     assert "one match" in kestrel.footer.text
 
 
-def test_the_reads_are_private_until_somebody_posts_them(cd_db):
-    """`PROPOSAL_champion_duel_ia.md` principle 5: an individual pulls it as an
-    ephemeral and posting to a channel is a deliberate leadership act. Follows
-    `SharePredictionView`, including holding the payload rather than rendering
-    it twice."""
-    embeds = [discord.Embed(title="🎯 Kestrel")]
-    view = hub._ReadsShareView(embeds=embeds, user_id=1)
+def _reads_view(cd_db, *, user_id=1):
+    """A `_ReadsView` over `_alliance_world()`'s three round-robin players,
+    best-placed first: Kestrel (group H, 2 opponents), Merlin (group C, 1
+    opponent), Plover (group H, 2 opponents)."""
+    grouping, _groups, players = _alliance_world()
+    state = hub.read_alliance(
+        _leader(players["Kestrel"], user_id=user_id), grouping, with_odds=False
+    )
+    roster = hub._reads_roster(state)
+    return hub._ReadsView(user_id=user_id, alliance="OGV", stage="semifinals", roster=roster)
 
-    assert [getattr(i, "label", None) for i in view.children] == [hub.CD_BTN_SHARE_READS]
-    assert view.embeds is embeds
+
+def test_the_pager_covers_the_whole_roster(cd_db):
+    """No ten-cap any more. `_ReadsView` pages the entire eligible roster,
+    best-placed first -- the order `_reads_roster` already sorts it in --
+    rather than the old auto-cut that stopped at ten and named the rest."""
+    view = _reads_view(cd_db)
+
+    assert [p["display_name"] for p in view.roster] == ["Kestrel", "Merlin", "Plover"]
+    assert view._embed().title == hub._READS_TITLE.format(player="Kestrel")
+
+
+async def test_prev_and_next_move_one_member_at_a_time(cd_db):
+    """One page, one member, edited in place -- the same ◀ Prev / Next ▶ shape
+    `_AllianceView` and `_GroupView` already page other long lists with."""
+    view = _reads_view(cd_db)
+    inter = _reads_interaction()
+
+    await view._on_next(inter)
+
+    assert view.index == 1
+    embed = inter.edit_original_response.call_args.kwargs["embed"]
+    assert embed.title == hub._READS_TITLE.format(player="Merlin")
+    labels = {getattr(i, "label", None): i for i in view.children}
+    assert not labels["◀ Prev"].disabled
+    assert not labels["Next ▶"].disabled, "Plover is still ahead"
+    assert "Page 2 / 3" in labels
+
+    await view._on_next(inter)
+    labels = {getattr(i, "label", None): i for i in view.children}
+    assert labels["Next ▶"].disabled, "Plover is the last page"
+
+
+async def test_a_page_turn_re_enables_the_share_button(cd_db):
+    """Sharing Kestrel does not mean Merlin has already been shared -- disabling
+    `📤` for the whole view's life would block every page after the one just
+    posted, not just that one."""
+    view = _reads_view(cd_db)
+    inter = _reads_interaction()
+
+    await view._on_share(inter)
+    assert next(i for i in view.children if i.label == hub.CD_BTN_SHARE_READS).disabled
+
+    await view._on_next(inter)
+    assert not next(i for i in view.children if i.label == hub.CD_BTN_SHARE_READS).disabled
+
+
+async def test_sharing_posts_only_the_page_on_screen(cd_db):
+    """`📤 Post this read to current channel` hands out the one member
+    currently displayed, not the whole team the old bulk post sent."""
+    view = _reads_view(cd_db)
+    inter = _reads_interaction()
+    await view._on_next(inter)  # Merlin
+
+    await view._on_share(inter)
+
+    posted = inter.channel.send.call_args
+    assert f"<@{view.user_id}>" in posted.args[0]
+    shared_embed = posted.kwargs["embed"]
+    assert shared_embed.title == hub._READS_TITLE.format(player="Merlin")
+
+
+async def test_jumping_to_a_name_moves_the_page(cd_db):
+    """The same one-field modal shape this file's other name-search flows use,
+    following `_NewPlayerWarzoneModal`'s pattern of editing the message it was
+    opened from rather than sending a second one."""
+    view = _reads_view(cd_db)
+    modal = hub._ReadsJumpModal(view=view)
+    modal.name._value = "Plover"
+    inter = _reads_interaction()
+
+    await modal.on_submit(inter)
+
+    assert view.index == 2
+    embed = inter.response.edit_message.call_args.kwargs["embed"]
+    assert embed.title == hub._READS_TITLE.format(player="Plover")
+
+
+async def test_a_jump_by_prefix_lands_when_it_is_unambiguous(cd_db):
+    view = _reads_view(cd_db)
+    modal = hub._ReadsJumpModal(view=view)
+    modal.name._value = "mer"
+    inter = _reads_interaction()
+
+    await modal.on_submit(inter)
+
+    assert view.index == 1
+
+
+async def test_a_jump_matching_nobody_names_the_alliance_and_the_round(cd_db):
+    """Refused clearly and specifically rather than a silent no-op, the same
+    rule `_READS_NOBODY` follows for the surface as a whole."""
+    view = _reads_view(cd_db)
+    modal = hub._ReadsJumpModal(view=view)
+    modal.name._value = "Nobody Here"
+    inter = _reads_interaction()
+
+    await modal.on_submit(inter)
+
+    assert view.index == 0, "the page does not move on a miss"
+    said = inter.response.send_message.call_args.args[0]
+    assert "OGV" in said
+    assert db.STAGE_LABELS["semifinals"] in said
+    assert "Nobody Here" in said
+
+
+def _ambiguous_roster_state(cd_db):
+    """Two OGV players sharing a prefix, and one exact match to it."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    for i, name in enumerate(("Kestrelle", "Kestrelson", "Rival"), start=1):
+        reg = db.upsert_registrant(
+            name, server="738", alliance="OGV" if name != "Rival" else "Kite", thp=300_000_000
+        )
+        _squads(reg["id"], 300_000_000)
+        db.set_placement(group["id"], reg["id"], rank=i)
+    return hub.read_alliance(_leader(db.upsert_registrant("Kestrelle", server="738")), grouping)
+
+
+async def test_a_jump_matching_two_names_is_a_miss_rather_than_a_guess(cd_db):
+    """Landing on the wrong one silently is worse than saying plainly it could
+    not find one."""
+    state = _ambiguous_roster_state(cd_db)
+    view = hub._ReadsView(
+        user_id=1, alliance="OGV", stage="semifinals", roster=hub._reads_roster(state)
+    )
+    modal = hub._ReadsJumpModal(view=view)
+    modal.name._value = "kestrel"  # a prefix of both, an exact match to neither
+    inter = _reads_interaction()
+
+    await modal.on_submit(inter)
+
+    assert view.index == 0, "the page does not move on an ambiguous miss"
+    assert inter.response.send_message.called
+
+
+async def test_an_exact_match_wins_over_an_ambiguous_prefix(cd_db):
+    """The exact spelling is never ambiguous even where it is also a prefix of
+    somebody else's name."""
+    state = _ambiguous_roster_state(cd_db)
+    roster = hub._reads_roster(state)
+    view = hub._ReadsView(user_id=1, alliance="OGV", stage="semifinals", roster=roster)
+    view.index = 1  # start on Kestrelson, so a jump to Kestrelle has to move it
+    modal = hub._ReadsJumpModal(view=view)
+    modal.name._value = "Kestrelle"
+    inter = _reads_interaction()
+
+    await modal.on_submit(inter)
+
+    assert view.roster[view.index]["display_name"] == "Kestrelle"
+
+
+def test_the_jump_and_pager_controls_are_absent_for_one_member(cd_db):
+    """Nothing to page through or jump between is nothing offered."""
+    grouping = db.create_grouping(["738"], started_so_today_is("semifinals"), origin="member")
+    group = db.get_or_create_group(grouping["id"], "semifinals", "H")
+    solo = db.upsert_registrant("Solo", server="738", alliance="OGV", thp=300_000_000)
+    _squads(solo["id"], 300_000_000)
+    db.set_placement(group["id"], solo["id"], rank=1)
+    rival = db.upsert_registrant("Rival", server="738", alliance="Kite", thp=300_000_000)
+    _squads(rival["id"], 300_000_000)
+    db.set_placement(group["id"], rival["id"], rank=2)
+    state = hub.read_alliance(_leader(solo), grouping, with_odds=False)
+    view = hub._ReadsView(
+        user_id=1, alliance="OGV", stage="semifinals", roster=hub._reads_roster(state)
+    )
+
+    labels = [getattr(i, "label", None) for i in view.children]
+    assert labels == [hub.CD_BTN_SHARE_READS]
+
+
+def test_the_leader_only_footer_counts_the_unscouted_and_the_shared_copy_drops_it(cd_db):
+    """One compact count on the leader's own screen; nothing extra once it
+    reaches the channel -- `_shared_read_embed` is a copy, not a second render.
+    """
+    grouping, groups, players = _alliance_world()
+    ghost = db.upsert_registrant("Ghost", server="738", alliance="Kite", thp=300_000_000)
+    db.set_placement(groups["H"]["id"], ghost["id"], rank=4)
+    state = hub.read_alliance(_leader(players["Kestrel"]), grouping, with_odds=False)
+
+    kestrel = next(e for e in hub.team_reads(state)["embeds"] if "Kestrel" in e.title)
+    shared = hub._shared_read_embed(kestrel)
+
+    assert kestrel.footer.text == f"{hub._READS_BASIS}\n1 opponent without a line-up on record."
+    assert shared.footer.text == hub._READS_BASIS
+    assert shared.title == kestrel.title
+    assert [(f.name, f.value) for f in shared.fields] == [(f.name, f.value) for f in kestrel.fields]
 
 
 def test_the_reads_control_is_absent_where_no_round_carries_one(cd_db):

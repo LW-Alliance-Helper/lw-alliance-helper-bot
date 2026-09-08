@@ -31,9 +31,21 @@ None of it is a runtime dependency. **Nothing here belongs in
 | Tool | How it runs | Installed? |
 |---|---|---|
 | `jscpd` | `npx jscpd` — no install needed | n/a, node is present |
-| `ast-grep` | `npx @ast-grep/cli` — no install needed | n/a, node is present |
-| `radon` | `.venv/Scripts/python.exe -m pip install radon` | **No** — ask before installing |
-| `vulture` | `.venv/Scripts/python.exe -m pip install vulture` | **No** — ask before installing |
+| `ast-grep` | `npx --yes --package @ast-grep/cli ast-grep` — no install needed | n/a, node is present |
+| `radon` | `$PY -m radon` | **Yes** — 6.0.1, in the shared venv |
+| `vulture` | `$PY -m vulture` | **Yes** — 2.16, in the shared venv |
+
+`$PY` is the main checkout's interpreter by absolute path
+(`.../lw-alliance-helper-bot/.venv/Scripts/python.exe`) — worktrees have none of
+their own.
+
+**The `ast-grep` invocation is not the obvious one.** `npx @ast-grep/cli` fails
+with "could not determine executable to run", because the package and the binary
+have different names. And a multi-line pattern passed inline to `-p` is silently
+mangled by the shell — ast-grep stops honouring `--lang`, falls back to text
+matching, returns hits from `README.md`, and still exits 0. Multi-line patterns
+go in a YAML rule file run with `scan -r`. Both are documented in
+`ast-grep-search`; both were found by smoke-testing, not by reading upstream.
 
 ---
 

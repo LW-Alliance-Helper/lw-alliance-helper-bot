@@ -21,17 +21,20 @@ Cyclomatic complexity, function length, nesting depth and parameter count are
 reading. Hand-counting is irreproducible between runs, expensive in tokens, and
 exactly the mechanical work a deterministic tool should do.
 
-`radon` is the Python tool. It is **not** in the venv, and it is dev tooling, so
-it must **not** go into `requirements.txt` — that file is the bot's runtime
-dependency list and Railway installs from it.
+`radon` is the Python tool. **Installed** (6.0.1) in the shared venv. It is dev
+tooling, so it must **not** go into `requirements.txt` — that file is the bot's
+runtime dependency list and Railway installs from it.
+
+Worktrees have no interpreter of their own; call the main checkout's by
+absolute path:
 
 ```bash
-/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe \
-  -m pip install radon
+PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
+$PY -m radon --version     # 6.0.1
 ```
 
-Ask before running that the first time. It changes the shared venv, which other
-sessions and worktrees use.
+If a future venv rebuild loses it: `$PY -m pip install radon`. Ask first — the
+venv is shared with every other worktree and session.
 
 ---
 
@@ -52,6 +55,13 @@ The useful question is not *which files are big* but **which functions inside
 them carry the complexity**, and whether a big file is one tangled thing or
 forty tidy ones sharing a filename. That distinction decides whether a module
 needs splitting or leaving alone.
+
+**The maintainability index is useless on these three.** `radon mi` reports
+`setup_cog.py`, `champion_duel_hub.py` and `config.py` all at exactly **0.00**
+— the metric floors, so it cannot tell you which is worse or whether a cleanup
+pass helped. Use `radon cc` per function for anything over about 3,000 lines,
+and reserve `mi` for the mid-sized modules where it still discriminates
+(`events_hub.py` scores 11.01, which is a real reading).
 
 ## Step 1 — Measure
 

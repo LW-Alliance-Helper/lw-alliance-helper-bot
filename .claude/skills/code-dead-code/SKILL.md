@@ -46,17 +46,26 @@ production.
 
 ---
 
-## Step 1 — Install the tool
+## Step 1 — The tool
 
-`vulture` is not in the venv, and it is dev tooling — it must **not** go into
-`requirements.txt`, which is the bot's runtime dependency list.
+`vulture` is **installed** (2.16) in the shared venv. It is dev tooling and must
+**not** go into `requirements.txt`, which is the bot's runtime dependency list.
+
+Worktrees have no interpreter of their own; call the main checkout's by
+absolute path:
 
 ```bash
-/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe \
-  -m pip install vulture
+PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
+$PY -m vulture --version   # vulture 2.16
 ```
 
-Ask before the first install. It changes the shared venv.
+If a future venv rebuild loses it: `$PY -m pip install vulture`. Ask first —
+the venv is shared.
+
+**Measured baseline:** on `events_hub.py` (1,776 lines) with no whitelist at
+all, `--min-confidence 90` returns **0** hits and `--min-confidence 60` returns
+**31**. That is the noise curve on this codebase in one line: 90 is signal, 60
+is triage work. Start at 90.
 
 ## Step 2 — Build the whitelist before the first run
 
@@ -71,15 +80,15 @@ callback names, the re-exported symbols, and anything reached only from
 ## Step 3 — Scan
 
 ```bash
-VULTURE=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
+PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
 
 # High confidence only — start here
-$VULTURE -m vulture . .vulture-whitelist.py \
+$PY -m vulture . .vulture-whitelist.py \
   --min-confidence 90 \
   --exclude ".venv,tests,assets,scripts"
 
 # Widen once the 90% band is clean and triaged
-$VULTURE -m vulture . .vulture-whitelist.py --min-confidence 70 --exclude ".venv,tests,assets"
+$PY -m vulture . .vulture-whitelist.py --min-confidence 70 --exclude ".venv,tests,assets"
 ```
 
 Start at 90. Below 60 the output is noise on a codebase this size.
@@ -88,7 +97,7 @@ Scope to a feature family when auditing something specific — that is also the
 only run where the results are small enough to check one by one:
 
 ```bash
-$VULTURE -m vulture champion_duel_*.py .vulture-whitelist.py --min-confidence 80
+$PY -m vulture champion_duel_*.py .vulture-whitelist.py --min-confidence 80
 ```
 
 ## Step 4 — Prove each suspect before proposing removal
@@ -133,8 +142,8 @@ effect of an audit. Delete, then run the targeted tests for every module that
 imported the removed name, in both lanes:
 
 ```bash
-$VULTURE -m pytest tests/unit/test_<module>.py -q
-FORCE_PREMIUM=1 $VULTURE -m pytest tests/unit/test_<module>.py -q
+$PY -m pytest tests/unit/test_<module>.py -q
+FORCE_PREMIUM=1 $PY -m pytest tests/unit/test_<module>.py -q
 ```
 
 ## Related

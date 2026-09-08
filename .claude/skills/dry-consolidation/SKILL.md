@@ -55,11 +55,11 @@ duplication by browsing. At 124,000 lines an impression is not evidence.
 `jscpd` is token-based, handles Python despite the name, and needs no install:
 
 ```bash
-npx jscpd --reporters json --min-tokens 60 --output /tmp/jscpd-out --silent \
+npx jscpd --reporters json --min-tokens 60 --output C:/tmp/jscpd-out --silent \
   --format python --ignore "tests/**,.venv/**,assets/**" .
 ```
 
-Read `/tmp/jscpd-out/jscpd-report.json` and parse `duplicates[]`. Each entry
+Read `C:/tmp/jscpd-out/jscpd-report.json` and parse `duplicates[]`. Each entry
 gives both file paths, exact line ranges, and the clone's size in tokens and
 lines. Read those ranges with `Read`'s `offset`/`limit`, nothing more.
 
@@ -79,12 +79,14 @@ metavariables, where `$VAR` matches any identifier and `$$$ARGS` any argument
 list:
 
 ```bash
-npx @ast-grep/cli -p 'async def $NAME($$$ARGS) -> discord.Embed: $$$' --lang py .
-npx @ast-grep/cli -p 'await interaction.response.send_message($$$ARGS)' --lang py .
+AG="npx --yes --package @ast-grep/cli ast-grep"     # not `npx @ast-grep/cli`
+$AG -p 'async def $NAME($$$ARGS) -> discord.Embed: $$$' --lang py .
+$AG -p 'await interaction.response.send_message($$$ARGS)' --lang py .
 ```
 
-See `ast-grep-search` for the pattern vocabulary. Use it to separate a genuine
-extractable duplicate from two blocks that happen to tokenize alike.
+See `ast-grep-search` for the pattern vocabulary, the reason the runner takes
+that form, and why multi-line patterns need a rule file. Use it to separate a
+genuine extractable duplicate from two blocks that happen to tokenize alike.
 
 **Fallback.** If `npx` is unavailable, fall back to Grep over the feature
 prefixes plus Glob over the sibling naming convention (`*_hub.py`, `*_db.py`,

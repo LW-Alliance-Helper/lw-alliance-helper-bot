@@ -418,6 +418,33 @@ These are deliberate and tested. Don't refactor away:
 
 ---
 
+## Cleanup skills
+
+Five skills in `.claude/skills/` automate the "grep for siblings before
+closing it" discipline above. Run them in this order; each narrows what
+the next has to look at.
+
+- **`code-complexity`** — ranks functions by measured complexity. Run it
+  first in any cleanup session: it turns "this feels messy" into a target
+  list. Needs `radon` (not installed — ask before installing).
+- **`dry-consolidation`** — finds code duplicated across modules with a
+  real clone detector, then extracts it into one helper. Reads § Patterns
+  to reuse above and treats everything there as preserved.
+- **`code-dead-code`** — finds what nothing reaches. Outputs suspects,
+  never a delete list: framework-dispatched callbacks, module re-exports
+  and the inline-config hook all look dead and are not. Needs `vulture`.
+- **`ast-grep-search`** — searches by AST shape rather than text. This is
+  the "human grep" `ruff.toml` says the ASYNC rule still needs for our own
+  non-stdlib blocking I/O (gspread, sqlite).
+- **`bulk-sweep-classify`** — classify every match before any repo-wide
+  find-replace. The success test is never "the grep returns zero".
+
+Adapted from a third-party MIT plugin; provenance and what changed is in
+`.claude/skills/THIRD_PARTY.md`. Their tooling is dev-only and must never
+reach `requirements.txt`.
+
+---
+
 ## Test fixtures
 
 - `seeded_db` (in `tests/conftest.py`) — temp SQLite with one

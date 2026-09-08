@@ -6059,7 +6059,18 @@ async def _finalize_structured_roster(
     import storm
 
     s = view.session
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    # The phase-aware Approve & Post picker reaches here through
+    # `_drop_approve_picker`, which has already deferred this
+    # interaction so it can delete the picker message. Deferring a
+    # second time raises `discord.InteractionResponded`, which
+    # subclasses `ClientException` rather than `HTTPException`, so
+    # nothing on that path caught it and the whole finalize step was
+    # skipped in silence. Direct-button presets arrive undeferred and
+    # still need this — finalize does Sheets I/O well past the
+    # 3-second response window. The picker path loses the "thinking"
+    # spinner; its own defer is not ephemeral+thinking.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
     # Refresh powers from the roster Sheet at finalise time so
     # `power_at_assignment` in the rosters_tab write reflects the value

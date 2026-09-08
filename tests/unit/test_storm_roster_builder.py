@@ -4086,6 +4086,197 @@ class TestFinalizePostOutcomes:
         assert self._find_followup(inter, "didn't fit") is None
 
 
+class TestApprovePickerReachesFinalize:
+    """The phase-aware Approve & Post picker chains two coroutines that
+    each own the interaction response: `_drop_approve_picker` defers it
+    so the picker can be deleted, then `_finalize_structured_roster` ran
+    an unguarded `response.defer(...)` of its own.
+
+    The second defer raises `discord.InteractionResponded`, which
+    subclasses `ClientException` — NOT `HTTPException` — so nothing on
+    the picker path caught it. discord.py's default `View.on_error` then
+    logged it and returned, and because the interaction was already
+    deferred the officer got no "Interaction failed" toast either. The
+    picker vanished, no mail posted, no sheet row written, and the
+    session lock stayed claimed.
+
+    Existing coverage missed it because it only ever built the picker to
+    assert its button labels, and tested `_finalize_structured_roster`
+    directly with a fresh interaction. Nothing crossed the seam. These
+    tests invoke the real button callback so the seam is exercised.
+    """
+
+    def _make_responded_interaction(self, guild):
+        """An interaction double whose SECOND `response.defer()` raises
+        `discord.InteractionResponded`, exactly as the real one does
+        once `_drop_approve_picker` has deferred it."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        inter = MagicMock()
+        inter.guild = guild
+        inter.user = MagicMock()
+        inter.user.id = 42  # matches session.user_id
+        inter.response = MagicMock()
+
+        state = {"deferred": False}
+
+        async def _defer(*args, **kwargs):
+            if state["deferred"]:
+                raise discord.InteractionResponded(inter)
+            state["deferred"] = True
+
+        inter.response.defer = AsyncMock(side_effect=_defer)
+        inter.response.is_done = MagicMock(side_effect=lambda: state["deferred"])
+        inter.delete_original_response = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        return inter
+
+    def _wire_post_channel(self, gid, channel_id):
+        import config
+
+        cfg = config.get_storm_config(gid, "DS")
+        cfg["post_channel_id"] = channel_id
+        config.save_storm_config(
+            gid,
+            "DS",
+            **{
+                k: v
+                for k, v in cfg.items()
+                if k
+                in {
+                    "tab_name",
+                    "mail_template",
+                    "timezone",
+                    "log_channel_id",
+                    "post_channel_id",
+                }
+            },
+        )
+
+    def _make_channel(self, channel_id):
+        from unittest.mock import AsyncMock, MagicMock
+
+        ch = MagicMock()
+        ch.id = channel_id
+        ch.mention = "<#%d>" % channel_id
+        ch.send = AsyncMock()
+        return ch
+
+    def _make_phase_aware_env(self, fake_env, *, channel_id=12345):
+        from unittest.mock import MagicMock
+        import config
+
+        _fake, gid = fake_env
+        self._wire_post_channel(gid, channel_id)
+
+        session = _make_phase_aware_session()
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Info Center"].append("1")
+        session.assignments_p2["Arsenal"].append("2")
+
+        view = srb.RosterBuilderView(session)
+        view.message = None
+        config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=42)
+
+        ch = self._make_channel(channel_id)
+        guild = MagicMock()
+        guild.get_channel = MagicMock(return_value=ch)
+
+        picker = srb._ApprovePostPickerView(parent_view=view)
+        picker.message = None
+        inter = self._make_responded_interaction(guild)
+        return inter, picker, ch, session
+
+    @staticmethod
+    def _button(picker, needle):
+        return next(c for c in picker.children if needle in (getattr(c, "label", "") or ""))
+
+    @pytest.mark.asyncio
+    async def test_with_image_posts_the_roster(self, fake_env):
+        inter, picker, ch, _ = self._make_phase_aware_env(fake_env)
+        # `Item.callback` is what discord.py's own dispatch awaits, so
+        # this is the real path an officer's click takes.
+        await self._button(picker, "With image").callback(inter)
+        ch.send.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_text_only_posts_the_roster(self, fake_env):
+        inter, picker, ch, _ = self._make_phase_aware_env(fake_env)
+        await self._button(picker, "Text only").callback(inter)
+        ch.send.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_picker_path_releases_the_session_lock(self, fake_env):
+        # The stuck lock was the worst downstream symptom: the officer
+        # couldn't reopen the builder at all until it aged out.
+        import config
+
+        _fake, gid = fake_env
+        inter, picker, _ch, _ = self._make_phase_aware_env(fake_env)
+        await self._button(picker, "Text only").callback(inter)
+        # A different officer can now claim the slot; while the lock is
+        # stuck this returns (False, 42).
+        claimed, holder = config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=99)
+        assert (claimed, holder) == (True, None)
+
+    @pytest.mark.asyncio
+    async def test_picker_path_tells_the_officer_what_happened(self, fake_env):
+        # Silence was the bug. The officer must get a summary followup.
+        inter, picker, _ch, _ = self._make_phase_aware_env(fake_env)
+        await self._button(picker, "Text only").callback(inter)
+        texts = [c.args[0] for c in inter.followup.send.await_args_list if c.args]
+        assert any("Roster posted." in t for t in texts), texts
+
+    @pytest.mark.asyncio
+    async def test_direct_button_path_still_defers(self, fake_env):
+        # The flat-structured buttons do NOT pre-defer, so the guard
+        # must leave their defer intact — finalize does real Sheets work
+        # and would blow the 3-second response window without it.
+        from unittest.mock import AsyncMock, MagicMock
+        import config
+
+        _fake, gid = fake_env
+        self._wire_post_channel(gid, 12345)
+
+        session = _make_session(
+            team="A",
+            members={
+                "1001": {
+                    "key": "1001",
+                    "name": "Alice",
+                    "discord_id": "1001",
+                    "power": 412_000_000,
+                    "not_on_discord": False,
+                },
+            },
+        )
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        view = srb.RosterBuilderView(session)
+        view.message = None
+        config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=42)
+
+        ch = self._make_channel(12345)
+        guild = MagicMock()
+        guild.get_channel = MagicMock(return_value=ch)
+
+        inter = MagicMock()
+        inter.guild = guild
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.response.is_done = MagicMock(return_value=False)
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+
+        await srb._finalize_structured_roster(inter, view)
+
+        inter.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        ch.send.assert_awaited()
+
+
 class TestSplitMailAtHeading:
     """#237: the long-mail picker's "Send as 2 posts" choice splits at
     a natural heading break so the second message always starts with

@@ -574,7 +574,7 @@ _ODDS_THRESHOLD = "A player goes through by finishing in the top **{advance}**."
 #: anyway, in a different place on every row. Two breaks in the same place every
 #: time, after the name.
 _ODDS_ROW = "**{name}**\n{parts}"
-_ODDS_ADVANCE = "Advancing odds: {odds}"
+_ODDS_ADVANCE = "Advancing odds: **{odds}**"
 #: **Dropped, then restored the same day.** It went when the shape under
 #: consideration was three inline embed fields, where three was a hard cap and
 #: this was the weakest of four. Labelled lines have no cap, so Kevin put it
@@ -587,9 +587,9 @@ _ODDS_ADVANCE = "Advancing odds: {odds}"
 #: honestly."* It was `Winning Odds`, which on a surface that also carries head
 #: to head and single-match simulation could be read as winning a match. This
 #: says the thing itself.
-_ODDS_WIN = "1st place odds: {odds}"
+_ODDS_WIN = "1st place odds: **{odds}**"
 #: Dropped whole when nobody has finished yet, rather than printed empty.
-_ODDS_PLACEMENT = "Placement: {place}"
+_ODDS_PLACEMENT = "Placement: **{place}**"
 
 #: The same, for the bracket, which is averaged over seedings rather than run
 #: against the one anybody will get.
@@ -1098,13 +1098,35 @@ _READ_RANGE = "Runs from {floor} to {ceiling}, depending on what the two of them
 #: recorded, so there is no line-up to put on the field.
 #:
 #: **The row stays on the page.** A leader handing this to a player needs to
-#: see that one of their seven meetings is unanswerable, and which box fixes
-#: it; a list that is quietly six long in one group and seven in another says
-#: nothing at all.
-_READ_NO_OPPONENT = (
-    "We do not have a full line-up for them, so this one cannot be worked out. "
-    "Slot(s) {slots} have no squad recorded. {path}"
-)
+#: see that one of their seven meetings is unanswerable; a list that is
+#: quietly six long in one group and seven in another says nothing at all.
+#:
+#: **A TAG RATHER THAN A SENTENCE, ON THIS BULK SURFACE ONLY.** `🎯 Head to
+#: head` -- the one-to-one command -- still spells this out in full; a leader
+#: paging through a whole team does not need the ask repeated per opponent,
+#: only the fact that one exists, the same way a missing rank prints `-`
+#: rather than a paragraph about how ranks are recorded. Signed off by
+#: Kevin, 2026-09-07.
+_READ_UNSCOUTED_TAG = "No line-up on record"
+
+#: Same rule, for the two "what to set" refusals that used to spell out what
+#: was missing. `_READ_UNSCOUTED_TAG` is the one that replaces a whole block;
+#: these replace one clause inside it, beside a headline and a deployment
+#: habit that stay exactly as they were. Signed off by Kevin, 2026-09-07,
+#: who reworded both from the first draft's bare tags to a short sentence.
+_READ_NEEDS_SQUADS_TAG = "Your squads not on record."
+_READ_TYPES_UNKNOWN_TAG = "No squad types on record."
+
+#: The leader's own copy of a read carries this; the one `📤 Post this to
+#: current channel` posts does not (`_shared_read_embed`). Wording signed off
+#: by Kevin, 2026-09-07 -- who also flagged that in the sign-off mock this
+#: line read as though it belonged to the last opponent listed rather than to
+#: the page as a whole. The embed's real footer (`set_footer`, not a trailing
+#: paragraph) is Discord's own visually distinct region, separated from the
+#: fields by more than the mock's flat HTML could show -- confirm this
+#: actually reads as separate once tested live, since the mock could not
+#: settle it either way.
+_READS_UNSCOUTED_FOOTER = "{count} without a line-up on record."
 
 #: What every figure on a read is, said once at the bottom.
 #:
@@ -1128,32 +1150,24 @@ _READS_NEEDS_THEM = (
 #: Nobody in the alliance is in a round these reads cover.
 _READS_NOBODY = "We do not hold anyone from **{alliance}** in the **{round}** yet."
 
-#: How many reads went out and, where it matters, who did not fit.
-#:
-#: **The cut is named rather than counted.** `CHAMPION_DUEL_INDEX.md`'s rule --
-#: a filter that silently drops its tail reads as "your alliance is not in
-#: this" -- applies to a bounded batch for the same reason, and a leader who
-#: cannot see which of their people was left out cannot go and get them.
-_READS_CUT = "The first {shown} by rank. Not included: {names}."
+#: The jump-to modal's refusal: no eligible player answers to the typed name.
+#: Names the alliance and the round rather than just failing quietly, the same
+#: rule `_READS_NOBODY` follows for the surface as a whole.
+_READS_JUMP_MISS = "No **{alliance}** player named **{name}** in the **{round}**."
 
-#: The control that hands the reads to the channel, and the line that rides
-#: with them.
+#: The control that hands one member's read to the channel, and the line that
+#: rides with it.
 #:
-#: Follows `CD_BTN_SHARE` to the word, because it is the same act on a
-#: different payload: an ephemeral answer that the person who asked for it
-#: chooses to make public. Private by default is `PROPOSAL_champion_duel_ia.md`
+#: Follows `CD_BTN_SHARE` to the word (singular, since one page is one member's
+#: read, not the whole team the old bulk post sent): the same act on a
+#: different payload, an ephemeral answer the person who asked for it chooses
+#: to make public. Private by default is `PROPOSAL_champion_duel_ia.md`
 #: principle 5, and posting is the deliberate leadership half of it.
-CD_BTN_SHARE_READS = "📤 Post these to current channel"
-
-#: How many players one press reads for.
 #:
-#: **It bounds the cost, and that is what it is for.** The measured worst case
-#: is about 450 ms of engine per player against a full semi-final group -- an
-#: unscouted pair is a 1,296-cell grid at 57 ms -- so ten is about four and a
-#: half seconds of Python holding the GIL of the process serving every guild.
-#: That is a deliberate leadership press and it is two orders of magnitude
-#: under the knockout bracket run this bot already does on one.
-READS_PER_PRESS = 10
+#: Renamed from "📤 Post these to current channel" for the new one-at-a-time
+#: pager. Signed off by Kevin, 2026-09-07, who dropped "read" from the first
+#: draft's label.
+CD_BTN_SHARE_READS = "📤 Post this to current channel"
 
 #: How many characters of embed one message may carry.
 #:
@@ -1169,6 +1183,13 @@ READS_PER_PRESS = 10
 #: being dropped -- the reads are the deliverable, and a batching rule that
 #: silently loses one would be the worst version of the cut this file already
 #: refuses to make silently.
+#:
+#: **Not reachable from the interactive surface any more.** The pager renders
+#: one embed per page and `📤 Post this read to current channel` posts one
+#: embed, and neither ever gets near either of Discord's caps -- `read_batches`
+#: and this budget are kept for whoever else needs to batch a list of embeds,
+#: and for the tests that already pin their behaviour, rather than deleted for
+#: having no call site left in this file.
 READS_CHAR_BUDGET = 5500
 
 #: Discord's other cap on the same message, kept beside the one that binds so
@@ -7205,13 +7226,48 @@ def _add_listing(embed: discord.Embed, name: str, lines: list[str]) -> None:
         embed.add_field(name=(name or "​")[:256], value="\n".join(chunk)[:FIELD_LIMIT], inline=False)
 
 
-def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> discord.Embed:
+def _alliance_real_stages(players: list[dict]) -> list[str]:
+    """Every `db.STAGES` round this alliance actually has a row in, furthest
+    reached first.
+
+    Read off the order `get_alliance_members` already sorted `players` into
+    rather than re-derived from `db.STAGES`, so this list and the "furthest
+    first" framing it drives cannot disagree with the read they come from.
+
+    **The unplaced bucket is not one of these.** It has no round to be
+    furthest in, so it is never a competing option in the select -- it rides
+    along with whichever real stage is on screen, exactly where it already sat
+    before there was anything to choose between.
+    """
+    seen: dict[str, None] = {}
+    for p in players:
+        stage = p.get("stage")
+        if stage is not None:
+            seen.setdefault(stage, None)
+    return list(seen)
+
+
+def build_alliance_embed(
+    state: dict, *, can_odds: bool, page: int = 0, stage: str | None = None
+) -> discord.Embed:
     """`🏰 Your alliance`: where all of my people are, and how far they get.
 
-    **One field per round, furthest round first.** The rounds are the shape of
-    the answer: a leader wants to know who got deepest before they want a
-    sorted list, and naming the sections off `db.STAGE_LABELS` borrows the
-    game's own words rather than inventing a ladder of our own.
+    **One round on screen at a time, furthest reached by default.** An
+    alliance spread across Qualifiers, Semi-finals and Knockouts used to get
+    every one of those stacked into one message; `stage` now picks which round
+    is shown, and `_AllianceView` offers the rest through a select rather than
+    piling them underneath it. An alliance that has reached only one round
+    never sees the select at all -- there is nothing to choose between, so the
+    screen renders exactly as it always did.
+
+    **Accounts we hold no round for ride along regardless of `stage`.** They
+    are a gap in our record rather than a fact about a round, so hiding them
+    behind whichever stage happens to be selected would make them flicker in
+    and out of a leader's view of their own alliance depending on a control
+    that has nothing to do with them.
+
+    Naming the sections off `db.STAGE_LABELS` borrows the game's own words
+    rather than inventing a ladder of our own.
 
     NO VERDICT SENTENCE ANYWHERE, and that is a rule rather than an omission.
     Kevin struck exactly that from `🏅 Your standing` on 2026-08-25 -- *"It's
@@ -7270,19 +7326,30 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
     held = opener + _ALLIANCE_HELD.format(count=_plural(len(players), "account"))
     embed.description = (f"{held}\n{elsewhere}" if elsewhere else held)[:4096]
 
-    pages = max(1, -(-len(players) // GROUP_PAGE_SIZE))
+    # One round at a time where the alliance has reached more than one --
+    # everybody else in it drops off this page -- and the accounts we hold no
+    # round for tag along regardless, since `stage` never selects them out.
+    # A single-round alliance narrows to nothing at all: `real_stages` has one
+    # entry, `stage` resolves to it, and `shown` is every player again.
+    real_stages = _alliance_real_stages(players)
+    stage = stage if stage in real_stages else (real_stages[0] if real_stages else None)
+    shown = [p for p in players if p.get("stage") is None or p.get("stage") == stage]
+
+    pages = max(1, -(-len(shown) // GROUP_PAGE_SIZE))
     page = max(0, min(page, pages - 1))
     start = page * GROUP_PAGE_SIZE
-    rows = players[start : start + GROUP_PAGE_SIZE]
+    rows = shown[start : start + GROUP_PAGE_SIZE]
 
     odds = state.get("odds") or {}
     # Grouped in the order they already arrive in. `get_alliance_members` sorts
     # furthest round first, so walking the page and cutting where the round
     # changes cannot disagree with that sort -- which a second grouping pass
-    # keyed on the round could.
-    for stage, group in itertools.groupby(rows, key=lambda p: p.get("stage")):
+    # keyed on the round could. `shown` already holds at most one real stage,
+    # so this produces at most two groups: that stage's rows, then the
+    # unplaced tail -- never the several a multi-stage alliance used to stack.
+    for row_stage, group in itertools.groupby(rows, key=lambda p: p.get("stage")):
         listed = list(group)
-        if stage is None:
+        if row_stage is None:
             _add_listing(
                 embed,
                 _ALLIANCE_UNPLACED,
@@ -7299,9 +7366,17 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
             continue
         _add_listing(
             embed,
-            db.STAGE_LABELS.get(stage, str(stage).title()),
+            db.STAGE_LABELS.get(row_stage, str(row_stage).title()),
             [_alliance_row(p, odds, can_odds=can_odds) for p in listed],
         )
+
+    # Scoped to the groups actually on screen, so a caveat or a basis line
+    # about a round the select is not even showing cannot ride along under
+    # this one's listing. A no-op for the common single-stage alliance, whose
+    # `shown` is every player and therefore every group `odds` was ever built
+    # from.
+    stage_group_ids = {gid for p in shown if (gid := (_current_row(p) or {}).get("group_id"))}
+    odds = {group_id: entry for group_id, entry in odds.items() if group_id in stage_group_ids}
 
     as_of = _alliance_as_of(odds) if can_odds else None
     if as_of:
@@ -7319,8 +7394,8 @@ def build_alliance_embed(state: dict, *, can_odds: bool, page: int = 0) -> disco
     listing = _listing_footer(
         first=start + 1,
         last=start + len(rows),
-        shown=len(players),
-        held=len(players),
+        shown=len(shown),
+        held=len(shown),
         filtered=False,
     )
     basis = _ODDS_BASIS if _alliance_showable(odds, can_odds=can_odds) else None
@@ -7364,13 +7439,24 @@ def _read_block(read, player_name: str) -> str:
     """One opponent, as the mock lays them out: odds, theirs, yours, the trust.
 
     The same decision tree `build_intel_embed` walks, compressed to lines
-    rather than fields, and reusing its sentences rather than shortened
-    rewrites of them -- those are Kevin's words and several of them exist
-    precisely to stop a shorter version overclaiming.
+    rather than fields. The headline, the deployment habit and the trust line
+    reuse its sentences rather than shortened rewrites of them -- those are
+    Kevin's words and several of them exist precisely to stop a shorter
+    version overclaiming.
+
+    **THE THREE MISSING-DATA REFUSALS DO NOT, AND THAT IS THIS SURFACE ONLY.**
+    `🎯 Head to head` still spells out what is missing and how to fix it, one
+    matchup at a time. A leader paging through a whole team hits the same
+    three refusals over and over, and a paragraph repeated across a dozen
+    opponents stops reading as guidance and starts reading as noise -- so here
+    they are a tag (`_READ_UNSCOUTED_TAG`, `_READ_NEEDS_SQUADS_TAG`,
+    `_READ_TYPES_UNKNOWN_TAG`), the same terse shape a missing rank already
+    prints as `` `-` ``. Nothing about the odds, the habit or the
+    recommendation below any of this changes -- Kevin was explicit that those
+    are findings, not prose, and stay.
     """
     if read.intel is None:
-        slots = ", ".join(str(s) for s in read.missing)
-        return _READ_NO_OPPONENT.format(slots=slots, path=_card_path(CD_BTN_SQUADS))
+        return _READ_UNSCOUTED_TAG
 
     result = read.intel
     worth_little = result.worth == intel_lib.WORTH_SETTLED
@@ -7423,11 +7509,11 @@ def _read_block(read, player_name: str) -> str:
     if worth_little:
         lines.append(words.order_barely_matters(result.envelope.spread))
     elif result.needs_your_squads:
-        lines.append(words.NEEDS_YOUR_SQUADS.format(path=_card_path(CD_BTN_SQUADS)))
+        lines.append(_READ_NEEDS_SQUADS_TAG)
     elif result.recommended is not None and not result.choice_matters:
         refusal = words.CANNOT_RECOMMEND_FLAT.format(measured=words.points(result.choice_spread))
         if not result.their_types_known:
-            refusal = f"{refusal} {words.CANNOT_RECOMMEND_WHY}"
+            refusal = f"{refusal} · {_READ_TYPES_UNKNOWN_TAG}"
         lines.append(refusal)
     elif result.recommended is not None:
         lines.append(f"{_READ_ANSWER}: **{_order_text(result.recommended.order)}**")
@@ -7444,6 +7530,18 @@ def _read_block(read, player_name: str) -> str:
     return "\n".join(lines)
 
 
+def _read_missing(read) -> bool:
+    """Whether `_read_block` prints this opponent as unscouted.
+
+    Only `read.intel is None` counts. The reader's own missing squads and an
+    opponent's unknown types are different gaps -- each already named in its
+    own block by `_READ_NEEDS_SQUADS_TAG`/`_READ_TYPES_UNKNOWN_TAG` -- and
+    folding all three into one number here would answer "what is wrong"
+    without saying which kind of wrong it is.
+    """
+    return read.intel is None
+
+
 def build_read_embed(player: dict, reads: list, *, stage: str, label=None) -> discord.Embed:
     """One player's read against every opponent in their group.
 
@@ -7454,6 +7552,13 @@ def build_read_embed(player: dict, reads: list, *, stage: str, label=None) -> di
     **Named for the player it is about**, because the whole point of this
     surface is that it gets handed to them: a page headed with the round would
     be a page about the tournament.
+
+    **Carries a leader-only line in the footer when something here is
+    unscouted.** One compact count rather than the per-opponent tag repeated:
+    the tag already says which row needs a line-up, so the footer only has to
+    say how many do. Stripped by `_shared_read_embed` before this goes to the
+    channel -- it is a note to the leader about their own screen, not a fact
+    about the opponent worth publishing.
     """
     name = str(player.get("display_name") or "?")
     embed = discord.Embed(
@@ -7469,8 +7574,25 @@ def build_read_embed(player: dict, reads: list, *, stage: str, label=None) -> di
             value=_read_block(read, name)[:1024],
             inline=False,
         )
-    embed.set_footer(text=_READS_BASIS[:2048])
+    footer = _READS_BASIS
+    missing = sum(1 for read in reads if _read_missing(read))
+    if missing:
+        footer = f"{footer}\n{_READS_UNSCOUTED_FOOTER.format(count=_plural(missing, 'opponent'))}"
+    embed.set_footer(text=footer[:2048])
     return embed
+
+
+def _shared_read_embed(embed: discord.Embed) -> discord.Embed:
+    """The same read, minus the leader-only footer line.
+
+    A copy rather than a second render: nothing about a read changes between
+    the leader's own screen and the channel it gets posted to, so there is
+    nothing here worth paying the engine for twice. `_ReadsView._on_share`
+    posts exactly this.
+    """
+    shared = embed.copy()
+    shared.set_footer(text=_READS_BASIS[:2048])
+    return shared
 
 
 def _embed_chars(embed: discord.Embed) -> int:
@@ -7518,7 +7640,24 @@ def read_batches(embeds: list[discord.Embed]) -> list[list[discord.Embed]]:
     return batches
 
 
-def team_reads(state: dict, *, limit: int = READS_PER_PRESS) -> dict:
+def _reads_roster(state: dict) -> list[dict]:
+    """The alliance's round-robin players, best-placed first -- nothing
+    computed yet.
+
+    Split out of `team_reads` for `_ReadsView`, which pages this list one
+    engine call at a time rather than paying for the whole roster up front.
+    No database or engine work happens here: `state["players"]` is already
+    read, already sorted furthest round first and then by rank, so this is a
+    filter over what is already in hand.
+    """
+    return [
+        p
+        for p in (state.get("players") or [])
+        if p.get("stage") in db.ROUND_ROBIN_STAGES and (_current_row(p) or {}).get("group_id")
+    ]
+
+
+def team_reads(state: dict, *, limit: int | None = None) -> dict:
     """A read for each of the alliance's players in a round-robin round.
 
     Returns `{"stage", "embeds", "cut", "shown"}`. `cut` names the players who
@@ -7543,52 +7682,35 @@ def team_reads(state: dict, *, limit: int = READS_PER_PRESS) -> dict:
     read at a different instant from the people they are being priced against.
 
     BLOCKING AND MEASURED. The worst case is about 450 ms of engine per player
-    against a full group of seven -- unscouted pairs are a 1,296-cell grid --
-    so `limit` is what stops one press from becoming several seconds of Python
-    holding the GIL of the process serving every guild. Call it in a thread.
+    against a full group of seven -- unscouted pairs are a 1,296-cell grid.
+    `limit`, when given, is what stops one call from becoming several seconds
+    of Python holding the GIL of the process serving every guild.
+
+    **`limit` defaults to None -- the whole roster -- and the interactive
+    surface never passes one.** `🎯 Head to head for everyone` used to compute
+    up to ten of these (the retired `READS_PER_PRESS`) before showing any of
+    them and cut the rest; `_ReadsView` now pages the roster one member at a
+    time, calling `_reads_roster` for the cheap part and `_read_one` for one
+    member's worth of the expensive part per page, so nothing there is ever
+    more than one 450 ms read away from a press. This function keeps its cap
+    for whoever else wants a bounded batch rather than the whole roster --
+    call it in a thread either way.
     """
-    players = [
-        p
-        for p in (state.get("players") or [])
-        if p.get("stage") in db.ROUND_ROBIN_STAGES and (_current_row(p) or {}).get("group_id")
-    ]
+    players = _reads_roster(state)
     stage = db.ROUND_ROBIN_STAGES[0]
     if not players:
         return {"stage": stage, "embeds": [], "cut": [], "shown": 0}
 
     # Already sorted furthest round first and then by rank, so the cut takes
     # the best-placed rather than whoever the database happened to return.
-    taken, cut = players[:limit], players[limit:]
+    taken, cut = (players, []) if limit is None else (players[:limit], players[limit:])
 
     scouting: dict[int, list[dict]] = {}
     embeds: list[discord.Embed] = []
     for player in taken:
-        row = _current_row(player) or {}
-        group_id = row["group_id"]
-        if group_id not in scouting:
-            scouting[group_id] = db.get_group_scouting(group_id)
-        members = scouting[group_id]
-        # Matched on the registrant id. `get_group_scouting` sets `id` to it
-        # for exactly this, and matching on a display name would put two
-        # players sharing one into the same read.
-        mine = next((m for m in members if m.get("id") == player["id"]), None)
-        if mine is None:  # pragma: no cover - the group is where the row came from
-            continue
-        opponents = [m for m in members if m.get("id") != player["id"]]
-        try:
-            reads = intel_lib.reads_for(mine, opponents)
-        except predict_lib.NotEnoughData as exc:
-            embed = discord.Embed(
-                title=_READS_TITLE.format(player=str(player.get("display_name") or "?"))[:256],
-                description=_READS_NEEDS_THEM.format(
-                    player=discord.utils.escape_markdown(str(player.get("display_name") or "?")),
-                    slots=", ".join(str(s) for s in exc.missing),
-                )[:4096],
-                color=discord.Color.blurple(),
-            )
+        embed = _read_one(player, stage, scouting)
+        if embed is not None:
             embeds.append(embed)
-            continue
-        embeds.append(build_read_embed(mine, reads, stage=stage, label=row.get("grp")))
 
     return {
         "stage": stage,
@@ -7598,51 +7720,235 @@ def team_reads(state: dict, *, limit: int = READS_PER_PRESS) -> dict:
     }
 
 
-class _ReadsShareView(discord.ui.View):
-    """Hands the reads to the channel, which is the deliberate half.
+def _read_one(player: dict, stage: str, scouting: dict[int, list[dict]]) -> discord.Embed | None:
+    """One player's read against their own group, computed on this call.
 
-    Private by default (`PROPOSAL_champion_duel_ia.md` principle 5): the
-    leader pulls them as an ephemeral and chooses to post them. Follows
-    `SharePredictionView` -- the same 📤, the same "to current channel"
-    phrasing, the same disable-after-use, and the same held payload rather than
-    a second render, so what gets posted is what was read.
+    Factored out of `team_reads`'s loop so `_ReadsView` can pay for one member
+    at a time -- exactly the cost of one page turn -- rather than the whole
+    roster the old capped press computed up front. `scouting` is a cache the
+    caller owns and reuses across players sharing a group, so a page turn
+    inside one group is a dict lookup rather than a second query.
 
-    No `interaction_check`: the message this hangs off is ephemeral, so the
-    only person who can press it is the only person who can see it.
+    Returns None only where the row's own group does not actually hold it,
+    which nothing reachable today produces -- the row came from the group.
+    """
+    row = _current_row(player) or {}
+    group_id = row["group_id"]
+    if group_id not in scouting:
+        scouting[group_id] = db.get_group_scouting(group_id)
+    members = scouting[group_id]
+    # Matched on the registrant id. `get_group_scouting` sets `id` to it for
+    # exactly this, and matching on a display name would put two players
+    # sharing one into the same read.
+    mine = next((m for m in members if m.get("id") == player["id"]), None)
+    if mine is None:  # pragma: no cover - the group is where the row came from
+        return None
+    opponents = [m for m in members if m.get("id") != player["id"]]
+    try:
+        reads = intel_lib.reads_for(mine, opponents)
+    except predict_lib.NotEnoughData as exc:
+        return discord.Embed(
+            title=_READS_TITLE.format(player=str(player.get("display_name") or "?"))[:256],
+            description=_READS_NEEDS_THEM.format(
+                player=discord.utils.escape_markdown(str(player.get("display_name") or "?")),
+                slots=", ".join(str(s) for s in exc.missing),
+            )[:4096],
+            color=discord.Color.blurple(),
+        )
+    return build_read_embed(mine, reads, stage=stage, label=row.get("grp"))
+
+
+def _reads_find(roster: list[dict], typed: str) -> int | None:
+    """The roster position whose name answers to `typed`, or None.
+
+    Exact, case-insensitive first. Failing that, a case-insensitive prefix --
+    for somebody who typed the start of a name rather than all of it -- but
+    only where exactly one name on the roster starts with it: several sharing
+    that prefix is a miss rather than a guess at which one was meant, because
+    landing on the wrong one silently is worse than saying plainly it could
+    not find one.
+    """
+    typed = (typed or "").strip().lower()
+    if not typed:
+        return None
+    names = [str(p.get("display_name") or "").lower() for p in roster]
+    if typed in names:
+        return names.index(typed)
+    starts = [i for i, name in enumerate(names) if name.startswith(typed)]
+    return starts[0] if len(starts) == 1 else None
+
+
+class _ReadsJumpModal(discord.ui.Modal, title="Find a player on this list"):
+    """One field, the same shape this file's other name-search flows use
+    (`_FindPlayerModal`, `_PlaceInGroupModal`) -- and the same
+    parent-view-in-hand shape `_NewPlayerWarzoneModal` uses to edit the
+    message it was opened from rather than sending a second one.
     """
 
-    def __init__(self, *, embeds: list[discord.Embed], user_id: int):
-        super().__init__(timeout=600)
-        self.embeds = embeds
+    name = discord.ui.TextInput(label="Player name", max_length=64)
+
+    def __init__(self, *, view: "_ReadsView"):
+        super().__init__()
+        self.parent = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        match = _reads_find(self.parent.roster, self.name.value)
+        if match is None:
+            await interaction.response.send_message(
+                _READS_JUMP_MISS.format(
+                    alliance=discord.utils.escape_markdown(self.parent.alliance),
+                    name=discord.utils.escape_markdown(_typed(self.name.value, 64)),
+                    round=db.STAGE_LABELS.get(self.parent.stage, self.parent.stage),
+                ),
+                ephemeral=True,
+            )
+            return
+        self.parent.index = match
+        self.parent._shared = False
+        embed = await asyncio.to_thread(self.parent._embed)
+        self.parent._build()
+        await interaction.response.edit_message(embed=embed, view=self.parent)
+
+
+class _ReadsView(discord.ui.View):
+    """`🎯 Head to head for everyone`: one member's read at a time.
+
+    **One page, one member, edited in place.** The bulk press used to compute
+    up to ten of these (`READS_PER_PRESS`, now retired) and dump every one of
+    them across several messages; that stacked shape is gone in favour of the
+    same ◀ Prev / Next ▶ pattern `_AllianceView` and `_GroupView` already page
+    other long lists with. Best-placed first, the order `_reads_roster`
+    already sorts the roster in -- nothing here re-ranks it.
+
+    **Computed one page at a time, not all up front.** `team_reads` used to
+    pay for the whole capped batch before showing any of it; this view calls
+    `_read_one` for whichever member is on screen and nowhere else, caching
+    what it has already built so paging back to somebody does not pay for
+    their read twice. That is what makes the old cap unnecessary rather than
+    merely removed: nothing here is ever more than one member's worth of
+    engine time away from a press, the same cost `🎯 Head to head` already
+    pays for one matchup.
+
+    Premium (`champion_duel_intel`) and `intel_lib.ENGINE_AVAILABLE` are both
+    re-checked once, by `_AllianceView._on_reads`, before this view is ever
+    built -- exactly where they were checked before this view existed. Only
+    presentation and navigation live here.
+    """
+
+    def __init__(self, *, user_id: int, alliance: str, stage: str, roster: list[dict]):
+        super().__init__(timeout=900)
         self.user_id = user_id
+        self.alliance = alliance
+        self.stage = stage
+        self.roster = roster
+        self.index = 0
         self.message: discord.Message | None = None
+        # One cache for the view's whole life, not per page turn. Paging back
+        # to somebody already built is a dict lookup rather than a second
+        # 450 ms engine call, and two players sharing a group share one
+        # `get_group_scouting` between them exactly as `team_reads` always did.
+        self._scouting: dict[int, list[dict]] = {}
+        self._embeds: dict[int, discord.Embed] = {}
+        # Whether the page ON SCREEN has already been posted. Reset on every
+        # navigation rather than carried for the view's whole life -- a leader
+        # who shares Kestrel and pages on to Merlin has not already shared
+        # Merlin, so disabling `📤` forever after the first press would block
+        # every page after it rather than just the one just posted.
+        self._shared = False
+        self._build()
+
+    def _embed(self) -> discord.Embed:
+        """The read on screen, computed on first visit and cached after."""
+        if self.index not in self._embeds:
+            self._embeds[self.index] = _read_one(
+                self.roster[self.index], self.stage, self._scouting
+            )
+        return self._embeds[self.index]
+
+    def _build(self):
+        self.clear_items()
+        row = 0
+        if len(self.roster) > 1:
+            # Bare, and the labels are `storm_log.py`'s to the character --
+            # the same pager `_AllianceView` and `_GroupView` already use.
+            self._pager("◀ Prev", row, self._on_prev, self.index == 0)
+            self._pager(f"Page {self.index + 1} / {len(self.roster)}", row, None, True)
+            self._pager("Next ▶", row, self._on_next, self.index >= len(self.roster) - 1)
+            row += 1
+            jump = discord.ui.Button(
+                label=CD_BTN_FIND[:80], style=discord.ButtonStyle.secondary, row=row
+            )
+            jump.callback = self._on_jump
+            self.add_item(jump)
+        share = discord.ui.Button(
+            label=CD_BTN_SHARE_READS[:80],
+            style=discord.ButtonStyle.secondary,
+            row=row,
+            disabled=self._shared,
+        )
+        share.callback = self._on_share
+        self.add_item(share)
+
+    def _pager(self, label, row, cb, disabled):
+        button = discord.ui.Button(
+            label=label[:80], style=discord.ButtonStyle.secondary, row=row, disabled=disabled
+        )
+        if cb:
+            button.callback = cb
+        self.add_item(button)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.user_id:
+            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
-    @discord.ui.button(label=CD_BTN_SHARE_READS, style=discord.ButtonStyle.secondary)
-    async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        button.disabled = True
-        await interaction.edit_original_response(view=self)
-        # Batched the same way the ephemeral was, so what lands in the channel
-        # is what the leader read. The attribution rides on the first message
-        # only: repeating it under every batch would say one thing four times.
-        batches = read_batches(self.embeds)
+    async def _turn(self, inter: discord.Interaction, index: int):
+        await inter.response.defer()
+        self.index = index
+        self._shared = False
+        embed = await asyncio.to_thread(self._embed)
+        self._build()
+        await inter.edit_original_response(embed=embed, view=self)
+
+    async def _on_prev(self, inter: discord.Interaction):
+        await self._turn(inter, self.index - 1)
+
+    async def _on_next(self, inter: discord.Interaction):
+        await self._turn(inter, self.index + 1)
+
+    async def _on_jump(self, inter: discord.Interaction):
+        await inter.response.send_modal(_ReadsJumpModal(view=self))
+
+    async def _on_share(self, inter: discord.Interaction):
+        """Post the page on screen, and only that page, to the channel.
+
+        Follows `SharePredictionView` -- the same 📤, the same "to current
+        channel" phrasing, the same held payload rather than a second render.
+        `_shared_read_embed` strips the leader-only footer line rather than
+        this rebuilding the embed from scratch: nothing about the read itself
+        changes on its way to the channel.
+        """
+        await inter.response.defer()
+        self._shared = True
+        self._build()
+        await inter.edit_original_response(view=self)
         try:
             # Posted to the channel directly: a followup to an ephemeral
             # interaction would itself be ephemeral, which is the one thing
             # this button exists to avoid.
-            for index, batch in enumerate(batches):
-                await interaction.channel.send(
-                    f"-# Shared by <@{self.user_id}>" if index == 0 else None, embeds=batch
-                )
+            await inter.channel.send(
+                f"-# Shared by <@{self.user_id}>", embed=_shared_read_embed(self._embed())
+            )
         except discord.Forbidden:
-            await interaction.followup.send(
+            await inter.followup.send(
                 "⚠️ I can't post in this channel. I need **Send Messages** here. "
-                "You can still read these above and post them yourself.",
+                "You can still read this above and post it yourself.",
                 ephemeral=True,
             )
 
@@ -7671,6 +7977,11 @@ class _AllianceView(discord.ui.View):
         # of them, so picking one would be a guess wearing an answer's clothes.
         warzone: str | None = None,
         page: int = 0,
+        # The round currently on screen. Left unresolved (`None`) until
+        # `_build` sees the players this state actually holds -- the caller
+        # cannot know the furthest one reached without reading the same list
+        # `_build` is about to walk anyway.
+        stage: str | None = None,
     ):
         super().__init__(timeout=900)
         self.user_id = user_id
@@ -7681,6 +7992,7 @@ class _AllianceView(discord.ui.View):
         self.can_write = can_write
         self.warzone = warzone
         self.page = page
+        self.stage = stage
         self.message: discord.Message | None = None
         self._build()
 
@@ -7726,9 +8038,23 @@ class _AllianceView(discord.ui.View):
             return
 
         players = self.state.get("players") or []
-        pages = max(1, -(-len(players) // GROUP_PAGE_SIZE))
+        real_stages = _alliance_real_stages(players)
+        self.stage = (
+            self.stage if self.stage in real_stages else (real_stages[0] if real_stages else None)
+        )
+        shown = [p for p in players if p.get("stage") is None or p.get("stage") == self.stage]
+        pages = max(1, -(-len(shown) // GROUP_PAGE_SIZE))
         self.page = max(0, min(self.page, pages - 1))
         row = 0
+
+        # One selectable round at a time rather than every one stacked, and
+        # offered only where there is more than one to choose between -- an
+        # alliance that has reached one round has nothing this control would
+        # do, so the screen it draws stays the one it always was.
+        if len(real_stages) > 1:
+            self.add_item(self._stage_select(real_stages, row))
+            row += 1
+
         if pages > 1:
             # Bare, and the labels are `storm_log.py`'s to the character. This
             # is the bot's pagination and a second wording of it would be a
@@ -7796,6 +8122,24 @@ class _AllianceView(discord.ui.View):
             record.callback = self._on_record
             self.add_item(record)
 
+    def _stage_select(self, stages: list[str], row: int) -> discord.ui.Select:
+        """Which round is on screen, furthest reached first -- `_PICK_STAGE`,
+        the same question `_GroupView` already asks in two other places."""
+        select = discord.ui.Select(
+            placeholder=_PICK_STAGE,
+            options=[
+                discord.SelectOption(
+                    label=db.STAGE_LABELS.get(s, s.title())[:100],
+                    value=s,
+                    default=(s == self.stage),
+                )
+                for s in stages
+            ],
+            row=row,
+        )
+        select.callback = self._on_stage
+        return select
+
     def _pager(self, label, row, cb, disabled):
         button = discord.ui.Button(
             label=label[:80], style=discord.ButtonStyle.secondary, row=row, disabled=disabled
@@ -7815,7 +8159,7 @@ class _AllianceView(discord.ui.View):
 
         await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
-    async def _turn(self, inter: discord.Interaction, page: int):
+    async def _turn(self, inter: discord.Interaction, *, page: int, stage: str | None = None):
         await inter.response.defer()
         self.state = await asyncio.to_thread(
             read_alliance,
@@ -7824,18 +8168,28 @@ class _AllianceView(discord.ui.View):
             warzone=self.warzone,
             with_odds=self.can_odds,
         )
+        if stage is not None:
+            self.stage = stage
         self.page = page
         self._build()
         await inter.edit_original_response(
-            embed=build_alliance_embed(self.state, can_odds=self.can_odds, page=self.page),
+            embed=build_alliance_embed(
+                self.state, can_odds=self.can_odds, page=self.page, stage=self.stage
+            ),
             view=self,
         )
 
     async def _on_prev(self, inter: discord.Interaction):
-        await self._turn(inter, self.page - 1)
+        await self._turn(inter, page=self.page - 1)
 
     async def _on_next(self, inter: discord.Interaction):
-        await self._turn(inter, self.page + 1)
+        await self._turn(inter, page=self.page + 1)
+
+    async def _on_stage(self, inter: discord.Interaction):
+        # Back to page one with the round, the same rule `_GroupView._on_stage`
+        # follows: a page number from one round's length means nothing against
+        # another's.
+        await self._turn(inter, page=0, stage=inter.data["values"][0])
 
     async def _on_who_am_i(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -7873,7 +8227,8 @@ class _AllianceView(discord.ui.View):
         )
 
     async def _on_reads(self, inter: discord.Interaction):
-        """Every player's read, in one press, private until they post it."""
+        """Every player's read, paged one member at a time, private until
+        somebody presses `📤` on the one they want to hand out."""
         await inter.response.defer(ephemeral=True, thinking=True)
         if not intel_lib.ENGINE_AVAILABLE:
             await inter.followup.send(_ENGINE_MISSING, ephemeral=True)
@@ -7890,34 +8245,30 @@ class _AllianceView(discord.ui.View):
         state = await asyncio.to_thread(
             read_alliance, inter.user.id, self.grouping, with_odds=False
         )
-        result = await asyncio.to_thread(team_reads, state)
-        if not result["embeds"]:
+        roster = _reads_roster(state)
+        stage = db.ROUND_ROBIN_STAGES[0]
+        if not roster:
             await inter.followup.send(
                 _READS_NOBODY.format(
                     alliance=discord.utils.escape_markdown(str(state.get("alliance") or "?")),
-                    round=db.STAGE_LABELS.get(result["stage"], result["stage"]),
+                    round=db.STAGE_LABELS.get(stage, stage),
                 ),
                 ephemeral=True,
             )
             return
 
-        # The cut is named on the message rather than left to be noticed.
-        note = _READS_ROUND_ONLY.format(round=db.STAGE_LABELS.get(result["stage"], result["stage"]))
-        if result["cut"]:
-            note += "\n" + _READS_CUT.format(
-                shown=result["shown"],
-                names=", ".join(discord.utils.escape_markdown(n) for n in result["cut"]),
-            )
-        # SEVERAL MESSAGES, BECAUSE ONE WILL NOT HOLD THEM. Discord counts 6,000
-        # characters across every embed on a message and a read is about 2,500,
-        # so a team of five is three messages. The button sits on the first with
-        # the note, which is where the reader starts, and it posts every batch.
-        batches = read_batches(result["embeds"])
-        view = _ReadsShareView(embeds=result["embeds"], user_id=inter.user.id)
-        await inter.followup.send(note[:2000], embeds=batches[0], view=view, ephemeral=True)
+        note = _READS_ROUND_ONLY.format(round=db.STAGE_LABELS.get(stage, stage))
+        view = _ReadsView(
+            user_id=inter.user.id,
+            alliance=str(state.get("alliance") or "?"),
+            stage=stage,
+            roster=roster,
+        )
+        # One member's worth of engine time, off the event loop -- the same
+        # cost a page turn pays, not the whole roster the old capped press did.
+        embed = await asyncio.to_thread(view._embed)
+        await inter.followup.send(note[:2000], embed=embed, view=view, ephemeral=True)
         view.message = await inter.original_response()
-        for batch in batches[1:]:
-            await inter.followup.send(embeds=batch, ephemeral=True)
 
 
 def build_hub_embed(
@@ -8691,7 +9042,7 @@ def build_bracket_embed(result, grouping, *, as_of: str | None = None) -> discor
     blocks = [
         f"**{discord.utils.escape_markdown(row.name)}**\n"
         + " · ".join(
-            f"{label} {words.probability(row.reach.get(rung, 0))}"
+            f"{label} **{words.probability(row.reach.get(rung, 0))}**"
             for rung, label in BRACKET_RUNGS.items()
         )
         for row in shown
@@ -8717,7 +9068,7 @@ def build_bracket_embed(result, grouping, *, as_of: str | None = None) -> discor
     while True:
         more = len(result.rows) - len(kept)
         tail = f"\n\nand **{_plural(more, 'player')}** below them." if more > 0 else ""
-        description = lead + ("\n\n" + "\n".join(kept) if kept else "") + tail
+        description = lead + ("\n\n" + "\n\n".join(kept) if kept else "") + tail
         if len(description) <= 4096 or not kept:
             break
         kept.pop()
@@ -8900,7 +9251,7 @@ def build_odds_embed(scouted, stage, label, grouping, *, stored=None) -> discord
         + " "
         + _ODDS_THRESHOLD.format(advance=result.advance)
         + "\n\n"
-        + "\n".join(lines)
+        + "\n\n".join(lines)
         + tail
     )[:4096]
 
@@ -9892,6 +10243,14 @@ class _PicksView(discord.ui.View):
             self._on_save,
             disabled=not (self.can_write and self.p1 is not None and self.p2 is not None),
         )
+        # Reachable from adding mode too, not only from the card underneath it.
+        # Just having put a meeting on the card is the exact moment somebody
+        # wants to look at what they have built so far, and the old path made
+        # them press `Cancel and go back` first to find this same button.
+        # `_on_show` and `CD_BTN_PICKS_SHOW` are grabbed as-is -- there is no
+        # second way to draw a card in this file, and this is not one either.
+        if self.meetings:
+            self._add(CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, row, self._on_show)
         # The way back out of a half-made meeting, and it is a button rather
         # than re-picking the warzone already selected: a client with nothing
         # new to send sends nothing at all, so a select somebody re-taps the

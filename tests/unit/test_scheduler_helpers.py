@@ -525,30 +525,6 @@ class TestFormatEtTimezoneSuffix:
         assert "(19:00 Server Time)" in msg
 
 
-# ── make_event_datetime: per-event tz instead of forced ET ───────────────────
-
-
-class TestMakeEventDatetimeTimezone:
-    """Regression: Add Event / Edit Time used to call make_et_datetime
-    which always pinned the dt to America/New_York, silently coercing
-    any non-ET alliance's edits into ET. The new helper accepts an
-    explicit tz so the editor can preserve the per-event setting."""
-
-    def test_default_tz_is_et_when_none_passed(self):
-        from datetime import date
-        from zoneinfo import ZoneInfo
-        from scheduler import make_event_datetime
-
-        dt = make_event_datetime(date(2026, 5, 8), 17, 0)
-        assert dt.tzinfo == ZoneInfo("America/New_York")
-        assert dt.hour == 17
-
-    def test_explicit_tz_is_preserved(self):
-        from datetime import date
-        from zoneinfo import ZoneInfo
-        from scheduler import make_event_datetime
-
-        seoul = ZoneInfo("Asia/Seoul")
-        dt = make_event_datetime(date(2026, 5, 8), 17, 0, tz=seoul)
-        assert dt.tzinfo == seoul
-        assert dt.hour == 17  # local hour, not converted
+# `next_clock_time` — which Add Event / Edit Time use to resolve a typed
+# time — moved to `time_helpers`; its tests moved with it. See
+# tests/unit/test_time_helpers.py.

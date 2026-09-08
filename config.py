@@ -27,6 +27,7 @@ from defaults import (
     DEFAULT_DS_TEMPLATE,
     DEFAULT_CS_TEMPLATE,
 )
+from time_helpers import SERVER_TZ
 
 DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
@@ -2471,25 +2472,6 @@ def delete_guild_event(guild_id: int, short_key: str) -> bool:
 DS_SERVER_TIMES = [(18, 0), (23, 0)]
 CS_SERVER_TIMES = [(12, 0), (23, 0)]
 
-SERVER_TZ_OFFSET = -2  # Server Time is UTC-2.
-
-
-def server_date_for(dt: datetime) -> date:
-    """The Last War in-game (server, UTC-2) calendar date at instant `dt`.
-
-    Last War's in-game day rolls over at 00:00 server time — about two hours
-    before UTC midnight — so a guild's local *evening* clock time (e.g. the
-    default 10pm train reminder) already falls on the **next** in-game day.
-    Date-keyed schedules (the train rotation, the legacy train blurb) resolve
-    "today's" entry against this server date rather than the guild's local
-    calendar date; otherwise the announcement that fires at the reset names the
-    in-game day that just ended, landing a full day behind. `dt` must be
-    timezone-aware.
-    """
-    from datetime import timezone as _tz, timedelta
-
-    return dt.astimezone(_tz(timedelta(hours=SERVER_TZ_OFFSET))).date()
-
 
 def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
     """Convert a Server Time (UTC-2) hour/minute to the guild's local clock.
@@ -2499,14 +2481,13 @@ def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
     `HH:MM Server Time` if the timezone lookup fails for any reason.
     """
     from zoneinfo import ZoneInfo
-    from datetime import datetime, timezone as _tz, timedelta
+    from datetime import datetime
 
     cfg = get_config(guild_id) if guild_id else None
     tz_str = cfg.timezone if cfg and cfg.timezone else "America/New_York"
     try:
-        server_tz = _tz(timedelta(hours=SERVER_TZ_OFFSET))
         # Use a stable date so DST behaves consistently for the rendered string.
-        server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=server_tz)
+        server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=SERVER_TZ)
         local_dt = server_dt.astimezone(ZoneInfo(tz_str))
         h12 = local_dt.hour % 12 or 12
         period = "am" if local_dt.hour < 12 else "pm"

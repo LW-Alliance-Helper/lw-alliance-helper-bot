@@ -9,6 +9,21 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.8.11] — 2026-09-08
+
+### Fixed
+- An event time edited in the editor now lands on the next occurrence of that clock time, not the day the editor was opened against.
+- Birthday announcements now resolve the day in the alliance's own timezone rather than the bot host's.
+- Birthday auto-population now resolves the day in server time, matching the train schedule it writes into.
+- Interval growth snapshots now count days in Eastern time, matching the gate they fire on.
+
+### Changed
+- Date resolution moved into one module, `time_helpers`, with the in-game (server) day as the default and the guild-local day a documented exception.
+- `shiny_tasks.py` no longer keeps a second copy of the UTC-2 server offset.
+
+Released from `main` with a patch bump, deliberately bypassing `dev` — that
+branch has unrelated work in flight.
+
 ## [1.8.10] — 2026-09-01
 
 ### Fixed

@@ -58,6 +58,7 @@ from messages import (
     TIME_PARSE_GIVE_UP,
     TIME_PARSE_RETRY,
 )
+from time_helpers import server_today
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def describe_event_schedule(ev: dict, *, today: Optional[date_cls] = None) -> st
     """
     from scheduler import next_event_dates
 
-    today = today or date_cls.today()
+    today = today or server_today()
     if ev.get("schedule_type") != "repeating" or not ev.get("anchor_date"):
         return "Manual (add it to a draft from the editor)"
     try:
@@ -246,7 +247,7 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
             inline=False,
         )
     else:
-        today = date_cls.today()
+        today = server_today()
         lines = [
             f"**{ev.get('name') or '(unnamed)'}** - {describe_event_schedule(ev, today=today)}"
             for ev in events
@@ -367,7 +368,7 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
     guild_id = interaction.guild_id
     cfg = get_config(guild_id)
     events = get_guild_events(guild_id, active_only=True)
-    today = date_cls.today()
+    today = server_today()
 
     if not events:
         await interaction.followup.send(
@@ -523,7 +524,7 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
     from scheduler import next_event_dates
 
     events = get_guild_events(interaction.guild_id, active_only=True)
-    today = date_cls.today()
+    today = server_today()
 
     embed = discord.Embed(title="📆 Upcoming events", color=discord.Color.blurple())
 
@@ -1175,7 +1176,7 @@ async def _open_pause_picker(interaction: discord.Interaction) -> None:
         )
         return
 
-    today = date_cls.today()
+    today = server_today()
     # Active first, then paused — matches the hub embed's reading order.
     events.sort(key=lambda e: 0 if e.get("active") else 1)
     options = [

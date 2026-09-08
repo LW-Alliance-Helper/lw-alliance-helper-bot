@@ -399,7 +399,8 @@ async def admin_shiny_servers_slash(
     if min_server > max_server:
         min_server, max_server = max_server, min_server
 
-    from config import _get_conn, server_date_for  # noqa: PLC0415
+    from config import _get_conn  # noqa: PLC0415
+    from time_helpers import server_today as resolve_server_today  # noqa: PLC0415
     from shiny_tasks import is_shiny_today  # noqa: PLC0415
 
     with _get_conn() as conn:
@@ -418,10 +419,10 @@ async def admin_shiny_servers_slash(
         return
 
     # "Today" = the Last War in-game (server, UTC-2) date — the same date the
-    # live post loop uses (see config.server_date_for) — so the Shiny? column
-    # matches what the bot would announce right now and is directly checkable
-    # against the source's "Shiny Tasks" column.
-    server_today = server_date_for(datetime.now(timezone.utc))
+    # live post loop uses (see time_helpers) — so the Shiny? column matches
+    # what the bot would announce right now and is directly checkable against
+    # the source's "Shiny Tasks" column.
+    server_today = resolve_server_today()
 
     header = f"{'Server':>6}  {'Created':<10}  {'Shiny?':<6}  {'Last seen':<10}"
     table = [header, "-" * len(header)]

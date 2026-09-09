@@ -25,8 +25,65 @@ and PR description.
 ### Changed
 - Button icons now mean one thing each across the whole bot: the same icon no longer stands for two different actions, and the same action no longer wears two different icons. Twenty-odd buttons and messages pick up a clearer icon; none of them changed what they do.
 
+## [1.8.11] — 2026-09-08
+
 ### Fixed
-- The bot's own storage no longer grows without bound on its hosting volume, which would eventually have taken every alliance's configuration offline at once.
+- An event time edited in the editor now lands on the next occurrence of that clock time, not the day the editor was opened against.
+- Birthday announcements now resolve the day in the alliance's own timezone rather than the bot host's.
+- Birthday auto-population now resolves the day in server time, matching the train schedule it writes into.
+- Interval growth snapshots now count days in Eastern time, matching the gate they fire on.
+
+### Changed
+- Date resolution moved into one module, `time_helpers`, with the in-game (server) day as the default and the guild-local day a documented exception.
+- `shiny_tasks.py` no longer keeps a second copy of the UTC-2 server offset.
+
+Released from `main` with a patch bump, deliberately bypassing `dev` — that
+branch has unrelated work in flight.
+
+## [1.8.10] — 2026-09-01
+
+### Fixed
+- The auto-posted 5-minute event warning read "<Event> at 5 minutes (5 minutes Server Time)" and now reads "<Event> in 5 minutes!" ([#565](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/565)).
+
+The warning no longer carries anything an alliance wrote into its announcement
+blurb, so alliances lose the instructions some had put there. Giving them a
+5-minute warning text of their own is
+[#566](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/566).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
+## [1.8.9] — 2026-08-31
+
+### Fixed
+- An event's 5-minute warning posted twice when a deploy landed inside its window; the queued row is now claimed before the send so exactly one instance posts it.
+- The config database ran on SQLite's default rollback journal, which climbed the Railway volume's reported usage ~55 MB/day; it now runs `journal_mode=WAL`.
+
+### Added
+- `/admin volume` — files on the Railway volume, the filesystem view, and per database the journal mode, page counts and largest tables.
+- `/admin loops` — last heartbeat of every background loop, marking which ones outage detection watches.
+- `/admin deploy` — running version, commit, uptime and live runtime settings.
+- `/admin config_backup` — `guild_configs.db` as a gzipped attachment, the first copy of it the bot has ever written.
+- A `volume_health` watchdog that alarms on a database not in WAL or a `-journal` file on the volume.
+
+A one-shot migration marks every already-past-due pending warning as fired, so
+the warnings the 1.8.8 deploy sent are not posted a third time by this one.
+
+## [1.8.8] — 2026-08-31
+
+### Added
+- Buddy pairings can be saved as named presets on the alliance's own spreadsheet, with saving gated to Premium and loading or deleting left free ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A single-step undo on the Buddy System management screen, covering refresh, auto-assign, re-pair and preset loading ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+
+### Fixed
+- Changing one pairing rewrote the whole Buddies tab; writes now issue only the rows that actually moved, so hand edits and notes kept in spare columns survive ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- The buddy list now names who it dropped and why, in place of the fixed "invalid pairs were cleared" notice that named nobody ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A contested Engineer, or a doubled War Leader when doubling is off, is now handed back to leadership as a decision rather than settled alphabetically and announced as a fact ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- "Re-pair from scratch" now swaps Engineers instead of refusing unless a spare one exists, which in a fully paired alliance is never ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+- A member setting their own profession now places only themselves, and a doubled pairing survives a War Leader renaming themselves ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)).
+
+Cherry-picked from `dev` ([#551](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/551)) so the Buddy System rework ships without
+waiting on the 1.9.0 Alliance Duel tracker. The glyph catalog refactor those
+commits sat on stays on `dev`, so the buddy buttons keep 1.8.7's icons.
 
 ## [1.8.7] — 2026-08-11
 

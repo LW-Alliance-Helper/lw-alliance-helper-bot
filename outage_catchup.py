@@ -46,6 +46,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import config
+import time_helpers
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,27 @@ HEARTBEAT_LOOPS = (
     "train_reminder",
     "storm_signup",
     "vs_score_prompt",
+)
+
+# Every loop that stamps a heartbeat, including the ones HEARTBEAT_LOOPS
+# deliberately excludes. Those exclusions are correct for *outage detection*
+# — a variable-sleep or long-interval loop cannot bound an outage window —
+# but it left them unobservable: `config_health`, `scheduler`,
+# `transfer_poll` and `volume_health` all stamp a heartbeat that nothing
+# ever read. `/admin loops` reads this list so a loop that quietly stopped
+# is visible even when it can't be an outage signal.
+#
+# Interval is what the view uses to decide whether a gap is suspicious, so
+# a long-interval loop isn't flagged for a gap that is simply its period.
+ALL_HEARTBEAT_LOOPS: tuple[tuple[str, timedelta, bool], ...] = (
+    ("shiny_post", timedelta(minutes=1), True),
+    ("survey_reminder", timedelta(minutes=1), True),
+    ("train_reminder", timedelta(minutes=1), True),
+    ("storm_signup", timedelta(minutes=1), True),
+    ("transfer_poll", timedelta(minutes=1), False),
+    ("config_health", timedelta(minutes=15), False),
+    ("scheduler", timedelta(hours=1), False),
+    ("volume_health", timedelta(hours=6), False),
 )
 
 # A gap larger than this marks a loop as having been offline. Sized so a
@@ -225,8 +247,8 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     # date, not the guild-local date `scheduled` carries — same #330 fix as
     # the live loop (bot.py's shiny_tasks_post_task); the dedup key above
     # (`today_iso`) correctly stays guild-local, matching the live loop's
-    # `last_posted_date` semantics. See config.server_date_for.
-    shiny_today = config.server_date_for(scheduled)
+    # `last_posted_date` semantics. See time_helpers.
+    shiny_today = time_helpers.server_date_for(scheduled)
 
     # Only surface a row when there is actually something to post today.
     rows = config.get_shiny_task_servers_in_range(server_min, server_max)
@@ -474,8 +496,8 @@ async def scan_train_reminder(bot, guild, cfg, window: OutageWindow) -> list[Mis
     schedule = load_schedule(guild.id)
     # Key the schedule lookup against the Last War in-game (server, UTC-2)
     # date, not `scheduled`'s guild-local date — same #318 fix as the live
-    # loop (train_cog.py's check_reminder). See config.server_date_for.
-    today_str = config.server_date_for(scheduled).isoformat()
+    # loop (train_cog.py's check_reminder). See time_helpers.
+    today_str = time_helpers.server_date_for(scheduled).isoformat()
     entry = schedule.get(today_str)
     if not entry:
         return []  # no conductor scheduled today

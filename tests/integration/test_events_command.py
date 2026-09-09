@@ -101,16 +101,19 @@ def _captured_followups(interaction):
 async def _run_today_editor(interaction, today_value: date_cls):
     """Run events_hub._open_today_editor with today's date pinned to
     `today_value`. Returns the post_editor mock so callers can assert
-    on its call args."""
+    on its call args.
+
+    Patches `events_hub.server_today` rather than `events_hub.date_cls` —
+    the hub resolves "today" via the shared `time_helpers.server_today`,
+    the Last War in-game (server, UTC-2) day, not the bare system clock,
+    so it agrees with which occurrence is actually next."""
     from events_hub import _open_today_editor
 
     bot = AsyncMock()
     with (
         patch("scheduler.post_editor", new_callable=AsyncMock) as mock_post,
-        patch("events_hub.date_cls") as mock_date,
+        patch("events_hub.server_today", return_value=today_value),
     ):
-        mock_date.today.return_value = today_value
-        mock_date.fromisoformat.side_effect = date_cls.fromisoformat
         await _open_today_editor(bot, interaction)
     return mock_post
 

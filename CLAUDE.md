@@ -73,7 +73,8 @@ reasoning. Verifying their contents is
     `main`.
   - **Small / doc changes:** feature → `release/X.Y.Z` → `main`,
     same as before. They skip `dev`.
-  - **Hotfixes:** still direct to `main` per the hotfix rule below.
+  - **Hotfixes:** straight at `main`, but via a PR, per the hotfix
+    rule below. They skip `dev` and the release branch, not review.
   - **Keep `dev` in sync:** when `main` moves forward and `dev`
     is *not* ahead with feature work in progress, fast-forward `dev`
     to `main`. If `dev` has uncommitted-to-main feature work, leave
@@ -100,7 +101,8 @@ reasoning. Verifying their contents is
   - `bug` — broken behavior or UX-clarity fixes (e.g. a confusing DM, a
     silent failure).
   - `documentation` — README / CLAUDE.md / docs/ / website copy changes.
-  - `hotfix` — urgent direct-to-main fix per the hotfix exception below.
+  - `hotfix` — urgent fix PR'd straight into `main` per the hotfix
+    exception below.
 - **Project status updates automatically** via
   `.github/workflows/project-status-sync.yml`. An issue's Status field
   walks `Up Next → In progress → In review → Ready for Release →
@@ -117,10 +119,30 @@ reasoning. Verifying their contents is
   default `GITHUB_TOKEN` can't touch org Project v2). For one-off
   bootstraps, run `scripts/sync_project_status.py --issue N --status
   "..."` locally with `GH_TOKEN` exported.
-- **Hotfix exception.** Direct-to-main is allowed for urgent one-line
-  fixes, but only with explicit approval before each push. After a
-  hotfix lands on main, fast-forward the active release branch to
-  include it.
+- **Hotfix exception.** Urgent fixes skip the release branch and go
+  straight at `main` — but through a **PR**, never a direct push. Taking
+  the hotfix path needs explicit approval; once it has that, the session
+  carries it to completion without checking back again:
+  1. Branch, fix, open the PR into `main`.
+  2. **Watch the checks through to the end.** `Sheet Integration Tests`
+     only runs on PRs into `main`, and only starts once the unit lane
+     has passed, so it appears late — a PR that looks green a minute
+     after opening usually has not run it yet. Opening the PR is not
+     the end of the task.
+  3. All checks green clears the merge. Merge it; no second approval.
+
+  A red check is never a merge, and step 3's clearance does not apply to
+  one. Re-run it if it looks transient, and if it fails again, bring it
+  back rather than merging past it.
+
+  Direct-to-main is what 1.8.10 did, and it is why this rule changed: a
+  direct push gets no sheet coverage and nothing gates the merge, so a
+  CI failure that withheld the Railway deploy went unnoticed until the
+  bug it was fixing fired again in production that evening
+  ([#569](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/569)).
+
+  After the hotfix lands on main, fast-forward the active release branch
+  to include it.
 - **Versioning is per-release.** Branch name encodes the version
   (`release/1.0.16` → version `1.0.16`); one CHANGELOG entry per
   release covering all merged issues. Bump `bot.py.__version__` and
@@ -398,8 +420,9 @@ These are deliberate and tested. Don't refactor away:
   set instead of the DB-backed pattern already fixed for birthday
   auto-population after a real production incident (#89); and
   `outage_catchup.py`'s recovery scans recomputed "today" from
-  guild-local time instead of `config.server_date_for`, reintroducing
-  a bug already fixed in the live loops (#330/#318). A fourth turned up
+  guild-local time instead of `time_helpers.server_date_for`,
+  reintroducing a bug already fixed in the live loops (#330/#318).
+  A fourth turned up
   in #413: the transfer poll loop still Sentry-captured every sheet
   read failure, though `config.is_user_config_sheet_error` had been
   added in 1.6.7 (#285/#286) precisely so alliance-owned Sheet problems
@@ -413,8 +436,16 @@ These are deliberate and tested. Don't refactor away:
   checks, or server-vs-guild-local date resolution — grep the repo
   for other places doing the same kind of thing and check whether
   they need the same fix. A canonical helper existing (`storm_permissions
-  .is_leader_or_admin`, `config.server_date_for`, the DB-backed
+  .is_leader_or_admin`, `time_helpers.server_today`, the DB-backed
   `last_*_fired` column pattern) doesn't mean every call site uses it.
+- **Dates: never call `date.today()`.** It answers without being asked
+  which calendar, and hands back the container's UTC day — nobody's.
+  `time_helpers` is the single home: `server_today()` is the default
+  (anything the game drives), `local_today(tz)` is the documented
+  exception for human-calendar data like birthdays, and if you already
+  hold a correctly-zoned datetime just call `.date()` on it. 1.8.11
+  came out of `date.today()` being used in four places that each
+  needed a different one of those answers.
 
 ---
 

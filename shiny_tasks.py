@@ -29,18 +29,23 @@ from typing import Optional
 
 import aiohttp
 
+from time_helpers import SERVER_TZ
+
 
 # Last War's in-game day rolls over at 00:00 server time (UTC-2, no DST), so the
 # launch *date* that anchors the 3-day shiny cycle is the server-time date of
 # the creation timestamp — not the UTC date. A server launched at, say, 00:30
 # UTC is already on the previous server-time day; using the UTC date would put
 # it one day late in the cycle (#331 — same off-by-one class as #318/#330).
-_SERVER_TZ = timezone(timedelta(hours=-2))
+#
+# SERVER_TZ comes from time_helpers, the single source of truth for the offset;
+# this module used to redeclare it, leaving two copies of a game constant that
+# had to be kept in step by hand.
 
 
 def _creation_date_from_ms(ts_ms: int) -> date:
     """Server-time (UTC-2) calendar date of a unix-millisecond launch timestamp."""
-    return datetime.fromtimestamp(ts_ms / 1000.0, tz=_SERVER_TZ).date()
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=SERVER_TZ).date()
 
 
 HEDGE_BASE_URL = "https://cpt-hedge.com"

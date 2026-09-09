@@ -38,7 +38,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.8.10"
+__version__ = "1.8.11"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -824,11 +824,17 @@ async def growth_task():
                 should_run = True
         elif freq == "interval":
             # Use a simple check: run at 10pm ET if today is a multiple of interval days
-            # from a fixed epoch (Jan 1 2026)
+            # from a fixed epoch (Jan 1 2026).
+            #
+            # `now.date()`, not `date.today()`: the gate below is on `now.hour`
+            # in ET, so the day counter has to be the ET day too. At 22:00 ET
+            # the container's UTC clock has *always* already rolled to the next
+            # calendar date, so the bare system date put this a full day out on
+            # every single run.
             from datetime import date as _date
 
             epoch = _date(2026, 1, 1)
-            delta = (_date.today() - epoch).days
+            delta = (now.date() - epoch).days
             interval = gcfg.get("snapshot_interval", 30)
             if delta % interval == 0 and now.hour == 22:
                 should_run = True
@@ -1000,9 +1006,9 @@ async def shiny_tasks_post_task():
         get_shiny_task_servers_in_range,
         list_shiny_enabled_guild_ids,
         mark_shiny_tasks_posted,
-        server_date_for,
         stamp_loop_heartbeat,
     )
+    from time_helpers import server_date_for
     from shiny_tasks import build_announcement_for_guild
 
     try:
@@ -1081,7 +1087,7 @@ async def shiny_tasks_post_task():
             # midnight) — e.g. a 10:30pm local post — at which point the local
             # date still names the in-game day that just ended, so the cycle
             # would list yesterday's shiny servers (#330). Same class of bug as
-            # the train "day behind" fix (#318). See config.server_date_for.
+            # the train "day behind" fix (#318). See time_helpers.
             shiny_today = server_date_for(guild_now)
             rows = get_shiny_task_servers_in_range(
                 int(scfg.get("server_min") or 0),

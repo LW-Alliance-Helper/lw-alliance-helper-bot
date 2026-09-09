@@ -46,10 +46,12 @@ ET = ZoneInfo("America/New_York")
 
 # Tests pin `datetime.now(tz=ET)` to 2026-05-15 22:00 ET inside the loop.
 # The train reminder fires at the in-game server reset and resolves "today"
-# against the Last War server date (UTC-2) via `config.server_date_for`, so a
-# 10pm EDT fire is already the next in-game day — 2026-05-16. Schedule keys
-# must match that server date, not the local calendar date, for the lookup to
-# hit. (The birthday auto-population path still keys off the local date.)
+# against the Last War server date (UTC-2) via `time_helpers.server_date_for`,
+# so a 10pm EDT fire is already the next in-game day — 2026-05-16. Schedule
+# keys must match that server date, not the local calendar date, for the
+# lookup to hit. The birthday *announcement* is the deliberate exception and
+# keys off the guild-local date (a birthday is a human calendar fact — see
+# time_helpers), so its tests pin 2026-05-15 instead.
 PATCHED_TODAY_ISO = "2026-05-16"
 
 
@@ -552,16 +554,15 @@ class TestBirthdayChannelForbiddenIsolation:
         fix."""
         cog = _make_cog()
 
-        # Member dict month/day must match real today, since the loop
-        # filters via `_d2.today()` (not the patched ET datetime).
-        from datetime import date as _date
-
-        real_today = _date.today()
+        # Member month/day matches the *pinned* guild-local date below: the
+        # loop filters birthdays on `guild_now.date()`, so this no longer
+        # depends on the real wall clock the way it did when it read the
+        # bare system date.
         members = [
             {
                 "name": "alice",
-                "month": real_today.month,
-                "day": real_today.day,
+                "month": 5,
+                "day": 15,
                 "discord_id": None,
             }
         ]
@@ -596,12 +597,11 @@ class TestBirthdayChannelForbiddenIsolation:
         identical errors for every member."""
         cog = _make_cog()
 
-        from datetime import date as _date
-
-        real_today = _date.today()
+        # Both match the pinned guild-local date below — see the note in
+        # the previous test.
         members = [
-            {"name": "alice", "month": real_today.month, "day": real_today.day, "discord_id": None},
-            {"name": "bob", "month": real_today.month, "day": real_today.day, "discord_id": None},
+            {"name": "alice", "month": 5, "day": 15, "discord_id": None},
+            {"name": "bob", "month": 5, "day": 15, "discord_id": None},
         ]
 
         chan = AsyncMock()

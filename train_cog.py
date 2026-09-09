@@ -584,9 +584,17 @@ class TrainCog(commands.Cog):
                 members = await asyncio.get_event_loop().run_in_executor(
                     None, load_birthdays, tab_name, guild.id
                 )
-                from datetime import date as _d2
-
-                today = _d2.today()
+                # Guild-local, not the in-game server day (time_helpers'
+                # documented exception): a birthday is a bare month/day with no
+                # timezone, so matching it against the server day compares a
+                # human calendar value to a game one. For an alliance far from
+                # UTC-2 that lands the announcement on the wrong local date —
+                # a Tokyo guild's 8am reminder on the 12th is still server-day
+                # the 11th, so it would fire a day late for the people reading
+                # it. `guild_now` is already in the guild's tz and is what the
+                # reminder-time gate above matched on; the bare system clock
+                # this used to read is neither calendar.
+                today = guild_now.date()
                 todays_bdays = [
                     m for m in members if m["month"] == today.month and m["day"] == today.day
                 ]
@@ -674,8 +682,8 @@ class TrainCog(commands.Cog):
             # Announce against the Last War in-game (server, UTC-2) date: this
             # reminder fires at the in-game reset, which is already the next
             # in-game day, so the local calendar date would name yesterday's
-            # train. See config.server_date_for.
-            from config import server_date_for
+            # train. See time_helpers.
+            from time_helpers import server_date_for
 
             today_str = server_date_for(guild_now).isoformat()
             schedule = await asyncio.get_event_loop().run_in_executor(None, load_schedule, guild.id)
@@ -857,12 +865,12 @@ class TrainCog(commands.Cog):
         # guild's local calendar date. The reminder fires at the in-game reset
         # (~2h before local midnight), which is already the next in-game day, so
         # the local date would name the conductor for the day that just ended —
-        # the "train a day behind" bug. See config.server_date_for.
+        # the "train a day behind" bug. See time_helpers.
         from config import (
             get_rotation_confirm_last_fired,
             mark_rotation_confirm_fired,
-            server_date_for,
         )
+        from time_helpers import server_date_for
 
         today_iso = server_date_for(guild_now).isoformat()
         # DB-backed dedup (#367) — mirrors the birthday auto-pop fix (#89).

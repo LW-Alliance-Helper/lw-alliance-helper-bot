@@ -13,6 +13,8 @@ import os
 import re
 from datetime import date, timedelta
 
+from time_helpers import server_today
+
 
 def _get_member_sheet_inner(tab_name: str, guild_id: int = None):
     """Return the active member worksheet (gspread Worksheet)."""
@@ -288,10 +290,17 @@ def render_conflict_message(conflicts: list[dict]) -> str:
     )
 
 
-def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[dict]]:
+def check_and_add_birthdays(
+    schedule: dict, guild_id: int = None, today: date = None
+) -> tuple[dict, list[dict]]:
     """
     Look ahead lookahead_days from today (from guild birthday config).
     Uses configured tab, name column, and birthday column.
+
+    `today` defaults to the Last War in-game (server) date, because the
+    `schedule` this places into is keyed by server dates (see
+    train_cog.py's check_reminder). Callers that already resolved the day
+    should pass it so both halves agree.
 
     Returns `(schedule, conflicts)` where `conflicts` is a list of
     structured dicts (one per member who couldn't be placed), each with
@@ -314,7 +323,11 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
     if not members:
         return schedule, []
 
-    today = date.today()
+    # Server day, not the container clock: the schedule keys this writes
+    # into are server dates, so the bare system date placed birthdays a
+    # day off every time the 22:00 ET auto-population ran (by then UTC has
+    # always rolled over already).
+    today = today or server_today()
     check_year = today.year
     added_count = 0
     # Per-member structured conflict records collected during the loop and

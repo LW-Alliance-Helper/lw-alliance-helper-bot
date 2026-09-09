@@ -27,6 +27,7 @@ import discord
 import discord.ext.commands
 from config import get_config
 from messages import LEADERSHIP_INACCESSIBLE
+from time_helpers import next_clock_time
 import wizard_registry
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
@@ -176,17 +177,6 @@ def format_et(dt: datetime) -> str:
     base = f"{hour12}:{dt:%M%p}".lower()
     tz = dt.tzname() if dt.tzinfo else None
     return f"{base} {tz}" if tz else base
-
-
-def make_event_datetime(
-    run_date: date, hour: int, minute: int, tz: ZoneInfo | None = None
-) -> datetime:
-    """Build a tz-aware datetime in the event's configured timezone.
-    Defaults to ET when no tz is supplied (legacy callers + free-tier
-    fallback). Add Event / Edit Time in EventEditorView pass through
-    the per-event tz so a custom-timezone alliance's edits stay in
-    that tz instead of getting silently coerced to ET."""
-    return datetime(run_date.year, run_date.month, run_date.day, hour, minute, tzinfo=tz or ET)
 
 
 # ── Event list helpers ─────────────────────────────────────────────────────────
@@ -451,7 +441,11 @@ class EventEditorView(discord.ui.View):
                             ev_tz = ZoneInfo(cfg_event["timezone"])
                     except Exception:
                         pass
-                dt = make_event_datetime(self.run_date, h, m, tz=ev_tz)
+                # A leader typing a time here means "the next time the clock
+                # reads this" (see next_clock_time's docstring), so this
+                # self-corrects even if this editor's run_date is wrong —
+                # unlike combining the typed time with self.run_date directly.
+                dt = next_clock_time(h, m, tz=ev_tz)
                 # Include name + blurb from the resolved event info so
                 # build_announcement can render the configured custom
                 # message. Without these, the announcement falls through
@@ -556,12 +550,10 @@ class EventEditorView(discord.ui.View):
                     # fired, and an Edit Time should stay in that tz, not
                     # silently coerce to ET.
                     ev_tz = self.event_list[idx]["dt"].tzinfo or ET
-                    self.event_list[idx]["dt"] = make_event_datetime(
-                        self.run_date,
-                        h,
-                        m,
-                        tz=ev_tz,
-                    )
+                    # An edited time means "the next time the clock reads
+                    # this" (see next_clock_time's docstring), so this
+                    # self-corrects even if this editor's run_date is wrong.
+                    self.event_list[idx]["dt"] = next_clock_time(h, m, tz=ev_tz)
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
                         f"✅ **{lib_name}** updated to {format_et(self.event_list[idx]['dt'])}.",

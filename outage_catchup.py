@@ -46,6 +46,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import config
+import time_helpers
 
 logger = logging.getLogger(__name__)
 
@@ -240,8 +241,8 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     # date, not the guild-local date `scheduled` carries — same #330 fix as
     # the live loop (bot.py's shiny_tasks_post_task); the dedup key above
     # (`today_iso`) correctly stays guild-local, matching the live loop's
-    # `last_posted_date` semantics. See config.server_date_for.
-    shiny_today = config.server_date_for(scheduled)
+    # `last_posted_date` semantics. See time_helpers.
+    shiny_today = time_helpers.server_date_for(scheduled)
 
     # Only surface a row when there is actually something to post today.
     rows = config.get_shiny_task_servers_in_range(server_min, server_max)
@@ -489,8 +490,8 @@ async def scan_train_reminder(bot, guild, cfg, window: OutageWindow) -> list[Mis
     schedule = load_schedule(guild.id)
     # Key the schedule lookup against the Last War in-game (server, UTC-2)
     # date, not `scheduled`'s guild-local date — same #318 fix as the live
-    # loop (train_cog.py's check_reminder). See config.server_date_for.
-    today_str = config.server_date_for(scheduled).isoformat()
+    # loop (train_cog.py's check_reminder). See time_helpers.
+    today_str = time_helpers.server_date_for(scheduled).isoformat()
     entry = schedule.get(today_str)
     if not entry:
         return []  # no conductor scheduled today

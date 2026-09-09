@@ -365,8 +365,9 @@ These are deliberate and tested. Don't refactor away:
   set instead of the DB-backed pattern already fixed for birthday
   auto-population after a real production incident (#89); and
   `outage_catchup.py`'s recovery scans recomputed "today" from
-  guild-local time instead of `config.server_date_for`, reintroducing
-  a bug already fixed in the live loops (#330/#318). A fourth turned up
+  guild-local time instead of `time_helpers.server_date_for`,
+  reintroducing a bug already fixed in the live loops (#330/#318).
+  A fourth turned up
   in #413: the transfer poll loop still Sentry-captured every sheet
   read failure, though `config.is_user_config_sheet_error` had been
   added in 1.6.7 (#285/#286) precisely so alliance-owned Sheet problems
@@ -380,8 +381,16 @@ These are deliberate and tested. Don't refactor away:
   checks, or server-vs-guild-local date resolution — grep the repo
   for other places doing the same kind of thing and check whether
   they need the same fix. A canonical helper existing (`storm_permissions
-  .is_leader_or_admin`, `config.server_date_for`, the DB-backed
+  .is_leader_or_admin`, `time_helpers.server_today`, the DB-backed
   `last_*_fired` column pattern) doesn't mean every call site uses it.
+- **Dates: never call `date.today()`.** It answers without being asked
+  which calendar, and hands back the container's UTC day — nobody's.
+  `time_helpers` is the single home: `server_today()` is the default
+  (anything the game drives), `local_today(tz)` is the documented
+  exception for human-calendar data like birthdays, and if you already
+  hold a correctly-zoned datetime just call `.date()` on it. 1.8.11
+  came out of `date.today()` being used in four places that each
+  needed a different one of those answers.
 
 ---
 

@@ -2483,13 +2483,10 @@ def needs_warzone_confirmation(guild_id, grouping_id) -> bool:
 
 
 def _server_today():
-    """Today's in-game date. Imported from `config` rather than restated.
-
-    Local import: `config` is a large module and this one is deliberately
-    independent of it, but duplicating a timezone constant is how two copies of
-    a number drift apart.
+    """Today's in-game date. Imported from `time_helpers` rather than restated:
+    duplicating a timezone constant is how two copies of a number drift apart.
     """
-    from config import server_date_for
+    from time_helpers import server_date_for
 
     return server_date_for(datetime.now(timezone.utc))
 

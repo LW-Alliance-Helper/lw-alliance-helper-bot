@@ -4343,7 +4343,7 @@ def parse_start_date(text, *, today=None) -> str | None:
 def _server_today():
     """Today's in-game date. Every date on these surfaces is a game date, and
     `UX.md` is explicit that game time is not local time."""
-    from config import server_date_for
+    from time_helpers import server_date_for
 
     return server_date_for(datetime.now(timezone.utc))
 

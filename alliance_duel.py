@@ -29,7 +29,7 @@ ground truth for this feature):
   absent. Same rule member sync learned in 1.4.2 (#262).
 - **Weekday resolves on server time, never guild-local.** Every "which day
   is it" decision goes through :func:`server_today` /
-  ``config.server_date_for``. A guild in UTC+10 sees Monday locally while it
+  ``time_helpers.server_date_for``. A guild in UTC+10 sees Monday locally while it
   is still Sunday on server time, which would misfile a whole day of scores.
   CLAUDE.md flags this as a bug class that has already recurred three times
   (#330 / #318).
@@ -667,13 +667,13 @@ def server_today(now: _dt.datetime | None = None) -> _dt.date:
     resolution as a bug class that has already recurred three times (#330 /
     #318), so there is no guild-local variant of this function on purpose.
     """
-    import config
+    from time_helpers import server_date_for
 
     if now is None:
         now = _dt.datetime.now(_dt.timezone.utc)
     elif now.tzinfo is None:
         raise ValueError("server_today() needs a timezone-aware datetime")
-    return config.server_date_for(now)
+    return server_date_for(now)
 
 
 def duel_day_for_date(d: _dt.date) -> int | None:

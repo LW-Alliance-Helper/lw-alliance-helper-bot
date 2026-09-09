@@ -27,6 +27,7 @@ from defaults import (
     DEFAULT_DS_TEMPLATE,
     DEFAULT_CS_TEMPLATE,
 )
+from time_helpers import SERVER_TZ
 
 DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
@@ -900,13 +901,24 @@ def init_db():
         # is written when the warning is scheduled and deleted once it
         # fires. `event_list_json` is the serialized event list needed
         # to render the warning message on fire/catch-up.
+        #
+        # `fired_at` is the send-side claim. #363 persisted the queue so a
+        # restart could not DROP a warning, and in doing so let a restart
+        # DUPLICATE one instead: `fire_warning` posted first and deleted the
+        # row afterwards, so two instances overlapping across a deploy both
+        # read the row and both posted. Claiming the row with a conditional
+        # UPDATE before the send makes exactly one caller win. Stamping
+        # rather than deleting keeps #363's guarantee intact — a row that
+        # was claimed but never sent is still distinguishable from one that
+        # was never claimed at all.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS scheduler_pending_warnings (
                 event_key       TEXT    PRIMARY KEY,
                 guild_id        INTEGER NOT NULL,
                 warn_at         TEXT    NOT NULL,
                 event_list_json TEXT    NOT NULL,
-                created_at      TEXT    NOT NULL
+                created_at      TEXT    NOT NULL,
+                fired_at        TEXT
             )
         """)
         conn.commit()
@@ -1834,6 +1846,79 @@ def init_db():
         except Exception:
             pass
 
+        # ── 1.8.9: 5-minute-warning send claim ─────────────────────────────────
+        # Adds `fired_at` to scheduler_pending_warnings and, in the same
+        # one-shot, marks every warning that is ALREADY PAST DUE as fired.
+        #
+        # The backfill is the point. The 1.8.8 deploy double-posted the
+        # 5-minute warnings that were live at the time: the outgoing and
+        # incoming containers overlapped, both held the same rows, and
+        # neither claimed before posting. Any row left behind by that is
+        # still sitting in the table with a `warn_at` in the past, and the
+        # restart recovery in `run_scheduler` fires exactly those on boot —
+        # so without this backfill the 1.8.9 deploy would post them a THIRD
+        # time. Stamping them here means this deploy treats them as done.
+        #
+        # Rows whose `warn_at` is still in the future are deliberately left
+        # unclaimed: those are real upcoming warnings and must fire normally.
+        #
+        # The comparison is done in Python rather than SQL because `warn_at`
+        # is an ISO string carrying a UTC offset, and ET rows written either
+        # side of a DST change do not sort lexicographically.
+        # The ALTER is tolerant (it fails harmlessly on every boot after the
+        # first), but the backfill is NOT folded into the same try. If the
+        # ALTER succeeded and the backfill then threw, swallowing it would
+        # leave the column in place, the migration "done", and the stale
+        # rows live — the precise outcome this exists to prevent. So the
+        # backfill is gated on its own `app_settings` marker instead: it
+        # retries on the next boot until it completes, and never runs twice.
+        try:
+            conn.execute("ALTER TABLE scheduler_pending_warnings ADD COLUMN fired_at TEXT")
+            conn.commit()
+            print("[CONFIG] Added fired_at to scheduler_pending_warnings")
+        except Exception:
+            pass
+
+        _BACKFILL_KEY = "pending_warning_claim_backfill_done"
+        _marker = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (_BACKFILL_KEY,)
+        ).fetchone()
+        if _marker is None:
+            from datetime import datetime as _dt, timezone as _tzmod
+
+            _now = _dt.now(_tzmod.utc)
+            _stale = []
+            for _row in conn.execute(
+                "SELECT event_key, warn_at FROM scheduler_pending_warnings"
+            ).fetchall():
+                try:
+                    _warn_at = _dt.fromisoformat(_row["warn_at"])
+                except (TypeError, ValueError):
+                    # An unparseable warn_at can never be compared safely.
+                    # Treat it as stale: a warning nobody can date is not
+                    # one to re-post on a deploy.
+                    _stale.append(_row["event_key"])
+                    continue
+                if _warn_at.tzinfo is None:
+                    _warn_at = _warn_at.replace(tzinfo=_tzmod.utc)
+                if _warn_at <= _now:
+                    _stale.append(_row["event_key"])
+            for _key in _stale:
+                conn.execute(
+                    "UPDATE scheduler_pending_warnings SET fired_at = ? WHERE event_key = ?",
+                    (_now.isoformat(), _key),
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                (_BACKFILL_KEY, _now.isoformat()),
+            )
+            conn.commit()
+            print(
+                f"[CONFIG] Pending-warning backfill: {len(_stale)} past-due "
+                "warning(s) marked as already fired so this deploy does not "
+                "re-post them"
+            )
+
         # ── Survey translation helper ──────────────────────────────────────────
         # Optional third-party translate bot added to each private survey
         # thread so non-English speakers can translate the prompts in place.
@@ -2598,25 +2683,6 @@ def delete_guild_event(guild_id: int, short_key: str) -> bool:
 DS_SERVER_TIMES = [(18, 0), (23, 0)]
 CS_SERVER_TIMES = [(12, 0), (23, 0)]
 
-SERVER_TZ_OFFSET = -2  # Server Time is UTC-2.
-
-
-def server_date_for(dt: datetime) -> date:
-    """The Last War in-game (server, UTC-2) calendar date at instant `dt`.
-
-    Last War's in-game day rolls over at 00:00 server time — about two hours
-    before UTC midnight — so a guild's local *evening* clock time (e.g. the
-    default 10pm train reminder) already falls on the **next** in-game day.
-    Date-keyed schedules (the train rotation, the legacy train blurb) resolve
-    "today's" entry against this server date rather than the guild's local
-    calendar date; otherwise the announcement that fires at the reset names the
-    in-game day that just ended, landing a full day behind. `dt` must be
-    timezone-aware.
-    """
-    from datetime import timezone as _tz, timedelta
-
-    return dt.astimezone(_tz(timedelta(hours=SERVER_TZ_OFFSET))).date()
-
 
 def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
     """Convert a Server Time (UTC-2) hour/minute to the guild's local clock.
@@ -2626,14 +2692,13 @@ def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
     `HH:MM Server Time` if the timezone lookup fails for any reason.
     """
     from zoneinfo import ZoneInfo
-    from datetime import datetime, timezone as _tz, timedelta
+    from datetime import datetime
 
     cfg = get_config(guild_id) if guild_id else None
     tz_str = cfg.timezone if cfg and cfg.timezone else "America/New_York"
     try:
-        server_tz = _tz(timedelta(hours=SERVER_TZ_OFFSET))
         # Use a stable date so DST behaves consistently for the rendered string.
-        server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=server_tz)
+        server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=SERVER_TZ)
         local_dt = server_dt.astimezone(ZoneInfo(tz_str))
         h12 = local_dt.hour % 12 or 12
         period = "am" if local_dt.hour < 12 else "pm"
@@ -3806,7 +3871,11 @@ def save_pending_warning(
             "  guild_id        = excluded.guild_id, "
             "  warn_at         = excluded.warn_at, "
             "  event_list_json = excluded.event_list_json, "
-            "  created_at      = excluded.created_at",
+            "  created_at      = excluded.created_at, "
+            # Re-scheduling an event_key is a NEW warning reusing an old
+            # key (the same event on a later day). Its claim has to start
+            # clear, or the row would arrive pre-fired and stay silent.
+            "  fired_at        = NULL",
             (
                 event_key,
                 int(guild_id),
@@ -3819,15 +3888,22 @@ def save_pending_warning(
 
 
 def load_pending_warnings() -> dict[str, tuple["datetime", list[dict], int]]:
-    """Return every persisted pending warning, keyed by event_key, in the
+    """Return every UNCLAIMED pending warning, keyed by event_key, in the
     same `(warn_dt, event_list, guild_id)` shape scheduler.py's in-memory
     dict uses. Called once at scheduler startup to recover any warnings a
-    restart interrupted before they fired."""
+    restart interrupted before they fired.
+
+    Rows with `fired_at` set are excluded. A claimed row has either already
+    been posted or was claimed by an instance that died mid-send; either
+    way re-posting it is the duplicate this filter exists to stop. The
+    claim in `claim_pending_warning` is the real guard — this just keeps
+    already-settled rows out of the in-memory dict in the first place."""
     from datetime import datetime
 
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT event_key, guild_id, warn_at, event_list_json FROM scheduler_pending_warnings"
+            "SELECT event_key, guild_id, warn_at, event_list_json "
+            "FROM scheduler_pending_warnings WHERE fired_at IS NULL"
         ).fetchall()
     return {
         row["event_key"]: (
@@ -3845,6 +3921,56 @@ def delete_pending_warning(event_key: str) -> None:
     with _get_conn() as conn:
         conn.execute("DELETE FROM scheduler_pending_warnings WHERE event_key = ?", (event_key,))
         conn.commit()
+
+
+def claim_pending_warning(event_key: str) -> bool:
+    """Claim the right to post `event_key`'s 5-minute warning. Returns True
+    for exactly one caller; every later caller gets False.
+
+    This is the fix for the 1.8.8 duplicate. `fire_warning` used to post and
+    only then delete the row, so during a deploy — when Railway runs the
+    outgoing and incoming containers concurrently — both instances held the
+    same warning and both posted it. The conditional UPDATE makes the claim
+    atomic: SQLite serialises the two writers, the first flips `fired_at`
+    from NULL and gets rowcount 1, the second matches no rows and gets 0.
+
+    A lock we cannot take is treated as "someone else has it" and returns
+    False. That is the deliberate direction to fail in: a warning posted
+    twice is what alliances actually complained about, and the caller logs
+    a skip loudly enough to notice if it ever happens for the wrong reason.
+    """
+    from datetime import datetime, timezone as _tz
+
+    try:
+        with _get_conn() as conn:
+            cur = conn.execute(
+                "UPDATE scheduler_pending_warnings SET fired_at = ? "
+                "WHERE event_key = ? AND fired_at IS NULL",
+                (datetime.now(_tz.utc).isoformat(), event_key),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+    except sqlite3.OperationalError:
+        return False
+
+
+def purge_fired_pending_warnings(older_than_days: int = 7) -> int:
+    """Drop claimed rows whose warning is long past, returning how many went.
+
+    `fire_warning` deletes its own row on the happy path, so this only ever
+    collects rows claimed by an instance that then died before sending. They
+    are harmless — the `fired_at` filter already keeps them from re-firing —
+    but without a sweep they would accumulate on the volume forever."""
+    from datetime import datetime, timedelta, timezone as _tz
+
+    cutoff = (datetime.now(_tz.utc) - timedelta(days=older_than_days)).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM scheduler_pending_warnings WHERE fired_at IS NOT NULL AND fired_at < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
 
 
 # ── Storm registration posts (#123, written by #124) ─────────────────────────

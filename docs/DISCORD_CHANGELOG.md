@@ -134,6 +134,31 @@ accident.
 
 ---
 
+**1.8.11** — 2026-09-08
+- Editing an event's time now schedules it for the next time that clock time comes around, so a time you change for tonight stays on tonight — and its 5-minute warning fires with it
+- Birthday announcements now use your alliance's timezone instead of the bot host's, so they land on the right day wherever your alliance is based
+- Birthdays added to the train rotation now land on the correct day
+- Interval growth snapshots now run on the day you'd expect
+
+---
+
+**1.8.10** — 2026-09-01
+- The 5-minute event warning now names your event and reads as a sentence, instead of "at 5 minutes (5 minutes Server Time)"
+
+---
+
+**1.8.9** — 2026-08-31
+- Event 5-minute warnings no longer post twice when the bot restarts
+
+---
+
+**1.8.8** — 2026-08-31
+- Changing one pairing no longer rewrites your whole Buddies tab
+- Buddy pairings can be saved as named presets on your sheet
+- The Buddy System management screen has a single-step undo
+
+---
+
 **1.8.7** — 2026-08-11
 NO POST: two log-noise fixes. Neither was ever visible to an alliance, and
 the setup problem behind the second one is already reported to leadership

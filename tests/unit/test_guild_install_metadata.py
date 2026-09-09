@@ -202,6 +202,13 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "verify",
         "champion_duel_import",
         "champion_duel_conflicts",
+        # 1.8.9 infrastructure diagnostics. Until these landed the only way
+        # to answer "what is the deployment doing" was a Railway shell, so
+        # in practice nobody asked and the volume filled unnoticed.
+        "volume",
+        "loops",
+        "deploy",
+        "config_backup",
     }
     # bot.py's own `_ADMIN_GUILD_IDS` is a `from bot_admin import ...`
     # snapshot taken during its reload above -- it doesn't retroactively
@@ -250,6 +257,10 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "verify",
             "champion_duel_import",
             "champion_duel_conflicts",
+            "volume",
+            "loops",
+            "deploy",
+            "config_backup",
         }
 
     # Unrelated guild sees nothing.

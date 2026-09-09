@@ -30,6 +30,7 @@ from config import get_config
 from events_hub import EVENTS_HUB_BTN_TODAY, EVENTS_HUB_CMD
 from messages import ANNOUNCEMENT_SEND_FAILED, LEADERSHIP_INACCESSIBLE
 from setup_hub import HUB_BTN_EVENTS
+from time_helpers import next_clock_time
 import wizard_registry
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
@@ -225,17 +226,6 @@ def format_et(dt: datetime) -> str:
     base = f"{hour12}:{dt:%M%p}".lower()
     tz = dt.tzname() if dt.tzinfo else None
     return f"{base} {tz}" if tz else base
-
-
-def make_event_datetime(
-    run_date: date, hour: int, minute: int, tz: ZoneInfo | None = None
-) -> datetime:
-    """Build a tz-aware datetime in the event's configured timezone.
-    Defaults to ET when no tz is supplied (legacy callers + free-tier
-    fallback). Add Event / Edit Time in EventEditorView pass through
-    the per-event tz so a custom-timezone alliance's edits stay in
-    that tz instead of getting silently coerced to ET."""
-    return datetime(run_date.year, run_date.month, run_date.day, hour, minute, tzinfo=tz or ET)
 
 
 # ── Event list helpers ─────────────────────────────────────────────────────────
@@ -513,7 +503,11 @@ class EventEditorView(discord.ui.View):
                             ev_tz = ZoneInfo(cfg_event["timezone"])
                     except Exception:
                         pass
-                dt = make_event_datetime(self.run_date, h, m, tz=ev_tz)
+                # A leader typing a time here means "the next time the clock
+                # reads this" (see next_clock_time's docstring), so this
+                # self-corrects even if this editor's run_date is wrong —
+                # unlike combining the typed time with self.run_date directly.
+                dt = next_clock_time(h, m, tz=ev_tz)
                 # Include name + blurb from the resolved event info so
                 # build_announcement can render the configured custom
                 # message. Without these, the announcement falls through
@@ -618,12 +612,10 @@ class EventEditorView(discord.ui.View):
                     # fired, and an Edit Time should stay in that tz, not
                     # silently coerce to ET.
                     ev_tz = self.event_list[idx]["dt"].tzinfo or ET
-                    self.event_list[idx]["dt"] = make_event_datetime(
-                        self.run_date,
-                        h,
-                        m,
-                        tz=ev_tz,
-                    )
+                    # An edited time means "the next time the clock reads
+                    # this" (see next_clock_time's docstring), so this
+                    # self-corrects even if this editor's run_date is wrong.
+                    self.event_list[idx]["dt"] = next_clock_time(h, m, tz=ev_tz)
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
                         f"✅ **{lib_name}** updated to {format_et(self.event_list[idx]['dt'])}.",
@@ -1087,7 +1079,18 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
     # immediately instead of being silently dropped; anything still ahead
     # of `now` is folded into `pending_warnings` and picked up by the
     # normal trigger loop below.
-    from config import load_pending_warnings
+    from config import load_pending_warnings, purge_fired_pending_warnings
+
+    # Sweep claimed-but-never-deleted rows before recovering. Only an
+    # instance that died between claiming and posting leaves these, so the
+    # count is normally zero; the sweep just stops them accruing on the
+    # volume. `load_pending_warnings` already filters them out either way.
+    try:
+        swept = purge_fired_pending_warnings()
+        if swept:
+            print(f"[SCHEDULER] Swept {swept} settled pending-warning row(s)")
+    except Exception as e:  # noqa: BLE001 - housekeeping must not block startup
+        print(f"[SCHEDULER][WARN] Could not sweep settled warnings: {e}")
 
     restored = load_pending_warnings()
     if restored:
@@ -1298,6 +1301,22 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         print(
             f"[SCHEDULER][ERROR] Announcement channel {cfg.announcement_channel_id} "
             f"not usable for guild {gid} — 5-min warning for {event_key} skipped"
+        )
+        return
+
+    # Claim before posting, never after. Railway overlaps the outgoing and
+    # incoming containers across a deploy, so for a few seconds two
+    # schedulers hold this same warning: the old one from its in-memory
+    # `pending_warnings`, the new one from restart recovery. Both used to
+    # reach `channel.send` and the alliance got the warning twice (1.8.8).
+    # The claim is a conditional UPDATE, so exactly one of them wins it.
+    from config import claim_pending_warning
+
+    if not claim_pending_warning(event_key):
+        pending_warnings.pop(event_key, None)
+        print(
+            f"[SCHEDULER] 5-minute warning {event_key} already claimed "
+            "elsewhere — skipping to avoid a duplicate post"
         )
         return
 

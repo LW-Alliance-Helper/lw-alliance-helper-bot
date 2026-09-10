@@ -47,6 +47,9 @@ ignore = ["F401", "F811"]
 # param) fires on fakes that intentionally mimic discord.py's own
 # `wait_for(..., timeout=...)` signature -- renaming would break the fake.
 "tests/**" = ["F403", "F405", "F841", "ASYNC109"]
+# The vulture whitelist is bare names by design (vulture's own --make-whitelist
+# format); every one of them is "undefined" to pyflakes.
+".vulture-whitelist.py" = ["F821"]
 
 [format]
 # Defaults otherwise (double quotes -- the codebase is already ~95%

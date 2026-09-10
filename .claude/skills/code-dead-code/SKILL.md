@@ -62,42 +62,49 @@ $PY -m vulture --version   # vulture 2.16
 If a future venv rebuild loses it: `$PY -m pip install vulture`. Ask first —
 the venv is shared.
 
-**Measured baseline:** on `events_hub.py` (1,776 lines) with no whitelist at
-all, `--min-confidence 90` returns **0** hits and `--min-confidence 60` returns
-**31**. That is the noise curve on this codebase in one line: 90 is signal, 60
-is triage work. Start at 90.
+**Vulture's confidence is fixed per category, not a noise curve.** Unused
+imports are rated 90, unreachable code 100, and *every* unused function,
+method, class, property and variable a flat **60**. So a run at 90 or 70 can
+only ever find unused imports and unreachable code; it can never find a dead
+function, and it will report a clean codebase that is not clean. **60 is the
+working band**, and the whitelist is what makes 60 readable. (The earlier
+advice here, "90 is signal, 60 is triage", was a misreading of the tool.)
 
-## Step 2 — Build the whitelist before the first run
+## Step 2 — The whitelist is committed; grow it
 
-Vulture takes a whitelist file of names to treat as used. Without one the first
-run is thousands of lines of framework callbacks and the signal is gone.
+`.vulture-whitelist.py` at the repo root holds every name a run has proved
+live, in three sections: framework-dispatched callbacks, functions called from
+outside the scanned family, and documented keeps. It is as much a project
+document as `ruff.toml`. Every run adds what it proves; nothing is removed
+from it without the three proofs below going the other way.
 
-Write `.vulture-whitelist.py` covering the three families above — decorated
-callback names, the re-exported symbols, and anything reached only from
-`messages.py` or config. Commit it; it is as much a project document as
-`ruff.toml`, and the next session needs it too.
+It cannot be written before the first run on a new scope (you do not know the
+names yet), so on a new family: run, triage, then append the false positives
+with `--make-whitelist` and a section comment saying why.
 
-## Step 3 — Scan
+## Step 3 — Scan, with the reference check built in
 
 ```bash
 PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
-
-# High confidence only — start here
-$PY -m vulture . .vulture-whitelist.py \
-  --min-confidence 90 \
-  --exclude ".venv,tests,assets,scripts"
-
-# Widen once the 90% band is clean and triaged
-$PY -m vulture . .vulture-whitelist.py --min-confidence 70 --exclude ".venv,tests,assets"
+$PY scripts/quality/dead_code.py champion_duel_     # one family, ~12 s
+$PY scripts/quality/dead_code.py                    # whole repo
 ```
 
-Start at 90. Below 60 the output is noise on a codebase this size.
+The script runs vulture at 60 with the whitelist applied, then does Step 4's
+first proof for every hit and buckets it: no reference anywhere, tests only,
+same file only, referenced elsewhere, framework. Scope to a feature family
+when auditing something specific; the whole-repo run is large.
 
-Scope to a feature family when auditing something specific — that is also the
-only run where the results are small enough to check one by one:
+**A family scan cannot see callers in the rest of the bot.** Every database
+function the admin toolkit, the API or startup calls looks dead to a scan of
+`champion_duel_*.py` alone. The "referenced elsewhere" bucket is that class,
+and it goes in the whitelist, not the suspect list. This is why the reference
+check is mandatory, not one proof of three.
+
+Raw vulture, for a quick look:
 
 ```bash
-$PY -m vulture champion_duel_*.py .vulture-whitelist.py --min-confidence 80
+$PY -m vulture champion_duel_*.py .vulture-whitelist.py --min-confidence 60
 ```
 
 ## Step 4 — Prove each suspect before proposing removal
@@ -106,8 +113,11 @@ For every hit, do all three. A name that survives all three is a candidate; a
 name that fails any one of them goes in the whitelist instead.
 
 1. **Grep the whole repo for the bare name**, including `tests/`, `scripts/`,
-   `api/` and `.github/`. A function called only from a test is not dead — it is
-   a tested helper whose caller you have not found yet.
+   `api/` and `.github/`. The script does this; read its bucket, and read the
+   actual lines for short names (`W`, `H`, `keep`, `due`), which match prose.
+   A function called only from a test is not dead — it is a tested helper
+   whose surface was never built, or whose caller you have not found yet.
+   Either way it is a human decision, not a removal.
 2. **Check for decorator dispatch.** Is it registered by a decorator, named in a
    `setup()`, or referenced as a string anywhere? Discord command names, view
    `custom_id`s and `tasks.loop` bodies are all reached without a call site.

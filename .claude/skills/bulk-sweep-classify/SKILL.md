@@ -36,10 +36,16 @@ then run the four-category pass over the text.
 
 | # | Category | Handling |
 |---|---|---|
-| 1 | **Genuine stale target** | Transform |
+| 1a | **Genuine target, mechanical** | Transform |
+| 1b | **Genuine target that touches user-facing copy** | Transform only after `copy-signoff`; one block per string |
 | 2 | **False positive** — matches the pattern, unrelated | Leave |
 | 3 | **Out-of-scope design** legitimately using the old form | Leave — transforming corrupts it |
 | 4 | **Immutable record** — changelog, shipped release notes, an issue body | Leave the body; add a note if needed |
+
+The 1a / 1b split is the whole difference on a sweep that carries copy. On
+the shared-base-view classification it was 61 sites that move mechanically
+against 11 that each carried their own wording; the second group stopped for
+a sign-off page and the first did not.
 
 **Category 3 is the sharpest trap.** The token you are replacing usually also
 appears in filenames, config keys, DB column names or asset paths that the
@@ -86,8 +92,11 @@ Read the surrounding line. Categories 1 and 2 are usually mechanical.
 **Reserve real judgment for 3 and 4** — they look like genuine targets and can
 only be told apart by reading intent.
 
-Record the files and lines in categories 2–4. That is the **intentionally
-preserved set**, and Step 5 depends on having it written down.
+Record the files and lines in categories 2–4, **on the tracking issue for
+the sweep**, not in a scratchpad. That is the **intentionally preserved
+set**; Step 5 depends on it, and Step 5 usually runs in a different session
+from Step 3. Generate the list from the enumeration rather than typing it:
+the first time it was typed, a count was wrong by four.
 
 ## Step 4 — Scope the transform to category-1 files only
 
@@ -141,6 +150,28 @@ feature branch or on `dev`.
 
 **Shipped release notes and closed issues are category 4.** Do not rewrite what
 was true when it was published.
+
+## Reporting
+
+```
+## Sweep classification — <what is being renamed or consolidated>
+
+Enumerated: <rule or pattern>, N definitions / M sites in K files
+
+### 1a Mechanical (N)              → transform
+### 1b Needs copy sign-off (N)     → copy-signoff first, one block per string
+### 2  False positives (N)         → leave
+### 3  Out-of-scope designs (N)    → leave; one line each on why
+### 4  Immutable records (N)       → leave
+
+### Prose that changes with the code
+- <file:line> — <the claim it makes>
+
+Preserved set recorded at: <issue URL>
+```
+
+Categories 2–4 are listed site by site. Category 1 is counted, with the 1b
+sites listed because each one is a decision.
 
 ## Fanning out
 

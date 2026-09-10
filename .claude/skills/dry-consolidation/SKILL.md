@@ -52,31 +52,44 @@ Enumerate duplicate ranges mechanically, then **read only the reported line
 ranges**. Do not read whole candidate files, and do not form an impression of
 duplication by browsing. At 124,000 lines an impression is not evidence.
 
-`jscpd` is token-based, handles Python despite the name, and needs no install:
+`jscpd` is token-based, handles Python despite the name, and needs no install.
+Write its output to the session scratchpad, not `C:/tmp` (which has been the
+graveyard of every previous run):
 
 ```bash
-npx jscpd --reporters json --min-tokens 60 --output C:/tmp/jscpd-out --silent \
-  --format python --ignore "tests/**,.venv/**,assets/**" .
+OUT=$SCRATCHPAD/jscpd-out
+npx --yes jscpd --reporters json --min-tokens 60 --output "$OUT" --silent \
+  --format python --ignore "tests/**,.venv/**,assets/**" \
+  --pattern "champion_duel_*.py" .
 ```
 
-Read `C:/tmp/jscpd-out/jscpd-report.json` and parse `duplicates[]`. Each entry
-gives both file paths, exact line ranges, and the clone's size in tokens and
-lines. Read those ranges with `Read`'s `offset`/`limit`, nothing more.
+Read `$OUT/jscpd-report.json` and parse `duplicates[]`. Each entry gives both
+file paths, exact line ranges, and the clone's size in tokens and lines. Read
+those ranges with `Read`'s `offset`/`limit`, nothing more.
 
 `--min-tokens 60` is tuned for this codebase. Lower it to 40 when hunting small
 repeated helpers; raise it to 100 when the report is too noisy to triage.
 
-**Scope it.** A whole-repo run produces more clusters than one session can act
-on. Prefer one feature family at a time — `champion_duel_*`, `storm_*`,
-`train_*`, `alliance_duel_*` — which is also how the duplication actually
-arose, since features here were built by copying their siblings.
+**Scope it with `--pattern`.** A whole-repo run produces more clusters than
+one session can act on. Prefer one feature family at a time — `champion_duel_*`,
+`storm_*`, `train_*`, `alliance_duel_*` — which is also how the duplication
+actually arose, since features here were built by copying their siblings.
 
-## Step 2 — Confirm the shape structurally
+**Expect the family run to report clones *inside* one file.** On
+`champion_duel_*` it found 21 clones, 20 of them within the hub module and
+none across files. That is not the answer; it is the list of shapes to take
+to Step 2. Twelve of those 21 turned out to be one shape (the owner guard plus
+the timeout cleanup) that exists in 45 view classes across 18 files.
 
-A token match can be coincidence. Confirm the cluster is the same *shape* —
-same call form, same block modulo renamed variables — with ast-grep
-metavariables, where `$VAR` matches any identifier and `$$$ARGS` any argument
-list:
+## Step 2 — Confirm the shape structurally, and do it repo-wide
+
+A token match can be coincidence, and a family-scoped detector cannot see the
+same shape in other families. So this step runs on the **whole repo** even
+when Step 1 was scoped: that is where the value was on the first run, and it
+is what turns "twenty clones in one file" into "one habit in eighteen".
+Confirm the cluster is the same *shape* — same call form, same block modulo
+renamed variables — with ast-grep metavariables, where `$VAR` matches any
+identifier and `$$$ARGS` any argument list:
 
 ```bash
 AG="npx --yes --package @ast-grep/cli ast-grep"     # not `npx @ast-grep/cli`
@@ -92,6 +105,18 @@ genuine extractable duplicate from two blocks that happen to tokenize alike.
 prefixes plus Glob over the sibling naming convention (`*_hub.py`, `*_db.py`,
 `*_ui.py`, `*_cog.py`). Recall is meaningfully lower for renamed variables —
 say so in the report rather than presenting a grep sweep as a clone scan.
+
+## Step 2b — Look for an existing helper before proposing a new one
+
+Before any cluster becomes a "new helper" line in the plan, grep for one that
+already does it. The pagination row (`◀ Prev` / `Page n / m` / `Next ▶`) had a
+shared helper in `storm_officer_view.py` from the 1.8.0 dedupe, private to
+that module with three callers, when Champion Duel wrote its own four times
+and six other files hand-built the same three buttons. The fix there is
+*promote*, not *extract*, and the plan should say which. The reuse list in
+`CLAUDE.md` § Patterns to reuse is the first place to look and the place to
+add what you find; a helper that only its own module knows about will be
+copied by the next feature.
 
 ## Step 3 — Classify each cluster
 
@@ -118,7 +143,8 @@ restructure, not a consolidation, and it is not this skill's call to make.
 - Consumers: <every file that will change>
 - Parameters: <the variations being parameterised>
 - Duplicated: N tokens / N lines            (from jscpd; blank if grep fallback)
-- Confirmed: ast-grep same-shape | token-only
+- Confirmed: ast-grep same-shape, N sites in M files repo-wide | token-only
+- Existing helper: <name and module, or "none found">
 - Preserved nearby: <anything in CLAUDE.md § Patterns to reuse this sits next to>
 - Lines saved: ~N
 ```

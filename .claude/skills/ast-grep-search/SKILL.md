@@ -47,8 +47,8 @@ It exits 0 while doing so, so nothing tells you it went wrong.
 - **More than one line** → a YAML rule file, run with `scan -r`.
 
 ```bash
-# multi-line: write the rule to a file first
-cat > C:/tmp/ag-rule.yml <<'YAML'
+# multi-line: write the rule to a file first (in the session scratchpad, not C:/tmp)
+cat > $SCRATCHPAD/ag-rule.yml <<'YAML'
 id: except-pass
 language: Python
 severity: warning
@@ -61,8 +61,20 @@ rule:
         pass
 YAML
 
-$AG scan -r C:/tmp/ag-rule.yml <paths>
+$AG scan -r $SCRATCHPAD/ag-rule.yml <paths>
 ```
+
+Rule files can express **context**, which a pattern cannot: `inside`,
+`not`, `has`, `all`, `any`, with `stopBy` to bound the search. Reusable
+pieces go under `utils:` and are referenced with `matches:`. **`utils:` must
+be declared inside each rule document**; a top-level `utils:` block in a
+multi-document file fails to parse with "missing field `language`". The
+committed rule files under `scripts/quality/ast-grep/` are the worked
+examples.
+
+Two spellings of one call are two tree shapes. `expire_view_message($$$)`
+does not match `wizard_registry.expire_view_message(...)`; when a helper can
+be called bare or qualified, search both (`name($$$A)` and `$M.name($$$A)`).
 
 `--inline-rules` exists but is fragile through this shell for the same reason.
 Use the file.
@@ -97,19 +109,32 @@ with three alternations to cover naming variations, that is the signal.
 **The blocking-I/O-in-async gap.** `ruff.toml` selects `ASYNC` but says plainly
 that it only catches *stdlib* blocking calls — "ASYNC does NOT know about our
 own blocking I/O (gspread, sqlite) since those aren't stdlib — that class of bug
-still needs a human grep." This is that grep, done structurally:
+still needs a human grep." This is that grep, and it is committed:
 
 ```bash
-$AG -p 'sqlite3.connect($$$)' --lang py .
-$AG -p '$CONN.execute($$$)' --lang py .
-$AG -p '$SHEET.get_all_records($$$)' --lang py .
-$AG -p '$SHEET.update($$$)' --lang py .
-$AG -p '$CLIENT.open_by_key($$$)' --lang py .
+PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
+$PY scripts/quality/blocking_io.py          # ~35 s repo-wide
 ```
 
-Each hit still needs a human read of whether the enclosing function is
-`async def` — ast-grep finds the call, not the context. But it finds *all* of
-them, which a name-based grep does not.
+It answers in two halves, because the question has two halves:
+
+- **Direct:** a `conn.execute` or a gspread call whose nearest enclosing def
+  is `async def` and which is not an argument of `asyncio.to_thread` or
+  `run_in_executor`. That is `scripts/quality/ast-grep/blocking-in-async.yml`,
+  a rule file with the context encoded. On the first run this turned 586
+  bare-pattern hits into 13.
+- **Indirect:** a coroutine calling one of the bot's *own* sync helpers
+  (`config.get_config`, the `*_db` functions) without a hand-off. No fixed
+  pattern can see this. The script generates the pattern list from the AST
+  (`sync-db-fns.yml` lists every sync function that opens a connection or a
+  spreadsheet, 280 on the first run) and searches for calls to any of them.
+  That is the **generate-then-search two-step**, and it is the larger half:
+  284 sites on the first run, plus one network call the 1.8.0 sweep missed.
+
+Do not write "ast-grep finds the call, not the context". Rule files find the
+context; that is the point of `inside` and `not`. What they cannot do is tell
+a gspread worksheet from a dict or a set by method name, so `.update(` and
+`.clear(` are not in the rule and need a filter step if you add them.
 
 **Discord surface inventory** — useful before a UX or copy pass:
 

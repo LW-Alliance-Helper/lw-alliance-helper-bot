@@ -40,46 +40,43 @@ venv is shared with every other worktree and session.
 
 ## What is already known
 
-You do not need a tool to discover these, and reporting them as findings wastes
-the run. On `origin/dev`, five modules hold 35% of all source:
-
-| Module | Lines |
-|---|---|
-| `setup_cog.py` | 12,015 |
-| `champion_duel_hub.py` | 11,403 |
-| `storm_roster_builder.py` | 7,227 |
-| `config.py` | 6,948 |
-| `champion_duel_db.py` | 5,865 |
+Do not rediscover the five largest modules; the script prints them and
+`wc -l *.py | sort -n | tail -6` does too. Hard-coded numbers in a skill file
+rot (the table that used to sit here was three releases stale when it was
+first checked), so this file carries commands, not figures.
 
 The useful question is not *which files are big* but **which functions inside
 them carry the complexity**, and whether a big file is one tangled thing or
 forty tidy ones sharing a filename. That distinction decides whether a module
 needs splitting or leaving alone.
 
-**The maintainability index is useless on these three.** `radon mi` reports
-`setup_cog.py`, `champion_duel_hub.py` and `config.py` all at exactly **0.00**
-— the metric floors, so it cannot tell you which is worse or whether a cleanup
-pass helped. Use `radon cc` per function for anything over about 3,000 lines,
-and reserve `mi` for the mid-sized modules where it still discriminates
-(`events_hub.py` scores 11.01, which is a real reading).
+**The maintainability index floors at 0.00 on anything over about 3,000
+lines** (twelve files on 2026-09-09, not three), so it cannot rank the big
+modules or show whether a cleanup helped. Use `radon cc` per function there;
+`mi` still discriminates on mid-sized modules.
 
 ## Step 1 — Measure
 
+The measurement is a script. Run it; do not re-derive it.
+
 ```bash
-# Cyclomatic complexity, ranked, B and worse, excluding tests
-radon cc . -s -a --min B -e "tests/*,.venv/*,assets/*,scripts/*"
-
-# Maintainability index per file
-radon mi . -s -e "tests/*,.venv/*,assets/*"
-
-# Machine-readable, when you want to sort or diff it
-radon cc . -j --min B -e "tests/*,.venv/*"
+PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.venv/Scripts/python.exe
+$PY scripts/quality/complexity_map.py                       # whole repo, ~25 s
+$PY scripts/quality/complexity_map.py storm_                # one family, by filename prefix
+$PY scripts/quality/complexity_map.py --since 2026-07-01 --json map.json
 ```
 
-Scope to a feature family when chasing something specific:
+It runs radon for cyclomatic complexity, walks the AST for nesting depth,
+parameter count and branch density (radon reports none of those), pulls
+per-file churn from `git log`, and prints the report in Step 3's format with
+a suggested order. `--json` writes the full measurement for a side-by-side
+after a cleanup pass.
+
+The raw radon commands, for a quick look at one file:
 
 ```bash
-radon cc champion_duel_*.py -s --min C
+$PY -m radon cc <file>.py -s --min C
+$PY -m radon mi <file>.py -s
 ```
 
 ## Step 2 — Rank against these thresholds
@@ -90,6 +87,12 @@ radon cc champion_duel_*.py -s --min C
 | Function length (lines) | 1–40 | 41–80 | 81+ |
 | Nesting depth | 1–3 | 4 | 5+ |
 | Parameters | 1–4 | 5–6 | 7+ |
+| Branches per 100 lines (functions of 100+ lines) | under 20 | | 20+ ("dense") |
+
+**Churn is not a threshold but it is a column**, and on the first run it
+changed the suggested order more than any complexity number did. Complexity
+nobody touches is a lower risk than complexity that changes weekly. The script
+prints commits-since per function's file; read the two together.
 
 Function length is set higher than upstream's 25/50 on purpose. Discord command
 handlers and wizard steps are legitimately long — they walk a user through a
@@ -116,12 +119,17 @@ Functions measured: N     Average CC: X.X
   module.py     N functions over threshold, out of M
 
 ### Suggested order
-1. <module> — <why it is first: highest CC, or most consumers, or blocks other work>
+1. <module>: <function> (CC N) — <why it is first: deepest, or most changed, or blocks other work>
 ```
 
-End with a **suggested order**, not just a table. The point of the map is
-picking the next target, and a ranked list without a recommendation leaves that
-work undone.
+End with a **suggested order**, not just a table, and give **one line of
+reasoning per target**. The point of the map is picking the next target, and a
+ranked list without a recommendation leaves that work undone; a recommendation
+without a reason cannot be reordered. The script's order is a proposal that
+weighs tangle first and churn second; say where you moved it and why. The
+first run's own reordering: length alone did not make a wizard a target, depth
+did, and the most-changed files went to `dry-consolidation` rather than to a
+refactor.
 
 ## Step 4 — Hand off
 
@@ -134,9 +142,9 @@ Once the map exists, route each target:
 
 ## Re-running
 
-Re-measure the same scope after a cleanup pass and put the two tables side by
-side. That is the only honest way to say whether a session improved anything.
-"Feels cleaner" is not a result.
+Re-measure the same scope after a cleanup pass (`--json` before and after)
+and put the two tables side by side. That is the only honest way to say
+whether a session improved anything. "Feels cleaner" is not a result.
 
 ## Related
 

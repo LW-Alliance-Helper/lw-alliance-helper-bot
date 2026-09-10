@@ -12,6 +12,7 @@ repos:
     hooks:
       - id: check-merge-conflict # stray <<<<<< markers (we merge a lot)
       - id: check-yaml # validate workflow / config YAML before it breaks CI
+        args: [--allow-multiple-documents] # scripts/quality/ast-grep/*.yml hold several rules per file
       - id: check-toml # validate ruff.toml, pytest config, etc.
       - id: check-added-large-files # block accidental binaries (storm PNGs)
 

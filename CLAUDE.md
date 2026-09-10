@@ -457,7 +457,7 @@ the next has to look at.
 
 - **`code-complexity`** — ranks functions by measured complexity. Run it
   first in any cleanup session: it turns "this feels messy" into a target
-  list. Needs `radon` (not installed — ask before installing).
+  list. `radon` is in the shared venv.
 - **`dry-consolidation`** — finds code duplicated across modules with a
   real clone detector, then extracts it into one helper. Reads § Patterns
   to reuse above and treats everything there as preserved.
@@ -469,6 +469,14 @@ the next has to look at.
   non-stdlib blocking I/O (gspread, sqlite).
 - **`bulk-sweep-classify`** — classify every match before any repo-wide
   find-replace. The success test is never "the grep returns zero".
+
+**The measurements are committed under `scripts/quality/`** (the
+complexity map, the blocking-I/O check, the dead-code runner, and the
+ast-grep rule files they use). Each skill calls its script rather than
+describing it, so a run starts where the last one ended and a re-run after
+a cleanup can be put beside the run before it. See `scripts/quality/README.md`.
+The 2026-09-09 walkthrough that produced them, one skill per turn with its
+findings, is [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589).
 
 Adapted from a third-party MIT plugin; provenance and what changed is in
 `.claude/skills/THIRD_PARTY.md`. Their tooling is dev-only and must never

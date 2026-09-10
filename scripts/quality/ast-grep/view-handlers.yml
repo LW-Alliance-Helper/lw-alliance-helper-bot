@@ -1,0 +1,23 @@
+# Enumerate every owner guard, timeout handler and storm-style guard, for the
+# shared-base-view consolidation (#589 item 1) and its verification: the
+# success test is zero matches outside the preserved set recorded there, not
+# zero matches. Both spellings of the cleanup call have to be searched: the
+# bare `expire_view_message(...)` and the qualified `wizard_registry.expire_view_message(...)`
+# are different tree shapes.
+id: any-interaction-check
+language: python
+rule:
+  kind: function_definition
+  has: { field: name, regex: "^interaction_check$" }
+---
+id: any-on-timeout
+language: python
+rule:
+  kind: function_definition
+  has: { field: name, regex: "^on_timeout$" }
+---
+id: any-guard-owner
+language: python
+rule:
+  kind: function_definition
+  has: { field: name, regex: "^_guard_owner$" }

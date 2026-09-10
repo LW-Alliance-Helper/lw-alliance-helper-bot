@@ -23,6 +23,24 @@ Upstream's non-standard frontmatter keys (`args`, `argument-hint`, `model`,
 `created`, `modified`, `reviewed`, `agent`, `context`, `user-invocable`) were
 dropped in favour of this repo's house style: `name` and `description` only.
 
+## What the 2026-09-09 walkthrough changed
+
+Each skill was run once, as written, on real code, and edited from what the
+run showed (the log is
+[#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)).
+The common change: every check a skill described in prose now exists as a
+script or rule file under `scripts/quality/`, and the skill calls it.
+Per skill: `code-complexity` lost its hard-coded baseline table and gained
+churn and a reason-per-target rule; `dry-consolidation` gained `--pattern`
+scoping, a repo-wide Step 2 and a "look for an existing helper first" step;
+`code-dead-code` had its confidence advice corrected (vulture rates every
+unused function at a flat 60, so "start at 90" could never find one) and its
+whitelist committed; `ast-grep-search` gained the context-aware rule files
+and the generate-then-search two-step for calls to the bot's own sync
+helpers; `bulk-sweep-classify` gained a report format and the 1a / 1b split
+for copy; `ux-review`'s brief gained the fifteen-minute edit limit and two
+rules about what a brief must not do. `copy-signoff` was unchanged.
+
 ## Tooling these skills call
 
 None of it is a runtime dependency. **Nothing here belongs in

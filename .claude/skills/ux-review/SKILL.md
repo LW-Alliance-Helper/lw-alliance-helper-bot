@@ -48,13 +48,27 @@ code and do not design the feature. Answer only:
 5. **Principles in tension.** Which of the seven `notes/UX.md` principles
    this work could plausibly violate, and where the risk sits.
 6. **Failure modes to design now.** What breaks when the channel is
-   deleted, the sheet tab is renamed, the view times out, the bot
-   restarts mid-flow, the alliance has 200 members, or the option list
-   exceeds 25. Whether it needs a `config_health` subject and an
-   `outage_catchup` adapter.
+   deleted, the sheet tab is renamed, the view times out, **the
+   interaction token expires** (an ephemeral message cannot be edited
+   after fifteen minutes, so a view whose timeout resets on every click
+   can outlive the only way to clean it up), the bot restarts mid-flow
+   (timeout handlers never fire after a redeploy), the alliance has 200
+   members, or the option list exceeds 25. Whether it needs a
+   `config_health` subject and an `outage_catchup` adapter.
 
 Keep it under a page. It is a checklist to build against, not a design
 document.
+
+**When the two contracts point different ways, that is the finding.** Report
+the disagreement, name both sections, and stop; do not resolve it in the
+brief. On view timeouts, `notes/DESIGN.md` § View timeouts scopes the
+mandatory notice to background-posted views while `notes/UX.md` § Principles
+says every timeout carries its exit; the brief's job was to say so, and the
+decision went to the tracking issue.
+
+**A brief never goes into a public issue.** The contracts are private and the
+bot repo is not. Record a brief's conclusions on an issue by section name
+only (`notes/UX.md` § Timeouts), quoting nothing.
 
 ---
 

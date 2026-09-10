@@ -1,0 +1,21 @@
+# Every sync function that opens a sqlite connection or a spreadsheet.
+# These are the bot's own blocking helpers (config.get_*, the *_db modules,
+# transfer_sheets, ...). blocking_io.py turns the list into a second rule that
+# finds coroutines calling any of them without a thread hand-off: the indirect
+# class, which the direct rule cannot see.
+id: sync-db-fn
+language: python
+message: sync function that opens a sqlite connection or a spreadsheet
+rule:
+  kind: function_definition
+  not: { regex: "^async" }
+  has:
+    any:
+      - pattern: "_get_conn()"
+      - pattern: "$M._get_conn()"
+      - pattern: "get_spreadsheet($$$A)"
+      - pattern: "$M.get_spreadsheet($$$A)"
+      - pattern: "get_spreadsheet_by_id($$$A)"
+      - pattern: "$M.get_spreadsheet_by_id($$$A)"
+      - pattern: "$C.open_by_key($$$A)"
+    stopBy: { kind: function_definition }

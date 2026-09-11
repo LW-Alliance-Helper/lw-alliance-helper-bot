@@ -1882,7 +1882,7 @@ class TestTeamPlanRosterPickerView:
         inter = MagicMock()
         inter.user.id = 12345  # not the owner (999)
         inter.response.send_message = AsyncMock()
-        ok = await view._guard_owner(inter)
+        ok = await view.interaction_check(inter)
         assert ok is False
         inter.response.send_message.assert_awaited_once()
         msg = inter.response.send_message.await_args.args[0]
@@ -1970,7 +1970,7 @@ class TestTeamPlanSubPickerView:
         inter = MagicMock()
         inter.user.id = 12345
         inter.response.send_message = AsyncMock()
-        ok = await view._guard_owner(inter)
+        ok = await view.interaction_check(inter)
         assert ok is False
         inter.response.send_message.assert_awaited_once()
 
@@ -2116,12 +2116,15 @@ class TestClearVotes:
         msg = inter.response.send_message.await_args.args[0]
         assert "Nothing to clear" in msg
 
-    async def test_confirm_helper_denies_non_owner(self, seeded_db):
+    async def test_non_owner_is_refused_before_the_helper_runs(self, seeded_db):
+        """The clear-votes helper used to carry its own owner check. The view's
+        inherited `interaction_check` now refuses a stranger before any button
+        callback (and so any helper) runs, so the guard lives in one place."""
         self._save_cfg()
         guild = _FakeGuild(TEST_GUILD_ID, [])
         view = sov.OfficerView(guild, owner_user_id=1, event_type="DS", event_date="2026-05-18")
         inter = self._owner_inter()
         inter.user.id = 2  # not the owner
-        await sov._confirm_clear_votes(inter, view, on_behalf_only=False)
+        assert await view.interaction_check(inter) is False
         msg = inter.response.send_message.await_args.args[0]
         assert msg == sov.DENY_NOT_OWNER

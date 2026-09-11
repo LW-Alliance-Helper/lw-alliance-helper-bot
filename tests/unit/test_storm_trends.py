@@ -543,7 +543,7 @@ class TestTrendsView:
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
         inter.response.send_message = AsyncMock()
-        ok = await view._guard(inter)
+        ok = await view.interaction_check(inter)
         assert ok is False
         inter.response.send_message.assert_called_once()
         assert "Only the user who opened this view" in inter.response.send_message.call_args.args[0]

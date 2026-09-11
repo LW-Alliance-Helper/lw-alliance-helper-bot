@@ -193,7 +193,6 @@ class TestSubsManageReturnSub:
         parent.session = sess
         view = srb._SubsManageView(parent_view=parent)
         view.selected_sub = "5"
-        view._guard_owner = AsyncMock(return_value=True)
         view._refresh_parent = AsyncMock()
 
         inter = MagicMock()
@@ -215,7 +214,6 @@ class TestSubsManageReturnSub:
         parent.session = sess
         view = srb._SubsManageView(parent_view=parent)
         view.selected_sub = "1"  # not actually a sub
-        view._guard_owner = AsyncMock(return_value=True)
         view._refresh_parent = AsyncMock()
 
         inter = MagicMock()

@@ -594,7 +594,11 @@ class _TrendsView(OwnedView):
         copy_btn.callback = self._on_copy
         self.add_item(copy_btn)
 
-    # ── Owner guard ─────────────────────────────────────────────────────
+    # ── Callbacks ───────────────────────────────────────────────────────
+    async def _redraw(self, inter: discord.Interaction, *, results: bool = False):
+        self._build()
+        embed = _render_results_embed(self.state) if results else _render_builder_embed(self.state)
+        await inter.response.edit_message(embed=embed, view=self)
 
     async def _on_question(self, inter: discord.Interaction):
         sel: discord.ui.Select = inter.data["values"]  # type: ignore

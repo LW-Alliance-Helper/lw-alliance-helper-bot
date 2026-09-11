@@ -2,7 +2,7 @@
 
 The privacy policy promises that we action requests. Until this there was no
 route to action one: `/admin forget_guild` clears a guild's install record and
-`champion_duel_db.purge_expired` clears expired sessions, and between them they
+`champion_duel_db.create_session` sweeps expired sessions on every sign-in, and between them they
 reach none of what the bot holds about a person.
 
 Kevin works in UIs, not the terminal, and that decides the shape rather than

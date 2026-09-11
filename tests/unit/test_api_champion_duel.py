@@ -74,6 +74,52 @@ async def _session(can_write=False, user="111", name="Kevin"):
     return db.create_session(user, name, can_write=can_write, writer_guild_id="999")
 
 
+# ── Sessions: one row per person, and the sweep that rides on sign-in ─────────
+
+
+def _session_rows(user=None):
+    with db._get_conn() as conn:
+        if user is None:
+            return conn.execute("SELECT * FROM sessions").fetchall()
+        return conn.execute("SELECT * FROM sessions WHERE discord_user_id = ?", (user,)).fetchall()
+
+
+async def test_second_sign_in_rewrites_the_row_and_retires_the_old_token(cd_db):
+    first = db.create_session("111", "Kevin")
+    second = db.create_session("111", "Kevin", can_write=True, writer_guild_id="999")
+
+    assert len(_session_rows("111")) == 1
+    assert db.get_session(first) is None, "the earlier token must stop working"
+    live = db.get_session(second)
+    assert live is not None and live["can_write"] == 1
+
+
+async def test_sign_in_does_not_touch_other_people(cd_db):
+    theirs = db.create_session("222", "Wren")
+    db.create_session("111", "Kevin")
+
+    assert db.get_session(theirs) is not None
+    assert {r["discord_user_id"] for r in _session_rows()} == {"111", "222"}
+
+
+async def test_sign_in_sweeps_expired_sessions_and_codes(cd_db):
+    stale = db.create_session("222", "Wren")
+    db.create_auth_code("333", "Ash")
+    long_ago = "2000-01-01T00:00:00+00:00"
+    with db._get_conn() as conn:
+        conn.execute(
+            "UPDATE sessions SET expires_at = ? WHERE discord_user_id = '222'", (long_ago,)
+        )
+        conn.execute("UPDATE auth_codes SET expires_at = ?", (long_ago,))
+
+    db.create_session("111", "Kevin")
+
+    assert db.get_session(stale) is None
+    assert [r["discord_user_id"] for r in _session_rows()] == ["111"]
+    with db._get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM auth_codes").fetchone()[0] == 0
+
+
 # ── Open routes ───────────────────────────────────────────────────────────────
 
 

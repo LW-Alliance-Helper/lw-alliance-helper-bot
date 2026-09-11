@@ -5478,10 +5478,24 @@ def contributor_summary(limit: int = 25) -> list[dict]:
 
 def create_session(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
     """Mint a session. Returns the plaintext token exactly once â€” only its hash
-    is stored, so it cannot be recovered from the volume afterwards."""
+    is stored, so it cannot be recovered from the volume afterwards.
+
+    **One row per Discord user.** Signing in rewrites that person's row rather
+    than adding another, so a second sign-in (a new device, or the thirty-day
+    expiry forcing a re-authorisation) invalidates the earlier token. Before
+    this, every sign-in inserted a fresh row and nothing ever removed the old
+    ones: expired sessions could not be used, but they sat on the volume with
+    the person's id and name for good (#589).
+
+    The same write sweeps everyone else's expired sessions and hand-off codes,
+    so the table holds at most one live row per person who has signed in, and
+    nothing about anyone whose thirty days are up.
+    """
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     with _get_conn() as conn:
+        _sweep_expired(conn, now.isoformat())
+        conn.execute("DELETE FROM sessions WHERE discord_user_id = ?", (str(discord_user_id),))
         conn.execute(
             """
             INSERT INTO sessions (token_hash, discord_user_id, discord_name,
@@ -5542,10 +5556,13 @@ def revoke_session(token: str) -> None:
         )
 
 
-def purge_expired() -> int:
-    with _get_conn() as conn:
-        n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_now(),)).rowcount
-        conn.execute("DELETE FROM auth_codes WHERE expires_at <= ?", (_now(),))
+def _sweep_expired(conn, now: str) -> int:
+    """Delete sessions and hand-off codes past their expiry. Runs inside every
+    sign-in (`create_session`), which is the only writer that needs it: an
+    expired row is already refused on read, so the sweep is about not keeping
+    a person's id and name after the thirty days the row promised."""
+    n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,)).rowcount
+    conn.execute("DELETE FROM auth_codes WHERE expires_at <= ?", (now,))
     return n
 
 

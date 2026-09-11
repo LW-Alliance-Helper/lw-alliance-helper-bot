@@ -6648,8 +6648,9 @@ class TestAssignConfirmView:
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
         inter.response.send_message = AsyncMock()
-        await confirm.yes(inter)
-        # No assignment landed; rejection sent.
+        # The guard is the view's inherited `interaction_check`, which discord.py
+        # runs before any button callback; a stranger never reaches `yes`.
+        assert await confirm.interaction_check(inter) is False
         assert "1005" not in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         args = inter.response.send_message.call_args.args
@@ -6915,8 +6916,9 @@ class TestZoneMemberEditView:
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
         inter.response.send_message = AsyncMock()
-        await v._on_apply(inter)
-        # No state change; rejection sent.
+        # The guard is the view's inherited `interaction_check`, which discord.py
+        # runs before any callback; a stranger never reaches `_on_apply`.
+        assert await v.interaction_check(inter) is False
         assert "1001" in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         assert (

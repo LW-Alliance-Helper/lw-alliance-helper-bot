@@ -1846,11 +1846,13 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
-        ws = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
-        rows = await asyncio.get_event_loop().run_in_executor(
-            None,
-            ws.get_all_values,
+        # Opening the spreadsheet and looking up the tab are network calls
+        # too, not just the read below (#589; the 1.8.0 sweep threaded the
+        # read and left the open on the loop).
+        ws = await asyncio.to_thread(
+            get_member_roster_sheet, interaction.guild_id, roster_cfg["tab_name"]
         )
+        rows = await asyncio.to_thread(ws.get_all_values)
     except Exception as e:
         await interaction.followup.send(
             f"⚠️ Could not read the roster sheet: {e}",

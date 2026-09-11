@@ -158,30 +158,52 @@ async def admin_overview_slash(interaction: discord.Interaction):
     # lands in Stale stragglers.
     held = "guild_id NOT IN (SELECT guild_id FROM guild_removals)"
 
-    with _get_conn() as conn:
-        total_guilds = conn.execute(
-            f"SELECT COUNT(*) FROM guild_install_metadata WHERE {held}"  # noqa: S608
-        ).fetchone()[0]
-        awaiting_removal = conn.execute("SELECT COUNT(*) FROM guild_removals").fetchone()[0]
-        with_setup_complete = conn.execute(
-            "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
-        ).fetchone()[0]
-        premium_assignments = conn.execute("SELECT COUNT(*) FROM premium_assignments").fetchone()[0]
-        # Recent installs: last 7 days. Use ISO timestamp comparison
-        # (TEXT-sorted, ISO-8601 is lexicographically ordered).
-        cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        recent_rows = conn.execute(
-            "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
-            f"WHERE installed_at >= ? AND {held} ORDER BY installed_at DESC LIMIT 10",  # noqa: S608
-            (cutoff_recent,),
-        ).fetchall()
-        # Stale stragglers: no on_ready ping in 14+ days.
-        cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        stale_rows = conn.execute(
-            "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
-            f"WHERE last_seen_at < ? AND {held} ORDER BY last_seen_at ASC LIMIT 10",  # noqa: S608
-            (cutoff_stale,),
-        ).fetchall()
+    def _read_overview():
+        # Six reads on the loop, even owner-only ones, are the class the
+        # 1.8.0 sweep (#366) was for; they run in a thread now (#589).
+        with _get_conn() as conn:
+            total_guilds = conn.execute(
+                f"SELECT COUNT(*) FROM guild_install_metadata WHERE {held}"  # noqa: S608
+            ).fetchone()[0]
+            awaiting_removal = conn.execute("SELECT COUNT(*) FROM guild_removals").fetchone()[0]
+            with_setup_complete = conn.execute(
+                "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
+            ).fetchone()[0]
+            premium_assignments = conn.execute(
+                "SELECT COUNT(*) FROM premium_assignments"
+            ).fetchone()[0]
+            # Recent installs: last 7 days. Use ISO timestamp comparison
+            # (TEXT-sorted, ISO-8601 is lexicographically ordered).
+            cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            recent_rows = conn.execute(
+                "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
+                f"WHERE installed_at >= ? AND {held} ORDER BY installed_at DESC LIMIT 10",  # noqa: S608
+                (cutoff_recent,),
+            ).fetchall()
+            # Stale stragglers: no on_ready ping in 14+ days.
+            cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+            stale_rows = conn.execute(
+                "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
+                f"WHERE last_seen_at < ? AND {held} ORDER BY last_seen_at ASC LIMIT 10",  # noqa: S608
+                (cutoff_stale,),
+            ).fetchall()
+        return (
+            total_guilds,
+            awaiting_removal,
+            with_setup_complete,
+            premium_assignments,
+            recent_rows,
+            stale_rows,
+        )
+
+    (
+        total_guilds,
+        awaiting_removal,
+        with_setup_complete,
+        premium_assignments,
+        recent_rows,
+        stale_rows,
+    ) = await asyncio.to_thread(_read_overview)
 
     embed = discord.Embed(
         title="⚙️ Admin Overview",
@@ -661,13 +683,16 @@ async def admin_shiny_servers_slash(
     from time_helpers import server_today as resolve_server_today  # noqa: PLC0415
     from shiny_tasks import is_shiny_today  # noqa: PLC0415
 
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT server_number, creation_date, last_seen_at "
-            "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
-            "ORDER BY server_number",
-            (min_server, max_server),
-        ).fetchall()
+    def _read_servers():
+        with _get_conn() as conn:
+            return conn.execute(
+                "SELECT server_number, creation_date, last_seen_at "
+                "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
+                "ORDER BY server_number",
+                (min_server, max_server),
+            ).fetchall()
+
+    rows = await asyncio.to_thread(_read_servers)
 
     if not rows:
         await interaction.response.send_message(

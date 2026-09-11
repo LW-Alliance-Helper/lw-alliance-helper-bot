@@ -7953,15 +7953,18 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         try:
             import config as _config
 
-            with _config._get_conn() as conn:
-                already_posted = (
-                    conn.execute(
-                        "SELECT 1 FROM storm_registration_posts "
-                        "WHERE guild_id = ? AND event_type = ? LIMIT 1",
-                        (guild_id, event_type),
-                    ).fetchone()
-                    is not None
-                )
+            def _signup_already_posted() -> bool:
+                with _config._get_conn() as conn:
+                    return (
+                        conn.execute(
+                            "SELECT 1 FROM storm_registration_posts "
+                            "WHERE guild_id = ? AND event_type = ? LIMIT 1",
+                            (guild_id, event_type),
+                        ).fetchone()
+                        is not None
+                    )
+
+            already_posted = await asyncio.to_thread(_signup_already_posted)
         except Exception:
             already_posted = True  # err on the side of not nagging
         if not already_posted:

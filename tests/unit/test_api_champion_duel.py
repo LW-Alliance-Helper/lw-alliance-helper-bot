@@ -74,6 +74,71 @@ async def _session(can_write=False, user="111", name="Kevin"):
     return db.create_session(user, name, can_write=can_write, writer_guild_id="999")
 
 
+# ── Sessions: one row per person, and the sweep that rides on sign-in ─────────
+
+
+def _session_rows(user=None):
+    with db._get_conn() as conn:
+        if user is None:
+            return conn.execute("SELECT * FROM sessions").fetchall()
+        return conn.execute("SELECT * FROM sessions WHERE discord_user_id = ?", (user,)).fetchall()
+
+
+async def test_phone_and_pc_both_stay_signed_in(cd_db):
+    phone = db.create_session("111", "Kevin", user_agent="Mozilla/5.0 (iPhone) Safari")
+    pc = db.create_session("111", "Kevin", user_agent="Mozilla/5.0 (Windows NT 10.0) Firefox")
+
+    assert db.get_session(phone) is not None
+    assert db.get_session(pc) is not None
+    rows = _session_rows("111")
+    assert len(rows) == 2
+    assert {r["user_agent"] for r in rows} == {
+        "Mozilla/5.0 (iPhone) Safari",
+        "Mozilla/5.0 (Windows NT 10.0) Firefox",
+    }
+
+
+async def test_sixth_sign_in_drops_the_oldest(cd_db):
+    tokens = []
+    for i in range(db.SESSIONS_PER_USER + 1):
+        tokens.append(db.create_session("111", "Kevin"))
+        with db._get_conn() as conn:  # spread creation so "oldest" is unambiguous
+            conn.execute(
+                "UPDATE sessions SET created_at = ? WHERE token_hash = ?",
+                (f"2026-09-10T00:00:0{i}+00:00", db._hash(tokens[-1])),
+            )
+
+    assert len(_session_rows("111")) == db.SESSIONS_PER_USER
+    assert db.get_session(tokens[0]) is None, "the oldest is the one that goes"
+    assert all(db.get_session(t) is not None for t in tokens[1:])
+
+
+async def test_sign_in_does_not_touch_other_people(cd_db):
+    theirs = db.create_session("222", "Wren")
+    db.create_session("111", "Kevin")
+
+    assert db.get_session(theirs) is not None
+    assert {r["discord_user_id"] for r in _session_rows()} == {"111", "222"}
+
+
+async def test_sign_in_sweeps_expired_sessions_and_codes(cd_db):
+    stale = db.create_session("222", "Wren")
+    db.create_auth_code("333", "Ash")
+    long_ago = "2000-01-01T00:00:00+00:00"
+    with db._get_conn() as conn:
+        conn.execute(
+            "UPDATE sessions SET expires_at = ? WHERE discord_user_id = '222'", (long_ago,)
+        )
+        conn.execute("UPDATE auth_codes SET expires_at = ?", (long_ago,))
+
+    db.create_session("111", "Kevin")
+
+    assert db.get_session(stale) is None
+    assert [r["discord_user_id"] for r in _session_rows()] == ["111"]
+    with db._get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM auth_codes").fetchone()[0] == 0
+
+
 # ── Open routes ───────────────────────────────────────────────────────────────
 
 

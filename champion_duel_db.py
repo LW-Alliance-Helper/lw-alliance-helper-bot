@@ -64,6 +64,9 @@ except ImportError:  # pragma: no cover - exercised by the degraded-mode path
 DB_PATH = os.getenv("CHAMPION_DUEL_DB_PATH", "/app/data/champion_duel.sqlite3")
 
 SESSION_TTL = timedelta(days=30)
+#: Live sessions one person may hold at once: a phone, a PC, a second
+#: browser, and room for two more. Past this the oldest goes at sign-in.
+SESSIONS_PER_USER = 5
 AUTH_CODE_TTL = timedelta(seconds=60)
 
 VALID_SOURCES = ("observed", "estimated", "edited")
@@ -1010,7 +1013,8 @@ def init_db() -> None:
                 created_at         TEXT NOT NULL,
                 expires_at         TEXT NOT NULL,
                 last_used_at       TEXT,
-                revoked_at         TEXT
+                revoked_at         TEXT,
+                user_agent         TEXT
             )
         """)
         conn.execute("""
@@ -1059,6 +1063,9 @@ def init_db() -> None:
         for _table, _column, _decl in (
             ("registrants", "troop_level", "INTEGER"),
             ("squads", "mixed", "INTEGER"),
+            # The browser's User-Agent at sign-in, so a device list can one day
+            # say "Firefox on Windows" per session. NULL on rows minted before.
+            ("sessions", "user_agent", "TEXT"),
         ):
             try:
                 conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_column} {_decl}")
@@ -5476,43 +5483,64 @@ def contributor_summary(limit: int = 25) -> list[dict]:
 # â”€â”€ Sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def create_session(discord_user_id, discord_name=None, can_write=False, writer_guild_id=None):
-    """Mint a session. Returns the plaintext token exactly once â€” only its hash
+def create_session(
+    discord_user_id,
+    discord_name=None,
+    can_write=False,
+    writer_guild_id=None,
+    user_agent=None,
+):
+    """Mint a session. Returns the plaintext token exactly once; only its hash
     is stored, so it cannot be recovered from the volume afterwards.
 
-    **One row per Discord user.** Signing in rewrites that person's row rather
-    than adding another, so a second sign-in (a new device, or the thirty-day
-    expiry forcing a re-authorisation) invalidates the earlier token. Before
-    this, every sign-in inserted a fresh row and nothing ever removed the old
-    ones: expired sessions could not be used, but they sat on the volume with
-    the person's id and name for good (#589).
+    **One row per sign-in, at most `SESSIONS_PER_USER` live per person.** A
+    phone and a PC each keep their own session, the way a streaming service
+    keeps a list of signed-in devices; nothing here can tell devices apart, so
+    the row is the device. Past the cap the oldest goes. The browser's
+    User-Agent is kept so a device list can one day label each row.
 
-    The same write sweeps everyone else's expired sessions and hand-off codes,
-    so the table holds at most one live row per person who has signed in, and
-    nothing about anyone whose thirty days are up.
+    The same write sweeps everyone's expired sessions and hand-off codes.
+    Before this, every sign-in inserted a row and nothing ever removed one:
+    an expired row could not be used, but it sat on the volume with the
+    person's id and name for good, and the function written to sweep them was
+    never called (#589). There is no timer: an expired row goes at the next
+    sign-in by anyone.
     """
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
+    uid = str(discord_user_id)
     with _get_conn() as conn:
         _sweep_expired(conn, now.isoformat())
-        conn.execute("DELETE FROM sessions WHERE discord_user_id = ?", (str(discord_user_id),))
         conn.execute(
             """
             INSERT INTO sessions (token_hash, discord_user_id, discord_name,
                                   can_write, writer_guild_id, premium_checked_at,
-                                  created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  created_at, expires_at, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _hash(token),
-                str(discord_user_id),
+                uid,
                 discord_name,
                 1 if can_write else 0,
                 None if writer_guild_id is None else str(writer_guild_id),
                 now.isoformat(),
                 now.isoformat(),
                 (now + SESSION_TTL).isoformat(),
+                (user_agent or None) and str(user_agent)[:256],
             ),
+        )
+        # Oldest beyond the cap go. Ordered by creation, then by hash, so two
+        # rows minted in the same instant still sort the same way every time.
+        conn.execute(
+            """
+            DELETE FROM sessions WHERE token_hash IN (
+                SELECT token_hash FROM sessions WHERE discord_user_id = ?
+                ORDER BY created_at DESC, token_hash DESC
+                LIMIT -1 OFFSET ?
+            )
+            """,
+            (uid, SESSIONS_PER_USER),
         )
     return token
 
@@ -5558,9 +5586,10 @@ def revoke_session(token: str) -> None:
 
 def _sweep_expired(conn, now: str) -> int:
     """Delete sessions and hand-off codes past their expiry. Runs inside every
-    sign-in (`create_session`), which is the only writer that needs it: an
-    expired row is already refused on read, so the sweep is about not keeping
-    a person's id and name after the thirty days the row promised."""
+    sign-in (`create_session`) rather than on a timer: an expired row is
+    already refused on read, so the sweep is about not keeping a person's id
+    and name after the thirty days the row promised, and the next sign-in by
+    anyone is soon enough for that."""
     n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,)).rowcount
     conn.execute("DELETE FROM auth_codes WHERE expires_at <= ?", (now,))
     return n

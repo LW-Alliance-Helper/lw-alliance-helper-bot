@@ -369,6 +369,7 @@ async def exchange(request: web.Request) -> web.Response:
         identity["discord_name"],
         identity["can_write"],
         identity["writer_guild_id"],
+        request.headers.get("User-Agent"),
     )
     return json_response(
         {

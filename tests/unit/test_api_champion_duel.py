@@ -84,14 +84,33 @@ def _session_rows(user=None):
         return conn.execute("SELECT * FROM sessions WHERE discord_user_id = ?", (user,)).fetchall()
 
 
-async def test_second_sign_in_rewrites_the_row_and_retires_the_old_token(cd_db):
-    first = db.create_session("111", "Kevin")
-    second = db.create_session("111", "Kevin", can_write=True, writer_guild_id="999")
+async def test_phone_and_pc_both_stay_signed_in(cd_db):
+    phone = db.create_session("111", "Kevin", user_agent="Mozilla/5.0 (iPhone) Safari")
+    pc = db.create_session("111", "Kevin", user_agent="Mozilla/5.0 (Windows NT 10.0) Firefox")
 
-    assert len(_session_rows("111")) == 1
-    assert db.get_session(first) is None, "the earlier token must stop working"
-    live = db.get_session(second)
-    assert live is not None and live["can_write"] == 1
+    assert db.get_session(phone) is not None
+    assert db.get_session(pc) is not None
+    rows = _session_rows("111")
+    assert len(rows) == 2
+    assert {r["user_agent"] for r in rows} == {
+        "Mozilla/5.0 (iPhone) Safari",
+        "Mozilla/5.0 (Windows NT 10.0) Firefox",
+    }
+
+
+async def test_sixth_sign_in_drops_the_oldest(cd_db):
+    tokens = []
+    for i in range(db.SESSIONS_PER_USER + 1):
+        tokens.append(db.create_session("111", "Kevin"))
+        with db._get_conn() as conn:  # spread creation so "oldest" is unambiguous
+            conn.execute(
+                "UPDATE sessions SET created_at = ? WHERE token_hash = ?",
+                (f"2026-09-10T00:00:0{i}+00:00", db._hash(tokens[-1])),
+            )
+
+    assert len(_session_rows("111")) == db.SESSIONS_PER_USER
+    assert db.get_session(tokens[0]) is None, "the oldest is the one that goes"
+    assert all(db.get_session(t) is not None for t in tokens[1:])
 
 
 async def test_sign_in_does_not_touch_other_people(cd_db):

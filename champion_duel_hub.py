@@ -5509,6 +5509,46 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         view.message = await interaction.original_response()
 
 
+async def _open_record_modal(
+    inter: discord.Interaction,
+    *,
+    can_write: bool,
+    grouping: dict,
+    warzone,
+    stage: str | None = None,
+    groupings: list | None = None,
+) -> None:
+    """Open `_RecordGroupModal` as the first response to `inter`.
+
+    A modal has to be the first response to an interaction, so a caller that
+    does not already hold the round and the grouping list reads them here
+    before responding rather than deferring first; the two reads are one
+    indexed SQLite lookup each, well inside the three seconds. The grouping
+    list is the same one the hub root's control offers: two record controls
+    whose Champion Duel pickers disagree is one surface contradicting
+    another. `grouping` is never None here: every control that opens this is
+    added only when its view holds a grouping (#589).
+    """
+    if stage is None or groupings is None:
+        stage, groupings = await asyncio.gather(
+            asyncio.to_thread(db.current_stage, grouping["id"]),
+            asyncio.to_thread(
+                db.groupings_readable_by,
+                warzone,
+                str(inter.guild_id) if inter.guild_id else None,
+            ),
+        )
+    await inter.response.send_modal(
+        _RecordGroupModal(
+            can_write=can_write,
+            grouping=grouping,
+            stage=stage,
+            groupings=groupings,
+            warzone=warzone,
+        )
+    )
+
+
 class _ReconcileView(OwnedView):
     """The paste, line by line, with Save held back until nothing is unresolved.
 
@@ -8062,27 +8102,8 @@ class _AllianceView(OwnedView):
         await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
 
     async def _on_record(self, inter: discord.Interaction):
-        # Read before responding, not after: a modal has to be the first
-        # response to an interaction, so this cannot defer first.
-        stage, groupings = await asyncio.gather(
-            asyncio.to_thread(db.current_stage, (self.grouping or {}).get("id")),
-            # The same list the hub root's control offers. Two record controls
-            # whose Champion Duel pickers disagree is one surface contradicting
-            # another, and this one is reached from further in.
-            asyncio.to_thread(
-                db.groupings_readable_by,
-                self.warzone,
-                str(inter.guild_id) if inter.guild_id else None,
-            ),
-        )
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=stage,
-                groupings=groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter, can_write=self.can_write, grouping=self.grouping, warzone=self.warzone
         )
 
     async def _on_reads(self, inter: discord.Interaction):
@@ -8634,18 +8655,15 @@ class _GroupView(OwnedView):
         """The empty round's way out, opened on the round they are looking at.
 
         Everything the modal needs is already on this view, so this is the one
-        button here that reaches the database not at all. It must also stay the
-        first response to its own interaction: Discord will not open a modal
-        after a defer.
+        button here that reaches the database not at all.
         """
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=self.stage,
-                groupings=self.groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter,
+            can_write=self.can_write,
+            grouping=self.grouping,
+            warzone=self.warzone,
+            stage=self.stage,
+            groupings=self.groupings,
         )
 
     # ── odds ─────────────────────────────────────────────────────────────────
@@ -11035,25 +11053,8 @@ class ChampionDuelHubView(OwnedView):
         )
 
     async def _on_record(self, inter: discord.Interaction):
-        # Read before responding, not after: a modal has to be the first
-        # response to an interaction, so this cannot defer first. One indexed
-        # SQLite read is well inside the three seconds.
-        stage, groupings = await asyncio.gather(
-            asyncio.to_thread(db.current_stage, self.grouping["id"]),
-            asyncio.to_thread(
-                db.groupings_readable_by,
-                self.warzone,
-                str(inter.guild_id) if inter.guild_id else None,
-            ),
-        )
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=stage,
-                groupings=groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter, can_write=self.can_write, grouping=self.grouping, warzone=self.warzone
         )
 
     async def _on_group(self, inter: discord.Interaction):

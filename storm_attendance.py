@@ -23,13 +23,14 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
+from messages import DATE_PARSE_REJECT
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
     HUB_BTN_POST_SIGNUP,
     HUB_BTN_ATTENDANCE,
 )
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -551,7 +552,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
     return embed
 
 
-class _AttendanceView(discord.ui.View):
+class _AttendanceView(OwnedView):
     """Member-select + ✅/❌ + Save (#171 / Decision #5).
 
     The view's two action buttons branch on whether a slot is currently
@@ -569,6 +570,10 @@ class _AttendanceView(discord.ui.View):
     the three-state pick (✅/❌/🔄) shrinks to a two-state in-place
     action because 🔄 Sub activated was dropped from the UI.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.session.user_id
 
     def __init__(self, session: _AttendanceSession):
         super().__init__(timeout=900)
@@ -626,8 +631,6 @@ class _AttendanceView(discord.ui.View):
         )
 
         async def _on_pick(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             raw = picker.values[0]
             parts = raw.split("|", 2)
             if len(parts) != 3:
@@ -677,8 +680,6 @@ class _AttendanceView(discord.ui.View):
         )
 
         async def _on_clear(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             if self.selected_key is not None:
                 s.statuses[self.selected_key] = STATUS_UNRECORDED
             self.selected_key = None
@@ -703,15 +704,11 @@ class _AttendanceView(discord.ui.View):
             )
 
             async def _prev(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 s.page = max(0, s.page - 1)
                 self.selected_key = None
                 await self._redraw(inter)
 
             async def _next(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 s.page = min(s.total_pages() - 1, s.page + 1)
                 self.selected_key = None
                 await self._redraw(inter)
@@ -732,8 +729,6 @@ class _AttendanceView(discord.ui.View):
 
     def _make_mark_callback(self, status: str):
         async def _cb(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             s = self.session
             if self.selected_key is not None:
                 # Single-slot write.
@@ -752,8 +747,6 @@ class _AttendanceView(discord.ui.View):
         return _cb
 
     async def _on_save(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         s = self.session
         await inter.response.defer(ephemeral=True, thinking=True)
         errors = await asyncio.to_thread(
@@ -790,12 +783,6 @@ class _AttendanceView(discord.ui.View):
             except discord.HTTPException:
                 pass
         self.stop()
-
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.session.user_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _redraw(self, inter: discord.Interaction):
         self._build()

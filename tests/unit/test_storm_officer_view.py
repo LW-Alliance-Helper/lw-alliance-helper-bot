@@ -980,7 +980,7 @@ class TestOnBehalfVoteView:
         view.guild = _FakeGuild(TEST_GUILD_ID, [])
         view.event_type = "DS"
         view.event_date = "2026-05-18"
-        view.owner_user_id = 1
+        view.owner_id = 1
         view.message = None
         view.bucket_filter = None
         view.buckets = {}
@@ -1194,7 +1194,7 @@ class TestOnBehalfVoteView:
         )
         view.selected_members = ["Alice"]
         view.selected_vote = "a"
-        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        interaction = self._fake_interaction(user_id=parent.owner_id)
         with patch(
             "config.record_storm_vote",
             return_value=True,
@@ -1228,7 +1228,7 @@ class TestOnBehalfVoteView:
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
         view.selected_members = ["Kevin"]
         view.selected_vote = "a"
-        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        interaction = self._fake_interaction(user_id=parent.owner_id)
         with patch("config.record_storm_vote", return_value=True) as record:
             await view._on_submit(interaction)
         kwargs = record.call_args.kwargs
@@ -1245,7 +1245,7 @@ class TestOnBehalfVoteView:
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
         view.selected_members = ["Frank"]
         view.selected_vote = "b"
-        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        interaction = self._fake_interaction(user_id=parent.owner_id)
         with patch("config.record_storm_vote", return_value=True) as record:
             await view._on_submit(interaction)
         kwargs = record.call_args.kwargs
@@ -1267,7 +1267,7 @@ class TestOnBehalfMultiSelect:
         view.guild = _FakeGuild(TEST_GUILD_ID, [])
         view.event_type = "DS"
         view.event_date = "2026-05-18"
-        view.owner_user_id = 1
+        view.owner_id = 1
         view.message = None
         view.bucket_filter = None
         view.buckets = {}
@@ -1377,7 +1377,7 @@ class TestOnBehalfMultiSelect:
             c for c in view.children if getattr(c, "label", "").startswith("🗳️ Select all not-voted")
         ]
         assert select_all_btns
-        interaction = self._fake_interaction(user_id=view.parent_view.owner_user_id)
+        interaction = self._fake_interaction(user_id=view.parent_view.owner_id)
         with patch("config.record_storm_vote") as record:
             await select_all_btns[0].callback(interaction)
         # The button only stages — no write happened.
@@ -1410,7 +1410,7 @@ class TestOnBehalfMultiSelect:
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
         view.selected_members = ["Alice", "Bob", "Carol"]
         view.selected_vote = "either"
-        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        interaction = self._fake_interaction(user_id=parent.owner_id)
         with patch("config.record_storm_vote", return_value=True) as record:
             await view._on_submit(interaction)
         assert record.call_count == 3
@@ -1432,7 +1432,7 @@ class TestOnBehalfMultiSelect:
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
         view.selected_members = ["Alice", "Bob", "Carol"]
         view.selected_vote = "a"
-        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        interaction = self._fake_interaction(user_id=parent.owner_id)
         # Bob's write fails; Alice + Carol succeed.
         with patch(
             "config.record_storm_vote",
@@ -1777,7 +1777,7 @@ class TestTeamPlanRosterPickerView:
 
     def _make_parent(self):
         parent = MagicMock()
-        parent.owner_user_id = 999
+        parent.owner_id = 999
         parent.guild_id = TEST_GUILD_ID
         parent.event_type = "DS"
         parent.event_date = "2026-05-21"
@@ -1894,7 +1894,7 @@ class TestTeamPlanSubPickerView:
 
     def _make_parent(self):
         parent = MagicMock()
-        parent.owner_user_id = 999
+        parent.owner_id = 999
         parent.guild_id = TEST_GUILD_ID
         parent.event_type = "DS"
         parent.event_date = "2026-05-21"

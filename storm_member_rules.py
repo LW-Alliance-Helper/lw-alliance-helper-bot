@@ -35,8 +35,9 @@ import logging
 
 import discord
 
-from messages import CANCEL_BACKPEDAL_DEFAULT, DENY_NOT_OWNER, NOT_SET_UP
+from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +442,7 @@ async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
     return False
 
 
-class _RulesListView(discord.ui.View):
+class _RulesListView(OwnedView):
     """List + clear buttons. Each button maps to one rule index. Discord
     limits Views to 25 components; we paginate at 20 rules per page (4
     rows of 5 clear buttons)."""
@@ -459,7 +460,7 @@ class _RulesListView(discord.ui.View):
     ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
-        self.user_id = user_id
+        self.owner_id = user_id
         self.event_type = event_type
         self.rules = rules
         self.page = page
@@ -532,15 +533,9 @@ class _RulesListView(discord.ui.View):
         )
 
         async def _on_add(inter: discord.Interaction):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             picker = _AddRuleTypePickerView(
                 event_type=self.event_type,
-                owner_id=self.user_id,
+                owner_id=self.owner_id,
             )
             await inter.response.send_message(
                 "➕ Pick the rule type to add.",
@@ -570,23 +565,11 @@ class _RulesListView(discord.ui.View):
             )
 
             async def _prev(inter: discord.Interaction):
-                if inter.user.id != self.user_id:
-                    await inter.response.send_message(
-                        DENY_NOT_OWNER,
-                        ephemeral=True,
-                    )
-                    return
                 self.page = max(0, self.page - 1)
                 self._build_buttons()
                 await inter.response.edit_message(embed=self.render_embed(), view=self)
 
             async def _next(inter: discord.Interaction):
-                if inter.user.id != self.user_id:
-                    await inter.response.send_message(
-                        DENY_NOT_OWNER,
-                        ephemeral=True,
-                    )
-                    return
                 self.page = min(self.total_pages - 1, self.page + 1)
                 self._build_buttons()
                 await inter.response.edit_message(embed=self.render_embed(), view=self)
@@ -597,7 +580,7 @@ class _RulesListView(discord.ui.View):
             self.add_item(next_btn)
 
 
-class _AddRuleTypePickerView(discord.ui.View):
+class _AddRuleTypePickerView(OwnedView):
     """Choice view opened by `_RulesListView`'s [➕ Add rule] button.
 
     Power-band rules go through the same `InlinePowerBandView` the setup
@@ -635,18 +618,7 @@ class _AddRuleTypePickerView(discord.ui.View):
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
     async def _on_power_band(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -664,8 +636,6 @@ class _AddRuleTypePickerView(discord.ui.View):
             pass
 
     async def _on_per_member(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -683,8 +653,6 @@ class _AddRuleTypePickerView(discord.ui.View):
             pass
 
     async def _on_cancel(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -712,12 +680,6 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
     rather than by reference."""
 
     async def _cb(inter: discord.Interaction):
-        if inter.user.id != view.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return
         # gspread off the event loop — delete + reload both block on
         # a network round-trip.
         await inter.response.defer()
@@ -883,7 +845,7 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
             )
 
 
-class InlinePowerBandView(discord.ui.View):
+class InlinePowerBandView(OwnedView):
     """Zone-picker view that gates the power-threshold modal.
 
     Sent ephemerally from the setup wizard's "Add a rule now?" offer. The
@@ -924,12 +886,6 @@ class InlinePowerBandView(discord.ui.View):
         )
 
         async def _on_zone(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             self.selected_zone = zone_select.values[0]
             self._build_components()
             try:
@@ -947,12 +903,6 @@ class InlinePowerBandView(discord.ui.View):
         )
 
         async def _on_set(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             if not self.selected_zone:
                 await inter.response.send_message(
                     "⚠️ Pick a zone first.",
@@ -981,12 +931,6 @@ class InlinePowerBandView(discord.ui.View):
         )
 
         async def _on_cancel(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             for child in self.children:
                 child.disabled = True
             try:

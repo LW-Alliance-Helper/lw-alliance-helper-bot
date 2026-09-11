@@ -16,10 +16,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
+import wizard_registry
 from wizard_registry import (
     register,
     unregister,
@@ -189,7 +190,7 @@ class TestExpireViewMessage:
 
         body = msg.edit.await_args.kwargs["content"]
         assert "timed out" in body.lower()
-        assert "re-initiate" not in body.lower()
+        assert "start again" not in body.lower()
 
     @pytest.mark.asyncio
     async def test_idempotent_when_notice_already_present(self):
@@ -200,7 +201,7 @@ class TestExpireViewMessage:
         msg.edit = AsyncMock()
         # Simulate first run already happened.
         msg.content = (
-            "draft\n\n⏰ *The actions for this have timed out. Use /events to re-initiate.*"
+            "draft\n\n⏰ *The actions for this have timed out. Use /events to start again.*"
         )
 
         await expire_view_message(msg, command_hint="/events")
@@ -225,6 +226,153 @@ class TestExpireViewMessage:
         # Should not raise.
         await expire_view_message(msg, command_hint="/events")
         msg.edit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_notice_says_start_again(self):
+        """The verb agrees with the timeout constants in messages.py: a flow
+        that ended is started again, not re-initiated (sign-off 2026-09-11)."""
+        msg = MagicMock()
+        msg.content = "draft"
+        msg.edit = AsyncMock()
+
+        await expire_view_message(msg, command_hint="`/events`")
+
+        body = msg.edit.await_args.kwargs["content"]
+        assert body.endswith("Use `/events` to start again.*")
+        assert "re-initiate" not in body
+
+
+# ── ExpiringView / OwnedView ──────────────────────────────────────────────────
+
+
+def _interaction(user_id: int) -> MagicMock:
+    inter = MagicMock()
+    inter.user.id = user_id
+    inter.response.send_message = AsyncMock()
+    return inter
+
+
+class TestExpiringView:
+    """The shared base for every view that posts buttons: on timeout it
+    strips them and appends the notice, but only when the view declared a
+    route back. Views that never set a hint keep Discord's silent default,
+    so inheriting the base cannot change what members see by accident."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_expires_the_message_with_the_hint(self):
+        class _V(wizard_registry.ExpiringView):
+            timeout_hint = "`/events`"
+
+        view = _V(timeout=1)
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_awaited_once_with(view.message, command_hint="`/events`")
+
+    @pytest.mark.asyncio
+    async def test_hint_may_be_computed_per_view(self):
+        class _V(wizard_registry.ExpiringView):
+            def __init__(self, event_type):
+                super().__init__(timeout=1)
+                self.event_type = event_type
+
+            @property
+            def timeout_hint(self):
+                return f"`/{self.event_type.lower()}storm`"
+
+        view = _V("Desert")
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        assert ex.await_args.kwargs["command_hint"] == "`/desertstorm`"
+
+    @pytest.mark.asyncio
+    async def test_no_hint_means_no_notice(self):
+        view = wizard_registry.ExpiringView(timeout=1)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_not_awaited()
+        view.message.edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_timeout_survives_a_view_that_was_never_sent(self):
+        class _V(wizard_registry.ExpiringView):
+            timeout_hint = "`/events`"
+
+        await _V(timeout=1).on_timeout()  # message is None: no-op, no raise
+
+    def test_add_button_binds_the_callback_and_clamps_the_label(self):
+        view = wizard_registry.ExpiringView(timeout=1)
+
+        async def cb(inter):
+            pass
+
+        btn = view.add_button("x" * 100, discord.ButtonStyle.secondary, cb, row=2, disabled=True)
+        assert btn in view.children
+        assert len(btn.label) == 80
+        assert btn.row == 2
+        assert btn.disabled is True
+        assert btn.callback is cb
+
+
+class TestOwnedView:
+    """The owner guard every hub and picker used to paste: the person who
+    opened the view may use it, anyone else is told so and nothing runs."""
+
+    @pytest.mark.asyncio
+    async def test_owner_passes(self):
+        view = wizard_registry.OwnedView(timeout=1)
+        view.owner_id = 42
+        inter = _interaction(42)
+        assert await view.interaction_check(inter) is True
+        inter.response.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stranger_is_refused_with_the_shared_wording(self):
+        from messages import DENY_NOT_OWNER
+
+        view = wizard_registry.OwnedView(timeout=1)
+        view.owner_id = 42
+        inter = _interaction(99)
+        assert await view.interaction_check(inter) is False
+        inter.response.send_message.assert_awaited_once_with(DENY_NOT_OWNER, ephemeral=True)
+
+    @pytest.mark.asyncio
+    async def test_owner_may_live_on_a_parent(self):
+        class _Child(wizard_registry.OwnedView):
+            def __init__(self, parent):
+                super().__init__(timeout=1)
+                self.parent = parent
+
+            @property
+            def owner_id(self):
+                return self.parent.owner_id
+
+        parent = wizard_registry.OwnedView(timeout=1)
+        parent.owner_id = 7
+        child = _Child(parent)
+        assert await child.interaction_check(_interaction(7)) is True
+        assert await child.interaction_check(_interaction(8)) is False
+
+    @pytest.mark.asyncio
+    async def test_a_view_with_no_owner_refuses_everyone(self):
+        """Fail closed: a subclass that forgot to set its owner is found on
+        the first click, not by a stranger in production."""
+        view = wizard_registry.OwnedView(timeout=1)
+        assert await view.interaction_check(_interaction(1)) is False
+
+    @pytest.mark.asyncio
+    async def test_owned_view_also_expires(self):
+        class _V(wizard_registry.OwnedView):
+            timeout_hint = "`/train`"
+
+        view = _V(timeout=1)
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_awaited_once_with(view.message, command_hint="`/train`")
 
 
 # ── safe_edit_response ────────────────────────────────────────────────────────

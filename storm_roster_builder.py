@@ -37,7 +37,12 @@ from typing import Optional
 
 import discord
 
-from messages import CANCEL_BACKPEDAL, DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
+from messages import (
+    CANCEL_BACKPEDAL,
+    DENY_NOT_OWNER,
+    PREMIUM_LOCKED_INLINE,
+    ROSTER_BUILDER_TIMEOUT,
+)
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -2808,21 +2813,19 @@ class RosterBuilderView(discord.ui.View):
         Post-2026-05-21 tester report: also surface a clear "your
         builder timed out, your in-progress work was lost" message
         above the disabled buttons so officers don't blame the
-        Interaction failed UX. The message points them at re-opening
-        the builder. Persistence (auto-save to SQLite so re-opens
-        recover state) is a follow-up issue.
+        Interaction failed UX. The message names the hub command and
+        button that re-open the builder. Persistence (auto-save to
+        SQLite so re-opens recover state) is a follow-up issue, and the
+        message no longer promises it (#589, sign-off block 13).
         """
         for item in self.children:
             item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(
-                    content=(
-                        "⏰ Roster builder timed out after 1 hour of "
-                        "inactivity. In-progress assignments were lost; "
-                        "re-open the builder to start over. Working on "
-                        "a save-and-resume feature so this doesn't keep "
-                        "happening."
+                    content=ROSTER_BUILDER_TIMEOUT.format(
+                        cmd=HUB_COMMAND[self.session.event_type],
+                        hub_btn=HUB_BTN_VIEW_SIGNUPS,
                     ),
                     view=self,
                 )

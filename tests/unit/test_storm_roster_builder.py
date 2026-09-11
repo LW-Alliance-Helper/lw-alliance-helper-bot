@@ -3529,6 +3529,30 @@ class TestBuilderViewTimeoutCleanup:
         assert ok is True
 
     @pytest.mark.asyncio
+    async def test_on_timeout_names_the_route_back_and_promises_nothing(self, seeded_db):
+        """Signed off 2026-09-11 (#589, block 13): the notice says what was
+        lost and which hub button re-opens the builder, and no longer
+        promises a save-and-resume feature that does not exist."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        session = _make_session(team="A")
+        session.event_type = "CS"
+        view = srb.RosterBuilderView(session)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock()
+
+        await view.on_timeout()
+
+        body = view.message.edit.await_args.kwargs["content"]
+        assert body.startswith("⏰ The roster builder timed out after an idle hour.")
+        assert "Nothing in progress was saved." in body
+        assert "`/canyonstorm`" in body
+        assert f"**{srb.HUB_BTN_VIEW_SIGNUPS}**" in body
+        assert body.endswith("to start again.")
+        assert "save-and-resume" not in body
+        assert all(item.disabled for item in view.children)
+
+    @pytest.mark.asyncio
     async def test_on_timeout_manual_mode_is_a_noop(self, seeded_db):
         # Free-tier (event_date=None) shouldn't try to release a
         # structured-mode lock that was never claimed.

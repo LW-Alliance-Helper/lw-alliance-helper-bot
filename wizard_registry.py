@@ -1,10 +1,16 @@
 """
-wizard_registry.py — shared cancel-event registry for active sessions
+wizard_registry.py — shared cancel-event registry, and the shared base views
 
 Any long-running interactive flow (setup wizard, train schedule wizard,
 storm participation log, etc.) registers a per-user asyncio.Event when it
 starts and unregisters when it ends. The /cancel command sets every
 registered event for the user, allowing each flow to bail out cleanly.
+
+It also owns the two view base classes every hub, picker and confirm
+inherits from: `ExpiringView` (cleans up on timeout, adds buttons) and
+`OwnedView` (the same, usable only by the person who opened it). They
+replaced seventy-odd pasted copies of the same two methods on 2026-09-11
+(#589); do not write a new copy of either.
 
 Usage in a wizard:
 
@@ -24,6 +30,8 @@ Usage in a wizard:
 import asyncio
 
 import discord
+
+from messages import DENY_NOT_OWNER, VIEW_TIMEOUT, VIEW_TIMEOUT_NO_HINT
 
 # user_id -> list of asyncio.Event objects (one per active flow)
 _active: dict[int, list[asyncio.Event]] = {}
@@ -136,8 +144,8 @@ async def expire_view_message(message, command_hint: str = "") -> None:
     """
     if message is None:
         return
-    suffix = f" Use {command_hint} to re-initiate." if command_hint else ""
-    notice = f"\n\n⏰ *The actions for this have timed out.{suffix}*"
+    line = VIEW_TIMEOUT.format(hint=command_hint) if command_hint else VIEW_TIMEOUT_NO_HINT
+    notice = f"\n\n*{line}*"
     try:
         existing = getattr(message, "content", None) or ""
         if "actions for this have timed out" in existing:
@@ -145,6 +153,67 @@ async def expire_view_message(message, command_hint: str = "") -> None:
         await message.edit(content=existing + notice, view=None)
     except Exception:
         pass
+
+
+class ExpiringView(discord.ui.View):
+    """A view that cleans up after itself when it times out.
+
+    Capture the message after sending (``view.message = await ch.send(...)``
+    or ``await inter.original_response()``) and set ``timeout_hint`` to the
+    route back, pre-formatted the way `expire_view_message` documents. When
+    the timeout fires the buttons come off and the notice goes on, so nobody
+    is left clicking a dead control. A view that leaves ``timeout_hint`` as
+    ``None`` does nothing on timeout, which is Discord's own default and how
+    the short-lived pickers behave today; whether they should is #589's
+    silent-timeout item and is decided there, not here.
+
+    ``timeout_hint`` can be a class attribute, set in ``__init__``, or
+    overridden as a property when the hint depends on the event type.
+    ``add_button`` is the shorthand every hub used to write for itself.
+    """
+
+    message: discord.Message | None = None
+    timeout_hint: str | None = None
+
+    async def on_timeout(self) -> None:
+        if self.timeout_hint is None:
+            return
+        await expire_view_message(self.message, command_hint=self.timeout_hint)
+
+    def add_button(
+        self,
+        label: str,
+        style: discord.ButtonStyle,
+        callback,
+        *,
+        row: int | None = None,
+        disabled: bool = False,
+    ) -> discord.ui.Button:
+        """Add a callback-bound button. Labels are clamped to Discord's 80."""
+        button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=disabled)
+        button.callback = callback
+        self.add_item(button)
+        return button
+
+
+class OwnedView(ExpiringView):
+    """An `ExpiringView` only the person who opened it may use.
+
+    Set ``owner_id`` in ``__init__``, or override it as a property where the
+    owner lives on a parent view or a builder session. Anyone else who
+    presses a control is told `messages.DENY_NOT_OWNER`, ephemerally, and
+    the callback never runs. A view that never sets an owner refuses
+    everyone rather than admitting everyone, so a forgotten owner shows up
+    on the first click in testing instead of in production.
+    """
+
+    owner_id: int | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
+            return False
+        return True
 
 
 async def wait_view_or_cancel(view, cancel_event):

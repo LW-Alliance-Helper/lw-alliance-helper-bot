@@ -20,6 +20,7 @@ from datetime import date, timedelta
 import discord
 
 import wizard_registry
+from wizard_registry import ExpiringView
 import train_rotation as tr
 import train_rotation_ui as ui
 
@@ -61,10 +62,12 @@ class _ReasonModal(discord.ui.Modal, title="Reason for this day"):
             pass
 
 
-class WeeklyDraftView(discord.ui.View):
+class WeeklyDraftView(ExpiringView):
     """Leadership-facing weekly draft. A day picker + shared action buttons edit
     the selected day; edits write straight to the Train History `scheduled`
     rows (the draft IS the schedule — no approve step)."""
+
+    timeout_hint = "/train draft_week"
 
     def __init__(
         self, bot, guild_id: int, draft: list[tr.DraftDay], week_start: date, preset_name: str
@@ -371,6 +374,3 @@ class WeeklyDraftView(discord.ui.View):
             view=confirm,
             ephemeral=True,
         )
-
-    async def on_timeout(self):
-        await wizard_registry.expire_view_message(self.message, command_hint="/train draft_week")

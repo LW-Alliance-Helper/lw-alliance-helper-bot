@@ -32,6 +32,7 @@ from messages import ANNOUNCEMENT_SEND_FAILED, LEADERSHIP_INACCESSIBLE
 from setup_hub import HUB_BTN_EVENTS
 from time_helpers import next_clock_time
 import wizard_registry
+from wizard_registry import ExpiringView
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
 ET = ZoneInfo("America/New_York")
@@ -378,12 +379,14 @@ def first_event_warning_dt(event_list: list[dict]) -> datetime | None:
 # ── Event editor UI ────────────────────────────────────────────────────────────
 
 
-class EventEditorView(discord.ui.View):
+class EventEditorView(ExpiringView):
     """
     Interactive event list editor. Shows the current event list and lets
     leadership add, edit times, or remove optional events before building
     the announcement.
     """
+
+    timeout_hint = "/events"
 
     def __init__(
         self, bot, event_list: list[dict], event_key: str, run_date: date, guild_id: int = None
@@ -420,12 +423,6 @@ class EventEditorView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction):
         """Update the editor message with the current event list."""
         await interaction.message.edit(content=self._render_editor_content(), view=self)
-
-    async def on_timeout(self):
-        """Strip the editor buttons and tell leadership how to re-open it."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint="/events")
 
     @discord.ui.button(label="➕ Add to today's draft", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -776,7 +773,9 @@ class EventEditorView(discord.ui.View):
 # ── Approval UI ────────────────────────────────────────────────────────────────
 
 
-class ApprovalView(discord.ui.View):
+class ApprovalView(ExpiringView):
+    timeout_hint = "/events"
+
     def __init__(
         self,
         bot,
@@ -940,14 +939,6 @@ class ApprovalView(discord.ui.View):
             )
 
         self.stop()
-
-    async def on_timeout(self):
-        """Strip the approval buttons and tell leadership how to re-open
-        the draft. Without the message edit, the buttons stayed on screen
-        but clicks failed silently with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint="/events")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────

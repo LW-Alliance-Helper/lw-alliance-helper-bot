@@ -33,6 +33,7 @@ from train import (
     render_conflict_message,
     get_member_tab_name,
 )
+from wizard_registry import ExpiringView
 
 
 # ── Default DM bodies (fallbacks when an alliance hasn't customised) ──────────
@@ -92,7 +93,7 @@ def _pretty_day(iso: str) -> str:
 # ── Birthday conflict alert (interactive) ────────────────────────────────────────
 
 
-class BirthdayConflictView(discord.ui.View):
+class BirthdayConflictView(ExpiringView):
     """Interactive resolution for a birthday→train scheduling conflict.
 
     Replaces the old fire-and-forget text alert. Posted to the leadership
@@ -112,6 +113,8 @@ class BirthdayConflictView(discord.ui.View):
     restart — but the loop re-posts a fresh, working alert each day the
     conflict is still open, so nothing is permanently lost.
     """
+
+    timeout_hint = "`/train` → 🎂 Run birthday check (it also re-posts tonight)"
 
     def __init__(self, cog, guild_id: int, conflicts: list[dict]):
         # 12h window so leadership has the evening + overnight to act; if it
@@ -164,17 +167,6 @@ class BirthdayConflictView(discord.ui.View):
         ignore_btn = discord.ui.Button(label="🔕 Ignore", style=discord.ButtonStyle.danger)
         ignore_btn.callback = self._on_ignore
         self.add_item(ignore_btn)
-
-    async def on_timeout(self):
-        """Strip the controls and point leadership at the manual escape
-        hatch. Without this the buttons look live after the view stops
-        listening and clicks fail with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="`/train` → 🎂 Run birthday check (it also re-posts tonight)",
-        )
 
     async def _ensure_leadership(self, interaction: discord.Interaction) -> bool:
         cfg = get_config(self.guild_id)

@@ -28,6 +28,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import premium
+from wizard_registry import OwnedView
 
 
 # Default Ko-fi link is set so the command works out-of-the-box for the
@@ -88,7 +89,7 @@ async def _resolve_user_label(bot: commands.Bot, user_id: int) -> str:
 # ── Confirmation views ────────────────────────────────────────────────────────
 
 
-class _ConfirmActionView(discord.ui.View):
+class _ConfirmActionView(OwnedView):
     """Generic two-button confirm/cancel used by /premium assign (both fresh
     and switch flows) and /premium unassign. The confirm button label is
     configurable so each call site reads naturally."""
@@ -109,15 +110,6 @@ class _ConfirmActionView(discord.ui.View):
         # "Switch to this server", "Release pin").
         self.confirm.label = confirm_label
         self.confirm.style = confirm_style
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only the user who ran the command can use these buttons.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, _btn: discord.ui.Button):

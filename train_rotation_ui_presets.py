@@ -19,6 +19,7 @@ import asyncio
 import discord
 
 import wizard_registry
+from wizard_registry import OwnedView
 import train_rotation as tr
 import train_rotation_ui as ui
 
@@ -168,14 +169,16 @@ class _SpecificMemberPickerView(discord.ui.View):
         await interaction.response.edit_message(content=self.content(), view=self)
 
 
-class TrainPresetEditorView(discord.ui.View):
+class TrainPresetEditorView(OwnedView):
     """Owner-locked live editor for one schedule preset. State held in
     `self.preset`; persisted to the Day Rules tab on Save."""
+
+    timeout_hint = "/train schedule_preset edit"
 
     def __init__(self, guild_id: int, user_id: int, preset: tr.SchedulePreset, day_rules_tab: str):
         super().__init__(timeout=ui.EDITOR_TIMEOUT)
         self.guild_id = guild_id
-        self.user_id = user_id
+        self.owner_id = user_id
         self.preset = preset
         self.day_rules_tab = day_rules_tab
         self.dirty = False
@@ -266,12 +269,6 @@ class TrainPresetEditorView(discord.ui.View):
             done_btn.callback = self._on_done
             self.add_item(done_btn)
 
-    async def _guard(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(ui.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     async def _rerender(self, interaction: discord.Interaction, *, content: str | None = None):
         self._rebuild()
         embed = ui.build_preset_editor_embed(self.preset, dirty=self.dirty)
@@ -287,14 +284,10 @@ class TrainPresetEditorView(discord.ui.View):
     # ── callbacks ─────────────────────────────────────────────────────────────
 
     async def _on_day(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         self.editing_day = int(interaction.data["values"][0])
         await self._rerender(interaction)
 
     async def _on_rule(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         rt = interaction.data["values"][0]
         rule = self.preset.rule_for(self.editing_day)
         rule.rule_type = rt
@@ -306,8 +299,6 @@ class TrainPresetEditorView(discord.ui.View):
         await self._rerender(interaction)
 
     async def _on_set_pin(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         day_name = tr.WEEKDAY_NAMES[self.editing_day]
         cur = self.preset.rule_for(self.editing_day).specific_member
         # Defer first (the roster read is a Sheets round-trip), then offer a
@@ -346,8 +337,6 @@ class TrainPresetEditorView(discord.ui.View):
         await self._apply_specific_member(name)
 
     async def _on_save(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         await interaction.response.defer()
         ok = await asyncio.to_thread(tr.save_preset, self.guild_id, self.day_rules_tab, self.preset)
         if ok:
@@ -380,18 +369,12 @@ class TrainPresetEditorView(discord.ui.View):
         self.stop()
 
     async def _on_abandon(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         await self._close(interaction, "🗑️ Abandoned. Your unsaved changes were not saved.")
 
     async def _on_cancel(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         await self._close(interaction, "✅ Closed. No changes were needed.")
 
     async def _on_done(self, interaction: discord.Interaction):
-        if not await self._guard(interaction):
-            return
         # Save any pending edits first so "Done" never silently drops work.
         if self.dirty:
             await interaction.response.defer()
@@ -420,11 +403,6 @@ class TrainPresetEditorView(discord.ui.View):
             self.stop()
         else:
             await self._close(interaction, f"✅ All set! **{self.preset.name}** is saved.")
-
-    async def on_timeout(self):
-        await wizard_registry.expire_view_message(
-            self.message, command_hint="/train schedule_preset edit"
-        )
 
 
 async def open_preset_editor(

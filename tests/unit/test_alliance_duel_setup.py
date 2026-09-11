@@ -373,13 +373,13 @@ def test_timeout_hints_name_the_button_not_just_the_command():
     import alliance_duel_wizard as w
 
     source = inspect.getsource(w)
-    assert 'command_hint="/setup"' not in source
+    assert 'timeout_hint = "/setup"' not in source
     # Every view that can expire routes back the same way. Asserted as a rule
     # rather than a count, so adding a view doesn't fail this for the wrong
     # reason: what matters is that no view opts out.
-    hints = source.count("command_hint=")
+    hints = source.count("timeout_hint = ")
     assert hints >= 3, "expected a hint on every expiring view"
-    assert source.count("command_hint=ads.VS_SETUP_NAV") == hints
+    assert source.count("timeout_hint = ads.VS_SETUP_NAV") == hints
 
 
 def test_recovery_copy_says_start_again_once_the_flow_has_ended():

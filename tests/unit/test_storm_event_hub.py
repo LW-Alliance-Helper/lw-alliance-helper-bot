@@ -747,7 +747,7 @@ class TestHandleEventHubRender:
         assert isinstance(kwargs.get("embed"), discord.Embed)
         view = kwargs.get("view")
         assert isinstance(view, seh._EventHubView)
-        assert view.owner_user_id == inter.user.id
+        assert view.owner_id == inter.user.id
         assert view.is_premium is True
         # The hub captures the sent message for `on_timeout` cleanup.
         assert view.message is inter.original_response.return_value

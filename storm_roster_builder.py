@@ -48,6 +48,7 @@ from storm_event_hub import (
     HUB_BTN_VIEW_SIGNUPS,
     HUB_BTN_PAST_ROSTERS,
 )
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -4446,7 +4447,7 @@ async def _render_and_attach(
     )
 
 
-class _RenderActionView(discord.ui.View):
+class _RenderActionView(OwnedView):
     """Three-button ephemeral action bar shown after a public roster
     image is posted. Each button operates on the same `png_bytes`
     snapshot captured at render time so subsequent actions reflect the
@@ -4476,15 +4477,6 @@ class _RenderActionView(discord.ui.View):
         self.team = team
         self.public_channel_id = public_channel_id
         self.public_message_id = public_message_id
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "⛔ These actions are for the officer who rendered the image.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="💾 Download", style=discord.ButtonStyle.secondary)
     async def download_btn(
@@ -4604,7 +4596,7 @@ class _RenderActionView(discord.ui.View):
         )
 
 
-class _PostToChannelPicker(discord.ui.View):
+class _PostToChannelPicker(OwnedView):
     """Ephemeral channel-select view. On selection, opens the caption
     modal; the modal's submit handler actually posts the image."""
 
@@ -4656,12 +4648,6 @@ class _PostToChannelPicker(discord.ui.View):
 
         select.callback = _on_pick
         self.add_item(select)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message("⛔ Not for you.", ephemeral=True)
-            return False
-        return True
 
 
 class _PostCaptionModal(discord.ui.Modal):
@@ -5512,7 +5498,7 @@ def _split_mail_at_heading(
     return mail[:best].rstrip(), mail[best:]
 
 
-class _LongMailPickerView(discord.ui.View):
+class _LongMailPickerView(OwnedView):
     """Ephemeral picker shown when the rendered mail exceeds Discord's
     2000-char message ceiling (#237). Three buttons: split / attach /
     cancel. Sets `self.choice` and stops the view; the caller awaits
@@ -5523,12 +5509,6 @@ class _LongMailPickerView(discord.ui.View):
         self.owner_id = owner_id
         self.choice: Optional[str] = None  # "split" | "txt" | "cancel"
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _pick(self, inter: discord.Interaction, choice: str) -> None:
         if self.is_finished():
@@ -5936,7 +5916,7 @@ async def _dm_rostered_members(
     return sent, failures
 
 
-class _DmRosteredMembersView(discord.ui.View):
+class _DmRosteredMembersView(OwnedView):
     """Single-button view attached to the Approve & Post officer
     ephemeral. Click fires the DMs, disables the button, and replaces
     the message with the outcome summary so the officer can't double-
@@ -5947,15 +5927,6 @@ class _DmRosteredMembersView(discord.ui.View):
         self.session = session
         self.bot = bot
         self.owner_id = owner_id
-
-    async def interaction_check(
-        self,
-        interaction: discord.Interaction,
-    ) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(
         label="📨 DM rostered members",

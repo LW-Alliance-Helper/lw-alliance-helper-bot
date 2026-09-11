@@ -371,9 +371,11 @@ class TestSurveyConfiguredView:
         interaction.response.send_message = AsyncMock()
 
         assert await view.interaction_check(interaction) is False
-        assert (
-            "belong to whoever ran the setup" in (interaction.response.send_message.call_args[0][0])
-        )
+        # The shared wording, signed off 2026-09-11 (#589, block 11): the old
+        # line named a `/survey` route nobody refused could reach.
+        from messages import DENY_NOT_OWNER
+
+        assert interaction.response.send_message.call_args[0][0] == DENY_NOT_OWNER
 
     @pytest.mark.asyncio
     async def test_the_wizard_runner_passes_the_check(self):

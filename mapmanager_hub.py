@@ -25,6 +25,7 @@ import discord
 import config
 import mapmanager_client
 import premium
+from wizard_registry import OwnedView
 
 try:
     import sentry_sdk
@@ -41,7 +42,6 @@ MM_HUB_BTN_CHANGE = "✏️ Change link"
 MM_HUB_BTN_UNLINK = "🔗 Unlink"
 MM_HUB_BTN_OPEN = "🗺️ Open Map Manager"
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
 _NOT_CONFIGURED_MSG = (
     "⚠️ The Map Manager integration isn't switched on for this bot yet. "
@@ -223,7 +223,7 @@ class _ChangeModal(discord.ui.Modal, title="Update Map Manager link"):
 # ── Unlink confirmation ─────────────────────────────────────────────────────────
 
 
-class _UnlinkConfirm(discord.ui.View):
+class _UnlinkConfirm(OwnedView):
     """Two-button confirm for the hub's Unlink action. Ephemeral, so it follows
     the ``_ForgetGuildConfirm`` precedent (value-checked, short timeout, no
     channel-message cleanup)."""
@@ -231,16 +231,8 @@ class _UnlinkConfirm(discord.ui.View):
     def __init__(self, *, guild_id: int, user_id: int, alliance_name: str):
         super().__init__(timeout=60)
         self._guild_id = guild_id
-        self._user_id = user_id
+        self.owner_id = user_id
         self._alliance_name = alliance_name
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self._user_id:
-            await interaction.response.send_message(
-                "⛔ Only the admin who started this can confirm.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="🔗 Remove link", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -307,9 +299,11 @@ def _build_mapmanager_hub_embed(guild_id: int, *, mapping: Optional[dict], confi
 # ── Hub view ─────────────────────────────────────────────────────────────────────
 
 
-class _MapManagerHubView(discord.ui.View):
+class _MapManagerHubView(OwnedView):
     """Hub button grid. Adapts to whether this server is already linked. Only the
     admin who opened the hub can use the buttons."""
+
+    timeout_hint = MAPMANAGER_HUB_CMD
 
     def __init__(
         self,
@@ -323,32 +317,16 @@ class _MapManagerHubView(discord.ui.View):
         super().__init__(timeout=900)
         self.bot = bot
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.mapping = mapping
         self.configured = configured
         self.message: Optional[discord.Message] = None
         self._build_buttons()
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=MAPMANAGER_HUB_CMD)
-
-    def _add(self, label, style, row, cb):
-        btn = discord.ui.Button(label=label[:80], style=style, row=row)
-        btn.callback = cb
-        self.add_item(btn)
-
     def _build_buttons(self):
         if self.mapping:
-            self._add(MM_HUB_BTN_CHANGE, discord.ButtonStyle.primary, 0, self._on_change)
-            self._add(MM_HUB_BTN_UNLINK, discord.ButtonStyle.danger, 0, self._on_unlink)
+            self.add_button(MM_HUB_BTN_CHANGE, discord.ButtonStyle.primary, self._on_change, row=0)
+            self.add_button(MM_HUB_BTN_UNLINK, discord.ButtonStyle.danger, self._on_unlink, row=0)
             url = mapmanager_client.alliance_dashboard_url(self.mapping.get("mm_alliance_id"))
             if url:
                 self.add_item(
@@ -357,7 +335,7 @@ class _MapManagerHubView(discord.ui.View):
                     )
                 )
         else:
-            self._add(MM_HUB_BTN_LINK, discord.ButtonStyle.success, 0, self._on_link)
+            self.add_button(MM_HUB_BTN_LINK, discord.ButtonStyle.success, self._on_link, row=0)
 
     # ── callbacks ──────────────────────────────────────────────────────────────
 

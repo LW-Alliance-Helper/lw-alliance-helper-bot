@@ -51,6 +51,7 @@ import premium
 import transfer
 import transfer_sheets
 import wizard_registry
+from wizard_registry import ExpiringView
 from transfers_hub import SETUP_TRANSFERS_BTN, TRANSFERS_HUB_CMD
 
 try:
@@ -383,7 +384,9 @@ class _WriteConfirmView(discord.ui.View):
         )
 
 
-class _NoticeView(discord.ui.View):
+class _NoticeView(ExpiringView):
+    timeout_hint = "`/transfers`"
+
     def __init__(
         self, *, guild_id, name, header, row, display_pairs, template_kinds, writeback=None
     ):
@@ -421,9 +424,6 @@ class _NoticeView(discord.ui.View):
                 )
                 btn.callback = self._make_writeback_cb(decision)
                 self.add_item(btn)
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(self.message, command_hint="`/transfers`")
 
     async def _full_details(self, interaction: discord.Interaction):
         await interaction.response.send_message(

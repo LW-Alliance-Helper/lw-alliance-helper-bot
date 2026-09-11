@@ -59,6 +59,7 @@ import discord
 
 import champion_duel_db as db
 from messages import COMMUNITY_SERVER_NAME, COMMUNITY_SERVER_URL
+from wizard_registry import OwnedView
 
 # ── Copy ──────────────────────────────────────────────────────────────────────
 #
@@ -214,7 +215,7 @@ def _community_link_view() -> discord.ui.View:
     return view
 
 
-class ClaimResultView(discord.ui.View):
+class ClaimResultView(OwnedView):
     """The message a claim lands on, carrying the way back out of it.
 
     A claim with no visible release is a one-way door, and accounts change
@@ -227,9 +228,13 @@ class ClaimResultView(discord.ui.View):
     account they have since moved off.
     """
 
+    @property
+    def timeout_hint(self) -> str:
+        return _hub().CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, user_id: int):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(
@@ -237,19 +242,6 @@ class ClaimResultView(discord.ui.View):
         )
         button.callback = self._on_release
         self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        hub = _hub()
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(hub._DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        hub = _hub()
-        await expire_view_message(self.message, command_hint=hub.CHAMPION_DUEL_HUB_CMD)
 
     async def _on_release(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True, thinking=True)

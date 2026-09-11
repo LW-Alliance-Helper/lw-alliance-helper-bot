@@ -37,13 +37,13 @@ import discord
 
 import buddy
 import buddy_ui as ui
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
 BUDDY_HUB_TITLE = "🤝 Profession Buddy System"
 BUDDY_HUB_CMD = "/buddy"
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 _DENY_NOT_LEADER = "⛔ That action is for leadership only."
 
 
@@ -108,7 +108,7 @@ def _with_report(text: str, result) -> str:
     return f"{text}\n\n{report}" if report else text
 
 
-class _ConfirmView(discord.ui.View):
+class _ConfirmView(OwnedView):
     def __init__(self, owner_id: int, on_confirm, confirm_label: str = "♻️ Yes, rebuild"):
         super().__init__(timeout=60)
         self.owner_id = owner_id
@@ -119,12 +119,6 @@ class _ConfirmView(discord.ui.View):
         no.callback = self._no
         self.add_item(yes)
         self.add_item(no)
-
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _yes(self, inter: discord.Interaction):
         for c in self.children:
@@ -137,7 +131,7 @@ class _ConfirmView(discord.ui.View):
         self.stop()
 
 
-class _ConflictView(discord.ui.View):
+class _ConflictView(OwnedView):
     """Hands back the calls the pairing logic shouldn't be making on its own.
 
     Two situations leave two pairings that can't both stand: one Engineer
@@ -149,6 +143,10 @@ class _ConflictView(discord.ui.View):
     Conflicts are recomputed after every resolution rather than worked through
     from a stale list, because settling one can change what the others are.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.hub.owner_id
 
     def __init__(self, hub, cfg: dict, conflicts: list):
         super().__init__(timeout=300)
@@ -162,12 +160,6 @@ class _ConflictView(discord.ui.View):
         )
         btn.callback = self._open
         self.add_item(btn)
-
-    async def interaction_check(self, inter):
-        if inter.user.id != self.hub.owner_user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _label(self, d) -> str:
         if d.reason == buddy.DROP_ENGINEER_TAKEN:
@@ -261,14 +253,16 @@ class _PresetNameModal(discord.ui.Modal, title="Save current pairings as a prese
         await self.hub._commit_preset(interaction, (self.preset_name.value or "").strip())
 
 
-class _BuddyHubView(discord.ui.View):
+class _BuddyHubView(OwnedView):
+    timeout_hint = BUDDY_HUB_CMD
+
     def __init__(
         self, bot, guild_id: int, owner_user_id: int, *, is_leader: bool, is_premium: bool
     ):
         super().__init__(timeout=900)
         self.bot = bot
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.is_leader = is_leader
         self.is_premium = is_premium
         self.message: Optional[discord.Message] = None
@@ -277,41 +271,38 @@ class _BuddyHubView(discord.ui.View):
         self.session = ui.BuddySession()
         self._build()
 
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self):
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=BUDDY_HUB_CMD)
-
-    def _add(self, label, style, row, cb):
-        btn = discord.ui.Button(label=label[:80], style=style, row=row)
-        btn.callback = cb
-        self.add_item(btn)
-
     def _build(self):
-        self._add("🔍 Who's my buddy?", discord.ButtonStyle.primary, 0, self._whoami)
-        self._add("📋 View buddy list", discord.ButtonStyle.secondary, 0, self._view_list)
+        self.add_button("🔍 Who's my buddy?", discord.ButtonStyle.primary, self._whoami, row=0)
+        self.add_button("📋 View buddy list", discord.ButtonStyle.secondary, self._view_list, row=0)
         if self.is_leader:
-            self._add("✏️ Manage pairings", discord.ButtonStyle.success, 1, self._manage)
-            self._add(
-                "🔄 Refresh from sheet", discord.ButtonStyle.secondary, 1, self._refresh_sheet
+            self.add_button("✏️ Manage pairings", discord.ButtonStyle.success, self._manage, row=1)
+            self.add_button(
+                "🔄 Refresh from sheet", discord.ButtonStyle.secondary, self._refresh_sheet, row=1
             )
-            self._add("📣 Post buddy list", discord.ButtonStyle.secondary, 1, self._post_list)
-            self._add("↩️ Undo last change", discord.ButtonStyle.secondary, 1, self._undo)
-            self._add("⚙️ Open setup", discord.ButtonStyle.secondary, 1, self._setup)
-            self._add("✨ Auto-assign", discord.ButtonStyle.success, 2, self._auto_assign)
-            self._add("♻️ Re-pair from scratch", discord.ButtonStyle.danger, 2, self._from_scratch)
-            self._add(
-                "📣 Post self-service buttons", discord.ButtonStyle.secondary, 2, self._post_buttons
+            self.add_button(
+                "📣 Post buddy list", discord.ButtonStyle.secondary, self._post_list, row=1
             )
-            self._add("💾 Save as preset", discord.ButtonStyle.secondary, 3, self._save_preset)
-            self._add("📂 Load preset", discord.ButtonStyle.secondary, 3, self._load_preset)
-            self._add("🗑️ Delete preset", discord.ButtonStyle.secondary, 3, self._delete_preset)
+            self.add_button("↩️ Undo last change", discord.ButtonStyle.secondary, self._undo, row=1)
+            self.add_button("⚙️ Open setup", discord.ButtonStyle.secondary, self._setup, row=1)
+            self.add_button("✨ Auto-assign", discord.ButtonStyle.success, self._auto_assign, row=2)
+            self.add_button(
+                "♻️ Re-pair from scratch", discord.ButtonStyle.danger, self._from_scratch, row=2
+            )
+            self.add_button(
+                "📣 Post self-service buttons",
+                discord.ButtonStyle.secondary,
+                self._post_buttons,
+                row=2,
+            )
+            self.add_button(
+                "💾 Save as preset", discord.ButtonStyle.secondary, self._save_preset, row=3
+            )
+            self.add_button(
+                "📂 Load preset", discord.ButtonStyle.secondary, self._load_preset, row=3
+            )
+            self.add_button(
+                "🗑️ Delete preset", discord.ButtonStyle.secondary, self._delete_preset, row=3
+            )
 
     # ── everyone ──────────────────────────────────────────────────────────────
 

@@ -34,10 +34,10 @@ from zoneinfo import ZoneInfo
 import discord
 
 import wizard_registry
+from wizard_registry import OwnedView
 import train_rotation as tr
 
 DENY_NOT_LEADER = "⛔ You need the leadership role to use this."
-DENY_NOT_OWNER = "⛔ Only the person who opened this editor can change it."
 EDITOR_TIMEOUT = 900  # 15 min — Discord's component interaction-token ceiling
 
 
@@ -504,7 +504,7 @@ _MEMBER_SORTS = [
 _DATE_SORTS = [("newest", "Newest first"), ("oldest", "Oldest first")]
 
 
-class AssignmentLogsView(discord.ui.View):
+class AssignmentLogsView(OwnedView):
     """Owner-locked, ephemeral Assignment Logs surface. Opens on the summary
     (most / fewest / recent); the View-all button swaps the same message into a
     paged, sortable history that toggles between a by-member tally and the
@@ -532,12 +532,6 @@ class AssignmentLogsView(discord.ui.View):
         self.sort_date = "newest"
         self._sync()
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     # ── rendering ──────────────────────────────────────────────────────────────
 
     def render_embed(self) -> discord.Embed:
@@ -557,46 +551,43 @@ class AssignmentLogsView(discord.ui.View):
         self.clear_items()
         if self.mode == "summary":
             if self.tally or self.posted:
-                self._button(self.BTN_VIEW_ALL, discord.ButtonStyle.primary, 0, self._on_view_all)
+                self.add_button(
+                    self.BTN_VIEW_ALL, discord.ButtonStyle.primary, self._on_view_all, row=0
+                )
             return
 
         # Pager modes: mode toggle, sort select, prev/next/back.
-        self._button(
+        self.add_button(
             self.BTN_BY_MEMBER,
             discord.ButtonStyle.primary if self.mode == "member" else discord.ButtonStyle.secondary,
-            0,
             self._on_by_member,
+            row=0,
             disabled=(self.mode == "member"),
         )
-        self._button(
+        self.add_button(
             self.BTN_BY_DATE,
             discord.ButtonStyle.primary if self.mode == "date" else discord.ButtonStyle.secondary,
-            0,
             self._on_by_date,
+            row=0,
             disabled=(self.mode == "date"),
         )
         self._add_sort_select()
         total = self._total_pages()
-        self._button(
+        self.add_button(
             self.BTN_PREV,
             discord.ButtonStyle.secondary,
-            2,
             self._on_prev,
+            row=2,
             disabled=(self.page <= 0),
         )
-        self._button(
+        self.add_button(
             self.BTN_NEXT,
             discord.ButtonStyle.secondary,
-            2,
             self._on_next,
+            row=2,
             disabled=(self.page >= total - 1),
         )
-        self._button(self.BTN_BACK, discord.ButtonStyle.secondary, 2, self._on_back)
-
-    def _button(self, label, style, row, cb, *, disabled=False):
-        btn = discord.ui.Button(label=label, style=style, row=row, disabled=disabled)
-        btn.callback = cb
-        self.add_item(btn)
+        self.add_button(self.BTN_BACK, discord.ButtonStyle.secondary, self._on_back, row=2)
 
     def _add_sort_select(self):
         if self.mode == "date":

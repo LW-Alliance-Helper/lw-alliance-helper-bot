@@ -34,6 +34,7 @@ import config_health
 import messages
 import premium
 import wizard_registry
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -923,8 +924,10 @@ VS_BTN_PREVIEW_WIN = "Preview winning path"
 VS_BTN_PREVIEW_LOSE = "Preview losing path"
 
 
-class VSPathView(discord.ui.View):
+class VSPathView(OwnedView):
     """The controls under the path. Renders from `state`, never re-reads."""
+
+    timeout_hint = f"`{VS_HUB_CMD}`"
 
     def __init__(self, state: HubState, owner_id: int):
         super().__init__(timeout=900)
@@ -964,15 +967,6 @@ class VSPathView(discord.ui.View):
         results.callback = self._results
         self.add_item(results)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
-
     def _preview(self, outcome: str):
         async def _open(interaction: discord.Interaction):
             await interaction.response.send_message(
@@ -1007,9 +1001,11 @@ class VSPathView(discord.ui.View):
         view.message = await interaction.original_response()
 
 
-class ResultsView(discord.ui.View):
+class ResultsView(OwnedView):
     """Screen 3's controls. Lives here rather than in `alliance_duel_entry`
     because Back re-renders the path, and entry cannot import the hub."""
+
+    timeout_hint = f"`{VS_HUB_CMD}`"
 
     def __init__(self, state: HubState, week: int, owner_id: int):
         super().__init__(timeout=900)
@@ -1042,15 +1038,6 @@ class ResultsView(discord.ui.View):
         back.callback = self._back
         self.add_item(back)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
-
     async def _day_scores(self, interaction: discord.Interaction):
         view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id, view=self)
         await interaction.response.send_message(
@@ -1081,8 +1068,10 @@ class ResultsView(discord.ui.View):
         self.stop()
 
 
-class VSHubView(discord.ui.View):
+class VSHubView(OwnedView):
     """The button grid. Renders from `state` and never re-reads the sheet."""
+
+    timeout_hint = f"`{VS_HUB_CMD}`"
 
     def __init__(self, bot, state: HubState, owner_id: int):
         super().__init__(timeout=900)
@@ -1207,15 +1196,6 @@ class VSHubView(discord.ui.View):
         setup = discord.ui.Button(label=VS_BTN_SETUP, style=discord.ButtonStyle.secondary, row=1)
         setup.callback = self._setup
         self.add_item(setup)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(self.message, command_hint=f"`{VS_HUB_CMD}`")
 
     async def _bracket(self, interaction: discord.Interaction):
         if not self.state.full_bracket:

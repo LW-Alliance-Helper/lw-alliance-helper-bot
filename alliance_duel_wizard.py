@@ -26,6 +26,7 @@ import config
 from messages import CANCEL_BACKPEDAL_DEFAULT
 from setup_hub import HUB_BTN_VS
 from wizard_registry import expire_view_message, safe_edit_response
+from wizard_registry import ExpiringView, OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class OwnAllianceModal(discord.ui.Modal, title="Your alliance"):
         await self._parent.show_mode_step(interaction)
 
 
-class TrackingModeView(discord.ui.View):
+class TrackingModeView(ExpiringView):
     """Step 2: own alliance or the full bracket.
 
     Neither button is `primary`. The bracket is the option that unlocks more,
@@ -94,13 +95,12 @@ class TrackingModeView(discord.ui.View):
     rather than a lesser one.
     """
 
+    timeout_hint = ads.VS_SETUP_NAV
+
     def __init__(self, parent: "VSSetupView") -> None:
         super().__init__(timeout=STEP_TIMEOUT)
         self._parent = parent
         self.message: discord.Message | None = None
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await self._parent.owns(interaction)
@@ -265,7 +265,7 @@ DAY_THEME_SURFACE = ScheduledSurface(
 )
 
 
-class ScheduledPostSettingsView(discord.ui.View):
+class ScheduledPostSettingsView(OwnedView):
     """Time, channel, an optional standing note, and on/off.
 
     A settings panel rather than a stepped wizard, which is the shape these
@@ -280,10 +280,12 @@ class ScheduledPostSettingsView(discord.ui.View):
     forgetting where it went.
     """
 
+    timeout_hint = ads.VS_SETUP_NAV
+
     def __init__(self, guild_id: int, owner_user_id: int, surface: ScheduledSurface) -> None:
         super().__init__(timeout=STEP_TIMEOUT)
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.surface = surface
         self.cfg = config.get_vs_config(guild_id)
         self.message: discord.Message | None = None
@@ -362,17 +364,6 @@ class ScheduledPostSettingsView(discord.ui.View):
         await safe_edit_response(interaction, embed=self.embed(), view=self)
 
     # ── Guards ────────────────────────────────────────────────────────────────
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_user_id:
-            return True
-        from messages import DENY_NOT_OWNER
-
-        await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-        return False
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -504,8 +495,10 @@ class LeadershipNoteModal(discord.ui.Modal, title="Note from leadership"):
         await self.panel._redraw(interaction)
 
 
-class VSSetupView(discord.ui.View):
+class VSSetupView(ExpiringView):
     """Holds the wizard's state across its two steps."""
+
+    timeout_hint = ads.VS_SETUP_NAV
 
     def __init__(self, guild_id: int, owner_user_id: int) -> None:
         super().__init__(timeout=STEP_TIMEOUT)
@@ -521,9 +514,6 @@ class VSSetupView(discord.ui.View):
 
         await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
         return False
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await self.owns(interaction)
@@ -616,12 +606,14 @@ class VSSetupView(discord.ui.View):
         view.message = await interaction.original_response()
 
 
-class FillBracketView(discord.ui.View):
+class FillBracketView(ExpiringView):
     """Offers the blank rows, and never writes without being asked.
 
     Declining is a real answer: an alliance may want the fuller views without
     backfilling a league already half over.
     """
+
+    timeout_hint = ads.VS_SETUP_NAV
 
     def __init__(self, parent: "VSSetupView", league, missing, tab_name: str) -> None:
         super().__init__(timeout=STEP_TIMEOUT)
@@ -630,9 +622,6 @@ class FillBracketView(discord.ui.View):
         self._missing = missing
         self._tab = tab_name
         self.message: discord.Message | None = None
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint=ads.VS_SETUP_NAV)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await self._parent.owns(interaction)

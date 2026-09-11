@@ -48,7 +48,6 @@ from messages import (
     DATE_PARSE_GIVE_UP,
     DATE_PARSE_REJECT,
     DATE_PARSE_RETRY,
-    DENY_NOT_OWNER,
     GENERIC_CMD_TIMEOUT,
     INPUT_INVALID_NO_EXAMPLE,
     LEADERSHIP_INACCESSIBLE,
@@ -59,6 +58,7 @@ from messages import (
     TIME_PARSE_RETRY,
 )
 from time_helpers import server_today
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +281,7 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
 # ── Hub view ─────────────────────────────────────────────────────────────────
 
 
-class _EventsHubView(discord.ui.View):
+class _EventsHubView(OwnedView):
     """Hub button grid. Each button dispatches into the matching flow.
 
     Layout (2 rows, 6 buttons):
@@ -308,43 +308,30 @@ class _EventsHubView(discord.ui.View):
     the other two positions untouched.
     """
 
+    timeout_hint = EVENTS_HUB_CMD
+
     def __init__(self, bot, guild_id: int, owner_user_id: int):
         super().__init__(timeout=900)
         self.bot = bot
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.message: Optional[discord.Message] = None
         self._build_buttons()
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=EVENTS_HUB_CMD)
-
     def _build_buttons(self) -> None:
         # Row 0: read surfaces
-        self._add(EVENTS_HUB_BTN_TODAY, discord.ButtonStyle.primary, 0, self._on_today)
-        self._add(EVENTS_HUB_BTN_UPCOMING, discord.ButtonStyle.secondary, 0, self._on_upcoming)
-        self._add(EVENTS_HUB_BTN_LOG, discord.ButtonStyle.secondary, 0, self._on_log)
+        self.add_button(EVENTS_HUB_BTN_TODAY, discord.ButtonStyle.primary, self._on_today, row=0)
+        self.add_button(
+            EVENTS_HUB_BTN_UPCOMING, discord.ButtonStyle.secondary, self._on_upcoming, row=0
+        )
+        self.add_button(EVENTS_HUB_BTN_LOG, discord.ButtonStyle.secondary, self._on_log, row=0)
         # Row 1: write surfaces
-        self._add(EVENTS_HUB_BTN_CREATE, discord.ButtonStyle.success, 1, self._on_create)
-        self._add(EVENTS_HUB_BTN_WARNING, discord.ButtonStyle.secondary, 1, self._on_warning)
-        self._add(EVENTS_HUB_BTN_PAUSE, discord.ButtonStyle.secondary, 1, self._on_pause)
-        self._add(EVENTS_HUB_BTN_DELETE, discord.ButtonStyle.danger, 1, self._on_delete)
-
-    def _add(self, label, style, row, callback):
-        btn = discord.ui.Button(label=label[:80], style=style, row=row)
-        btn.callback = callback
-        self.add_item(btn)
+        self.add_button(EVENTS_HUB_BTN_CREATE, discord.ButtonStyle.success, self._on_create, row=1)
+        self.add_button(
+            EVENTS_HUB_BTN_WARNING, discord.ButtonStyle.secondary, self._on_warning, row=1
+        )
+        self.add_button(EVENTS_HUB_BTN_PAUSE, discord.ButtonStyle.secondary, self._on_pause, row=1)
+        self.add_button(EVENTS_HUB_BTN_DELETE, discord.ButtonStyle.danger, self._on_delete, row=1)
 
     # ── Button callbacks ─────────────────────────────────────────────────
 
@@ -702,7 +689,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
 # ── Create flow: preset picker -> wizard ─────────────────────────────────────
 
 
-class _CreatePickerView(discord.ui.View):
+class _CreatePickerView(OwnedView):
     """Two equally-weighted entry buttons: 📋 Pick a preset, ✏️ Define
     my own. Custom events stay first-class — this view exists only to
     branch on which prefill the officer wants."""
@@ -710,17 +697,8 @@ class _CreatePickerView(discord.ui.View):
     def __init__(self, bot, owner_user_id: int):
         super().__init__(timeout=180)
         self.bot = bot
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="📋 Pick a preset", style=discord.ButtonStyle.primary, row=0)
     async def pick_preset(self, inter: discord.Interaction, _btn: discord.ui.Button):

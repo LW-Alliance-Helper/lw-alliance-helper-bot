@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import wizard_registry
+from wizard_registry import ExpiringView
 import train_rotation as tr
 import train_rotation_ui as ui
 
@@ -53,13 +54,15 @@ class _ConfirmPostModal(discord.ui.Modal, title="Post Train Conductor"):
         )
 
 
-class DailyConfirmView(discord.ui.View):
+class DailyConfirmView(ExpiringView):
     """Each drive day's confirmation. Confirm writes a `posted` history row and —
     when a public channel is configured — announces the conductor there (with an
     optional blurb + image). With no public channel it just records the
     conductor. The other buttons adjust the conductor first.
 
     `public_channel_id` of 0 means the alliance opted out of public posts."""
+
+    timeout_hint = "/train draft_week"
 
     def __init__(self, bot, guild_id: int, draft_day: tr.DraftDay, public_channel_id: int):
         super().__init__(timeout=ui.EDITOR_TIMEOUT)
@@ -225,6 +228,3 @@ class DailyConfirmView(discord.ui.View):
             except discord.HTTPException:
                 pass
         self.stop()
-
-    async def on_timeout(self):
-        await wizard_registry.expire_view_message(self.message, command_hint="/train draft_week")

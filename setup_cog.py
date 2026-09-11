@@ -26,6 +26,7 @@ from config import (
 import config_health
 import premium
 import wizard_registry
+from wizard_registry import ExpiringView, OwnedView
 from messages import (
     CANCEL_PLAIN,
     GENERIC_CMD_TIMEOUT,
@@ -1202,7 +1203,9 @@ async def ask_disable_with_clear(
         f"Re-run `/{setup_command}` and pick Yes to restore it instantly."
     )
 
-    class ClearConfigView(discord.ui.View):
+    class ClearConfigView(ExpiringView):
+        timeout_hint = f"`/{setup_command}`"
+
         def __init__(self):
             super().__init__(timeout=300)
             self.message: discord.Message | None = None
@@ -1235,12 +1238,6 @@ async def ask_disable_with_clear(
                 view=self,
             )
             self.stop()
-
-        async def on_timeout(self):
-            await wizard_registry.expire_view_message(
-                self.message,
-                command_hint=f"`/{setup_command}`",
-            )
 
     view = ClearConfigView()
     view.message = await channel.send(body, view=view)
@@ -5851,7 +5848,7 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
 SURVEY_CONFIRM_VIEW_TIMEOUT = 900  # 15 minutes
 
 
-class SurveyConfiguredView(discord.ui.View):
+class SurveyConfiguredView(OwnedView):
     """Post or edit the survey straight off the wizard's confirmation embed.
 
     Those are the two things leadership almost always wants next, and
@@ -5862,6 +5859,8 @@ class SurveyConfiguredView(discord.ui.View):
     leadership channel, and these buttons act on a survey the clicker
     may not have configured. Anyone else gets there through `/survey`.
     """
+
+    timeout_hint = "`/survey`"
 
     def __init__(
         self,
@@ -5880,7 +5879,7 @@ class SurveyConfiguredView(discord.ui.View):
         self._survey_id = survey_id
         self._survey_name = survey_name
         self._template_key = template_key
-        self._owner_id = owner_id
+        self.owner_id = owner_id
 
         from survey_hub import SURVEY_HUB_BTN_EDIT, SURVEY_HUB_BTN_POST
 
@@ -5891,15 +5890,6 @@ class SurveyConfiguredView(discord.ui.View):
         edit_btn = discord.ui.Button(label=SURVEY_HUB_BTN_EDIT, style=discord.ButtonStyle.secondary)
         edit_btn.callback = self._on_edit
         self.add_item(edit_btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self._owner_id:
-            return True
-        await interaction.response.send_message(
-            "⛔ These buttons belong to whoever ran the setup. Use `/survey` to post or edit a survey.",
-            ephemeral=True,
-        )
-        return False
 
     async def _disable(self, interaction: discord.Interaction):
         for item in self.children:
@@ -5931,9 +5921,6 @@ class SurveyConfiguredView(discord.ui.View):
             target_survey_name=self._survey_name if self._survey_id else None,
             template=self._template_key,
         )
-
-    async def on_timeout(self):
-        await wizard_registry.expire_view_message(self.message, command_hint="`/survey`")
 
 
 async def _ensure_survey_tab(channel, guild_id: int, tab_name: str) -> None:
@@ -8982,10 +8969,14 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
 # get re-prompted to create the first row.
 
 
-class _InlineCreatePresetOffer(discord.ui.View):
+class _InlineCreatePresetOffer(OwnedView):
     """Posted after the Strategy Presets tab name is saved (and the
     alliance has zero presets). 'Create now' opens the same preset
     editor as `/<parent> strategy create`."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PRESETS}**"
 
     def __init__(
         self, *, owner_id: int, event_type: str, parent: str, default_name: str = "Standard"
@@ -8997,15 +8988,6 @@ class _InlineCreatePresetOffer(discord.ui.View):
         self.default_name = default_name
         self.choice: str | None = None
         self.message: discord.Message | None = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "Only the user running setup can pick.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="➕ Create my first preset now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
@@ -9037,20 +9019,16 @@ class _InlineCreatePresetOffer(discord.ui.View):
         await inter.response.edit_message(view=self)
         self.stop()
 
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
 
-        await expire_view_message(
-            self.message,
-            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PRESETS}**",
-        )
-
-
-class _InlineCreateMemberRuleOffer(discord.ui.View):
+class _InlineCreateMemberRuleOffer(OwnedView):
     """Posted after the Member Rules tab name is saved (and the alliance
     has zero rules). 'Add one now' opens a streamlined modal for a
     power-band rule — the most-common rule type. Per-member rules (which
     need a Discord member picker) remain available via the slash commands."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_RULES}**"
 
     def __init__(self, *, owner_id: int, event_type: str, parent: str):
         super().__init__(timeout=300)
@@ -9059,15 +9037,6 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         self.parent = parent
         self.choice: str | None = None
         self.message: discord.Message | None = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "Only the user running setup can pick.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="➕ Add a power-band rule now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
@@ -9112,20 +9081,16 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         await inter.response.edit_message(view=self)
         self.stop()
 
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
 
-        await expire_view_message(
-            self.message,
-            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_RULES}**",
-        )
-
-
-class _InlinePostFirstSignupOffer(discord.ui.View):
+class _InlinePostFirstSignupOffer(OwnedView):
     """Posted at the end of the storm setup wizard (DS / CS) when
     the structured flow is opted in, a sign-up channel is configured,
     and no sign-up post has been recorded yet. 'Post now' fires
     `post_registration` against the next configured event date."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_POST_SIGNUP}**"
 
     def __init__(
         self, *, owner_id: int, bot, guild_id: int, event_type: str, parent: str, label: str
@@ -9139,15 +9104,6 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
         self.label = label
         self.choice: str | None = None
         self.message: discord.Message | None = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "Only the user who ran setup can pick.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="📣 Post my first sign-up now", style=discord.ButtonStyle.primary)
     async def post_btn(self, inter: discord.Interaction, _btn):
@@ -9203,14 +9159,6 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             child.disabled = True
         await inter.response.edit_message(view=self)
         self.stop()
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_POST_SIGNUP}**",
-        )
 
 
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────

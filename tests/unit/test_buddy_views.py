@@ -333,6 +333,8 @@ def test_picker_paginates_beyond_25_and_all_options_reachable():
     prev_btn, page_btn, next_btn = _buttons(view)
     assert prev_btn.disabled and not next_btn.disabled
     assert page_btn.label == "Page 1 / 3"
+    # The row carries the count; the select's placeholder stays bare (#589).
+    assert "page" not in _select(view).placeholder.lower()
     # Every option shows up across the three pages with no gaps or dupes.
     seen = list(_select(view).options)
     view.page = 1

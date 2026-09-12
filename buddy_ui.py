@@ -952,10 +952,9 @@ class _PickerView(OwnedView):
         self.page = max(0, min(self.page, total - 1))
         start = self.page * self.PAGE_SIZE
         page_opts = self._options[start : start + self.PAGE_SIZE]
-        placeholder = self._placeholder
-        if total > 1:
-            placeholder = f"{self._placeholder} (page {self.page + 1} of {total})"
-        sel = discord.ui.Select(placeholder=placeholder, options=page_opts, row=0)
+        # One select, and the pagination row right under it says the page;
+        # the placeholder stays bare (signed off 2026-09-12, #589 step 7).
+        sel = discord.ui.Select(placeholder=self._placeholder, options=page_opts, row=0)
         sel.callback = self._cb
         self._sel = sel
         self.add_item(sel)

@@ -77,7 +77,7 @@ def test_repeats_are_the_signal_and_are_kept(cd_db):
 
     habit = intel_lib.read_habit(_player("AlphaOne"))
     assert habit.top == ("Missile", "Tank", "Aircraft")
-    assert (habit.seen, habit.total, habit.distinct) == (5, 6, 2)
+    assert (habit.seen, habit.total) == (5, 6)
     assert habit.share == pytest.approx(5 / 6)
 
 
@@ -300,7 +300,7 @@ def test_their_best_reply_is_over_the_orders_they_could_set(cd_db):
 
     result = intel_lib.intel(_player("AlphaOne"), _player("BetaTwo"))
     assert result.their_best_reply is not None
-    assert result.p_if_they_switch < result.p_if_they_hold
+    assert result.p_if_they_switch < result.recommended.mean
 
 
 def test_a_placeholder_line_up_names_no_best_reply(cd_db):

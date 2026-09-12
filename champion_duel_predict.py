@@ -52,9 +52,7 @@ class SideInput:
     server: str | None
     player: dict
     orders: list[list[tuple[float, str]]]
-    observed_squads: int
     sightings: int
-    estimated_squads: int = 0
     #: Squads whose power is a real figure rather than derived from total hero
     #: power — `observed` from the sighting corpus plus `edited`, which is what
     #: the hub writes when someone types a squad in. Both mean "we hold a
@@ -106,10 +104,6 @@ class Prediction:
     @property
     def p_b(self) -> float:
         return 1.0 - self.p_a
-
-    @property
-    def favored(self) -> SideInput:
-        return self.a if self.p_a >= 0.5 else self.b
 
     def confidence(self) -> str:
         """`high` / `medium` / `low`, from what the number was built on.
@@ -177,16 +171,12 @@ def build_side(player: dict) -> SideInput:
         if all(t in powers for t in types):
             orders.append([(powers[t], t) for t in types])
 
-    observed = sum(1 for slot in SLOTS if squads[slot].get("source") == "observed")
-    estimated = sum(1 for slot in SLOTS if squads[slot].get("source") == "estimated")
     recorded = sum(1 for slot in SLOTS if squads[slot].get("source") in ("observed", "edited"))
     return SideInput(
         name=player.get("display_name") or "",
         server=player.get("server"),
         player=natural,
         orders=orders,
-        observed_squads=observed,
-        estimated_squads=estimated,
         recorded_squads=recorded,
         sightings=len(orders),
     )

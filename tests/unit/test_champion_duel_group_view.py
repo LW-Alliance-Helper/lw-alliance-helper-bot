@@ -1957,11 +1957,11 @@ def test_the_batch_names_whoever_did_not_fit(cd_db):
 
 
 def test_a_full_group_of_reads_fits_a_discord_message(cd_db):
-    """The measurement `read_batches` is allowed to lean on.
+    """The measurement the one-read-per-page pager leans on.
 
     A single read must stay well inside the 6,000 characters Discord counts
     across a message, because an embed over that on its own cannot be sent at
-    all and batching cannot save it. Seven opponents on the wordiest branches
+    all. Seven opponents on the wordiest branches
     -- nothing scouted, so every block carries a range, the no-line-up sentence
     and the record-your-squads ask -- is the worst shape this produces.
     """
@@ -1972,38 +1972,6 @@ def test_a_full_group_of_reads_fits_a_discord_message(cd_db):
 
     assert len(biggest.fields) == 7, "a full semi-final group, less the player"
     assert hub._embed_chars(biggest) < hub.READS_CHAR_BUDGET / 2
-
-
-def test_no_message_carries_more_embed_than_discord_counts(cd_db):
-    """The cap people know about is ten embeds; the one that binds is 6,000
-    characters across all of them. A read is about 2,500, so a team of five is
-    several messages rather than one -- and nothing is dropped to make it fit.
-    """
-    grouping, _big = _two_full_groups()
-    lead = db.upsert_registrant("A0", server="738")
-    state = hub.read_alliance(_leader(lead), grouping, with_odds=False)
-    embeds = hub.team_reads(state)["embeds"]
-
-    batches = hub.read_batches(embeds)
-
-    assert len(batches) > 1, "ten reads do not fit one message"
-    assert sum(len(b) for b in batches) == len(embeds), "nothing dropped"
-    for batch in batches:
-        assert len(batch) <= hub.READS_EMBEDS_PER_MESSAGE
-        assert sum(hub._embed_chars(e) for e in batch) <= hub.READS_CHAR_BUDGET
-
-
-def test_one_oversized_read_is_sent_alone_rather_than_dropped(cd_db):
-    """The reads are the deliverable. An embed nothing can batch with still
-    goes out, because a batching rule that quietly lost one would be the worst
-    version of the cut this surface refuses to make silently."""
-    huge = discord.Embed(title="🎯 Kestrel", description="x" * (hub.READS_CHAR_BUDGET + 10))
-    small = discord.Embed(title="🎯 Plover", description="y")
-
-    batches = hub.read_batches([huge, small])
-
-    assert [len(b) for b in batches] == [1, 1]
-    assert batches[0][0] is huge
 
 
 def test_a_read_says_it_is_one_match_rather_than_a_meeting(cd_db):

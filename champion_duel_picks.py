@@ -564,17 +564,6 @@ def build(guild_id, play_on, *, card_no: int = 1) -> Slate | None:
     )
 
 
-def todays(guild_id, *, card_no: int = 1) -> Slate | None:
-    """Today's card, on the game's clock rather than the reader's.
-
-    The card is prepared the evening before, so the day it is FOR and the day
-    it was built are different days. This asks for the one it is for, and
-    `db.server_today` is the same reading of the clock the slate was dated by
-    -- a second reading is how two answers to "today" drift apart.
-    """
-    return build(guild_id, db.server_today().isoformat(), card_no=card_no)
-
-
 # ── The text half ─────────────────────────────────────────────
 #
 # **THE ROWS CANNOT OVERFLOW, AND THAT IS STRUCTURAL NOW.** This used to be a

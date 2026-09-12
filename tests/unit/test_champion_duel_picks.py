@@ -757,18 +757,6 @@ def test_a_stage_named_outright_beats_the_one_the_calendar_would_stamp(cd_db, mo
     assert saved["stage"] == "knockouts"
 
 
-def test_todays_card_reads_the_games_clock(cd_db, monkeypatch):
-    """The card is prepared the evening before, so the day it is FOR and the
-    day it was built are different days."""
-    _field()
-    a, b = _ids("Ravenshade", "NightOwl")
-    monkeypatch.setattr(db, "_server_today", lambda: date(2026, 8, 25))
-    assert picks.todays(GUILD) is None
-
-    db.set_slate(GUILD, DAY, [(a, b)], actor=ACTOR)
-    assert len(picks.todays(GUILD).picks) == 1
-
-
 # ── The text half ─────────────────────────────────────────────────────────────
 
 

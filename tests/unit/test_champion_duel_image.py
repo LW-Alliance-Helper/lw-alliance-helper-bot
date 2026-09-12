@@ -214,7 +214,6 @@ def test_a_squad_someone_typed_in_counts_as_recorded(cd_db):
     side = cdp.build_side(a)
 
     assert side.recorded_squads == 3
-    assert side.observed_squads == 0, "still not an observation; just a number we hold"
     assert words.evidence(cdp.build_side(a), cdp.build_side(b)) == "both"
     assert cdp.predict(a, b).confidence() == "medium", "no sightings yet, so not high"
 

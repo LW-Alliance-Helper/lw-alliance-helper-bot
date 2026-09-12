@@ -5,94 +5,63 @@
 # the working band is 60 and this file is what makes 60 readable. Grow it:
 # every run that proves a name live adds it here, in the section that says why.
 #
-# Format is vulture's own (`--make-whitelist`). Run:
+# Format is vulture's own (`--make-whitelist`), one line per NAME: vulture
+# matches whitelist entries by name, so one `_.on_submit` covers every modal.
+# Run:
 #   python -m vulture . .vulture-whitelist.py --min-confidence 60 --exclude ".venv,tests,assets,scripts"
 # or scripts/quality/dead_code.py, which adds the repo-wide reference check.
 #
-# Started by the code-dead-code skill run of 2026-09-09 on champion_duel_*.py.
-# 1. Framework-dispatched: discord.py calls these by convention or decorator.
-_.interaction_check  # unused method (champion_duel_claim.py:241)
-_.interaction_check  # unused method (champion_duel_hub.py:10464)
-_.interaction_check  # unused method (champion_duel_hub.py:10880)
-_.interaction_check  # unused method (champion_duel_hub.py:2374)
-_.interaction_check  # unused method (champion_duel_hub.py:2717)
-_.interaction_check  # unused method (champion_duel_hub.py:2845)
-_.interaction_check  # unused method (champion_duel_hub.py:3580)
-_.interaction_check  # unused method (champion_duel_hub.py:3855)
-_.interaction_check  # unused method (champion_duel_hub.py:4057)
-_.interaction_check  # unused method (champion_duel_hub.py:4104)
-_.interaction_check  # unused method (champion_duel_hub.py:4539)
-_.interaction_check  # unused method (champion_duel_hub.py:4649)
-_.interaction_check  # unused method (champion_duel_hub.py:4707)
-_.interaction_check  # unused method (champion_duel_hub.py:5201)
-_.interaction_check  # unused method (champion_duel_hub.py:5765)
-_.interaction_check  # unused method (champion_duel_hub.py:6865)
-_.interaction_check  # unused method (champion_duel_hub.py:7900)
-_.interaction_check  # unused method (champion_duel_hub.py:8151)
-_.interaction_check  # unused method (champion_duel_hub.py:8679)
-_.keep  # unused method (champion_duel_hub.py:3633)
-_.on_submit  # unused method (champion_duel_claim.py:355)
-_.on_submit  # unused method (champion_duel_hub.py:1816)
-_.on_submit  # unused method (champion_duel_hub.py:2205)
-_.on_submit  # unused method (champion_duel_hub.py:2612)
-_.on_submit  # unused method (champion_duel_hub.py:2879)
-_.on_submit  # unused method (champion_duel_hub.py:3084)
-_.on_submit  # unused method (champion_duel_hub.py:3334)
-_.on_submit  # unused method (champion_duel_hub.py:4031)
-_.on_submit  # unused method (champion_duel_hub.py:4167)
-_.on_submit  # unused method (champion_duel_hub.py:4218)
-_.on_submit  # unused method (champion_duel_hub.py:4581)
-_.on_submit  # unused method (champion_duel_hub.py:4860)
-_.on_submit  # unused method (champion_duel_hub.py:5561)
-_.on_submit  # unused method (champion_duel_hub.py:5889)
-_.on_submit  # unused method (champion_duel_hub.py:7794)
-_.on_timeout  # unused method (champion_duel_claim.py:248)
-_.on_timeout  # unused method (champion_duel_hub.py:10470)
-_.on_timeout  # unused method (champion_duel_hub.py:10886)
-_.on_timeout  # unused method (champion_duel_hub.py:1709)
-_.on_timeout  # unused method (champion_duel_hub.py:2380)
-_.on_timeout  # unused method (champion_duel_hub.py:2723)
-_.on_timeout  # unused method (champion_duel_hub.py:2851)
-_.on_timeout  # unused method (champion_duel_hub.py:3641)
-_.on_timeout  # unused method (champion_duel_hub.py:3861)
-_.on_timeout  # unused method (champion_duel_hub.py:4063)
-_.on_timeout  # unused method (champion_duel_hub.py:4545)
-_.on_timeout  # unused method (champion_duel_hub.py:4655)
-_.on_timeout  # unused method (champion_duel_hub.py:4713)
-_.on_timeout  # unused method (champion_duel_hub.py:5207)
-_.on_timeout  # unused method (champion_duel_hub.py:5771)
-_.on_timeout  # unused method (champion_duel_hub.py:6871)
-_.on_timeout  # unused method (champion_duel_hub.py:7906)
-_.on_timeout  # unused method (champion_duel_hub.py:8157)
-_.on_timeout  # unused method (champion_duel_hub.py:8685)
-_.on_timeout  # unused method (champion_duel_hub.py:9961)
-_.use_mine  # unused method (champion_duel_hub.py:3637)
-setup  # unused function (champion_duel_cog.py:39)
+# Started by the code-dead-code skill run of 2026-09-09 on champion_duel_*.py;
+# regenerated 2026-09-12 after the base views (#594) took the pasted
+# `interaction_check` / `on_timeout` methods and the dead-code pass (#589,
+# step 9) removed what nothing reached.
 
-# 2. Called from outside the champion_duel_* family (bot.py, bot_admin.py, config.py, api/, scripts/).
-_.row_factory  # unused attribute (champion_duel_db.py:448)
-consume_auth_code  # unused function (champion_duel_db.py:5583)
-create_auth_code  # unused function (champion_duel_db.py:5555)
-create_session  # unused function (champion_duel_db.py:5479)
-due  # unused function (champion_duel_store.py:562)
-ensure_grouping  # unused function (champion_duel_db.py:1799)
-find_grouping_conflicts  # unused function (champion_duel_db.py:1935)
-get_roster  # unused function (champion_duel_db.py:4095)
-get_session  # unused function (champion_duel_db.py:5506)
-import_orders  # unused function (champion_duel_db.py:4959)
-import_profiles  # unused function (champion_duel_db.py:5239)
-import_registrants  # unused function (champion_duel_db.py:3918)
-import_squads  # unused function (champion_duel_db.py:4872)
-init_db  # unused function (champion_duel_db.py:496)
-init_store  # unused function (champion_duel_store.py:120)
-merge_groupings  # unused function (champion_duel_db.py:2142)
-picks_size  # unused function (champion_duel_image.py:608)
-purge_guild_data  # unused function (champion_duel_db.py:5704)
-purge_user_data  # unused function (champion_duel_db.py:5819)
-record_import  # unused function (champion_duel_db.py:5029)
-revoke_guild_sessions  # unused function (champion_duel_db.py:5650)
-revoke_session  # unused function (champion_duel_db.py:5538)
-run_one  # unused function (champion_duel_store.py:627)
+# 1. Framework-dispatched: discord.py or aiohttp calls these by convention,
+#    decorator or route table, never by a call site in this repo.
+_.on_submit  # discord.ui.Modal
+_.keep  # @discord.ui.button
+_.use_mine  # @discord.ui.button
+_.timeout_hint  # read by wizard_registry.ExpiringView.on_timeout
+_.disabled  # discord.ui.Item state, set on children before an edit
+_.row_factory  # sqlite3.Connection
+setup  # champion_duel_cog.py: discord.py cog entry point
+preflight  # api/champion_duel_auth.py: aiohttp route
+login  # api/champion_duel_auth.py: aiohttp route
+exchange  # api/champion_duel_auth.py: aiohttp route
+me  # api/champion_duel_auth.py: aiohttp route
+logout  # api/champion_duel_auth.py: aiohttp route
+requires_session  # api/champion_duel_auth.py: decorator applied by the routes
+requires_writer  # api/champion_duel_auth.py: decorator applied by the routes
+requires_admin  # api/champion_duel_auth.py: decorator applied by the routes
 
-# 3. Documented keeps: the code's own comment says why it stays.
-entry_position  # unused variable (champion_duel_picks.py:218)
+# 2. Called from outside the champion_duel_* family (bot.py, bot_admin.py,
+#    config.py, api/, scripts/), which a family-scoped scan cannot see.
+due  # champion_duel_store.py
+ensure_grouping  # champion_duel_db.py
+find_grouping_conflicts  # champion_duel_db.py
+get_roster  # champion_duel_db.py
+import_orders  # champion_duel_db.py
+import_profiles  # champion_duel_db.py
+import_registrants  # champion_duel_db.py
+import_squads  # champion_duel_db.py
+init_db  # champion_duel_db.py
+init_store  # champion_duel_store.py
+merge_groupings  # champion_duel_db.py
+picks_size  # champion_duel_image.py
+purge_guild_data  # champion_duel_db.py
+purge_user_data  # champion_duel_db.py
+record_import  # champion_duel_db.py
+revoke_guild_sessions  # champion_duel_db.py
+run_one  # champion_duel_store.py
+
+# 3. Documented keeps: the code's own comment, or the log on #589, says why.
+entry_position  # champion_duel_picks.py: carried for the card's order
+claims_for  # champion_duel_db.py: waits for the claim marker on the listings, per champion_duel_claim.py's docstring
+build  # champion_duel_picks.py: the stored-card reader the picks tests score through
+list_disagreements  # champion_duel_db.py: the read side of the disagreement log; the hub tests look through it
+list_imports  # champion_duel_db.py: the read side of the import log; the import tests look through it
+READS_CHAR_BUDGET  # champion_duel_hub.py: the yardstick the read-size test measures against
+_embed_chars  # champion_duel_hub.py: how that test measures
+W  # champion_duel_image.py: the canvas the image tests measure every box against
+H  # champion_duel_image.py: the same
+team_reads  # champion_duel_hub.py: in progress, touched 2026-09-07

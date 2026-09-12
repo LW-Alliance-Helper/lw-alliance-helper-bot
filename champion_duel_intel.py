@@ -243,7 +243,6 @@ class Habit:
     top: tuple[str, ...]
     seen: int
     total: int
-    distinct: int
     meetings: int = 0
     meetings_changed: int = 0
     #: Meetings with more than one recorded line-up, which are the only ones
@@ -313,7 +312,6 @@ def read_habit(player: dict) -> Habit | None:
         top=top,
         seen=seen,
         total=sum(counts.values()),
-        distinct=len(counts),
         meetings=len(meetings),
         meetings_multi=sum(1 for rows in meetings.values() if rows["rows"] > 1),
         meetings_changed=sum(1 for rows in meetings.values() if len(rows["orders"]) > 1),
@@ -536,7 +534,6 @@ class Intel:
     #: their types are a placeholder, because naming one arrangement out of
     #: thirty-six as "their best reply" would dress a guess as a finding.
     their_best_reply: tuple[str, ...] | None = None
-    p_if_they_hold: float | None = None
     p_if_they_switch: float | None = None
     #: Optional only so it can follow the fields that carry defaults. Every
     #: result has one — both sides are required, so there is always a grid to
@@ -550,10 +547,6 @@ class Intel:
     @property
     def your_types_known(self) -> bool:
         return self.your_types_recorded == len(SLOTS)
-
-    @property
-    def counterable(self) -> bool:
-        return self.read in (STRONG, LEAN)
 
     @property
     def needs_your_squads(self) -> bool:
@@ -727,7 +720,6 @@ def intel(them: dict, you: dict, *, best_of: int = 1) -> Intel:
         worst_at = min(range(len(row)), key=row.__getitem__)
         result.their_best_reply = tuple(t for _, t in their_orders[worst_at])
         result.p_if_they_switch = row[worst_at]
-        result.p_if_they_hold = result.recommended.mean
 
     return result
 

@@ -304,7 +304,7 @@ def test_the_join_ranks_on_the_title_and_cascades_out_from_there(scored):
     Ranking on the title is the neutral choice — it is the one thing every
     player in a bracket is unambiguously playing for, so it does not quietly
     answer "which round does advancing mean"."""
-    titles = [row.champion for row in scored.rows]
+    titles = [row.reach.get("champion", 0.0) for row in scored.rows]
     assert titles == sorted(titles, reverse=True)
 
 

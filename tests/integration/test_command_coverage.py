@@ -820,7 +820,7 @@ class TestHelpCommand:
         from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
         from help_content import HelpView, HELP_CATEGORIES
 
-        view = HelpView(is_premium=False, origin=None)
+        view = HelpView(is_premium=False)
         select = view.children[0]
 
         # Pick the first real category (not the Overview sentinel).

@@ -31,7 +31,14 @@ import asyncio
 
 import discord
 
-from messages import DENY_NOT_OWNER, VIEW_TIMEOUT, VIEW_TIMEOUT_NO_HINT
+from messages import (
+    BTN_PAGE_LABEL,
+    BTN_PAGE_NEXT,
+    BTN_PAGE_PREV,
+    DENY_NOT_OWNER,
+    VIEW_TIMEOUT,
+    VIEW_TIMEOUT_NO_HINT,
+)
 
 # user_id -> list of asyncio.Event objects (one per active flow)
 _active: dict[int, list[asyncio.Event]] = {}
@@ -155,6 +162,33 @@ async def expire_view_message(message, command_hint: str = "") -> None:
         pass
 
 
+class PaginationRow:
+    """The three buttons `ExpiringView.add_pagination_row` added.
+
+    A view that rebuilds its items on every page turn can ignore this. One
+    that updates controls in place instead (the transfer setup pickers
+    re-point a select rather than rebuilding) calls `sync` after changing
+    the page, so the arrows and the count follow.
+    """
+
+    def __init__(
+        self,
+        prev: discord.ui.Button,
+        label: discord.ui.Button,
+        next_: discord.ui.Button,
+        page_count: int,
+    ):
+        self.prev = prev
+        self.label = label
+        self.next = next_
+        self.page_count = page_count
+
+    def sync(self, page: int) -> None:
+        self.prev.disabled = page <= 0
+        self.next.disabled = page >= self.page_count - 1
+        self.label.label = BTN_PAGE_LABEL.format(n=page + 1, m=self.page_count)
+
+
 class ExpiringView(discord.ui.View):
     """A view that cleans up after itself when it times out.
 
@@ -194,6 +228,52 @@ class ExpiringView(discord.ui.View):
         button.callback = callback
         self.add_item(button)
         return button
+
+    def add_pagination_row(
+        self,
+        *,
+        page: int,
+        page_count: int,
+        on_page,
+        row: int | None = None,
+        next_label: str = BTN_PAGE_NEXT,
+    ) -> PaginationRow | None:
+        """Prev, "Page n / m", Next, when there is more than one page.
+
+        `on_page(interaction, page)` is the view's own async page turn: store
+        the page, rebuild or re-point the controls, and edit the message. It
+        only ever receives a page inside range, because the arrow at either
+        end is disabled. Below two pages nothing is added and `None` comes
+        back, which is every earlier copy's behaviour. `next_label` exists for
+        the team-plan pickers, where "Next" would read as the next step.
+        """
+        if page_count <= 1:
+            return None
+
+        async def _prev(inter: discord.Interaction) -> None:
+            await on_page(inter, max(0, page - 1))
+
+        async def _next(inter: discord.Interaction) -> None:
+            await on_page(inter, min(page_count - 1, page + 1))
+
+        prev = self.add_button(
+            BTN_PAGE_PREV, discord.ButtonStyle.secondary, _prev, row=row, disabled=page <= 0
+        )
+        label = discord.ui.Button(
+            label=BTN_PAGE_LABEL.format(n=page + 1, m=page_count),
+            style=discord.ButtonStyle.secondary,
+            row=row,
+            disabled=True,
+        )
+        self.add_item(label)
+        next_ = self.add_button(
+            next_label,
+            discord.ButtonStyle.secondary,
+            _next,
+            row=row,
+            disabled=page >= page_count - 1,
+        )
+        return PaginationRow(prev, label, next_, page_count)
 
 
 class OwnedView(ExpiringView):

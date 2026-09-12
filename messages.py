@@ -135,6 +135,17 @@ PREMIUM_LOCKED_INLINE = "🔒 The **{feature}** is a 💎 Premium feature. Run `
 # what they tried.
 DENY_NOT_OWNER = "⛔ Only the user who opened this view can use it."
 
+# The pagination triple every paged view renders, through
+# `wizard_registry.ExpiringView.add_pagination_row`. Bare labels, per the
+# button-label rule in the design contract, which names this set. The middle
+# one is a disabled button, so the count sits between the arrows it belongs
+# to rather than in an embed footer or a select placeholder. One wording as
+# of 2026-09-11 (#589): before that the tree had "◀ Prev / Next ▶",
+# "◀️ Prev / ▶️ Next", bare "◀ / ▶", and four places for the count.
+BTN_PAGE_PREV = "◀ Prev"
+BTN_PAGE_NEXT = "Next ▶"
+BTN_PAGE_LABEL = "Page {n} / {m}"
+
 # Admin-or-role permission deny. The caller passes the leadership
 # role display name as {role} and a short action verb phrase as
 # {action} (e.g. "use the setup hub", "run `/setup`").

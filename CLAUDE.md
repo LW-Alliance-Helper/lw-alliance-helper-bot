@@ -296,13 +296,11 @@ These are deliberate and tested. Don't refactor away:
 used the second time, and gets a line here.** The Champion Duel feature
 copied its siblings instead of reusing them because the helpers it needed
 were private to whichever module wrote them first, and nothing here named
-them. Three of the four helpers that found are now the shared base views
-(below, 2026-09-11); the fourth, the Prev / Page / Next row, is still
-`storm_officer_view._add_pagination_row` until its item on
-[#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)
-lands. Do not write a copy of any of them.
+them. All four now live on the shared base views below (2026-09-11 and
+12, [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)).
+Do not write a copy of any of them.
 
-### Every view inherits a base view, never `discord.ui.View` directly
+### New views inherit a base view, never `discord.ui.View` directly
 - `wizard_registry.OwnedView` for anything one person opened (a hub, a
   picker, a confirm, an editor): set `self.owner_id` in `__init__`, or
   define `owner_id` as a property when the owner lives on a parent view
@@ -311,8 +309,23 @@ lands. Do not write a copy of any of them.
   own. A view that never sets an owner refuses everyone (fail closed).
 - `wizard_registry.ExpiringView` for a view anyone present may use (the
   scheduler's editor and approval, the train reminder, the outage
-  digest). `OwnedView` extends it, so both get the timeout cleanup and
-  `add_button(label, style, callback, *, row=None, disabled=False)`.
+  digest). `OwnedView` extends it, so both get the timeout cleanup,
+  `add_button(label, style, callback, *, row=None, disabled=False)` and
+  `add_pagination_row(*, page, page_count, on_page, row=None)`.
+- **Paging is one row: `◀ Prev`, a disabled `Page n / m`, `Next ▶`**
+  (`messages.BTN_PAGE_*`; the design contract's button-label rule names
+  this set). `on_page(interaction, page)` is the view's own page turn;
+  the row is absent below two pages. A view that re-points its controls
+  instead of rebuilding them keeps the returned `PaginationRow` and calls
+  `sync(page)`. The count lives in the row, not in an embed footer or a
+  header line; a select's placeholder may still say which page it shows
+  when several selects share a screen and only one of them pages. Twelve
+  views across ten modules rendered five different pagers before this
+  (2026-09-12, #589).
+- About fifty views still subclass `discord.ui.View`: persistent panels,
+  wizard yes/no prompts and the like, with neither an owner nor a
+  timeout notice. They are not wrong, and they move over as they are
+  touched; a new view starts on a base view.
 - The fold that made this the rule (2026-09-11,
   [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589))
   replaced 75 pasted `interaction_check` methods, 56 `on_timeout`

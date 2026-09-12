@@ -317,6 +317,69 @@ class TestExpiringView:
         assert btn.callback is cb
 
 
+class TestPaginationRow:
+    """The one Prev / Page n / m / Next row every paged view renders."""
+
+    def _view(self, page, page_count, turns):
+        view = wizard_registry.ExpiringView(timeout=1)
+
+        async def on_page(inter, new_page):
+            turns.append(new_page)
+
+        row = view.add_pagination_row(page=page, page_count=page_count, on_page=on_page, row=1)
+        return view, row
+
+    def test_single_page_adds_nothing(self):
+        view, row = self._view(0, 1, [])
+        assert row is None
+        assert view.children == []
+
+    def test_three_buttons_with_the_count_in_the_middle(self):
+        from messages import BTN_PAGE_NEXT, BTN_PAGE_PREV
+
+        view, row = self._view(1, 3, [])
+        labels = [c.label for c in view.children]
+        assert labels == [BTN_PAGE_PREV, "Page 2 / 3", BTN_PAGE_NEXT]
+        assert row.label.disabled is True
+        assert all(c.row == 1 for c in view.children)
+
+    def test_arrows_disable_at_either_end(self):
+        view, row = self._view(0, 3, [])
+        assert row.prev.disabled is True and row.next.disabled is False
+        view, row = self._view(2, 3, [])
+        assert row.prev.disabled is False and row.next.disabled is True
+
+    @pytest.mark.asyncio
+    async def test_arrows_turn_to_the_neighbouring_page(self):
+        turns = []
+        view, row = self._view(1, 3, turns)
+        await row.prev.callback(MagicMock())
+        await row.next.callback(MagicMock())
+        assert turns == [0, 2]
+
+    @pytest.mark.asyncio
+    async def test_a_turn_never_leaves_the_range(self):
+        turns = []
+        view, row = self._view(0, 2, turns)
+        await row.prev.callback(MagicMock())  # already on the first page
+        assert turns == [0]
+
+    def test_sync_moves_the_arrows_and_the_count_in_place(self):
+        view, row = self._view(0, 4, [])
+        row.sync(3)
+        assert row.prev.disabled is False and row.next.disabled is True
+        assert row.label.label == "Page 4 / 4"
+
+    def test_next_label_can_say_page_where_next_means_the_next_step(self):
+        view = wizard_registry.ExpiringView(timeout=1)
+
+        async def on_page(inter, p):
+            pass
+
+        view.add_pagination_row(page=0, page_count=2, on_page=on_page, next_label="Page ▶")
+        assert view.children[-1].label == "Page ▶"
+
+
 class TestOwnedView:
     """The owner guard every hub and picker used to paste: the person who
     opened the view may use it, anyone else is told so and nothing runs."""

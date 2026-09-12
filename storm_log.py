@@ -26,6 +26,7 @@ from setup_hub import HUB_BTN_MEMBERS, STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
 from config import get_config
 import wizard_registry
+from wizard_registry import ExpiringView
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -513,7 +514,7 @@ class _LogDatePickerView(discord.ui.View):
         self.stop()
 
 
-class _PaginatedRosterMultiSelectView(discord.ui.View):
+class _PaginatedRosterMultiSelectView(ExpiringView):
     """Roster-wide multi-select with Discord-friendly pagination (#244).
 
     Discord caps a `Select` at 25 options, so a 60+ member alliance can't
@@ -582,33 +583,9 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
         )
         select.callback = self._on_select
         self.add_item(select)
-        # Pagination row only when there's more than one page.
-        if self.page_count > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0),
-                row=1,
-            )
-            prev_btn.callback = self._on_prev
-            self.add_item(prev_btn)
-
-            page_btn = discord.ui.Button(
-                label=f"Page {self.page + 1} / {self.page_count}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=1,
-            )
-            self.add_item(page_btn)
-
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1),
-                row=1,
-            )
-            next_btn.callback = self._on_next
-            self.add_item(next_btn)
+        self.add_pagination_row(
+            page=self.page, page_count=self.page_count, on_page=self._on_page, row=1
+        )
 
         save_btn = discord.ui.Button(
             label="✅ Save",
@@ -634,16 +611,9 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
         self.selected_set = (self.selected_set - page_names) | picked
         await interaction.response.defer()
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        if self.page > 0:
-            self.page -= 1
-            self._build_components()
-        await wizard_registry.safe_edit_response(interaction, view=self)
-
-    async def _on_next(self, interaction: discord.Interaction):
-        if self.page < self.page_count - 1:
-            self.page += 1
-            self._build_components()
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
+        self._build_components()
         await wizard_registry.safe_edit_response(interaction, view=self)
 
     async def _on_clear(self, interaction: discord.Interaction):

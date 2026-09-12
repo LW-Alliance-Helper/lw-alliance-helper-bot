@@ -38,3 +38,17 @@ rule:
       kind: function_definition
       has: { field: name, regex: "^(interaction_check|_guard_owner)$" }
       stopBy: end
+---
+# A Prev / Next button built by hand rather than through
+# `ExpiringView.add_pagination_row` (2026-09-12). Matches the label string
+# inside a `discord.ui.Button(...)` call, so a step button that happens to say
+# "Next" shows up too; the preserved set on #589 lists those.
+id: hand-built-pager
+language: python
+rule:
+  kind: string
+  regex: '◀|▶|\bPrev\b|\bNext\b'
+  inside:
+    kind: call
+    has: { field: function, regex: 'discord[.]ui[.]Button$' }
+    stopBy: end

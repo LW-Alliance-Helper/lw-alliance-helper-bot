@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import wizard_registry
-from wizard_registry import OwnedView
+from wizard_registry import ExpiringView, OwnedView
 import train_rotation as tr
 
 DENY_NOT_LEADER = "⛔ You need the leadership role to use this."
@@ -472,7 +472,7 @@ def build_history_page_embed(
     window = rows[start : start + PAGE_SIZE]
 
     embed = discord.Embed(title="🚂 Train History", color=discord.Color.gold())
-    header = f"**{mode_label}** · Sorted by {sort_label} · Page {page + 1} of {total_pages}"
+    header = f"**{mode_label}** · Sorted by {sort_label}"
     if not rows:
         embed.description = f"{header}\n\n*Nothing logged yet.*"
         return embed
@@ -516,8 +516,6 @@ class AssignmentLogsView(OwnedView):
     BTN_VIEW_ALL = "📜 View all history"
     BTN_BY_MEMBER = "👥 By member"
     BTN_BY_DATE = "📅 By date"
-    BTN_PREV = "◀️ Prev"
-    BTN_NEXT = "▶️ Next"
     BTN_BACK = "↩️ Back"
 
     def __init__(self, owner_id: int, tally: list, posted: list):
@@ -572,20 +570,8 @@ class AssignmentLogsView(OwnedView):
             disabled=(self.mode == "date"),
         )
         self._add_sort_select()
-        total = self._total_pages()
-        self.add_button(
-            self.BTN_PREV,
-            discord.ButtonStyle.secondary,
-            self._on_prev,
-            row=2,
-            disabled=(self.page <= 0),
-        )
-        self.add_button(
-            self.BTN_NEXT,
-            discord.ButtonStyle.secondary,
-            self._on_next,
-            row=2,
-            disabled=(self.page >= total - 1),
+        self.add_pagination_row(
+            page=self.page, page_count=self._total_pages(), on_page=self._on_page, row=2
         )
         self.add_button(self.BTN_BACK, discord.ButtonStyle.secondary, self._on_back, row=2)
 
@@ -636,12 +622,8 @@ class AssignmentLogsView(OwnedView):
         self.page = 0
         await self._rerender(inter)
 
-    async def _on_prev(self, inter):
-        self.page = max(0, self.page - 1)
-        await self._rerender(inter)
-
-    async def _on_next(self, inter):
-        self.page = min(self._total_pages() - 1, self.page + 1)
+    async def _on_page(self, inter, page: int):
+        self.page = page
         await self._rerender(inter)
 
     async def _on_back(self, inter):
@@ -716,7 +698,7 @@ def _resolve_name_from_list(names: list[str], typed: str) -> str:
     return hits[0] if len(hits) == 1 else t
 
 
-class _RosterPickerView(discord.ui.View):
+class _RosterPickerView(ExpiringView):
     """Reusable roster-backed conductor picker (dropdown + Save / Cancel / Type a
     name instead), shown ephemerally wherever leadership assigns someone by hand.
 
@@ -788,23 +770,9 @@ class _RosterPickerView(discord.ui.View):
             )
             sel.callback = self._on_select
             self.add_item(sel)
-            if self.total_pages > 1:
-                prev = discord.ui.Button(
-                    label="◀ Prev",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page == 0,
-                    row=1,
-                )
-                prev.callback = self._prev
-                self.add_item(prev)
-                nxt = discord.ui.Button(
-                    label="Next ▶",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page >= self.total_pages - 1,
-                    row=1,
-                )
-                nxt.callback = self._next
-                self.add_item(nxt)
+            self.add_pagination_row(
+                page=self.page, page_count=self.total_pages, on_page=self._on_page, row=1
+            )
             save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
             save.callback = self._on_save
             self.add_item(save)
@@ -837,13 +805,8 @@ class _RosterPickerView(discord.ui.View):
         self._build()
         await interaction.response.edit_message(content=self.content(), view=self)
 
-    async def _prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._build()
-        await interaction.response.edit_message(content=self.content(), view=self)
-
-    async def _next(self, interaction: discord.Interaction):
-        self.page = min(self.total_pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._build()
         await interaction.response.edit_message(content=self.content(), view=self)
 

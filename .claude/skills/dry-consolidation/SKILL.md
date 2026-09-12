@@ -112,8 +112,9 @@ Before any cluster becomes a "new helper" line in the plan, grep for one that
 already does it. The pagination row (`◀ Prev` / `Page n / m` / `Next ▶`) had a
 shared helper in `storm_officer_view.py` from the 1.8.0 dedupe, private to
 that module with three callers, when Champion Duel wrote its own four times
-and six other files hand-built the same three buttons. The fix there is
-*promote*, not *extract*, and the plan should say which. The reuse list in
+and six other files hand-built the same three buttons (it became
+`wizard_registry.ExpiringView.add_pagination_row` on 2026-09-12). The fix
+there is *promote*, not *extract*, and the plan should say which. The reuse list in
 `CLAUDE.md` § Patterns to reuse is the first place to look and the place to
 add what you find; a helper that only its own module knows about will be
 copied by the next feature.

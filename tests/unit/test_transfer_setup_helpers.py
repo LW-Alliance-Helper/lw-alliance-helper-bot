@@ -187,7 +187,7 @@ class TestAdaptiveColumnMap:
         v._render_field("status")
         kinds = [type(c).__name__ for c in v.children]
         assert kinds.count("Select") == 1
-        assert kinds.count("Button") == 3  # ◀ ▶ Done
+        assert kinds.count("Button") == 4  # ◀ Prev, Page n / m, Next ▶, Done
 
     def test_name_field_is_single_select(self):
         v = self._view()

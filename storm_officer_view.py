@@ -51,7 +51,6 @@ from messages import (
     CANCEL_BACKPEDAL,
     CANCEL_BACKPEDAL_DEFAULT,
     DATE_PARSE_REJECT,
-    DENY_NOT_OWNER,
 )
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 from setup_hub import STORM_GLYPH
@@ -704,106 +703,6 @@ def _format_on_behalf_ack(
     return msg
 
 
-async def _guard_owner(inter: discord.Interaction, owner_user_id: int) -> bool:
-    """Session-ownership gate for the pagination row below, and nothing else
-    now: every view in this module inherits `wizard_registry.OwnedView`, whose
-    `interaction_check` is this same test (#589, 2026-09-11). It stays only
-    because `_add_pagination_row` is written to be bolted onto any view; the
-    pagination consolidation on #589 retires both. (#375 dedupe before that:
-    previously copy-pasted verbatim across four View classes plus a dozen
-    inline call sites.)
-
-    Distinct from `storm_permissions.is_leader_or_admin` (the
-    leader/admin role gate that decides who can OPEN an officer view at
-    all) — this answers a narrower question: "is this the person who
-    opened THIS ephemeral session", so a second officer can't hijack
-    someone else's in-flight picker/confirm view. Sends `DENY_NOT_OWNER`
-    and returns False on mismatch; callers must return immediately when
-    this comes back False.
-    """
-    if inter.user.id != owner_user_id:
-        await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-        return False
-    return True
-
-
-def _add_pagination_row(
-    view: discord.ui.View,
-    *,
-    row: int,
-    owner_user_id: int,
-    next_label: str = "Next ▶",
-) -> None:
-    """Attach the shared `◀ Prev` / `Page N / M` / next-button pagination
-    triple to `view` (#375 dedupe — previously copy-pasted across
-    `_OnBehalfVoteView`, `_TeamPlanRosterPickerView`, and
-    `_TeamPlanSubPickerView`).
-
-    `view` must expose `page` (int), `page_count` (property), and a
-    `_build_components()` re-render method — every picker view already
-    does. Only `row` and `next_label` vary between call sites; the
-    clamp/rebuild/edit-message/HTTPException-swallow behavior is
-    identical everywhere, so it lives here once. No-op when
-    `view.page_count <= 1`, matching every prior copy's behavior.
-    """
-    if view.page_count <= 1:
-        return
-
-    prev_btn = discord.ui.Button(
-        label="◀ Prev",
-        style=discord.ButtonStyle.secondary,
-        disabled=(view.page == 0),
-        row=row,
-    )
-
-    async def _on_prev(inter: discord.Interaction):
-        if not await _guard_owner(inter, owner_user_id):
-            return
-        if view.page > 0:
-            view.page -= 1
-            view._build_components()
-            try:
-                await inter.response.edit_message(view=view)
-            except discord.HTTPException:
-                pass
-        else:
-            await inter.response.defer()
-
-    prev_btn.callback = _on_prev
-    view.add_item(prev_btn)
-
-    page_label = discord.ui.Button(
-        label=f"Page {view.page + 1} / {view.page_count}",
-        style=discord.ButtonStyle.secondary,
-        disabled=True,
-        row=row,
-    )
-    view.add_item(page_label)
-
-    next_btn = discord.ui.Button(
-        label=next_label,
-        style=discord.ButtonStyle.secondary,
-        disabled=(view.page >= view.page_count - 1),
-        row=row,
-    )
-
-    async def _on_next(inter: discord.Interaction):
-        if not await _guard_owner(inter, owner_user_id):
-            return
-        if view.page < view.page_count - 1:
-            view.page += 1
-            view._build_components()
-            try:
-                await inter.response.edit_message(view=view)
-            except discord.HTTPException:
-                pass
-        else:
-            await inter.response.defer()
-
-    next_btn.callback = _on_next
-    view.add_item(next_btn)
-
-
 class _OnBehalfVoteView(OwnedView):
     """Ephemeral on-behalf vote picker (#168, multi-select in #218).
 
@@ -978,6 +877,14 @@ class _OnBehalfVoteView(OwnedView):
             return 1
         return (len(self.members) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
 
+    async def _on_page(self, inter: discord.Interaction, page: int) -> None:
+        self.page = page
+        self._build_components()
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+
     def _members_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
         return self.members[start : start + _ON_BEHALF_PAGE_SIZE]
@@ -1075,11 +982,8 @@ class _OnBehalfVoteView(OwnedView):
 
         # Paging row — only rendered when the roster is bigger than the
         # 25-option Select cap.
-        _add_pagination_row(
-            self,
-            row=2,
-            owner_user_id=self.parent_view.owner_id,
-            next_label="Next ▶",
+        self.add_pagination_row(
+            page=self.page, page_count=self.page_count, on_page=self._on_page, row=2
         )
 
         submit_label = "✅ Submit"
@@ -1313,6 +1217,14 @@ class _TeamPlanRosterPickerView(OwnedView):
             return 1
         return (len(self.candidates) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
 
+    async def _on_page(self, inter: discord.Interaction, page: int) -> None:
+        self.page = page
+        self._build_components()
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+
     def _candidates_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
         return self.candidates[start : start + _ON_BEHALF_PAGE_SIZE]
@@ -1370,10 +1282,11 @@ class _TeamPlanRosterPickerView(OwnedView):
             select.callback = _on_pick
             self.add_item(select)
 
-        _add_pagination_row(
-            self,
+        self.add_pagination_row(
+            page=self.page,
+            page_count=self.page_count,
+            on_page=self._on_page,
             row=1,
-            owner_user_id=self.parent_view.owner_id,
             next_label="Page ▶",
         )
 
@@ -1505,6 +1418,14 @@ class _TeamPlanSubPickerView(OwnedView):
             return 1
         return (len(self.chosen) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
 
+    async def _on_page(self, inter: discord.Interaction, page: int) -> None:
+        self.page = page
+        self._build_components()
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+
     def _chosen_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
         return self.chosen[start : start + _ON_BEHALF_PAGE_SIZE]
@@ -1558,10 +1479,11 @@ class _TeamPlanSubPickerView(OwnedView):
             select.callback = _on_pick
             self.add_item(select)
 
-        _add_pagination_row(
-            self,
+        self.add_pagination_row(
+            page=self.page,
+            page_count=self.page_count,
+            on_page=self._on_page,
             row=1,
-            owner_user_id=self.parent_view.owner_id,
             next_label="Page ▶",
         )
 

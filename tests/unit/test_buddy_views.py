@@ -328,10 +328,13 @@ def test_picker_paginates_beyond_25_and_all_options_reachable():
     opts = _opts(60)
     view = buddy_ui._PickerView(opts, owner_id=1, on_pick=AsyncMock())
     assert view._total_pages() == 3  # 25 + 25 + 10
-    # Page 1: 25 options, ◀ disabled / ▶ enabled.
+    # Page 1: 25 options, Prev disabled / Next enabled, the count between them.
     assert [o.value for o in _select(view).options] == [str(i) for i in range(25)]
-    prev_btn, next_btn = _buttons(view)
+    prev_btn, page_btn, next_btn = _buttons(view)
     assert prev_btn.disabled and not next_btn.disabled
+    assert page_btn.label == "Page 1 / 3"
+    # The row carries the count; the select's placeholder stays bare (#589).
+    assert "page" not in _select(view).placeholder.lower()
     # Every option shows up across the three pages with no gaps or dupes.
     seen = list(_select(view).options)
     view.page = 1
@@ -341,19 +344,22 @@ def test_picker_paginates_beyond_25_and_all_options_reachable():
     view._sync()
     seen += list(_select(view).options)
     assert [o.value for o in seen] == [str(i) for i in range(60)]
-    # Last page: ▶ disabled, ◀ enabled.
-    prev_btn, next_btn = _buttons(view)
+    # Last page: Next disabled, Prev enabled; the count sits between them.
+    prev_btn, page_btn, next_btn = _buttons(view)
     assert next_btn.disabled and not prev_btn.disabled
+    assert page_btn.label == "Page 3 / 3" and page_btn.disabled
 
 
 @pytest.mark.asyncio
 async def test_picker_next_prev_buttons_swap_pages():
     view = buddy_ui._PickerView(_opts(60), owner_id=1, on_pick=AsyncMock())
     inter = make_mock_interaction(user_id=1)
-    await view._on_next(inter)
+    prev_btn, _, next_btn = _buttons(view)
+    await next_btn.callback(inter)
     assert view.page == 1
     inter.response.edit_message.assert_awaited()
-    await view._on_prev(inter)
+    prev_btn, _, next_btn = _buttons(view)
+    await prev_btn.callback(inter)
     assert view.page == 0
 
 

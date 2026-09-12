@@ -509,8 +509,6 @@ class _RulesListView(OwnedView):
             description="\n".join(lines) or "*empty*",
             color=discord.Color.blurple(),
         )
-        if self.total_pages > 1:
-            embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages}")
         return embed
 
     def _build_buttons(self):
@@ -550,34 +548,14 @@ class _RulesListView(OwnedView):
         add_btn.callback = _on_add
         self.add_item(add_btn)
 
-        if self.total_pages > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=self.page == 0,
-                row=4,
-            )
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=self.page >= self.total_pages - 1,
-                row=4,
-            )
+        async def _on_page(inter: discord.Interaction, page: int):
+            self.page = page
+            self._build_buttons()
+            await inter.response.edit_message(embed=self.render_embed(), view=self)
 
-            async def _prev(inter: discord.Interaction):
-                self.page = max(0, self.page - 1)
-                self._build_buttons()
-                await inter.response.edit_message(embed=self.render_embed(), view=self)
-
-            async def _next(inter: discord.Interaction):
-                self.page = min(self.total_pages - 1, self.page + 1)
-                self._build_buttons()
-                await inter.response.edit_message(embed=self.render_embed(), view=self)
-
-            prev_btn.callback = _prev
-            next_btn.callback = _next
-            self.add_item(prev_btn)
-            self.add_item(next_btn)
+        self.add_pagination_row(
+            page=self.page, page_count=self.total_pages, on_page=_on_page, row=4
+        )
 
 
 class _AddRuleTypePickerView(OwnedView):

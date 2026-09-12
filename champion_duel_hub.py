@@ -7788,11 +7788,9 @@ class _ReadsView(OwnedView):
         self.clear_items()
         row = 0
         if len(self.roster) > 1:
-            # Bare, and the labels are `storm_log.py`'s to the character --
-            # the same pager `_AllianceView` and `_GroupView` already use.
-            self._pager("◀ Prev", row, self._on_prev, self.index == 0)
-            self._pager(f"Page {self.index + 1} / {len(self.roster)}", row, None, True)
-            self._pager("Next ▶", row, self._on_next, self.index >= len(self.roster) - 1)
+            self.add_pagination_row(
+                page=self.index, page_count=len(self.roster), on_page=self._turn, row=row
+            )
             row += 1
             jump = discord.ui.Button(
                 label=CD_BTN_FIND[:80], style=discord.ButtonStyle.secondary, row=row
@@ -7808,14 +7806,6 @@ class _ReadsView(OwnedView):
         share.callback = self._on_share
         self.add_item(share)
 
-    def _pager(self, label, row, cb, disabled):
-        button = discord.ui.Button(
-            label=label[:80], style=discord.ButtonStyle.secondary, row=row, disabled=disabled
-        )
-        if cb:
-            button.callback = cb
-        self.add_item(button)
-
     async def _turn(self, inter: discord.Interaction, index: int):
         await inter.response.defer()
         self.index = index
@@ -7823,12 +7813,6 @@ class _ReadsView(OwnedView):
         embed = await asyncio.to_thread(self._embed)
         self._build()
         await inter.edit_original_response(embed=embed, view=self)
-
-    async def _on_prev(self, inter: discord.Interaction):
-        await self._turn(inter, self.index - 1)
-
-    async def _on_next(self, inter: discord.Interaction):
-        await self._turn(inter, self.index + 1)
 
     async def _on_jump(self, inter: discord.Interaction):
         await inter.response.send_modal(_ReadsJumpModal(view=self))
@@ -7966,12 +7950,9 @@ class _AllianceView(OwnedView):
             row += 1
 
         if pages > 1:
-            # Bare, and the labels are `storm_log.py`'s to the character. This
-            # is the bot's pagination and a second wording of it would be a
-            # second thing to learn (`notes/DESIGN.md`, emoji rule 7).
-            self._pager("◀ Prev", row, self._on_prev, self.page == 0)
-            self._pager(f"Page {self.page + 1} / {pages}", row, None, True)
-            self._pager("Next ▶", row, self._on_next, self.page >= pages - 1)
+            self.add_pagination_row(
+                page=self.page, page_count=pages, on_page=self._on_page, row=row
+            )
             row += 1
 
         # Present only where there is somebody to read for. The round-robin
@@ -8050,14 +8031,6 @@ class _AllianceView(OwnedView):
         select.callback = self._on_stage
         return select
 
-    def _pager(self, label, row, cb, disabled):
-        button = discord.ui.Button(
-            label=label[:80], style=discord.ButtonStyle.secondary, row=row, disabled=disabled
-        )
-        if cb:
-            button.callback = cb
-        self.add_item(button)
-
     async def _turn(self, inter: discord.Interaction, *, page: int, stage: str | None = None):
         await inter.response.defer()
         self.state = await asyncio.to_thread(
@@ -8078,11 +8051,8 @@ class _AllianceView(OwnedView):
             view=self,
         )
 
-    async def _on_prev(self, inter: discord.Interaction):
-        await self._turn(inter, page=self.page - 1)
-
-    async def _on_next(self, inter: discord.Interaction):
-        await self._turn(inter, page=self.page + 1)
+    async def _on_page(self, inter: discord.Interaction, page: int):
+        await self._turn(inter, page=page)
 
     async def _on_stage(self, inter: discord.Interaction):
         # Back to page one with the round, the same rule `_GroupView._on_stage`
@@ -8418,12 +8388,9 @@ class _GroupView(OwnedView):
         # fall off the end when the filter changes under it.
         self.page = max(0, min(self.page, pages - 1))
         if pages > 1:
-            # Bare, and the labels are `storm_log.py`'s to the character. This
-            # is the bot's pagination and a second wording of it would be a
-            # second thing to learn (`notes/DESIGN.md`, emoji rule 7).
-            self._pager("◀ Prev", row, self._on_prev, self.page == 0)
-            self._pager(f"Page {self.page + 1} / {pages}", row, None, True)
-            self._pager("Next ▶", row, self._on_next, self.page >= pages - 1)
+            self.add_pagination_row(
+                page=self.page, page_count=pages, on_page=self._on_page, row=row
+            )
 
         # Wherever there is a model. The qualifiers and the semi-finals are
         # separate models with separate constants and the engine is explicit
@@ -8547,17 +8514,6 @@ class _GroupView(OwnedView):
         select.callback = callback
         return select
 
-    def _pager(self, label, row, callback, disabled):
-        button = discord.ui.Button(
-            label=label,
-            style=discord.ButtonStyle.secondary,
-            row=row,
-            disabled=disabled,
-        )
-        if callback is not None:
-            button.callback = callback
-        self.add_item(button)
-
     # ── moving between groups ────────────────────────────────────────────────
 
     def _embed(self) -> discord.Embed:
@@ -8641,14 +8597,9 @@ class _GroupView(OwnedView):
         self.page = 0
         await self._rerender(inter)
 
-    async def _on_prev(self, inter: discord.Interaction):
+    async def _on_page(self, inter: discord.Interaction, page: int):
         await inter.response.defer()
-        self.page -= 1
-        await self._rerender(inter)
-
-    async def _on_next(self, inter: discord.Interaction):
-        await inter.response.defer()
-        self.page += 1
+        self.page = page
         await self._rerender(inter)
 
     async def _on_record(self, inter: discord.Interaction):
@@ -10098,12 +10049,9 @@ class _PicksView(OwnedView):
             )
             row += 1
         if pages > 1:
-            # `storm_log.py`'s labels to the character. This is the bot's
-            # pagination and a second wording of it would be a second thing to
-            # learn (`notes/DESIGN.md`, emoji rule 7).
-            self._pager("◀ Prev", row, self._on_prev, self.pages[step] == 0)
-            self._pager(f"Page {self.pages[step] + 1} / {pages}", row, None, True)
-            self._pager("Next ▶", row, self._on_next, self.pages[step] >= pages - 1)
+            self.add_pagination_row(
+                page=self.pages[step], page_count=pages, on_page=self._on_page, row=row
+            )
             row += 1
         self.add_button(
             CD_BTN_PICKS_SAVE,
@@ -10317,17 +10265,6 @@ class _PicksView(OwnedView):
         select = discord.ui.Select(placeholder=placeholder[:150], options=options, row=row)
         select.callback = callback
         return select
-
-    def _pager(self, label, row, callback, disabled):
-        button = discord.ui.Button(
-            label=label,
-            style=discord.ButtonStyle.secondary,
-            row=row,
-            disabled=disabled,
-        )
-        if callback is not None:
-            button.callback = callback
-        self.add_item(button)
 
     # ── rendering ────────────────────────────────────────────────────────────
 
@@ -10571,14 +10508,9 @@ class _PicksView(OwnedView):
         self.p2 = int(inter.data["values"][0])
         await self._rerender(inter)
 
-    async def _on_prev(self, inter: discord.Interaction):
+    async def _on_page(self, inter: discord.Interaction, page: int):
         await inter.response.defer()
-        self.pages[self._step()] -= 1
-        await self._rerender(inter)
-
-    async def _on_next(self, inter: discord.Interaction):
-        await inter.response.defer()
-        self.pages[self._step()] += 1
+        self.pages[self._step()] = page
         await self._rerender(inter)
 
     async def _on_restart(self, inter: discord.Interaction):

@@ -10,6 +10,7 @@ import datetime as _dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import storm_officer_view as sov
+from messages import DENY_NOT_OWNER
 
 from tests.unit.test_config import TEST_GUILD_ID
 
@@ -2127,4 +2128,4 @@ class TestClearVotes:
         inter.user.id = 2  # not the owner
         assert await view.interaction_check(inter) is False
         msg = inter.response.send_message.await_args.args[0]
-        assert msg == sov.DENY_NOT_OWNER
+        assert msg == DENY_NOT_OWNER

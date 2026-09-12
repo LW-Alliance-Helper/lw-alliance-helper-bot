@@ -2047,7 +2047,7 @@ async def test_prev_and_next_move_one_member_at_a_time(cd_db):
     view = _reads_view(cd_db)
     inter = _reads_interaction()
 
-    await view._on_next(inter)
+    await view._turn(inter, view.index + 1)
 
     assert view.index == 1
     embed = inter.edit_original_response.call_args.kwargs["embed"]
@@ -2057,7 +2057,7 @@ async def test_prev_and_next_move_one_member_at_a_time(cd_db):
     assert not labels["Next ▶"].disabled, "Plover is still ahead"
     assert "Page 2 / 3" in labels
 
-    await view._on_next(inter)
+    await view._turn(inter, view.index + 1)
     labels = {getattr(i, "label", None): i for i in view.children}
     assert labels["Next ▶"].disabled, "Plover is the last page"
 
@@ -2072,7 +2072,7 @@ async def test_a_page_turn_re_enables_the_share_button(cd_db):
     await view._on_share(inter)
     assert next(i for i in view.children if i.label == hub.CD_BTN_SHARE_READS).disabled
 
-    await view._on_next(inter)
+    await view._turn(inter, view.index + 1)
     assert not next(i for i in view.children if i.label == hub.CD_BTN_SHARE_READS).disabled
 
 
@@ -2081,7 +2081,7 @@ async def test_sharing_posts_only_the_page_on_screen(cd_db):
     displayed, not the whole team the old bulk post sent."""
     view = _reads_view(cd_db)
     inter = _reads_interaction()
-    await view._on_next(inter)  # Merlin
+    await view._turn(inter, view.index + 1)  # Merlin
 
     await view._on_share(inter)
 

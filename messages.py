@@ -55,6 +55,10 @@ HUB_TIMEOUT = "⏰ Timed out. Run `/{cmd}` and click **{hub_btn}** to start agai
 # it said "re-initiate" until 2026-09-11 (#589, sign-off block 12).
 VIEW_TIMEOUT = "⏰ The actions for this have timed out. Use {hint} to start again."
 VIEW_TIMEOUT_NO_HINT = "⏰ The actions for this have timed out."
+# The {hint} for a view reached through a hub button: the command in
+# backticks, the arrow, the button in bold. `storm_event_hub.HUB_COMMAND`
+# already carries the slash.
+ROUTE_HINT = "`{cmd}` → **{btn}**"
 
 # The roster builder's own timeout. Unlike HUB_TIMEOUT it says what was lost:
 # an idle hour ends a builder session and nothing in it persists. {cmd} is

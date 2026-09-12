@@ -197,7 +197,8 @@ PREMIUM_FEATURES: set[str] = {
     # premium feature").
     #
     # What is being sold is a model output over a corpus the alliance did not
-    # type: which line-up an opponent repeats, and what to set against it. The
+    # enter themselves: which line-up an opponent repeats, and what to set
+    # against it. The
     # habit half is scouting other alliances contributed; the recommendation
     # half is the engine run over every deployment either side could field.
     # Neither is the asking alliance's own work, which is exactly the line the

@@ -22,7 +22,8 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
+from messages import DATE_PARSE_REJECT
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -460,7 +461,7 @@ def render_history_list_embed(
 # ── Officer view ─────────────────────────────────────────────────────────────
 
 
-class _RosterImageLinksView(discord.ui.View):
+class _RosterImageLinksView(OwnedView):
     """`[🖼️ View Team A image]` / `[🖼️ View Team B image]` (or just
     `[🖼️ View image]` for CS / single-team DS) buttons attached below
     the event-detail embed. Each click fetches the saved message at
@@ -502,15 +503,6 @@ class _RosterImageLinksView(discord.ui.View):
             )
             btn.callback = self._make_callback(ref)
             self.add_item(btn)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     def _make_callback(self, ref: dict):
         async def _cb(inter: discord.Interaction):
@@ -624,12 +616,6 @@ class _HistoryListView(discord.ui.View):
 
     def _make_callback(self, date_str: str):
         async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             # Send the event-detail embed as an ephemeral followup but
             # KEEP the date buttons active so the officer can hop between
             # dates. The prior implementation disabled every button on

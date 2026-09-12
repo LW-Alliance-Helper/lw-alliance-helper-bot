@@ -26,13 +26,13 @@ from typing import Optional
 import discord
 
 import buddy
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
 BUDDY_LIST_TITLE = "🤝 Profession Buddy List"
 BUDDY_CMD = "/buddy"
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this can use these buttons."
 
 # Persistent profession button codes.
 _CODE_WL = "wl"
@@ -923,7 +923,7 @@ def register_persistent_buddy_views(bot) -> int:
 # ── manual editor (leadership) ────────────────────────────────────────────────
 
 
-class _PickerView(discord.ui.View):
+class _PickerView(OwnedView):
     """Generic single-select picker → callback(interaction, value).
 
     Discord caps a Select at 25 options, so when there are more the view
@@ -970,12 +970,6 @@ class _PickerView(discord.ui.View):
         btn.callback = cb
         self.add_item(btn)
 
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     async def _on_prev(self, inter: discord.Interaction):
         self.page -= 1
         self._sync()
@@ -1007,8 +1001,10 @@ def _member_value(m) -> str:
     return (m.discord_id or "").strip() or m.name
 
 
-class BuddyManageView(discord.ui.View):
+class BuddyManageView(OwnedView):
     """Owner-locked manual pairing editor: Unpair / Pair / Re-pair / Refresh."""
+
+    timeout_hint = BUDDY_CMD
 
     def __init__(self, bot, guild_id: int, owner_id: int, session=None):
         super().__init__(timeout=300)
@@ -1019,26 +1015,10 @@ class BuddyManageView(discord.ui.View):
         # (#289 F-03). None when the editor is opened without one.
         self.session = session
         self.message: Optional[discord.Message] = None
-        self._add("🔗 Unpair", discord.ButtonStyle.danger, self._unpair)
-        self._add("➕ Pair", discord.ButtonStyle.success, self._pair)
-        self._add("🔁 Re-pair", discord.ButtonStyle.primary, self._repair)
-        self._add("🔄 Refresh", discord.ButtonStyle.secondary, self._rerender)
-
-    def _add(self, label, style, cb):
-        btn = discord.ui.Button(label=label, style=style)
-        btn.callback = cb
-        self.add_item(btn)
-
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self):
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=BUDDY_CMD)
+        self.add_button("🔗 Unpair", discord.ButtonStyle.danger, self._unpair)
+        self.add_button("➕ Pair", discord.ButtonStyle.success, self._pair)
+        self.add_button("🔁 Re-pair", discord.ButtonStyle.primary, self._repair)
+        self.add_button("🔄 Refresh", discord.ButtonStyle.secondary, self._rerender)
 
     def _cfg(self):
         import config

@@ -27,7 +27,7 @@ The `ast-grep/` folder holds the rule files the scripts and the skills use:
 |---|---|
 | `blocking-in-async.yml` | Direct sqlite and gspread calls whose nearest enclosing def is `async def` and which are not handed to a thread |
 | `sync-db-fns.yml` | Every sync function that opens a connection or a spreadsheet; `blocking_io.py` turns the list into the indirect rule |
-| `view-handlers.yml` | Every owner guard, timeout handler and storm-style guard, for the shared-base-view work on #589 and its verification |
+| `view-handlers.yml` | Every owner guard, timeout handler, storm-style guard and inline per-callback owner check. The shared base views landed 2026-09-11 (#589); the rule is now the regression check, and its preserved set (the two non-owner `interaction_check` methods, the 23 silent timeouts, the pagination row's `_guard_owner`, the walkthrough's five inline checks) is recorded on the issue |
 
 Run a rule file directly with:
 

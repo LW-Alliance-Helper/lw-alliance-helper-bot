@@ -31,6 +31,7 @@ import logging
 from typing import Optional
 
 import discord
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,6 @@ SURVEY_HUB_BTN_REMOVE = "🗑️ Remove Survey"
 SURVEY_HUB_BTN_POST = "📮 Post Survey"
 SURVEY_HUB_BTN_REMIND = "🔔 Reminders"
 SURVEY_HUB_BTN_TRANSLATE = "🌐 Survey Translation"
-
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
 
 # ── Embed ─────────────────────────────────────────────────────────────────────
@@ -120,8 +119,10 @@ def _build_survey_hub_embed(
 # ── View ──────────────────────────────────────────────────────────────────────
 
 
-class _SurveyHubView(discord.ui.View):
+class _SurveyHubView(OwnedView):
     """Hub button grid. Config actions on row 0, operational ones on row 1."""
+
+    timeout_hint = SURVEY_HUB_CMD
 
     def __init__(
         self,
@@ -136,71 +137,57 @@ class _SurveyHubView(discord.ui.View):
         super().__init__(timeout=900)
         self.bot = bot
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.is_premium = is_premium
         self.has_extras = has_extras
         self.has_default = has_default
         self.message: Optional[discord.Message] = None
         self._build_buttons()
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=SURVEY_HUB_CMD)
-
-    def _add(self, label, style, row, cb, *, disabled=False):
-        btn = discord.ui.Button(label=label[:80], style=style, row=row, disabled=disabled)
-        btn.callback = cb
-        self.add_item(btn)
-
     def _build_buttons(self):
         # Row 0 — configuration. Add and Remove touch extra surveys, which
         # are Premium; editing the default survey never is.
         add_label = SURVEY_HUB_BTN_ADD if self.is_premium else f"💎 {SURVEY_HUB_BTN_ADD}"
-        self._add(
+        self.add_button(
             add_label,
             discord.ButtonStyle.success,
-            0,
             self._on_add,
+            row=0,
             disabled=not self.is_premium,
         )
 
         edit_label = SURVEY_HUB_BTN_EDIT if self.has_default else SURVEY_HUB_BTN_SETUP
-        self._add(edit_label, discord.ButtonStyle.primary, 0, self._on_edit)
+        self.add_button(edit_label, discord.ButtonStyle.primary, self._on_edit, row=0)
 
         # Remove only ever targets extras, so it stays off with none to remove.
         remove_label = SURVEY_HUB_BTN_REMOVE if self.is_premium else f"💎 {SURVEY_HUB_BTN_REMOVE}"
-        self._add(
+        self.add_button(
             remove_label,
             discord.ButtonStyle.danger,
-            0,
             self._on_remove,
+            row=0,
             disabled=not (self.is_premium and self.has_extras),
         )
 
         # Row 1 — running the survey. All free; the DM destination inside
         # Reminders does its own Premium check.
-        self._add(
+        self.add_button(
             SURVEY_HUB_BTN_POST,
             discord.ButtonStyle.secondary,
-            1,
             self._on_post,
+            row=1,
             disabled=not self.has_default,
         )
-        self._add(
+        self.add_button(
             SURVEY_HUB_BTN_REMIND,
             discord.ButtonStyle.secondary,
-            1,
             self._on_remind,
+            row=1,
             disabled=not self.has_default,
         )
-        self._add(SURVEY_HUB_BTN_TRANSLATE, discord.ButtonStyle.secondary, 1, self._on_translate)
+        self.add_button(
+            SURVEY_HUB_BTN_TRANSLATE, discord.ButtonStyle.secondary, self._on_translate, row=1
+        )
 
     async def _close(self, inter: discord.Interaction):
         """Disable the grid before dispatching, so a slow wizard can't be

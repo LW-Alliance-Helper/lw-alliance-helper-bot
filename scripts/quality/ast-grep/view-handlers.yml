@@ -21,3 +21,20 @@ language: python
 rule:
   kind: function_definition
   has: { field: name, regex: "^_guard_owner$" }
+---
+# The third shape the 2026-09-11 fold found: an inline owner check at the top
+# of a component callback, which the view's inherited `interaction_check`
+# already covers. `!=` only: the `==`-then-return-True form lives in the two
+# preserved `interaction_check` methods and nowhere else.
+id: inline-owner-check
+language: python
+rule:
+  kind: if_statement
+  has:
+    field: condition
+    pattern: $I.user.id != $OWNER
+  not:
+    inside:
+      kind: function_definition
+      has: { field: name, regex: "^(interaction_check|_guard_owner)$" }
+      stopBy: end

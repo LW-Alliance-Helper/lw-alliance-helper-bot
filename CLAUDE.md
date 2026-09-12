@@ -273,7 +273,7 @@ reasoning. Verifying their contents is
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
-| `wizard_registry.py` | `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~200 |
+| `wizard_registry.py` | The two view base classes every hub, picker and confirm inherits (`OwnedView`, `ExpiringView`; see § Patterns to reuse), plus `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~280 |
 | `defaults.py` | Hardcoded copy: themes/tones, default mail templates, default DM bodies. | ~100 |
 | `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
 | `dm.py` | DM helpers. | ~80 |
@@ -296,15 +296,30 @@ These are deliberate and tested. Don't refactor away:
 used the second time, and gets a line here.** The Champion Duel feature
 copied its siblings instead of reusing them because the helpers it needed
 were private to whichever module wrote them first, and nothing here named
-them. Four such helpers are queued for promotion on
+them. Three of the four helpers that found are now the shared base views
+(below, 2026-09-11); the fourth, the Prev / Page / Next row, is still
+`storm_officer_view._add_pagination_row` until its item on
 [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)
-(the owner-only `interaction_check`, the `on_timeout` cleanup, the
-Prev / Page / Next row, the add-a-button helper). Until that lands, the
-canonical forms are: the guard compares `inter.user.id` to the owner and
-answers with `messages.DENY_NOT_OWNER`; the timeout calls
-`wizard_registry.expire_view_message`; pagination is
-`storm_officer_view._add_pagination_row`. Do not write a fifth copy of any
-of them.
+lands. Do not write a copy of any of them.
+
+### Every view inherits a base view, never `discord.ui.View` directly
+- `wizard_registry.OwnedView` for anything one person opened (a hub, a
+  picker, a confirm, an editor): set `self.owner_id` in `__init__`, or
+  define `owner_id` as a property when the owner lives on a parent view
+  or a builder session. Its `interaction_check` refuses everyone else
+  with `messages.DENY_NOT_OWNER`, so callbacks carry no guard of their
+  own. A view that never sets an owner refuses everyone (fail closed).
+- `wizard_registry.ExpiringView` for a view anyone present may use (the
+  scheduler's editor and approval, the train reminder, the outage
+  digest). `OwnedView` extends it, so both get the timeout cleanup and
+  `add_button(label, style, callback, *, row=None, disabled=False)`.
+- The fold that made this the rule (2026-09-11,
+  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589))
+  replaced 75 pasted `interaction_check` methods, 56 `on_timeout`
+  copies, 13 `_guard_owner` methods with their call lines, 27 inline
+  per-callback checks and 12 add-a-button helpers. The check that finds
+  a new copy is `scripts/quality/ast-grep/view-handlers.yml`; its
+  preserved set is on the issue.
 
 ### Wizard "Use default vs Keep current vs Define my own"
 - `setup_cog.ask_keep_or_change(default=, current=, ...)` — pass the
@@ -320,17 +335,25 @@ of them.
   timeout fired and posted a misleading "⏰ Timed out" message.
 
 ### Auto-posted approval/review views must clean up on timeout
-- Any background task that posts a `discord.ui.View` to a channel
-  (daily event editor, the approval review that follows, the train
-  reminder, etc.) must capture the sent message
-  (`view.message = await ch.send(...)`) and override `on_timeout` to
-  call `wizard_registry.expire_view_message(self.message,
-  command_hint="/X")`.
+- Any background task that posts a view to a channel (daily event
+  editor, the approval review that follows, the train reminder, etc.)
+  must capture the sent message (`view.message = await ch.send(...)`)
+  and declare the route back as `timeout_hint` (a class attribute, or a
+  property when it depends on the event type: the slash command in
+  backticks, plus the hub button in bold where the command alone would
+  not get them there). The base view's `on_timeout` then calls
+  `wizard_registry.expire_view_message`, which strips the buttons and
+  appends `messages.VIEW_TIMEOUT`.
 - Without this, expired views render apparently-active buttons that
   fail with "Interaction failed" on click — there's no signal that
   the draft has gone stale. Canonical callsites:
   `scheduler.EventEditorView`, `scheduler.ApprovalView`,
   `train.ReminderView`.
+- A view that leaves `timeout_hint` unset does nothing on timeout.
+  About twenty short-lived officer pickers do that today; whether they
+  should is an open item on
+  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589),
+  not a per-view choice.
 
 ### DM body templates (configurable per alliance)
 - Schema column stores user template; empty string = "use hardcoded

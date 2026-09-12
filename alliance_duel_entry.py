@@ -35,7 +35,7 @@ import alliance_duel_setup as ad_setup
 import config
 import config_health
 import messages
-from wizard_registry import expire_view_message
+from wizard_registry import OwnedView, expire_view_message
 
 logger = logging.getLogger(__name__)
 
@@ -596,7 +596,7 @@ class KnownModal(discord.ui.Modal, title="What do you know about them?"):
         )
 
 
-class ScoutActionsView(discord.ui.View):
+class ScoutActionsView(OwnedView):
     """The write actions that hang off a scout profile."""
 
     def __init__(self, state, alliance: ad.AllianceKey, owner_id: int):
@@ -628,12 +628,6 @@ class ScoutActionsView(discord.ui.View):
                 button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
                 button.callback = self._picker(outcome)
                 self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _known(self, interaction: discord.Interaction):
         await interaction.response.send_modal(KnownModal(self.state, self.alliance, self.week or 1))
@@ -896,28 +890,21 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
 VS_BTN_RETRY_NEW_LEAGUE = "✏️ Edit and try again"
 
 
-class _RetryNewLeagueView(discord.ui.View):
+class _RetryNewLeagueView(OwnedView):
     """Reopen the new-league modal with what was typed still in it."""
+
+    timeout_hint = "`/vs`"
 
     def __init__(self, state, user_id: int, defaults: dict):
         super().__init__(timeout=600)
         self.state = state
-        self.user_id = user_id
+        self.owner_id = user_id
         self.defaults = defaults
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=VS_BTN_RETRY_NEW_LEAGUE, style=discord.ButtonStyle.primary)
         button.callback = self._retry
         self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="`/vs`")
 
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(NewLeagueModal(self.state, defaults=self.defaults))
@@ -1212,13 +1199,15 @@ def ad_hub_btn_path() -> str:
     return alliance_duel_hub.VS_BTN_PATH
 
 
-class DeclarationView(discord.ui.View):
+class DeclarationView(OwnedView):
     """Push, save, or clear, plus an optional announcement to members.
 
     Neither call is styled as the recommended one. Whether to spend or bank a
     week is a strategy decision belonging entirely to the alliance, and a
     `primary` button on either would read as the bot having a view about it.
     """
+
+    timeout_hint = "/vs"
 
     def __init__(self, state, week: int, owner_id: int):
         super().__init__(timeout=ENTRY_TIMEOUT)
@@ -1265,17 +1254,6 @@ class DeclarationView(discord.ui.View):
             )
             announce.callback = self._announce
             self.add_item(announce)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-        await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-        return False
-
-    async def on_timeout(self) -> None:
-        import wizard_registry
-
-        await wizard_registry.expire_view_message(self.message, command_hint="/vs")
 
     def _make_declare(self, intent: str):
         async def _callback(interaction: discord.Interaction):
@@ -1629,7 +1607,7 @@ def prediction_options(state, week: int, staged: dict, guild=None) -> list[disco
     return options
 
 
-class PredictionsView(discord.ui.View):
+class PredictionsView(OwnedView):
     """Screen 2: predict the rest of the league's week, several at a time.
 
     **Nothing is written until Save.** Choices stage in memory and re-render
@@ -1638,6 +1616,8 @@ class PredictionsView(discord.ui.View):
     without saving has to be an offered move, not a thing you do by ignoring
     the screen.
     """
+
+    timeout_hint = "`/vs`"
 
     def __init__(self, state, week: int, owner_id: int, guild=None):
         super().__init__(timeout=ENTRY_TIMEOUT)
@@ -1678,15 +1658,6 @@ class PredictionsView(discord.ui.View):
         )
         cancel.callback = self._cancel
         self.add_item(cancel)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="`/vs`")
 
     def _apply(self, values: list[str]) -> ad.Match | None:
         """Stage one round of choices, or name the match that contradicts.
@@ -1976,13 +1947,15 @@ def day_options(state, week: int) -> list[discord.SelectOption]:
     return options
 
 
-class DayPickerView(discord.ui.View):
+class DayPickerView(OwnedView):
     """Pick which day to enter, then hand off to the modal that already exists.
 
     A separate step rather than six buttons: the modal is the same one the hub
     opens for today, and the only thing missing from it was a way to say
     *which* day when today is not the one you are catching up on.
     """
+
+    timeout_hint = "`/vs`"
 
     def __init__(self, state, week: int, owner_id: int, view=None):
         super().__init__(timeout=ENTRY_TIMEOUT)
@@ -2000,15 +1973,6 @@ class DayPickerView(discord.ui.View):
         )
         select.callback = self._picked
         self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="`/vs`")
 
     async def _picked(self, interaction: discord.Interaction):
         day = int((interaction.data.get("values") or ["1"])[0])
@@ -2291,7 +2255,7 @@ class OtherResultsModal(discord.ui.Modal):
         )
 
 
-class _RetryResultsView(discord.ui.View):
+class _RetryResultsView(OwnedView):
     """Reopen the results box holding what was refused, not what the sheet has.
 
     A week is eight lines. Losing all of them because one said `8-4` would be
@@ -2299,11 +2263,13 @@ class _RetryResultsView(discord.ui.View):
     submit, so the way back in has to be a button.
     """
 
+    timeout_hint = "`/vs`"
+
     def __init__(self, state, week: int, user_id: int, typed: str, view=None):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
-        self.user_id = user_id
+        self.owner_id = user_id
         self.typed = typed
         self.view = view
         self.message: discord.Message | None = None
@@ -2311,15 +2277,6 @@ class _RetryResultsView(discord.ui.View):
         button = discord.ui.Button(label=VS_BTN_RETRY_RESULTS, style=discord.ButtonStyle.primary)
         button.callback = self._retry
         self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await expire_view_message(self.message, command_hint="`/vs`")
 
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(

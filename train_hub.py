@@ -25,6 +25,7 @@ import discord
 
 import train_rotation as tr
 import train_rotation_ui as ui
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,6 @@ TRAIN_HUB_BTN_LOG = "📜 Prompt log"
 TRAIN_HUB_BTN_BIRTHDAYS = "🎂 Run birthday check"
 # Always
 TRAIN_HUB_BTN_SETUP = "⚙️ Open setup"
-
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
 
 # ── Embed ─────────────────────────────────────────────────────────────────────
@@ -113,48 +112,47 @@ def _build_train_hub_embed(bot, guild_id: int) -> discord.Embed:
 # ── Hub view ──────────────────────────────────────────────────────────────────
 
 
-class _TrainHubView(discord.ui.View):
+class _TrainHubView(OwnedView):
     """Hub button grid, adapting to whether rotation is on."""
+
+    timeout_hint = TRAIN_HUB_CMD
 
     def __init__(self, bot, guild_id: int, owner_user_id: int, *, rotation_on: bool):
         super().__init__(timeout=900)
         self.bot = bot
         self.guild_id = guild_id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.rotation_on = rotation_on
         self.message: Optional[discord.Message] = None
         self._build_buttons()
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=TRAIN_HUB_CMD)
-
-    def _add(self, label, style, row, cb):
-        btn = discord.ui.Button(label=label[:80], style=style, row=row)
-        btn.callback = cb
-        self.add_item(btn)
-
     def _build_buttons(self):
         if self.rotation_on:
-            self._add(TRAIN_HUB_BTN_WEEK, discord.ButtonStyle.primary, 0, self._on_week)
-            self._add(TRAIN_HUB_BTN_LOGS, discord.ButtonStyle.secondary, 0, self._on_logs)
-            self._add(TRAIN_HUB_BTN_PRESETS, discord.ButtonStyle.success, 1, self._on_presets)
-            self._add(
-                TRAIN_HUB_BTN_MEMBER_RULES, discord.ButtonStyle.success, 1, self._on_member_rules
+            self.add_button(TRAIN_HUB_BTN_WEEK, discord.ButtonStyle.primary, self._on_week, row=0)
+            self.add_button(TRAIN_HUB_BTN_LOGS, discord.ButtonStyle.secondary, self._on_logs, row=0)
+            self.add_button(
+                TRAIN_HUB_BTN_PRESETS, discord.ButtonStyle.success, self._on_presets, row=1
             )
-            self._add(TRAIN_HUB_BTN_SETUP, discord.ButtonStyle.secondary, 2, self._on_setup)
+            self.add_button(
+                TRAIN_HUB_BTN_MEMBER_RULES,
+                discord.ButtonStyle.success,
+                self._on_member_rules,
+                row=1,
+            )
+            self.add_button(
+                TRAIN_HUB_BTN_SETUP, discord.ButtonStyle.secondary, self._on_setup, row=2
+            )
         else:
-            self._add(TRAIN_HUB_BTN_OVERVIEW, discord.ButtonStyle.primary, 0, self._on_overview)
-            self._add(TRAIN_HUB_BTN_LOG, discord.ButtonStyle.secondary, 0, self._on_log)
-            self._add(TRAIN_HUB_BTN_BIRTHDAYS, discord.ButtonStyle.secondary, 0, self._on_birthdays)
-            self._add(TRAIN_HUB_BTN_SETUP, discord.ButtonStyle.secondary, 1, self._on_setup)
+            self.add_button(
+                TRAIN_HUB_BTN_OVERVIEW, discord.ButtonStyle.primary, self._on_overview, row=0
+            )
+            self.add_button(TRAIN_HUB_BTN_LOG, discord.ButtonStyle.secondary, self._on_log, row=0)
+            self.add_button(
+                TRAIN_HUB_BTN_BIRTHDAYS, discord.ButtonStyle.secondary, self._on_birthdays, row=0
+            )
+            self.add_button(
+                TRAIN_HUB_BTN_SETUP, discord.ButtonStyle.secondary, self._on_setup, row=1
+            )
 
     # ── rotation callbacks ────────────────────────────────────────────────────
 
@@ -345,7 +343,7 @@ class _PresetNameModal(discord.ui.Modal, title="Create schedule preset"):
         await self._on_name(interaction, self.name.value.strip())
 
 
-class _PresetPickerView(discord.ui.View):
+class _PresetPickerView(OwnedView):
     """Dropdown of presets → callback with the chosen name. Used for edit /
     set-active / delete."""
 
@@ -363,19 +361,13 @@ class _PresetPickerView(discord.ui.View):
         self._sel = sel
         self.add_item(sel)
 
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     async def _cb(self, inter: discord.Interaction):
         self._sel.disabled = True
         await self._on_pick(inter, self._sel.values[0])
         self.stop()
 
 
-class PresetsManageView(discord.ui.View):
+class PresetsManageView(OwnedView):
     """Owner-locked preset management: list + Create / Edit / Set active / Delete."""
 
     def __init__(self, bot, guild_id: int, owner_id: int, day_rules_tab: str):
@@ -385,21 +377,10 @@ class PresetsManageView(discord.ui.View):
         self.owner_id = owner_id
         self.day_rules_tab = day_rules_tab
         self.message: Optional[discord.Message] = None
-        self._add("➕ Create", discord.ButtonStyle.success, self._create)
-        self._add("✏️ Edit", discord.ButtonStyle.primary, self._edit)
-        self._add("⭐ Set active", discord.ButtonStyle.secondary, self._set_active)
-        self._add("🗑️ Delete", discord.ButtonStyle.danger, self._delete)
-
-    def _add(self, label, style, cb):
-        btn = discord.ui.Button(label=label, style=style)
-        btn.callback = cb
-        self.add_item(btn)
-
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
+        self.add_button("➕ Create", discord.ButtonStyle.success, self._create)
+        self.add_button("✏️ Edit", discord.ButtonStyle.primary, self._edit)
+        self.add_button("⭐ Set active", discord.ButtonStyle.secondary, self._set_active)
+        self.add_button("🗑️ Delete", discord.ButtonStyle.danger, self._delete)
 
     def _active(self) -> str:
         from config import get_train_config
@@ -557,7 +538,7 @@ class _AddMemberRuleModal(discord.ui.Modal, title="Add a member rule"):
         await self._cb(interaction, self.member.value.strip(), self.skip_until.value.strip())
 
 
-class MemberRulesManageView(discord.ui.View):
+class MemberRulesManageView(OwnedView):
     """Owner-locked member-rule management: Add / Remove."""
 
     def __init__(self, bot, guild_id: int, owner_id: int, tab: str):
@@ -573,12 +554,6 @@ class MemberRulesManageView(discord.ui.View):
         rm_btn = discord.ui.Button(label="🗑️ Remove rule", style=discord.ButtonStyle.danger)
         rm_btn.callback = self._remove_rule
         self.add_item(rm_btn)
-
-    async def interaction_check(self, inter):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _refresh_message(self):
         if self.message:
@@ -644,8 +619,8 @@ class MemberRulesManageView(discord.ui.View):
             return
         opts = [discord.SelectOption(label=m[:100], value=m) for m in members[:25]]
         sel = discord.ui.Select(placeholder="Pick a member to clear…", options=opts)
-        picker = discord.ui.View(timeout=120)
-        owner = self.owner_id
+        picker = OwnedView(timeout=120)
+        picker.owner_id = self.owner_id
 
         async def _on_pick(i: discord.Interaction):
             name = sel.values[0]
@@ -656,14 +631,7 @@ class MemberRulesManageView(discord.ui.View):
             )
             await self._refresh_message()
 
-        async def _check(i):
-            if i.user.id != owner:
-                await i.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-                return False
-            return True
-
         sel.callback = _on_pick
-        picker.interaction_check = _check
         picker.add_item(sel)
         await inter.response.send_message("Pick a member to clear:", view=picker, ephemeral=True)
 

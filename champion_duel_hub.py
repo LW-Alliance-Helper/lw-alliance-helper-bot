@@ -69,6 +69,7 @@ from messages import (
     COMMUNITY_SERVER_URL,
     DATE_PARSE_REJECT,
 )
+from wizard_registry import ExpiringView, OwnedView
 
 CHAMPION_DUEL_HUB_TITLE = "👑 Champion Duel"
 CHAMPION_DUEL_HUB_CMD = "/champion_duel"
@@ -488,7 +489,6 @@ ORDERS = [
     ("Aircraft", "Missile", "Tank"),
 ]
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 _ENGINE_MISSING = (
     "⚠️ The Champion Duel engine isn't installed on this bot, so predictions and "
     "player look-ups are unavailable. If you're the bot operator, check that "
@@ -1683,7 +1683,7 @@ def prediction_caption(result: predict_lib.Prediction) -> str:
     )
 
 
-class SharePredictionView(discord.ui.View):
+class SharePredictionView(ExpiringView):
     """Lets the person who asked repost the card visibly to this channel.
 
     Follows `member_stats.SharePowerView`: the same 📤, the same "to this
@@ -1699,17 +1699,14 @@ class SharePredictionView(discord.ui.View):
     changes between being read and being shared is worse than the memory.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, png: bytes, caption: str, user_id: int):
         super().__init__(timeout=600)
         self.png = png
         self.caption = caption
         self.user_id = user_id
         self.message: discord.Message | None = None
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     @discord.ui.button(label=CD_BTN_SHARE, style=discord.ButtonStyle.secondary)
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2340,7 +2337,7 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         )
 
 
-class _IntelRetryView(discord.ui.View):
+class _IntelRetryView(OwnedView):
     """Reopen the head-to-head form with what was typed still in it.
 
     The message this rides on is ephemeral and so already private to the one
@@ -2349,6 +2346,8 @@ class _IntelRetryView(discord.ui.View):
     `_DisagreementView`, `_RetryGroupingView` -- and a single view that quietly
     opts out reads as a considered exemption to whoever finds it next.
     """
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(
         self,
@@ -2360,7 +2359,7 @@ class _IntelRetryView(discord.ui.View):
         your_server: str | None,
     ):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.opponent = opponent
         self.opponent_server = opponent_server
         self.you = you
@@ -2370,17 +2369,6 @@ class _IntelRetryView(discord.ui.View):
         button = discord.ui.Button(label=CD_BTN_INTEL_RETRY[:80], style=discord.ButtonStyle.primary)
         button.callback = self._on_retry
         self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def retire(self) -> None:
         """Grey the button out. A later submission has superseded this offer.
@@ -2644,7 +2632,7 @@ class _PlaceInGroupModal(discord.ui.Modal, title="Which group are they in?"):
         )
 
 
-class PlayerActionsView(discord.ui.View):
+class PlayerActionsView(OwnedView):
     """The write actions, attached to a player already on screen.
 
     Each flow used to open with "who?" — so contributing three squad values
@@ -2657,6 +2645,8 @@ class PlayerActionsView(discord.ui.View):
     would look like.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(
         self,
         *,
@@ -2668,7 +2658,7 @@ class PlayerActionsView(discord.ui.View):
     ):
         super().__init__(timeout=600)
         self.player = player
-        self.user_id = user_id
+        self.owner_id = user_id
         self.grouping = grouping
         self.message: discord.Message | None = None
 
@@ -2713,17 +2703,6 @@ class PlayerActionsView(discord.ui.View):
         # of "pick yourself out and we remember" -- and the claim is what gives
         # every other Champion Duel surface a "you" to open on.
         claim_lib.add_claim_button(self, player=player, claim_row=claim, user_id=user_id)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_guide(self, inter: discord.Interaction):
         """The annotated screens, beside the controls that ask for them.
@@ -2802,13 +2781,15 @@ async def send_player_card(
     view.message = await interaction.original_response()
 
 
-class _MissView(discord.ui.View):
+class _MissView(OwnedView):
     """The exit from a name we do not have, on the message that reported it.
 
     The name and server they just typed are carried into the modal as
     defaults, so someone who spelled it right and simply met a player we have
     never imported does not type it a second time.
     """
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(
         self,
@@ -2821,7 +2802,7 @@ class _MissView(discord.ui.View):
     ):
         super().__init__(timeout=600)
         self.can_write = can_write
-        self.user_id = user_id
+        self.owner_id = user_id
         self.name = name
         self.server = server
         self.grouping = grouping
@@ -2841,17 +2822,6 @@ class _MissView(discord.ui.View):
         guide = discord.ui.Button(label=CD_BTN_GUIDE[:80], style=discord.ButtonStyle.secondary)
         guide.callback = self._on_guide
         self.add_item(guide)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_add(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -3552,7 +3522,7 @@ async def _write_undisputed(interaction, player, pending, *, source: str) -> int
     return written
 
 
-class _DisagreementView(discord.ui.View):
+class _DisagreementView(OwnedView):
     """Two pieces, two buttons.
 
     It settles ONLY the contradicted fields. Everything else in the submission
@@ -3568,20 +3538,16 @@ class _DisagreementView(discord.ui.View):
     the opinion `UX.md` says it does not have.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, player: dict, pending: list[dict], user_id: int, source: str):
         super().__init__(timeout=120)
         self.player = player
         self.pending = [entry for entry in pending if entry["disputed"]]
-        self.user_id = user_id
+        self.owner_id = user_id
         self.source = source
         #: Set by `_ask_which` so the view can retire its own message.
         self.message = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _settle(self, inter: discord.Interaction, *, use_offered: bool):
         for item in self.children:
@@ -3637,14 +3603,6 @@ class _DisagreementView(discord.ui.View):
     @discord.ui.button(label="Use what I entered", style=discord.ButtonStyle.secondary)
     async def use_mine(self, inter: discord.Interaction, button: discord.ui.Button):
         await self._settle(inter, use_offered=True)
-
-    async def on_timeout(self) -> None:
-        # A live-looking button on a dead view is a bug, not cosmetics: the
-        # member presses it, gets "Interaction failed", and never learns the
-        # question went unanswered.
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
 
 async def _pending_squad_entries(interaction, player: dict, offered_by_slot: dict) -> list[dict]:
@@ -3820,18 +3778,20 @@ async def _ask_for_type_order(interaction, player: dict) -> None:
 # ── Record a line-up (Premium) ────────────────────────────────────────────────
 
 
-class _OrderSelectView(discord.ui.View):
+class _OrderSelectView(OwnedView):
     """The six permutations in one select, plus a confirm.
 
     Select-then-confirm rather than acting on change, because a mis-tap on a
     phone would otherwise file a sighting nobody can see to correct.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, player: dict, opponent: str | None, user_id: int):
         super().__init__(timeout=300)
         self.player = player
         self.opponent = opponent
-        self.user_id = user_id
+        self.owner_id = user_id
         self.choice: tuple[str, str, str] | None = None
         self.message: discord.Message | None = None
 
@@ -3851,17 +3811,6 @@ class _OrderSelectView(discord.ui.View):
         )
         self.confirm.callback = self._on_confirm
         self.add_item(self.confirm)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_select(self, inter: discord.Interaction):
         self.choice = ORDERS[int(self.select.values[0])]
@@ -4042,28 +3991,19 @@ class _EditsFilterModal(discord.ui.Modal, title="Filter Champion Duel edits"):
         )
 
 
-class _EditsView(discord.ui.View):
+class _EditsView(OwnedView):
     """The listing's own filter control. The common case — "what happened
     lately" — stays one click; narrowing costs a second one."""
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, user_id: int):
         super().__init__(timeout=300)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.message: discord.Message | None = None
         button = discord.ui.Button(label=CD_BTN_FILTER, style=discord.ButtonStyle.secondary)
         button.callback = self._on_filter
         self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_filter(self, inter: discord.Interaction):
         await inter.response.send_modal(_EditsFilterModal())
@@ -4087,7 +4027,7 @@ async def _send_edits(interaction, *, player=None, actor=None, limit=10):
     view.message = await interaction.original_response()
 
 
-class _RevertAnyway(discord.ui.View):
+class _RevertAnyway(OwnedView):
     """The `force` flag, as a button on the conflict that provoked it.
 
     Better than the old `force: True` parameter: nobody can set it before
@@ -4098,14 +4038,8 @@ class _RevertAnyway(discord.ui.View):
     def __init__(self, *, edit_id: int, user_id: int, current: str):
         super().__init__(timeout=120)
         self.edit_id = edit_id
-        self.user_id = user_id
+        self.owner_id = user_id
         self.current = current
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(label="⏪ Revert anyway", style=discord.ButtonStyle.danger)
     async def force(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -4500,7 +4434,7 @@ def build_onboarding_embed(*, servers: list[dict], warzone: str | None) -> disco
     return embed
 
 
-class ChampionDuelOnboardingView(discord.ui.View):
+class ChampionDuelOnboardingView(OwnedView):
     """Set a warzone, or enter the grouping it belongs to.
 
     **Add a grouping renders disabled until the warzone is known**, rather than
@@ -4511,41 +4445,29 @@ class ChampionDuelOnboardingView(discord.ui.View):
     the reason, not left inert.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, user_id: int, can_write: bool, warzone: str | None):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.warzone = warzone
         self.message: discord.Message | None = None
 
         known = bool(warzone)
-        self._add(
+        self.add_button(
             CD_BTN_CHANGE_WARZONE if known else CD_BTN_SET_WARZONE,
             discord.ButtonStyle.secondary if known else discord.ButtonStyle.primary,
             self._on_warzone,
+            row=0,
         )
-        self._add(
+        self.add_button(
             CD_BTN_ADD_GROUPING,
             discord.ButtonStyle.primary if known else discord.ButtonStyle.secondary,
             self._on_add_grouping,
+            row=0,
             disabled=not known,
         )
-
-    def _add(self, label, style, cb, *, disabled=False):
-        button = discord.ui.Button(label=label[:80], style=style, row=0, disabled=disabled)
-        button.callback = cb
-        self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_warzone(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -4627,12 +4549,14 @@ _WARZONE_NEEDS_A_SERVER = (
 )
 
 
-class _ChangeWarzoneView(discord.ui.View):
+class _ChangeWarzoneView(OwnedView):
     """The confirm half of changing a warzone that was already answered."""
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(self, *, user_id: int, can_write: bool, current: str, proposed: str):
         super().__init__(timeout=120)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.current = current
         self.proposed = proposed
@@ -4645,17 +4569,6 @@ class _ChangeWarzoneView(discord.ui.View):
             button = discord.ui.Button(label=label[:80], style=style, row=0)
             button.callback = cb
             self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_yes(self, inter: discord.Interaction):
         for item in self.children:
@@ -4679,7 +4592,7 @@ class _ChangeWarzoneView(discord.ui.View):
         self.stop()
 
 
-class _ConfirmWarzoneView(discord.ui.View):
+class _ConfirmWarzoneView(OwnedView):
     """Once per Champion Duel, check the warzone we resolved from is still right.
 
     An alliance that moves warzone still resolves, silently and to the wrong
@@ -4688,9 +4601,11 @@ class _ConfirmWarzoneView(discord.ui.View):
     re-confirmed when the grouping changes rather than trusted forever.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, user_id: int, can_write: bool, warzone: str, grouping: dict):
         super().__init__(timeout=300)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.warzone = warzone
         self.grouping = grouping
@@ -4703,17 +4618,6 @@ class _ConfirmWarzoneView(discord.ui.View):
             button = discord.ui.Button(label=label[:80], style=style, row=0)
             button.callback = cb
             self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_yes(self, inter: discord.Interaction):
         for item in self.children:
@@ -5138,7 +5042,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         view.message = await interaction.original_response()
 
 
-class _RetryGroupingView(discord.ui.View):
+class _RetryGroupingView(OwnedView):
     """Reopen the grouping modal with what was typed still in it.
 
     `offer_community` adds the second exit, and only the conflict has one: a
@@ -5146,6 +5050,8 @@ class _RetryGroupingView(discord.ui.View):
     somewhere with nothing to do there is the same waste as one that cannot
     change anything.
     """
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(
         self,
@@ -5160,7 +5066,7 @@ class _RetryGroupingView(discord.ui.View):
         replace: tuple | None = None,
     ):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.warzone = warzone
         # Carried so the retry reopens the modal the caller was actually in.
@@ -5197,17 +5103,6 @@ class _RetryGroupingView(discord.ui.View):
             # one tap here and a thing to read and copy there, and this is a
             # phone surface.
             self.add_item(discord.ui.Button(label=CD_BTN_COMMUNITY[:80], url=COMMUNITY_SERVER_URL))
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_retry(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -5614,7 +5509,47 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         view.message = await interaction.original_response()
 
 
-class _ReconcileView(discord.ui.View):
+async def _open_record_modal(
+    inter: discord.Interaction,
+    *,
+    can_write: bool,
+    grouping: dict,
+    warzone,
+    stage: str | None = None,
+    groupings: list | None = None,
+) -> None:
+    """Open `_RecordGroupModal` as the first response to `inter`.
+
+    A modal has to be the first response to an interaction, so a caller that
+    does not already hold the round and the grouping list reads them here
+    before responding rather than deferring first; the two reads are one
+    indexed SQLite lookup each, well inside the three seconds. The grouping
+    list is the same one the hub root's control offers: two record controls
+    whose Champion Duel pickers disagree is one surface contradicting
+    another. `grouping` is never None here: every control that opens this is
+    added only when its view holds a grouping (#589).
+    """
+    if stage is None or groupings is None:
+        stage, groupings = await asyncio.gather(
+            asyncio.to_thread(db.current_stage, grouping["id"]),
+            asyncio.to_thread(
+                db.groupings_readable_by,
+                warzone,
+                str(inter.guild_id) if inter.guild_id else None,
+            ),
+        )
+    await inter.response.send_modal(
+        _RecordGroupModal(
+            can_write=can_write,
+            grouping=grouping,
+            stage=stage,
+            groupings=groupings,
+            warzone=warzone,
+        )
+    )
+
+
+class _ReconcileView(OwnedView):
     """The paste, line by line, with Save held back until nothing is unresolved.
 
     A select carries **only the unresolved lines**. One select per line would
@@ -5622,9 +5557,11 @@ class _ReconcileView(discord.ui.View):
     control: they are already right.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, user_id, can_write, grouping, stage, label, recording, rows, index=None):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.grouping = grouping
         self.stage = stage
@@ -5761,17 +5698,6 @@ class _ReconcileView(discord.ui.View):
         await inter.response.edit_message(embed=self._embed(), view=self)
 
     # ── plumbing ──────────────────────────────────────────────────────────────
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
 
@@ -6683,7 +6609,7 @@ def build_standing_embed(state: dict, *, can_odds: bool) -> discord.Embed:
     return embed
 
 
-class _StandingClaimView(discord.ui.View):
+class _StandingClaimView(OwnedView):
     """The exit from a landing that does not know who is reading it.
 
     `UX.md` principle 3 -- every dead end carries its exit -- and this is the
@@ -6705,6 +6631,8 @@ class _StandingClaimView(discord.ui.View):
     on the same message.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(
         self,
         *,
@@ -6717,7 +6645,7 @@ class _StandingClaimView(discord.ui.View):
         warzone: str | None = None,
     ):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_write = can_write
         self.grouping = grouping
         # WHETHER THE BUTTON IS THERE, not what it opens on. `_open_edit_me`
@@ -6833,7 +6761,7 @@ class _StandingClaimView(discord.ui.View):
             inter,
             grouping=grouping,
             warzone=warzone,
-            user_id=self.user_id,
+            user_id=self.owner_id,
             can_write=self.can_write,
             stage=(self.standing or {}).get("stage"),
             label=row.get("grp"),
@@ -6861,17 +6789,6 @@ class _StandingClaimView(discord.ui.View):
             stage=(self.standing or {}).get("stage"),
             label=row.get("grp"),
         )
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     async def _on_press(self, inter: discord.Interaction):
         await inter.response.send_modal(
@@ -7810,7 +7727,7 @@ class _ReadsJumpModal(discord.ui.Modal, title="Find a player on this list"):
         await interaction.response.edit_message(embed=embed, view=self.parent)
 
 
-class _ReadsView(discord.ui.View):
+class _ReadsView(OwnedView):
     """`🎯 Head to head for everyone`: one member's read at a time.
 
     **One page, one member, edited in place.** The bulk press used to compute
@@ -7835,9 +7752,11 @@ class _ReadsView(discord.ui.View):
     presentation and navigation live here.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, user_id: int, alliance: str, stage: str, roster: list[dict]):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.alliance = alliance
         self.stage = stage
         self.roster = roster
@@ -7897,17 +7816,6 @@ class _ReadsView(discord.ui.View):
             button.callback = cb
         self.add_item(button)
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
     async def _turn(self, inter: discord.Interaction, index: int):
         await inter.response.defer()
         self.index = index
@@ -7943,7 +7851,7 @@ class _ReadsView(discord.ui.View):
             # interaction would itself be ephemeral, which is the one thing
             # this button exists to avoid.
             await inter.channel.send(
-                f"-# Shared by <@{self.user_id}>", embed=_shared_read_embed(self._embed())
+                f"-# Shared by <@{self.owner_id}>", embed=_shared_read_embed(self._embed())
             )
         except discord.Forbidden:
             await inter.followup.send(
@@ -7953,7 +7861,7 @@ class _ReadsView(discord.ui.View):
             )
 
 
-class _AllianceView(discord.ui.View):
+class _AllianceView(OwnedView):
     """`🏰 Your alliance`, with the page control and the way to hand reads out.
 
     Re-reads on every press rather than paging a captured list. This view lives
@@ -7961,6 +7869,8 @@ class _AllianceView(discord.ui.View):
     that window -- and unlike the group listing, the thing being paged here is
     resolved from the reader rather than passed in.
     """
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(
         self,
@@ -7984,7 +7894,7 @@ class _AllianceView(discord.ui.View):
         stage: str | None = None,
     ):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.grouping = grouping
         self.state = state
         self.can_odds = can_odds
@@ -8148,17 +8058,6 @@ class _AllianceView(discord.ui.View):
             button.callback = cb
         self.add_item(button)
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
     async def _turn(self, inter: discord.Interaction, *, page: int, stage: str | None = None):
         await inter.response.defer()
         self.state = await asyncio.to_thread(
@@ -8203,27 +8102,8 @@ class _AllianceView(discord.ui.View):
         await inter.response.send_modal(_AddPlayerModal(self.can_write, grouping=self.grouping))
 
     async def _on_record(self, inter: discord.Interaction):
-        # Read before responding, not after: a modal has to be the first
-        # response to an interaction, so this cannot defer first.
-        stage, groupings = await asyncio.gather(
-            asyncio.to_thread(db.current_stage, (self.grouping or {}).get("id")),
-            # The same list the hub root's control offers. Two record controls
-            # whose Champion Duel pickers disagree is one surface contradicting
-            # another, and this one is reached from further in.
-            asyncio.to_thread(
-                db.groupings_readable_by,
-                self.warzone,
-                str(inter.guild_id) if inter.guild_id else None,
-            ),
-        )
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=stage,
-                groupings=groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter, can_write=self.can_write, grouping=self.grouping, warzone=self.warzone
         )
 
     async def _on_reads(self, inter: discord.Interaction):
@@ -8391,7 +8271,7 @@ def _finished_line(warzone: str | None) -> str:
     return CD_FINISHED_LINE.format(whose=whose)
 
 
-class _GroupView(discord.ui.View):
+class _GroupView(OwnedView):
     """One group, plus every way of getting to a different one.
 
     Selects rather than a sequence of steps. A member who has been knocked out,
@@ -8418,6 +8298,8 @@ class _GroupView(discord.ui.View):
     `page` catches whatever is still long at twenty.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(
         self,
         *,
@@ -8443,7 +8325,7 @@ class _GroupView(discord.ui.View):
         page: int = 0,
     ):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.can_odds = can_odds
         self.can_write = can_write
         self.groupings = groupings
@@ -8676,17 +8558,6 @@ class _GroupView(discord.ui.View):
             button.callback = callback
         self.add_item(button)
 
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
     # ── moving between groups ────────────────────────────────────────────────
 
     def _embed(self) -> discord.Embed:
@@ -8784,18 +8655,15 @@ class _GroupView(discord.ui.View):
         """The empty round's way out, opened on the round they are looking at.
 
         Everything the modal needs is already on this view, so this is the one
-        button here that reaches the database not at all. It must also stay the
-        first response to its own interaction: Discord will not open a modal
-        after a defer.
+        button here that reaches the database not at all.
         """
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=self.stage,
-                groupings=self.groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter,
+            can_write=self.can_write,
+            grouping=self.grouping,
+            warzone=self.warzone,
+            stage=self.stage,
+            groupings=self.groupings,
         )
 
     # ── odds ─────────────────────────────────────────────────────────────────
@@ -9926,7 +9794,7 @@ def _slate_file(png: bytes | None, alt: str) -> dict:
     }
 
 
-class _SlateShareView(discord.ui.View):
+class _SlateShareView(ExpiringView):
     """Hands the card to the channel, which is the deliberate half.
 
     Private by default (`PROPOSAL_champion_duel_ia.md` principle 5): the maker
@@ -9950,6 +9818,8 @@ class _SlateShareView(discord.ui.View):
     only person who can press it is the only person who can see it.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(self, *, png: bytes | None, embed: discord.Embed, alt: str, user_id: int):
         super().__init__(timeout=600)
         self.png = png
@@ -9957,11 +9827,6 @@ class _SlateShareView(discord.ui.View):
         self.alt = alt
         self.user_id = user_id
         self.message: discord.Message | None = None
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     @discord.ui.button(label=CD_BTN_PICKS_SHARE, style=discord.ButtonStyle.secondary)
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -10003,7 +9868,7 @@ async def _draw_slate(slate) -> bytes | None:
         return None
 
 
-class _PicksView(discord.ui.View):
+class _PicksView(OwnedView):
     """The card, and the three selects that put a meeting on it.
 
     **Two modes on one message rather than two surfaces.** The card is what the
@@ -10026,6 +9891,8 @@ class _PicksView(discord.ui.View):
     another's. `read_picks` resolves it once, off the stored card first.
     """
 
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
+
     def __init__(
         self,
         *,
@@ -10035,7 +9902,7 @@ class _PicksView(discord.ui.View):
         can_write: bool = True,
     ):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.guild_id = guild_id
         self.can_write = can_write
         self.state = state
@@ -10137,11 +10004,11 @@ class _PicksView(discord.ui.View):
                 self._select(_PICKS_PICK_REMOVE, self._remove_options(), row, self._on_remove)
             )
             row += 1
-        self._add(
+        self.add_button(
             CD_BTN_PICKS_ADD,
             discord.ButtonStyle.primary if self.can_write else discord.ButtonStyle.secondary,
-            row,
             self._on_add,
+            row=row,
             disabled=not self.can_write,
         )
         # A read, so no write gate on it: anybody who can open the bench can
@@ -10149,13 +10016,15 @@ class _PicksView(discord.ui.View):
         # refuses an empty one, and a button that always fails is worse than a
         # button that is not there.
         if self.meetings:
-            self._add(CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, row, self._on_show)
+            self.add_button(
+                CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, self._on_show, row=row
+            )
         if self.meetings:
-            self._add(
+            self.add_button(
                 CD_BTN_PICKS_DELETE,
                 discord.ButtonStyle.danger,
-                row,
                 self._on_delete,
+                row=row,
                 disabled=not self.can_write,
             )
 
@@ -10236,11 +10105,11 @@ class _PicksView(discord.ui.View):
             self._pager(f"Page {self.pages[step] + 1} / {pages}", row, None, True)
             self._pager("Next ▶", row, self._on_next, self.pages[step] >= pages - 1)
             row += 1
-        self._add(
+        self.add_button(
             CD_BTN_PICKS_SAVE,
             discord.ButtonStyle.success,
-            row,
             self._on_save,
+            row=row,
             disabled=not (self.can_write and self.p1 is not None and self.p2 is not None),
         )
         # Reachable from adding mode too, not only from the card underneath it.
@@ -10250,13 +10119,17 @@ class _PicksView(discord.ui.View):
         # `_on_show` and `CD_BTN_PICKS_SHOW` are grabbed as-is -- there is no
         # second way to draw a card in this file, and this is not one either.
         if self.meetings:
-            self._add(CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, row, self._on_show)
+            self.add_button(
+                CD_BTN_PICKS_SHOW, discord.ButtonStyle.secondary, self._on_show, row=row
+            )
         # The way back out of a half-made meeting, and it is a button rather
         # than re-picking the warzone already selected: a client with nothing
         # new to send sends nothing at all, so a select somebody re-taps the
         # same value on may never reach us.
-        self._add(CD_BTN_PICKS_RESTART, discord.ButtonStyle.secondary, row, self._on_restart)
-        self._add(CD_BTN_PICKS_BACK, discord.ButtonStyle.secondary, row, self._on_back)
+        self.add_button(
+            CD_BTN_PICKS_RESTART, discord.ButtonStyle.secondary, self._on_restart, row=row
+        )
+        self.add_button(CD_BTN_PICKS_BACK, discord.ButtonStyle.secondary, self._on_back, row=row)
 
     def _placeholder(self, mine: str, label: str, step: str, pages: int) -> str:
         """A select's placeholder, saying which page it shows while it pages."""
@@ -10440,11 +10313,6 @@ class _PicksView(discord.ui.View):
 
     # ── controls ─────────────────────────────────────────────────────────────
 
-    def _add(self, label, style, row, cb, *, disabled=False):
-        button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=disabled)
-        button.callback = cb
-        self.add_item(button)
-
     def _select(self, placeholder, options, row, callback):
         select = discord.ui.Select(placeholder=placeholder[:150], options=options, row=row)
         select.callback = callback
@@ -10460,17 +10328,6 @@ class _PicksView(discord.ui.View):
         if callback is not None:
             button.callback = callback
         self.add_item(button)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
 
     # ── rendering ────────────────────────────────────────────────────────────
 
@@ -10656,7 +10513,7 @@ class _PicksView(discord.ui.View):
         embed = build_slate_embed(slate)
         alt = picks_lib.alt_text(slate)
         png = await _draw_slate(slate)
-        view = _SlateShareView(png=png, embed=embed, alt=alt, user_id=self.user_id)
+        view = _SlateShareView(png=png, embed=embed, alt=alt, user_id=self.owner_id)
         view.message = await inter.followup.send(
             embed=embed,
             view=view,
@@ -10832,7 +10689,7 @@ async def send_picks_view(
     view.message = await interaction.original_response()
 
 
-class ChampionDuelHubView(discord.ui.View):
+class ChampionDuelHubView(OwnedView):
     """The button grid. Rows group by kind: everyone, contributors, operator.
 
     **Every state of the hub is this view.** There used to be a second one for
@@ -10843,6 +10700,8 @@ class ChampionDuelHubView(discord.ui.View):
     this grid is in, not a grid of its own, so a control added below cannot go
     missing from it again.
     """
+
+    timeout_hint = CHAMPION_DUEL_HUB_CMD
 
     def __init__(
         self,
@@ -10858,7 +10717,7 @@ class ChampionDuelHubView(discord.ui.View):
         finished: bool = False,
     ):
         super().__init__(timeout=900)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.is_admin = is_admin
         self.can_write = can_write
         self.engine_ok = engine_ok
@@ -10876,22 +10735,6 @@ class ChampionDuelHubView(discord.ui.View):
         self.grouping = grouping
         self.message: discord.Message | None = None
         self._build_buttons()
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint=CHAMPION_DUEL_HUB_CMD)
-
-    def _add(self, label, style, row, cb, *, disabled=False):
-        button = discord.ui.Button(label=label[:80], style=style, row=row, disabled=disabled)
-        button.callback = cb
-        self.add_item(button)
 
     def _build_buttons(self):
         """Five rows, each one a kind of thing rather than a rank of importance.
@@ -10933,9 +10776,13 @@ class ChampionDuelHubView(discord.ui.View):
         known = (self.standing or {}).get("state") in ("held", "elsewhere")
         if self.grouping:
             if known:
-                self._add(CD_BTN_STANDING, discord.ButtonStyle.primary, 0, self._on_standing)
+                self.add_button(
+                    CD_BTN_STANDING, discord.ButtonStyle.primary, self._on_standing, row=0
+                )
             else:
-                self._add(CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, 0, self._on_who_am_i)
+                self.add_button(
+                    CD_BTN_WHO_AM_I, discord.ButtonStyle.primary, self._on_who_am_i, row=0
+                )
         # Drawn whether or not we know the reader, unlike the pair above. That
         # pair swaps because a button reading "your standing" would be a promise
         # to somebody we cannot place; this one lands on a surface that says
@@ -10943,7 +10790,9 @@ class ChampionDuelHubView(discord.ui.View):
         # Hiding it would make "leadership has no view of their own people" and
         # "you have not claimed yet" the same screen.
         if self.grouping:
-            self._add(CD_BTN_ALLIANCE, discord.ButtonStyle.secondary, 0, self._on_alliance)
+            self.add_button(
+                CD_BTN_ALLIANCE, discord.ButtonStyle.secondary, self._on_alliance, row=0
+            )
         # ONLY WHERE THE READER CANNOT REACH IT THROUGH THEMSELVES, which is the
         # rule it already had and keeps. You get to your own group by getting to
         # yourself first, and `🏅 Your standing` carries it opened on your own
@@ -10960,7 +10809,7 @@ class ChampionDuelHubView(discord.ui.View):
         # against, where 🏅 is the game's own Ranking badge and belongs to the
         # surface about your rank.
         if self.grouping and not known:
-            self._add(CD_BTN_GROUP, discord.ButtonStyle.secondary, 0, self._on_group)
+            self.add_button(CD_BTN_GROUP, discord.ButtonStyle.secondary, self._on_group, row=0)
 
         # ── Row 1: what you open every day ───────────────────────────────────
         #
@@ -10968,11 +10817,11 @@ class ChampionDuelHubView(discord.ui.View):
         # Premium rule in `DESIGN.md`: an alliance should see the shape of what
         # they would be buying, and this one is hard to describe and easy to
         # show. **The only control in this feature gated at the door.**
-        self._add(
+        self.add_button(
             CD_BTN_INTEL if self.can_intel else f"🔒 {CD_BTN_INTEL}",
             discord.ButtonStyle.secondary,
-            1,
             self._on_intel,
+            row=1,
             disabled=not self.can_intel or not self.engine_ok,
         )
         # NOT GATED ON `can_write`, and it used to be. The card is a read for
@@ -10981,18 +10830,18 @@ class ChampionDuelHubView(discord.ui.View):
         # the write. Absent without a grouping: with no Champion Duel resolved
         # there is no field to pick two players out of.
         if self.grouping:
-            self._add(CD_BTN_PICKS, discord.ButtonStyle.secondary, 1, self._on_picks)
+            self.add_button(CD_BTN_PICKS, discord.ButtonStyle.secondary, self._on_picks, row=1)
 
         # ── Row 2: global, and needing no Champion Duel ──────────────────────
         #
         # Finding a player is how somebody reaches an opponent, and it is the
         # gap-fill door as well: a miss lands on `_MissView` and its
         # `➕ Add a player`, which is where adding one now lives.
-        self._add(
+        self.add_button(
             CD_BTN_FIND,
             discord.ButtonStyle.secondary,
-            2,
             self._on_find,
+            row=2,
             disabled=not self.engine_ok,
         )
         # **ALWAYS, AND THAT IS THE ONE VISIBILITY CHANGE HERE.** Kevin,
@@ -11009,11 +10858,11 @@ class ChampionDuelHubView(discord.ui.View):
         # It also means the one-off stops living two clicks deep on a bench it
         # has nothing to do with, which is where it was reachable from when a
         # Champion Duel was resolved.
-        self._add(
+        self.add_button(
             CD_BTN_PREDICT,
             discord.ButtonStyle.secondary,
-            2,
             self._on_predict,
+            row=2,
             disabled=not self.engine_ok,
         )
 
@@ -11028,34 +10877,36 @@ class ChampionDuelHubView(discord.ui.View):
         # does not exist and gating this today would take recording away from
         # members who have it.
         if self.grouping:
-            self._add(
+            self.add_button(
                 f"🔒 {CD_BTN_RECORD}" if not self.can_write else CD_BTN_RECORD,
                 discord.ButtonStyle.secondary,
-                3,
                 self._on_record,
+                row=3,
                 disabled=not self.can_write,
             )
         # A wrong warzone points the whole server at somebody else's tournament,
         # and nothing else on this hub can fix it. Present whenever we resolved
         # from one, which is the only time there is something to change.
         if self.warzone:
-            self._add(CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, 3, self._on_warzone)
+            self.add_button(
+                CD_BTN_CHANGE_WARZONE, discord.ButtonStyle.secondary, self._on_warzone, row=3
+            )
         # One control, and the form asks nothing about whose Champion Duel it
         # is -- see `_AddGroupingModal`. It needs a Champion Duel resolved for
         # the same reason `Record a group` does: without one the caller is being
         # asked for their warzone instead, and `ChampionDuelOnboardingView`
         # carries `CD_BTN_ADD_GROUPING` for exactly that.
         if self.grouping:
-            self._add(CD_BTN_ADD_CD, discord.ButtonStyle.secondary, 3, self._on_add_cd)
+            self.add_button(CD_BTN_ADD_CD, discord.ButtonStyle.secondary, self._on_add_cd, row=3)
 
         # ── Row 4: the operator, least important by far ──────────────────────
         #
         # Absent entirely for everyone else, so for every other reader this is
         # a four-row grid and Discord collapses the gap.
         if self.is_admin:
-            self._add(CD_BTN_EDITS, discord.ButtonStyle.secondary, 4, self._on_edits)
-            self._add(CD_BTN_REVERT, discord.ButtonStyle.secondary, 4, self._on_revert)
-            self._add(CD_BTN_EXPORT, discord.ButtonStyle.secondary, 4, self._on_export)
+            self.add_button(CD_BTN_EDITS, discord.ButtonStyle.secondary, self._on_edits, row=4)
+            self.add_button(CD_BTN_REVERT, discord.ButtonStyle.secondary, self._on_revert, row=4)
+            self.add_button(CD_BTN_EXPORT, discord.ButtonStyle.secondary, self._on_export, row=4)
 
     # ── callbacks ─────────────────────────────────────────────────────────────
 
@@ -11202,25 +11053,8 @@ class ChampionDuelHubView(discord.ui.View):
         )
 
     async def _on_record(self, inter: discord.Interaction):
-        # Read before responding, not after: a modal has to be the first
-        # response to an interaction, so this cannot defer first. One indexed
-        # SQLite read is well inside the three seconds.
-        stage, groupings = await asyncio.gather(
-            asyncio.to_thread(db.current_stage, self.grouping["id"]),
-            asyncio.to_thread(
-                db.groupings_readable_by,
-                self.warzone,
-                str(inter.guild_id) if inter.guild_id else None,
-            ),
-        )
-        await inter.response.send_modal(
-            _RecordGroupModal(
-                can_write=self.can_write,
-                grouping=self.grouping,
-                stage=stage,
-                groupings=groupings,
-                warzone=self.warzone,
-            )
+        await _open_record_modal(
+            inter, can_write=self.can_write, grouping=self.grouping, warzone=self.warzone
         )
 
     async def _on_group(self, inter: discord.Interaction):
@@ -11237,7 +11071,7 @@ class ChampionDuelHubView(discord.ui.View):
             inter,
             grouping=self.grouping,
             warzone=self.warzone,
-            user_id=self.user_id,
+            user_id=self.owner_id,
             can_write=self.can_write,
         )
 
@@ -11255,7 +11089,7 @@ class ChampionDuelHubView(discord.ui.View):
         await send_picks_view(
             inter,
             grouping=self.grouping,
-            user_id=self.user_id,
+            user_id=self.owner_id,
             can_write=self.can_write,
         )
 

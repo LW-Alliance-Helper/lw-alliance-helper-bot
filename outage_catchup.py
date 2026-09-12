@@ -47,6 +47,7 @@ import discord
 
 import config
 import time_helpers
+from wizard_registry import ExpiringView
 
 logger = logging.getLogger(__name__)
 
@@ -897,11 +898,13 @@ def render_digest(window: OutageWindow, tz: ZoneInfo, items: list[MissedItem]) -
     return "\n".join([header, *rows])
 
 
-class OutageCatchupView(discord.ui.View):
+class OutageCatchupView(ExpiringView):
     """The digest's interactive controls: a multi-select row picker plus the
     three action buttons. Times out per the auto-post pattern — buttons strip
     and a hint to re-run is appended (``wizard_registry.expire_view_message``).
     """
+
+    timeout_hint = "each item's own command"
 
     def __init__(self, items: list[MissedItem], *, timeout: float = 60 * 60 * 6):
         super().__init__(timeout=timeout)
@@ -991,14 +994,6 @@ class OutageCatchupView(discord.ui.View):
             )
         except Exception:
             pass
-
-    async def on_timeout(self):
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="each item's own command",
-        )
 
 
 def _trim(s: str, n: int) -> str:

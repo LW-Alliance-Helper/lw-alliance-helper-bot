@@ -24,8 +24,8 @@ from typing import Optional
 
 import discord
 
-from messages import DENY_NOT_OWNER
 from setup_hub import STORM_GLYPH
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ def _build_event_hub_embed(
 # ── Hub view ─────────────────────────────────────────────────────────────────
 
 
-class _EventHubView(discord.ui.View):
+class _EventHubView(OwnedView):
     """Hub button grid. Each button dispatches into an existing storm
     handler. Premium-gated buttons render disabled on the free tier.
 
@@ -206,6 +206,10 @@ class _EventHubView(discord.ui.View):
     Discord caps the View at 25 components; 11 well under.
     """
 
+    @property
+    def timeout_hint(self) -> str:
+        return f"/{_PARENT_CMD[self.event_type]}"
+
     def __init__(
         self,
         bot,
@@ -218,29 +222,10 @@ class _EventHubView(discord.ui.View):
         self.bot = bot
         self.guild_id = guild_id
         self.event_type = event_type
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.is_premium = is_premium
         self.message: Optional[discord.Message] = None
         self._build_buttons()
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        """Only the officer who opened the hub can click buttons. Same
-        pattern every other shared view uses."""
-        if inter.user.id != self.owner_user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint=f"/{_PARENT_CMD[self.event_type]}",
-        )
 
     def _premium_disabled(self) -> bool:
         return not self.is_premium
@@ -251,7 +236,7 @@ class _EventHubView(discord.ui.View):
         # ── Row 0: active event-day actions ──────────────────────────────
         # Post sign-up poll (Premium): blue, the "start the cycle"
         # action. Most events begin with this button click.
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_POST_SIGNUP) if premium_off else HUB_BTN_POST_SIGNUP,
             style=discord.ButtonStyle.primary,
             disabled=premium_off,
@@ -261,7 +246,7 @@ class _EventHubView(discord.ui.View):
         # View sign-ups + set up teams (Premium): green, the "build
         # the roster" action. Highest-traffic button once the poll is
         # up — gets the most visual weight after Post.
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_VIEW_SIGNUPS) if premium_off else HUB_BTN_VIEW_SIGNUPS,
             style=discord.ButtonStyle.success,
             disabled=premium_off,
@@ -271,7 +256,7 @@ class _EventHubView(discord.ui.View):
         # Record attendance (Premium): secondary — same row because
         # it's part of the event-day flow, but visually deprioritised
         # so officers don't click it mid-build by accident.
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_ATTENDANCE) if premium_off else HUB_BTN_ATTENDANCE,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
@@ -280,7 +265,7 @@ class _EventHubView(discord.ui.View):
         )
         # Fill out participation questions (free tier): same row
         # because participation logs are an event-day chore.
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_PARTICIPATION,
             style=discord.ButtonStyle.secondary,
             disabled=False,
@@ -290,28 +275,28 @@ class _EventHubView(discord.ui.View):
 
         # ── Row 1: Communications + configuration ────────────────────────
         # DM roster reminder (Premium): leads the comms/config row.
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_REMIND) if premium_off else HUB_BTN_REMIND,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=1,
             callback=self._on_remind,
         )
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_PRESETS,
             style=discord.ButtonStyle.secondary,
             disabled=False,
             row=1,
             callback=self._on_manage_presets,
         )
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_RULES,
             style=discord.ButtonStyle.secondary,
             disabled=False,
             row=1,
             callback=self._on_manage_rules,
         )
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_DRAFT,
             style=discord.ButtonStyle.secondary,
             disabled=False,
@@ -320,7 +305,7 @@ class _EventHubView(discord.ui.View):
         )
 
         # ── Row 2: Reference + setup ─────────────────────────────────────
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_LOGS,
             style=discord.ButtonStyle.secondary,
             disabled=False,
@@ -330,45 +315,27 @@ class _EventHubView(discord.ui.View):
         # Trends Viewer (Premium): same reference row as Logs and Past
         # Rosters — same data lineage (post-event lookback) just a
         # different lens.
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_TRENDS) if premium_off else HUB_BTN_TRENDS,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=2,
             callback=self._on_trends,
         )
-        self._add_button(
+        self.add_button(
             label=_locked(HUB_BTN_PAST_ROSTERS) if premium_off else HUB_BTN_PAST_ROSTERS,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=2,
             callback=self._on_past_rosters,
         )
-        self._add_button(
+        self.add_button(
             label=HUB_BTN_SETUP,
             style=discord.ButtonStyle.secondary,
             disabled=False,
             row=2,
             callback=self._on_setup,
         )
-
-    def _add_button(
-        self,
-        *,
-        label: str,
-        style: discord.ButtonStyle,
-        disabled: bool,
-        row: int,
-        callback,
-    ) -> None:
-        btn = discord.ui.Button(
-            label=label[:80],  # Discord button-label cap
-            style=style,
-            disabled=disabled,
-            row=row,
-        )
-        btn.callback = callback
-        self.add_item(btn)
 
     # ── Button callbacks ────────────────────────────────────────────────
     # Each one dispatches to an existing handler. Premium-gated handlers

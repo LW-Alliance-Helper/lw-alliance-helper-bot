@@ -23,6 +23,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import wizard_registry
+from wizard_registry import ExpiringView
 
 import config_health
 from config import get_config
@@ -594,7 +595,9 @@ class ToneSelectView(discord.ui.View):
         self.stop()
 
 
-class ReminderView(discord.ui.View):
+class ReminderView(ExpiringView):
+    timeout_hint = "`/train` → 📅 Schedule overview → 📋 Generate Prompt"
+
     def __init__(self, cog, date_str: str, name: str):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -603,17 +606,6 @@ class ReminderView(discord.ui.View):
         # Set by the reminder loop right after channel.send so on_timeout
         # can strip the button + post the re-initiate hint.
         self.message = None
-
-    async def on_timeout(self):
-        """Strip the prompt button and tell the assignee how to re-open
-        it. Without this, the button looks live for an hour after the
-        view stopped listening — clicks fail with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="`/train` → 📅 Schedule overview → 📋 Generate Prompt",
-        )
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):

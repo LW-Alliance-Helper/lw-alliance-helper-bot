@@ -51,6 +51,7 @@ from config import (
 )
 import support_join_watch
 import bot_state
+from wizard_registry import OwnedView
 
 bot = bot_state.bot
 ET = bot_state.ET
@@ -333,22 +334,14 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-class _ForgetGuildConfirm(discord.ui.View):
+class _ForgetGuildConfirm(OwnedView):
     """Two-button confirm for /admin forget_guild. Auto-cancels on timeout."""
 
     def __init__(self, guild_id: int, owner_id: int):
         super().__init__(timeout=60)
         self._guild_id = guild_id
-        self._owner_id = owner_id
+        self.owner_id = owner_id
         self._handled = False
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self._owner_id:
-            await interaction.response.send_message(
-                "⛔ Only the bot owner who started this can confirm.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="🗑️ Delete metadata row", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -535,22 +528,14 @@ def _run_user_removal(uid: int, *, apply: bool) -> tuple[list[dict], list[tuple[
     return results, errors
 
 
-class _ForgetUserConfirm(discord.ui.View):
+class _ForgetUserConfirm(OwnedView):
     """Two-button confirm for /admin forget_user. Auto-cancels on timeout."""
 
     def __init__(self, user_id: int, owner_id: int, label: str):
         super().__init__(timeout=120)
         self._user_id = user_id
-        self._owner_id = owner_id
+        self.owner_id = owner_id
         self._label = label
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self._owner_id:
-            await interaction.response.send_message(
-                "⛔ Only the bot owner who started this can confirm.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="🗑️ Run removal", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -1625,7 +1610,7 @@ def _conflict_summary(cd_db, pair: dict) -> str:
     return f"shared: **{', '.join(pair['shared'])}**\n" + "\n".join(lines)
 
 
-class _MergeGroupingsView(discord.ui.View):
+class _MergeGroupingsView(OwnedView):
     """Pick a conflict, then pick which side survives.
 
     Two steps because the second is irreversible. The direction buttons only
@@ -1637,7 +1622,7 @@ class _MergeGroupingsView(discord.ui.View):
 
     def __init__(self, *, user_id: int, pairs: list[dict], cd_db):
         super().__init__(timeout=600)
-        self.user_id = user_id
+        self.owner_id = user_id
         self.pairs = pairs
         self.cd_db = cd_db
         self.chosen: dict | None = None
@@ -1737,12 +1722,6 @@ class _MergeGroupingsView(discord.ui.View):
                 pass
         await inter.followup.send(text[:2000], ephemeral=True)
         self.stop()
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.user_id:
-            await inter.response.send_message("That isn't yours to press.", ephemeral=True)
-            return False
-        return True
 
     async def _on_pick(self, inter: discord.Interaction):
         self.chosen = self.pairs[int(inter.data["values"][0])]

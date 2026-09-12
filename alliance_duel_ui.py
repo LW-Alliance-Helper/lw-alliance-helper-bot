@@ -26,6 +26,7 @@ import alliance_duel as ad
 import alliance_duel_analytics as an
 import alliance_duel_setup as ad_setup
 import messages
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +251,7 @@ def _projection_block(state, target: ad.AllianceKey) -> str:
 # ── Picker ────────────────────────────────────────────────────────────────────
 
 
-class ScoutPickerView(discord.ui.View):
+class ScoutPickerView(OwnedView):
     """Choose an alliance to scout. Renders from the loaded snapshot only."""
 
     def __init__(self, state, owner_id: int):
@@ -271,12 +272,6 @@ class ScoutPickerView(discord.ui.View):
         )
         select.callback = self._picked
         self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(messages.DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _picked(self, interaction: discord.Interaction):
         import alliance_duel_entry as ad_entry

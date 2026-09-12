@@ -2086,7 +2086,7 @@ async def test_sharing_posts_only_the_page_on_screen(cd_db):
     await view._on_share(inter)
 
     posted = inter.channel.send.call_args
-    assert f"<@{view.user_id}>" in posted.args[0]
+    assert f"<@{view.owner_id}>" in posted.args[0]
     shared_embed = posted.kwargs["embed"]
     assert shared_embed.title == hub._READS_TITLE.format(player="Merlin")
 

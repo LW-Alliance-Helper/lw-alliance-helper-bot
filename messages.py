@@ -45,6 +45,28 @@ GENERIC_CMD_TIMEOUT = "⏰ Timed out. Run `/{cmd}` to start again."
 # leading slash) as {cmd} and a HUB_BTN_* constant as {hub_btn}.
 HUB_TIMEOUT = "⏰ Timed out. Run `/{cmd}` and click **{hub_btn}** to start again."
 
+# A posted view's buttons expired. Appended (in italics) under the original
+# message by `wizard_registry.expire_view_message`, which every view built on
+# `wizard_registry.ExpiringView` calls from `on_timeout`. {hint} is the view's
+# pre-formatted route back: the slash command in backticks, plus the hub
+# button in bold where the command alone would not get them there. Keeps
+# "the actions for this" because the message above it is still worth reading
+# (a drafted post, a summary), unlike a wizard prompt. "start again" per D1;
+# it said "re-initiate" until 2026-09-11 (#589, sign-off block 12).
+VIEW_TIMEOUT = "⏰ The actions for this have timed out. Use {hint} to start again."
+VIEW_TIMEOUT_NO_HINT = "⏰ The actions for this have timed out."
+
+# The roster builder's own timeout. Unlike HUB_TIMEOUT it says what was lost:
+# an idle hour ends a builder session and nothing in it persists. {cmd} is
+# the event's hub command with its slash (`storm_event_hub.HUB_COMMAND`),
+# {hub_btn} is `storm_event_hub.HUB_BTN_VIEW_SIGNUPS`. Until 2026-09-11 this
+# promised a save-and-resume feature (#589, sign-off block 13): no roadmap
+# claims in user copy.
+ROSTER_BUILDER_TIMEOUT = (
+    "⏰ The roster builder timed out after an idle hour. Nothing in progress was saved. "
+    "Run `{cmd}` and click **{hub_btn}** to start again."
+)
+
 # User cancelled a top-level command/wizard. Whole flow is dead, no
 # parent state to preserve.
 CANCEL_PLAIN = "❌ Canceled."

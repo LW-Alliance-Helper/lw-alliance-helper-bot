@@ -23,8 +23,8 @@ import logging
 
 import discord
 
-from messages import DENY_NOT_OWNER
 import storm_strategy as ss
+from wizard_registry import ExpiringView, OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -623,10 +623,14 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 )
 
 
-class _ZoneWizardNextView(discord.ui.View):
+class _ZoneWizardNextView(OwnedView):
     """One-button bridge between wizard pages. The button opens the
     next page's modal so the multi-step flow doesn't need an outer
     coordinator object."""
+
+    @property
+    def owner_id(self) -> int:
+        return self._editor.owner_id
 
     def __init__(
         self, editor_view: "_PresetEditorView", zone_name: str, *, next_page: str, label: str
@@ -640,12 +644,6 @@ class _ZoneWizardNextView(discord.ui.View):
         btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
 
         async def _go(inter: discord.Interaction):
-            if inter.user.id != editor_view.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             if next_page == "priority":
                 await inter.response.send_modal(_ZonePhasePriorityModal(editor_view, zone_name))
             else:
@@ -669,12 +667,16 @@ class _ZoneWizardNextView(discord.ui.View):
         self.add_item(btn)
 
 
-class _ApplyToSimilarView(discord.ui.View):
+class _ApplyToSimilarView(OwnedView):
     """Follow-up view shown after a zone edit when the preset contains
     sibling zones (same building-family prefix, #149). Officer ticks
     which siblings should receive the same Max / Min / Priority and
     clicks Apply; values land via the parent editor's ss.PresetBuffer
     and the embed refreshes."""
+
+    @property
+    def owner_id(self) -> int:
+        return self._editor.owner_id
 
     def __init__(
         self,
@@ -705,12 +707,6 @@ class _ApplyToSimilarView(discord.ui.View):
         )
 
         async def _on_select(inter: discord.Interaction):
-            if inter.user.id != self._editor.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             self._selected = list(select.values)
             # Defer silently — the choice is captured; the Apply button
             # commits. No need to re-render the message.
@@ -728,12 +724,6 @@ class _ApplyToSimilarView(discord.ui.View):
         )
 
         async def _apply(inter: discord.Interaction):
-            if inter.user.id != self._editor.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             if not self._selected:
                 await inter.response.send_message(
                     "⚠️ Pick at least one sibling from the dropdown first, or use Skip to dismiss.",
@@ -792,12 +782,6 @@ class _ApplyToSimilarView(discord.ui.View):
         )
 
         async def _skip(inter: discord.Interaction):
-            if inter.user.id != self._editor.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             for item in self.children:
                 item.disabled = True
             try:
@@ -864,13 +848,19 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
         await self._view.refresh(interaction, message=f"✏️ Renamed **{old}** → **{new}**.")
 
 
-class _PresetEditorView(discord.ui.View):
+class _PresetEditorView(OwnedView):
     """Editor view. State held in `self.buf`; persisted to Sheet on Save."""
+
+    @property
+    def timeout_hint(self) -> str:
+        from storm_event_hub import HUB_BTN_PRESETS, HUB_COMMAND
+
+        return f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
 
     def __init__(self, guild_id: int, user_id: int, buf: ss.PresetBuffer):
         super().__init__(timeout=900)  # 15 min — Discord's interaction token max
         self.guild_id = guild_id
-        self.user_id = user_id
+        self.owner_id = user_id
         self.buf = buf
         self.cancelled = False
         self.message: discord.Message | None = None
@@ -898,12 +888,6 @@ class _PresetEditorView(discord.ui.View):
             )
 
             async def _on_select(inter: discord.Interaction):
-                if inter.user.id != self.user_id:
-                    await inter.response.send_message(
-                        DENY_NOT_OWNER,
-                        ephemeral=True,
-                    )
-                    return
                 zone_name = zone_select.values[0]
                 # Phase-aware presets get the 2-page wizard since
                 # capacity + minimums + priority totals up to 8 fields,
@@ -951,12 +935,6 @@ class _PresetEditorView(discord.ui.View):
         )
 
         async def _on_phase_mode(inter: discord.Interaction):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             new_count = int(phase_mode_select.values[0])
             if new_count == self.buf.phase_count:
                 # Officer re-picked the same option — silent ack so the
@@ -1036,17 +1014,11 @@ class _PresetEditorView(discord.ui.View):
         )
 
         async def _rename(inter):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-                return
             await inter.response.send_modal(_RenameModal(self))
 
         rename_btn.callback = _rename
 
         async def _save(inter):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-                return
             # Capacity over the team-size hint is normal — alliances
             # build in flex room. The editor embed already shows the
             # capacity vs. 30 line so officers can see at a glance
@@ -1089,9 +1061,6 @@ class _PresetEditorView(discord.ui.View):
         save_btn.callback = _save
 
         async def _cancel(inter):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-                return
             self.cancelled = True
             for item in self.children:
                 item.disabled = True
@@ -1124,18 +1093,6 @@ class _PresetEditorView(discord.ui.View):
                 await interaction.response.edit_message(content=content, embed=embed, view=self)
         except discord.HTTPException:
             pass
-
-    async def on_timeout(self) -> None:
-        """Strip the editor + append the canonical timeout notice. The
-        editor is posted publicly (so multiple leadership members can
-        see the edit progress) with a 15-minute interaction-token
-        window; without this hook, buttons silently 404 with
-        'Interaction failed' after timeout."""
-        from wizard_registry import expire_view_message
-        from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS
-
-        hint = f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
-        await expire_view_message(self.message, command_hint=hint)
 
 
 # ── Cog + slash command groups ───────────────────────────────────────────────
@@ -1230,7 +1187,7 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
         await _open_editor(interaction, self.event_type, buf)
 
 
-class _ConfirmDeleteView(discord.ui.View):
+class _ConfirmDeleteView(OwnedView):
     """Confirm/cancel buttons for a delete operation. Reused by both the
     `/<parent> strategy delete` slash command and the list view's Delete
     flow."""
@@ -1243,12 +1200,6 @@ class _ConfirmDeleteView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Delete preset", style=discord.ButtonStyle.danger)
     async def yes(self, inter: discord.Interaction, btn: discord.ui.Button):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return
         self.confirmed = True
         for item in self.children:
             item.disabled = True
@@ -1257,12 +1208,6 @@ class _ConfirmDeleteView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def no(self, inter: discord.Interaction, btn: discord.ui.Button):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return
         self.confirmed = False
         for item in self.children:
             item.disabled = True
@@ -1377,7 +1322,7 @@ async def open_strategy_list(
             view.message = None
 
 
-class _StrategyListView(discord.ui.View):
+class _StrategyListView(OwnedView):
     """Inline Create / Edit / Delete actions for `/<parent> strategy list`.
 
     Rule M: every list surface ends with action buttons — no dead-end
@@ -1404,8 +1349,6 @@ class _StrategyListView(discord.ui.View):
         )
 
         async def _on_create(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             await inter.response.send_modal(_CreatePresetNameModal(self.event_type))
 
         create_btn.callback = _on_create
@@ -1419,8 +1362,6 @@ class _StrategyListView(discord.ui.View):
         )
 
         async def _on_edit(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             picker = _PresetPickerView(
                 owner_id=self.owner_id,
                 event_type=self.event_type,
@@ -1448,8 +1389,6 @@ class _StrategyListView(discord.ui.View):
         )
 
         async def _on_delete(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             picker = _PresetPickerView(
                 owner_id=self.owner_id,
                 event_type=self.event_type,
@@ -1469,15 +1408,6 @@ class _StrategyListView(discord.ui.View):
         delete_btn.callback = _on_delete
         self.add_item(delete_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
     async def on_timeout(self) -> None:
         for item in self.children:
             item.disabled = True
@@ -1491,7 +1421,7 @@ class _StrategyListView(discord.ui.View):
 _PRESET_PICKER_MAX_OPTIONS = 25
 
 
-class _PresetPickerView(discord.ui.View):
+class _PresetPickerView(OwnedView):
     """Ephemeral preset Select for the list view's Edit / Delete buttons.
     Action picks the destination flow — `edit` opens the editor, `delete`
     runs the confirm + delete sequence. Discord's Select option cap is 25;
@@ -1560,12 +1490,6 @@ class _PresetPickerView(discord.ui.View):
 
     def _make_pick_callback(self, sel: discord.ui.Select):
         async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             name = sel.values[0]
             self.stop()
             for item in self.children:
@@ -1601,12 +1525,6 @@ class _PresetPickerView(discord.ui.View):
         return _cb
 
     async def _on_cancel(self, inter: discord.Interaction):
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return
         self.stop()
         for item in self.children:
             item.disabled = True

@@ -55,6 +55,7 @@ from messages import (
 )
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 from setup_hub import STORM_GLYPH
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -704,9 +705,13 @@ def _format_on_behalf_ack(
 
 
 async def _guard_owner(inter: discord.Interaction, owner_user_id: int) -> bool:
-    """Session-ownership gate shared by every ephemeral officer-view
-    surface (#375 dedupe — previously copy-pasted verbatim across four
-    View classes plus a dozen inline call sites).
+    """Session-ownership gate for the pagination row below, and nothing else
+    now: every view in this module inherits `wizard_registry.OwnedView`, whose
+    `interaction_check` is this same test (#589, 2026-09-11). It stays only
+    because `_add_pagination_row` is written to be bolted onto any view; the
+    pagination consolidation on #589 retires both. (#375 dedupe before that:
+    previously copy-pasted verbatim across four View classes plus a dozen
+    inline call sites.)
 
     Distinct from `storm_permissions.is_leader_or_admin` (the
     leader/admin role gate that decides who can OPEN an officer view at
@@ -799,7 +804,7 @@ def _add_pagination_row(
     view.add_item(next_btn)
 
 
-class _OnBehalfVoteView(discord.ui.View):
+class _OnBehalfVoteView(OwnedView):
     """Ephemeral on-behalf vote picker (#168, multi-select in #218).
 
     Replaces the old `_OnBehalfModal` free-text flow with structured
@@ -821,6 +826,10 @@ class _OnBehalfVoteView(discord.ui.View):
     `Page X / Y` label-only indicator. The Member Select's options are
     rebuilt on every page change while the picked-vote value sticks.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.owner_id
 
     def __init__(
         self,
@@ -1018,8 +1027,6 @@ class _OnBehalfVoteView(discord.ui.View):
             )
 
             async def _on_member(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 # Replace the picks for the current page only. Anything
                 # picked on other pages survives. Without this, paging
                 # to page 2 + ticking new names would silently erase
@@ -1056,8 +1063,6 @@ class _OnBehalfVoteView(discord.ui.View):
         )
 
         async def _on_vote(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             self.selected_vote = vote_select.values[0]
             self._build_components()
             try:
@@ -1073,7 +1078,7 @@ class _OnBehalfVoteView(discord.ui.View):
         _add_pagination_row(
             self,
             row=2,
-            owner_user_id=self.parent_view.owner_user_id,
+            owner_user_id=self.parent_view.owner_id,
             next_label="Next ▶",
         )
 
@@ -1109,8 +1114,6 @@ class _OnBehalfVoteView(discord.ui.View):
         )
 
         async def _on_select_all(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             not_voted_names = [
                 m["name"] for m in self._all_members if m["target_id"] not in self.voted_target_ids
             ]
@@ -1142,8 +1145,6 @@ class _OnBehalfVoteView(discord.ui.View):
             )
 
             async def _on_toggle(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 self.show_voted = not self.show_voted
                 # Reset to first page so a toggle never strands the
                 # officer on a now-empty page.
@@ -1157,12 +1158,7 @@ class _OnBehalfVoteView(discord.ui.View):
             toggle_btn.callback = _on_toggle
             self.add_item(toggle_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.parent_view.owner_user_id)
-
     async def _on_submit(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if not (self.selected_members and self.selected_vote):
             await inter.response.send_message(
                 "⚠️ Pick at least one member and a vote before submitting.",
@@ -1242,8 +1238,6 @@ class _OnBehalfVoteView(discord.ui.View):
             pass
 
     async def _on_cancel(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -1265,7 +1259,7 @@ class _OnBehalfVoteView(discord.ui.View):
                 pass
 
 
-class _TeamPlanRosterPickerView(discord.ui.View):
+class _TeamPlanRosterPickerView(OwnedView):
     """Step 1 of the team-plan picker (#239) — pick up to 30 players
     for one team for one event.
 
@@ -1280,6 +1274,10 @@ class _TeamPlanRosterPickerView(discord.ui.View):
     Re-entry pre-seeds picks from the saved plan (primaries ∪ subs) so
     the officer is editing the existing 30, not starting over.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.owner_id
 
     def __init__(
         self,
@@ -1361,8 +1359,6 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             )
 
             async def _on_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 kept = [tid for tid in self.selected_target_ids if tid not in page_ids]
                 self.selected_target_ids = kept + list(select.values)
                 self._build_components()
@@ -1377,7 +1373,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         _add_pagination_row(
             self,
             row=1,
-            owner_user_id=self.parent_view.owner_user_id,
+            owner_user_id=self.parent_view.owner_id,
             next_label="Page ▶",
         )
 
@@ -1391,8 +1387,6 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         )
 
         async def _on_next(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             self.advance_to_step2 = True
             for item in self.children:
                 item.disabled = True
@@ -1415,8 +1409,6 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         )
 
         async def _on_cancel(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             for item in self.children:
                 item.disabled = True
             self.stop()
@@ -1439,8 +1431,6 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             )
 
             async def _on_clear(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 import config
 
                 config.clear_storm_team_plan(
@@ -1464,9 +1454,6 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             clear_btn.callback = _on_clear
             self.add_item(clear_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.parent_view.owner_user_id)
-
     async def on_timeout(self) -> None:
         for item in self.children:
             item.disabled = True
@@ -1477,7 +1464,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
                 pass
 
 
-class _TeamPlanSubPickerView(discord.ui.View):
+class _TeamPlanSubPickerView(OwnedView):
     """Step 2 of the team-plan picker (#239) — of the 30 picked in
     step 1, mark up to 10 as subs. The remaining are primaries.
 
@@ -1485,6 +1472,10 @@ class _TeamPlanSubPickerView(discord.ui.View):
     `config.save_storm_team_plan`. Back → returns to step 1 with
     state preserved so the officer can swap picks before saving.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.owner_id
 
     def __init__(
         self,
@@ -1556,8 +1547,6 @@ class _TeamPlanSubPickerView(discord.ui.View):
             )
 
             async def _on_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 kept = [tid for tid in self.selected_sub_ids if tid not in page_ids]
                 self.selected_sub_ids = kept + list(select.values)
                 self._build_components()
@@ -1572,7 +1561,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
         _add_pagination_row(
             self,
             row=1,
-            owner_user_id=self.parent_view.owner_user_id,
+            owner_user_id=self.parent_view.owner_id,
             next_label="Page ▶",
         )
 
@@ -1595,8 +1584,6 @@ class _TeamPlanSubPickerView(discord.ui.View):
         )
 
         async def _on_back(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             self.go_back = True
             for item in self.children:
                 item.disabled = True
@@ -1619,8 +1606,6 @@ class _TeamPlanSubPickerView(discord.ui.View):
         )
 
         async def _on_cancel(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             for item in self.children:
                 item.disabled = True
             self.stop()
@@ -1635,12 +1620,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
         cancel_btn.callback = _on_cancel
         self.add_item(cancel_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.parent_view.owner_user_id)
-
     async def _on_save(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         sub_set = set(self.selected_sub_ids)
         primaries = [c["target_id"] for c in self.chosen if c["target_id"] not in sub_set]
         subs = [c["target_id"] for c in self.chosen if c["target_id"] in sub_set]
@@ -1737,9 +1717,6 @@ async def _open_team_plan(
     those as subs. Save persists via `config.save_storm_team_plan`;
     cancel or timeout leaves any prior plan untouched.
     """
-    if not await _guard_owner(inter, officer_view.owner_user_id):
-        return
-
     # Log entry so the click is at least visible in Railway logs even
     # if downstream silently fails. logger.info routes to stdout.
     logger.info(
@@ -2022,14 +1999,18 @@ async def _refresh_officer_view_message(officer_view: "OfficerView") -> None:
         pass
 
 
-class OfficerView(discord.ui.View):
+class OfficerView(OwnedView):
     """Officer view for one event. Owns the bucket map + filter state."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
 
     def __init__(self, guild: discord.Guild, owner_user_id: int, event_type: str, event_date: str):
         super().__init__(timeout=900)
         self.guild = guild
         self.guild_id = guild.id
-        self.owner_user_id = owner_user_id
+        self.owner_id = owner_user_id
         self.event_type = event_type
         self.event_date = event_date
         self.bucket_filter: str | None = None
@@ -2051,15 +2032,6 @@ class OfficerView(discord.ui.View):
         # sheet read out is cheap; the buckets attribute starts empty
         # and only the embed-render path reads it (post-refresh).
         self._build_components()
-
-    async def on_timeout(self) -> None:
-        """Strip the view + append the canonical timeout notice so
-        officers know the buttons are dead. Matches the auto-post-view
-        cleanup contract in CLAUDE.md."""
-        from wizard_registry import expire_view_message
-
-        hint = f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
-        await expire_view_message(self.message, command_hint=hint)
 
     async def refresh_buckets(self) -> None:
         """Re-read the alliance roster Sheet + storm_signups SQLite
@@ -2091,8 +2063,6 @@ class OfficerView(discord.ui.View):
         )
 
         async def _on_filter(inter: discord.Interaction):
-            if not await _guard_owner(inter, self.owner_user_id):
-                return
             choice = filter_select.values[0]
             self.bucket_filter = None if choice == "_all" else choice
             self._build_components()
@@ -2113,8 +2083,6 @@ class OfficerView(discord.ui.View):
         )
 
         async def _on_behalf(inter: discord.Interaction):
-            if not await _guard_owner(inter, self.owner_user_id):
-                return
             # Defer first — `_read_roster_rows` is a gspread round-trip
             # that can take seconds under rate-limit pressure, and the
             # 3-second initial-response token would otherwise expire.
@@ -2181,8 +2149,6 @@ class OfficerView(discord.ui.View):
         refresh_btn = discord.ui.Button(label="🔄 Refresh", style=discord.ButtonStyle.secondary)
 
         async def _refresh(inter: discord.Interaction):
-            if not await _guard_owner(inter, self.owner_user_id):
-                return
             # Defer first — `refresh_buckets` does a gspread read off
             # the event loop, which can exceed Discord's 3-second
             # initial-response window under Sheets rate-limit pressure.
@@ -2458,9 +2424,6 @@ async def _open_team_setup(
     the saved zone assignments + pairings load on top of the freshly-
     built session.
     """
-    if not await _guard_owner(inter, officer_view.owner_user_id):
-        return
-
     # #240 Resume path: the saved draft already names the preset. Skip
     # the preset picker and go straight to the builder. If the draft
     # vanished between officer-view render and click (extreme race),
@@ -2601,9 +2564,6 @@ async def _confirm_discard_and_setup(
     draft exists, confirm before discarding the draft. Yes → delete
     the draft + open the preset picker; Cancel → back to officer
     view, draft untouched."""
-    if not await _guard_owner(inter, officer_view.owner_user_id):
-        return
-
     import config
 
     draft = config.get_roster_draft(
@@ -2636,7 +2596,7 @@ async def _confirm_discard_and_setup(
         confirm.message = None
 
 
-class _DiscardDraftConfirmView(discord.ui.View):
+class _DiscardDraftConfirmView(OwnedView):
     """Two-button confirm shown before `➕ Set up new` overwrites a
     saved draft (#240). Yes → delete draft + open preset picker;
     Cancel → close ephemeral, draft untouched."""
@@ -2655,9 +2615,6 @@ class _DiscardDraftConfirmView(discord.ui.View):
         self.team = team
         self.draft_event_date = draft_event_date
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.owner_id)
 
     @discord.ui.button(label="Yes, start over", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
@@ -2725,9 +2682,6 @@ async def _confirm_clear_votes(
     votes exist, so the officer doesn't get a confirm prompt that does
     nothing.
     """
-    if not await _guard_owner(inter, officer_view.owner_user_id):
-        return
-
     import config
 
     signups = config.get_storm_signups(
@@ -2780,7 +2734,7 @@ async def _confirm_clear_votes(
         confirm.message = None
 
 
-class _ClearVotesConfirmView(discord.ui.View):
+class _ClearVotesConfirmView(OwnedView):
     """Two-button confirm for the 🗑️ Clear-votes buttons (#287). Yes →
     delete the live `storm_signups` rows + prune the matching Sheet rows +
     refresh the officer post; Cancel → close, votes untouched."""
@@ -2797,9 +2751,6 @@ class _ClearVotesConfirmView(discord.ui.View):
         self.officer_view = officer_view
         self.on_behalf_only = on_behalf_only
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.owner_id)
 
     @discord.ui.button(label="Yes, clear them", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
@@ -2897,7 +2848,7 @@ class _ClearVotesConfirmView(discord.ui.View):
         self.stop()
 
 
-class _OrphanDraftDiscardView(discord.ui.View):
+class _OrphanDraftDiscardView(OwnedView):
     """Shown when a Resume click hits a draft whose `selected_preset_name`
     no longer exists (preset was renamed or deleted between save and
     resume). #240 follow-up — without this the officer just sees a
@@ -2916,10 +2867,6 @@ class _OrphanDraftDiscardView(discord.ui.View):
         self.officer_view = officer_view
         self.team = team
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        return await _guard_owner(inter, self.owner_id)
-        return True
 
     @discord.ui.button(label="🗑️ Discard orphan draft", style=discord.ButtonStyle.danger)
     async def discard(self, inter: discord.Interaction, _btn: discord.ui.Button):
@@ -2968,7 +2915,7 @@ class _OrphanDraftDiscardView(discord.ui.View):
         self.stop()
 
 
-class _PresetPickerView(discord.ui.View):
+class _PresetPickerView(OwnedView):
     """Single-select dropdown for picking a saved preset."""
 
     def __init__(self, *, owner_id: int, preset_names: list[str]):
@@ -2985,8 +2932,6 @@ class _PresetPickerView(discord.ui.View):
         )
 
         async def _on_pick(inter: discord.Interaction):
-            if not await _guard_owner(inter, self.owner_id):
-                return
             self.selected_preset = select.values[0]
             for item in self.children:
                 item.disabled = True

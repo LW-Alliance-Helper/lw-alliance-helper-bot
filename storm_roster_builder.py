@@ -37,12 +37,17 @@ from typing import Optional
 
 import discord
 
-from messages import CANCEL_BACKPEDAL, DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
+from messages import (
+    CANCEL_BACKPEDAL,
+    PREMIUM_LOCKED_INLINE,
+    ROSTER_BUILDER_TIMEOUT,
+)
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
     HUB_BTN_PAST_ROSTERS,
 )
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -2071,10 +2076,14 @@ def _eligible_member_keys_for_zone(
 _MAX_DROPDOWN_OPTIONS = 25  # Discord limit per Select
 
 
-class RosterBuilderView(discord.ui.View):
+class RosterBuilderView(OwnedView):
     """Stateful builder UI. State lives on `self.session`. The view
     rebuilds its components every time state changes so dropdown
     options reflect the current zone + eligibility."""
+
+    @property
+    def owner_id(self) -> int:
+        return self.session.user_id
 
     def __init__(self, session: RosterBuilderSession):
         # Bumped 900 → 3600 (15 min → 1 hour) after tester report
@@ -2155,8 +2164,6 @@ class RosterBuilderView(discord.ui.View):
 
                 def _make_callback(p):
                     async def _on_phase(inter: discord.Interaction):
-                        if not await self._guard_owner(inter):
-                            return
                         s.selected_phase = p
                         await self._redraw(inter)
 
@@ -2195,8 +2202,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _on_zone(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 s.selected_zone = zone_select.values[0]
                 s.show_below_floor = False
                 await self._redraw(inter)
@@ -2248,8 +2253,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _on_member(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 if not s.selected_zone:
                     await inter.response.send_message(
                         "⚠️ Pick a zone first.",
@@ -2349,8 +2352,6 @@ class RosterBuilderView(discord.ui.View):
         )
 
         async def _edit_zone(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             if not s.selected_zone:
                 await inter.response.send_message(
                     "⚠️ Pick a zone first.",
@@ -2378,8 +2379,6 @@ class RosterBuilderView(discord.ui.View):
         )
 
         async def _unassign(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             if not s.selected_zone:
                 await inter.response.send_message("⚠️ Pick a zone first.", ephemeral=True)
                 return
@@ -2409,8 +2408,6 @@ class RosterBuilderView(discord.ui.View):
         )
 
         async def _manage_subs(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             menu = _SubsManageView(parent_view=self)
             await inter.response.send_message(
                 menu.render_content(),
@@ -2435,8 +2432,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _pair_subs(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 await _open_pair_subs_view(inter, self)
 
             pair_btn.callback = _pair_subs
@@ -2520,8 +2515,6 @@ class RosterBuilderView(discord.ui.View):
             self._run_auto_fill = _run_auto_fill  # noqa — captured by the picker view
 
             async def _auto_fill(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 # #226: every Auto-fill click opens the strategy picker.
                 # The picker carries (a) the two strategy buttons and
                 # (b) the destructive-rerun warning copy when the
@@ -2573,8 +2566,6 @@ class RosterBuilderView(discord.ui.View):
                 )
 
                 async def _approve_with_image(inter: discord.Interaction):
-                    if not await self._guard_owner(inter):
-                        return
                     await _finalize_structured_roster(
                         inter,
                         self,
@@ -2591,8 +2582,6 @@ class RosterBuilderView(discord.ui.View):
                 )
 
                 async def _approve_text_only(inter: discord.Interaction):
-                    if not await self._guard_owner(inter):
-                        return
                     await _finalize_structured_roster(
                         inter,
                         self,
@@ -2609,8 +2598,6 @@ class RosterBuilderView(discord.ui.View):
                 )
 
                 async def _approve(inter: discord.Interaction):
-                    if not await self._guard_owner(inter):
-                        return
                     # Phase-aware: open the ephemeral picker.
                     picker = _ApprovePostPickerView(parent_view=self)
                     await inter.response.send_message(
@@ -2634,8 +2621,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _preview(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 await _send_mail_preview(inter, s)
 
             preview_btn.callback = _preview
@@ -2648,8 +2633,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _gen_mail(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 await _send_mail_preview(inter, s)
 
             mail_btn.callback = _gen_mail
@@ -2662,8 +2645,6 @@ class RosterBuilderView(discord.ui.View):
             )
 
             async def _save_preset(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 await inter.response.send_modal(_SaveAsPresetModal(self))
 
             save_preset_btn.callback = _save_preset
@@ -2688,8 +2669,6 @@ class RosterBuilderView(discord.ui.View):
         )
 
         async def _render(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             await _render_and_attach(inter, s)
 
         render_btn.callback = _render
@@ -2708,8 +2687,6 @@ class RosterBuilderView(discord.ui.View):
         )
 
         async def _done(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             for item in self.children:
                 item.disabled = True
             if s.is_structured:
@@ -2748,15 +2725,6 @@ class RosterBuilderView(discord.ui.View):
         # `_rebuild`, so real edits get saved.
         if self._user_action_since_open:
             _autosave_draft(self.session)
-
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     async def _redraw(self, inter: discord.Interaction) -> None:
         # `_redraw` is the chokepoint user-action button callbacks
@@ -2808,21 +2776,19 @@ class RosterBuilderView(discord.ui.View):
         Post-2026-05-21 tester report: also surface a clear "your
         builder timed out, your in-progress work was lost" message
         above the disabled buttons so officers don't blame the
-        Interaction failed UX. The message points them at re-opening
-        the builder. Persistence (auto-save to SQLite so re-opens
-        recover state) is a follow-up issue.
+        Interaction failed UX. The message names the hub command and
+        button that re-open the builder. Persistence (auto-save to
+        SQLite so re-opens recover state) is a follow-up issue, and the
+        message no longer promises it (#589, sign-off block 13).
         """
         for item in self.children:
             item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(
-                    content=(
-                        "⏰ Roster builder timed out after 1 hour of "
-                        "inactivity. In-progress assignments were lost; "
-                        "re-open the builder to start over. Working on "
-                        "a save-and-resume feature so this doesn't keep "
-                        "happening."
+                    content=ROSTER_BUILDER_TIMEOUT.format(
+                        cmd=HUB_COMMAND[self.session.event_type],
+                        hub_btn=HUB_BTN_VIEW_SIGNUPS,
                     ),
                     view=self,
                 )
@@ -2831,7 +2797,7 @@ class RosterBuilderView(discord.ui.View):
         self._release_session_lock()
 
 
-class _ZoneMemberEditView(discord.ui.View):
+class _ZoneMemberEditView(OwnedView):
     """Ephemeral picker for surgical edits to a single zone's roster
     (#251 tester ask). Replaces the "wipe entire zone + re-add"
     workflow with two specific actions:
@@ -2846,6 +2812,10 @@ class _ZoneMemberEditView(discord.ui.View):
     max — they make an informed choice without a separate confirm
     dialog (the Edit dialog itself IS the confirm surface).
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.session.user_id
 
     REMOVE_VALUE = "__remove__"
 
@@ -2863,15 +2833,6 @@ class _ZoneMemberEditView(discord.ui.View):
         self.selected_member: Optional[str] = None
         self.selected_destination: Optional[str] = None
         self._build()
-
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     def _build(self) -> None:
         self.clear_items()
@@ -2905,8 +2866,6 @@ class _ZoneMemberEditView(discord.ui.View):
             )
 
             async def _on_member_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 vals = inter.data.get("values") or []
                 self.selected_member = vals[0] if vals else None
                 # Picking a new member clears any prior destination
@@ -2969,8 +2928,6 @@ class _ZoneMemberEditView(discord.ui.View):
             )
 
             async def _on_dest_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 vals = inter.data.get("values") or []
                 self.selected_destination = vals[0] if vals else None
                 self._build()
@@ -3011,8 +2968,6 @@ class _ZoneMemberEditView(discord.ui.View):
         return _format_member_label(m)
 
     async def _on_apply(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         s = self.parent_view.session
@@ -3061,8 +3016,6 @@ class _ZoneMemberEditView(discord.ui.View):
             pass
 
     async def _on_cancel(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3077,7 +3030,7 @@ class _ZoneMemberEditView(discord.ui.View):
             pass
 
 
-class _SubsManageView(discord.ui.View):
+class _SubsManageView(OwnedView):
     """Ephemeral menu for the sub pool (#274 tester ask). Two actions in
     one place, opened by the main builder's 🪑 Manage subs button:
 
@@ -3095,17 +3048,15 @@ class _SubsManageView(discord.ui.View):
     PRIMARY leaving a zone, so the sub-side cleanup is done explicitly.
     """
 
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.session.user_id
+
     def __init__(self, *, parent_view: "RosterBuilderView"):
         super().__init__(timeout=300)
         self.parent_view = parent_view
         self.selected_sub: Optional[str] = None
         self._build()
-
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.session.user_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _unassigned_keys(self) -> list[str]:
         """Members eligible for the bulk add: in this team's pool, not a
@@ -3171,8 +3122,6 @@ class _SubsManageView(discord.ui.View):
             )
 
             async def _on_sub_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 vals = inter.data.get("values") or []
                 self.selected_sub = vals[0] if vals else None
                 self._build()
@@ -3235,8 +3184,6 @@ class _SubsManageView(discord.ui.View):
                 pass
 
     async def _on_add_all(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         s = self.parent_view.session
         to_move = self._unassigned_keys()
         if not to_move:
@@ -3259,8 +3206,6 @@ class _SubsManageView(discord.ui.View):
         await self._refresh_parent()
 
     async def _on_return_sub(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         s = self.parent_view.session
         key = self.selected_sub
         if not key or key not in s.subs:
@@ -3288,8 +3233,6 @@ class _SubsManageView(discord.ui.View):
         await self._refresh_parent()
 
     async def _on_done(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         self.stop()
         for item in self.children:
             item.disabled = True
@@ -3302,7 +3245,7 @@ class _SubsManageView(discord.ui.View):
             pass
 
 
-class _AssignConfirmView(discord.ui.View):
+class _AssignConfirmView(OwnedView):
     """Ephemeral yes/no confirm for assigning a member to a zone when
     one or both rule violations would otherwise block the assign:
 
@@ -3326,6 +3269,10 @@ class _AssignConfirmView(discord.ui.View):
     leadership doesn't see two sequential confirms for the same
     pick.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.session.user_id
 
     def __init__(
         self,
@@ -3371,18 +3318,7 @@ class _AssignConfirmView(discord.ui.View):
         no_btn.callback = self.no
         self.add_item(no_btn)
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
     async def yes(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3432,8 +3368,6 @@ class _AssignConfirmView(discord.ui.View):
             pass
 
     async def no(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3476,7 +3410,7 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
     return session.selected_zone or ""
 
 
-class _AutoFillStrategyPickerView(discord.ui.View):
+class _AutoFillStrategyPickerView(OwnedView):
     """Strategy picker for the Auto-fill button (#226).
 
     The Auto-fill button always opens this picker. Officers pick one
@@ -3496,19 +3430,14 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     view via its captured message handle.
     """
 
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.session.user_id
+
     def __init__(self, *, parent_view: "RosterBuilderView"):
         super().__init__(timeout=120)
         self.parent_view = parent_view
         self.message: Optional[discord.Message] = None
-
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     async def _run_with_strategy(
         self,
@@ -3516,8 +3445,6 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         strategy: str,
         label: str,
     ) -> None:
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3603,8 +3530,6 @@ class _AutoFillStrategyPickerView(discord.ui.View):
 
     @discord.ui.button(label="↩️ Cancel Auto-fill", style=discord.ButtonStyle.secondary, row=0)
     async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3645,7 +3570,7 @@ async def _drop_approve_picker(inter: discord.Interaction) -> None:
         pass
 
 
-class _ApprovePostPickerView(discord.ui.View):
+class _ApprovePostPickerView(OwnedView):
     """Phase-aware-only fallback for the Approve & Post choice (#225).
 
     Flat-structured presets show two main-view buttons (Approve with
@@ -3655,24 +3580,17 @@ class _ApprovePostPickerView(discord.ui.View):
     single Approve button opens this ephemeral picker instead.
     """
 
+    @property
+    def owner_id(self) -> int:
+        return self.parent_view.session.user_id
+
     def __init__(self, *, parent_view: "RosterBuilderView"):
         super().__init__(timeout=120)
         self.parent_view = parent_view
         self.message: Optional[discord.Message] = None
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.parent_view.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
     @discord.ui.button(label="🖼️ With image", style=discord.ButtonStyle.success)
     async def with_image(self, inter: discord.Interaction, _btn: discord.ui.Button):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3685,8 +3603,6 @@ class _ApprovePostPickerView(discord.ui.View):
 
     @discord.ui.button(label="📄 Text only", style=discord.ButtonStyle.success)
     async def text_only(self, inter: discord.Interaction, _btn: discord.ui.Button):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3699,8 +3615,6 @@ class _ApprovePostPickerView(discord.ui.View):
 
     @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
-        if not await self._guard_owner(inter):
-            return
         if self.is_finished():
             return
         self.stop()
@@ -3763,7 +3677,7 @@ async def _open_pair_subs_view(
         )
 
 
-class _PairSubsView(discord.ui.View):
+class _PairSubsView(OwnedView):
     """Combined Primary + Sub picker with a running pair list.
 
     Renders the message content as the running pair list (one row per
@@ -3777,6 +3691,10 @@ class _PairSubsView(discord.ui.View):
     primary's phase comes from `assignments_for_phase`; the sub binds
     to the same phase via `paired_subs_for_phase`.
     """
+
+    @property
+    def owner_id(self) -> int:
+        return self.main_view.session.user_id
 
     def __init__(self, *, main_view: "RosterBuilderView"):
         super().__init__(timeout=600)
@@ -3908,8 +3826,6 @@ class _PairSubsView(discord.ui.View):
             )
 
             async def _on_primary(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 self.selected_primary = primary_select.values[0]
                 self._build_components()
                 try:
@@ -3946,8 +3862,6 @@ class _PairSubsView(discord.ui.View):
                 )
 
                 async def _on_sub(inter: discord.Interaction):
-                    if not await self._guard_owner(inter):
-                        return
                     self.selected_sub = sub_select.values[0]
                     self._build_components()
                     try:
@@ -4023,8 +3937,6 @@ class _PairSubsView(discord.ui.View):
             )
 
             async def _on_pick(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
                 self.selected_unpair_primary = unpair_select.values[0]
                 self._build_components()
                 try:
@@ -4056,18 +3968,8 @@ class _PairSubsView(discord.ui.View):
         self.add_item(back_btn)
 
     # ── Callbacks ────────────────────────────────────────────────────
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.main_view.session.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     async def _on_assign(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if not (self.selected_primary and self.selected_sub):
             await inter.response.send_message(
                 "⚠️ Pick a primary and a sub before assigning.",
@@ -4109,8 +4011,6 @@ class _PairSubsView(discord.ui.View):
             pass
 
     async def _enter_unpair_mode(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         self.unpair_mode = True
         self.selected_unpair_primary = None
         self._build_components()
@@ -4123,8 +4023,6 @@ class _PairSubsView(discord.ui.View):
             pass
 
     async def _exit_unpair_mode(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         self.unpair_mode = False
         self.selected_unpair_primary = None
         self._build_components()
@@ -4137,8 +4035,6 @@ class _PairSubsView(discord.ui.View):
             pass
 
     async def _on_confirm_unpair(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         if not self.selected_unpair_primary:
             await inter.response.send_message(
                 "⚠️ Pick a pair to unpair.",
@@ -4170,8 +4066,6 @@ class _PairSubsView(discord.ui.View):
             pass
 
     async def _on_done(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         self.stop()
         # Drop the picker on Done — the builder above already reflects
         # the final pairings (each Assign/Unpair edits it in-place), so
@@ -4443,7 +4337,7 @@ async def _render_and_attach(
     )
 
 
-class _RenderActionView(discord.ui.View):
+class _RenderActionView(OwnedView):
     """Three-button ephemeral action bar shown after a public roster
     image is posted. Each button operates on the same `png_bytes`
     snapshot captured at render time so subsequent actions reflect the
@@ -4473,15 +4367,6 @@ class _RenderActionView(discord.ui.View):
         self.team = team
         self.public_channel_id = public_channel_id
         self.public_message_id = public_message_id
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "⛔ These actions are for the officer who rendered the image.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="💾 Download", style=discord.ButtonStyle.secondary)
     async def download_btn(
@@ -4601,7 +4486,7 @@ class _RenderActionView(discord.ui.View):
         )
 
 
-class _PostToChannelPicker(discord.ui.View):
+class _PostToChannelPicker(OwnedView):
     """Ephemeral channel-select view. On selection, opens the caption
     modal; the modal's submit handler actually posts the image."""
 
@@ -4634,12 +4519,6 @@ class _PostToChannelPicker(discord.ui.View):
         )
 
         async def _on_pick(picker_inter: discord.Interaction):
-            if picker_inter.user.id != self.owner_id:
-                await picker_inter.response.send_message(
-                    "⛔ Not for you.",
-                    ephemeral=True,
-                )
-                return
             picked = select.values[0]
             modal = _PostCaptionModal(
                 channel_id=picked.id,
@@ -4653,12 +4532,6 @@ class _PostToChannelPicker(discord.ui.View):
 
         select.callback = _on_pick
         self.add_item(select)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message("⛔ Not for you.", ephemeral=True)
-            return False
-        return True
 
 
 class _PostCaptionModal(discord.ui.Modal):
@@ -5509,7 +5382,7 @@ def _split_mail_at_heading(
     return mail[:best].rstrip(), mail[best:]
 
 
-class _LongMailPickerView(discord.ui.View):
+class _LongMailPickerView(OwnedView):
     """Ephemeral picker shown when the rendered mail exceeds Discord's
     2000-char message ceiling (#237). Three buttons: split / attach /
     cancel. Sets `self.choice` and stops the view; the caller awaits
@@ -5520,12 +5393,6 @@ class _LongMailPickerView(discord.ui.View):
         self.owner_id = owner_id
         self.choice: Optional[str] = None  # "split" | "txt" | "cancel"
         self.message: Optional[discord.Message] = None
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _pick(self, inter: discord.Interaction, choice: str) -> None:
         if self.is_finished():
@@ -5933,7 +5800,7 @@ async def _dm_rostered_members(
     return sent, failures
 
 
-class _DmRosteredMembersView(discord.ui.View):
+class _DmRosteredMembersView(OwnedView):
     """Single-button view attached to the Approve & Post officer
     ephemeral. Click fires the DMs, disables the button, and replaces
     the message with the outcome summary so the officer can't double-
@@ -5944,15 +5811,6 @@ class _DmRosteredMembersView(discord.ui.View):
         self.session = session
         self.bot = bot
         self.owner_id = owner_id
-
-    async def interaction_check(
-        self,
-        interaction: discord.Interaction,
-    ) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(
         label="📨 DM rostered members",
@@ -7166,7 +7024,7 @@ async def open_roster_builder(
         raise
 
 
-class _TeamPickerView(discord.ui.View):
+class _TeamPickerView(OwnedView):
     """Two-button picker for DS team. Only the invoking user can click."""
 
     def __init__(self, owner_id: int):
@@ -7179,12 +7037,6 @@ class _TeamPickerView(discord.ui.View):
         b = discord.ui.Button(label="🅱️ Team B", style=discord.ButtonStyle.success)
 
         async def _pick_a(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             self.selected = "A"
             for item in self.children:
                 item.disabled = True
@@ -7195,12 +7047,6 @@ class _TeamPickerView(discord.ui.View):
             self.stop()
 
         async def _pick_b(inter: discord.Interaction):
-            if inter.user.id != self.owner_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             self.selected = "B"
             for item in self.children:
                 item.disabled = True

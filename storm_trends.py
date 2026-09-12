@@ -23,7 +23,8 @@ from typing import Optional
 
 import discord
 
-from messages import DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
+from messages import PREMIUM_LOCKED_INLINE
+from wizard_registry import OwnedView
 
 
 logger = logging.getLogger(__name__)
@@ -470,8 +471,12 @@ def _render_results_embed(state: _TrendsState) -> discord.Embed:
 # ── View ────────────────────────────────────────────────────────────────────
 
 
-class _TrendsView(discord.ui.View):
+class _TrendsView(OwnedView):
     """Query builder + results display. Owner-gated."""
+
+    @property
+    def owner_id(self) -> int:
+        return self.state.user_id
 
     def __init__(self, state: _TrendsState):
         super().__init__(timeout=900)
@@ -589,16 +594,6 @@ class _TrendsView(discord.ui.View):
         copy_btn.callback = self._on_copy
         self.add_item(copy_btn)
 
-    # ── Owner guard ─────────────────────────────────────────────────────
-    async def _guard(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.state.user_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
-
     # ── Callbacks ───────────────────────────────────────────────────────
     async def _redraw(self, inter: discord.Interaction, *, results: bool = False):
         self._build()
@@ -606,24 +601,18 @@ class _TrendsView(discord.ui.View):
         await inter.response.edit_message(embed=embed, view=self)
 
     async def _on_question(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         sel: discord.ui.Select = inter.data["values"]  # type: ignore
         self.state.question_key = sel[0] if sel else self.state.question_key
         self.state.last_query = None  # invalidate stale results
         await self._redraw(inter)
 
     async def _on_operator(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         sel: list = inter.data.get("values") or []
         if sel:
             self.state.operator = sel[0]
         await self._redraw(inter)
 
     async def _on_threshold(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         sel: list = inter.data.get("values") or []
         if sel:
             try:
@@ -633,8 +622,6 @@ class _TrendsView(discord.ui.View):
         await self._redraw(inter)
 
     async def _on_lookback(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         sel: list = inter.data.get("values") or []
         if sel:
             try:
@@ -644,8 +631,6 @@ class _TrendsView(discord.ui.View):
         await self._redraw(inter)
 
     async def _on_team_cycle(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         cur = self.state.team_filter
         try:
             idx = _TEAM_FILTER_CYCLE.index(cur)
@@ -655,8 +640,6 @@ class _TrendsView(discord.ui.View):
         await self._redraw(inter)
 
     async def _on_run(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         # Defer so the gspread read doesn't blow the 3-second window.
         await inter.response.defer()
         try:
@@ -689,8 +672,6 @@ class _TrendsView(discord.ui.View):
         )
 
     async def _on_copy(self, inter: discord.Interaction):
-        if not await self._guard(inter):
-            return
         text = render_results_text(
             event_type=self.state.event_type,
             question_label=self.state.question_label(),

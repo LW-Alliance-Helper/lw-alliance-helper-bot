@@ -380,6 +380,83 @@ class TestPaginationRow:
         assert view.children[-1].label == "Page ▶"
 
 
+class TestTokenWindow:
+    """An ephemeral message can be edited only for TOKEN_WINDOW after it was
+    sent, and Discord restarts a view's timer on every click. The base view
+    shrinks its timer on each click so the timeout, and the notice, always
+    land inside the window (settled 2026-09-12, #589)."""
+
+    def _view(self, timeout, ephemeral, cls=None):
+        view = (cls or wizard_registry.ExpiringView)(timeout=timeout)
+        msg = MagicMock()
+        msg.flags.ephemeral = ephemeral
+        view.message = msg
+        return view
+
+    def _at(self, monkeypatch, view, seconds_after_send):
+        monkeypatch.setattr(
+            wizard_registry.time, "monotonic", lambda: view._sent_at + seconds_after_send
+        )
+
+    def test_setting_the_message_records_when_it_was_sent(self):
+        view = wizard_registry.ExpiringView(timeout=1)
+        assert view._sent_at is None
+        view.message = MagicMock()
+        assert view._sent_at is not None
+        view.message = None
+        assert view._sent_at is None
+
+    def test_init_takes_the_hint(self):
+        view = wizard_registry.ExpiringView(timeout=1, timeout_hint="`/help`")
+        assert view.timeout_hint == "`/help`"
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_timer_shrinks_to_what_is_left_of_the_window(self, monkeypatch):
+        view = self._view(900, True)
+        self._at(monkeypatch, view, 300)
+        assert await view.interaction_check(MagicMock()) is True
+        assert view.timeout == pytest.approx(wizard_registry.TOKEN_WINDOW - 300)
+
+    @pytest.mark.asyncio
+    async def test_a_timer_already_inside_the_window_is_left_alone(self, monkeypatch):
+        view = self._view(60, True)
+        self._at(monkeypatch, view, 300)
+        await view.interaction_check(MagicMock())
+        assert view.timeout == 60
+
+    @pytest.mark.asyncio
+    async def test_a_channel_message_is_left_alone(self, monkeypatch):
+        view = self._view(900, False)
+        self._at(monkeypatch, view, 300)
+        await view.interaction_check(MagicMock())
+        assert view.timeout == 900
+
+    @pytest.mark.asyncio
+    async def test_a_view_with_no_message_is_left_alone(self):
+        view = wizard_registry.ExpiringView(timeout=900)
+        await view.interaction_check(MagicMock())
+        assert view.timeout == 900
+
+    @pytest.mark.asyncio
+    async def test_the_timer_never_drops_below_a_second(self, monkeypatch):
+        view = self._view(600, True)
+        self._at(monkeypatch, view, wizard_registry.TOKEN_WINDOW + 120)
+        await view.interaction_check(MagicMock())
+        assert view.timeout == 1.0
+
+    @pytest.mark.asyncio
+    async def test_an_owned_view_clamps_after_the_owner_check(self, monkeypatch):
+        view = self._view(900, True, cls=wizard_registry.OwnedView)
+        view.owner_id = 42
+        self._at(monkeypatch, view, 600)
+        assert await view.interaction_check(_interaction(42)) is True
+        assert view.timeout == pytest.approx(wizard_registry.TOKEN_WINDOW - 600)
+        # a stranger is refused before the clamp and changes nothing
+        view.timeout = 900
+        assert await view.interaction_check(_interaction(7)) is False
+        assert view.timeout == 900
+
+
 class TestOwnedView:
     """The owner guard every hub and picker used to paste: the person who
     opened the view may use it, anyone else is told so and nothing runs."""

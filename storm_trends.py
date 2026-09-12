@@ -23,7 +23,7 @@ from typing import Optional
 
 import discord
 
-from messages import PREMIUM_LOCKED_INLINE
+from messages import PREMIUM_LOCKED_INLINE, ROUTE_HINT
 from wizard_registry import OwnedView
 
 
@@ -475,6 +475,12 @@ class _TrendsView(OwnedView):
     """Query builder + results display. Owner-gated."""
 
     @property
+    def timeout_hint(self) -> str:
+        from storm_event_hub import HUB_BTN_TRENDS, HUB_COMMAND
+
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.state.event_type], btn=HUB_BTN_TRENDS)
+
+    @property
     def owner_id(self) -> int:
         return self.state.user_id
 
@@ -684,15 +690,6 @@ class _TrendsView(OwnedView):
         # Wrap in a code block so spacing survives Discord's renderer.
         wrapped = f"```\n{text[:1990]}\n```"
         await inter.response.send_message(wrapped, ephemeral=True)
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # ── Entry point (hub button handler) ────────────────────────────────────────

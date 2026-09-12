@@ -28,6 +28,7 @@ Usage in a wizard:
 """
 
 import asyncio
+import time
 
 import discord
 
@@ -39,6 +40,11 @@ from messages import (
     VIEW_TIMEOUT,
     VIEW_TIMEOUT_NO_HINT,
 )
+
+#: How long after an ephemeral message is sent it can still be edited. The
+#: interaction token lives 15 minutes; a minute is kept back for the timeout
+#: task to wake and the edit to land.
+TOKEN_WINDOW = 14 * 60
 
 # user_id -> list of asyncio.Event objects (one per active flow)
 _active: dict[int, list[asyncio.Event]] = {}
@@ -194,20 +200,58 @@ class ExpiringView(discord.ui.View):
 
     Capture the message after sending (``view.message = await ch.send(...)``
     or ``await inter.original_response()``) and set ``timeout_hint`` to the
-    route back, pre-formatted the way `expire_view_message` documents. When
-    the timeout fires the buttons come off and the notice goes on, so nobody
-    is left clicking a dead control. A view that leaves ``timeout_hint`` as
-    ``None`` does nothing on timeout, which is Discord's own default and how
-    the short-lived pickers behave today; whether they should is #589's
-    silent-timeout item and is decided there, not here.
+    route back, pre-formatted the way `expire_view_message` documents (for a
+    hub button, `messages.ROUTE_HINT`). When the timeout fires the buttons
+    come off and the notice goes on, so nobody is left clicking a dead
+    control. Every view that can time out declares a hint (settled
+    2026-09-12, #589); the two that keep their own handler are named in
+    `CLAUDE.md`. A view with no hint and no handler does nothing on timeout.
 
-    ``timeout_hint`` can be a class attribute, set in ``__init__``, or
-    overridden as a property when the hint depends on the event type.
-    ``add_button`` is the shorthand every hub used to write for itself.
+    ``timeout_hint`` can be a class attribute, passed to ``__init__``, or
+    overridden as a property when the hint depends on the event type or
+    lives on a parent view. ``add_button`` and ``add_pagination_row`` are
+    the shorthands every hub used to write for itself.
+
+    An ephemeral message can be edited only for `TOKEN_WINDOW` after it was
+    sent, and Discord restarts a view's timer on every click, so a 10-minute
+    picker worked for 20 minutes would time out after the notice could land.
+    The base keeps that from happening: once it holds an ephemeral message
+    it shrinks its own timer on each click so the timeout always fires
+    inside the window. The officer keeps the full timeout per click until
+    the window nears its end.
     """
 
-    message: discord.Message | None = None
     timeout_hint: str | None = None
+    _message: discord.Message | None = None
+    _sent_at: float | None = None
+
+    def __init__(self, *, timeout: float | None = 180.0, timeout_hint: str | None = None):
+        super().__init__(timeout=timeout)
+        if timeout_hint is not None:
+            self.timeout_hint = timeout_hint
+
+    @property
+    def message(self) -> discord.Message | None:
+        return self._message
+
+    @message.setter
+    def message(self, value: discord.Message | None) -> None:
+        self._message = value
+        self._sent_at = time.monotonic() if value is not None else None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        self._keep_inside_token_window()
+        return True
+
+    def _keep_inside_token_window(self) -> None:
+        msg = self._message
+        if msg is None or self._sent_at is None or not self.timeout:
+            return
+        if getattr(getattr(msg, "flags", None), "ephemeral", None) is not True:
+            return
+        left = TOKEN_WINDOW - (time.monotonic() - self._sent_at)
+        if left < self.timeout:
+            self.timeout = max(1.0, left)
 
     async def on_timeout(self) -> None:
         if self.timeout_hint is None:
@@ -293,7 +337,7 @@ class OwnedView(ExpiringView):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
-        return True
+        return await super().interaction_check(interaction)
 
 
 async def wait_view_or_cancel(view, cancel_event):

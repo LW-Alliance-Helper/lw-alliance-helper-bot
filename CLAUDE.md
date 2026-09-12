@@ -347,26 +347,41 @@ Do not write a copy of any of them.
   this helper, `/cancel` mid-wizard left views hanging until their own
   timeout fired and posted a misleading "⏰ Timed out" message.
 
-### Auto-posted approval/review views must clean up on timeout
-- Any background task that posts a view to a channel (daily event
-  editor, the approval review that follows, the train reminder, etc.)
-  must capture the sent message (`view.message = await ch.send(...)`)
-  and declare the route back as `timeout_hint` (a class attribute, or a
-  property when it depends on the event type: the slash command in
-  backticks, plus the hub button in bold where the command alone would
-  not get them there). The base view's `on_timeout` then calls
-  `wizard_registry.expire_view_message`, which strips the buttons and
-  appends `messages.VIEW_TIMEOUT`.
+### Every view that can time out says how to get back
+- Whether a background task posted it to a channel or an officer opened
+  it ephemerally, a view captures its message (`view.message = await
+  ch.send(...)` or `await inter.original_response()`) and declares the
+  route back as `timeout_hint`: a class attribute, an `__init__` kwarg,
+  or a property when it depends on the event type or lives on a parent
+  view. For a hub button the shape is `messages.ROUTE_HINT` (the slash
+  command in backticks, the arrow, the button in bold); a bare command
+  in backticks where the command alone gets them there. The base view's
+  `on_timeout` then calls `wizard_registry.expire_view_message`, which
+  strips the buttons and appends `messages.VIEW_TIMEOUT`. Settled
+  2026-09-12 (`notes/UX.md`, Settled): the twenty-one views that greyed
+  out silently declare a hint like the rest.
 - Without this, expired views render apparently-active buttons that
   fail with "Interaction failed" on click — there's no signal that
   the draft has gone stale. Canonical callsites:
   `scheduler.EventEditorView`, `scheduler.ApprovalView`,
   `train.ReminderView`.
-- A view that leaves `timeout_hint` unset does nothing on timeout.
-  About twenty short-lived officer pickers do that today; whether they
-  should is an open item on
-  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589),
-  not a per-view choice.
+- Two views keep their own `on_timeout`, each settled by its own design:
+  `survey.CloseThreadView` (its thread deletes itself a minute later)
+  and `storm_roster_builder.RosterBuilderView` (posts
+  `messages.ROSTER_BUILDER_TIMEOUT`, which names the route). Nothing
+  else overrides it; `scripts/quality/ast-grep/view-handlers.yml`
+  counts three `on_timeout` definitions including the base class.
+- **An ephemeral message can be edited for 15 minutes after it was
+  sent, and Discord restarts a view's timer on every click.** The base
+  view handles it: once it holds an ephemeral message it shrinks its own
+  timer on each click so the timeout fires inside
+  `wizard_registry.TOKEN_WINDOW`, and the notice lands while the message
+  can still be edited. Do not shorten a view's timeout to work around
+  this, and do not write a fresh-post dance; the tiers in
+  `notes/DESIGN.md` (View timeouts) stand. Restarts are the gap that
+  remains: no `on_timeout` fires after a redeploy, and nothing sweeps
+  those views; open on
+  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589).
 
 ### DM body templates (configurable per alliance)
 - Schema column stores user template; empty string = "use hardcoded

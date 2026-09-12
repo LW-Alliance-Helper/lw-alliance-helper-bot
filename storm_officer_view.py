@@ -48,6 +48,7 @@ from config import (
     STORM_PLAN_MAX_TOTAL,
 )
 from messages import (
+    ROUTE_HINT,
     CANCEL_BACKPEDAL,
     CANCEL_BACKPEDAL_DEFAULT,
     DATE_PARSE_REJECT,
@@ -727,6 +728,10 @@ class _OnBehalfVoteView(OwnedView):
     """
 
     @property
+    def timeout_hint(self) -> str:
+        return self.parent_view.timeout_hint
+
+    @property
     def owner_id(self) -> int:
         return self.parent_view.owner_id
 
@@ -1153,15 +1158,6 @@ class _OnBehalfVoteView(OwnedView):
         except discord.HTTPException:
             pass
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 class _TeamPlanRosterPickerView(OwnedView):
     """Step 1 of the team-plan picker (#239) — pick up to 30 players
@@ -1178,6 +1174,10 @@ class _TeamPlanRosterPickerView(OwnedView):
     Re-entry pre-seeds picks from the saved plan (primaries ∪ subs) so
     the officer is editing the existing 30, not starting over.
     """
+
+    @property
+    def timeout_hint(self) -> str:
+        return self.parent_view.timeout_hint
 
     @property
     def owner_id(self) -> int:
@@ -1367,15 +1367,6 @@ class _TeamPlanRosterPickerView(OwnedView):
             clear_btn.callback = _on_clear
             self.add_item(clear_btn)
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 class _TeamPlanSubPickerView(OwnedView):
     """Step 2 of the team-plan picker (#239) — of the 30 picked in
@@ -1385,6 +1376,10 @@ class _TeamPlanSubPickerView(OwnedView):
     `config.save_storm_team_plan`. Back → returns to step 1 with
     state preserved so the officer can swap picks before saving.
     """
+
+    @property
+    def timeout_hint(self) -> str:
+        return self.parent_view.timeout_hint
 
     @property
     def owner_id(self) -> int:
@@ -1582,15 +1577,6 @@ class _TeamPlanSubPickerView(OwnedView):
             )
         except discord.HTTPException:
             pass
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 def _build_team_plan_raw_pool(
@@ -1926,7 +1912,7 @@ class OfficerView(OwnedView):
 
     @property
     def timeout_hint(self) -> str:
-        return f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_VIEW_SIGNUPS)
 
     def __init__(self, guild: discord.Guild, owner_user_id: int, event_type: str, event_date: str):
         super().__init__(timeout=900)
@@ -2434,6 +2420,7 @@ async def _open_team_setup(
     picker = _PresetPickerView(
         owner_id=inter.user.id,
         preset_names=preset_names,
+        timeout_hint=officer_view.timeout_hint,
     )
     team_label = "Team A" if team == "A" else "Team B" if team == "B" else "this roster"
     # #240 chain-from-confirm path: the discard-confirm view already
@@ -2840,8 +2827,8 @@ class _OrphanDraftDiscardView(OwnedView):
 class _PresetPickerView(OwnedView):
     """Single-select dropdown for picking a saved preset."""
 
-    def __init__(self, *, owner_id: int, preset_names: list[str]):
-        super().__init__(timeout=180)
+    def __init__(self, *, owner_id: int, preset_names: list[str], timeout_hint: str):
+        super().__init__(timeout=180, timeout_hint=timeout_hint)
         self.owner_id = owner_id
         self.selected_preset: Optional[str] = None
         self.message: Optional[discord.Message] = None
@@ -2866,17 +2853,6 @@ class _PresetPickerView(OwnedView):
 
         select.callback = _on_pick
         self.add_item(select)
-
-    async def on_timeout(self) -> None:
-        """Strip the picker on timeout so a click on a stale option
-        doesn't surface 'Interaction failed'."""
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # ── Slash command handler ────────────────────────────────────────────────────

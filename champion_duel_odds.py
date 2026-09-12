@@ -767,14 +767,6 @@ class BracketRow:
     #: None on anything built before this was added.
     key: str | None = None
 
-    @property
-    def champion(self) -> float:
-        return self.reach.get("champion", 0.0)
-
-    @property
-    def podium(self) -> float:
-        return self.reach.get("podium", 0.0)
-
 
 @dataclass
 class BracketOdds:

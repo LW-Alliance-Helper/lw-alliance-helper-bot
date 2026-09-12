@@ -76,7 +76,6 @@ CHAMPION_DUEL_HUB_CMD = "/champion_duel"
 
 # Feature + action labels. Constants per the HUB_BTN_* convention: other
 # modules name these buttons in prose, so a rename has to stay one line.
-HUB_BTN_CHAMPION_DUEL = "👑 Champion Duel"
 #: Approved by Kevin, 2026-09-01: *"Predict a single match"*, then settled as
 #: **Simulate a match** in the same conversation. The rename is not cosmetic.
 #:
@@ -1178,23 +1177,12 @@ CD_BTN_SHARE_READS = "📤 Post this to current channel"
 #: one embed of roughly 2,500, so ten of them are four times over a limit that
 #: is not about how many embeds there are.
 #:
-#: 5,500 rather than 6,000 leaves room for the message content riding with the
-#: first batch. Anything that does not fit goes in another followup rather than
-#: being dropped -- the reads are the deliverable, and a batching rule that
-#: silently loses one would be the worst version of the cut this file already
-#: refuses to make silently.
-#:
-#: **Not reachable from the interactive surface any more.** The pager renders
-#: one embed per page and `📤 Post this read to current channel` posts one
-#: embed, and neither ever gets near either of Discord's caps -- `read_batches`
-#: and this budget are kept for whoever else needs to batch a list of embeds,
-#: and for the tests that already pin their behaviour, rather than deleted for
-#: having no call site left in this file.
+#: 5,500 rather than 6,000 leaves room for message content riding with the
+#: embeds. Nothing batches reads any more: the pager renders one embed per
+#: page and `📤 Post this to current channel` posts one embed, and neither gets
+#: near the cap. The budget stays as the yardstick the size test measures a
+#: single read against (the batcher that used it went on 2026-09-12, #589).
 READS_CHAR_BUDGET = 5500
-
-#: Discord's other cap on the same message, kept beside the one that binds so
-#: neither is mistaken for the whole rule.
-READS_EMBEDS_PER_MESSAGE = 10
 
 # ── The day's picks ──────────────────────────────────────────────────────────
 #
@@ -7522,39 +7510,6 @@ def _embed_chars(embed: discord.Embed) -> int:
     total = len(embed.title or "") + len(embed.description or "")
     total += sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
     return total + len((embed.footer.text if embed.footer else "") or "")
-
-
-def read_batches(embeds: list[discord.Embed]) -> list[list[discord.Embed]]:
-    """The reads split into messages Discord will actually accept.
-
-    **Two caps, and the one people know about is not the one that binds.** Ten
-    embeds a message is the famous limit; the 6,000 combined characters across
-    every embed on the message is the one a page of seven opponents runs into,
-    at roughly 2,500 characters each.
-
-    **NOTHING IS DROPPED.** An embed that would not fit starts the next message
-    instead, and one that exceeds the whole budget on its own is sent alone --
-    the reads are the deliverable, and a batching rule that quietly lost one
-    would be exactly the silent cut this file refuses to make anywhere else.
-    A single read cannot realistically reach 6,000 on its own: seven opponents
-    at the longest block any branch produces is well under half of it, and
-    `test_a_full_group_of_reads_fits_a_discord_message` is what keeps that true.
-    """
-    batches: list[list[discord.Embed]] = []
-    current: list[discord.Embed] = []
-    used = 0
-    for embed in embeds:
-        size = _embed_chars(embed)
-        if current and (
-            used + size > READS_CHAR_BUDGET or len(current) >= READS_EMBEDS_PER_MESSAGE
-        ):
-            batches.append(current)
-            current, used = [], 0
-        current.append(embed)
-        used += size
-    if current:
-        batches.append(current)
-    return batches
 
 
 def _reads_roster(state: dict) -> list[dict]:

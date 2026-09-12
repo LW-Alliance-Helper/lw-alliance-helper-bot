@@ -321,12 +321,6 @@ ROUND_ROBIN_STAGES = ("semifinals",)
 # letter -- so an import is never blocked by the picker's bounds.
 GROUP_LABELS = tuple(chr(ord("A") + i) for i in range(16))
 
-# Which entry a recording writes. A group is recorded twice over its life --
-# once at the draw, once at the standings -- and they are different numbers for
-# the same player and round, so they are different columns. Writing one must
-# never destroy the other; that is the same failure `groups` exists to stop.
-RECORDINGS = ("draw", "final")
-
 
 class AmbiguousPlayer(Exception):
     """That name exists on more than one server.
@@ -917,7 +911,7 @@ def init_db() -> None:
         # hundreds of rows, one actor, one moment, and nothing in it is
         # revertable row by row. Folding imports into `edits` would bury every
         # real correction under them and rank whoever ran the import above
-        # every scout in `contributor_summary`. So
+        # every scout in a contributor ranking. So
         # `test_an_import_writes_no_edit_rows` stands, and this table carries
         # what that rule leaves unrecorded.
         #
@@ -954,7 +948,7 @@ def init_db() -> None:
         # worth recording most is the one where NOTHING changed: somebody
         # challenged what we hold and a person confirmed it. Writing that as an
         # edit with old == new would put a no-op in the revert history and make
-        # `contributor_summary` count a confirmation as a correction.
+        # a contributor ranking count a confirmation as a correction.
         #
         # One row per disputed field, all sharing one decision, because the
         # question put to the member is about the entry as a whole: here are
@@ -3138,19 +3132,6 @@ def server_today():
     timezone is how two answers to "today" drift apart.
     """
     return _server_today()
-
-
-def get_group(group_id: int) -> dict | None:
-    """One group row, or None.
-
-    `get_group_members` and `get_group_scouting` both answer "who is in it".
-    This answers "what is it" -- which round, which grouping, which letter --
-    and a surface naming a group on a card needs that without reading eight
-    member rows to find out.
-    """
-    with _get_conn() as conn:
-        row = conn.execute("SELECT * FROM groups WHERE id = ?", (int(group_id),)).fetchone()
-    return dict(row) if row else None
 
 
 def _registrant_name(registrant_id: int) -> str:
@@ -5467,19 +5448,6 @@ def export_edits(start: str, end: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def contributor_summary(limit: int = 25) -> list[dict]:
-    """Who has contributed what. The contributor graph IS the user base â€” no
-    separate table needed to know which servers have people entering data."""
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT actor_discord_id, actor_name, COUNT(*) AS edits, "
-            "MAX(created_at) AS last_seen FROM edits "
-            "GROUP BY actor_discord_id ORDER BY edits DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 # â”€â”€ Sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
@@ -5561,20 +5529,6 @@ def get_session(token: str) -> dict | None:
             (_now(), row["token_hash"]),
         )
     return dict(row)
-
-
-def update_session_premium(token, can_write, writer_guild_id=None):
-    with _get_conn() as conn:
-        conn.execute(
-            "UPDATE sessions SET can_write = ?, writer_guild_id = ?, "
-            "premium_checked_at = ? WHERE token_hash = ?",
-            (
-                1 if can_write else 0,
-                None if writer_guild_id is None else str(writer_guild_id),
-                _now(),
-                _hash(token),
-            ),
-        )
 
 
 def revoke_session(token: str) -> None:

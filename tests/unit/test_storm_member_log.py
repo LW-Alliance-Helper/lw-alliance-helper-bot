@@ -596,7 +596,7 @@ class TestPaginatedRosterMultiSelectView:
         # Flip to page 1.
         inter2 = MagicMock()
         with patch("wizard_registry.safe_edit_response", AsyncMock()):
-            await v._on_next(inter2)
+            await v._on_page(inter2, 1)
         assert v.page == 1
 
         # Simulate a select on page 1 (picks m25 + m27).

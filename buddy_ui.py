@@ -959,24 +959,10 @@ class _PickerView(OwnedView):
         sel.callback = self._cb
         self._sel = sel
         self.add_item(sel)
-        if total > 1:
-            self._pager_button("◀", self._on_prev, disabled=(self.page <= 0))
-            self._pager_button("▶", self._on_next, disabled=(self.page >= total - 1))
+        self.add_pagination_row(page=self.page, page_count=total, on_page=self._on_page, row=1)
 
-    def _pager_button(self, label, cb, *, disabled):
-        btn = discord.ui.Button(
-            label=label, style=discord.ButtonStyle.secondary, row=1, disabled=disabled
-        )
-        btn.callback = cb
-        self.add_item(btn)
-
-    async def _on_prev(self, inter: discord.Interaction):
-        self.page -= 1
-        self._sync()
-        await inter.response.edit_message(view=self)
-
-    async def _on_next(self, inter: discord.Interaction):
-        self.page += 1
+    async def _on_page(self, inter: discord.Interaction, page: int):
+        self.page = page
         self._sync()
         await inter.response.edit_message(view=self)
 

@@ -323,10 +323,11 @@ def test_assignment_logs_embed_sections():
 def test_history_page_member_paginates_and_sorts():
     tally = [(f"M{i:02d}", i, "") for i in range(20)]  # 20 members, M19 = most trains
     p0 = ui.build_history_page_embed(tally, [], mode="member", sort_key=tr.TALLY_SORT_MOST, page=0)
-    assert "Page 1 of 2" in p0.description  # 20 rows / 15 per page → 2 pages
+    # 20 rows / 15 per page: two pages. The count is the pagination row's
+    # job now (2026-09-11, #589), not the header's.
+    assert "Page" not in p0.description
     assert "M19" in p0.description  # most trains on page 1
     p1 = ui.build_history_page_embed(tally, [], mode="member", sort_key=tr.TALLY_SORT_MOST, page=1)
-    assert "Page 2 of 2" in p1.description
     assert "M00" in p1.description  # fewest trains trails to page 2
 
 

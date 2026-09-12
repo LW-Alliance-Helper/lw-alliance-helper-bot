@@ -598,8 +598,7 @@ class _PagedColumnPickerView(OwnedView):
         self.pages = _page_count(headers, self.per_page)
         self.message: discord.Message | None = None
         self.saved = False
-        self._prev: discord.ui.Button | None = None
-        self._next: discord.ui.Button | None = None
+        self._nav: wizard_registry.PaginationRow | None = None
 
     # ── global-index helpers, page-scoped so subclasses don't repeat args ──
     def _page_index_set(self) -> set:
@@ -646,22 +645,16 @@ class _PagedColumnPickerView(OwnedView):
         return sel
 
     def _add_nav_buttons(self, row: int) -> None:
-        """Prev/Next buttons, only if the sheet spans more than one page;
-        ``_render()``/``_update_nav_disabled()`` keep their disabled state
-        current."""
-        if self.pages <= 1:
-            return
-        self._prev = discord.ui.Button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=row)
-        self._prev.callback = self._on_prev
-        self.add_item(self._prev)
-        self._next = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, row=row)
-        self._next.callback = self._on_next
-        self.add_item(self._next)
+        """The pagination row, only if the sheet spans more than one page;
+        ``_render()``/``_update_nav_disabled()`` keep it current, because
+        these pickers re-point their selects rather than rebuilding."""
+        self._nav = self.add_pagination_row(
+            page=self.page, page_count=self.pages, on_page=self._on_page, row=row
+        )
 
     def _update_nav_disabled(self) -> None:
-        if self._prev is not None:
-            self._prev.disabled = self.page <= 0
-            self._next.disabled = self.page >= self.pages - 1
+        if self._nav is not None:
+            self._nav.sync(self.page)
 
     # ── page flip / save — subclasses supply the render hook + edit kwargs ──
     def _render(self) -> None:
@@ -675,13 +668,8 @@ class _PagedColumnPickerView(OwnedView):
         overrides this to also carry a rebuilt embed."""
         return {"view": self}
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._render()
-        await wizard_registry.safe_edit_response(interaction, **self._render_kwargs())
-
-    async def _on_next(self, interaction: discord.Interaction):
-        self.page = min(self.pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._render()
         await wizard_registry.safe_edit_response(interaction, **self._render_kwargs())
 
@@ -923,20 +911,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
         )
         sel.callback = self._on_field_select
         self.add_item(sel)
-        if self.pages > 1:
-            prev = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1, disabled=self.page <= 0
-            )
-            prev.callback = self._on_prev
-            self.add_item(prev)
-            nxt = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                disabled=self.page >= self.pages - 1,
-            )
-            nxt.callback = self._on_next
-            self.add_item(nxt)
+        self.add_pagination_row(page=self.page, page_count=self.pages, on_page=self._on_page, row=1)
         done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.primary, row=1)
         done.callback = self._on_field_done
         self.add_item(done)
@@ -949,10 +924,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
             label, desc = self._FIELDS[self.mode]
             lines.append(f"**Editing {label}:** {desc}.")
             if self.pages > 1:
-                lines.append(
-                    f"Page **{self.page + 1} of {self.pages}** — ◀ ▶ shows more columns. "
-                    "**Done** goes back to the field list."
-                )
+                lines.append("◀ ▶ shows more columns. **Done** goes back to the field list.")
         body = "\n".join(lines) + "\n\n" + transfer.summarize_column_map(self.column_map())
         if self._warn:
             body += f"\n\n{self._warn}"
@@ -962,7 +934,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
 
     # ── interactions ─────────────────────────────────────────────────────────
     def _render(self):
-        """Base ``_on_prev``/``_on_next`` hook — re-render whichever field is
+        """Base ``_on_page`` hook — re-render whichever field is
         currently open. Only called while ``mode`` is a field (the hub has no
         nav buttons wired to it)."""
         self._render_field(self.mode)
@@ -1211,18 +1183,9 @@ class _FilterColumnView(OwnedView):
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
-        self._prev = self._next = None
-        if self.pages > 1:
-            self._prev = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1
-            )
-            self._prev.callback = self._on_prev
-            self.add_item(self._prev)
-            self._next = discord.ui.Button(
-                label="Next ▶", style=discord.ButtonStyle.secondary, row=1
-            )
-            self._next.callback = self._on_next
-            self.add_item(self._next)
+        self._nav = self.add_pagination_row(
+            page=self.page, page_count=self.pages, on_page=self._on_page, row=1
+        )
         back = discord.ui.Button(label=self._back_label, style=discord.ButtonStyle.secondary, row=1)
         back.callback = self._on_back
         self.add_item(back)
@@ -1230,9 +1193,8 @@ class _FilterColumnView(OwnedView):
 
     def _render(self):
         self._sel.options = _page_options(self.all_headers, self.page, set())
-        if self._prev is not None:
-            self._prev.disabled = self.page <= 0
-            self._next.disabled = self.page >= self.pages - 1
+        if self._nav is not None:
+            self._nav.sync(self.page)
 
     async def _cb(self, interaction: discord.Interaction):
         picked = _selected_indices(interaction.data["values"])
@@ -1246,13 +1208,8 @@ class _FilterColumnView(OwnedView):
         await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._render()
-        await wizard_registry.safe_edit_response(interaction, view=self)
-
-    async def _on_next(self, interaction: discord.Interaction):
-        self.page = min(self.pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._render()
         await wizard_registry.safe_edit_response(interaction, view=self)
 

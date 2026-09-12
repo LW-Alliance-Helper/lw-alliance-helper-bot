@@ -688,35 +688,13 @@ class _AttendanceView(OwnedView):
         clear_btn.callback = _on_clear
         self.add_item(clear_btn)
 
-        # Row 3 — pagination (only rendered when total slots > one page).
-        if s.total_pages() > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                row=3,
-                disabled=s.page == 0,
-            )
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                row=3,
-                disabled=s.page >= s.total_pages() - 1,
-            )
+        # Row 3: pagination (only rendered when total slots > one page).
+        async def _on_page(inter: discord.Interaction, page: int):
+            s.page = page
+            self.selected_key = None
+            await self._redraw(inter)
 
-            async def _prev(inter: discord.Interaction):
-                s.page = max(0, s.page - 1)
-                self.selected_key = None
-                await self._redraw(inter)
-
-            async def _next(inter: discord.Interaction):
-                s.page = min(s.total_pages() - 1, s.page + 1)
-                self.selected_key = None
-                await self._redraw(inter)
-
-            prev_btn.callback = _prev
-            next_btn.callback = _next
-            self.add_item(prev_btn)
-            self.add_item(next_btn)
+        self.add_pagination_row(page=s.page, page_count=s.total_pages(), on_page=_on_page, row=3)
 
         # Row 4 — Save.
         save_btn = discord.ui.Button(

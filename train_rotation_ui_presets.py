@@ -19,7 +19,7 @@ import asyncio
 import discord
 
 import wizard_registry
-from wizard_registry import OwnedView
+from wizard_registry import ExpiringView, OwnedView
 import train_rotation as tr
 import train_rotation_ui as ui
 
@@ -37,7 +37,7 @@ def _roster_member_names(guild_id: int) -> list[str]:
     return out
 
 
-class _SpecificMemberPickerView(discord.ui.View):
+class _SpecificMemberPickerView(ExpiringView):
     """Roster-backed picker for a Specific-member day pin (#302). The dropdown
     only sets a *pending* choice (Discord won't fire the change event if you
     re-pick the already-selected member, so selection alone can't be the commit);
@@ -85,23 +85,9 @@ class _SpecificMemberPickerView(discord.ui.View):
             )
             sel.callback = self._on_select
             self.add_item(sel)
-            if self.total_pages > 1:
-                prev = discord.ui.Button(
-                    label="◀ Prev",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page == 0,
-                    row=1,
-                )
-                prev.callback = self._prev
-                self.add_item(prev)
-                nxt = discord.ui.Button(
-                    label="Next ▶",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page >= self.total_pages - 1,
-                    row=1,
-                )
-                nxt.callback = self._next
-                self.add_item(nxt)
+            self.add_pagination_row(
+                page=self.page, page_count=self.total_pages, on_page=self._on_page, row=1
+            )
             save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
             save.callback = self._on_save
             self.add_item(save)
@@ -158,13 +144,8 @@ class _SpecificMemberPickerView(discord.ui.View):
             )
         )
 
-    async def _prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._build()
-        await interaction.response.edit_message(content=self.content(), view=self)
-
-    async def _next(self, interaction: discord.Interaction):
-        self.page = min(self.total_pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._build()
         await interaction.response.edit_message(content=self.content(), view=self)
 

@@ -31,6 +31,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
+from wizard_registry import ExpiringView
 
 logger = logging.getLogger(__name__)
 
@@ -938,7 +939,7 @@ class SharePowerView(discord.ui.View):
 # ── /member_stats leadership picker hub ──────────────────────────────────────
 
 
-class MemberPickerView(discord.ui.View):
+class MemberPickerView(ExpiringView):
     """Leadership-only paginated member picker. A dropdown (names are easier to
     scan/recognise than typeahead) of 25 per page, Prev/Next to page through a
     larger alliance. Picking a member renders their full leadership view."""
@@ -966,8 +967,6 @@ class MemberPickerView(discord.ui.View):
                 "tracked data. To list your whole alliance, set up the member roster via "
                 "`/setup` → 👥 Member Sync (a Premium feature, `/upgrade` to unlock it)."
             )
-        if self.total_pages > 1:
-            parts.append(f"_Page {self.page + 1} of {self.total_pages}_")
         return "\n\n".join(parts)
 
     def _build_controls(self):
@@ -980,19 +979,7 @@ class MemberPickerView(discord.ui.View):
         )
         select.callback = self._on_pick
         self.add_item(select)
-        if self.total_pages > 1:
-            prev = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, disabled=self.page == 0
-            )
-            prev.callback = self._prev
-            self.add_item(prev)
-            nxt = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=self.page >= self.total_pages - 1,
-            )
-            nxt.callback = self._next
-            self.add_item(nxt)
+        self.add_pagination_row(page=self.page, page_count=self.total_pages, on_page=self._on_page)
 
     async def _on_pick(self, interaction: discord.Interaction):
         name = interaction.data["values"][0]
@@ -1006,13 +993,8 @@ class MemberPickerView(discord.ui.View):
         embed = await asyncio.to_thread(_build_leadership_embed, self.guild_id, name)
         await interaction.edit_original_response(content=self.notice(), embed=embed, view=self)
 
-    async def _prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._build_controls()
-        await interaction.response.edit_message(content=self.notice(), view=self)
-
-    async def _next(self, interaction: discord.Interaction):
-        self.page = min(self.total_pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._build_controls()
         await interaction.response.edit_message(content=self.notice(), view=self)
 

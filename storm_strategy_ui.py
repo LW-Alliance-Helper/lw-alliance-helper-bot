@@ -24,9 +24,18 @@ import logging
 import discord
 
 import storm_strategy as ss
+from messages import ROUTE_HINT
 from wizard_registry import ExpiringView, OwnedView
 
 logger = logging.getLogger(__name__)
+
+
+def _presets_hint(event_type: str) -> str:
+    """The route back to the presets surface, for every timeout notice here.
+    `storm_event_hub` imports this module, so its constants are read late."""
+    from storm_event_hub import HUB_BTN_PRESETS, HUB_COMMAND
+
+    return ROUTE_HINT.format(cmd=HUB_COMMAND[event_type], btn=HUB_BTN_PRESETS)
 
 
 # ── In-Discord editor ────────────────────────────────────────────────────────
@@ -675,6 +684,10 @@ class _ApplyToSimilarView(OwnedView):
     and the embed refreshes."""
 
     @property
+    def timeout_hint(self) -> str:
+        return _presets_hint(self._editor.buf.event_type)
+
+    @property
     def owner_id(self) -> int:
         return self._editor.owner_id
 
@@ -796,17 +809,6 @@ class _ApplyToSimilarView(OwnedView):
         skip_btn.callback = _skip
         self.add_item(skip_btn)
 
-    async def on_timeout(self) -> None:
-        """Strip the picker on timeout so a click on a stale option
-        doesn't surface 'Interaction failed'."""
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 class _RenameModal(discord.ui.Modal, title="Rename Preset"):
     def __init__(self, view: "_PresetEditorView"):
@@ -853,9 +855,7 @@ class _PresetEditorView(OwnedView):
 
     @property
     def timeout_hint(self) -> str:
-        from storm_event_hub import HUB_BTN_PRESETS, HUB_COMMAND
-
-        return f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
+        return _presets_hint(self.buf.event_type)
 
     def __init__(self, guild_id: int, user_id: int, buf: ss.PresetBuffer):
         super().__init__(timeout=900)  # 15 min — Discord's interaction token max
@@ -1192,8 +1192,8 @@ class _ConfirmDeleteView(OwnedView):
     `/<parent> strategy delete` slash command and the list view's Delete
     flow."""
 
-    def __init__(self, owner_id: int):
-        super().__init__(timeout=60)
+    def __init__(self, owner_id: int, *, timeout_hint: str):
+        super().__init__(timeout=60, timeout_hint=timeout_hint)
         self.owner_id = owner_id
         self.confirmed: bool | None = None
         self.message: discord.Message | None = None
@@ -1214,15 +1214,6 @@ class _ConfirmDeleteView(OwnedView):
         await inter.response.edit_message(view=self)
         self.stop()
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 async def _run_delete_with_confirm(
     interaction: discord.Interaction,
@@ -1236,7 +1227,7 @@ async def _run_delete_with_confirm(
     flips between `interaction.response.send_message` and
     `interaction.followup.send` for the confirm prompt — the rest of the
     flow uses followup either way."""
-    view = _ConfirmDeleteView(interaction.user.id)
+    view = _ConfirmDeleteView(interaction.user.id, timeout_hint=_presets_hint(event_type))
     prompt = (
         f"⚠️ Delete preset **{name}**? This removes all rows for this preset "
         f"from your Sheet. Can't be undone."
@@ -1331,6 +1322,10 @@ class _StrategyListView(OwnedView):
     are just disabled when no presets exist.
     """
 
+    @property
+    def timeout_hint(self) -> str:
+        return _presets_hint(self.event_type)
+
     def __init__(self, owner_id: int, event_type: str, names: list[str]):
         super().__init__(timeout=600)
         self.owner_id = owner_id
@@ -1408,15 +1403,6 @@ class _StrategyListView(OwnedView):
         delete_btn.callback = _on_delete
         self.add_item(delete_btn)
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 _PRESET_PICKER_MAX_OPTIONS = 25
 
@@ -1426,6 +1412,10 @@ class _PresetPickerView(OwnedView):
     Action picks the destination flow — `edit` opens the editor, `delete`
     runs the confirm + delete sequence. Discord's Select option cap is 25;
     the picker shows the first 25 alphabetically and warns about overflow."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return _presets_hint(self.event_type)
 
     def __init__(
         self,
@@ -1532,15 +1522,6 @@ class _PresetPickerView(OwnedView):
             await inter.response.edit_message(view=self)
         except discord.HTTPException:
             pass
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # Slash-command surface used to live here as a `_StrategyGroup` plus

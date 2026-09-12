@@ -39,6 +39,7 @@ import discord
 
 from messages import (
     CANCEL_BACKPEDAL,
+    ROUTE_HINT,
     PREMIUM_LOCKED_INLINE,
     ROSTER_BUILDER_TIMEOUT,
 )
@@ -2082,6 +2083,10 @@ class RosterBuilderView(OwnedView):
     options reflect the current zone + eligibility."""
 
     @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.session.event_type], btn=HUB_BTN_VIEW_SIGNUPS)
+
+    @property
     def owner_id(self) -> int:
         return self.session.user_id
 
@@ -3431,6 +3436,10 @@ class _AutoFillStrategyPickerView(OwnedView):
     """
 
     @property
+    def timeout_hint(self) -> str:
+        return self.parent_view.timeout_hint
+
+    @property
     def owner_id(self) -> int:
         return self.parent_view.session.user_id
 
@@ -3543,15 +3552,6 @@ class _AutoFillStrategyPickerView(OwnedView):
         except discord.HTTPException:
             pass
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 async def _drop_approve_picker(inter: discord.Interaction) -> None:
     """Drop the Approve & Post picker before the finalize flow takes
@@ -3579,6 +3579,10 @@ class _ApprovePostPickerView(OwnedView):
     View at 5 ActionRows and phase-aware already uses all 5), so the
     single Approve button opens this ephemeral picker instead.
     """
+
+    @property
+    def timeout_hint(self) -> str:
+        return self.parent_view.timeout_hint
 
     @property
     def owner_id(self) -> int:
@@ -3627,15 +3631,6 @@ class _ApprovePostPickerView(OwnedView):
             )
         except discord.HTTPException:
             pass
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 async def _open_pair_subs_view(
@@ -3691,6 +3686,10 @@ class _PairSubsView(OwnedView):
     primary's phase comes from `assignments_for_phase`; the sub binds
     to the same phase via `paired_subs_for_phase`.
     """
+
+    @property
+    def timeout_hint(self) -> str:
+        return self.main_view.timeout_hint
 
     @property
     def owner_id(self) -> int:
@@ -4088,15 +4087,6 @@ class _PairSubsView(OwnedView):
                     await self.message.edit(view=self)
                 except discord.HTTPException:
                     pass
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
@@ -6726,7 +6716,12 @@ async def open_roster_builder(
         elif teams_setting == "B":
             team = "B"
         else:
-            team_view = _TeamPickerView(interaction.user.id)
+            team_view = _TeamPickerView(
+                interaction.user.id,
+                timeout_hint=ROUTE_HINT.format(
+                    cmd=HUB_COMMAND[event_type], btn=HUB_BTN_VIEW_SIGNUPS
+                ),
+            )
             team_view.message = await interaction.followup.send(
                 f"Build roster for **Team A** or **Team B** with preset **{preset_name}**?",
                 view=team_view,
@@ -7027,8 +7022,8 @@ async def open_roster_builder(
 class _TeamPickerView(OwnedView):
     """Two-button picker for DS team. Only the invoking user can click."""
 
-    def __init__(self, owner_id: int):
-        super().__init__(timeout=120)
+    def __init__(self, owner_id: int, *, timeout_hint: str):
+        super().__init__(timeout=120, timeout_hint=timeout_hint)
         self.owner_id = owner_id
         self.selected: Optional[str] = None
         self.message: Optional[discord.Message] = None
@@ -7060,14 +7055,3 @@ class _TeamPickerView(OwnedView):
         b.callback = _pick_b
         self.add_item(a)
         self.add_item(b)
-
-    async def on_timeout(self) -> None:
-        """Strip the buttons after the 2-minute window. Officer can
-        re-run the slash command to re-open the picker."""
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass

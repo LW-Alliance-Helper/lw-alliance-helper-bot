@@ -23,7 +23,7 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT
+from messages import DATE_PARSE_REJECT, ROUTE_HINT
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -572,6 +572,10 @@ class _AttendanceView(OwnedView):
     """
 
     @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.session.event_type], btn=HUB_BTN_ATTENDANCE)
+
+    @property
     def owner_id(self) -> int:
         return self.session.user_id
 
@@ -768,15 +772,6 @@ class _AttendanceView(OwnedView):
             embed=_render_embed(self.session),
             view=self,
         )
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # ── Slash command ────────────────────────────────────────────────────────────

@@ -536,6 +536,20 @@ class TestTrendsView:
         assert view.state.team_filter == "both"
 
     @pytest.mark.asyncio
+    async def test_timeout_names_the_trends_button(self):
+        """Settled 2026-09-12 (#589): the trends view no longer greys out
+        silently; its notice routes back through the hub button."""
+        from storm_trends import _TrendsView
+        from storm_event_hub import HUB_BTN_TRENDS
+
+        view = _TrendsView(self._state())
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        hint = ex.await_args.kwargs["command_hint"]
+        assert hint == f"`/desertstorm` → **{HUB_BTN_TRENDS}**"
+
+    @pytest.mark.asyncio
     async def test_owner_guard_blocks_others(self):
         from storm_trends import _TrendsView
 

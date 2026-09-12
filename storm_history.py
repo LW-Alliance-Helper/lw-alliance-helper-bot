@@ -22,8 +22,8 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT
-from wizard_registry import OwnedView
+from messages import DATE_PARSE_REJECT, ROUTE_HINT
+from wizard_registry import ExpiringView, OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -586,9 +586,15 @@ class _RosterImageLinksView(OwnedView):
         )
 
 
-class _HistoryListView(discord.ui.View):
+class _HistoryListView(ExpiringView):
     """Lists recent event dates as buttons. Click → re-renders the
     embed for that event."""
+
+    @property
+    def timeout_hint(self) -> str:
+        from storm_event_hub import HUB_BTN_PAST_ROSTERS, HUB_COMMAND
+
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_PAST_ROSTERS)
 
     def __init__(
         self,
@@ -671,15 +677,6 @@ class _HistoryListView(discord.ui.View):
             )
 
         return _cb
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # ── Entry point invoked by storm_strategy slash commands ────────────────────

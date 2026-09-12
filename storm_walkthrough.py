@@ -26,12 +26,14 @@ import logging
 import discord
 
 from storm_event_hub import (
+    HUB_COMMAND,
     HUB_BTN_ATTENDANCE,
     HUB_BTN_POST_SIGNUP,
     HUB_BTN_PRESETS,
     HUB_BTN_RULES,
     HUB_BTN_VIEW_SIGNUPS,
 )
+from wizard_registry import ExpiringView
 
 logger = logging.getLogger(__name__)
 
@@ -191,10 +193,14 @@ async def maybe_offer_storm_hub_tour(
         )
 
 
-class _OfferView(discord.ui.View):
+class _OfferView(ExpiringView):
     """First-run offer: [Walk me through this] / [No thanks]. Both
     record the dismissal. The bot only ever offers once per officer +
     walkthrough_key tuple."""
+
+    @property
+    def timeout_hint(self) -> str:
+        return f"`{HUB_COMMAND[self.event_type]}`"
 
     def __init__(
         self,
@@ -238,7 +244,7 @@ class _OfferView(discord.ui.View):
         except discord.HTTPException:
             pass
         steps = _build_storm_hub_tour_steps(self.event_type)
-        await _send_tour_step(inter, steps, index=0)
+        await _send_tour_step(inter, steps, index=0, event_type=self.event_type)
 
     @discord.ui.button(label="No thanks", style=discord.ButtonStyle.secondary)
     async def decline(self, inter: discord.Interaction, btn: discord.ui.Button):
@@ -267,25 +273,13 @@ class _OfferView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    async def on_timeout(self):
-        # Timing out without clicking is treated as "deferred" so the
-        # offer fires again next time. Strip the view from the message
-        # so the buttons don't 404 on a stale click.
-        for item in self.children:
-            item.disabled = True
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(view=self)
-        except discord.HTTPException:
-            pass
-
 
 async def _send_tour_step(
     interaction: discord.Interaction,
     steps: list[str],
     *,
     index: int,
+    event_type: str,
 ) -> None:
     """Send one tour step as an ephemeral followup. The view itself
     carries the index for the next step, so progression doesn't have
@@ -298,6 +292,7 @@ async def _send_tour_step(
         index=index,
         owner_id=interaction.user.id,
         is_last=is_last,
+        event_type=event_type,
     )
     try:
         msg = await interaction.followup.send(
@@ -315,15 +310,18 @@ async def _send_tour_step(
         )
 
 
-class _TourStepView(discord.ui.View):
+class _TourStepView(ExpiringView):
     """One step of the tour. Owns the index so Next/Skip can advance
     correctly. Earlier implementation re-entered a start function on
     every Next click, which threw away the increment and looped on
     step 1 forever."""
 
-    def __init__(self, *, steps: list[str], index: int, owner_id: int, is_last: bool):
-        super().__init__(timeout=600)
+    def __init__(
+        self, *, steps: list[str], index: int, owner_id: int, is_last: bool, event_type: str
+    ):
+        super().__init__(timeout=600, timeout_hint=f"`{HUB_COMMAND[event_type]}`")
         self._steps = steps
+        self._event_type = event_type
         self._index = index
         self._owner_id = owner_id
         self.message: discord.Message | discord.WebhookMessage | None = None
@@ -358,7 +356,9 @@ class _TourStepView(discord.ui.View):
                 await inter.response.edit_message(view=self)
             except discord.HTTPException:
                 pass
-            await _send_tour_step(inter, self._steps, index=self._index + 1)
+            await _send_tour_step(
+                inter, self._steps, index=self._index + 1, event_type=self._event_type
+            )
 
         return _next
 
@@ -409,16 +409,3 @@ class _TourStepView(discord.ui.View):
                 pass
 
         return _close
-
-    async def on_timeout(self):
-        """Strip the view so stale buttons don't 404 with "Interaction
-        failed" after the 10-minute timeout. Per CLAUDE.md's
-        auto-post-view contract."""
-        for item in self.children:
-            item.disabled = True
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(view=self)
-        except discord.HTTPException:
-            pass

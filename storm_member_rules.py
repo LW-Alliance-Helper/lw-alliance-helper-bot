@@ -35,7 +35,7 @@ import logging
 
 import discord
 
-from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP
+from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP, ROUTE_HINT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 from wizard_registry import OwnedView
 
@@ -447,6 +447,10 @@ class _RulesListView(OwnedView):
     limits Views to 25 components; we paginate at 20 rules per page (4
     rows of 5 clear buttons)."""
 
+    @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_RULES)
+
     def __init__(
         self,
         guild_id: int,
@@ -471,18 +475,6 @@ class _RulesListView(OwnedView):
         self.guild = guild
         self.message: discord.Message | None = None
         self._build_buttons()
-
-    async def on_timeout(self) -> None:
-        """Strip the buttons on timeout so officers know the list went
-        stale (Clear and pagination would otherwise surface 'Interaction
-        failed' silently)."""
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
     @property
     def total_pages(self) -> int:
@@ -567,6 +559,10 @@ class _AddRuleTypePickerView(OwnedView):
     points the officer at the slash commands instead.
     """
 
+    @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_RULES)
+
     def __init__(self, *, event_type: str, owner_id: int):
         super().__init__(timeout=120)
         self.event_type = event_type
@@ -641,15 +637,6 @@ class _AddRuleTypePickerView(OwnedView):
             )
         except discord.HTTPException:
             pass
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 def _make_clear_callback(view: "_RulesListView", idx: int):
@@ -832,6 +819,10 @@ class InlinePowerBandView(OwnedView):
     the threshold. The whole flow stays ephemeral.
     """
 
+    @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_RULES)
+
     def __init__(self, event_type: str, owner_id: int):
         super().__init__(timeout=300)
         self.event_type = event_type
@@ -922,12 +913,3 @@ class InlinePowerBandView(OwnedView):
 
         cancel_btn.callback = _on_cancel
         self.add_item(cancel_btn)
-
-    async def on_timeout(self) -> None:
-        for child in self.children:
-            child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass

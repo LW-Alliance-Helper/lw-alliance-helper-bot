@@ -1681,12 +1681,13 @@ async def help_slash(interaction: discord.Interaction):
         bot=bot,
     )
     embed = build_overview_embed(is_premium_flag)
-    view = HelpView(is_premium_flag, origin=interaction)
+    view = HelpView(is_premium_flag)
     await interaction.response.send_message(
         embed=embed,
         view=view,
         ephemeral=True,
     )
+    view.message = await interaction.original_response()
 
 
 # The owner-only /admin diagnostic toolkit lives in its own module (#372) --

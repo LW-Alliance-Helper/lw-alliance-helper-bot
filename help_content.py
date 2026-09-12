@@ -36,6 +36,7 @@ from survey_hub import (
     SURVEY_HUB_BTN_REMOVE,
     SURVEY_HUB_BTN_TRANSLATE,
 )
+from wizard_registry import ExpiringView
 
 
 PRIVACY_URL = "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
@@ -573,23 +574,14 @@ class HelpCategorySelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 
-class HelpView(discord.ui.View):
+class HelpView(ExpiringView):
     """Dropdown-driven /help. Stores the originating interaction so the
     select can be disabled in place when the 3-min view timeout fires
     (matches the auto-post-timeout cleanup pattern used elsewhere).
     """
 
-    def __init__(self, is_premium: bool, *, origin: Optional[discord.Interaction] = None):
-        super().__init__(timeout=180)
-        self.origin = origin
-        self.add_item(HelpCategorySelect(is_premium))
+    timeout_hint = "`/help`"
 
-    async def on_timeout(self):
-        for item in self.children:
-            if hasattr(item, "disabled"):
-                item.disabled = True
-        if self.origin is not None:
-            try:
-                await self.origin.edit_original_response(view=self)
-            except discord.HTTPException:
-                pass
+    def __init__(self, is_premium: bool):
+        super().__init__(timeout=180)
+        self.add_item(HelpCategorySelect(is_premium))

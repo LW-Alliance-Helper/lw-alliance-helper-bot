@@ -209,6 +209,8 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "loops",
         "deploy",
         "config_backup",
+        # The step 10 measurement on #589: what a config read costs on the loop.
+        "db_timings",
     }
     # bot.py's own `_ADMIN_GUILD_IDS` is a `from bot_admin import ...`
     # snapshot taken during its reload above -- it doesn't retroactively
@@ -261,6 +263,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "loops",
             "deploy",
             "config_backup",
+            "db_timings",
         }
 
     # Unrelated guild sees nothing.

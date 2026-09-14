@@ -9,8 +9,10 @@ the block's own body had no coverage. These tests were written against
 the pre-refactor function and pass unchanged against the refactored one:
 they drive the real views the block posts, in order, and assert on the
 returned config dict, the order of the prompts, and the button labels
-officers see. Nothing here knows the block's internal shape, only what
-it posts and what it returns.
+officers see. Nothing here knows the block's internal shape beyond the
+attribute each view answers through (the sub mode view's became
+`outcome` when it joined the shared `_ChoiceView`); what it posts and
+what it returns are the contract.
 
 The `Script` harness answers each view the block posts, in order. An
 entry is `(attribute, value)` to set on the view before stopping it,
@@ -276,7 +278,7 @@ class TestGate:
 HAPPY = [
     ("selected", True),  # opt in
     ("outcome", "default"),  # power data source
-    ("selected", "pool"),  # sub mode
+    ("outcome", "pool"),  # sub mode
     ("confirmed", True),  # sign-up channel (patched step)
     ("selected", False),  # power-refresh DM
     ("outcome", "default"),  # DM template: Starter
@@ -533,7 +535,7 @@ class TestSubMode:
     async def test_paired_saved_reads_use_current(self, seeded_db):
         current = _current(sub_mode="paired")
         answers = list(HAPPY)
-        answers[2] = ("selected", "paired")
+        answers[2] = ("outcome", "paired")
         result, script = await _drive(answers, current=current, keep_values=FULL_TABS)
         assert script.labels(2) == ["Pool: flat sub list", "Use Current: Paired"]
         assert result["sub_mode"] == "paired"
@@ -557,7 +559,7 @@ class TestSubMode:
 STALE_ON = [
     ("selected", True),  # opt in
     ("outcome", "default"),  # power source
-    ("selected", "pool"),
+    ("outcome", "pool"),
     ("confirmed", True),
     ("selected", True),  # power-refresh DM on
     ("selected", True),  # stale DM on
@@ -648,7 +650,7 @@ class TestStalePower:
         )
         harness = _Harness(has_config=True)
         answers = (
-            [("value", True), ("outcome", "default"), ("selected", "pool"), ("confirmed", True)]
+            [("value", True), ("outcome", "default"), ("outcome", "pool"), ("confirmed", True)]
             + [("value", True), ("value", True)]  # refresh gate, stale gate
             + [("outcome", "keep"), ("outcome", "keep")]  # days, source
             + TAIL

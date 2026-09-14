@@ -39,6 +39,7 @@ import discord
 
 from setup_hub import STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
+from time_helpers import server_today
 
 
 def _log():
@@ -286,7 +287,8 @@ async def _ask_date(w: _Walk) -> date:
 
     raw = await w.ask_text("Type the date (e.g. `April 14`, `4/14`) or type `today`:")
     if raw.lower() == "today":
-        return date.today()
+        # A storm is a game event, so "today" is the in-game (server) day.
+        return server_today()
     from train import parse_date_and_name
 
     parsed, _, _ = parse_date_and_name(f"{raw} - placeholder")

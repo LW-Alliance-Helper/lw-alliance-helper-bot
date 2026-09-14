@@ -463,8 +463,10 @@ class TestParticipationFlowHappyPath:
         assert captured.get("event_type") == "DS"
         assert captured.get("answers", {}).get("outcome") == "Win"
         assert captured.get("answers", {}).get("rescheduled") == "Yes"
-        # log_date should be today
-        assert captured.get("log_date") == date.today()
+        # log_date should be today, in the game's (server) calendar
+        from time_helpers import server_today
+
+        assert captured.get("log_date") == server_today()
 
 
 # ── Participation flow — numeric retry on bad input ───────────────────────────

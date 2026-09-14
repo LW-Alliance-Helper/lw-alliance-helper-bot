@@ -230,14 +230,18 @@ class TestDateStep:
         assert (
             values[0] == "__today__" and values[1] == "__yesterday__" and values[-1] == "__manual__"
         )
+        # The quick picks are server days, like the typed "today".
+        from time_helpers import server_today
+
+        assert select.options[0].description == server_today().isoformat()
 
     @pytest.mark.asyncio
     async def test_typed_today(self, seeded_db):
         _configure([TEXT_Q])
         r = await Run(views=[{"wants_manual": True}], replies=["today", "Win"]).go()
-        # Pins the pre-refactor behaviour: the container's calendar day, not
-        # the server day. The rule says never; the fix is its own commit.
-        assert r.row[1] == date.today()  # noqa: DTZ011
+        from time_helpers import server_today
+
+        assert r.row[1] == server_today()
         assert "Type the date (e.g. `April 14`, `4/14`) or type `today`:" in r.script.texts
         # The prompt and the reply are both deleted after a typed answer.
         assert r.replies.deleted == ["today", "Win"]

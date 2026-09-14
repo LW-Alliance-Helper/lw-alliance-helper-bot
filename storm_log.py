@@ -413,7 +413,10 @@ class _LogDatePickerView(discord.ui.View):
     def _build(self, recent_dates: list[str]):
         import datetime as _dt
 
-        today = _dt.date.today()
+        # A storm is a game event, so the quick picks are in-game (server) days.
+        from time_helpers import server_today
+
+        today = server_today()
         yesterday = today - _dt.timedelta(days=1)
 
         options: list[discord.SelectOption] = []

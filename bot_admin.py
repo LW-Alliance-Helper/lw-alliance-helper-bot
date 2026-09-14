@@ -51,6 +51,8 @@ from config import (
 )
 import support_join_watch
 import bot_state
+import db_timings
+from db_timings import SLOW_MS
 from wizard_registry import OwnedView
 
 bot = bot_state.bot
@@ -732,6 +734,73 @@ async def admin_shiny_servers_slash(
         await interaction.response.send_message(
             content=f"{summary}\n*(full table attached)*",
             file=discord.File(fp, filename=f"shiny_servers_{min_server}_{max_server}.txt"),
+            ephemeral=True,
+        )
+
+
+def render_db_timings(snap: dict, *, now: float, limit: int = 20) -> str:
+    """The `/admin db_timings` text: one row per config helper, the ones that
+    spend the most time on the event loop first, then the recent slow calls.
+    Kept as a function so the shape is testable without a Discord in the way."""
+    since = datetime.fromtimestamp(snap["since"], tz=timezone.utc)
+    hours = max(0.0, (now - snap["since"]) / 3600)
+    helpers = snap["helpers"]
+    total_calls = sum(h["calls"] for h in helpers)
+    on_loop = sum(h["on_loop"] for h in helpers)
+    loop_ms = sum(h["loop_ms"] for h in helpers)
+    head = (
+        f"📊 Config database timings since {since:%Y-%m-%d %H:%M} UTC "
+        f"({hours:.1f} h): {total_calls:,} calls, {on_loop:,} on the event loop, "
+        f"{loop_ms / 1000:.1f} s of loop time in total."
+    )
+    if not helpers:
+        return head + "\n\nNothing recorded yet."
+    cols = f"{'helper':<32} {'calls':>7} {'on loop':>8} {'avg ms':>7} {'max ms':>7} {'≥20ms':>6}"
+    lines = [cols, "-" * len(cols)]
+    for h in helpers[:limit]:
+        over_20 = h["buckets"][3] + h["buckets"][4]
+        lines.append(
+            f"{h['helper'][:32]:<32} {h['calls']:>7,} {h['on_loop']:>8,} "
+            f"{h['avg_ms']:>7.2f} {h['max_ms']:>7.1f} {over_20:>6,}"
+        )
+    if len(helpers) > limit:
+        lines.append(f"... and {len(helpers) - limit} more helpers")
+    slow = snap["recent_slow"]
+    if slow:
+        lines.append("")
+        lines.append(f"Recent calls over {int(SLOW_MS)} ms, newest last:")
+        for when, helper, ms, was_on_loop in slow[-8:]:
+            stamp = datetime.fromtimestamp(when, tz=timezone.utc)
+            where = "on the loop" if was_on_loop else "off the loop"
+            lines.append(f"  {stamp:%m-%d %H:%M}  {helper:<28} {ms:>6.0f} ms  {where}")
+    return head + "\n```\n" + "\n".join(lines) + "\n```"
+
+
+@admin_group.command(
+    name="db_timings",
+    description="(Bot owner only) How long config database calls take, per helper, on and off the event loop",
+)
+@app_commands.describe(reset="Clear the counters after showing them")
+async def admin_db_timings_slash(interaction: discord.Interaction, reset: bool = False):
+    """The step 10 measurement on #589: whether a config read on the event
+    loop is a convention to bless or a class of bug to fix. In-process
+    counters from `db_timings`, so a restart starts them over; read them
+    after a day of loops and traffic, not after a deploy."""
+    if not await _require_bot_owner(interaction):
+        return
+    import time as _time  # noqa: PLC0415
+
+    text = render_db_timings(db_timings.snapshot(), now=_time.time())
+    if reset:
+        db_timings.reset()
+        text += "\nCounters reset."
+    if len(text) <= 1900:
+        await interaction.response.send_message(text, ephemeral=True)
+    else:
+        fp = io.BytesIO(text.encode("utf-8"))
+        await interaction.response.send_message(
+            content="📊 Config database timings (attached).",
+            file=discord.File(fp, filename="db_timings.txt"),
             ephemeral=True,
         )
 

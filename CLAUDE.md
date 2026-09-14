@@ -258,7 +258,7 @@ reasoning. Verifying their contents is
 | File | Role | Size |
 |---|---|---|
 | `bot.py` | Entry point. Gateway intents (`members` is privileged), slash command tree, `on_ready`, and the four `@tasks.loop` background loops (`growth_task`, `stats_publish_task`, `shiny_tasks_refresh_task`, `shiny_tasks_post_task`). The loops and the ~241-line `on_ready` are the unfinished half of [#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372) — don't assume the split is done. | ~1.3K |
-| `bot_admin.py` / `bot_state.py` | Owner-only `/admin` toolkit extracted from `bot.py` ([#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372), partial), plus the shared bot-state accessor both sides import to avoid a circular import. | ~1K total |
+| `bot_admin.py` / `bot_state.py` | Owner-only `/admin` toolkit extracted from `bot.py` ([#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372), partial), plus the shared bot-state accessor both sides import to avoid a circular import. `/admin db_timings` reads `db_timings.py`. | ~1.1K total |
 | `api_server.py` | aiohttp server backing the Map Manager integration. Gated by `MAPMANAGER_API_KEY`; the Procfile runs the bot as a `web` service for it. | ~175 |
 | `setup_cog.py` | The `/setup` hub launcher (`setup_hub`) + every feature wizard (foundations, birthdays, growth, storm, members, shiny tasks, etc.), reachable as hub buttons. Largest file in the repo. | ~11.2K |
 | `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. `iter_guild_event_drafts` (the per-guild draft computation) is extracted so the live loop and the #227 catch-up scan share one code path. | ~970 LOC |
@@ -273,6 +273,7 @@ reasoning. Verifying their contents is
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
+| `db_timings.py` | Per-helper timing of every config database call, on and off the event loop, recorded by `config._get_conn` and read by `/admin db_timings`. The measurement behind the on-loop-reads rule ([#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589) step 10); one warning per helper per ten minutes for a call over 50 ms. | ~170 |
 | `wizard_registry.py` | The two view base classes every hub, picker and confirm inherits (`OwnedView`, `ExpiringView`; see § Patterns to reuse), plus `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~280 |
 | `defaults.py` | Hardcoded copy: themes/tones, default mail templates, default DM bodies. | ~100 |
 | `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
@@ -534,6 +535,9 @@ Do not write a copy of any of them.
   called the config-helper class "worth a repo-wide look" and closed with
   284 of them untouched, because nothing could find them again.
   `scripts/quality/blocking_io.py` is what that look should have been.
+  Whether those 284 are a convention or a bug is decided by measurement,
+  not argument: `/admin db_timings` shows what each config helper costs
+  on the loop in production. The rule follows the numbers (#589 step 10).
 - **Dates: never call `date.today()`.** It answers without being asked
   which calendar, and hands back the container's UTC day — nobody's.
   `time_helpers` is the single home: `server_today()` is the default

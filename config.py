@@ -28,6 +28,7 @@ from defaults import (
     DEFAULT_CS_TEMPLATE,
 )
 from time_helpers import SERVER_TZ
+import db_timings
 
 DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
@@ -86,7 +87,12 @@ class GuildConfig:
 
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # Timed from here to the end of the caller's `with` block, per calling
+    # helper, for `/admin db_timings` (#589, step 10: is a config read on the
+    # event loop a convention to bless or a class of bug to fix?).
+    t0 = time.perf_counter()
+    conn = sqlite3.connect(DB_PATH, factory=db_timings.TimedConnection)
+    conn.start(t0, db_timings.caller_name(2), db_timings.on_event_loop())
     conn.row_factory = sqlite3.Row
     # WAL is load-bearing for storage, not just for concurrency.
     #

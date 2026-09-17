@@ -224,12 +224,14 @@ def test_the_buddy_wizard_asks_where_presets_live_and_counts_its_steps():
     import inspect
     import re
 
-    import setup_cog
+    import buddy_setup
 
-    src = inspect.getsource(setup_cog.run_buddy_setup)
+    # The wizard is one function per step now (#611), so the whole module
+    # is the source to read.
+    src = inspect.getsource(buddy_setup)
     assert 'exclude_field="preset_tab"' in src
-    assert 'update_buddy_config_field(guild_id, "preset_tab", preset_tab)' in src
-    assert "**Preset tab:** {preset_tab}" in src
+    assert '("preset_tab", a.preset_tab)' in src
+    assert "**Preset tab:** {a.preset_tab}" in src
 
     steps = re.findall(r"\*\*Step (\d+)[a-z]? of (\d+)", src)
     assert steps, "no step headings found"

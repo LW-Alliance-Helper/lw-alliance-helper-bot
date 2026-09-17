@@ -486,7 +486,17 @@ async def finalize_structured_roster(
 
     b = _builder()
     s = view.session
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    # The phase-aware Approve & Post picker reaches here through
+    # `_drop_approve_picker`, which has already deferred this
+    # interaction so it can delete the picker message. Deferring a
+    # second time raises `discord.InteractionResponded`, which
+    # subclasses `ClientException` rather than `HTTPException`, so
+    # nothing on that path caught it and the whole finalize step was
+    # skipped in silence (#585). Direct-button presets arrive
+    # undeferred and still need this: finalize does Sheets I/O well
+    # past the 3-second response window.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
     await _refresh_powers(interaction, s)
 

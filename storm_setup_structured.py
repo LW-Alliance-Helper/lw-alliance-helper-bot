@@ -7,7 +7,7 @@ templates (#226) and the strategy preset / member rules library (#54, #144).
 
 Split out of `setup_cog.py` in the #589 step 11 refactor, following the
 1.8.0 precedent of `storm_strategy_ui.py` and `train_rotation_ui_*.py`: the
-wizard lives in `setup_cog.run_storm_setup`, which calls
+wizard lives in `storm_setup.run_storm_setup`, which calls
 `run_structured_flow_step` as its eighth step. This module reaches back
 into `setup_cog` for the shared wizard pieces (the yes/no views, the
 channel picker, `ask_keep_or_change`, the schedule sub-flow) through

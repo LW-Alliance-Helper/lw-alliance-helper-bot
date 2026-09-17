@@ -815,7 +815,7 @@ async def _run_create_event_wizard(
         get_guild_events,
     )
     from scheduler import WARNING_BLURB_DEFAULT
-    from setup_cog import _parse_12h_time, _parse_month_day
+    from wizard_time import _parse_12h_time, _parse_month_day
 
     guild_id = interaction.guild_id
     channel = interaction.channel
@@ -1247,7 +1247,7 @@ class _AnchorDateModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from config import get_guild_event, set_guild_event_active, set_guild_event_anchor
-        from setup_cog import _parse_month_day
+        from wizard_time import _parse_month_day
 
         raw = self.field.value.strip()
         parsed = _parse_month_day(raw)

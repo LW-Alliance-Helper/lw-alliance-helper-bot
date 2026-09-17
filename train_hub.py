@@ -65,7 +65,7 @@ def _build_train_hub_embed(bot, guild_id: int) -> discord.Embed:
 
     def _time(hhmm):
         # Canonical "6:00pm EDT" renderer, shared with the setup summaries.
-        from setup_cog import _format_time_with_tz
+        from wizard_time import _format_time_with_tz
 
         return _format_time_with_tz(hhmm, tz)
 

@@ -11,8 +11,8 @@ wizard lives in `storm_setup.run_storm_setup`, which calls
 `run_structured_flow_step` as its eighth step. The shared wizard pieces
 (the yes/no views, the channel picker, `ask_keep_or_change`) come from
 `wizard_steps`; this module reaches back into `setup_cog` through
-`_setup()` at call time only for what still lives there (the schedule
-sub-flow, the column-letter helper, the inline-create offers), so
+`_setup()` at call time only for what still lives there (the
+column-letter helper, the inline-create offers), so
 importing either module first works and every `patch("setup_cog.X")` on
 those keeps its target. Tests patch the shared pieces on `wizard_steps`.
 
@@ -43,6 +43,7 @@ import discord
 
 import wizard_registry
 import wizard_steps
+import wizard_time
 from wizard_registry import wait_view_or_cancel
 from messages import GENERIC_CMD_TIMEOUT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS, HUB_BTN_RULES
@@ -525,10 +526,9 @@ async def _ask_signup_schedule(w: _Wizard, result: dict) -> None:
     and shiny wizards do."""
     from config import get_config
 
-    sc = _setup()
     guild_cfg = get_config(w.guild_id) if w.guild_id else None
     tz_str = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
-    sched = await sc._ask_signup_schedule(
+    sched = await wizard_time._ask_signup_schedule(
         w.channel,
         w.bot,
         w.user,

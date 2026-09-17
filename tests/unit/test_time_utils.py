@@ -14,10 +14,10 @@ from tests.conftest import TEST_GUILD_ID
 
 
 class TestParse12hTime:
-    """Test _parse_12h_time from setup_cog."""
+    """Test _parse_12h_time from wizard_time."""
 
     def setup_method(self):
-        from setup_cog import _parse_12h_time
+        from wizard_time import _parse_12h_time
 
         self.parse = _parse_12h_time
 
@@ -65,7 +65,7 @@ class TestFormat24hTo12h:
     was reported in dev for /setup_shiny_tasks Step 4."""
 
     def setup_method(self):
-        from setup_cog import _format_24h_to_12h
+        from wizard_time import _format_24h_to_12h
 
         self.fmt = _format_24h_to_12h
 
@@ -82,7 +82,7 @@ class TestFormat24hTo12h:
         assert self.fmt("12:00") == "12:00pm"
 
     def test_round_trip_with_parse(self):
-        from setup_cog import _parse_12h_time
+        from wizard_time import _parse_12h_time
 
         for raw in ("9:00am", "10:15pm", "12:00am", "12:00pm", "1:05am"):
             assert self.fmt(_parse_12h_time(raw)) == raw
@@ -108,7 +108,7 @@ class TestParseMonthDay:
     leaning year rule stays local."""
 
     def setup_method(self):
-        from setup_cog import _parse_month_day
+        from wizard_time import _parse_month_day
 
         self.parse = _parse_month_day
 
@@ -191,7 +191,7 @@ class TestFormatTimeWithTz:
     leaves them guessing which timezone the reminder fires in."""
 
     def setup_method(self):
-        from setup_cog import _format_time_with_tz
+        from wizard_time import _format_time_with_tz
 
         self.fmt = _format_time_with_tz
 

@@ -1864,7 +1864,7 @@ async def _step_frequency(channel, owner_id, current_freq, cancel_event):
 async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
     """Walk the three in-game message templates. Returns ``"OK"`` or
     ``"ABORT"`` (``ask_keep_or_change`` posts its own cancel/timeout notice)."""
-    from setup_cog import ask_keep_or_change
+    from wizard_steps import ask_keep_or_change
     from defaults import DEFAULT_TRANSFER_TEMPLATES
 
     await channel.send(
@@ -1892,7 +1892,7 @@ async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
 
 
 async def _step_removal(channel, guild_id, owner_id, cancel_event):
-    from setup_cog import YesNoView
+    from wizard_steps import YesNoView
 
     view = YesNoView()
     await channel.send(
@@ -1912,7 +1912,7 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
 
 async def _step_enrich(channel, guild_id, owner_id, cancel_event):
     """Opt into blank-cell enrichment of existing rows from the source (#9)."""
-    from setup_cog import YesNoView
+    from wizard_steps import YesNoView
 
     view = YesNoView()
     await channel.send(

@@ -56,7 +56,7 @@ async def _invoke(*, default, current=None):
     channel = MagicMock()
     channel.send = AsyncMock()
 
-    with patch("setup_cog.wait_view_or_cancel", _fake_cancel):
+    with patch("wizard_steps.wait_view_or_cancel", _fake_cancel):
         result = await ask_keep_or_change(
             channel,
             "Some prompt",

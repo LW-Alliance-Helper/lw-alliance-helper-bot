@@ -313,7 +313,8 @@ class TestStepFresh:
         # A pristine row stores name column 0, which reads back as "A".
         assert rec.kw(2)["default"] == "A" and rec.kw(2)["current"] == "A"
         assert rec.prompt(3).startswith("**Step 7.5: Roster Source: First Data Row**\n")
-        assert rec.kw(3)["default"] == "2" and rec.kw(3)["current"] == ""
+        # A pristine row stores start row 2, which reads back as current "2".
+        assert rec.kw(3)["default"] == "2" and rec.kw(3)["current"] == "2"
         assert rec.kw(3)["modal_label"] == "Row number"
 
     @pytest.mark.asyncio

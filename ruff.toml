@@ -18,9 +18,12 @@ line-length = 100
 # errors; ASYNC (flake8-async) for stdlib-level blocking calls inside
 # `async def` (blocking sleep/subprocess/pathlib/file-I/O, async-with-timeout
 # params -- see #366). ASYNC does NOT know about our own blocking I/O
-# (gspread, sqlite) since those aren't stdlib -- that class of bug still
-# needs a human grep, ASYNC only catches new stdlib-level regressions going
-# forward. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
+# (gspread, sqlite) since those aren't stdlib -- that class still needs
+# `scripts/quality/blocking_io.py`; ASYNC only catches new stdlib-level
+# regressions going forward. For sqlite the rule is measured, not
+# guessed (#589 step 10, CLAUDE.md § Patterns to reuse): config reads stay
+# on the loop, config writes inside a loop tick go through
+# `asyncio.to_thread`. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
 # and import sorting (I) are intentionally left off -- whitespace/layout is
 # the formatter's job, and we don't want the linter second-guessing the
 # author's `if x: return` style choices.

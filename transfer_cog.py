@@ -657,7 +657,7 @@ class TransferCog(commands.Cog):
             except Exception as e:
                 logger.warning("[TRANSFER] poll error for guild %s: %s", cfg.get("guild_id"), e)
                 _capture(e)
-        config.stamp_loop_heartbeat("transfer_poll")
+        await asyncio.to_thread(config.stamp_loop_heartbeat, "transfer_poll")
 
     @poll.before_loop
     async def _before(self):

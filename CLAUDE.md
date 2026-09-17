@@ -482,8 +482,10 @@ Do not write a copy of any of them.
 - See `bot.growth_task`, `train_cog.check_reminder`,
   `survey.check_scheduled_reminders` for canonical examples.
 - **Clock-driven loops stamp a heartbeat** at the end of each clean tick
-  via `config.stamp_loop_heartbeat("<name>")` so the #227 outage catch-up
-  can detect downtime. The four per-minute loops (`shiny_post`,
+  via `await asyncio.to_thread(config.stamp_loop_heartbeat, "<name>")`
+  so the #227 outage catch-up can detect downtime. The stamp is a write,
+  so it goes through the thread hand-off (see the config-database rule
+  below); the tests still patch `config.stamp_loop_heartbeat`. The four per-minute loops (`shiny_post`,
   `survey_reminder`, `train_reminder`, `storm_signup`) are the reliable
   outage signal; `scheduler` stamps too but is excluded from window
   detection (variable sleep). Adding a new clock-driven member-facing
@@ -539,9 +541,21 @@ Do not write a copy of any of them.
   called the config-helper class "worth a repo-wide look" and closed with
   284 of them untouched, because nothing could find them again.
   `scripts/quality/blocking_io.py` is what that look should have been.
-  Whether those 284 are a convention or a bug is decided by measurement,
-  not argument: `/admin db_timings` shows what each config helper costs
-  on the loop in production. The rule follows the numbers (#589 step 10).
+  Whether those 284 were a convention or a bug was decided by
+  measurement, not argument: `/admin db_timings` shows what each config
+  helper costs on the loop (#589 step 10).
+- **Config database: reads stay on the loop, writes in a loop tick go
+  through `asyncio.to_thread`.** Measured over a day on staging
+  (2026-09-16, 27,403 calls): every read helper the per-minute loops
+  call averaged under a millisecond with a worst case of 75 ms, so the
+  284 on-loop reads are a convention, and a thread hop per read would
+  cost more than it saves. Writes are the tail: they fsync under WAL on
+  the volume, and the heartbeat stamp alone (3.8 ms average, 251 ms
+  worst, nine loops once a minute) was 33 of the 46 seconds the
+  database took from the loop all day. A write that runs once when a
+  person clicks is fine where it is; a write inside a `tasks.loop` body
+  is threaded. The numbers are staging's; re-read `/admin db_timings`
+  in production after 1.9.0 and revise this line if they disagree.
 - **Dates: never call `date.today()`.** It answers without being asked
   which calendar, and hands back the container's UTC day — nobody's.
   `time_helpers` is the single home: `server_today()` is the default

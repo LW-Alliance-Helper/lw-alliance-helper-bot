@@ -1128,7 +1128,7 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
         # loops define the window. We stamp anyway for observability.
         from config import stamp_loop_heartbeat
 
-        stamp_loop_heartbeat("scheduler")
+        await asyncio.to_thread(stamp_loop_heartbeat, "scheduler")
 
         triggers = []
 

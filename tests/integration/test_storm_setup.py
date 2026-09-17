@@ -475,9 +475,9 @@ class TestFreshWalk:
 
         with config._get_conn() as conn:
             conn.execute(
-                "INSERT INTO storm_registration_posts (guild_id, event_type, event_date, channel_id, message_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (TEST_GUILD_ID, "DS", "2026-09-20", 1, 1),
+                "INSERT INTO storm_registration_posts (guild_id, event_type, event_date, channel_id, message_id, posted_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (TEST_GUILD_ID, "DS", "2026-09-20", 1, 1, "2026-09-16T00:00:00+00:00"),
             )
             conn.commit()
         s = await _drive(

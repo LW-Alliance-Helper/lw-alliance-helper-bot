@@ -288,3 +288,24 @@ class TestTimeStep:
     async def test_abandoning_the_time_step_returns_none(self):
         result, _ = await _drive([("selected", 5)], times=[None])
         assert result is None
+
+
+# ── The move itself ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_parse_12h_time",
+        "_format_24h_to_12h",
+        "_format_time_with_tz",
+        "_parse_month_day",
+        "_normalise_hhmm",
+        "_DOW_NAMES",
+        "_ask_signup_schedule",
+    ],
+)
+def test_setup_cog_re_exports_the_same_object(name):
+    import wizard_time
+
+    assert getattr(setup_cog, name) is getattr(wizard_time, name)

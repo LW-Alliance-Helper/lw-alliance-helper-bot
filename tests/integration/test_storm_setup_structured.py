@@ -176,7 +176,7 @@ class _Harness:
             patch("config.get_roster_dm_templates", return_value=self.dm_templates),
             patch("storm_strategy.list_presets", return_value=self.presets),
             patch("storm_member_rules.list_rules", return_value=self.rules),
-            patch("setup_cog._ask_signup_schedule", side_effect=self.schedule),
+            patch("wizard_time._ask_signup_schedule", side_effect=self.schedule),
             patch("wizard_steps.ChannelSelectStep", return_value=self.channel_step),
         ]
         for p in self._patches:

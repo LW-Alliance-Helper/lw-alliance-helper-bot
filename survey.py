@@ -1937,7 +1937,7 @@ class _DayPickView(discord.ui.View):
 async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
     """Walk leadership through configuring a survey's scheduled reminder."""
     from config import save_survey_reminder, get_config
-    from setup_cog import _format_time_with_tz
+    from wizard_time import _format_time_with_tz
 
     # Pick which survey
     survey = await _pick_survey(
@@ -2122,7 +2122,7 @@ async def _ask_time(
     is used only to render the "current:" hint in the button label as
     e.g. `8:00am EDT` — saved values are still HH:MM 24h.
     """
-    from setup_cog import _parse_12h_time, _format_time_with_tz
+    from wizard_time import _parse_12h_time, _format_time_with_tz
 
     current_label = _format_time_with_tz(default, tz_name) or default
 

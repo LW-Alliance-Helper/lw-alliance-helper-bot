@@ -56,6 +56,9 @@ class _Abort(Exception):
 
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN)
+#: The route back the keep-or-change helper prints on its own timeout notice:
+#: the hub button, like every other exit here. `/setup_train` went with #201.
+NAV = f"setup → {HUB_BTN_TRAIN}"
 
 
 # ── Shared handles ───────────────────────────────────────────────────────────
@@ -99,7 +102,7 @@ class _Wizard:
 
     async def keep_or_change(self, prompt: str, **kw) -> str:
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd="setup_train", cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_cmd=NAV, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort
@@ -450,7 +453,9 @@ def _summary_fields(current: dict, guild_tz: str) -> list[tuple[str, str]]:
     if current.get("rotation_enabled"):
         import train_rotation as _tr
 
-        _wd = int(current.get("weekly_draft_day", 6) or 6)
+        # 0 is Monday, so the fallback is for a missing value only, not a falsy one.
+        _saved_wd = current.get("weekly_draft_day")
+        _wd = 6 if _saved_wd is None else int(_saved_wd)
         _draft_day = _tr.WEEKDAY_NAMES[_wd] if 0 <= _wd < len(_tr.WEEKDAY_NAMES) else "?"
         _confirm = _format_time_with_tz(current.get("reminder_time"), guild_tz) or "not set"
         _pub = current.get("rotation_public_channel_id", 0) or 0

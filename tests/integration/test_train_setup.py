@@ -275,7 +275,7 @@ class TestWizardFresh:
             "⚠️ *Make sure this tab exists in your sheet before continuing.*"
         )
         assert rec.kw(0)["default"] == "Train Schedule" and rec.kw(0)["current"] == "Train Schedule"
-        assert rec.kw(0)["timeout_cmd"] == "setup_train"
+        assert rec.kw(0)["timeout_cmd"] == "setup → 🚂 Train"
         cfg = _train()
         assert cfg["tab_name"] == "Trains" and cfg["blurbs_enabled"] == 0
         assert cfg["reminders_enabled"] == 0 and cfg["rotation_enabled"] == 0
@@ -436,8 +436,8 @@ class TestWizardReentry:
         import config
 
         _save_train()
-        # Saved draft day 0 (Monday) renders as Sunday: the summary reads it as
-        # `int(... or 6)`, so a falsy Monday falls back. Kept as the code stands.
+        # Draft day 0 is Monday; it used to render as Sunday because the reader
+        # treated a falsy 0 as unset.
         config.save_train_rotation_config(
             G,
             rotation_enabled=1,
@@ -459,7 +459,7 @@ class TestWizardReentry:
             ("Reminder Time", _t("22:00")),
             (
                 "Conductor Rotation",
-                f"✅ Enabled\nWeekly draft: Sunday at {_t('22:00')}\nPublic posts: <#7>\nActive preset: Season 6",
+                f"✅ Enabled\nWeekly draft: Monday at {_t('22:00')}\nPublic posts: <#7>\nActive preset: Season 6",
             ),
         ]
         assert rec.calls == []

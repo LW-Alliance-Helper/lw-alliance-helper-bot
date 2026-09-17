@@ -740,7 +740,7 @@ class TrainCog(commands.Cog):
         # Clean tick — stamp liveness for the outage catch-up scan (#227).
         # One heartbeat covers both surfaces in this loop (the birthday
         # Discord announcement and the train daily reminder).
-        stamp_loop_heartbeat("train_reminder")
+        await asyncio.to_thread(stamp_loop_heartbeat, "train_reminder")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

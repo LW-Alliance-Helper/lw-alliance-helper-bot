@@ -19,6 +19,7 @@ clock-driven loop worth seeing in the loop-health view.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from discord.ext import commands, tasks
@@ -48,7 +49,7 @@ class ConfigHealthCog(commands.Cog):
             return
         if posted:
             logger.info("[CONFIG-HEALTH] posted config notices to %s guild(s)", posted)
-        config.stamp_loop_heartbeat("config_health")
+        await asyncio.to_thread(config.stamp_loop_heartbeat, "config_health")
 
     @notify.before_loop
     async def _before(self):

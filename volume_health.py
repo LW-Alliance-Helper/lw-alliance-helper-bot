@@ -41,6 +41,7 @@ token; that is deliberately out of scope.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -330,7 +331,7 @@ class VolumeHealthCog(commands.Cog):
 
         if alarms:
             logger.warning("[VOLUME] %s", " | ".join(alarms))
-        config.stamp_loop_heartbeat("volume_health")
+        await asyncio.to_thread(config.stamp_loop_heartbeat, "volume_health")
 
     @watch.before_loop
     async def _before(self):

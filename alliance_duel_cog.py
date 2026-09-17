@@ -14,6 +14,7 @@ DB-backed dedup, and a heartbeat stamped at the end of every clean pass so
 reminder (#406) lands on the same tick.
 """
 
+import asyncio
 import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -84,7 +85,7 @@ class AllianceDuelCog(commands.Cog):
             except Exception as e:  # noqa: BLE001 - one guild must not sink the tick
                 logger.exception("[VS POSTS] tick failed for guild %s: %s", guild.id, e)
 
-        config.stamp_loop_heartbeat(VS_POSTS_HEARTBEAT)
+        await asyncio.to_thread(config.stamp_loop_heartbeat, VS_POSTS_HEARTBEAT)
 
     async def _maybe_post_score_prompt(self, guild, vs_cfg, guild_now) -> None:
         """Ask for the day that just ended, once, in the alliance's channel."""

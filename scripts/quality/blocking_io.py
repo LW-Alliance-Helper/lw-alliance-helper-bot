@@ -19,8 +19,10 @@ Dev tooling only. Needs node (ast-grep runs through npx).
 Read the direct hits as questions, not defects: an owner-only admin command
 doing one indexed read is the same class as a storm reminder opening a
 spreadsheet, and only one of those stalls every alliance. The indirect
-sqlite class is a convention question (#589) until measured; the indirect
-sheet class is the one to fix on sight.
+sqlite class was measured (#589 step 10, a day of `/admin db_timings` on
+staging): reads stay on the loop, writes inside a loop tick are threaded,
+so an indirect sqlite hit is a finding only when it is a write in a loop.
+The indirect sheet class is the one to fix on sight.
 """
 
 from __future__ import annotations

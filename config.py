@@ -5391,7 +5391,11 @@ def stamp_loop_heartbeat(loop_name: str) -> None:
     measure the gap since the last tick and detect an outage window for the
     catch-up digest (#227). One row per loop, never per guild — if the
     scheduler ticked at 8:12, every guild's scheduler-driven posts are
-    considered current up to 8:12."""
+    considered current up to 8:12.
+
+    A write, so loops call it through `asyncio.to_thread`: on Railway's
+    volume it averaged 3.8 ms with a 251 ms tail over a day on staging
+    (2026-09-16), the only config call with a tail at all (#589 step 10)."""
     now_iso = datetime.now(timezone.utc).isoformat()
     with _get_conn() as conn:
         conn.execute(

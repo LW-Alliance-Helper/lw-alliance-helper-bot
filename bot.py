@@ -1337,7 +1337,7 @@ async def shiny_tasks_post_task():
     # Mark a clean tick so the outage catch-up scan (#227) can tell this
     # loop was alive up to now. Per-guild failures above are isolated and
     # don't count as an outage.
-    stamp_loop_heartbeat("shiny_post")
+    await asyncio.to_thread(stamp_loop_heartbeat, "shiny_post")
 
 
 @shiny_tasks_post_task.before_loop

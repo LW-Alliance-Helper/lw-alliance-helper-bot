@@ -109,7 +109,7 @@ class TestStormSetupWithParticipation:
             return _fake_structured_flow_opted_out()
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=fake_participation),
             patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
             patch_keep_or_change(["DS Assignments"]),
@@ -162,7 +162,7 @@ class TestStormSetupWithParticipation:
             return _fake_structured_flow_opted_out()
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=disabled_participation),
             patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
             patch_keep_or_change(["CS Assignments"]),

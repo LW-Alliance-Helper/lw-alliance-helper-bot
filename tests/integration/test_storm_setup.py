@@ -27,6 +27,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# setup_cog re-exports the wizard pieces by name at import time. Import it
+# before any test patches `wizard_steps.X`, or the first import inside a
+# patched block binds the mock into setup_cog for the rest of the run.
+import setup_cog  # noqa: F401
+
 from tests.conftest import TEST_GUILD_ID, make_mock_interaction
 from tests.integration.test_setup_flows import patch_keep_or_change
 from messages import GENERIC_CMD_TIMEOUT, PREV_CHANNEL_GONE
@@ -194,7 +199,7 @@ async def _drive(
         return ev
 
     with (
-        patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
+        patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
         patch("setup_cog._run_storm_participation_step", side_effect=_participation),
         patch("setup_cog._run_structured_flow_setup_step", side_effect=_structured_step),
         patch("premium.is_premium", AsyncMock(return_value=is_premium)),
@@ -501,7 +506,7 @@ class TestFreshWalk:
             calls.append(kw)
             return steps.pop(0)
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=_record):
+        with patch("wizard_steps.ChannelSelectStep", side_effect=_record):
             interaction = make_mock_interaction()
             Script(
                 interaction.channel,
@@ -778,7 +783,7 @@ class TestExits:
         )
         steps = iter([_channel_step(1), _channel_step(2)])
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
             patch(
                 "setup_cog._run_storm_participation_step",
                 AsyncMock(return_value=dict(PARTICIPATION_OFF)),
@@ -792,6 +797,25 @@ class TestExits:
             await _wizard()(interaction, bot, "DS")
         assert s.texts[-1] == TIMEOUT
         assert not config.has_storm_config(TEST_GUILD_ID, "DS")
+
+    @pytest.mark.parametrize("answer", ["timeout", "cancel"])
+    @pytest.mark.asyncio
+    async def test_an_exit_releases_the_wizard_registration(self, seeded_db, answer):
+        """A cancelled or timed-out walk no longer leaves its cancel event
+        registered against the officer."""
+        import wizard_registry
+
+        wizard_registry._active.pop(123456789, None)
+        await _drive([answer])
+        assert not wizard_registry._active.get(123456789)
+
+    @pytest.mark.asyncio
+    async def test_a_finished_walk_releases_the_wizard_registration(self, seeded_db):
+        import wizard_registry
+
+        wizard_registry._active.pop(123456789, None)
+        await _drive(WALK)
+        assert not wizard_registry._active.get(123456789)
 
     @pytest.mark.asyncio
     async def test_tab_step_abort_stops_before_any_prompt(self, seeded_db):
@@ -809,7 +833,7 @@ class TestExits:
         s = Script(interaction.channel, list(WALK))
         steps = iter([_channel_step(1), _channel_step(2)])
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(steps)),
             patch("setup_cog._run_storm_participation_step", AsyncMock(return_value=None)),
             patch("setup_cog._run_structured_flow_setup_step", AsyncMock()) as structured,
             patch("premium.is_premium", AsyncMock(return_value=False)),

@@ -308,7 +308,7 @@ class TestRunTrainSetup:
 
         # YesNoView order: blurbs → reminders → Conductor Rotation (Step 9).
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
             patch_keep_or_change(["My Train Tab"]),
         ):
             make_send_handler(interaction.channel)
@@ -336,8 +336,8 @@ class TestRunTrainSetup:
         ch_view = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
-            patch("setup_cog.ChannelSelectStep", return_value=ch_view),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.ChannelSelectStep", return_value=ch_view),
             patch_keep_or_change(["Train Schedule", "10:00pm"]),
         ):
             make_send_handler(interaction.channel)
@@ -430,8 +430,8 @@ class TestRunTrainSetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["My Tab", "10:00pm", ""]),
         ):
             # `view_overrides` covers the summary EditOrCancelView ->
@@ -1862,7 +1862,7 @@ class TestPremiumCaps:
         # path returns the user's typed string). The first response feeds
         # the tab-name step; the next two feed themes and tones.
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
             patch_keep_or_change(
                 [
                     "Train Schedule",

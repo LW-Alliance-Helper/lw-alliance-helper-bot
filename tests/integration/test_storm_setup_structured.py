@@ -29,6 +29,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# setup_cog re-exports the wizard pieces by name at import time. Import it
+# before any test patches `wizard_steps.X`, or the first import inside a
+# patched block binds the mock into setup_cog for the rest of the run.
+import setup_cog  # noqa: F401
+
 from tests.conftest import TEST_GUILD_ID, make_mock_channel, make_mock_user
 from tests.integration.test_setup_flows import patch_keep_or_change
 from messages import GENERIC_CMD_TIMEOUT
@@ -172,7 +177,7 @@ class _Harness:
             patch("storm_strategy.list_presets", return_value=self.presets),
             patch("storm_member_rules.list_rules", return_value=self.rules),
             patch("setup_cog._ask_signup_schedule", side_effect=self.schedule),
-            patch("setup_cog.ChannelSelectStep", return_value=self.channel_step),
+            patch("wizard_steps.ChannelSelectStep", return_value=self.channel_step),
         ]
         for p in self._patches:
             p.start()

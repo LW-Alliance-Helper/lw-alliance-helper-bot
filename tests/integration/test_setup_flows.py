@@ -14,6 +14,7 @@ defaults so the wizard advances past them.
 """
 
 import asyncio
+import contextlib
 from unittest.mock import patch, MagicMock, AsyncMock
 import sys, os
 
@@ -87,9 +88,12 @@ def make_send_handler(channel, *, view_overrides=None):
 
 
 def patch_keep_or_change(values):
-    """Return a patch context manager for setup_cog.ask_keep_or_change.
+    """Return a patch context manager for `ask_keep_or_change`.
 
-    `values` is a list consumed in order — one per call.
+    Patches both homes: `setup_cog.ask_keep_or_change` for the wizards
+    still in `setup_cog`, and `wizard_steps.ask_keep_or_change` for the
+    companions that import it from there. `values` is a list consumed
+    in order — one per call, across both.
     """
     it = iter(values)
 
@@ -100,7 +104,15 @@ def patch_keep_or_change(values):
             # Tests should provide enough values; missing → default
             return kwargs.get("default", "default")
 
-    return patch("setup_cog.ask_keep_or_change", side_effect=fake)
+    @contextlib.contextmanager
+    def _both():
+        with (
+            patch("setup_cog.ask_keep_or_change", side_effect=fake),
+            patch("wizard_steps.ask_keep_or_change", side_effect=fake),
+        ):
+            yield
+
+    return _both()
 
 
 # ── /setup wizard ─────────────────────────────────────────────────────────────
@@ -890,7 +902,7 @@ class TestRunStormSetup:
 
         # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
         with (
-            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("wizard_steps.ChannelSelectStep", return_value=log_view),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch(
                 "setup_cog._run_structured_flow_setup_step",
@@ -931,7 +943,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("wizard_steps.ChannelSelectStep", return_value=log_view),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch(
                 "setup_cog._run_structured_flow_setup_step",
@@ -1040,7 +1052,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch_keep_or_change(["DS Assignments", ""]),
         ):
@@ -1130,7 +1142,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch_keep_or_change(["DS Assignments", ""]),
         ):

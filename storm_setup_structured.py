@@ -8,12 +8,13 @@ templates (#226) and the strategy preset / member rules library (#54, #144).
 Split out of `setup_cog.py` in the #589 step 11 refactor, following the
 1.8.0 precedent of `storm_strategy_ui.py` and `train_rotation_ui_*.py`: the
 wizard lives in `storm_setup.run_storm_setup`, which calls
-`run_structured_flow_step` as its eighth step. This module reaches back
-into `setup_cog` for the shared wizard pieces (the yes/no views, the
-channel picker, `ask_keep_or_change`, the schedule sub-flow) through
-`_setup()` at call time rather than a module-level import, so importing
-either module first works and every `patch("setup_cog.X")` in the tests
-keeps its target.
+`run_structured_flow_step` as its eighth step. The shared wizard pieces
+(the yes/no views, the channel picker, `ask_keep_or_change`) come from
+`wizard_steps`; this module reaches back into `setup_cog` through
+`_setup()` at call time only for what still lives there (the schedule
+sub-flow, the column-letter helper, the inline-create offers), so
+importing either module first works and every `patch("setup_cog.X")` on
+those keeps its target. Tests patch the shared pieces on `wizard_steps`.
 
 Shape:
 
@@ -41,6 +42,7 @@ from typing import Callable
 import discord
 
 import wizard_registry
+import wizard_steps
 from wizard_registry import wait_view_or_cancel
 from messages import GENERIC_CMD_TIMEOUT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS, HUB_BTN_RULES
@@ -107,17 +109,17 @@ class _Wizard:
         """A yes/no question. With no saved answer (`current is None`) it
         is the plain Yes / No view; with one, the Keep current / Switch
         gate, so a re-run never forces a re-pick."""
-        sc = _setup()
         if current is None:
-            return bool(await self.ask(text, sc.YesNoView(), "selected"))
-        return bool(await self.ask(text, sc._KeepOrFlipYesNoGate(current_value=current), "value"))
+            return bool(await self.ask(text, wizard_steps.YesNoView(), "selected"))
+        gate = wizard_steps._KeepOrFlipYesNoGate(current_value=current)
+        return bool(await self.ask(text, gate, "value"))
 
     async def ask_tab(self, text: str, *, key: str, result: dict, modal_title: str) -> None:
         """One Sheet-tab-name question through `ask_keep_or_change`,
         written straight into `result[key]`."""
         from config import default_structured_tab
 
-        picked = await _setup().ask_keep_or_change(
+        picked = await wizard_steps.ask_keep_or_change(
             self.channel,
             text,
             default=default_structured_tab(self.event_type, key),
@@ -490,7 +492,7 @@ async def _ask_sub_mode(w: _Wizard, result: dict) -> None:
 
 
 async def _ask_signup_channel(w: _Wizard, result: dict) -> None:
-    view = _setup().ChannelSelectStep(
+    view = wizard_steps.ChannelSelectStep(
         f"Select the channel where {w.label} sign-up polls post...",
         suggested_name=f"{w.slug}-signups",
         include_threads=True,
@@ -535,7 +537,7 @@ async def _ask_signup_schedule(w: _Wizard, result: dict) -> None:
         cmd_name=w.cmd_name,
         current_dow=result.get("poll_day_of_week", -1),
         current_time=result.get("signup_time", ""),
-        tz_label=sc.TIMEZONE_LABELS.get(tz_str, tz_str),
+        tz_label=wizard_steps.TIMEZONE_LABELS.get(tz_str, tz_str),
         event_type=w.event_type,
     )
     if sched is None:

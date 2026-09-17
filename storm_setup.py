@@ -8,11 +8,13 @@ summary embed and the first sign-up offer (#144).
 
 Moved out of `setup_cog.py` in round 2 of the skills walkthrough (#611),
 in the shape `storm_setup_structured.py` set in round 1: `setup_cog`
-imports `run_storm_setup` back under its old name, and this module reaches
-into `setup_cog` at call time (`_setup()`) for the pieces the tests patch
-there (`ChannelSelectStep`, `ask_keep_or_change`, the participation and
-structured steps, the re-entry summary, the sign-up offer), so every
-`patch("setup_cog.X")` keeps its target.
+imports `run_storm_setup` back under its old name. The shared wizard
+pieces (`ChannelSelectStep`, `ask_keep_or_change`, the timezone labels)
+come from `wizard_steps`, and the tests patch them there; this module
+reaches into `setup_cog` at call time (`_setup()`) only for what still
+lives there (the participation and structured steps, the re-entry
+summary, the tab-claim warning, the sign-up offer), so every
+`patch("setup_cog.X")` on those keeps its target.
 
 Shape:
 * `_Wizard` carries the handles every question needs; `_Saved` is what
@@ -43,8 +45,8 @@ import wizard_registry
 from messages import GENERIC_CMD_TIMEOUT, PREV_CHANNEL_GONE
 from setup_hub import STORM_GLYPH
 from storm_event_hub import HUB_BTN_POST_SIGNUP, HUB_COMMAND
+import wizard_steps
 from wizard_registry import wait_view_or_cancel
-from wizard_steps import TIMEZONE_LABELS
 
 
 def _setup():
@@ -415,7 +417,7 @@ def _load_saved(w: _Wizard) -> _Saved:
         current_structured=current_structured,
         guild_cfg=guild_cfg,
         timezone=timezone,
-        tz_label=TIMEZONE_LABELS.get(timezone, timezone),
+        tz_label=wizard_steps.TIMEZONE_LABELS.get(timezone, timezone),
         already_configured=has_storm_config(w.guild_id, w.event_type),
         log_channel_id=saved_log_ch or 0,
         post_channel_id=current.get("post_channel_id") or 0,
@@ -517,7 +519,7 @@ async def _ask_tab(w: _Wizard, s: _Saved) -> str:
         hardcoded_tab = _sync_cfg_step1.get("tab_name") or "Member Roster"
     else:
         hardcoded_tab = "DS Assignments" if w.event_type == "DS" else "CS Assignments"
-    tab_name = await _setup().ask_keep_or_change(
+    tab_name = await wizard_steps.ask_keep_or_change(
         w.channel,
         f"**Step 1 of 9: Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {w.label} zone assignments?\n"
@@ -609,7 +611,7 @@ async def _ask_channel(
 ) -> int:
     """One channel picker step: the saved channel's absence is called
     out, the picker posted, and the picked channel's id returned."""
-    view = _setup().ChannelSelectStep(
+    view = wizard_steps.ChannelSelectStep(
         picker_prompt,
         suggested_name=suggested_name,
         include_threads=w.is_premium,
@@ -820,7 +822,7 @@ async def _ask_reminder_dm(w: _Wizard, s: _Saved) -> str:
 
     default_remind_dm = DEFAULT_STORM_REMINDER_DM.format(label=w.label)
     saved_remind_dm = (s.current.get("dm_reminder_message") or "").strip()
-    remind_dm = await _setup().ask_keep_or_change(
+    remind_dm = await wizard_steps.ask_keep_or_change(
         w.channel,
         f"**Step 9 of 9: {w.label} Reminder DM (💎 Premium)**\n"
         f"When leadership clicks **📨 Send DM reminder to roster** on "
@@ -1121,6 +1123,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         a.structured = await _ask_structured(w, saved)
         a.dm_reminder_message = await _ask_reminder_dm(w, saved)
     except _Abort:
+        # The old function returned without unregistering, so a cancelled
+        # or timed-out walk left its event in the registry until the next
+        # /cancel swept it. Release it here (Kevin, 2026-09-17).
+        wizard_registry.unregister(w.user.id, w.cancel_event)
         return
 
     _save(w, saved, a)

@@ -374,7 +374,7 @@ class ScheduledPostSettingsView(OwnedView):
         await interaction.response.send_modal(LeadershipNoteModal(self))
 
     async def _set_channel(self, interaction: discord.Interaction) -> None:
-        from setup_cog import ChannelSelectStep
+        from wizard_steps import ChannelSelectStep
 
         surface = self.surface
         picker = ChannelSelectStep(

@@ -50,6 +50,7 @@ class _Abort(Exception):
 
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN)
+NAV = f"setup → {HUB_BTN_TRAIN}"  # the keep-or-change helper's own timeout hint
 _DEF_HIST, _DEF_MR, _DEF_DR = "Train History", "Train Member Rules", "Train Day Rules"
 
 
@@ -118,7 +119,7 @@ class _Step:
 
     async def keep_or_change(self, prompt: str, **kw) -> str:
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd="setup_train", cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_cmd=NAV, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort

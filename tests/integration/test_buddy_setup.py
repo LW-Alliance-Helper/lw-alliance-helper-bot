@@ -257,7 +257,7 @@ class TestFreshMinimal:
         assert all(type(v).__name__ == "YesNoView" for v in s.views)
         assert rec.prompt(0).startswith("**Step 2 of 10 — Buddy List Tab**\n")
         assert rec.kw(0)["default"] == "Buddy System" and rec.kw(0)["current"] == "Buddy System"
-        assert rec.kw(0)["timeout_cmd"] == "setup_buddy"
+        assert rec.kw(0)["timeout_cmd"] == "setup → 🤝 Buddy System"
         assert rec.prompt(1).startswith("**Step 3 of 10 — Buddy Presets Tab**\n")
         assert (
             rec.kw(1)["default"] == "Buddy Presets"

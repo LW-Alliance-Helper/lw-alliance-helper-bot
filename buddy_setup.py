@@ -100,7 +100,7 @@ class _Wizard:
         """One `ask_keep_or_change` question. The helper posts its own cancel
         and timeout notice; an abandoned one just raises."""
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd="setup_buddy", cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_cmd=NAV, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort

@@ -51,13 +51,16 @@ def _both(name):
     """The two homes of a survey-family name: `setup_cog` before the move
     and the module after it. Patching a home that has no such attribute
     is skipped, so the same file runs on both sides."""
-    targets = [f"setup_cog.{name}"]
-    try:
-        import survey_setup  # noqa: F401
+    import importlib
 
-        targets.append(f"survey_setup.{name}")
-    except ImportError:
-        pass
+    targets = []
+    for home in ("setup_cog", "survey_setup"):
+        try:
+            module = importlib.import_module(home)
+        except ImportError:
+            continue
+        if hasattr(module, name):
+            targets.append(f"{home}.{name}")
     return targets
 
 

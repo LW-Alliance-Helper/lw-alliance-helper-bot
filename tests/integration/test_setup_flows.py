@@ -1436,10 +1436,10 @@ class TestRunShinyTasksSetup:
             return ch_view
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
-            patch("setup_cog.YesNoView", return_value=enable_yes),
-            patch("setup_cog.ConfirmView", return_value=confirm),
-            patch("setup_cog.ModalLaunchView", return_value=range_launcher),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", return_value=enable_yes),
+            patch("wizard_steps.ConfirmView", return_value=confirm),
+            patch("wizard_steps.ModalLaunchView", return_value=range_launcher),
             patch_keep_or_change(["9:00am", ""]),
         ):  # Step 4 time + Step 5 template
             make_send_handler(
@@ -1478,7 +1478,7 @@ class TestRunShinyTasksSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -1510,7 +1510,7 @@ class TestRunShinyTasksSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)

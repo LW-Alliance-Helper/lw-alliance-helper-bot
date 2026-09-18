@@ -20,8 +20,8 @@ to sit behind a Premium-disabled button.
 
 The actual flows live in their existing modules: `survey.run_post_survey`,
 `survey._run_remind_hub`, `survey.run_translation_helper_setup`,
-`setup_cog.run_create_new_extra_survey`, `setup_cog.run_pick_survey_to_edit`,
-`setup_cog.run_remove_extra_survey`, `setup_cog.run_survey_setup`. Each
+`survey_setup.run_create_new_extra_survey`, `survey_setup.run_pick_survey_to_edit`,
+`survey_setup.run_remove_extra_survey`, `survey_setup.run_survey_setup`. Each
 button is a thin dispatcher.
 """
 
@@ -202,7 +202,8 @@ class _SurveyHubView(OwnedView):
     # ── Row 0 dispatchers ────────────────────────────────────────────────────
 
     async def _on_add(self, inter: discord.Interaction):
-        from setup_cog import _check_wizard_can_run, run_create_new_extra_survey
+        from setup_cog import _check_wizard_can_run
+        from survey_setup import run_create_new_extra_survey
 
         await self._close(inter)
         # The wizards below talk in-channel via `channel.send`, so keep the
@@ -215,7 +216,8 @@ class _SurveyHubView(OwnedView):
     async def _on_edit(self, inter: discord.Interaction):
         # One survey means nothing to pick — go straight into the wizard.
         # The picker only earns its click when extras exist.
-        from setup_cog import _check_wizard_can_run, run_pick_survey_to_edit, run_survey_setup
+        from setup_cog import _check_wizard_can_run
+        from survey_setup import run_pick_survey_to_edit, run_survey_setup
 
         await self._close(inter)
         if not await _check_wizard_can_run(inter, "survey"):
@@ -226,7 +228,7 @@ class _SurveyHubView(OwnedView):
             await run_survey_setup(inter, self.bot)
 
     async def _on_remove(self, inter: discord.Interaction):
-        from setup_cog import run_remove_extra_survey
+        from survey_setup import run_remove_extra_survey
 
         await self._close(inter)
         await run_remove_extra_survey(inter, self.bot)

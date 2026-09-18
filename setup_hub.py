@@ -11,7 +11,7 @@ disabled on the free tier with a click-upsell.
 This module owns the embed builder and the button view; the actual
 wizard handlers live in their existing modules (setup_cog.run_train_setup,
 run_growth_setup, run_birthday_setup, run_storm_setup, run_event_setup,
-run_survey_setup, run_shiny_tasks_setup, run_growth_breakdown_setup;
+run_shiny_tasks_setup, run_growth_breakdown_setup; survey_setup.run_survey_setup;
 member_roster.run_member_roster_setup; setup_cog.run_setup;
 setup_cog._send_view_configuration; setup_cog._reset_config). Each
 button is a thin dispatcher.

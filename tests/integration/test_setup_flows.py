@@ -710,8 +710,8 @@ class TestRunSurveySetup:
         bot.wait_for = AsyncMock(return_value=MagicMock(content="Please submit weekly!"))
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=ch_views),
-            patch("setup_cog._ensure_survey_tab", AsyncMock()),
+            patch("wizard_steps.ChannelSelectStep", side_effect=ch_views),
+            patch("survey_setup._ensure_survey_tab", AsyncMock()),
             patch_keep_or_change(["Squad Powers", "Survey History"]),
         ):
             # The wizard builds its step views inline, so the choices are
@@ -821,7 +821,7 @@ class TestRunSurveySetup:
             return next(ch_iter)
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Squad Powers", "Survey History"]),
         ):
             make_send_handler(

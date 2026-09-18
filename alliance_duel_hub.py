@@ -285,6 +285,7 @@ def hub_embed(state: HubState) -> discord.Embed:
             f"Fill in the bracket off the in-game League screen, or open "
             f"**{VS_BTN_SETUP}** for the column guide."
         )
+        _add_new_feature_field(embed)
         return embed
 
     league = state.league
@@ -314,8 +315,24 @@ def hub_embed(state: HubState) -> discord.Embed:
         )
 
     _add_sheet_problem_field(embed, state.guild_id)
+    _add_new_feature_field(embed)
     embed.set_footer(text="Your sheet is the source. Anything you type there wins.")
     return embed
+
+
+def _add_new_feature_field(embed: discord.Embed) -> None:
+    """Temporary, see messages.NEW_FEATURE_NOTICE.
+
+    Pull this call (and the function) once Alliance Duel has stopped being
+    the thing that just shipped.
+    """
+    embed.add_field(
+        name=messages.NEW_FEATURE_FIELD_NAME,
+        value=messages.NEW_FEATURE_NOTICE.format(
+            feature="Alliance Duel (VS)", community=messages.COMMUNITY_SERVER_NAME
+        ),
+        inline=False,
+    )
 
 
 def _own_matchup_line(state: HubState) -> str:

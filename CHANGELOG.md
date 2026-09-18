@@ -15,10 +15,10 @@ Both Champion Duel and Alliance Duel (VS) are brand new this release. Both hubs
 say so in their footer, and point to the Support Server for anything that looks wrong.
 
 ### Added
-- **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
+- **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
 - Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
 - **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
-- **Daily score prompt** (💎 Premium): an opt-in post that asks for the duel day that just finished, with one button that opens the same score modal the hub uses. You choose the time and the channel ([#405](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/405)).
+- **Daily score prompt** (💎 Premium): an opt-in post asking for the duel day that just finished, so you can record it while it's fresh ([#405](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/405)).
 - Start a new VS league in one paste off the in-game League screen, with your own matchup shown first each week ([#574](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/574)).
 - A weekly day-theme reminder for members, naming the day and what it's worth ([#406](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/406)).
 - Push a week's declaration straight to your sheet instead of typing every cell by hand ([#407](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/407)).
@@ -26,7 +26,7 @@ say so in their footer, and point to the Support Server for anything that looks 
 - Event-driven posts for an opponent reveal, a live clinch update, and a season recap ([#409](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/409)).
 - Scores you record are shared across every alliance in your league, so a matchup you've never personally played still comes with real history if others in the league have played it ([#544](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/544)).
 - Seasons already sitting in your sheet before this shipped are picked up automatically, so history that predates the shared store isn't lost ([#544](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/544)).
-- **Champion Duel** (`/champion_duel`): odds for a match from the same calibrated engine the backtest validates, plus what a registrant fields and the order they have been seen deploying in. The prediction comes back as a card you can share to your channel ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- **Champion Duel** (`/champion_duel`): match odds from the same calibrated engine the backtest validates, returned as a card you can share to your channel ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
 - Every Champion Duel squad value says whether it was observed or estimated, and every prediction says what it was built on — so a guess never reads as a sighting ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
 - Anyone can correct a Champion Duel squad or record a line-up they have seen. Every entry is attributed and can be put back ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
 - **Champion Duel head to head** (💎 Premium): what an opponent usually fields, how often they change it, and which line-up to set against them ([#513](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/513)).
@@ -37,7 +37,7 @@ say so in their footer, and point to the Support Server for anything that looks 
 - A person can ask to have everything the bot holds about them removed; the owner runs it through `/admin forget_user` with a preview before anything is deleted ([#517](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/517)).
 
 ### Changed
-- Button icons now mean one thing each across the whole bot: the same icon no longer stands for two different actions, and the same action no longer wears two different icons. Twenty-odd buttons and messages pick up a clearer icon; none of them changed what they do.
+- Button icons now mean one thing each across the whole bot: no icon stands for two actions and no action wears two icons.
 - 💎 now marks only the survey and setup question types that are actually Premium-gated, instead of also appearing on some free-tier types ([#530](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/530)).
 - Removing the bot from a server now holds its data for 30 days before deleting it, instead of erasing it the moment it leaves ([#543](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/543)).
 

@@ -12,7 +12,7 @@ and PR description.
 ## [1.9.0] — 2026-09-18
 
 Both Champion Duel and Alliance Duel (VS) are brand new this release. Both hubs
-say so on open, and point to the Community Server for anything that looks wrong.
+say so in their footer, and point to the Support Server for anything that looks wrong.
 
 ### Added
 - **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket, who you are likely to face next, and where your weeks actually get decided ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).

@@ -315,24 +315,25 @@ def hub_embed(state: HubState) -> discord.Embed:
         )
 
     _add_sheet_problem_field(embed, state.guild_id)
-    _add_new_feature_field(embed)
     embed.set_footer(text="Your sheet is the source. Anything you type there wins.")
+    _add_new_feature_field(embed)
     return embed
 
 
 def _add_new_feature_field(embed: discord.Embed) -> None:
     """Temporary, see messages.NEW_FEATURE_NOTICE.
 
+    A footer line, not a field: no headline, no emoji, appended after a
+    break when the embed already carries one (Kevin, 18 Sep, on the sign-off
+    page). Call this after any other `set_footer` on the embed, never
+    before, or the existing line is silently dropped.
+
     Pull this call (and the function) once Alliance Duel has stopped being
     the thing that just shipped.
     """
-    embed.add_field(
-        name=messages.NEW_FEATURE_FIELD_NAME,
-        value=messages.NEW_FEATURE_NOTICE.format(
-            feature="Alliance Duel (VS)", community=messages.COMMUNITY_SERVER_NAME
-        ),
-        inline=False,
-    )
+    notice = messages.NEW_FEATURE_NOTICE.format(feature="Alliance Duel (VS)")
+    existing = embed.footer.text  # None when no footer has been set yet
+    embed.set_footer(text=(f"{existing}\n\n{notice}" if existing else notice)[:2048])
 
 
 def _own_matchup_line(state: HubState) -> str:

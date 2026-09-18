@@ -1245,10 +1245,17 @@ def test_hub_embed_invites_a_player_from_a_server_we_do_not_have(cd_db):
 
 def test_hub_embed_carries_no_source_legend(cd_db):
     """The 👁/≈/✏️ marks annotate squad powers, which only appear on a player's
-    card. A legend on the hub is a key to a map the reader is not holding."""
+    card. A legend on the hub is a key to a map the reader is not holding.
+
+    The footer isn't empty any more -- it carries the temporary "just
+    shipped" notice (messages.NEW_FEATURE_NOTICE) -- so the legend check has
+    to look for the glyphs specifically rather than for an absent footer."""
     embed = hub.build_hub_embed(servers=db.get_servers(), can_write=True)
 
-    assert embed.footer.text is None
+    footer = embed.footer.text or ""
+    assert "👁" not in footer
+    assert "≈" not in footer
+    assert "✏️" not in footer
     assert "observed" not in (embed.description or "")
 
 

@@ -68,7 +68,6 @@ from messages import (
     COMMUNITY_SERVER_NAME,
     COMMUNITY_SERVER_URL,
     DATE_PARSE_REJECT,
-    NEW_FEATURE_FIELD_NAME,
     NEW_FEATURE_NOTICE,
 )
 from wizard_registry import ExpiringView, OwnedView
@@ -8161,12 +8160,9 @@ def build_hub_embed(
             inline=False,
         )
     # Temporary, see messages.NEW_FEATURE_NOTICE -- pull this once Champion
-    # Duel has stopped being the thing that just shipped.
-    embed.add_field(
-        name=NEW_FEATURE_FIELD_NAME,
-        value=NEW_FEATURE_NOTICE.format(feature="Champion Duel", community=COMMUNITY_SERVER_NAME),
-        inline=False,
-    )
+    # Duel has stopped being the thing that just shipped. No existing footer
+    # on this embed to share the line with, so it stands alone.
+    embed.set_footer(text=NEW_FEATURE_NOTICE.format(feature="Champion Duel")[:2048])
     # No upsell for contributing, because contributing is not gated. The field
     # that stood here sold Premium on "correcting squads and recording
     # sightings", which is the one thing in this feature that must never be

@@ -251,16 +251,21 @@ ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.gi
 COMMUNITY_SERVER_URL = "https://discord.gg/J3PMVJ4y4d"
 COMMUNITY_SERVER_NAME = "Community Server"
 
-# Temporary field for a hub that just shipped, so the first people to open it
-# know that and know where a bug goes. Caller passes the feature's own name
-# as {feature}; COMMUNITY_SERVER_NAME fills {community}. Two call sites today
-# (Champion Duel's and Alliance Duel's hub embeds, both landing in 1.9.0) --
-# pull the field once "new" has stopped being true rather than leaving it to
-# go stale the way NOT_ENTERED nearly did.
-NEW_FEATURE_FIELD_NAME = "🆕 New"
+# Temporary footer text for a hub that just shipped, so the first people to
+# open it know that and know where a bug goes. No headline, no emoji, and it
+# rides in the footer rather than its own field -- Kevin, 18 Sep, on the
+# sign-off page. Caller passes the feature's own name as {feature}. Two call
+# sites today (Champion Duel's and Alliance Duel's hub embeds, both landing
+# in 1.9.0) -- pull it once "new" has stopped being true rather than leaving
+# it to go stale the way NOT_ENTERED nearly did.
+#
+# Says "Support Server", not COMMUNITY_SERVER_NAME above -- Kevin's own
+# wording, verbatim, on the same page. The rest of the bot calls this place
+# "Community Server"; flagged, not changed without him saying so.
 NEW_FEATURE_NOTICE = (
-    "{feature} just shipped. If something looks wrong or confusing, tell us "
-    "on the {community} and we'll sort it out."
+    "{feature} is a new feature to LW Alliance Helper. If you run into any "
+    "issues, things look wrong or confusing, or you just have questions, "
+    "reach out on the Support Server for help!"
 )
 
 

@@ -127,10 +127,10 @@ accident.
 
 **1.9.0** — 2026-09-18
 - `/vs` tracks your Alliance Duel league and projects your path through the bracket
-- Check my sheet names the row and column of every entry mistake it finds
-- An optional daily post asks for the duel day that just finished
-- `/champion_duel` gives the odds for a match, as a card you can share
-- Champion Duel Premium adds a head to head read, knockout odds, and recording the squads and line-ups you scout
+- "Check my sheet" will tell you the row and column of every entry mistake it finds
+- An optional daily post asks for the duel day that just finished to help you with timely recordings
+- `/champion_duel` gives the odds for a match, with a card that can be shared
+- Champion Duel Premium adds head to head, knockout odds, and recording the squads and line-ups
 
 ---
 

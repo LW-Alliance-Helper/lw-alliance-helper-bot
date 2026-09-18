@@ -19,6 +19,7 @@ text (`[#34](https://...)` counts as `#34`, not the full URL).
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -38,14 +39,22 @@ _LINK = re.compile(r"\[([^]]+)\]\(([^)]+)\)")
 
 
 def _baseline_lines(path: Path) -> set[str]:
-    """Lines that already exist in `path` as of `git HEAD`.
+    """Lines that already exist in `path` as of the baseline ref.
 
-    The hook should only flag bullets the user is *adding* in this
-    edit — historical wordy entries pre-date the slim-rule enforcement
-    and would otherwise drown out new violations. Returns an empty set
-    when git isn't reachable or the file is new (every line is "new"
-    by definition, which is also fine).
+    The baseline defaults to `HEAD` (the hook's case: uncommitted edits
+    on disk, so lines already in the last commit are historical). CI
+    runs against an already-committed release PR, where disk == HEAD, so
+    it overrides the baseline to the PR's base ref via
+    `CHANGELOG_SLIM_BASELINE_REF` — otherwise every bullet would read as
+    "already in baseline" and the check would be a no-op.
+
+    Only flags bullets the user is *adding* relative to that baseline —
+    historical wordy entries pre-date the slim-rule enforcement and
+    would otherwise drown out new violations. Returns an empty set when
+    git isn't reachable or the file is new at that ref (every line is
+    "new" by definition, which is also fine).
     """
+    ref = os.environ.get("CHANGELOG_SLIM_BASELINE_REF", "HEAD")
     try:
         # `git show HEAD:<path>` only accepts paths relative to the repo
         # root. The hook passes absolute Windows paths which git rejects
@@ -61,7 +70,7 @@ def _baseline_lines(path: Path) -> set[str]:
         ).resolve()
         rel = path.resolve().relative_to(toplevel).as_posix()
         result = subprocess.run(
-            ["git", "show", f"HEAD:{rel}"],
+            ["git", "show", f"{ref}:{rel}"],
             capture_output=True,
             check=True,
         )

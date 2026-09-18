@@ -197,6 +197,18 @@ reasoning. Verifying their contents is
   release-on-main workflow uses the CHANGELOG section as the GitHub
   Release notes, and the PR body is what reviewers (and your future
   self when bisecting) see first.
+- **The release checklist is split machine-checkable / judgment
+  ([#628](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/628)).**
+  `release-changelog-check.yml` hard-gates the PR into `main` on the
+  machine half: `__version__` matches the branch name, `CHANGELOG.md`
+  has a dated (not "Unreleased") entry, the slim-changelog rule, the
+  Discord changelog block, and the PR title/body shape. A
+  `PostToolUse` hook nudges toward the `/release-check` skill the
+  moment a `release/*` branch is created; run that skill before
+  opening the PR — it covers what CI can't (copy sign-off actually
+  happened, the Discord post reviewed against what shipped, an
+  announcement-post decision made, any cross-repo dependency
+  resolved).
 - **Pre-commit hooks run on staged files** (`pre-commit` framework, config
   in `.pre-commit-config.yaml`): stock `pre-commit-hooks` file checks
   (check-merge-conflict, check-yaml, check-toml, check-added-large-files),

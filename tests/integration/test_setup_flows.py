@@ -1184,7 +1184,7 @@ class TestRunGrowthSetup:
 
         yn = MagicMock(selected=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", return_value=yn):
+        with patch("wizard_steps.YesNoView", return_value=yn):
             make_send_handler(interaction.channel)
             await run_growth_setup(interaction, bot)
 
@@ -1224,7 +1224,7 @@ class TestRunGrowthSetup:
         # 5. Snapshot Day   → "1"
         keep_values = ["Squad Powers", "2", "A", "Growth Tracking", "1"]
 
-        with patch("setup_cog.YesNoView", return_value=yn), patch_keep_or_change(keep_values):
+        with patch("wizard_steps.YesNoView", return_value=yn), patch_keep_or_change(keep_values):
             # MetricsActionView and FrequencyView are inline; resolve via
             # send-handler with their respective attribute overrides.
             make_send_handler(
@@ -1305,7 +1305,7 @@ class TestRunGrowthSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -1339,7 +1339,7 @@ class TestRunGrowthSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)
@@ -1927,7 +1927,7 @@ class TestPremiumCaps:
 
         yn = MagicMock(selected=True, wait=AsyncMock())
         with (
-            patch("setup_cog.YesNoView", return_value=yn),
+            patch("wizard_steps.YesNoView", return_value=yn),
             patch_keep_or_change(["Squad Powers", "2", "A", "Growth Tracking", "1"]),
         ):
             await run_growth_setup(interaction, bot)

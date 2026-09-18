@@ -125,7 +125,7 @@ accident.
 
 ---
 
-**1.9.0** — unreleased
+**1.9.0** — 2026-09-18
 - `/vs` tracks your Alliance Duel league and projects your path through the bracket
 - Check my sheet names the row and column of every entry mistake it finds
 - An optional daily post asks for the duel day that just finished

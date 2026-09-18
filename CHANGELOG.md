@@ -9,7 +9,7 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
-## [1.9.0] — unreleased
+## [1.9.0] — 2026-09-18
 
 Both Champion Duel and Alliance Duel (VS) are brand new this release. Both hubs
 say so on open, and point to the Community Server for anything that looks wrong.

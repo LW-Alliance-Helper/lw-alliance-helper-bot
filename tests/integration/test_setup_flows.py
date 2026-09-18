@@ -463,7 +463,7 @@ class TestRunBirthdaySetup:
 
         enabled_view = MagicMock(selected=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", return_value=enabled_view):
+        with patch("wizard_steps.YesNoView", return_value=enabled_view):
             make_send_handler(interaction.channel)
             await run_birthday_setup(interaction, bot)
 
@@ -487,7 +487,7 @@ class TestRunBirthdaySetup:
 
         # Tab → "Members", name col → "A", bday col → "B"
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
             patch_keep_or_change(["Members", "A", "B"]),
         ):
             make_send_handler(interaction.channel)
@@ -588,8 +588,8 @@ class TestRunBirthdaySetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Members", "A", "B", "8:00am", ""]),
         ):
             make_send_handler(
@@ -639,7 +639,7 @@ class TestRunBirthdaySetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -675,7 +675,7 @@ class TestRunBirthdaySetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)

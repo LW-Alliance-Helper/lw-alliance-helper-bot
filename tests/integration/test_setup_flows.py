@@ -1621,8 +1621,8 @@ class TestRunGrowthBreakdownSetup:
         autopost_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", return_value=autopost_yes),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", return_value=autopost_yes),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Growth Breakdown"]),
         ):  # Step 1 tab name
             # Summary proceed=True; inline bucket-filter / thresholds /
@@ -1669,7 +1669,7 @@ class TestRunGrowthBreakdownSetup:
         autopost_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", return_value=autopost_no),
+            patch("wizard_steps.YesNoView", return_value=autopost_no),
             patch_keep_or_change(["Growth Breakdown"]),
         ):
             make_send_handler(

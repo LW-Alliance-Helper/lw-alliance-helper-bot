@@ -1638,6 +1638,28 @@ async def test_rename_league_updates_the_loaded_state_too(_rename_sheet):
 
 
 @pytest.mark.asyncio
+async def test_rename_league_carries_the_live_week_over_to_the_new_identity(_rename_sheet):
+    """`LiveWeek` is frozen. The rename assigned to it and raised in production
+    (19 Sep) after the sheet write had already gone through, so the officer saw
+    a failure for a rename that had worked. The other rename tests never hit
+    this because they changed `state.league` after `live` was resolved from a
+    different league, so the live-week branch was skipped."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    row = _row(OWN_TAG, week=1)
+    row.league = old
+    state = _state([row])
+    assert state.live is not None and state.live.league == old
+    _rename_sheet(state.rows)
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+
+    ok, _ = await entry.rename_league(state, new)
+
+    assert ok is True
+    assert state.live.league == new
+    assert state.live.week == 1 and state.live.week_date == MONDAY
+
+
+@pytest.mark.asyncio
 async def test_rename_league_with_nothing_loaded_is_refused():
     state = _state([])
     ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))

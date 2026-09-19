@@ -793,19 +793,26 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             default=d.get("week_now"),
         )
         if state.full_bracket:
+            # A placeholder is not enough here: Discord clears it the moment
+            # someone starts typing, which is exactly when sixteen lines of
+            # format is most needed (Kevin, 19 Sep, after watching it vanish
+            # mid-paste). `discord.ui.Label.description` sits between the
+            # label and the box and stays put regardless of what's typed --
+            # the field itself is unwrapped (no `label=`, deprecated on a
+            # `TextInput` once it carries a `Label`), and `self.bracket`
+            # keeps pointing at the real input so `_typed()` and `on_submit`
+            # don't need to know it's wrapped.
             self.bracket = discord.ui.TextInput(
-                label="The bracket, in League order",
                 style=discord.TextStyle.paragraph,
-                # Discord caps a placeholder at 100 characters, so the shape is
-                # shown rather than described: the labelled example line says
-                # the order, and the tail says what is optional.
-                placeholder=(
-                    "kTZ 714 26.8b 25 100  (tag warzone power gift members)\n"
-                    "IMI 685\nAll 16, one per line."
-                ),
+                placeholder="kTZ 714 26.8b 25 100",
                 max_length=1800,
                 required=True,
                 default=d.get("bracket"),
+            )
+            self._bracket_label = discord.ui.Label(
+                text="The bracket, in League order",
+                description="tag warzone power gift members, in that order. All 16, one per line.",
+                component=self.bracket,
             )
         else:
             self.bracket = discord.ui.TextInput(
@@ -815,7 +822,8 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 required=True,
                 default=d.get("bracket"),
             )
-        for item in (self.season, self.tier, self.group, self.week_now, self.bracket):
+        bracket_item = self._bracket_label if state.full_bracket else self.bracket
+        for item in (self.season, self.tier, self.group, self.week_now, bracket_item):
             self.add_item(item)
 
     def _typed(self) -> dict:

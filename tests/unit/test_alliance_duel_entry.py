@@ -656,6 +656,35 @@ def test_the_retry_modal_still_holds_what_was_typed():
     assert modal.bracket.default == "kTZ 714"
 
 
+def test_the_bracket_format_survives_typing():
+    """#630: the format used to live only in the placeholder, which Discord
+    clears the instant someone starts typing -- exactly when pasting sixteen
+    lines is where it's needed. The `Label.description` sits above the box
+    and isn't cleared by anything the user types."""
+    modal = entry.NewLeagueModal(_state([]))
+
+    assert modal._bracket_label.text == "The bracket, in League order"
+    description = modal._bracket_label.description
+    assert "tag" in description and "warzone" in description
+    assert "power" in description and "gift" in description and "members" in description
+    # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
+    # go through `self.bracket`, not the Label, so what Discord fills in on
+    # submit -- `_value`, mirroring a real interaction -- reaches it the same
+    # way it always did.
+    assert modal._bracket_label.component is modal.bracket
+    modal.bracket._value = "kTZ 714 26.8b 25 100"
+    assert modal._typed()["bracket"] == "kTZ 714 26.8b 25 100"
+
+
+def test_own_alliance_mode_keeps_its_plain_ranking_field():
+    """The own-alliance ranking field is one short number, not a format to
+    remember, so it stays a plain labelled `TextInput` with no wrapper."""
+    modal = entry.NewLeagueModal(_state([], tracking_mode=ad.MODE_OWN_ALLIANCE))
+
+    assert not hasattr(modal, "_bracket_label")
+    assert modal.bracket.label == "Your ranking"
+
+
 def test_the_league_week_is_asked_for_instead_of_a_date():
     """The League screen shows a countdown and a Week 1-4 header. Which week it
     is on is readable; the Monday week 1 began on has to be worked out."""
@@ -668,7 +697,11 @@ def test_the_league_week_is_asked_for_instead_of_a_date():
 def test_every_modal_field_fits_what_discord_will_accept():
     """Discord rejects an oversized label or placeholder at send time, not at
     construction, so a too-long one ships green and fails in front of a user.
-    Limits: label 45, placeholder 100."""
+    Limits: label 45, placeholder 100, and a wrapping `discord.ui.Label` has
+    its own pair -- text 45, description 100 -- checked on the wrapper AND
+    recursed into whatever it wraps, since a `Label` has neither `.label`
+    nor `.placeholder` itself and the old version of this test silently
+    skipped one entirely (caught fixing #630's bracket field, 19 Sep)."""
     import discord
 
     modals = [
@@ -687,11 +720,21 @@ def test_every_modal_field_fits_what_discord_will_accept():
     for m in built:
         fields.extend(getattr(m, "children", [m]))
     assert fields
+    checked = 0
     for field in fields:
+        if isinstance(field, discord.ui.Label):
+            text = field.text or ""
+            description = field.description or ""
+            assert len(text) <= 45, f"{text!r} is {len(text)} characters"
+            assert len(description) <= 100, f"{description!r} is {len(description)} characters"
+            checked += 1
+            field = field.component  # fall through to check the wrapped item too
         label = getattr(field, "label", "") or ""
         placeholder = getattr(field, "placeholder", "") or ""
         assert len(label) <= 45, f"{label!r} is {len(label)} characters"
         assert len(placeholder) <= 100, f"{placeholder!r} is {len(placeholder)} characters"
+        checked += 1
+    assert checked >= len(fields), "every field should contribute at least one check"
 
 
 async def test_a_mid_league_setup_writes_every_week_up_to_this_one(_captured):

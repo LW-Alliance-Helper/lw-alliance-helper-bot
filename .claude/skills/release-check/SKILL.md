@@ -80,6 +80,14 @@ in the file's own preamble.
 
 ## 3. Release-unveiling announcement post
 
+**Patch releases skip this section.** Compare the release branch's
+version against the one currently on `main`: if only the third number
+changed (`1.9.0` → `1.9.1`), this is a patch, say so in one line and
+move to §4. Kevin, 19 Sep, confirmed on 1.9.1: a patch doesn't get an
+announcement, full stop, so there's no decision here to chase him for.
+Only a minor or major bump (the first or second number moves) reaches
+the rest of this section.
+
 Distinct from the automated `#changelog` bot post: the richer
 `:tada: Introducing version X.Y.Z` post a session drafts by hand (style
 rules in memory: `feedback_release_unveiling_post_style.md`).

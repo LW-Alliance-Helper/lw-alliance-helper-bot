@@ -1215,6 +1215,52 @@ class VSHubView(OwnedView):
         setup.callback = self._setup
         self.add_item(setup)
 
+        # Row 1 is full at five. Backfilling a week is its own row rather than
+        # a corner of Screen 3, since it is reached by week, not by "today".
+        backfill = discord.ui.Button(
+            label=ad_entry.VS_BTN_BACKFILL_RESULTS,
+            style=discord.ButtonStyle.secondary,
+            disabled=not has_league,
+            row=2,
+        )
+        backfill.callback = self._backfill_results
+        self.add_item(backfill)
+
+        rank = discord.ui.Button(
+            label=ad_entry.VS_BTN_SET_RANK,
+            style=discord.ButtonStyle.secondary,
+            disabled=not has_league,
+            row=2,
+        )
+        rank.callback = self._set_rank
+        self.add_item(rank)
+
+        edit_league = discord.ui.Button(
+            label=ad_entry.VS_BTN_EDIT_LEAGUE,
+            style=discord.ButtonStyle.secondary,
+            disabled=not has_league,
+            row=2,
+        )
+        edit_league.callback = self._edit_league
+        self.add_item(edit_league)
+
+    async def _edit_league(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ad_entry.EditLeagueModal(self.state))
+
+    async def _set_rank(self, interaction: discord.Interaction):
+        view = ad_entry.AllianceRankWeekPickerView(self.state, interaction.user.id)
+        await interaction.response.send_message(
+            ad_entry.VS_BACKFILL_PICK_PROMPT, view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+    async def _backfill_results(self, interaction: discord.Interaction):
+        view = ad_entry.BackfillWeekPickerView(self.state, interaction.user.id)
+        await interaction.response.send_message(
+            ad_entry.VS_BACKFILL_PICK_PROMPT, view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
     async def _bracket(self, interaction: discord.Interaction):
         if not self.state.full_bracket:
             await interaction.response.send_message(

@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.9.1** — 2026-09-19
+- Enter results for a past week of your Alliance Duel league at any time
+- Correct an alliance's rank for a past week once you learn it
+- Fix a league's season, tier or group after it's already been started
+- Tier is now a dropdown so it can't be mistyped
+- The new-league bracket paste's format now stays visible while you type
+
+---
+
 **1.9.0** — 2026-09-18
 - `/vs` tracks your Alliance Duel league and projects your path through the bracket
 - "Check my sheet" will tell you the row and column of every entry mistake it finds

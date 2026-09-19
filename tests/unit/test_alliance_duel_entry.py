@@ -656,6 +656,35 @@ def test_the_retry_modal_still_holds_what_was_typed():
     assert modal.bracket.default == "kTZ 714"
 
 
+def test_the_bracket_format_survives_typing():
+    """#630: the format used to live only in the placeholder, which Discord
+    clears the instant someone starts typing -- exactly when pasting sixteen
+    lines is where it's needed. The `Label.description` sits above the box
+    and isn't cleared by anything the user types."""
+    modal = entry.NewLeagueModal(_state([]))
+
+    assert modal._bracket_label.text == "The bracket, in League order"
+    description = modal._bracket_label.description
+    assert "tag" in description and "warzone" in description
+    assert "power" in description and "gift" in description and "members" in description
+    # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
+    # go through `self.bracket`, not the Label, so what Discord fills in on
+    # submit -- `_value`, mirroring a real interaction -- reaches it the same
+    # way it always did.
+    assert modal._bracket_label.component is modal.bracket
+    modal.bracket._value = "kTZ 714 26.8b 25 100"
+    assert modal._typed()["bracket"] == "kTZ 714 26.8b 25 100"
+
+
+def test_own_alliance_mode_keeps_its_plain_ranking_field():
+    """The own-alliance ranking field is one short number, not a format to
+    remember, so it stays a plain labelled `TextInput` with no wrapper."""
+    modal = entry.NewLeagueModal(_state([], tracking_mode=ad.MODE_OWN_ALLIANCE))
+
+    assert not hasattr(modal, "_bracket_label")
+    assert modal.bracket.label == "Your ranking"
+
+
 def test_the_league_week_is_asked_for_instead_of_a_date():
     """The League screen shows a countdown and a Week 1-4 header. Which week it
     is on is readable; the Monday week 1 began on has to be worked out."""
@@ -668,7 +697,11 @@ def test_the_league_week_is_asked_for_instead_of_a_date():
 def test_every_modal_field_fits_what_discord_will_accept():
     """Discord rejects an oversized label or placeholder at send time, not at
     construction, so a too-long one ships green and fails in front of a user.
-    Limits: label 45, placeholder 100."""
+    Limits: label 45, placeholder 100, and a wrapping `discord.ui.Label` has
+    its own pair -- text 45, description 100 -- checked on the wrapper AND
+    recursed into whatever it wraps, since a `Label` has neither `.label`
+    nor `.placeholder` itself and the old version of this test silently
+    skipped one entirely (caught fixing #630's bracket field, 19 Sep)."""
     import discord
 
     modals = [
@@ -687,11 +720,21 @@ def test_every_modal_field_fits_what_discord_will_accept():
     for m in built:
         fields.extend(getattr(m, "children", [m]))
     assert fields
+    checked = 0
     for field in fields:
+        if isinstance(field, discord.ui.Label):
+            text = field.text or ""
+            description = field.description or ""
+            assert len(text) <= 45, f"{text!r} is {len(text)} characters"
+            assert len(description) <= 100, f"{description!r} is {len(description)} characters"
+            checked += 1
+            field = field.component  # fall through to check the wrapped item too
         label = getattr(field, "label", "") or ""
         placeholder = getattr(field, "placeholder", "") or ""
         assert len(label) <= 45, f"{label!r} is {len(label)} characters"
         assert len(placeholder) <= 100, f"{placeholder!r} is {len(placeholder)} characters"
+        checked += 1
+    assert checked >= len(fields), "every field should contribute at least one check"
 
 
 async def test_a_mid_league_setup_writes_every_week_up_to_this_one(_captured):
@@ -1361,6 +1404,257 @@ def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
     modal = entry.OtherResultsModal(state, 1)
 
     assert modal.box.default == entry.results_prefill(state, 1)
+
+
+def test_backfill_declares_a_pairing_nothing_has_recorded():
+    """#630-adjacent, 19 Sep: a backfilled week has no recorded opponent and
+    no prior week decided, so `parse_results` would refuse every line as an
+    unrecognised match. `parse_backfill_results` reads the line as stating
+    the pairing rather than confirming one the algorithm already knows."""
+    state = _state(_bracket(week=3))
+    a, b = OWN_TAG, "A02"
+
+    rows, problems = entry.parse_backfill_results(state, 3, f"{a} v {b}: {a} 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in rows} == {_key(a), _key(b)}
+    winner = next(r for r in rows if r.alliance == _key(a))
+    loser = next(r for r in rows if r.alliance == _key(b))
+    assert winner.week_score == 9 and winner.week_outcome == "W" and winner.opponent == _key(b)
+    assert loser.week_score == 4 and loser.week_outcome == "L" and loser.opponent == _key(a)
+
+
+def test_backfill_refuses_an_alliance_not_in_that_weeks_roster():
+    state = _state(_bracket(week=3))
+    rows, problems = entry.parse_backfill_results(state, 3, f"{OWN_TAG} v ZQX: {OWN_TAG} 9-4")
+
+    assert rows == []
+    assert len(problems) == 1 and "ZQX" in problems[0]
+
+
+def test_backfill_refuses_an_alliance_playing_itself():
+    state = _state(_bracket(week=3))
+    rows, problems = entry.parse_backfill_results(state, 3, f"{OWN_TAG} v {OWN_TAG}: {OWN_TAG} 9-4")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_backfill_refuses_an_alliance_assigned_twice():
+    """Two lines naming the same alliance is a typo, not two matches -- the
+    week is 13 points and an alliance plays exactly one match in it."""
+    state = _state(_bracket(week=3))
+    text = f"{OWN_TAG} v A02: {OWN_TAG} 9-4\n{OWN_TAG} v A03: {OWN_TAG} 7-6"
+
+    rows, problems = entry.parse_backfill_results(state, 3, text)
+
+    assert len(problems) == 1 and OWN_TAG in problems[0]
+    # The first line is still good on its own -- only the alliance that
+    # collides across lines costs anything.
+    assert {r.alliance for r in rows} == {_key(OWN_TAG), _key("A02")}
+
+
+def test_backfill_modal_starts_blank_with_its_own_label():
+    """Nothing is prefilled -- there is nothing on the sheet yet to prefill
+    from, which is the entire reason this mode exists."""
+    state = _state(_bracket(week=3))
+    modal = entry.OtherResultsModal(state, 3, backfill=True)
+
+    assert modal.box.default == ""
+    assert modal._box_label.text == entry.VS_BACKFILL_FIELD_LABEL
+    assert modal._box_label.text != entry.VS_RESULTS_FIELD_LABEL
+
+
+def test_backfill_boxs_format_survives_typing():
+    """Same bug as #630's bracket field, on the same night: a placeholder
+    alone vanishes the moment someone starts typing, and this box has
+    nothing prefilled to fall back on. The format lives in the wrapping
+    Label's description instead, which stays put. Kevin, 19 Sep."""
+    state = _state(_bracket(week=3))
+    modal = entry.OtherResultsModal(state, 3, backfill=True)
+
+    assert modal.box.label is None  # unwrapped -- the Label carries the text
+    description = modal._box_label.description
+    assert "v" in description and "score" in description.lower()
+    assert modal._box_label.component is modal.box
+
+
+def test_backfill_retry_reopens_in_backfill_mode():
+    """A refused backfill submission has to reopen as a backfill modal, not
+    the live-week one -- otherwise the retry silently switches parsers."""
+    state = _state(_bracket(week=3))
+    retry = entry._RetryResultsView(state, 3, 1, "typed", backfill=True)
+
+    assert retry.backfill is True
+
+
+def test_the_week_picker_skips_a_week_with_no_roster_yet():
+    """A league started with `upto_week` short of some week has no rows
+    there at all -- nothing typed could resolve to an alliance, so the
+    button is absent rather than present and guaranteed to refuse."""
+    state = _state(_bracket(week=1) + _bracket(week=2))
+    picker = entry.BackfillWeekPickerView(state, 1)
+
+    assert [b.label for b in picker.children] == ["Week 1", "Week 2"]
+
+
+def test_the_rank_week_picker_also_skips_a_week_with_no_roster():
+    state = _state(_bracket(week=1))
+    picker = entry.AllianceRankWeekPickerView(state, 1)
+
+    assert [b.label for b in picker.children] == ["Week 1"]
+
+
+def test_the_rank_picker_shows_the_current_rank_per_alliance():
+    """Picking blind is a guess at who is who -- the option itself says what
+    is already on record, so correcting one is an informed choice."""
+    state = _state(_bracket(week=2))
+    picker = entry.AllianceRankPickerView(state, 2, 1)
+
+    select = picker.children[0]
+    by_label = {opt.label: opt.description for opt in select.options}
+    assert by_label[state.display_name(OWN)].startswith("Currently rank")
+    assert state.display_name(OWN) in [o.label for o in select.options]
+
+
+@pytest.mark.asyncio
+async def test_the_rank_modal_writes_only_that_weeks_row(_captured):
+    """Ranking lives per row, per week -- correcting week 2's must not touch
+    week 1's, unlike `start_new_league`'s blanket stamp across every week."""
+    state = _state(_bracket(week=1) + _bracket(week=2))
+    modal = entry.AllianceRankModal(state, 2, _key("A02"))
+    modal.rank._value = "3"
+
+    await modal.on_submit(_FakeInteraction())
+
+    assert len(_captured) == 1
+    assert _captured[0].week == 2
+    assert _captured[0].alliance == _key("A02")
+    assert _captured[0].ranking == 3
+
+
+@pytest.mark.asyncio
+async def test_the_rank_modal_refuses_an_out_of_range_value(_captured):
+    state = _state(_bracket(week=2))
+    modal = entry.AllianceRankModal(state, 2, _key("A02"))
+    modal.rank._value = "99"
+    interaction = _FakeInteraction()
+
+    await modal.on_submit(interaction)
+
+    assert _captured == []
+    assert any("1 to" in (msg or "") for msg in interaction.followed)
+
+
+# -- Renaming the league already loaded (#630-adjacent, 19 Sep) ----------------
+
+
+def _sheet_grid(rows):
+    header = list(ad.SHEET_COLUMNS)
+    hidx = {name: i for i, name in enumerate(header)}
+    grid = [header]
+    for row in rows:
+        line = [""] * len(header)
+        for name, value in ad.row_values(row).items():
+            line[hidx[name]] = value
+        grid.append(line)
+    return grid
+
+
+class _FakeRenameSheet:
+    def __init__(self, grid):
+        self._grid = grid
+        self.batch_calls = []
+
+    def get_all_values(self):
+        return self._grid
+
+    def batch_update(self, updates, **kw):
+        self.batch_calls.append(updates)
+
+
+@pytest.fixture
+def _rename_sheet(monkeypatch):
+    import config as _config
+
+    sheet_holder = {}
+
+    def _make(rows):
+        fake = _FakeRenameSheet(_sheet_grid(rows))
+        sheet_holder["sheet"] = fake
+        monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+        monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: fake)
+        return fake
+
+    return _make
+
+
+@pytest.mark.asyncio
+async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename_sheet):
+    """#630-adjacent: resubmitting the new-league paste with a corrected tier
+    would read as new rows under `plan_upsert`'s key match, leaving the
+    mistyped originals behind. This has to edit the same cells instead."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    fake = _rename_sheet(state.rows)
+
+    ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))
+
+    assert ok is True
+    # No row count -- that's a fact about their sheet, not what this did.
+    assert "Diamond" in message and "row" not in message.lower()
+    [updates] = fake.batch_calls
+    values = {u["range"]: u["values"][0][0] for u in updates}
+    # Row 2 -- the header is row 1, the one alliance is the only data row.
+    assert values[f"{transfer_col(ad.COL_TIER)}2"] == "Diamond"
+    assert values[f"{transfer_col(ad.COL_SEASON)}2"] == "S36"
+    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12-1"
+
+
+def transfer_col(name: str) -> str:
+    import transfer as _transfer
+
+    header = list(ad.SHEET_COLUMNS)
+    idx = _transfer.header_index(header)[_transfer.norm_header(name)]
+    return _transfer.col_index_to_letter(idx)
+
+
+@pytest.mark.asyncio
+async def test_rename_league_updates_the_loaded_state_too(_rename_sheet):
+    """The hub reads the sheet once per invocation (#269) -- without patching
+    the snapshot, the very next screen would still show the old identity."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    _rename_sheet(state.rows)
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+
+    await entry.rename_league(state, new)
+
+    assert state.league == new
+    assert all(r.league == new for r in state.rows)
+
+
+@pytest.mark.asyncio
+async def test_rename_league_with_nothing_loaded_is_refused():
+    state = _state([])
+    ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))
+
+    assert ok is False and "no league" in message.lower()
+
+
+def test_edit_league_modal_defaults_to_the_current_tier():
+    state = _state(_bracket())
+    state.league = ad.LeagueKey("S36", "Diamon", "12-1")
+    modal = entry.EditLeagueModal(state)
+
+    assert modal.season.default == "S36"
+    assert modal.group.default == "12-1"
+    # "Diamon" is not one of the three real tiers, so nothing is pre-selected
+    # -- there is no honest default for a typo.
+    assert not any(opt.default for opt in modal.tier.options)
 
 
 @pytest.mark.asyncio

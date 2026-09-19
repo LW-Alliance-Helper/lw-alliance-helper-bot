@@ -35,6 +35,7 @@ import alliance_duel_setup as ad_setup
 import config
 import config_health
 import messages
+import transfer
 from wizard_registry import OwnedView, expire_view_message
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,76 @@ def _patch_snapshot(state, rows: list[ad.AllianceWeek]) -> None:
             if value not in (None, "", {}, 0) or field in ("day_scores", "day_outcomes"):
                 setattr(existing, field, value or getattr(existing, field))
     state.profiles = ad.build_profiles(state.rows)
+
+
+async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple[bool, str]:
+    """Correct the identity of the league currently loaded, in place.
+
+    A league's season/tier/group is baked into every row's key the moment it
+    is written, so a typo like "Diamon" for "Diamond" cannot be fixed by
+    resubmitting the new-league paste: `plan_upsert` matches by key, so a
+    "corrected" resubmission reads as sixteen new rows rather than sixteen
+    corrections, and the mistyped originals are left behind as orphans.
+    Kevin hit exactly this, 19 Sep.
+
+    This edits only the Season/Tier/Group cells of the rows already on the
+    sheet, by their real row number -- everything else about them (week,
+    tag, warzone, power, opponent, scores) is untouched, the same
+    non-clobbering guarantee `plan_upsert` gives every other write here.
+    """
+    old_league = state.league
+    if old_league is None:
+        return False, "There's no league running right now to rename."
+
+    tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"
+
+    def _write() -> int:
+        spreadsheet = config.get_spreadsheet(state.guild_id)
+        worksheet = ad_setup.ensure_tab(spreadsheet, tab)
+        values = worksheet.get_all_values()
+        header = list(values[0]) if values else list(ad.SHEET_COLUMNS)
+        hidx = transfer.header_index(header)
+        rows = [r for r in ad.parse_rows(values) if r.league == old_league and r.row_number]
+
+        updates: list[ad.CellUpdate] = []
+        for row in rows:
+            for name, value in (
+                (ad.COL_SEASON, new_league.season),
+                (ad.COL_TIER, new_league.tier),
+                (ad.COL_GROUP, new_league.group),
+            ):
+                idx = hidx.get(transfer.norm_header(name))
+                if idx is None:
+                    continue
+                a1 = f"{transfer.col_index_to_letter(idx)}{row.row_number}"
+                updates.append(ad.CellUpdate(a1, value))
+
+        if updates:
+            ad.apply_upsert(worksheet, ad.UpsertPlan(updates=tuple(updates)))
+        return len(rows)
+
+    try:
+        count = await asyncio.to_thread(_write)
+    except Exception as e:  # noqa: BLE001 - the alliance's sheet, their fix
+        logger.warning("[VS] rename failed for guild=%s: %s", state.guild_id, e)
+        config_health.record_sheet_failure(state.guild_id, ad_setup.VS_SHEET_SUBJECT, e, tab=tab)
+        return False, f"I couldn't write to your tab: {config.describe_sheet_error(e)}"
+
+    if count == 0:
+        return False, "I couldn't find anything to rename for this league."
+
+    # Patch the snapshot the same way every other write here does (#269) --
+    # every row sharing the old identity gets the new one, in place.
+    for row in state.rows:
+        if row.league == old_league:
+            row.league = new_league
+    state.league = new_league
+    if state.live is not None and state.live.league == old_league:
+        state.live.league = new_league
+
+    # No row count here -- that's a fact about their sheet, not about what
+    # this action did. Kevin, 19 Sep.
+    return True, f"Renamed to **{new_league.season} · {new_league.tier} {new_league.group}**."
 
 
 def _row_for_write(state, alliance: ad.AllianceKey, week: int) -> ad.AllianceWeek:
@@ -726,6 +797,10 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
 
 VS_BTN_NEW_LEAGUE = "➕ Start a new league"
 
+#: The tiers the game has, as far as Kevin's alliance has seen them (19 Sep).
+#: Shared with `EditLeagueModal` so both surfaces offer the same list.
+VS_TIER_OPTIONS = ("Diamond", "Gold", "Silver")
+
 
 def pending_new_league(state) -> bool:
     """Whether pressing the button would actually start something.
@@ -767,13 +842,19 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             required=True,
             default=d.get("season"),
         )
-        self.tier = discord.ui.TextInput(
-            label="Tier",
-            placeholder="Diamond",
-            max_length=24,
-            required=False,
-            default=d.get("tier"),
+        # A dropdown, not free text -- Kevin, 19 Sep, after a mistyped
+        # "Diamond" baked itself into every row's league identity with no way
+        # to fix it short of the edit path `rename_league` now covers. If the
+        # game ever adds a tier this list doesn't know, that's a code change,
+        # not a paste any officer can make -- the same tradeoff LEAGUE_WEEKS
+        # and BRACKET_SIZE already make elsewhere in this feature.
+        self.tier = discord.ui.Select(
+            options=[
+                discord.SelectOption(label=t, value=t, default=(d.get("tier") == t))
+                for t in VS_TIER_OPTIONS
+            ],
         )
+        self._tier_label = discord.ui.Label(text="Tier", component=self.tier)
         self.group = discord.ui.TextInput(
             label="Group",
             placeholder="12 - 1",
@@ -793,19 +874,29 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             default=d.get("week_now"),
         )
         if state.full_bracket:
+            # A placeholder is not enough here: Discord clears it the moment
+            # someone starts typing, which is exactly when sixteen lines of
+            # format is most needed (Kevin, 19 Sep, after watching it vanish
+            # mid-paste). `discord.ui.Label.description` sits between the
+            # label and the box and stays put regardless of what's typed --
+            # the field itself is unwrapped (no `label=`, deprecated on a
+            # `TextInput` once it carries a `Label`), and `self.bracket`
+            # keeps pointing at the real input so `_typed()` and `on_submit`
+            # don't need to know it's wrapped.
             self.bracket = discord.ui.TextInput(
-                label="The bracket, in League order",
                 style=discord.TextStyle.paragraph,
-                # Discord caps a placeholder at 100 characters, so the shape is
-                # shown rather than described: the labelled example line says
-                # the order, and the tail says what is optional.
-                placeholder=(
-                    "kTZ 714 26.8b 25 100  (tag warzone power gift members)\n"
-                    "IMI 685\nAll 16, one per line."
-                ),
+                placeholder="kTZ 714 26.8b 25 100",
                 max_length=1800,
                 required=True,
                 default=d.get("bracket"),
+            )
+            self._bracket_label = discord.ui.Label(
+                text="The bracket, in League order",
+                description=(
+                    "tag warzone power gift members, e.g. kTZ 714 26.8b 25 100. "
+                    "All 16, one per line."
+                ),
+                component=self.bracket,
             )
         else:
             self.bracket = discord.ui.TextInput(
@@ -815,14 +906,15 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 required=True,
                 default=d.get("bracket"),
             )
-        for item in (self.season, self.tier, self.group, self.week_now, self.bracket):
+        bracket_item = self._bracket_label if state.full_bracket else self.bracket
+        for item in (self.season, self._tier_label, self.group, self.week_now, bracket_item):
             self.add_item(item)
 
     def _typed(self) -> dict:
         """What was entered, so a refusal can hand it straight back."""
         return {
             "season": self.season.value,
-            "tier": self.tier.value,
+            "tier": self.tier.values[0] if self.tier.values else "",
             "group": self.group.value,
             "week_now": self.week_now.value,
             "bracket": self.bracket.value,
@@ -845,7 +937,8 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        league = ad.LeagueKey.of(self.season.value, self.tier.value, self.group.value)
+        tier = self.tier.values[0] if self.tier.values else ""
+        league = ad.LeagueKey.of(self.season.value, tier, self.group.value)
         if league is None:
             await self._refuse(
                 interaction,
@@ -1051,6 +1144,64 @@ async def start_new_league(
             f"matchups can be projected. Record each day as it lands."
         )
     return True, f"Started **{league}** with {added} {noun} for {span}. {nudge}"
+
+
+VS_BTN_EDIT_LEAGUE = "✏️ Edit league details"
+
+
+class EditLeagueModal(discord.ui.Modal, title="Edit league details"):
+    """Correct the season, tier or group of the league already running.
+
+    Separate from `NewLeagueModal`: starting a new league and correcting the
+    one already loaded are different acts with different costs of getting
+    wrong, and folding "fix a typo" into "start over" is what left Kevin's
+    "Diamon" with no way back short of this (19 Sep).
+    """
+
+    def __init__(self, state):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        league = state.league
+
+        self.season = discord.ui.TextInput(
+            label="Season",
+            placeholder="S36",
+            default=league.season if league else None,
+            required=True,
+            max_length=12,
+        )
+        self.group = discord.ui.TextInput(
+            label="Group",
+            placeholder="12 - 1",
+            default=league.group if league else None,
+            required=False,
+            max_length=24,
+        )
+        self.tier = discord.ui.Select(
+            options=[
+                discord.SelectOption(
+                    label=t, value=t, default=(league is not None and league.tier == t)
+                )
+                for t in VS_TIER_OPTIONS
+            ],
+        )
+        self._tier_label = discord.ui.Label(text="Tier", component=self.tier)
+        for item in (self.season, self._tier_label, self.group):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        tier = self.tier.values[0] if self.tier.values else ""
+        new_league = ad.LeagueKey.of(self.season.value, tier, self.group.value)
+        if new_league is None:
+            await interaction.followup.send(
+                "⚠️ A league needs a season, the one on the League screen.", ephemeral=True
+            )
+            return
+
+        ok, message = await rename_league(self.state, new_league, actor=interaction)
+        await interaction.followup.send(f"{'✅' if ok else '⚠️'} {message}", ephemeral=True)
 
 
 __all__ = [
@@ -2169,6 +2320,106 @@ def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], l
     return rows, problems
 
 
+#: Reached from the hub directly, not from Screen 3 -- backfilling a week is
+#: not "this week's" business. Kevin's own name for it, 19 Sep.
+VS_BTN_BACKFILL_RESULTS = "Enter past week results"
+
+#: A shorter instruction than the live-week box needs, because the box itself
+#: is empty here: nothing is prefilled to correct, only an example to follow.
+#: The format itself lives in the wrapping Label's description (19 Sep) so
+#: it survives typing -- see `OtherResultsModal.__init__`.
+VS_BACKFILL_FIELD_LABEL = "Who played whom, and the split"
+
+BACKFILL_UNKNOWN_ALLIANCE = "{label}: I don't know {tag}. Check it against the bracket."
+BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
+#: Not `{label}:` -- the alliance is the same regardless of which line it was
+#: caught on, and naming both lines would take two passes to fix one typo.
+BACKFILL_DUPLICATE_ALLIANCE = "{tag} already has a result recorded elsewhere in this box."
+
+
+def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
+    """Read a past week's box. Same line shape as `parse_results` -- a label,
+    `_RESULT_SEP`, a tag and a split -- but for a week nothing has recorded
+    yet, there is nothing for `_match_by_label` to check a line against.
+
+    `parse_results` refuses any pairing `all_week_matches` has not already
+    predicted or recorded, which is exactly backwards for backfilling: the
+    whole point is stating what actually happened, not correcting an
+    inference. So a line names its own pairing, checked only against the
+    league's roster for that week -- every alliance already has a blank row
+    there, written when the league (or a later week's roster) was set up --
+    never against a computed or recorded opponent.
+
+    An alliance assigned two different results in the same box is refused:
+    that is a typo, not two matches.
+    """
+    roster = {
+        state.display_name(r.alliance).casefold(): r.alliance for r in state.league_rows(week)
+    }
+    rows: list[ad.AllianceWeek] = []
+    problems: list[str] = []
+    assigned: set[ad.AllianceKey] = set()
+
+    for raw in text.splitlines():
+        label, _, value = raw.partition(_RESULT_SEP)
+        label, value = label.strip(), value.strip()
+        if not label or not value:
+            continue
+
+        names = [part.strip() for part in label.split(" v ")]
+        if len(names) != 2 or not all(names):
+            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
+            continue
+        a, b = roster.get(names[0].casefold()), roster.get(names[1].casefold())
+        if a is None or b is None:
+            problems.append(
+                BACKFILL_UNKNOWN_ALLIANCE.format(
+                    label=label, tag=names[0] if a is None else names[1]
+                )
+            )
+            continue
+        if a == b:
+            problems.append(BACKFILL_SAME_ALLIANCE.format(label=label))
+            continue
+
+        split = re.match(r"^(?P<tag>.*?)\s*(?P<x>\d+)\s*[^\d\s]\s*(?P<y>\d+)$", value.strip())
+        if split is None or not split.group("tag").strip():
+            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
+            continue
+
+        name_a, name_b = state.display_name(a), state.display_name(b)
+        tag = split.group("tag").strip()
+        if tag.casefold() == name_a.casefold():
+            first, second = a, b
+        elif tag.casefold() == name_b.casefold():
+            first, second = b, a
+        else:
+            problems.append(RESULTS_BAD_TAG.format(label=label, tag=tag, a=name_a, b=name_b))
+            continue
+
+        x, y = int(split.group("x")), int(split.group("y"))
+        if x + y != ad.WEEK_POINTS_TOTAL:
+            problems.append(
+                RESULTS_BAD_TOTAL.format(label=label, x=x, y=y, total=ad.WEEK_POINTS_TOTAL)
+            )
+            continue
+
+        if first in assigned or second in assigned:
+            dupe = first if first in assigned else second
+            problems.append(BACKFILL_DUPLICATE_ALLIANCE.format(tag=state.display_name(dupe)))
+        else:
+            assigned.add(first)
+            assigned.add(second)
+            for side, other, score in ((first, second, x), (second, first, y)):
+                row = _row_for_write(state, side, week)
+                row.week_score = score
+                row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
+                row.opponent = other
+                rows.append(row)
+
+    return rows, problems
+
+
 def results_saved_lines(state, rows: list[ad.AllianceWeek]) -> list[str]:
     """One phrase per match for the confirmation, winners named.
 
@@ -2197,36 +2448,77 @@ class OtherResultsModal(discord.ui.Modal):
     list: Match Record puts every match of the week on one scrollable screen,
     already split into two numbers. An input that mirrors that is two presses
     for a week where a match-at-a-time flow is twenty-two.
+
+    **`backfill=True`** is the same modal used for "Enter past week results"
+    (#630-adjacent, 19 Sep): a week nothing has recorded, opened directly off
+    the hub rather than off Screen 3. Nothing here is prefilled to correct --
+    `parse_backfill_results` reads a line as *stating* a pairing rather than
+    confirming one already known, which is the whole point of backfilling
+    real history instead of waiting on the algorithm to infer it.
     """
 
-    def __init__(self, state, week: int, view=None, typed: str | None = None):
+    def __init__(
+        self,
+        state,
+        week: int,
+        view=None,
+        typed: str | None = None,
+        *,
+        backfill: bool = False,
+    ):
         super().__init__(title=VS_RESULTS_MODAL_TITLE.format(week=week)[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.view = view
+        self.backfill = backfill
 
-        self.box = discord.ui.TextInput(
-            label=VS_RESULTS_FIELD_LABEL[:45],
-            style=discord.TextStyle.paragraph,
-            # `typed` is what a refused submission held. Reopening on the
-            # sheet's version instead would throw a week of typing away to
-            # fix one line.
-            default=typed if typed is not None else results_prefill(state, week),
-            required=False,
-            max_length=1500,
-        )
-        self.add_item(self.box)
+        default = typed if typed is not None else ("" if backfill else results_prefill(state, week))
+        if backfill:
+            # A placeholder alone isn't enough here -- Discord clears it the
+            # moment someone starts typing, and a blank backfill box has
+            # nothing prefilled to fall back on for the format. Same fix as
+            # the new-league bracket field (#630, 19 Sep, and Kevin's own
+            # callback to it here): `Label.description` sits above the box
+            # and survives typing; the field itself carries no `label=` of
+            # its own once a `Label` wraps it.
+            self.box = discord.ui.TextInput(
+                style=discord.TextStyle.paragraph,
+                placeholder="OGV v nWA: OGV 7-6",
+                default=default,
+                required=False,
+                max_length=1500,
+            )
+            self._box_label = discord.ui.Label(
+                text=VS_BACKFILL_FIELD_LABEL[:45],
+                description=(
+                    "One match per line: Tag v Tag: Tag score-score, e.g. OGV v nWA: OGV 7-6."
+                )[:100],
+                component=self.box,
+            )
+            self.add_item(self._box_label)
+        else:
+            self.box = discord.ui.TextInput(
+                label=VS_RESULTS_FIELD_LABEL[:45],
+                style=discord.TextStyle.paragraph,
+                default=default,
+                required=False,
+                max_length=1500,
+            )
+            self.add_item(self.box)
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         typed = self.box.value or ""
-        rows, problems = parse_results(self.state, self.week, typed)
+        parser = parse_backfill_results if self.backfill else parse_results
+        rows, problems = parser(self.state, self.week, typed)
         if problems:
             # Discord will not open a modal off a modal submit, so the way
             # back in has to be a button. Same shape as the new-league paste.
-            retry = _RetryResultsView(self.state, self.week, interaction.user.id, typed, self.view)
+            retry = _RetryResultsView(
+                self.state, self.week, interaction.user.id, typed, self.view, backfill=self.backfill
+            )
             retry.message = await interaction.followup.send(
                 "\n".join([RESULTS_REFUSED, *problems])[:1900],
                 view=retry,
@@ -2265,13 +2557,16 @@ class _RetryResultsView(OwnedView):
 
     timeout_hint = "`/vs`"
 
-    def __init__(self, state, week: int, user_id: int, typed: str, view=None):
+    def __init__(
+        self, state, week: int, user_id: int, typed: str, view=None, *, backfill: bool = False
+    ):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.owner_id = user_id
         self.typed = typed
         self.view = view
+        self.backfill = backfill
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=VS_BTN_RETRY_RESULTS, style=discord.ButtonStyle.primary)
@@ -2280,5 +2575,175 @@ class _RetryResultsView(OwnedView):
 
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
-            OtherResultsModal(self.state, self.week, view=self.view, typed=self.typed)
+            OtherResultsModal(
+                self.state, self.week, view=self.view, typed=self.typed, backfill=self.backfill
+            )
+        )
+
+
+VS_BACKFILL_PICK_PROMPT = "Which week?"
+VS_BACKFILL_WEEK_LABEL = "Week {week}"
+
+
+class BackfillWeekPickerView(OwnedView):
+    """One button per week, reached from the hub rather than from Screen 3 --
+    backfilling is not tied to whichever week is live right now.
+
+    A week with no roster yet (the league was started with `upto_week` short
+    of it) is left off rather than shown disabled: nothing typed there could
+    resolve to an alliance, and the empty-roster case is better explained by
+    the button's absence than by a click that refuses everything typed.
+    """
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        for week in range(1, ad.LEAGUE_WEEKS + 1):
+            if not state.league_rows(week):
+                continue
+            button = discord.ui.Button(
+                label=VS_BACKFILL_WEEK_LABEL.format(week=week), style=discord.ButtonStyle.secondary
+            )
+            button.callback = self._make_open(week)
+            self.add_item(button)
+
+    def _make_open(self, week: int):
+        async def _open(interaction: discord.Interaction):
+            await interaction.response.send_modal(
+                OtherResultsModal(self.state, week, backfill=True)
+            )
+
+        return _open
+
+
+VS_BTN_SET_RANK = "🔢 Set an alliance's rank"
+VS_RANK_PICK_ALLIANCE_PROMPT = "Which alliance?"
+VS_RANK_MODAL_TITLE = "Set {tag}'s rank"
+VS_RANK_FIELD_LABEL = "Rank for week {week}"
+RANK_SAVED = "✅ Set {tag}'s week {week} rank to {rank}."
+RANK_BAD_VALUE = "A rank is a number from 1 to {size}."
+
+
+class AllianceRankWeekPickerView(OwnedView):
+    """Same shape as `BackfillWeekPickerView`: one button per week that has a
+    roster to correct a rank on. A separate flow from "Add or edit alliance"
+    rather than a sixth field there -- Discord caps a modal at five, and
+    that one is already full (tag, warzone, power, members, gift)."""
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        for week in range(1, ad.LEAGUE_WEEKS + 1):
+            if not state.league_rows(week):
+                continue
+            button = discord.ui.Button(
+                label=VS_BACKFILL_WEEK_LABEL.format(week=week), style=discord.ButtonStyle.secondary
+            )
+            button.callback = self._make_open(week)
+            self.add_item(button)
+
+    def _make_open(self, week: int):
+        async def _open(interaction: discord.Interaction):
+            view = AllianceRankPickerView(self.state, week, self.owner_id)
+            await interaction.response.edit_message(content=VS_RANK_PICK_ALLIANCE_PROMPT, view=view)
+            view.message = await interaction.original_response()
+
+        return _open
+
+
+class AllianceRankPickerView(OwnedView):
+    """A select of the chosen week's roster, each option showing its current
+    rank so picking one is informed rather than a guess at who is who."""
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, week: int, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        rows = sorted(state.league_rows(week), key=lambda r: state.display_name(r.alliance))
+        self._alliances = [r.alliance for r in rows][:25]
+        options = [
+            discord.SelectOption(
+                label=state.display_name(r.alliance)[:100],
+                value=str(i),
+                description=(
+                    f"Currently rank {r.ranking}" if r.ranking else "No rank recorded yet"
+                ),
+            )
+            for i, r in enumerate(rows[:25])
+        ]
+
+        select = discord.ui.Select(placeholder=VS_RANK_PICK_ALLIANCE_PROMPT, options=options)
+        select.callback = self._picked
+        self.add_item(select)
+
+    async def _picked(self, interaction: discord.Interaction):
+        select = self.children[0]
+        alliance = self._alliances[int(select.values[0])]
+        await interaction.response.send_modal(AllianceRankModal(self.state, self.week, alliance))
+
+
+class AllianceRankModal(discord.ui.Modal):
+    """One field: this alliance's rank for this specific week.
+
+    Ranking lives per row, per week (`AllianceWeek.ranking`), not once for
+    the whole league -- `start_new_league` just always stamped the same
+    value across every backfilled week. Correcting one week's here never
+    touches another week's."""
+
+    def __init__(self, state, week: int, alliance: ad.AllianceKey):
+        super().__init__(
+            title=VS_RANK_MODAL_TITLE.format(tag=state.display_name(alliance))[:45],
+            timeout=ENTRY_TIMEOUT,
+        )
+        self.state = state
+        self.week = week
+        self.alliance = alliance
+
+        existing = state.row_for(alliance, week)
+        self.rank = discord.ui.TextInput(
+            label=VS_RANK_FIELD_LABEL.format(week=week)[:45],
+            placeholder="9",
+            default=str(existing.ranking) if existing and existing.ranking else None,
+            required=True,
+            max_length=4,
+        )
+        self.add_item(self.rank)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        rank = ad.parse_int(self.rank.value)
+        if rank is None or not 1 <= rank <= ad.BRACKET_SIZE:
+            await interaction.followup.send(
+                f"⚠️ {RANK_BAD_VALUE.format(size=ad.BRACKET_SIZE)}", ephemeral=True
+            )
+            return
+
+        row = _row_for_write(self.state, self.alliance, self.week)
+        row.ranking = rank
+        problem = await save_rows(self.state, [row], actor=interaction)
+        if problem:
+            await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            RANK_SAVED.format(
+                tag=self.state.display_name(self.alliance), week=self.week, rank=rank
+            ),
+            ephemeral=True,
         )

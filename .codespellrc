@@ -8,4 +8,4 @@
 # fragments), not real words we're choosing to misspell.
 [codespell]
 skip = .git,.ruff_cache,htmlcov,node_modules,notes,*.png,*.csv,*.svg,*.lock,*.json,*.html
-ignore-words-list = seh,unparseable,tuseday,nd,te,fo,ot,ue,fro,re-used,re-uses,re-use,pre-selected,pre-emptively,varian,categor,thur
+ignore-words-list = seh,unparseable,tuseday,nd,te,fo,ot,ue,fro,re-used,re-uses,re-use,pre-selected,pre-emptively,varian,categor,thur,diamon

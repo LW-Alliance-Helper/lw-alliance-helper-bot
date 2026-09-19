@@ -6,7 +6,7 @@ gspread>=6.2.1
 google-auth>=2.55.2
 python-dotenv>=1.2.2
 tzdata>=2026.3
-sentry-sdk>=2.64.0
+sentry-sdk>=2.69.1
 Pillow>=12.3.0,<13
 # Champion Duel match engine. Pinned to a tag so the constants the bot serves
 # are a deliberate version bump, not silent drift -- the engine stays in the

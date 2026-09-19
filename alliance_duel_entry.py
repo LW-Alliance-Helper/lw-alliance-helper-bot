@@ -24,6 +24,7 @@ or the next button click renders the value the user just replaced.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as _dt
 import logging
 import re
@@ -247,7 +248,7 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
             row.league = new_league
     state.league = new_league
     if state.live is not None and state.live.league == old_league:
-        state.live.league = new_league
+        state.live = dataclasses.replace(state.live, league=new_league)
 
     # No row count here -- that's a fact about their sheet, not about what
     # this action did. Kevin, 19 Sep.

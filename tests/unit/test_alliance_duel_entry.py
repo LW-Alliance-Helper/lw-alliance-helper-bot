@@ -1460,8 +1460,22 @@ def test_backfill_modal_starts_blank_with_its_own_label():
     modal = entry.OtherResultsModal(state, 3, backfill=True)
 
     assert modal.box.default == ""
-    assert modal.box.label == entry.VS_BACKFILL_FIELD_LABEL
-    assert modal.box.label != entry.VS_RESULTS_FIELD_LABEL
+    assert modal._box_label.text == entry.VS_BACKFILL_FIELD_LABEL
+    assert modal._box_label.text != entry.VS_RESULTS_FIELD_LABEL
+
+
+def test_backfill_boxs_format_survives_typing():
+    """Same bug as #630's bracket field, on the same night: a placeholder
+    alone vanishes the moment someone starts typing, and this box has
+    nothing prefilled to fall back on. The format lives in the wrapping
+    Label's description instead, which stays put. Kevin, 19 Sep."""
+    state = _state(_bracket(week=3))
+    modal = entry.OtherResultsModal(state, 3, backfill=True)
+
+    assert modal.box.label is None  # unwrapped -- the Label carries the text
+    description = modal._box_label.description
+    assert "v" in description and "score" in description.lower()
+    assert modal._box_label.component is modal.box
 
 
 def test_backfill_retry_reopens_in_backfill_mode():
@@ -1588,7 +1602,8 @@ async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename
     ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))
 
     assert ok is True
-    assert "Diamond" in message and "1 row" in message
+    # No row count -- that's a fact about their sheet, not what this did.
+    assert "Diamond" in message and "row" not in message.lower()
     [updates] = fake.batch_calls
     values = {u["range"]: u["values"][0][0] for u in updates}
     # Row 2 -- the header is row 1, the one alliance is the only data row.

@@ -201,7 +201,7 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     """
     old_league = state.league
     if old_league is None:
-        return False, "There is no league loaded to rename."
+        return False, "There's no league running right now to rename."
 
     tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"
 
@@ -238,7 +238,7 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
         return False, f"I couldn't write to your tab: {config.describe_sheet_error(e)}"
 
     if count == 0:
-        return False, "I found nothing under the current league to rename."
+        return False, "I couldn't find anything to rename for this league."
 
     # Patch the snapshot the same way every other write here does (#269) --
     # every row sharing the old identity gets the new one, in place.
@@ -249,12 +249,9 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     if state.live is not None and state.live.league == old_league:
         state.live.league = new_league
 
-    plural = "" if count == 1 else "s"
-    return (
-        True,
-        f"Renamed to **{new_league.season} · {new_league.tier} {new_league.group}** "
-        f"across {count} row{plural}.",
-    )
+    # No row count here -- that's a fact about their sheet, not about what
+    # this action did. Kevin, 19 Sep.
+    return True, f"Renamed to **{new_league.season} · {new_league.tier} {new_league.group}**."
 
 
 def _row_for_write(state, alliance: ad.AllianceKey, week: int) -> ad.AllianceWeek:
@@ -2326,8 +2323,9 @@ VS_BTN_BACKFILL_RESULTS = "Enter past week results"
 
 #: A shorter instruction than the live-week box needs, because the box itself
 #: is empty here: nothing is prefilled to correct, only an example to follow.
+#: The format itself lives in the wrapping Label's description (19 Sep) so
+#: it survives typing -- see `OtherResultsModal.__init__`.
 VS_BACKFILL_FIELD_LABEL = "Who played whom, and the split"
-VS_BACKFILL_PLACEHOLDER = "OGV v nWA: OGV 7-6\none match per line, in any order"
 
 BACKFILL_UNKNOWN_ALLIANCE = "{label}: I don't know {tag}. Check it against the bracket."
 BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
@@ -2471,21 +2469,37 @@ class OtherResultsModal(discord.ui.Modal):
         self.view = view
         self.backfill = backfill
 
-        self.box = discord.ui.TextInput(
-            label=(VS_BACKFILL_FIELD_LABEL if backfill else VS_RESULTS_FIELD_LABEL)[:45],
-            style=discord.TextStyle.paragraph,
-            placeholder=VS_BACKFILL_PLACEHOLDER[:100] if backfill else None,
-            # `typed` is what a refused submission held. Reopening on the
-            # sheet's version instead would throw a week of typing away to
-            # fix one line. Backfill starts blank -- there is nothing on the
-            # sheet yet to prefill from.
-            default=typed
-            if typed is not None
-            else ("" if backfill else results_prefill(state, week)),
-            required=False,
-            max_length=1500,
-        )
-        self.add_item(self.box)
+        default = typed if typed is not None else ("" if backfill else results_prefill(state, week))
+        if backfill:
+            # A placeholder alone isn't enough here -- Discord clears it the
+            # moment someone starts typing, and a blank backfill box has
+            # nothing prefilled to fall back on for the format. Same fix as
+            # the new-league bracket field (#630, 19 Sep, and Kevin's own
+            # callback to it here): `Label.description` sits above the box
+            # and survives typing; the field itself carries no `label=` of
+            # its own once a `Label` wraps it.
+            self.box = discord.ui.TextInput(
+                style=discord.TextStyle.paragraph,
+                placeholder="OGV v nWA: OGV 7-6",
+                default=default,
+                required=False,
+                max_length=1500,
+            )
+            self._box_label = discord.ui.Label(
+                text=VS_BACKFILL_FIELD_LABEL[:45],
+                description="One match per line: Tag v Tag: Tag score-score."[:100],
+                component=self.box,
+            )
+            self.add_item(self._box_label)
+        else:
+            self.box = discord.ui.TextInput(
+                label=VS_RESULTS_FIELD_LABEL[:45],
+                style=discord.TextStyle.paragraph,
+                default=default,
+                required=False,
+                max_length=1500,
+            )
+            self.add_item(self.box)
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).

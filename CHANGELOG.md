@@ -9,6 +9,19 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.1] — 2026-09-19
+
+### Added
+- **Enter past week results**: record who played whom and the score for any past week of your Alliance Duel league, without waiting on a prediction the algorithm can't make yet.
+- Correct an alliance's rank for a specific past week, once you learn it.
+- **Edit league details**: fix a league's season, tier or group after it's been started, correcting the rows already on your sheet instead of starting over.
+
+### Changed
+- Tier is now a dropdown (Diamond, Gold or Silver) when starting or editing a league, so it can't be mistyped.
+
+### Fixed
+- The new-league bracket paste's format used to vanish the moment you started typing; it now stays visible the whole time.
+
 ## [1.9.0] — 2026-09-18
 
 Both Champion Duel and Alliance Duel (VS) are brand new this release. Both hubs

@@ -892,7 +892,10 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
             self._bracket_label = discord.ui.Label(
                 text="The bracket, in League order",
-                description="tag warzone power gift members, in that order. All 16, one per line.",
+                description=(
+                    "tag warzone power gift members, e.g. kTZ 714 26.8b 25 100. "
+                    "All 16, one per line."
+                ),
                 component=self.bracket,
             )
         else:
@@ -2487,7 +2490,9 @@ class OtherResultsModal(discord.ui.Modal):
             )
             self._box_label = discord.ui.Label(
                 text=VS_BACKFILL_FIELD_LABEL[:45],
-                description="One match per line: Tag v Tag: Tag score-score."[:100],
+                description=(
+                    "One match per line: Tag v Tag: Tag score-score, e.g. OGV v nWA: OGV 7-6."
+                )[:100],
                 component=self.box,
             )
             self.add_item(self._box_label)

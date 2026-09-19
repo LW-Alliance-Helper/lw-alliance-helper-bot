@@ -35,6 +35,7 @@ import alliance_duel_setup as ad_setup
 import config
 import config_health
 import messages
+import transfer
 from wizard_registry import OwnedView, expire_view_message
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,79 @@ def _patch_snapshot(state, rows: list[ad.AllianceWeek]) -> None:
             if value not in (None, "", {}, 0) or field in ("day_scores", "day_outcomes"):
                 setattr(existing, field, value or getattr(existing, field))
     state.profiles = ad.build_profiles(state.rows)
+
+
+async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple[bool, str]:
+    """Correct the identity of the league currently loaded, in place.
+
+    A league's season/tier/group is baked into every row's key the moment it
+    is written, so a typo like "Diamon" for "Diamond" cannot be fixed by
+    resubmitting the new-league paste: `plan_upsert` matches by key, so a
+    "corrected" resubmission reads as sixteen new rows rather than sixteen
+    corrections, and the mistyped originals are left behind as orphans.
+    Kevin hit exactly this, 19 Sep.
+
+    This edits only the Season/Tier/Group cells of the rows already on the
+    sheet, by their real row number -- everything else about them (week,
+    tag, warzone, power, opponent, scores) is untouched, the same
+    non-clobbering guarantee `plan_upsert` gives every other write here.
+    """
+    old_league = state.league
+    if old_league is None:
+        return False, "There is no league loaded to rename."
+
+    tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"
+
+    def _write() -> int:
+        spreadsheet = config.get_spreadsheet(state.guild_id)
+        worksheet = ad_setup.ensure_tab(spreadsheet, tab)
+        values = worksheet.get_all_values()
+        header = list(values[0]) if values else list(ad.SHEET_COLUMNS)
+        hidx = transfer.header_index(header)
+        rows = [r for r in ad.parse_rows(values) if r.league == old_league and r.row_number]
+
+        updates: list[ad.CellUpdate] = []
+        for row in rows:
+            for name, value in (
+                (ad.COL_SEASON, new_league.season),
+                (ad.COL_TIER, new_league.tier),
+                (ad.COL_GROUP, new_league.group),
+            ):
+                idx = hidx.get(transfer.norm_header(name))
+                if idx is None:
+                    continue
+                a1 = f"{transfer.col_index_to_letter(idx)}{row.row_number}"
+                updates.append(ad.CellUpdate(a1, value))
+
+        if updates:
+            ad.apply_upsert(worksheet, ad.UpsertPlan(updates=tuple(updates)))
+        return len(rows)
+
+    try:
+        count = await asyncio.to_thread(_write)
+    except Exception as e:  # noqa: BLE001 - the alliance's sheet, their fix
+        logger.warning("[VS] rename failed for guild=%s: %s", state.guild_id, e)
+        config_health.record_sheet_failure(state.guild_id, ad_setup.VS_SHEET_SUBJECT, e, tab=tab)
+        return False, f"I couldn't write to your tab: {config.describe_sheet_error(e)}"
+
+    if count == 0:
+        return False, "I found nothing under the current league to rename."
+
+    # Patch the snapshot the same way every other write here does (#269) --
+    # every row sharing the old identity gets the new one, in place.
+    for row in state.rows:
+        if row.league == old_league:
+            row.league = new_league
+    state.league = new_league
+    if state.live is not None and state.live.league == old_league:
+        state.live.league = new_league
+
+    plural = "" if count == 1 else "s"
+    return (
+        True,
+        f"Renamed to **{new_league.season} · {new_league.tier} {new_league.group}** "
+        f"across {count} row{plural}.",
+    )
 
 
 def _row_for_write(state, alliance: ad.AllianceKey, week: int) -> ad.AllianceWeek:
@@ -726,6 +800,10 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
 
 VS_BTN_NEW_LEAGUE = "➕ Start a new league"
 
+#: The tiers the game has, as far as Kevin's alliance has seen them (19 Sep).
+#: Shared with `EditLeagueModal` so both surfaces offer the same list.
+VS_TIER_OPTIONS = ("Diamond", "Gold", "Silver")
+
 
 def pending_new_league(state) -> bool:
     """Whether pressing the button would actually start something.
@@ -767,13 +845,19 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             required=True,
             default=d.get("season"),
         )
-        self.tier = discord.ui.TextInput(
-            label="Tier",
-            placeholder="Diamond",
-            max_length=24,
-            required=False,
-            default=d.get("tier"),
+        # A dropdown, not free text -- Kevin, 19 Sep, after a mistyped
+        # "Diamond" baked itself into every row's league identity with no way
+        # to fix it short of the edit path `rename_league` now covers. If the
+        # game ever adds a tier this list doesn't know, that's a code change,
+        # not a paste any officer can make -- the same tradeoff LEAGUE_WEEKS
+        # and BRACKET_SIZE already make elsewhere in this feature.
+        self.tier = discord.ui.Select(
+            options=[
+                discord.SelectOption(label=t, value=t, default=(d.get("tier") == t))
+                for t in VS_TIER_OPTIONS
+            ],
         )
+        self._tier_label = discord.ui.Label(text="Tier", component=self.tier)
         self.group = discord.ui.TextInput(
             label="Group",
             placeholder="12 - 1",
@@ -823,14 +907,14 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 default=d.get("bracket"),
             )
         bracket_item = self._bracket_label if state.full_bracket else self.bracket
-        for item in (self.season, self.tier, self.group, self.week_now, bracket_item):
+        for item in (self.season, self._tier_label, self.group, self.week_now, bracket_item):
             self.add_item(item)
 
     def _typed(self) -> dict:
         """What was entered, so a refusal can hand it straight back."""
         return {
             "season": self.season.value,
-            "tier": self.tier.value,
+            "tier": self.tier.values[0] if self.tier.values else "",
             "group": self.group.value,
             "week_now": self.week_now.value,
             "bracket": self.bracket.value,
@@ -853,7 +937,8 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        league = ad.LeagueKey.of(self.season.value, self.tier.value, self.group.value)
+        tier = self.tier.values[0] if self.tier.values else ""
+        league = ad.LeagueKey.of(self.season.value, tier, self.group.value)
         if league is None:
             await self._refuse(
                 interaction,
@@ -1059,6 +1144,64 @@ async def start_new_league(
             f"matchups can be projected. Record each day as it lands."
         )
     return True, f"Started **{league}** with {added} {noun} for {span}. {nudge}"
+
+
+VS_BTN_EDIT_LEAGUE = "✏️ Edit league details"
+
+
+class EditLeagueModal(discord.ui.Modal, title="Edit league details"):
+    """Correct the season, tier or group of the league already running.
+
+    Separate from `NewLeagueModal`: starting a new league and correcting the
+    one already loaded are different acts with different costs of getting
+    wrong, and folding "fix a typo" into "start over" is what left Kevin's
+    "Diamon" with no way back short of this (19 Sep).
+    """
+
+    def __init__(self, state):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        league = state.league
+
+        self.season = discord.ui.TextInput(
+            label="Season",
+            placeholder="S36",
+            default=league.season if league else None,
+            required=True,
+            max_length=12,
+        )
+        self.group = discord.ui.TextInput(
+            label="Group",
+            placeholder="12 - 1",
+            default=league.group if league else None,
+            required=False,
+            max_length=24,
+        )
+        self.tier = discord.ui.Select(
+            options=[
+                discord.SelectOption(
+                    label=t, value=t, default=(league is not None and league.tier == t)
+                )
+                for t in VS_TIER_OPTIONS
+            ],
+        )
+        self._tier_label = discord.ui.Label(text="Tier", component=self.tier)
+        for item in (self.season, self._tier_label, self.group):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        tier = self.tier.values[0] if self.tier.values else ""
+        new_league = ad.LeagueKey.of(self.season.value, tier, self.group.value)
+        if new_league is None:
+            await interaction.followup.send(
+                "⚠️ A league needs a season, the one on the League screen.", ephemeral=True
+            )
+            return
+
+        ok, message = await rename_league(self.state, new_league, actor=interaction)
+        await interaction.followup.send(f"{'✅' if ok else '⚠️'} {message}", ephemeral=True)
 
 
 __all__ = [

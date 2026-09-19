@@ -1235,6 +1235,18 @@ class VSHubView(OwnedView):
         rank.callback = self._set_rank
         self.add_item(rank)
 
+        edit_league = discord.ui.Button(
+            label=ad_entry.VS_BTN_EDIT_LEAGUE,
+            style=discord.ButtonStyle.secondary,
+            disabled=not has_league,
+            row=2,
+        )
+        edit_league.callback = self._edit_league
+        self.add_item(edit_league)
+
+    async def _edit_league(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ad_entry.EditLeagueModal(self.state))
+
     async def _set_rank(self, interaction: discord.Interaction):
         view = ad_entry.AllianceRankWeekPickerView(self.state, interaction.user.id)
         await interaction.response.send_message(

@@ -1531,6 +1531,117 @@ async def test_the_rank_modal_refuses_an_out_of_range_value(_captured):
     assert any("1 to" in (msg or "") for msg in interaction.followed)
 
 
+# -- Renaming the league already loaded (#630-adjacent, 19 Sep) ----------------
+
+
+def _sheet_grid(rows):
+    header = list(ad.SHEET_COLUMNS)
+    hidx = {name: i for i, name in enumerate(header)}
+    grid = [header]
+    for row in rows:
+        line = [""] * len(header)
+        for name, value in ad.row_values(row).items():
+            line[hidx[name]] = value
+        grid.append(line)
+    return grid
+
+
+class _FakeRenameSheet:
+    def __init__(self, grid):
+        self._grid = grid
+        self.batch_calls = []
+
+    def get_all_values(self):
+        return self._grid
+
+    def batch_update(self, updates, **kw):
+        self.batch_calls.append(updates)
+
+
+@pytest.fixture
+def _rename_sheet(monkeypatch):
+    import config as _config
+
+    sheet_holder = {}
+
+    def _make(rows):
+        fake = _FakeRenameSheet(_sheet_grid(rows))
+        sheet_holder["sheet"] = fake
+        monkeypatch.setattr(_config, "get_spreadsheet", lambda gid: object())
+        monkeypatch.setattr(entry.ad_setup, "ensure_tab", lambda *a, **k: fake)
+        return fake
+
+    return _make
+
+
+@pytest.mark.asyncio
+async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename_sheet):
+    """#630-adjacent: resubmitting the new-league paste with a corrected tier
+    would read as new rows under `plan_upsert`'s key match, leaving the
+    mistyped originals behind. This has to edit the same cells instead."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    fake = _rename_sheet(state.rows)
+
+    ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))
+
+    assert ok is True
+    assert "Diamond" in message and "1 row" in message
+    [updates] = fake.batch_calls
+    values = {u["range"]: u["values"][0][0] for u in updates}
+    # Row 2 -- the header is row 1, the one alliance is the only data row.
+    assert values[f"{transfer_col(ad.COL_TIER)}2"] == "Diamond"
+    assert values[f"{transfer_col(ad.COL_SEASON)}2"] == "S36"
+    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12-1"
+
+
+def transfer_col(name: str) -> str:
+    import transfer as _transfer
+
+    header = list(ad.SHEET_COLUMNS)
+    idx = _transfer.header_index(header)[_transfer.norm_header(name)]
+    return _transfer.col_index_to_letter(idx)
+
+
+@pytest.mark.asyncio
+async def test_rename_league_updates_the_loaded_state_too(_rename_sheet):
+    """The hub reads the sheet once per invocation (#269) -- without patching
+    the snapshot, the very next screen would still show the old identity."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    _rename_sheet(state.rows)
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+
+    await entry.rename_league(state, new)
+
+    assert state.league == new
+    assert all(r.league == new for r in state.rows)
+
+
+@pytest.mark.asyncio
+async def test_rename_league_with_nothing_loaded_is_refused():
+    state = _state([])
+    ok, message = await entry.rename_league(state, ad.LeagueKey("S36", "Diamond", "12-1"))
+
+    assert ok is False and "no league" in message.lower()
+
+
+def test_edit_league_modal_defaults_to_the_current_tier():
+    state = _state(_bracket())
+    state.league = ad.LeagueKey("S36", "Diamon", "12-1")
+    modal = entry.EditLeagueModal(state)
+
+    assert modal.season.default == "S36"
+    assert modal.group.default == "12-1"
+    # "Diamon" is not one of the three real tiers, so nothing is pre-selected
+    # -- there is no honest default for a typo.
+    assert not any(opt.default for opt in modal.tier.options)
+
+
 @pytest.mark.asyncio
 async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
     """The results screen is a reading of the week. Saving into it and leaving

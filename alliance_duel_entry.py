@@ -2241,6 +2241,19 @@ def all_week_matches(state, week: int) -> list[ad.Match]:
     return week_matches(state, week, exclude_own=False)
 
 
+_MATCHUP_SEP = re.compile(r"\s+vs?\s+", re.IGNORECASE)
+
+
+def _split_matchup(label: str) -> list[str]:
+    """The names on either side of a matchup label.
+
+    The prefill writes ` v `, but people retype it as `V` or `vs`, and a
+    case-sensitive split read `DXL V KTL` as one name and refused the line with
+    a message about the split, which was fine.
+    """
+    return [part.strip() for part in _MATCHUP_SEP.split(label.strip())]
+
+
 def _match_by_label(state, week: int, label: str) -> ad.Match | None:
     """Find the match a prefilled label names, whichever way round it reads.
 
@@ -2250,7 +2263,7 @@ def _match_by_label(state, week: int, label: str) -> ad.Match | None:
     failed to match any pairing, and refused the whole box -- which nobody could
     fix, because the line they were being refused for was prefilled.
     """
-    parts = [part.strip().casefold() for part in label.split(" v ")]
+    parts = [part.casefold() for part in _split_matchup(label)]
     if len(parts) != 2 or not all(parts):
         return None
     for match in all_week_matches(state, week):
@@ -2371,7 +2384,7 @@ def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.Allianc
         if not label or not value:
             continue
 
-        names = [part.strip() for part in label.split(" v ")]
+        names = _split_matchup(label)
         if len(names) != 2 or not all(names):
             problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
             continue

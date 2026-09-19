@@ -1459,6 +1459,32 @@ def test_backfill_declares_a_pairing_nothing_has_recorded():
     assert loser.week_score == 4 and loser.week_outcome == "L" and loser.opponent == _key(a)
 
 
+@pytest.mark.parametrize("sep", ["v", "V", "vs", "Vs", "VS"])
+def test_backfill_reads_a_matchup_however_the_v_was_typed(sep):
+    """19 Sep, in production: eight lines typed `DXL V KTL: DXL 13-0` were all
+    refused with a message about the split, because the label was split on a
+    lowercase ` v ` only. The prefill writes lowercase, but people retype it."""
+    state = _state(_bracket(week=3))
+    a, b = OWN_TAG, "A02"
+
+    rows, problems = entry.parse_backfill_results(state, 3, f"{a} {sep} {b}: {a} 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in rows} == {_key(a), _key(b)}
+
+
+@pytest.mark.parametrize("sep", ["V", "vs"])
+def test_the_live_box_reads_a_matchup_however_the_v_was_typed(sep):
+    state = _state(_bracket(week=1))
+    match = entry.all_week_matches(state, 1)[0]
+    a, b = state.display_name(match.a), state.display_name(match.b)
+
+    rows, problems = entry.parse_results(state, 1, f"{a} {sep} {b}: {a} 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in rows} == {match.a, match.b}
+
+
 def test_backfill_refuses_an_alliance_not_in_that_weeks_roster():
     state = _state(_bracket(week=3))
     rows, problems = entry.parse_backfill_results(state, 3, f"{OWN_TAG} v ZQX: {OWN_TAG} 9-4")

@@ -2177,6 +2177,105 @@ def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], l
     return rows, problems
 
 
+#: Reached from the hub directly, not from Screen 3 -- backfilling a week is
+#: not "this week's" business. Kevin's own name for it, 19 Sep.
+VS_BTN_BACKFILL_RESULTS = "Enter past week results"
+
+#: A shorter instruction than the live-week box needs, because the box itself
+#: is empty here: nothing is prefilled to correct, only an example to follow.
+VS_BACKFILL_FIELD_LABEL = "Who played whom, and the split"
+VS_BACKFILL_PLACEHOLDER = "OGV v nWA: OGV 7-6\none match per line, in any order"
+
+BACKFILL_UNKNOWN_ALLIANCE = "{label}: I don't know {tag}. Check it against the bracket."
+BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
+#: Not `{label}:` -- the alliance is the same regardless of which line it was
+#: caught on, and naming both lines would take two passes to fix one typo.
+BACKFILL_DUPLICATE_ALLIANCE = "{tag} already has a result recorded elsewhere in this box."
+
+
+def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
+    """Read a past week's box. Same line shape as `parse_results` -- a label,
+    `_RESULT_SEP`, a tag and a split -- but for a week nothing has recorded
+    yet, there is nothing for `_match_by_label` to check a line against.
+
+    `parse_results` refuses any pairing `all_week_matches` has not already
+    predicted or recorded, which is exactly backwards for backfilling: the
+    whole point is stating what actually happened, not correcting an
+    inference. So a line names its own pairing, checked only against the
+    league's roster for that week -- every alliance already has a blank row
+    there, written when the league (or a later week's roster) was set up --
+    never against a computed or recorded opponent.
+
+    An alliance assigned two different results in the same box is refused:
+    that is a typo, not two matches.
+    """
+    roster = {
+        state.display_name(r.alliance).casefold(): r.alliance for r in state.league_rows(week)
+    }
+    rows: list[ad.AllianceWeek] = []
+    problems: list[str] = []
+    assigned: set[ad.AllianceKey] = set()
+
+    for raw in text.splitlines():
+        label, _, value = raw.partition(_RESULT_SEP)
+        label, value = label.strip(), value.strip()
+        if not label or not value:
+            continue
+
+        names = [part.strip() for part in label.split(" v ")]
+        if len(names) != 2 or not all(names):
+            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
+            continue
+        a, b = roster.get(names[0].casefold()), roster.get(names[1].casefold())
+        if a is None or b is None:
+            problems.append(
+                BACKFILL_UNKNOWN_ALLIANCE.format(
+                    label=label, tag=names[0] if a is None else names[1]
+                )
+            )
+            continue
+        if a == b:
+            problems.append(BACKFILL_SAME_ALLIANCE.format(label=label))
+            continue
+
+        split = re.match(r"^(?P<tag>.*?)\s*(?P<x>\d+)\s*[^\d\s]\s*(?P<y>\d+)$", value.strip())
+        if split is None or not split.group("tag").strip():
+            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
+            continue
+
+        name_a, name_b = state.display_name(a), state.display_name(b)
+        tag = split.group("tag").strip()
+        if tag.casefold() == name_a.casefold():
+            first, second = a, b
+        elif tag.casefold() == name_b.casefold():
+            first, second = b, a
+        else:
+            problems.append(RESULTS_BAD_TAG.format(label=label, tag=tag, a=name_a, b=name_b))
+            continue
+
+        x, y = int(split.group("x")), int(split.group("y"))
+        if x + y != ad.WEEK_POINTS_TOTAL:
+            problems.append(
+                RESULTS_BAD_TOTAL.format(label=label, x=x, y=y, total=ad.WEEK_POINTS_TOTAL)
+            )
+            continue
+
+        if first in assigned or second in assigned:
+            dupe = first if first in assigned else second
+            problems.append(BACKFILL_DUPLICATE_ALLIANCE.format(tag=state.display_name(dupe)))
+        else:
+            assigned.add(first)
+            assigned.add(second)
+            for side, other, score in ((first, second, x), (second, first, y)):
+                row = _row_for_write(state, side, week)
+                row.week_score = score
+                row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
+                row.opponent = other
+                rows.append(row)
+
+    return rows, problems
+
+
 def results_saved_lines(state, rows: list[ad.AllianceWeek]) -> list[str]:
     """One phrase per match for the confirmation, winners named.
 
@@ -2205,21 +2304,41 @@ class OtherResultsModal(discord.ui.Modal):
     list: Match Record puts every match of the week on one scrollable screen,
     already split into two numbers. An input that mirrors that is two presses
     for a week where a match-at-a-time flow is twenty-two.
+
+    **`backfill=True`** is the same modal used for "Enter past week results"
+    (#630-adjacent, 19 Sep): a week nothing has recorded, opened directly off
+    the hub rather than off Screen 3. Nothing here is prefilled to correct --
+    `parse_backfill_results` reads a line as *stating* a pairing rather than
+    confirming one already known, which is the whole point of backfilling
+    real history instead of waiting on the algorithm to infer it.
     """
 
-    def __init__(self, state, week: int, view=None, typed: str | None = None):
+    def __init__(
+        self,
+        state,
+        week: int,
+        view=None,
+        typed: str | None = None,
+        *,
+        backfill: bool = False,
+    ):
         super().__init__(title=VS_RESULTS_MODAL_TITLE.format(week=week)[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.view = view
+        self.backfill = backfill
 
         self.box = discord.ui.TextInput(
-            label=VS_RESULTS_FIELD_LABEL[:45],
+            label=(VS_BACKFILL_FIELD_LABEL if backfill else VS_RESULTS_FIELD_LABEL)[:45],
             style=discord.TextStyle.paragraph,
+            placeholder=VS_BACKFILL_PLACEHOLDER[:100] if backfill else None,
             # `typed` is what a refused submission held. Reopening on the
             # sheet's version instead would throw a week of typing away to
-            # fix one line.
-            default=typed if typed is not None else results_prefill(state, week),
+            # fix one line. Backfill starts blank -- there is nothing on the
+            # sheet yet to prefill from.
+            default=typed
+            if typed is not None
+            else ("" if backfill else results_prefill(state, week)),
             required=False,
             max_length=1500,
         )
@@ -2230,11 +2349,14 @@ class OtherResultsModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         typed = self.box.value or ""
-        rows, problems = parse_results(self.state, self.week, typed)
+        parser = parse_backfill_results if self.backfill else parse_results
+        rows, problems = parser(self.state, self.week, typed)
         if problems:
             # Discord will not open a modal off a modal submit, so the way
             # back in has to be a button. Same shape as the new-league paste.
-            retry = _RetryResultsView(self.state, self.week, interaction.user.id, typed, self.view)
+            retry = _RetryResultsView(
+                self.state, self.week, interaction.user.id, typed, self.view, backfill=self.backfill
+            )
             retry.message = await interaction.followup.send(
                 "\n".join([RESULTS_REFUSED, *problems])[:1900],
                 view=retry,
@@ -2273,13 +2395,16 @@ class _RetryResultsView(OwnedView):
 
     timeout_hint = "`/vs`"
 
-    def __init__(self, state, week: int, user_id: int, typed: str, view=None):
+    def __init__(
+        self, state, week: int, user_id: int, typed: str, view=None, *, backfill: bool = False
+    ):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.owner_id = user_id
         self.typed = typed
         self.view = view
+        self.backfill = backfill
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=VS_BTN_RETRY_RESULTS, style=discord.ButtonStyle.primary)
@@ -2288,5 +2413,47 @@ class _RetryResultsView(OwnedView):
 
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
-            OtherResultsModal(self.state, self.week, view=self.view, typed=self.typed)
+            OtherResultsModal(
+                self.state, self.week, view=self.view, typed=self.typed, backfill=self.backfill
+            )
         )
+
+
+VS_BACKFILL_PICK_PROMPT = "Which week?"
+VS_BACKFILL_WEEK_LABEL = "Week {week}"
+
+
+class BackfillWeekPickerView(OwnedView):
+    """One button per week, reached from the hub rather than from Screen 3 --
+    backfilling is not tied to whichever week is live right now.
+
+    A week with no roster yet (the league was started with `upto_week` short
+    of it) is left off rather than shown disabled: nothing typed there could
+    resolve to an alliance, and the empty-roster case is better explained by
+    the button's absence than by a click that refuses everything typed.
+    """
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        for week in range(1, ad.LEAGUE_WEEKS + 1):
+            if not state.league_rows(week):
+                continue
+            button = discord.ui.Button(
+                label=VS_BACKFILL_WEEK_LABEL.format(week=week), style=discord.ButtonStyle.secondary
+            )
+            button.callback = self._make_open(week)
+            self.add_item(button)
+
+    def _make_open(self, week: int):
+        async def _open(interaction: discord.Interaction):
+            await interaction.response.send_modal(
+                OtherResultsModal(self.state, week, backfill=True)
+            )
+
+        return _open

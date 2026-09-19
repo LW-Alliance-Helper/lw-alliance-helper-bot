@@ -1406,6 +1406,83 @@ def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
     assert modal.box.default == entry.results_prefill(state, 1)
 
 
+def test_backfill_declares_a_pairing_nothing_has_recorded():
+    """#630-adjacent, 19 Sep: a backfilled week has no recorded opponent and
+    no prior week decided, so `parse_results` would refuse every line as an
+    unrecognised match. `parse_backfill_results` reads the line as stating
+    the pairing rather than confirming one the algorithm already knows."""
+    state = _state(_bracket(week=3))
+    a, b = OWN_TAG, "A02"
+
+    rows, problems = entry.parse_backfill_results(state, 3, f"{a} v {b}: {a} 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in rows} == {_key(a), _key(b)}
+    winner = next(r for r in rows if r.alliance == _key(a))
+    loser = next(r for r in rows if r.alliance == _key(b))
+    assert winner.week_score == 9 and winner.week_outcome == "W" and winner.opponent == _key(b)
+    assert loser.week_score == 4 and loser.week_outcome == "L" and loser.opponent == _key(a)
+
+
+def test_backfill_refuses_an_alliance_not_in_that_weeks_roster():
+    state = _state(_bracket(week=3))
+    rows, problems = entry.parse_backfill_results(state, 3, f"{OWN_TAG} v ZQX: {OWN_TAG} 9-4")
+
+    assert rows == []
+    assert len(problems) == 1 and "ZQX" in problems[0]
+
+
+def test_backfill_refuses_an_alliance_playing_itself():
+    state = _state(_bracket(week=3))
+    rows, problems = entry.parse_backfill_results(state, 3, f"{OWN_TAG} v {OWN_TAG}: {OWN_TAG} 9-4")
+
+    assert rows == [] and len(problems) == 1
+
+
+def test_backfill_refuses_an_alliance_assigned_twice():
+    """Two lines naming the same alliance is a typo, not two matches -- the
+    week is 13 points and an alliance plays exactly one match in it."""
+    state = _state(_bracket(week=3))
+    text = f"{OWN_TAG} v A02: {OWN_TAG} 9-4\n{OWN_TAG} v A03: {OWN_TAG} 7-6"
+
+    rows, problems = entry.parse_backfill_results(state, 3, text)
+
+    assert len(problems) == 1 and OWN_TAG in problems[0]
+    # The first line is still good on its own -- only the alliance that
+    # collides across lines costs anything.
+    assert {r.alliance for r in rows} == {_key(OWN_TAG), _key("A02")}
+
+
+def test_backfill_modal_starts_blank_with_its_own_label():
+    """Nothing is prefilled -- there is nothing on the sheet yet to prefill
+    from, which is the entire reason this mode exists."""
+    state = _state(_bracket(week=3))
+    modal = entry.OtherResultsModal(state, 3, backfill=True)
+
+    assert modal.box.default == ""
+    assert modal.box.label == entry.VS_BACKFILL_FIELD_LABEL
+    assert modal.box.label != entry.VS_RESULTS_FIELD_LABEL
+
+
+def test_backfill_retry_reopens_in_backfill_mode():
+    """A refused backfill submission has to reopen as a backfill modal, not
+    the live-week one -- otherwise the retry silently switches parsers."""
+    state = _state(_bracket(week=3))
+    retry = entry._RetryResultsView(state, 3, 1, "typed", backfill=True)
+
+    assert retry.backfill is True
+
+
+def test_the_week_picker_skips_a_week_with_no_roster_yet():
+    """A league started with `upto_week` short of some week has no rows
+    there at all -- nothing typed could resolve to an alliance, so the
+    button is absent rather than present and guaranteed to refuse."""
+    state = _state(_bracket(week=1) + _bracket(week=2))
+    picker = entry.BackfillWeekPickerView(state, 1)
+
+    assert [b.label for b in picker.children] == ["Week 1", "Week 2"]
+
+
 @pytest.mark.asyncio
 async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
     """The results screen is a reading of the week. Saving into it and leaving

@@ -204,7 +204,7 @@ class TestEnsureSurveyTab:
 
     @pytest.mark.asyncio
     async def test_creates_a_missing_tab_and_says_so(self):
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
@@ -214,14 +214,14 @@ class TestEnsureSurveyTab:
         sh.add_worksheet = MagicMock(return_value=MagicMock())
 
         with patch("config.get_spreadsheet", return_value=sh):
-            await setup_cog._ensure_survey_tab(channel, TEST_GUILD_ID, "VP Buff Agreement")
+            await survey_setup._ensure_survey_tab(channel, TEST_GUILD_ID, "VP Buff Agreement")
 
         sh.add_worksheet.assert_called_once()
         assert "Created" in channel.send.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_leaves_an_existing_tab_alone(self):
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
@@ -231,7 +231,7 @@ class TestEnsureSurveyTab:
         sh.add_worksheet = MagicMock()
 
         with patch("config.get_spreadsheet", return_value=sh):
-            await setup_cog._ensure_survey_tab(channel, TEST_GUILD_ID, "Squad Powers")
+            await survey_setup._ensure_survey_tab(channel, TEST_GUILD_ID, "Squad Powers")
 
         sh.add_worksheet.assert_not_called()
         assert "Found" in channel.send.call_args[0][0]
@@ -240,13 +240,13 @@ class TestEnsureSurveyTab:
     async def test_a_broken_sheet_warns_instead_of_ending_the_wizard(self):
         """The alliance owns their spreadsheet. It being unshared or gone
         is theirs to fix, and must not cost them the rest of setup."""
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
 
         with patch("config.get_spreadsheet", side_effect=Exception("403 forbidden")):
-            await setup_cog._ensure_survey_tab(channel, TEST_GUILD_ID, "VP Buff Agreement")
+            await survey_setup._ensure_survey_tab(channel, TEST_GUILD_ID, "VP Buff Agreement")
 
         msg = channel.send.call_args[0][0]
         assert "couldn't check your Google Sheet" in msg
@@ -256,19 +256,19 @@ class TestEnsureSurveyTab:
 class TestAskSurveyTab:
     @pytest.mark.asyncio
     async def test_rejects_a_tab_another_survey_owns_and_re_asks(self):
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
 
         with (
             patch(
-                "setup_cog.ask_keep_or_change",
+                "wizard_steps.ask_keep_or_change",
                 AsyncMock(side_effect=["Squad Powers", "VP Buff Agreement"]),
             ),
-            patch("setup_cog._ensure_survey_tab", AsyncMock()) as ensure,
+            patch("survey_setup._ensure_survey_tab", AsyncMock()) as ensure,
         ):
-            chosen = await setup_cog._ask_survey_tab(
+            chosen = await survey_setup._ask_survey_tab(
                 channel,
                 prompt="pick a tab",
                 default="VP Buff Agreement",
@@ -288,19 +288,19 @@ class TestAskSurveyTab:
 
     @pytest.mark.asyncio
     async def test_rejects_pointing_both_of_one_survey_s_tabs_at_each_other(self):
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
 
         with (
             patch(
-                "setup_cog.ask_keep_or_change",
+                "wizard_steps.ask_keep_or_change",
                 AsyncMock(side_effect=["VP Buff Agreement", "VP Buff Agreement History"]),
             ),
-            patch("setup_cog._ensure_survey_tab", AsyncMock()),
+            patch("survey_setup._ensure_survey_tab", AsyncMock()),
         ):
-            chosen = await setup_cog._ask_survey_tab(
+            chosen = await survey_setup._ask_survey_tab(
                 channel,
                 prompt="pick a history tab",
                 default="VP Buff Agreement History",
@@ -316,16 +316,16 @@ class TestAskSurveyTab:
 
     @pytest.mark.asyncio
     async def test_cancelling_the_step_returns_none(self):
-        import setup_cog
+        import survey_setup
 
         channel = MagicMock()
         channel.send = AsyncMock()
 
         with (
-            patch("setup_cog.ask_keep_or_change", AsyncMock(return_value=None)),
-            patch("setup_cog._ensure_survey_tab", AsyncMock()) as ensure,
+            patch("wizard_steps.ask_keep_or_change", AsyncMock(return_value=None)),
+            patch("survey_setup._ensure_survey_tab", AsyncMock()) as ensure,
         ):
-            chosen = await setup_cog._ask_survey_tab(
+            chosen = await survey_setup._ask_survey_tab(
                 channel,
                 prompt="pick a tab",
                 default="X",
@@ -346,9 +346,9 @@ class TestSurveyConfiguredView:
     always wants next, instead of sending them back out to /survey."""
 
     def _view(self, bot=None, owner_id=7):
-        import setup_cog
+        import survey_setup
 
-        return setup_cog.SurveyConfiguredView(
+        return survey_setup.SurveyConfiguredView(
             bot or MagicMock(),
             guild_id=TEST_GUILD_ID,
             survey_id="vp-buff-agreement",
@@ -371,9 +371,11 @@ class TestSurveyConfiguredView:
         interaction.response.send_message = AsyncMock()
 
         assert await view.interaction_check(interaction) is False
-        assert (
-            "belong to whoever ran the setup" in (interaction.response.send_message.call_args[0][0])
-        )
+        # The shared wording, signed off 2026-09-11 (#589, block 11): the old
+        # line named a `/survey` route nobody refused could reach.
+        from messages import DENY_NOT_OWNER
+
+        assert interaction.response.send_message.call_args[0][0] == DENY_NOT_OWNER
 
     @pytest.mark.asyncio
     async def test_the_wizard_runner_passes_the_check(self):
@@ -385,7 +387,7 @@ class TestSurveyConfiguredView:
 
     @pytest.mark.asyncio
     async def test_post_button_posts_that_survey_without_a_picker(self, seeded_db):
-        import config, setup_cog
+        import config, survey_setup
 
         config.save_extra_survey(
             TEST_GUILD_ID,
@@ -403,46 +405,46 @@ class TestSurveyConfiguredView:
         with patch(
             "survey.post_survey_to_its_channel", AsyncMock(return_value=(True, "✅ posted"))
         ) as post:
-            await setup_cog.SurveyConfiguredView._on_post(view, interaction)
+            await survey_setup.SurveyConfiguredView._on_post(view, interaction)
 
         assert post.await_args[0][2]["survey_id"] == "vp-buff-agreement"
         interaction.followup.send.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_post_button_reports_a_survey_deleted_since_setup(self, seeded_db):
-        import setup_cog
+        import survey_setup
 
         view = self._view()
         interaction = MagicMock()
         interaction.response.edit_message = AsyncMock()
         interaction.followup.send = AsyncMock()
 
-        await setup_cog.SurveyConfiguredView._on_post(view, interaction)
+        await survey_setup.SurveyConfiguredView._on_post(view, interaction)
 
         assert "no longer configured" in interaction.followup.send.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_edit_button_reopens_the_wizard_on_the_same_survey(self):
-        import setup_cog
+        import survey_setup
 
         view = self._view()
         interaction = MagicMock()
         interaction.response.edit_message = AsyncMock()
 
-        with patch("setup_cog.run_survey_setup", AsyncMock()) as run:
-            await setup_cog.SurveyConfiguredView._on_edit(view, interaction)
+        with patch("survey_setup.run_survey_setup", AsyncMock()) as run:
+            await survey_setup.SurveyConfiguredView._on_edit(view, interaction)
 
         assert run.await_args.kwargs["target_survey_id"] == "vp-buff-agreement"
         assert run.await_args.kwargs["template"] == "scratch"
 
     @pytest.mark.asyncio
     async def test_timeout_strips_the_buttons(self):
-        import setup_cog
+        import survey_setup
 
         view = self._view()
         view.message = MagicMock()
         with patch("wizard_registry.expire_view_message", AsyncMock()) as expire:
-            await setup_cog.SurveyConfiguredView.on_timeout(view)
+            await survey_setup.SurveyConfiguredView.on_timeout(view)
 
         expire.assert_awaited_once()
 

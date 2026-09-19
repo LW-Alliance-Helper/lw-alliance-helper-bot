@@ -187,7 +187,7 @@ class TestAdaptiveColumnMap:
         v._render_field("status")
         kinds = [type(c).__name__ for c in v.children]
         assert kinds.count("Select") == 1
-        assert kinds.count("Button") == 3  # ◀ ▶ Done
+        assert kinds.count("Button") == 4  # ◀ Prev, Page n / m, Next ▶, Done
 
     def test_name_field_is_single_select(self):
         v = self._view()
@@ -242,7 +242,7 @@ class TestSectionPickerView:
 
     def test_specs_and_back(self):
         v = transfer_setup._SectionPickerView(
-            owner_id=1, specs=[("📢 Channel", "channel"), ("⏱️ Frequency", "frequency")]
+            owner_id=1, specs=[("📢 Channel", "channel"), ("🕒 Frequency", "frequency")]
         )
         labels = [c.label for c in v.children]
         assert any("Channel" in lbl for lbl in labels)

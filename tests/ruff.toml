@@ -1,0 +1,52 @@
+# Test-only lint rules, layered on the root config.
+#
+# `dev` went red twice in three days on tests that read the machine's wall
+# clock while the code under test deliberately ran on another one:
+#
+#   - `test_growth.py` computed `datetime.now()` and compared it against a
+#     snapshot `growth.py` had labelled from `America/New_York`. On a UTC
+#     runner those disagree for the four hours after 00:00 UTC, so on the
+#     first of a month the test asked for `Power (Sep 2026)` against a
+#     correctly-written `Power (Aug 2026)`.
+#
+# `flake8-datetimez` catches exactly that shape at the point somebody writes
+# it. Only the three clock-*reading* rules are on -- DTZ001 (naive
+# construction) and DTZ007 (naive `strptime`) fire on fixed instants and
+# parsed user input, which are fine here and would drown the signal.
+#
+# A naive read is not automatically wrong: it is wrong when the code under
+# test is not also naive. Where they genuinely have to agree, the site takes a
+# `# noqa: DTZ011` naming the production clock it is matching -- which makes
+# this rule's real job forcing that question to be asked, and its waivers a
+# map of which subsystem runs on which clock.
+extend = "../ruff.toml"
+
+[lint]
+extend-select = ["DTZ003", "DTZ005", "DTZ011"]
+
+[lint.extend-per-file-ignores]
+# Waivers, each naming the production clock the test is matching. A naive read
+# is correct when the code under test is naive too -- forcing that pairing to
+# be stated is this rule's whole job, and these entries are the answer for the
+# files that already existed when it went in.
+#
+# If one of these modules is ever moved onto ET or server time, its entry here
+# is what says the tests have to move with it.
+
+# `train_birthdays.check_and_add_birthdays` resolves its lookahead from a naive
+# `date.today()`, so the test has to build its target dates from the same one.
+"unit/test_train.py" = ["DTZ011"]
+"sheets/test_live_writes.py" = ["DTZ011"]
+
+# The reminder loop filters on a naive `date.today()` rather than the ET
+# datetime it patches elsewhere; the tests say so at the call site.
+"unit/test_train_reminder_loop.py" = ["DTZ011"]
+
+# `storm_signup_view` ages a member's `last_updated` against a naive
+# `date.today()`.
+"unit/test_storm_signup_view.py" = ["DTZ011"]
+
+# `storm_log` stamps `log_date` from a naive `date.today()`, and its date
+# picker offers `__today__` off the same one.
+"unit/test_storm_member_log.py" = ["DTZ011"]
+"integration/test_draft_flows.py" = ["DTZ011"]

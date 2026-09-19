@@ -176,7 +176,7 @@ class TestPollNewApplicant:
         chan.send.assert_awaited_once()
         embed = chan.send.await_args.kwargs["embed"]
         assert "Bad Pew" in embed.title
-        assert embed.title.startswith("📥")
+        assert embed.title.startswith("🔔")
 
         # The notice's view.message must be captured for on_timeout cleanup.
         view = chan.send.await_args.kwargs["view"]

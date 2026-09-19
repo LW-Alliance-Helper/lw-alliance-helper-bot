@@ -51,6 +51,9 @@ from config import (
 )
 import support_join_watch
 import bot_state
+import db_timings
+from db_timings import SLOW_MS
+from wizard_registry import OwnedView
 
 bot = bot_state.bot
 ET = bot_state.ET
@@ -151,30 +154,62 @@ async def admin_overview_slash(interaction: discord.Interaction):
 
     from config import _get_conn  # noqa: PLC0415 — module-level imports already loaded
 
-    with _get_conn() as conn:
-        total_guilds = conn.execute("SELECT COUNT(*) FROM guild_install_metadata").fetchone()[0]
-        with_setup_complete = conn.execute(
-            "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
-        ).fetchone()[0]
-        premium_assignments = conn.execute("SELECT COUNT(*) FROM premium_assignments").fetchone()[0]
-        # Recent installs: last 7 days. Use ISO timestamp comparison
-        # (TEXT-sorted, ISO-8601 is lexicographically ordered).
-        cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        recent_rows = conn.execute(
-            "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
-            "WHERE installed_at >= ? ORDER BY installed_at DESC LIMIT 10",
-            (cutoff_recent,),
-        ).fetchall()
-        # Stale stragglers: no on_ready ping in 14+ days.
-        cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        stale_rows = conn.execute(
-            "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
-            "WHERE last_seen_at < ? ORDER BY last_seen_at ASC LIMIT 10",
-            (cutoff_stale,),
-        ).fetchall()
+    # Metadata rows now outlive a removal by the length of the hold (#543), so
+    # every count here has to exclude servers that are on their way out.
+    # Without this the fleet size over-reports, and because `on_ready` only
+    # refreshes `last_seen_at` for servers the bot is in, every removed one
+    # lands in Stale stragglers.
+    held = "guild_id NOT IN (SELECT guild_id FROM guild_removals)"
+
+    def _read_overview():
+        # Six reads on the loop, even owner-only ones, are the class the
+        # 1.8.0 sweep (#366) was for; they run in a thread now (#589).
+        with _get_conn() as conn:
+            total_guilds = conn.execute(
+                f"SELECT COUNT(*) FROM guild_install_metadata WHERE {held}"  # noqa: S608
+            ).fetchone()[0]
+            awaiting_removal = conn.execute("SELECT COUNT(*) FROM guild_removals").fetchone()[0]
+            with_setup_complete = conn.execute(
+                "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
+            ).fetchone()[0]
+            premium_assignments = conn.execute(
+                "SELECT COUNT(*) FROM premium_assignments"
+            ).fetchone()[0]
+            # Recent installs: last 7 days. Use ISO timestamp comparison
+            # (TEXT-sorted, ISO-8601 is lexicographically ordered).
+            cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            recent_rows = conn.execute(
+                "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
+                f"WHERE installed_at >= ? AND {held} ORDER BY installed_at DESC LIMIT 10",  # noqa: S608
+                (cutoff_recent,),
+            ).fetchall()
+            # Stale stragglers: no on_ready ping in 14+ days.
+            cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+            stale_rows = conn.execute(
+                "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
+                f"WHERE last_seen_at < ? AND {held} ORDER BY last_seen_at ASC LIMIT 10",  # noqa: S608
+                (cutoff_stale,),
+            ).fetchall()
+        return (
+            total_guilds,
+            awaiting_removal,
+            with_setup_complete,
+            premium_assignments,
+            recent_rows,
+            stale_rows,
+        )
+
+    (
+        total_guilds,
+        awaiting_removal,
+        with_setup_complete,
+        premium_assignments,
+        recent_rows,
+        stale_rows,
+    ) = await asyncio.to_thread(_read_overview)
 
     embed = discord.Embed(
-        title="🛠️ Admin Overview",
+        title="⚙️ Admin Overview",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -183,6 +218,7 @@ async def admin_overview_slash(interaction: discord.Interaction):
             f"**Installed guilds:** {total_guilds}\n"
             f"**Completed setup:** {with_setup_complete}\n"
             f"**Premium assignments:** {premium_assignments}"
+            + (f"\n**Awaiting removal:** {awaiting_removal}" if awaiting_removal else "")
         ),
         inline=False,
     )
@@ -247,7 +283,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
         return
 
     title = (meta["guild_name"] if meta else None) or f"Guild {gid}"
-    embed = discord.Embed(title=f"🔎 {title}", color=discord.Color.blurple())
+    embed = discord.Embed(title=f"🔍 {title}", color=discord.Color.blurple())
     embed.add_field(name="Guild ID", value=f"`{gid}`", inline=False)
 
     if meta is not None:
@@ -300,22 +336,14 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-class _ForgetGuildConfirm(discord.ui.View):
+class _ForgetGuildConfirm(OwnedView):
     """Two-button confirm for /admin forget_guild. Auto-cancels on timeout."""
 
     def __init__(self, guild_id: int, owner_id: int):
         super().__init__(timeout=60)
         self._guild_id = guild_id
-        self._owner_id = owner_id
+        self.owner_id = owner_id
         self._handled = False
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self._owner_id:
-            await interaction.response.send_message(
-                "⛔ Only the bot owner who started this can confirm.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="🗑️ Delete metadata row", style=discord.ButtonStyle.danger)
     async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -337,7 +365,7 @@ class _ForgetGuildConfirm(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await inter.response.edit_message(
-            content=f"❌ Cancelled — `{self._guild_id}` metadata left intact.",
+            content=f"❌ Canceled. `{self._guild_id}` metadata left intact.",
             view=self,
         )
         self.stop()
@@ -377,6 +405,245 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
     )
 
 
+# The other half of `forget_guild` (#517). That one clears a guild's install
+# metadata row; this is the route for a person, which nothing had before --
+# `remove_premium_assignment` was the only user-keyed delete anywhere in the
+# tree and it exists for subscription management.
+#
+# Preview first, then confirm, because this runs delete statements against
+# production on somebody else's say-so and the counts are the only thing that
+# says the ID was right. The preview and the run share every predicate (see
+# `config.purge_user_data`), so the preview cannot promise something the run
+# does not do.
+#
+# The receipt is the post-run counts rather than the preview's. Nothing stops a
+# sign-up landing between the two, and what gets written back to the person has
+# to be what happened, not what was going to.
+
+
+def _parse_user_id(raw: str) -> int | None:
+    """Same parse as `_parse_guild_id`, named for what it reads. Snowflakes
+    arrive as strings because they exceed JavaScript's safe-integer range.
+
+    Zero is refused as well as unparseable input. It is the scrub sentinel on
+    `voter_user_id`, `saved_by_user_id` and `posted_by_user_id`, and the
+    recorded value of a guild owner nobody captured, so a run for `0` would
+    match rows belonging to no person and inflate the counts that are the only
+    check the operator has that the ID was right.
+    """
+    uid = _parse_guild_id(raw)
+    return uid if uid and uid > 0 else None
+
+
+def _removal_lines(counts: dict) -> str:
+    """One line per table, widest first. Nothing renders as an em dash rather
+    than an empty string, which Discord rejects as a field value."""
+    if not counts:
+        return "—"
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return "\n".join(f"`{table}` {n}" for table, n in ordered)
+
+
+def _removal_embed(
+    uid: int,
+    label: str,
+    results: list[dict],
+    errors: list[tuple[str, str]],
+) -> discord.Embed:
+    """One removal report. Same shape for the preview and the receipt, because
+    the operator reads the second against the first.
+
+    Takes a list rather than one argument per database. There are three now
+    (#544) and the count is the sort of thing that grows: a signature with a
+    slot per store is how a fourth one gets added to the runner and quietly
+    left out of the receipt somebody is handed as proof.
+    """
+    deleted: dict = {}
+    scrubbed: dict = {}
+    for result in results:
+        deleted.update(result.get("deleted", {}))
+        scrubbed.update(result.get("scrubbed", {}))
+    applied = any(r.get("applied") for r in results)
+    n_deleted = sum(deleted.values())
+    n_scrubbed = sum(scrubbed.values())
+
+    embed = discord.Embed(
+        title="Data removal" if applied else "Data removal preview",
+        description=f"**{label}**\n`{uid}`" if label else f"`{uid}`",
+        color=discord.Color.red() if applied else discord.Color.orange(),
+    )
+    embed.add_field(
+        name=f"{'Deleted' if applied else 'To delete'} ({n_deleted})",
+        value=_removal_lines(deleted),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"{'Scrubbed' if applied else 'To scrub'} ({n_scrubbed})",
+        value=_removal_lines(scrubbed),
+        inline=True,
+    )
+    for where, message in errors:
+        embed.add_field(name=where, value=f"Not reached: `{message}`", inline=False)
+    if not (n_deleted or n_scrubbed or errors):
+        embed.set_footer(text="Nothing held under this ID in either database.")
+    elif "guild_install_metadata" in scrubbed:
+        # Worth saying every time it applies: on_ready rewrites owner_id for
+        # every guild the bot is in, so that column comes back on the next boot
+        # for as long as the install stands.
+        embed.set_footer(text="owner_id returns on the next boot while the bot is in that guild.")
+    return embed
+
+
+#: Every database a person can appear in, and the name the operator sees when
+#: one of them cannot be reached. A store missing from this list is a store a
+#: removal silently skips while reporting itself as done, so it is a list rather
+#: than three hand-written blocks.
+_USER_REMOVAL_STORES = (
+    ("Guild config database", "config"),
+    ("Champion Duel database", "champion_duel_db"),
+    ("VS score database", "alliance_duel_db"),
+)
+
+
+def _run_user_removal(uid: int, *, apply: bool) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Every database, one call. Returns `(results, errors)`, where each error
+    is the database that could not be reached and why.
+
+    Each store is caught on its own so a failure in one cannot leave the
+    operator believing the others did not run either. A removal that
+    half-happened and reported nothing is the worst outcome available here, and
+    it is the one that gets written back to a person as "done".
+    """
+    import importlib  # noqa: PLC0415
+
+    results: list[dict] = []
+    errors: list[tuple[str, str]] = []
+
+    for label, module_name in _USER_REMOVAL_STORES:
+        try:
+            module = importlib.import_module(module_name)
+            results.append(module.purge_user_data(uid, apply=apply))
+        except Exception as exc:
+            results.append({"deleted": {}, "scrubbed": {}, "applied": apply})
+            errors.append((label, str(exc)))
+
+    return results, errors
+
+
+class _ForgetUserConfirm(OwnedView):
+    """Two-button confirm for /admin forget_user. Auto-cancels on timeout."""
+
+    def __init__(self, user_id: int, owner_id: int, label: str):
+        super().__init__(timeout=120)
+        self._user_id = user_id
+        self.owner_id = owner_id
+        self._label = label
+
+    @discord.ui.button(label="🗑️ Run removal", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+
+        # Acknowledge before the work, not after. Two SQLite files and a
+        # rewrite of every roster draft can outrun the three seconds Discord
+        # allows, and the failure that buys is the removal happening with no
+        # receipt and the buttons still live -- which reads as "it did not run"
+        # and invites a second press.
+        await inter.response.edit_message(view=self)
+
+        results, errors = _run_user_removal(self._user_id, apply=True)
+
+        # Premium is cached per guild and per user and the assignment row may
+        # have just gone. Clearing the whole cache is blunt, but a removal
+        # request is a rare owner action and a stale premium read is not worth
+        # the precision.
+        import premium  # noqa: PLC0415
+
+        premium.clear_cache()
+
+        await inter.edit_original_response(
+            content=f"🗑️ Ran data removal for `{self._user_id}`.",
+            embed=_removal_embed(self._user_id, self._label, results, errors),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content=f"❌ Canceled. Nothing removed for `{self._user_id}`.",
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+
+@admin_group.command(
+    name="forget_user",
+    description="(Bot owner only) Action a data-removal request for a Discord user ID.",
+)
+@app_commands.describe(user_id="Discord user ID making the removal request")
+async def admin_forget_user_slash(interaction: discord.Interaction, user_id: str):
+    """Preview, then run, a data removal for one person across both databases.
+
+    Champion Duel *player* records are out of scope by the #499 decision. This
+    reaches people with Discord identities only, which is what the privacy
+    policy's removal promise is about.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+
+    uid = _parse_user_id(user_id)
+    if uid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{user_id}` isn't a valid integer user ID.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    # Worth one REST call: the operator is about to delete rows on the strength
+    # of an ID somebody typed, and a name is the only check available that the
+    # ID is the person who asked.
+    user = bot.get_user(uid)
+    if user is None:
+        try:
+            user = await bot.fetch_user(uid)
+        except Exception:
+            # Anything at all. The name is a check on the ID, not part of the
+            # removal, and a lookup that fails must not be what stops a request
+            # from being actioned.
+            user = None
+    label = user.name if user is not None else ""
+
+    results, errors = _run_user_removal(uid, apply=False)
+    embed = _removal_embed(uid, label, results, errors)
+    total = sum(
+        sum(result.get(bucket, {}).values())
+        for result in results
+        for bucket in ("deleted", "scrubbed")
+    )
+    # A database that could not be read has not said this person is absent from
+    # it. Withholding the confirm on a blank preview would make an outage look
+    # like an answer.
+    if not total and not errors:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    view = _ForgetUserConfirm(user_id=uid, owner_id=interaction.user.id, label=label)
+    await interaction.followup.send(
+        content=(
+            "⚠️ Deletes are permanent and scrubs cannot be undone. "
+            "`/admin forget_guild` is the separate route for a guild's install record."
+        ),
+        embed=embed,
+        view=view,
+        ephemeral=True,
+    )
+
+
 @admin_group.command(
     name="shiny_servers",
     description="(Bot owner only) Dump stored shiny_task_servers rows for a server-number range.",
@@ -403,13 +670,16 @@ async def admin_shiny_servers_slash(
     from time_helpers import server_today as resolve_server_today  # noqa: PLC0415
     from shiny_tasks import is_shiny_today  # noqa: PLC0415
 
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT server_number, creation_date, last_seen_at "
-            "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
-            "ORDER BY server_number",
-            (min_server, max_server),
-        ).fetchall()
+    def _read_servers():
+        with _get_conn() as conn:
+            return conn.execute(
+                "SELECT server_number, creation_date, last_seen_at "
+                "FROM shiny_task_servers WHERE server_number BETWEEN ? AND ? "
+                "ORDER BY server_number",
+                (min_server, max_server),
+            ).fetchall()
+
+    rows = await asyncio.to_thread(_read_servers)
 
     if not rows:
         await interaction.response.send_message(
@@ -464,6 +734,73 @@ async def admin_shiny_servers_slash(
         await interaction.response.send_message(
             content=f"{summary}\n*(full table attached)*",
             file=discord.File(fp, filename=f"shiny_servers_{min_server}_{max_server}.txt"),
+            ephemeral=True,
+        )
+
+
+def render_db_timings(snap: dict, *, now: float, limit: int = 20) -> str:
+    """The `/admin db_timings` text: one row per config helper, the ones that
+    spend the most time on the event loop first, then the recent slow calls.
+    Kept as a function so the shape is testable without a Discord in the way."""
+    since = datetime.fromtimestamp(snap["since"], tz=timezone.utc)
+    hours = max(0.0, (now - snap["since"]) / 3600)
+    helpers = snap["helpers"]
+    total_calls = sum(h["calls"] for h in helpers)
+    on_loop = sum(h["on_loop"] for h in helpers)
+    loop_ms = sum(h["loop_ms"] for h in helpers)
+    head = (
+        f"📊 Config database timings since {since:%Y-%m-%d %H:%M} UTC "
+        f"({hours:.1f} h): {total_calls:,} calls, {on_loop:,} on the event loop, "
+        f"{loop_ms / 1000:.1f} s of loop time in total."
+    )
+    if not helpers:
+        return head + "\n\nNothing recorded yet."
+    cols = f"{'helper':<32} {'calls':>7} {'on loop':>8} {'avg ms':>7} {'max ms':>7} {'≥20ms':>6}"
+    lines = [cols, "-" * len(cols)]
+    for h in helpers[:limit]:
+        over_20 = h["buckets"][3] + h["buckets"][4]
+        lines.append(
+            f"{h['helper'][:32]:<32} {h['calls']:>7,} {h['on_loop']:>8,} "
+            f"{h['avg_ms']:>7.2f} {h['max_ms']:>7.1f} {over_20:>6,}"
+        )
+    if len(helpers) > limit:
+        lines.append(f"... and {len(helpers) - limit} more helpers")
+    slow = snap["recent_slow"]
+    if slow:
+        lines.append("")
+        lines.append(f"Recent calls over {int(SLOW_MS)} ms, newest last:")
+        for when, helper, ms, was_on_loop in slow[-8:]:
+            stamp = datetime.fromtimestamp(when, tz=timezone.utc)
+            where = "on the loop" if was_on_loop else "off the loop"
+            lines.append(f"  {stamp:%m-%d %H:%M}  {helper:<28} {ms:>6.0f} ms  {where}")
+    return head + "\n```\n" + "\n".join(lines) + "\n```"
+
+
+@admin_group.command(
+    name="db_timings",
+    description="(Bot owner only) How long config database calls take, per helper, on and off the event loop",
+)
+@app_commands.describe(reset="Clear the counters after showing them")
+async def admin_db_timings_slash(interaction: discord.Interaction, reset: bool = False):
+    """The step 10 measurement on #589: whether a config read on the event
+    loop is a convention to bless or a class of bug to fix. In-process
+    counters from `db_timings`, so a restart starts them over; read them
+    after a day of loops and traffic, not after a deploy."""
+    if not await _require_bot_owner(interaction):
+        return
+    import time as _time  # noqa: PLC0415
+
+    text = render_db_timings(db_timings.snapshot(), now=_time.time())
+    if reset:
+        db_timings.reset()
+        text += "\nCounters reset."
+    if len(text) <= 1900:
+        await interaction.response.send_message(text, ephemeral=True)
+    else:
+        fp = io.BytesIO(text.encode("utf-8"))
+        await interaction.response.send_message(
+            content="📊 Config database timings (attached).",
+            file=discord.File(fp, filename="db_timings.txt"),
             ephemeral=True,
         )
 
@@ -861,7 +1198,7 @@ async def admin_verify_slash(
             role_managed=role.managed,
         )
         set_app_setting(support_join_watch.VERIFIED_ROLE_SETTING, str(role.id))
-        line = f"🏷️ Verified role set to **{role.name}**."
+        line = f"✅ Verified role set to **{role.name}**."
         if blocker:
             line += f"\n   ⚠️ Heads up: {blocker} — I can't assign it until that's fixed."
         changes.append(line)
@@ -968,7 +1305,7 @@ async def _run_verify_scan(interaction: discord.Interaction):
         )
     buf = io.BytesIO(text.encode("utf-8"))
     await interaction.followup.send(
-        f"🔎 Scanned **{len(members)}** members of **{guild.name}** — "
+        f"🔍 Scanned **{len(members)}** members of **{guild.name}** — "
         f"**{len(none_lines)}** in no other bot server, "
         f"**{len(some_lines)}** with overlap{verify_summary}. Full breakdown attached.",
         file=discord.File(buf, filename=f"member_scan_{guild.id}.txt"),
@@ -1068,6 +1405,443 @@ async def admin_changelog_slash(
         lines.append(f"This version: marked `{changelog_post.NO_POST_MARKER}`")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@admin_group.command(
+    name="champion_duel_import",
+    description="(Bot owner only) Load the Champion Duel roster and scouting from an attached JSON.",
+)
+@app_commands.describe(
+    file="payload.json from the simulator's `push_to_bot.py --out payload.json`.",
+    round="Which round this draw is for. Defaults to whatever the payload says.",
+)
+# Spelled out rather than built from `cd_db.STAGE_LABELS`: this decorator runs
+# at import time and `champion_duel_db` is imported inside the callback. A test
+# asserts the two stay identical, so the duplication cannot drift silently --
+# which is what caught these when the labels moved to the game's spelling.
+@app_commands.choices(
+    round=[
+        app_commands.Choice(name="Qualifiers", value="qualifiers"),
+        app_commands.Choice(name="Semi-finals", value="semifinals"),
+        app_commands.Choice(name="Knockout Stage", value="knockouts"),
+    ]
+)
+async def admin_champion_duel_import_slash(
+    interaction: discord.Interaction,
+    file: discord.Attachment,
+    round: app_commands.Choice[str] | None = None,
+):
+    """Import the roster from an attachment rather than over HTTP.
+
+    The same payload `POST /admin/import` takes, applied by the same data-layer
+    functions, arriving a different way — and the difference is the whole point.
+    The HTTP path needs a public host, a service key, and a shell with the
+    simulator checked out. This needs a file and the surface the operator is
+    already in, and `_require_bot_owner` is a stronger gate than the service key
+    it replaces.
+
+    The route stays: Map Manager will want it later, and it is what the web app
+    would use. This is a second door to one room, not a second room.
+
+    Nothing about the data is parsed here. Reading the workbooks, fitting the
+    THP ratios and resolving renames all stay in the simulator, where the corpus
+    that validates them lives — the bot receives a finished payload and applies
+    it. That is the same reason the engine is a pinned package rather than a
+    port.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import champion_duel_db as cd_db  # noqa: PLC0415
+
+    try:
+        raw = await file.read()
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        await interaction.followup.send(
+            f"⚠️ `{file.filename}` isn't UTF-8 text — attach the JSON from `push_to_bot.py --out`.",
+            ephemeral=True,
+        )
+        return
+    except ValueError as e:
+        await interaction.followup.send(
+            f"⚠️ Couldn't parse `{file.filename}` as JSON: {e}", ephemeral=True
+        )
+        return
+
+    if not isinstance(payload, dict) or not any(
+        isinstance(payload.get(k), list) for k in ("registrants", "squads", "orders", "profiles")
+    ):
+        await interaction.followup.send(
+            "⚠️ That JSON has none of `registrants`, `squads`, `orders` or `profiles`. "
+            "Generate it with `push_to_bot.py --out payload.json`.",
+            ephemeral=True,
+        )
+        return
+
+    actor = {
+        "discord_user_id": str(interaction.user.id),
+        "discord_name": interaction.user.display_name,
+        "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
+    }
+
+    # Which round this draw is for: the picker on the command, then the
+    # payload's own declaration, then none. Deliberately no fallback to
+    # qualifiers -- guessing qualifiers on a semifinal draw overwrites the
+    # qualifier groups, which is the failure rounds exist to prevent. Importing
+    # without a round just adds the players, which is always recoverable.
+    stage = (round.value if round else None) or payload.get("stage") or None
+    if stage:
+        try:
+            stage = cd_db._stage(stage)
+        except ValueError:
+            await interaction.followup.send(
+                f"⚠️ `{stage}` isn't a round I know. Pick one on the command, or fix "
+                f"the payload's `stage`.",
+                ephemeral=True,
+            )
+            return
+
+    # Which grouping this draw belongs to. The payload's Participating Warzone
+    # line settles it outright; without one the importer falls back to matching
+    # a registrant's warzone against the groupings we hold, which is what every
+    # payload written before groupings existed relies on.
+    #
+    # A grouping block also *completes* a row: it fills in a start date nobody
+    # had read yet and any of the sixteen that fielded no players, neither of
+    # which the registrant list can supply.
+    grouping = payload.get("grouping") if isinstance(payload.get("grouping"), dict) else None
+    grouping_id = None
+    if grouping:
+        try:
+            resolved = await asyncio.to_thread(
+                cd_db.ensure_grouping,
+                grouping.get("warzones") or [],
+                grouping.get("started_on"),
+            )
+        except ValueError as e:
+            await interaction.followup.send(
+                f"⚠️ The payload's `grouping` block has no usable warzones: {e}", ephemeral=True
+            )
+            return
+        grouping_id = resolved["id"]
+        lines_prefix = f"Grouping `#{grouping_id}`, **{len(resolved['warzones'])}** warzones" + (
+            f", started {resolved['started_on']}" if resolved.get("started_on") else ""
+        )
+    else:
+        lines_prefix = None
+
+    # Dependency order: squads and orders both resolve against registrant rows.
+    lines, problems = [], []
+    results = {}
+    if lines_prefix:
+        lines.append(lines_prefix)
+    if isinstance(payload.get("registrants"), list):
+        try:
+            result = results["registrants"] = await asyncio.to_thread(
+                cd_db.import_registrants,
+                payload["registrants"],
+                stage=stage,
+                grouping_id=grouping_id,
+                started_on=(grouping or {}).get("started_on"),
+            )
+        except ValueError as e:
+            # A payload that would fill the round with the wrong people. Refused
+            # whole rather than half-applied, and said in words -- unwrapped this
+            # reaches the operator as a failed interaction with nothing to act on.
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+        # `placed` is reported, not just `total`. This import can succeed at
+        # loading every player and still put none of them in the round, which
+        # is what a silent placement failure looks like from the outside: the
+        # registrant count reads normal and the field is simply not there.
+        placed = result.get("placed", 0)
+        line = f"**{result['total']}** registrants ({result['inserted']} new)"
+        if stage:
+            label = cd_db.STAGE_LABELS.get(stage, stage)
+            line += f", **{placed}** placed in the {label}"
+        lines.append(line)
+    if isinstance(payload.get("squads"), list):
+        result = results["squads"] = await asyncio.to_thread(
+            cd_db.import_squads, payload["squads"], actor=actor
+        )
+        lines.append(
+            f"**{result['applied']}** squad rows"
+            + (
+                f", {result['kept_observed']} existing values kept"
+                if result["kept_observed"]
+                else ""
+            )
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+    if isinstance(payload.get("orders"), list):
+        result = results["orders"] = await asyncio.to_thread(
+            cd_db.import_orders, payload["orders"], actor=actor
+        )
+        lines.append(
+            f"**{result['applied']}** deployment orders across {result['players']} players"
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+    if isinstance(payload.get("profiles"), list):
+        result = results["profiles"] = await asyncio.to_thread(
+            cd_db.import_profiles, payload["profiles"], actor=actor
+        )
+        # Coverage, not a total. The model runs without these and falls back to
+        # the population, so what this number says is how much of the field is
+        # measured rather than assumed.
+        lines.append(
+            f"**{result['applied']}** player profiles"
+            + (f", {result['cleared']} cleared" if result["cleared"] else "")
+            + (f", {result['skipped']} skipped" if result["skipped"] else "")
+        )
+        problems += result["problems"]
+
+    # Logged after the sections rather than before, so the row records what
+    # actually landed. An import that skipped everything is exactly the run
+    # somebody comes asking about.
+    await asyncio.to_thread(
+        cd_db.record_import,
+        door="discord",
+        results=results,
+        grouping_id=grouping_id,
+        stage=stage,
+        actor=actor,
+    )
+
+    groups = await asyncio.to_thread(cd_db.get_groups)
+    # Names the round it used, so a wrong pick is visible now rather than after
+    # the next import compounds it. "no round" is stated rather than left
+    # blank: it is a real outcome, not a missing word.
+    where = f"**{cd_db.STAGE_LABELS[stage]}** " if stage else ""
+    tail = (
+        ""
+        if stage
+        else "\n\nNo round recorded, so this only added players. "
+        "Re-run with a round to place them in one."
+    )
+    summary = "✅ Imported {}from `{}`:\n{}\n\n{} group(s), {} registrants now loaded.{}".format(
+        where,
+        file.filename,
+        "\n".join(f"• {line}" for line in lines),
+        len(groups),
+        sum(g["registrants"] for g in groups),
+        tail,
+    )
+    if problems:
+        # Attached rather than inlined: a roster refresh can produce hundreds,
+        # and truncating them into an embed hides the ones nobody has seen yet.
+        fp = io.BytesIO("\n".join(problems).encode("utf-8"))
+        await interaction.followup.send(
+            f"{summary}\n\n⚠️ **{len(problems)}** row(s) didn't land — see attached.",
+            file=discord.File(fp, filename="champion_duel_import_problems.txt"),
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(summary, ephemeral=True)
+
+
+# ── Champion Duel: resolving grouping conflicts ───────────────────────────────
+#
+# Two groupings inside one event window claiming the same warzone is a
+# contradiction: a warzone is drawn into exactly one set of Participating
+# Warzones per Champion Duel. The member-facing half of this shipped first --
+# `champion_duel_hub._report_conflict` shows both lists, offers to fix the
+# caller's own, and for the other one tells them to reach us on the Community
+# Server. That exit had nothing behind it until this.
+#
+# The bot does not merge on its own, and that is deliberate rather than
+# unfinished. A conflict only arises from a wrong claim, an alliance cannot
+# undo one, and deciding which community's entry was the mistake is the kind of
+# opinion `UX.md` principle 6 says the bot does not have. Detect it, keep it
+# off member surfaces, give the operator a merge.
+
+
+def _conflict_summary(cd_db, pair: dict) -> str:
+    """One conflict as a block an operator can decide from.
+
+    Both warzone lists in full, because naming the shared number says one of
+    them is wrong without showing which. Counts alongside, because the whole
+    decision is which to keep and that turns on which holds real data.
+    """
+    lines = []
+    for side, grouping in (("A", pair["a"]), ("B", pair["b"])):
+        counts = pair[f"{side.lower()}_counts"]
+        started = grouping.get("started_on") or "no date recorded"
+        lines.append(
+            f"**{side} · #{grouping['id']}** started {started}, origin `{grouping['origin']}`\n"
+            f"  {counts['players']} players · {counts['groups']} groups · "
+            f"{counts['results']} results · {counts['guilds']} guilds pinned\n"
+            f"  {', '.join(grouping['warzones'])}"
+        )
+    return f"shared: **{', '.join(pair['shared'])}**\n" + "\n".join(lines)
+
+
+class _MergeGroupingsView(OwnedView):
+    """Pick a conflict, then pick which side survives.
+
+    Two steps because the second is irreversible. The direction buttons only
+    appear once a pair is selected and are labelled with the id that survives,
+    so nobody can press one before seeing what it would fold away -- the same
+    reason `champion_duel_hub._RevertAnyway` is a button on the conflict rather
+    than a `force` parameter set in advance.
+    """
+
+    def __init__(self, *, user_id: int, pairs: list[dict], cd_db):
+        super().__init__(timeout=600)
+        self.owner_id = user_id
+        self.pairs = pairs
+        self.cd_db = cd_db
+        self.chosen: dict | None = None
+        self.message: discord.Message | None = None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        select = discord.ui.Select(
+            placeholder="Which conflict?",
+            options=[
+                discord.SelectOption(
+                    label=f"#{p['a']['id']} vs #{p['b']['id']}",
+                    value=str(i),
+                    description=f"shares {', '.join(p['shared'])[:80]}",
+                    default=self.chosen is p,
+                )
+                for i, p in enumerate(self.pairs[:25])
+            ],
+            row=0,
+        )
+        select.callback = self._on_pick
+        self.add_item(select)
+
+        if self.chosen:
+            for side, other in (("a", "b"), ("b", "a")):
+                keep = self.chosen[side]
+                drop = self.chosen[other]
+                button = discord.ui.Button(
+                    label=f"Keep #{keep['id']}, fold in #{drop['id']}",
+                    style=discord.ButtonStyle.danger,
+                    row=1,
+                )
+                button.callback = self._merge_into(keep["id"], drop["id"])
+                self.add_item(button)
+
+    def _merge_into(self, keep_id: int, drop_id: int):
+        async def callback(inter: discord.Interaction):
+            await inter.response.defer(ephemeral=True, thinking=True)
+            try:
+                moved = await asyncio.to_thread(
+                    self.cd_db.merge_groupings,
+                    drop_id,
+                    keep_id,
+                    actor=str(inter.user.id),
+                )
+            except self.cd_db.MergeRefused as exc:
+                await self._retire(inter, f"Not merged: {exc}")
+                return
+            except Exception as exc:  # noqa: BLE001
+                # Two operators on one conflict list is what produces this: the
+                # existence check runs before the write, so a merge that landed
+                # in between surfaces as an integrity error rather than a
+                # refusal. Either way the operator needs a reply, because a
+                # deferred interaction with no follow-up is a spinner forever.
+                print(f"[CHAMPION_DUEL] merge {drop_id} into {keep_id} failed: {exc!r}")
+                await self._retire(
+                    inter, f"Merge failed and nothing was changed: `{type(exc).__name__}: {exc}`"
+                )
+                return
+            await self._retire(
+                inter,
+                f"Merged #{drop_id} into #{keep_id}. "
+                f"{moved['players']} players moved, {moved['filled']} filled in gaps, "
+                f"{moved['unchanged']} already complete in #{keep_id}, "
+                f"{moved['groups']} groups touched, {moved['guilds']} guilds repointed"
+                + (f", {moved['unpinned']} unpinned" if moved["unpinned"] else "")
+                + (
+                    f", {moved['readers']} servers that could read it carried over"
+                    if moved.get("readers")
+                    else ""
+                )
+                + f". #{drop_id} is gone, and its warzones went with it"
+                + (
+                    f" ({', '.join(moved['dropped_warzones'])})"
+                    if moved["dropped_warzones"]
+                    else ""
+                )
+                + ". Run the command again for what is left.",
+            )
+
+        return callback
+
+    async def _retire(self, inter: discord.Interaction, text: str):
+        """Report, and stop the buttons looking live.
+
+        The pairs this view holds are stale the moment a merge lands, and a
+        danger button that still renders is one that fails with Discord's bare
+        "This interaction failed" when pressed.
+        """
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        await inter.followup.send(text[:2000], ephemeral=True)
+        self.stop()
+
+    async def _on_pick(self, inter: discord.Interaction):
+        self.chosen = self.pairs[int(inter.data["values"][0])]
+        self._build()
+        await inter.response.edit_message(
+            content=(
+                "**Champion Duel grouping conflicts**\n\n"
+                + _conflict_summary(self.cd_db, self.chosen)
+                + "\n\nMerging is not revertable. The one you keep wins every "
+                "placement they both hold; the other only fills gaps."
+            )[:2000],
+            view=self,
+        )
+
+
+@admin_group.command(
+    name="champion_duel_conflicts",
+    description="(Bot owner only) Groupings claiming the same warzone, and a merge.",
+)
+async def admin_champion_duel_conflicts_slash(interaction: discord.Interaction):
+    """What is broken right now, and the only surface that can fix it.
+
+    `overlapping_groupings` answers the question one member's entry asks, at
+    the moment they ask it. This sweeps what is already stored, which is the
+    operator's question and nobody else's: a conflict reported last Tuesday is
+    still there and nothing else lists it.
+    """
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    import champion_duel_db as cd_db  # noqa: PLC0415
+
+    pairs = await asyncio.to_thread(cd_db.find_grouping_conflicts)
+    if not pairs:
+        await interaction.followup.send(
+            "No grouping conflicts. Every warzone is in one set of "
+            "Participating Warzones per Champion Duel.",
+            ephemeral=True,
+        )
+        return
+
+    view = _MergeGroupingsView(user_id=interaction.user.id, pairs=pairs, cd_db=cd_db)
+    body = "\n\n".join(_conflict_summary(cd_db, p) for p in pairs[:5])
+    more = f"\n\n{len(pairs) - 5} more not shown." if len(pairs) > 5 else ""
+    await interaction.followup.send(
+        f"**{len(pairs)} grouping conflict(s)**\n\n{body}{more}"[:2000],
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
 
 
 # ── Infrastructure diagnostics ───────────────────────────────────────────────

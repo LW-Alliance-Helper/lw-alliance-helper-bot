@@ -9,6 +9,38 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.0] — 2026-09-18
+
+Both Champion Duel and Alliance Duel (VS) are brand new this release. Both hubs
+say so in their footer, and point to the Support Server for anything that looks wrong.
+
+### Added
+- **Alliance Duel (VS) tracker** (💎 Premium): record your alliance's VS league in your own sheet and see your projected path through the bracket ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398)).
+- Track either your whole 16-alliance League bracket or just your own alliance, chosen at setup and changeable at any time ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)).
+- **Check my sheet** finds the entry mistakes that would otherwise quietly produce wrong projections, naming the row and column for each one ([#399](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/399)).
+- **Daily score prompt** (💎 Premium): an opt-in post asking for the duel day that just finished, so you can record it while it's fresh ([#405](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/405)).
+- Start a new VS league in one paste off the in-game League screen, with your own matchup shown first each week ([#574](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/574)).
+- A weekly day-theme reminder for members, naming the day and what it's worth ([#406](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/406)).
+- Push a week's declaration straight to your sheet instead of typing every cell by hand ([#407](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/407)).
+- **VS analytics** (💎 Premium): day profiles, head-to-head history against an opponent, and how your own predictions have tracked against results ([#408](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/408)).
+- Event-driven posts for an opponent reveal, a live clinch update, and a season recap ([#409](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/409)).
+- Scores you record are shared across every alliance in your league, so a matchup you've never personally played still comes with real history if others in the league have played it ([#544](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/544)).
+- Seasons already sitting in your sheet before this shipped are picked up automatically, so history that predates the shared store isn't lost ([#544](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/544)).
+- **Champion Duel** (`/champion_duel`): match odds from the same calibrated engine the backtest validates, returned as a card you can share to your channel ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- Every Champion Duel squad value says whether it was observed or estimated, and every prediction says what it was built on — so a guess never reads as a sighting ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- Anyone can correct a Champion Duel squad or record a line-up they have seen. Every entry is attributed and can be put back ([#467](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/467)).
+- **Champion Duel head to head** (💎 Premium): what an opponent usually fields, how often they change it, and which line-up to set against them ([#513](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/513)).
+- **Champion Duel knockout odds** (💎 Premium): the odds of advancing now cover the knockout bracket, across the brackets that could still happen ([#513](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/513)).
+- Alliances can write their own 5-minute event warning text, separate from the announcement blurb it used to borrow ([#566](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/566)).
+- `/events → Upcoming events` now lists every occurrence due in the next 30 days per event, not just the next one, so a short-interval event's shifting weekday no longer stays hidden ([#580](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/580)).
+- Leadership is now told when an event-draft channel or the birthday tab breaks, the same way other broken setups are reported ([#464](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/464)).
+- A person can ask to have everything the bot holds about them removed; the owner runs it through `/admin forget_user` with a preview before anything is deleted ([#517](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/517)).
+
+### Changed
+- Button icons now mean one thing each across the whole bot: no icon stands for two actions and no action wears two icons.
+- 💎 now marks only the survey and setup question types that are actually Premium-gated, instead of also appearing on some free-tier types ([#530](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/530)).
+- Removing the bot from a server now holds its data for 30 days before deleting it, instead of erasing it the moment it leaves ([#543](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/543)).
+
 ## [1.8.11] — 2026-09-08
 
 ### Fixed
@@ -176,7 +208,7 @@ Hotfix released direct to main per CLAUDE.md's hotfix exception.
 
 ### Changed
 - Growth snapshots now write each new period's columns with thousands separators, matching the formatting alliances keep on their own source columns ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
-- The growth bucket for 0-5% change is now labelled "No Change" instead of "None", which read as though the bot had no data for those members ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
+- The growth bucket for 0-5% change is now labeled "No Change" instead of "None", which read as though the bot had no data for those members ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)).
 
 ## [1.7.5] — 2026-07-30
 
@@ -624,7 +656,7 @@ This release is documentation only — no bot code changed. `__version__` and `b
 ### Changed
 - README `/setup_train`, `/setup_birthdays`, `/setup_desertstorm` step lists rewritten to match the actual wizards (8, 9, and 7 steps respectively).
 - README's outdated Canyon Storm fixed-time claim (12:00 / 23:00 Server Time) removed — that was an OGV assumption stripped in 1.0.9.
-- Added Premium-feature-matrix row for "Customisable DM bodies" (1.0.9 feature).
+- Added Premium-feature-matrix row for "Customizable DM bodies" (1.0.9 feature).
 
 ## [1.0.12] — 2026-05-02
 
@@ -650,7 +682,7 @@ This release is documentation only — no bot code changed. `__version__` and `b
 ### Fixed
 - Wizard views no longer hang on Discord interaction-token expiry. New `wizard_registry.safe_edit_response` falls back to `interaction.message.edit` on `NotFound`, swallows post-delete `HTTPException`. Threaded through ~100 callsites.
 - `/cancel` now actually stops view-based wizard steps via `wizard_registry.wait_view_or_cancel` (~40 callsites in `setup_cog.py`).
-- Survey too-long text input re-prompts the same question up to 5 times instead of cancelling the whole survey.
+- Survey too-long text input re-prompts the same question up to 5 times instead of canceling the whole survey.
 - CS draft renders full zone names from a single `CS_ZONE_STRUCTURE` source of truth (was rendering `Dc1` instead of "Data Center 1"; sub pairs were duplicated).
 - `/sync_members` actually writes member counts — `intents.members = True` plus `_ensure_member_cache(guild)`. Side effect: `on_member_join` / `_remove` / `_update` now fire, so Member Roster auto-resync works.
 - Custom event blurb shows up in `/events` announcements — `_resolve_event_info()` populates `name` + `blurb`; `build_announcement` re-resolves from `guild_events` if missing.

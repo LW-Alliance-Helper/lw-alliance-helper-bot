@@ -7,7 +7,7 @@ view. The 5-step content walks the weekly cycle, strategy presets +
 member rules, free vs Premium gating, and a /help pointer.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -229,7 +229,7 @@ class TestTourStepProgression:
     @pytest.mark.asyncio
     async def test_next_button_advances_to_step_2(self):
         steps = ["one", "two", "three"]
-        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
+        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False, event_type="DS")
         # The view exposes Next + Skip; the first child is Next.
         assert len(view.children) == 2
         inter = _make_interaction(user_id=42, message=MagicMock(content="one"))
@@ -262,6 +262,7 @@ class TestTourStepProgression:
             index=0,
             owner_id=42,
             is_last=False,
+            event_type="DS",
         )
         for _ in range(len(steps) - 1):
             inter = _make_interaction(user_id=42, message=MagicMock(content="prior"))
@@ -278,6 +279,7 @@ class TestTourStepProgression:
                 index=next_index,
                 owner_id=42,
                 is_last=is_last,
+                event_type="DS",
             )
 
         # The observed content list should be steps[1] … steps[N-1].
@@ -286,7 +288,7 @@ class TestTourStepProgression:
     @pytest.mark.asyncio
     async def test_last_step_renders_close_button_only(self):
         steps = ["a", "b"]
-        view = sw._TourStepView(steps=steps, index=1, owner_id=42, is_last=True)
+        view = sw._TourStepView(steps=steps, index=1, owner_id=42, is_last=True, event_type="DS")
         # Single child: the Close button.
         assert len(view.children) == 1
         assert view.children[0].label == "Close"
@@ -296,7 +298,7 @@ class TestTourStepProgression:
         """`inter.message.content` can be falsy; the Skip handler must
         not raise TypeError concatenating to None."""
         steps = ["one", "two"]
-        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
+        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False, event_type="DS")
         # Children: [Next, Skip]
         skip_btn = view.children[1]
         inter = _make_interaction(user_id=42, message=MagicMock(content=None))
@@ -311,7 +313,7 @@ class TestTourStepProgression:
     @pytest.mark.asyncio
     async def test_non_owner_click_rejected(self):
         steps = ["one", "two"]
-        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
+        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False, event_type="DS")
         next_btn = view.children[0]
         inter = _make_interaction(
             user_id=99,  # not the owner
@@ -329,7 +331,7 @@ class TestTourStepProgression:
         """A fast second click on Next while the first is still
         in-flight must not spawn two step-2 messages."""
         steps = ["one", "two", "three"]
-        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
+        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False, event_type="DS")
         next_btn = view.children[0]
         inter_a = _make_interaction(user_id=42, message=MagicMock(content="one"))
         await next_btn.callback(inter_a)
@@ -338,6 +340,34 @@ class TestTourStepProgression:
         # Only the first click made it to followup.send.
         inter_a.followup.send.assert_awaited_once()
         inter_b.followup.send.assert_not_called()
+
+
+class TestTimeoutsCarryTheirExit:
+    """Settled 2026-09-12 (#589): a walkthrough that times out says how to
+    get it back, like every other view, instead of greying out silently."""
+
+    @pytest.mark.asyncio
+    async def test_offer_times_out_with_the_hub_as_the_way_back(self):
+        view = sw._OfferView(
+            guild_id=TEST_GUILD_ID,
+            user_id=42,
+            walkthrough_key=sw.STORM_HUB_TOUR_KEY,
+            event_type="CS",
+        )
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_awaited_once_with(view.message, command_hint="`/canyonstorm`")
+
+    @pytest.mark.asyncio
+    async def test_tour_step_times_out_with_the_hub_as_the_way_back(self):
+        view = sw._TourStepView(
+            steps=["one", "two"], index=0, owner_id=42, is_last=False, event_type="DS"
+        )
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_awaited_once_with(view.message, command_hint="`/desertstorm`")
 
 
 class TestOfferViewDoubleClick:

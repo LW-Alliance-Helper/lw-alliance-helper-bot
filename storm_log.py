@@ -24,8 +24,10 @@ import discord
 from messages import FEATURE_NOT_CONFIGURED, NOT_SET_UP
 from setup_hub import HUB_BTN_MEMBERS, STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
+from storm_log_flow import run_log_flow  # the walk itself; split out in #589
 from config import get_config
 import wizard_registry
+from wizard_registry import ExpiringView
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -411,7 +413,10 @@ class _LogDatePickerView(discord.ui.View):
     def _build(self, recent_dates: list[str]):
         import datetime as _dt
 
-        today = _dt.date.today()
+        # A storm is a game event, so the quick picks are in-game (server) days.
+        from time_helpers import server_today
+
+        today = server_today()
         yesterday = today - _dt.timedelta(days=1)
 
         options: list[discord.SelectOption] = []
@@ -513,7 +518,7 @@ class _LogDatePickerView(discord.ui.View):
         self.stop()
 
 
-class _PaginatedRosterMultiSelectView(discord.ui.View):
+class _PaginatedRosterMultiSelectView(ExpiringView):
     """Roster-wide multi-select with Discord-friendly pagination (#244).
 
     Discord caps a `Select` at 25 options, so a 60+ member alliance can't
@@ -582,33 +587,9 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
         )
         select.callback = self._on_select
         self.add_item(select)
-        # Pagination row only when there's more than one page.
-        if self.page_count > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0),
-                row=1,
-            )
-            prev_btn.callback = self._on_prev
-            self.add_item(prev_btn)
-
-            page_btn = discord.ui.Button(
-                label=f"Page {self.page + 1} / {self.page_count}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=1,
-            )
-            self.add_item(page_btn)
-
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1),
-                row=1,
-            )
-            next_btn.callback = self._on_next
-            self.add_item(next_btn)
+        self.add_pagination_row(
+            page=self.page, page_count=self.page_count, on_page=self._on_page, row=1
+        )
 
         save_btn = discord.ui.Button(
             label="✅ Save",
@@ -634,16 +615,9 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
         self.selected_set = (self.selected_set - page_names) | picked
         await interaction.response.defer()
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        if self.page > 0:
-            self.page -= 1
-            self._build_components()
-        await wizard_registry.safe_edit_response(interaction, view=self)
-
-    async def _on_next(self, interaction: discord.Interaction):
-        if self.page < self.page_count - 1:
-            self.page += 1
-            self._build_components()
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
+        self._build_components()
         await wizard_registry.safe_edit_response(interaction, view=self)
 
     async def _on_clear(self, interaction: discord.Interaction):
@@ -1128,508 +1102,6 @@ def append_participation_row(
 # ── Shared log flow (new configurable version) ───────────────────────────────
 
 
-async def run_log_flow(bot, channel, user, event_type):
-    """
-    Walk leadership through the participation log flow. The questions
-    asked are read from the per-guild participation config saved by
-    the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). The date is always asked
-    first (mandatory, never configurable).
-    """
-    is_ds = event_type.upper() == "DS"
-    event_label = "Desert Storm" if is_ds else "Canyon Storm"
-    hub_cmd = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
-    log_hint = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
-    # Post-#201: storm setup wizards live behind /setup hub buttons.
-    setup_cmd = STORM_SETUP_NAV["DS" if is_ds else "CS"]
-    guild_id = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
-    cancel_event = asyncio.Event()
-    active_logs[user.id] = cancel_event
-
-    from config import get_participation_config
-
-    pcfg = get_participation_config(guild_id, event_type) if guild_id else {}
-
-    if not pcfg.get("enabled"):
-        await channel.send(
-            f"⚙️ Participation tracking isn't enabled for {event_label} yet. "
-            f"Run `{setup_cmd}` and walk through Step 6 to define what you want to track."
-        )
-        active_logs.pop(user.id, None)
-        return
-
-    questions = pcfg.get("questions") or []
-    if not questions:
-        await channel.send(
-            f"⚙️ Participation tracking is enabled but no questions are configured. "
-            f"Run `{setup_cmd}` to add questions."
-        )
-        active_logs.pop(user.id, None)
-        return
-
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def wait_for_msg(prompt_text):
-        prompt_msg = await channel.send(prompt_text)
-        try:
-            reply_task = asyncio.ensure_future(
-                bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
-            )
-            cancel_task = asyncio.ensure_future(cancel_event.wait())
-            done, pending = await asyncio.wait(
-                [reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
-            )
-            for t in pending:
-                t.cancel()
-            if cancel_event.is_set():
-                try:
-                    await prompt_msg.delete()
-                except discord.HTTPException:
-                    pass
-                return None
-            reply = done.pop().result()
-            try:
-                await prompt_msg.delete()
-                await reply.delete()
-            except discord.HTTPException:
-                pass
-            return reply.content.strip()
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
-            return None
-
-    async def wait_for_view(view, prompt_msg):
-        """Wait for any view (NameEntryView, YesNoLogView, etc). Returns False if cancelled/timed out."""
-        view_task = asyncio.ensure_future(view.wait())
-        cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait(
-            [view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
-        )
-        for t in pending:
-            t.cancel()
-        if cancel_event.is_set():
-            for item in view.children:
-                item.disabled = True
-            try:
-                await prompt_msg.edit(view=view)
-            except discord.HTTPException:
-                pass
-            return False
-        if not getattr(view, "confirmed", True):
-            try:
-                await prompt_msg.delete()
-            except discord.HTTPException:
-                pass
-            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
-            return False
-        return True
-
-    try:
-        total_steps = len(questions) + 1  # +1 for the always-required date
-        await channel.send(
-            f"📋 **{event_label} Log** started by {user.mention}\n"
-            f"*{total_steps} step(s) total. Use `/cancel` at any time to stop.*"
-        )
-
-        # ── Step 1: Date (always asked, never configurable) ──────────────────
-        # Officers can pick from recent saved event dates (storm
-        # signups + structured rosters) — typing a date from scratch
-        # was a tester pain point. Free-text remains an option for
-        # backfilling old events that pre-date the saved data.
-        recent_dates = await asyncio.get_event_loop().run_in_executor(
-            None,
-            _collect_recent_event_dates,
-            guild_id,
-            event_type,
-        )
-        picker = _LogDatePickerView(recent_dates)
-        picker_msg = await channel.send(
-            "**Step 1: Event date**\nPick the date this log is for:",
-            view=picker,
-        )
-        if not await wait_for_view(picker, picker_msg):
-            if cancel_event.is_set():
-                await channel.send("❌ Log cancelled.")
-            return
-        if picker.cancelled:
-            await channel.send("❌ Log cancelled.")
-            return
-        if picker.picked_date is not None:
-            log_date = picker.picked_date
-        else:
-            # Free-text fallback — officer chose "Type a different date".
-            raw_date = await wait_for_msg(
-                "Type the date (e.g. `April 14`, `4/14`) or type `today`:"
-            )
-            if raw_date is None:
-                if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
-                return
-            if raw_date.lower() == "today":
-                log_date = date.today()
-            else:
-                from train import parse_date_and_name
-
-                parsed_d, _, _ = parse_date_and_name(
-                    f"{raw_date} - placeholder",
-                )
-                if not parsed_d:
-                    await channel.send(
-                        f"⚠️ Could not parse `{raw_date}` as a date. Run {log_hint} to start again."
-                    )
-                    return
-                log_date = parsed_d
-
-        # ── Roster (lazy — only loaded if any question needs it) ─────────────
-        roster_loaded = False
-        names: list[str] = []
-        alias_map: dict[str, str] = {}
-
-        async def _ensure_roster():
-            nonlocal roster_loaded, names, alias_map
-            if roster_loaded:
-                return
-            loading_msg = await channel.send("⏳ Loading roster from your configured tab…")
-            names, alias_map = await asyncio.get_event_loop().run_in_executor(
-                None,
-                load_roster_from_config,
-                guild_id,
-                event_type,
-            )
-            try:
-                await loading_msg.delete()
-            except discord.HTTPException:
-                pass
-            roster_loaded = True
-
-        # ── Walk through configured questions ────────────────────────────────
-        # `answers` holds event-level data (existing behaviour); the new
-        # `per_member_data` holds per-(member, question) flags / counts
-        # produced by `roster_multi_select` and `derived_count` (#244).
-        # The two stores write to different Sheet tabs at save time.
-        answers: dict[str, str] = {}
-        per_member_data: dict[str, dict[str, str]] = {}
-        per_member_question_keys: list[str] = []
-        for idx, q in enumerate(questions, start=2):
-            qkey = q.get("key", f"q{idx}")
-            qlabel = q.get("label", qkey)
-            qtype = q.get("type", "text")
-
-            header = f"**Step {idx} of {total_steps}: {qlabel}**"
-
-            if qtype == "yes_no":
-                yn = _YesNoLogView()
-                msg = await channel.send(f"{header}\nPick one.", view=yn)
-                if not await wait_for_view(yn, msg):
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                answers[qkey] = "Yes" if yn.value else "No"
-
-            elif qtype == "numeric":
-                lo = q.get("min")
-                hi = q.get("max")
-                bound_hint = ""
-                if lo is not None or hi is not None:
-                    bits = []
-                    if lo is not None:
-                        bits.append(f"min `{lo}`")
-                    if hi is not None:
-                        bits.append(f"max `{hi}`")
-                    bound_hint = f" *({', '.join(bits)})*"
-                attempts = 5
-                value: str | None = None
-                while attempts > 0:
-                    raw = await wait_for_msg(f"{header}{bound_hint}\nType a number.")
-                    if raw is None:
-                        if cancel_event.is_set():
-                            await channel.send("❌ Log cancelled.")
-                        return
-                    try:
-                        n = float(raw) if "." in raw else int(raw)
-                    except ValueError:
-                        attempts -= 1
-                        await channel.send(
-                            f"⚠️ `{raw}` isn't a number. Please re-enter your answer."
-                        )
-                        continue
-                    if lo is not None and n < lo:
-                        attempts -= 1
-                        await channel.send(f"⚠️ Must be at least **{lo}**. Please re-enter.")
-                        continue
-                    if hi is not None and n > hi:
-                        attempts -= 1
-                        await channel.send(f"⚠️ Must be at most **{hi}**. Please re-enter.")
-                        continue
-                    value = str(n)
-                    break
-                if value is None:
-                    await channel.send(
-                        "⚠️ Too many invalid attempts. Cancelling the log. "
-                        f"run {log_hint} when you're ready to try again."
-                    )
-                    return
-                answers[qkey] = value
-
-            elif qtype == "roster_names":
-                await _ensure_roster()
-                if not names:
-                    await channel.send(
-                        "⚠️ The configured roster tab is empty or unreachable. "
-                        f"Run `{setup_cmd}` "
-                        f"to update the roster source, then try again."
-                    )
-                    return
-                preview = ", ".join(names) if len(names) <= 25 else f"{len(names)} members loaded"
-                view = NameEntryView(names, qlabel, alias_map)
-                prompt = await channel.send(
-                    f"{header}\nPress **Enter Names** to type who applies. "
-                    f"Press **Skip** if none.\n*Roster: {preview}*",
-                    view=view,
-                )
-                if not await wait_for_view(view, prompt):
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                picked = sorted(view.selected)
-                if view.unrecognized:
-                    picked += sorted(view.unrecognized)
-                answers[qkey] = ", ".join(picked)
-
-            elif qtype == "single_select":
-                opts = q.get("options") or []
-                if not opts:
-                    answers[qkey] = ""
-                    continue
-                view = ShortSelectView(opts, qlabel)
-                prompt = await channel.send(f"{header}\nPick one.", view=view)
-                if not await wait_for_view(view, prompt):
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                answers[qkey] = next(iter(view.selected), "")
-
-            elif qtype == "multi_select":
-                opts = q.get("options") or []
-                if not opts:
-                    answers[qkey] = ""
-                    continue
-                view = ShortSelectView(opts, qlabel)
-                prompt = await channel.send(f"{header}\nPick any that apply.", view=view)
-                if not await wait_for_view(view, prompt):
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                answers[qkey] = ", ".join(sorted(view.selected))
-
-            elif qtype == "date":
-                fmt = q.get("date_format") or "%m/%d/%Y"
-                attempts = 5
-                value = None
-                while attempts > 0:
-                    raw = await wait_for_msg(f"{header} *(format `{fmt}`)*")
-                    if raw is None:
-                        if cancel_event.is_set():
-                            await channel.send("❌ Log cancelled.")
-                        return
-                    try:
-                        from datetime import datetime as _dt
-
-                        d = _dt.strptime(raw, fmt).date()
-                        value = d.isoformat()
-                        break
-                    except ValueError:
-                        attempts -= 1
-                        await channel.send(f"⚠️ `{raw}` doesn't match `{fmt}`. Please re-enter.")
-                if value is None:
-                    await channel.send("⚠️ Too many invalid attempts. Cancelling the log.")
-                    return
-                answers[qkey] = value
-
-            elif qtype == "roster_multi_select":
-                # #244 — paginated multi-select against the alliance
-                # roster. Officer picks members who match; per-member
-                # flags (yes/no) get written to the Per-Member Log
-                # tab so the Trends Viewer can aggregate.
-                await _ensure_roster()
-                if not names:
-                    await channel.send(
-                        "⚠️ The configured roster tab is empty or unreachable. "
-                        f"Run `{setup_cmd}` to update the roster source."
-                    )
-                    return
-                # Pre-fill (Premium only). Compute the matching member
-                # names from signup data when configured.
-                preselected: set[str] = set()
-                prefill_source = q.get("prefill_source") or ""
-                if prefill_source == "discord_poll":
-                    preselected = await asyncio.to_thread(
-                        _prefill_from_discord_poll,
-                        guild_id,
-                        event_type,
-                        log_date.isoformat(),
-                        names,
-                        alias_map,
-                    )
-                view = _PaginatedRosterMultiSelectView(
-                    names,
-                    qlabel,
-                    preselected=preselected,
-                    prefill_used=bool(prefill_source),
-                )
-                preview = (
-                    (
-                        ", ".join(sorted(preselected)[:5])
-                        + (f" (+{len(preselected) - 5} more)" if len(preselected) > 5 else "")
-                    )
-                    if preselected
-                    else ""
-                )
-                prompt_lines = [header]
-                if prefill_source == "discord_poll":
-                    prompt_lines.append(
-                        "🗳️ Pre-checked members are those who voted to "
-                        "attend in the Discord signup poll. The legend "
-                        "`✏️` marks any member you toggle manually."
-                    )
-                    if preview:
-                        prompt_lines.append(f"*Pre-checked:* {preview}")
-                prompt_lines.append(
-                    "Use the dropdown(s) to pick the members who match. Click ✅ Save when done."
-                )
-                prompt = await channel.send(
-                    "\n".join(prompt_lines),
-                    view=view,
-                )
-                if not await wait_for_view(view, prompt):
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                picked = view.selected_set
-                # Build per-member flags for every roster member: "yes"
-                # for picked, "no" otherwise. Officer's omission is a
-                # meaningful "no" — not "missing data."
-                for member_name in names:
-                    per_member_data.setdefault(member_name, {})[qkey] = (
-                        "yes" if member_name in picked else "no"
-                    )
-                per_member_question_keys.append(qkey)
-                # Surface a short event-level summary too (for the
-                # post-log embed): count of picked members.
-                answers[qkey] = f"{len(picked)} member(s)"
-
-            elif qtype == "derived_count":
-                # #244 — Premium derived count. Read past Per-Member
-                # Log rows for the configured source question, count
-                # per member, write to the Per-Member Log under this
-                # question's key. Override UI deferred to v2.
-                source_key = q.get("source_question_key", "")
-                lookback = int(q.get("lookback_events", 4))
-                if not source_key:
-                    await channel.send(
-                        f"⚠️ Derived count `{qlabel}` has no source question configured. Skipping."
-                    )
-                    continue
-                await _ensure_roster()
-                counts = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    count_member_flags_in_window,
-                    guild_id,
-                    event_type,
-                    lookback,
-                    source_key,
-                )
-                # Make sure every roster member has a row (count = 0
-                # for those who never appeared in the source data).
-                for member_name in names:
-                    per_member_data.setdefault(member_name, {})[qkey] = str(
-                        counts.get(member_name, 0)
-                    )
-                per_member_question_keys.append(qkey)
-                if q.get("show_during_log"):
-                    # Surface the top-5 by count so officers see at a
-                    # glance who's flagged most often.
-                    ordered = sorted(
-                        counts.items(),
-                        key=lambda kv: (-kv[1], kv[0]),
-                    )
-                    top = [f"{n} ({c})" for n, c in ordered[:5] if c > 0]
-                    if top:
-                        await channel.send(
-                            f"{header}\n📊 Top by count in past {lookback} events: {', '.join(top)}"
-                        )
-                answers[qkey] = (
-                    f"max {max(counts.values()) if counts else 0} (past {lookback} events)"
-                )
-
-            else:  # "text" or unknown — fall back to free text
-                raw = await wait_for_msg(f"{header}\nType your answer (or `skip` for none).")
-                if raw is None:
-                    if cancel_event.is_set():
-                        await channel.send("❌ Log cancelled.")
-                    return
-                answers[qkey] = "" if raw.lower() == "skip" else raw
-
-        # ── Save row ─────────────────────────────────────────────────────────
-        await channel.send("💾 Saving log…")
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                append_participation_row,
-                guild_id,
-                event_type,
-                log_date,
-                answers,
-            )
-        except Exception as e:
-            await channel.send(f"⚠️ Error saving to sheet: {e}")
-            return
-
-        # Per-Member Log tab: append wide-format rows for question types
-        # that produce one value per alliance member (roster_multi_select,
-        # derived_count). The event-level tab keeps the summary value; the
-        # Member Log tab keeps the per-member detail so Trends Viewer (#246)
-        # and derived_count lookbacks can read history.
-        if per_member_question_keys and per_member_data:
-            try:
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    upsert_member_log_rows,
-                    guild_id,
-                    event_type,
-                    log_date,
-                    per_member_data,
-                    per_member_question_keys,
-                )
-            except Exception as e:
-                await channel.send(f"⚠️ Saved event row, but per-member log failed: {e}")
-
-        # ── Summary ──────────────────────────────────────────────────────────
-        date_str = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
-        lines = [f"📋 **{event_label} Log: {date_str}**"]
-        for q in questions:
-            qkey = q.get("key", "")
-            qlabel = q.get("label", qkey)
-            v = answers.get(qkey, "")
-            lines.append(f"**{qlabel}:** {v if v not in ('', None) else 'None'}")
-        summary = "\n".join(lines)
-
-        await channel.send(f"✅ **Log saved!**\n\n{summary}")
-
-        # Mirror the summary into the configured log channel (if different).
-        try:
-            log_channel_id = int(pcfg.get("log_channel_id") or 0)
-            if log_channel_id and channel.id != log_channel_id:
-                target = bot.get_channel(log_channel_id)
-                if target:
-                    await target.send(summary)
-        except Exception as e:
-            print(f"[LOG] Error mirroring summary to log channel: {e}")
-
-    finally:
-        active_logs.pop(user.id, None)
-
-
 class _YesNoLogView(discord.ui.View):
     """Simple Yes/No picker for participation `yes_no` questions."""
 
@@ -1846,11 +1318,13 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
-        ws = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
-        rows = await asyncio.get_event_loop().run_in_executor(
-            None,
-            ws.get_all_values,
+        # Opening the spreadsheet and looking up the tab are network calls
+        # too, not just the read below (#589; the 1.8.0 sweep threaded the
+        # read and left the open on the loop).
+        ws = await asyncio.to_thread(
+            get_member_roster_sheet, interaction.guild_id, roster_cfg["tab_name"]
         )
+        rows = await asyncio.to_thread(ws.get_all_values)
     except Exception as e:
         await interaction.followup.send(
             f"⚠️ Could not read the roster sheet: {e}",
@@ -1899,7 +1373,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 # ── Default DM body + safe template rendering ────────────────────────────────
 
 # Hardcoded fallback when a guild hasn't configured its own DM body via
-# the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). `{label}` is substituted at
+# the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🛡️ Canyon Storm`). `{label}` is substituted at
 # call time from the event_type so DS and CS share one default. The only
 # user-supplied placeholder is `{name}` (member's roster name).
 DEFAULT_STORM_REMINDER_DM = (

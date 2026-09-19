@@ -28,6 +28,7 @@ from defaults import (
     DEFAULT_CS_TEMPLATE,
 )
 from time_helpers import SERVER_TZ
+import db_timings
 
 DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
@@ -86,7 +87,12 @@ class GuildConfig:
 
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # Timed from here to the end of the caller's `with` block, per calling
+    # helper, for `/admin db_timings` (#589, step 10: is a config read on the
+    # event loop a convention to bless or a class of bug to fix?).
+    t0 = time.perf_counter()
+    conn = sqlite3.connect(DB_PATH, factory=db_timings.TimedConnection)
+    conn.start(t0, db_timings.caller_name(2), db_timings.on_event_loop())
     conn.row_factory = sqlite3.Row
     # WAL is load-bearing for storage, not just for concurrency.
     #
@@ -161,6 +167,7 @@ def init_db():
                 timezone                TEXT    NOT NULL DEFAULT 'America/New_York',
                 default_time            TEXT    NOT NULL DEFAULT '22:00',
                 announcement_blurb      TEXT    NOT NULL DEFAULT '',
+                warning_blurb           TEXT    NOT NULL DEFAULT '',
                 schedule_type           TEXT    NOT NULL DEFAULT 'repeating',
                 anchor_date             TEXT    DEFAULT '',
                 interval_days           INTEGER DEFAULT 3,
@@ -720,6 +727,25 @@ def init_db():
             )
         """)
 
+        # guild_removals — the hold between a server removing the bot and its
+        # data actually going (#543).
+        #
+        # **The removal is recorded, not acted on.** An admin who kicks the bot
+        # and re-adds it an hour later would otherwise lose every wizard they
+        # ever ran, and that is a far more common event than a deliberate
+        # goodbye. `on_guild_join` clears the row, so coming back inside the
+        # window costs nothing at all.
+        #
+        # The window is bounded rather than open-ended: Discord's Developer
+        # Policy asks for deletion on removal, and "we keep it until someone
+        # notices" is not a retention position.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_removals (
+                guild_id   INTEGER PRIMARY KEY,
+                removed_at TEXT    NOT NULL
+            )
+        """)
+
         # storm_signup_history — append-only audit log for storm sign-up
         # votes. `storm_signups` UPSERTs on (guild_id, event_type,
         # event_date, target_member_id) so the prior vote, the prior
@@ -822,7 +848,7 @@ def init_db():
         # storm_roster_drafts — per-(guild, event_type, team) snapshot of
         # the structured roster builder's in-progress state (#240).
         # Auto-saved on every state change; loaded when the officer
-        # clicks `♻️ Resume Team X roster` on the OfficerView. Survives
+        # clicks `▶️ Resume Team X roster` on the OfficerView. Survives
         # View timeouts AND Railway redeploys so a builder session can
         # take longer than 1 hour without losing work.
         #
@@ -848,9 +874,9 @@ def init_db():
         conn.commit()
 
         # storm_roster_images — pointer to a public roster-image message
-        # in Discord, written by the `💾 Save to history` action on the
+        # in Discord, written by the `📜 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
-        # a `📷 View image` button on the matching event embed so a
+        # a `🖼️ View image` button on the matching event embed so a
         # roster image from week N is still retrievable in week N+8.
         # `team` differentiates DS Team A / Team B; CS uses empty string.
         # UPSERT on the composite key — re-saving overwrites the prior
@@ -991,6 +1017,108 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_vs_config — Alliance Duel (VS) tracker (#398/#399), following
+        # the guild_storm_config precedent: enough fields to warrant its own
+        # table rather than more columns on guild_configs.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_vs_config (
+                guild_id                  INTEGER PRIMARY KEY,
+                enabled                   INTEGER DEFAULT 0,
+                tab_name                  TEXT    DEFAULT 'Alliance Duel (VS)',
+                -- Own alliance identity, stored once rather than repeated as a
+                -- sheet column. Everything else about your alliance is just
+                -- another row; these two say which row is yours.
+                own_tag                   TEXT    DEFAULT '',
+                own_warzone                TEXT    DEFAULT '',
+                -- Tracking mode (#448): 'own_alliance' | 'full_bracket'.
+                -- Asked at setup, never inferred — skeleton generation is a
+                -- *write*, so the shape has to be known before there is any
+                -- data to infer it from. An own-alliance sheet is a supported
+                -- shape, not incomplete data: it changes how many skeleton
+                -- rows get written and gates validation rules 4, 5 and 6,
+                -- which all assume a full 16-alliance bracket.
+                tracking_mode             TEXT    DEFAULT 'full_bracket',
+                -- Per-surface opt-in toggles, posting times (HH:MM in the
+                -- guild's configured timezone) and channels. Every automated
+                -- post is opt-in with a user-chosen time and channel; the bot
+                -- never picks a posting time on the alliance's behalf.
+                score_prompt_enabled      INTEGER DEFAULT 0,
+                score_prompt_time         TEXT    DEFAULT '',
+                score_prompt_channel_id   INTEGER DEFAULT 0,
+                day_theme_enabled         INTEGER DEFAULT 0,
+                day_theme_time            TEXT    DEFAULT '',
+                day_theme_channel_id      INTEGER DEFAULT 0,
+                -- A standing line from leadership carried on every day-theme
+                -- post (#406), for coordination the bot cannot know about:
+                -- holding points back to see the opponent's position before
+                -- committing is a real tactic and the reminder supports it.
+                day_theme_note            TEXT    DEFAULT '',
+                -- DB-backed dedup, never an in-memory set. CLAUDE.md flags
+                -- that exact mistake (#89): Train Conductor Rotation
+                -- reimplemented in-memory dedup after the DB-backed pattern
+                -- had already been fixed following a production incident.
+                -- Event-driven posts (#409). One channel for all three, and
+                -- no posting time at all: these fire when data lands rather
+                -- than on a clock, and three channels for three occasional
+                -- leadership posts would be configuration for its own sake.
+                event_posts_channel_id    INTEGER DEFAULT 0,
+                clinch_status_enabled     INTEGER DEFAULT 0,
+                opponent_reveal_enabled   INTEGER DEFAULT 0,
+                season_recap_enabled      INTEGER DEFAULT 0,
+                last_score_prompt_fired   TEXT    DEFAULT '',
+                last_day_theme_fired      TEXT    DEFAULT ''
+            )
+        """)
+        conn.commit()
+
+        # vs_score_prompt_posts — table-of-record for "this message is a daily
+        # score prompt" (#405), the same job `storm_registration_posts` does
+        # for sign-ups. Read at startup to re-register the persistent View so
+        # the buttons still work after a Railway redeploy, and read on click to
+        # recover which league-week the prompt was asking about. The league is
+        # stored rather than re-derived: a prompt clicked after the next league
+        # has started would otherwise write the day score onto the wrong
+        # league's row.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vs_score_prompt_posts (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id       INTEGER NOT NULL,
+                channel_id     INTEGER NOT NULL,
+                message_id     INTEGER NOT NULL,
+                league_season  TEXT    DEFAULT '',
+                league_tier    TEXT    DEFAULT '',
+                league_group   TEXT    DEFAULT '',
+                week           INTEGER NOT NULL,
+                duel_day       INTEGER NOT NULL,
+                -- Server date of the day being asked about, which is also the
+                -- dedup key: one prompt per guild per duel day.
+                server_date    TEXT    NOT NULL,
+                posted_at      TEXT    NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_vs_prompt_posts_message
+            ON vs_score_prompt_posts (message_id)
+        """)
+        conn.commit()
+
+        # vs_event_posts — what has already been announced (#409). The
+        # event-driven posts fire off writes rather than a clock, and a write
+        # can happen twice (an officer correcting a mistyped score re-saves the
+        # same day), so "has this already gone out?" needs a durable answer
+        # rather than an in-memory one. Key is per surface: one clinch post per
+        # day, one reveal per week, one recap per league.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vs_event_posts (
+                guild_id   INTEGER NOT NULL,
+                kind       TEXT    NOT NULL,
+                event_key  TEXT    NOT NULL,
+                posted_at  TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, kind, event_key)
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -1113,6 +1241,39 @@ def init_db():
             except Exception:
                 pass
 
+        # ── guild_vs_config (#399) ────────────────────────────────────────────
+        # Same ALTER-in-try/except shape as the storm block above, so a DB
+        # created before a column existed picks it up on next boot. Keep this
+        # list, the CREATE TABLE above, save_vs_config and get_vs_config's
+        # fallback dict in sync.
+        for col, definition in [
+            ("enabled", "INTEGER DEFAULT 0"),
+            ("tab_name", "TEXT    DEFAULT 'Alliance Duel (VS)'"),
+            ("own_tag", "TEXT    DEFAULT ''"),
+            ("own_warzone", "TEXT    DEFAULT ''"),
+            # Tracking mode (#448) — see CREATE TABLE comment.
+            ("tracking_mode", "TEXT    DEFAULT 'full_bracket'"),
+            ("score_prompt_enabled", "INTEGER DEFAULT 0"),
+            ("score_prompt_time", "TEXT    DEFAULT ''"),
+            ("score_prompt_channel_id", "INTEGER DEFAULT 0"),
+            ("day_theme_enabled", "INTEGER DEFAULT 0"),
+            ("day_theme_time", "TEXT    DEFAULT ''"),
+            ("day_theme_channel_id", "INTEGER DEFAULT 0"),
+            ("day_theme_note", "TEXT    DEFAULT ''"),
+            ("event_posts_channel_id", "INTEGER DEFAULT 0"),
+            ("clinch_status_enabled", "INTEGER DEFAULT 0"),
+            ("opponent_reveal_enabled", "INTEGER DEFAULT 0"),
+            ("season_recap_enabled", "INTEGER DEFAULT 0"),
+            ("last_score_prompt_fired", "TEXT    DEFAULT ''"),
+            ("last_day_theme_fired", "TEXT    DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_vs_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_vs_config")
+            except Exception:
+                pass
+
         # ── Drop judicator_role_id (Rule G / #167) ────────────────────────────
         # Faction-roles feature removed end-to-end. Drop the column.
         try:
@@ -1168,6 +1329,26 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_storm_config DROP COLUMN {col}")
                 conn.commit()
                 print(f"[CONFIG] Dropped {col} from guild_storm_config")
+            except Exception:
+                pass
+
+        # ── guild_events migrations (per-event 5-minute warning text) ──────────
+        # `warning_blurb` is the text the 5-minute warning posts. It was read
+        # by scheduler.build_warning_message from the start but never had a
+        # column, so the branch was dead and every event fell through to the
+        # generic line (#566).
+        #
+        # It backfills to '' rather than to the generic line on purpose: ''
+        # means "this alliance has not chosen", which is what lets the wizard
+        # honestly label the generic line as the default instead of showing it
+        # back to them as a saved value they picked.
+        for col, definition in [
+            ("warning_blurb", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_events ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_events")
             except Exception:
                 pass
 
@@ -2445,6 +2626,42 @@ def set_guild_event_anchor(guild_id: int, short_key: str, anchor_date: str) -> b
         return cur.rowcount > 0
 
 
+def set_guild_event_five_min_warning(guild_id: int, short_key: str, on: bool) -> bool:
+    """Turn one event's 5-minute warning on or off.
+
+    This is the flag the scheduler actually reads. `guild_configs.
+    event_five_min_warning` is only the default a new event is created
+    with -- it is not a master switch, and nothing re-syncs the two, so
+    an event created while the default was on keeps warning after the
+    default is turned off. That was invisible until the per-event
+    control existed (#566). Returns False when no such event exists.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_events SET five_min_warning = ? WHERE guild_id = ? AND short_key = ?",
+            (1 if on else 0, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def set_guild_event_warning_blurb(guild_id: int, short_key: str, warning_blurb: str) -> bool:
+    """Set (or clear) the text an event's 5-minute warning posts (#566).
+
+    An empty string is the meaningful "clear it" value, not a no-op: ''
+    means the alliance has not chosen, which is what sends the warning
+    back to `scheduler.WARNING_BLURB_DEFAULT`. Returns False when no such
+    event exists for the guild.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_events SET warning_blurb = ? WHERE guild_id = ? AND short_key = ?",
+            (warning_blurb, guild_id, short_key),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def delete_guild_event(guild_id: int, short_key: str) -> bool:
     """Permanently remove an event row.
 
@@ -3598,7 +3815,7 @@ def delete_roster_draft(
 ) -> int:
     """Delete the saved draft for one team. Returns the rowcount (0
     if nothing was saved). Called when the officer confirms
-    🆕 Set up new — the draft is cleared and a fresh builder opens."""
+    ➕ Set up new — the draft is cleared and a fresh builder opens."""
     with _get_conn() as conn:
         cur = conn.execute(
             "DELETE FROM storm_roster_drafts WHERE guild_id = ? AND event_type = ? AND team = ?",
@@ -3932,7 +4149,7 @@ def list_roster_image_refs(
 ) -> list[dict]:
     """All saved roster-image pointers for a (guild, event) — usually
     one for CS, up to two (Team A + Team B) for DS. Empty list if no
-    `💾 Save to history` clicks have been recorded for this event.
+    `📜 Save to history` clicks have been recorded for this event.
     Ordered so DS Team A renders before Team B in the history view."""
     with _get_conn() as conn:
         rows = conn.execute(
@@ -5174,7 +5391,11 @@ def stamp_loop_heartbeat(loop_name: str) -> None:
     measure the gap since the last tick and detect an outage window for the
     catch-up digest (#227). One row per loop, never per guild — if the
     scheduler ticked at 8:12, every guild's scheduler-driven posts are
-    considered current up to 8:12."""
+    considered current up to 8:12.
+
+    A write, so loops call it through `asyncio.to_thread`: on Railway's
+    volume it averaged 3.8 ms with a 251 ms tail over a day on staging
+    (2026-09-16), the only config call with a tail at all (#589 step 10)."""
     now_iso = datetime.now(timezone.utc).isoformat()
     with _get_conn() as conn:
         conn.execute(
@@ -6184,3 +6405,680 @@ def get_last_shiny_refresh_at():
     if not row or not row["last"]:
         return None
     return _dt.fromisoformat(row["last"])
+
+
+# ── Alliance Duel (VS) tracker (#398 / #399) ──────────────────────────────────
+
+#: Every column `save_vs_config` will write. Keep in sync with the
+#: `guild_vs_config` CREATE TABLE and migration list in `init_db`, and with
+#: `get_vs_config`'s fallback dict.
+_VS_CONFIG_COLUMNS = (
+    "enabled",
+    "tab_name",
+    "own_tag",
+    "own_warzone",
+    "tracking_mode",
+    "score_prompt_enabled",
+    "score_prompt_time",
+    "score_prompt_channel_id",
+    "day_theme_enabled",
+    "day_theme_time",
+    "day_theme_channel_id",
+    "day_theme_note",
+    "event_posts_channel_id",
+    "clinch_status_enabled",
+    "opponent_reveal_enabled",
+    "season_recap_enabled",
+    "last_score_prompt_fired",
+    "last_day_theme_fired",
+)
+
+#: The two tracking modes (#448). Mirrors `alliance_duel.TRACKING_MODES`,
+#: duplicated here so `config` stays importable without the feature module.
+VS_MODE_OWN_ALLIANCE = "own_alliance"
+VS_MODE_FULL_BRACKET = "full_bracket"
+
+
+def get_vs_config(guild_id: int) -> dict:
+    """Alliance Duel (VS) config for a guild, or all-off defaults.
+
+    A never-configured guild reads back `enabled = 0` with `full_bracket`
+    tracking, which is the shape the setup wizard starts from. The mode
+    default is only a placeholder: setup **asks** before writing anything,
+    because skeleton generation is a write and the shape has to be known
+    before there is data to infer it from (#448).
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_vs_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "guild_id": guild_id,
+        "enabled": 0,
+        "tab_name": "Alliance Duel (VS)",
+        "own_tag": "",
+        "own_warzone": "",
+        "tracking_mode": VS_MODE_FULL_BRACKET,
+        "score_prompt_enabled": 0,
+        "score_prompt_time": "",
+        "score_prompt_channel_id": 0,
+        "day_theme_enabled": 0,
+        "day_theme_time": "",
+        "day_theme_channel_id": 0,
+        "day_theme_note": "",
+        "event_posts_channel_id": 0,
+        "clinch_status_enabled": 0,
+        "opponent_reveal_enabled": 0,
+        "season_recap_enabled": 0,
+        "last_score_prompt_fired": "",
+        "last_day_theme_fired": "",
+    }
+
+
+def save_vs_config(guild_id: int, **fields) -> bool:
+    """Upsert only the VS config fields actually passed. Returns True on write.
+
+    Deliberately a **partial** update, unlike the older
+    `save_*_config(guild_id, a, b, c, ...)` savers in this module. The VS
+    setup wizard writes one answer per step (mode here, channel there), and a
+    full-field saver would make every step responsible for re-passing the
+    other twelve values or silently clobbering them. That is the same class of
+    bug the Keep-current rework fixed in `2c577dd`, and it is cheaper to avoid
+    than to re-fix.
+
+    Unknown keys are ignored rather than raising, so a caller passing a
+    retired column during a migration doesn't take a wizard down.
+    """
+    writable = {k: v for k, v in fields.items() if k in _VS_CONFIG_COLUMNS}
+    if not writable:
+        return False
+
+    # Booleans arrive from toggles; SQLite wants integers.
+    for key, value in list(writable.items()):
+        if isinstance(value, bool):
+            writable[key] = int(value)
+
+    mode = writable.get("tracking_mode")
+    if mode is not None and mode not in (VS_MODE_OWN_ALLIANCE, VS_MODE_FULL_BRACKET):
+        writable["tracking_mode"] = VS_MODE_FULL_BRACKET
+
+    columns = list(writable)
+    assignments = ", ".join(f"{c} = ?" for c in columns)
+    values = [writable[c] for c in columns]
+
+    with _get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO guild_vs_config (guild_id) VALUES (?)", (guild_id,))
+        conn.execute(
+            f"UPDATE guild_vs_config SET {assignments} WHERE guild_id = ?",
+            (*values, guild_id),
+        )
+        conn.commit()
+    return True
+
+
+def clear_vs_config(guild_id: int) -> None:
+    """Delete a guild's VS config, for the wizard's Clear-my-configuration
+    path. The sheet tab is the alliance's own data and is never touched."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM guild_vs_config WHERE guild_id = ?", (guild_id,))
+        conn.commit()
+
+
+def list_vs_enabled_guild_ids() -> list[int]:
+    """Guild IDs with the VS tracker switched on, for the clock-driven loops."""
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT guild_id FROM guild_vs_config WHERE enabled = 1").fetchall()
+    return [r["guild_id"] for r in rows]
+
+
+# ── Daily score prompt posts (#405) ───────────────────────────────────────────
+
+
+def record_vs_score_prompt_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    league,
+    week: int,
+    duel_day: int,
+    server_date: str,
+) -> None:
+    """Remember a posted score prompt, so its buttons survive a restart.
+
+    `league` is an `alliance_duel.LeagueKey` or None, taken apart here rather
+    than imported, so `config` stays importable without the feature module.
+    """
+    import datetime as _dt
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vs_score_prompt_posts "
+            "(guild_id, channel_id, message_id, league_season, league_tier, league_group, "
+            " week, duel_day, server_date, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                guild_id,
+                channel_id,
+                message_id,
+                getattr(league, "season", "") or "",
+                getattr(league, "tier", "") or "",
+                getattr(league, "group", "") or "",
+                week,
+                duel_day,
+                server_date,
+                _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+
+def get_vs_score_prompt_post(message_id: int) -> dict | None:
+    """The prompt a clicked message belongs to, or None once it has aged out."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM vs_score_prompt_posts WHERE message_id = ?", (int(message_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def vs_event_already_posted(guild_id: int, kind: str, event_key: str) -> bool:
+    """Whether this exact event post has already gone out (#409)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM vs_event_posts WHERE guild_id = ? AND kind = ? AND event_key = ?",
+            (guild_id, kind, event_key),
+        ).fetchone()
+    return row is not None
+
+
+def mark_vs_event_posted(guild_id: int, kind: str, event_key: str) -> None:
+    """Record an event post so a re-save of the same data cannot repeat it."""
+    import datetime as _dt
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vs_event_posts (guild_id, kind, event_key, posted_at) "
+            "VALUES (?, ?, ?, ?)",
+            (guild_id, kind, event_key, _dt.datetime.now(_dt.timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+
+def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:
+    """Prompts recent enough to still be worth re-registering on startup.
+
+    Fourteen days covers a fortnight of a four-week league, which is well past
+    the point where an unanswered prompt is worth chasing. Bounded against UTC
+    today for the same reason the storm equivalent is: the host's local clock
+    must not drift the cutoff.
+    """
+    import datetime as _dt
+
+    today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+    cutoff = (today_utc - _dt.timedelta(days=within_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vs_score_prompt_posts WHERE server_date >= ?", (cutoff,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Data removal ────────────────────────────────────────────────────────────
+#
+# Actioning a removal request from someone with a Discord identity (#517).
+# Before this, `remove_premium_assignment` was the only user-keyed delete in
+# the file and it exists for subscription management; everything else was
+# guild-scoped or event-scoped, so nothing could remove a person.
+#
+# Two shapes, and what a table gets is decided by what its rows are.
+#
+#   * A record a person WROTE keeps its contribution and loses its attribution.
+#     A team plan the officer saved is the alliance's record of who it committed
+#     in-game, and it is not theirs to take back on the way out.
+#   * A record ABOUT a person goes whole. Nothing survives scrubbing a row whose
+#     entire content is "this member chose A".
+#
+# `storm_signups` and `storm_signup_history` carry both kinds, which is why they
+# appear in both lists. A row is about the person named in `target_member_id`;
+# the officer in `voter_user_id` only wrote it. So the requester's own votes go
+# and their on-behalf votes for other members keep the vote and lose the
+# officer -- otherwise one person leaving would silently withdraw somebody
+# else's sign-up.
+#
+# `target_member_id` is free-form by design (see the `storm_signups` schema
+# comment): `str(discord_user_id)` for a member on Discord, a roster name for
+# one who is not. This route matches the first form only, which is the whole
+# scope of the issue -- a person with no Discord identity has no request to
+# make through Discord.
+#
+# The scrub sentinel is 0 for the `INTEGER NOT NULL` officer columns, which is
+# the value `guild_install_metadata.owner_id` already uses for "not known", and
+# NULL for `installer_user_id`, which allows it.
+#
+# Every scrub predicate is disjoint from every delete predicate, so a preview
+# and the run it previews cannot disagree about a row: nothing is counted by one
+# pass and removed by another.
+
+_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    ("storm_signups", "target_member_id = :sid"),
+    ("storm_signup_history", "target_member_id = :sid"),
+    ("storm_team_plans", "target_member_id = :sid"),
+    ("storm_power_refresh_dms_sent", "voter_user_id = :uid"),
+    ("storm_session_state", "user_id = :uid"),
+    ("walkthrough_dismissals", "user_id = :uid"),
+    ("premium_assignments", "user_id = :uid"),
+)
+
+_REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
+    (
+        "storm_signups",
+        "voter_user_id = 0",
+        "voter_user_id = :uid AND target_member_id <> :sid",
+    ),
+    (
+        "storm_signup_history",
+        "voter_user_id = 0",
+        "voter_user_id = :uid AND target_member_id <> :sid",
+    ),
+    (
+        "storm_team_plans",
+        "saved_by_user_id = 0",
+        "saved_by_user_id = :uid AND target_member_id <> :sid",
+    ),
+    ("storm_roster_images", "posted_by_user_id = 0", "posted_by_user_id = :uid"),
+    # One statement rather than two so a person who is both the owner and the
+    # installer of a guild counts as one row touched instead of two.
+    (
+        "guild_install_metadata",
+        "owner_id = CASE WHEN owner_id = :uid THEN 0 ELSE owner_id END, "
+        "installer_user_id = CASE WHEN installer_user_id = :uid "
+        "THEN NULL ELSE installer_user_id END",
+        "owner_id = :uid OR installer_user_id = :uid",
+    ),
+)
+
+
+def _scrub_member_from_draft(node, member_key: str):
+    """Drop every trace of one member key from a decoded roster-draft payload.
+
+    Structural rather than field-by-field on purpose. `storm_roster_builder
+    ._serialize_session` owns this format and it has grown fields before
+    (`member_names_at_save` arrived as a follow-up to #240); a scrub naming each
+    field would go quietly stale the next time it grows, and a stale scrub in a
+    removal path leaves a live Discord ID behind while reporting success.
+
+    The rule is the same wherever the key can appear: a list drops elements
+    equal to it, and a dict drops entries whose key or value equals it. That
+    covers `subs`, the per-phase assignment and override lists and
+    `member_names_at_save`, and it drops a `paired_subs` entry whole when either
+    side of the pairing is this member -- which is right, because half a pairing
+    is not a pairing. `_apply_saved_state` already drops member keys that are no
+    longer in the pool, so what comes back is a state the loader handles rather
+    than a new one.
+    """
+    if isinstance(node, dict):
+        return {
+            k: _scrub_member_from_draft(v, member_key)
+            for k, v in node.items()
+            if k != member_key and v != member_key
+        }
+    if isinstance(node, list):
+        return [_scrub_member_from_draft(v, member_key) for v in node if v != member_key]
+    return node
+
+
+def _purge_user_from_roster_drafts(conn, member_key: str, *, apply: bool) -> tuple[int, int]:
+    """Scrub one member out of every saved roster draft. Returns
+    `(scrubbed, deleted)`.
+
+    Drafts are the one place a member's Discord ID lives inside a blob rather
+    than a column, and they outlive the event they were built for -- the table
+    keeps one row per team, reused across weeks, so a draft saved once can hold
+    an ID indefinitely.
+
+    `updated_at` is deliberately left alone. It means "when the officer last
+    saved", and the officer did not save.
+
+    A row whose JSON will not parse cannot be scrubbed and cannot be loaded
+    either, so it is deleted if the raw text mentions the member at all. That
+    should be unreachable -- the only writer is `json.dumps` -- but a removal
+    path is the wrong place to assume a row is well-formed.
+    """
+    rows = conn.execute(
+        "SELECT guild_id, event_type, team, session_json FROM storm_roster_drafts"
+    ).fetchall()
+    scrubbed = 0
+    deleted = 0
+    for row in rows:
+        key = (row["guild_id"], row["event_type"], row["team"])
+        raw = row["session_json"]
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            if member_key and member_key in (raw or ""):
+                deleted += 1
+                if apply:
+                    conn.execute(
+                        "DELETE FROM storm_roster_drafts "
+                        "WHERE guild_id = ? AND event_type = ? AND team = ?",
+                        key,
+                    )
+            continue
+        cleaned = _scrub_member_from_draft(payload, member_key)
+        if cleaned == payload:
+            continue
+        scrubbed += 1
+        if apply:
+            conn.execute(
+                "UPDATE storm_roster_drafts SET session_json = ? "
+                "WHERE guild_id = ? AND event_type = ? AND team = ?",
+                (json.dumps(cleaned), *key),
+            )
+    return scrubbed, deleted
+
+
+# ── The hold before a guild removal takes effect (#543) ───────────────────────
+
+#: How long a removed server's data is kept before it goes. Bounded because
+#: the Developer Policy asks for deletion on removal, and long enough that an
+#: accidental kick, a permissions mishap or a server rebuild all fall inside
+#: it. Matches the 30-day age-out `shiny_task_servers` already uses, so the
+#: bot has one retention number rather than two.
+GUILD_REMOVAL_HOLD_DAYS = 30
+
+
+def record_guild_removal(guild_id: int, *, when: str | None = None) -> None:
+    """Mark a server as removed, starting its hold.
+
+    Idempotent on purpose: Discord can deliver `GUILD_DELETE` more than once,
+    and a second delivery must not restart the clock -- otherwise a flapping
+    connection could hold data indefinitely, which is the one outcome a
+    bounded window exists to prevent.
+    """
+    stamp = when or datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_removals (guild_id, removed_at) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO NOTHING",
+            (int(guild_id), stamp),
+        )
+        conn.commit()
+
+
+def clear_guild_removal(guild_id: int) -> bool:
+    """Cancel the hold because the bot is back in that server.
+
+    Returns True if a hold was cancelled. Called from `on_guild_join`, which
+    is why re-adding the bot inside the window costs nothing: the data was
+    never touched.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute("DELETE FROM guild_removals WHERE guild_id = ?", (int(guild_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def guild_removal_held_since(guild_id: int) -> str | None:
+    """When this server's hold started, or None if it is not held."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT removed_at FROM guild_removals WHERE guild_id = ?", (int(guild_id),)
+        ).fetchone()
+        return row["removed_at"] if row else None
+
+
+def guild_removals_due(
+    *, hold_days: int = GUILD_REMOVAL_HOLD_DAYS, now: "datetime | None" = None
+) -> list[int]:
+    """Servers whose hold has run out, oldest first.
+
+    Compared in Python rather than SQL: `removed_at` is an ISO string and a
+    lexicographic cutoff would quietly do the wrong thing the first time one
+    was written without a timezone.
+    """
+    import datetime as _dt
+
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - _dt.timedelta(days=hold_days)
+    due = []
+    with _get_conn() as conn:
+        for row in conn.execute("SELECT guild_id, removed_at FROM guild_removals").fetchall():
+            try:
+                stamp = datetime.fromisoformat(row["removed_at"])
+            except ValueError:
+                # Unparseable means it was written by something that is gone.
+                # Treat it as due rather than keeping it forever.
+                due.append((moment, int(row["guild_id"])))
+                continue
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if stamp <= cutoff:
+                due.append((stamp, int(row["guild_id"])))
+    return [gid for _, gid in sorted(due)]
+
+
+# ── Guild removal (#543) ──────────────────────────────────────────────────────
+#
+# The same mechanism as the personal removal above, with `guild_id` as the
+# predicate instead of a Discord user id. The rule is different, though, and
+# the difference is the whole design:
+#
+# **A personal removal strips who did it and keeps what they contributed**,
+# because a reading of the game outlives its author. **A guild removal deletes**,
+# because everything below is *about that server* -- its configuration, its
+# events, its sign-ups -- and none of it means anything once the bot is gone
+# from it. Discord's Developer Policy asks for exactly that on `GUILD_DELETE`.
+#
+# Two deliberate exceptions:
+#
+# - `premium_assignments` is **not touched**. It is keyed on the subscriber,
+#   not the server: the row records that a paying person pinned their one
+#   licence here. Deleting it would take something from someone who did
+#   nothing, and `/premium assign` already copes with a guild it cannot see
+#   (`donate._resolve_guild_name`).
+# - Champion Duel's game records are scrubbed rather than deleted, in
+#   `champion_duel_db.purge_guild_data`. They are readings of a tournament
+#   other alliances also contributed to, and only the attribution is this
+#   server's.
+
+_GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
+    # Configuration, one table per feature.
+    ("guild_configs", "guild_id = :gid"),
+    ("guild_alliance_mappings", "guild_id = :gid"),
+    ("guild_birthday_config", "guild_id = :gid"),
+    ("guild_buddy_config", "guild_id = :gid"),
+    ("guild_config_health", "guild_id = :gid"),
+    ("guild_events", "guild_id = :gid"),
+    ("guild_extra_surveys", "guild_id = :gid"),
+    ("guild_growth_config", "guild_id = :gid"),
+    ("guild_install_metadata", "guild_id = :gid"),
+    ("guild_member_roster_config", "guild_id = :gid"),
+    ("guild_shiny_tasks_config", "guild_id = :gid"),
+    ("guild_storm_config", "guild_id = :gid"),
+    ("guild_survey_config", "guild_id = :gid"),
+    ("guild_train_config", "guild_id = :gid"),
+    ("guild_transfer_config", "guild_id = :gid"),
+    ("guild_vs_config", "guild_id = :gid"),
+    # Member-submitted state. Deleted rather than scrubbed: a sign-up is a
+    # choice about one server's event, and there is no second server it still
+    # means anything to.
+    ("storm_signups", "guild_id = :gid"),
+    ("storm_signup_history", "guild_id = :gid"),
+    ("storm_team_plans", "guild_id = :gid"),
+    ("storm_session_state", "guild_id = :gid"),
+    ("storm_roster_drafts", "guild_id = :gid"),
+    ("storm_roster_images", "guild_id = :gid"),
+    ("storm_registration_posts", "guild_id = :gid"),
+    ("storm_power_refresh_dms_sent", "guild_id = :gid"),
+    ("walkthrough_dismissals", "guild_id = :gid"),
+    # Scheduled work and posted-message bookkeeping, all of it pointing at
+    # channels the bot can no longer reach.
+    ("scheduler_pending_warnings", "guild_id = :gid"),
+    ("vs_event_posts", "guild_id = :gid"),
+    ("vs_score_prompt_posts", "guild_id = :gid"),
+)
+
+
+def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
+    """Remove one server from the guild-config database.
+
+    Mirrors :func:`purge_user_data` exactly -- same shape in, same shape out,
+    same `apply=False` dry run -- because a removal nobody can audit is a
+    removal nobody can trust, and the preview has to run the same predicates
+    the real thing does.
+
+    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool}`.
+    `scrubbed` is always empty here and kept only so the two purges return the
+    same shape; the Champion Duel side is where a guild removal scrubs.
+    """
+    gid = int(guild_id)
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"gid": gid}
+    with _get_conn() as conn:
+        for table, where in _GUILD_REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        if apply:
+            conn.commit()
+    return out
+
+
+def sweep_guild_removals(
+    *,
+    apply: bool = False,
+    hold_days: int = GUILD_REMOVAL_HOLD_DAYS,
+    installed: "set[int] | None" = None,
+) -> dict:
+    """Purge every server whose hold has run out, across all three databases.
+
+    The one entry point the scheduler calls, and the one place the purges are
+    known to belong together. Returns
+    `{"guilds": [ids], "config": {...}, "champion_duel": {...},
+    "alliance_duel": {...}, "applied": bool}` with the per-table counts merged
+    across servers, because
+    "we removed 3 servers" is not something anyone can check and
+    "we deleted 41 storm_signups rows" is.
+
+    The hold row is cleared **last and only on a real run**, so a purge that
+    fails partway is retried on the next sweep rather than being forgotten.
+
+    `installed` is the set of guild ids the bot is currently in, and a due
+    guild that appears in it has its hold **cancelled rather than actioned**.
+    `on_guild_join` is not dispatched for a server re-added while the bot was
+    disconnected -- that arrives in the READY burst instead -- so without this
+    a live server's data would be deleted thirty days after it came back.
+    """
+    merged: dict = {
+        "guilds": [],
+        "config": {"deleted": {}, "scrubbed": {}},
+        "champion_duel": {"deleted": {}, "scrubbed": {}},
+        "alliance_duel": {"deleted": {}, "scrubbed": {}},
+        "rejoined": [],
+        "failed": [],
+        "applied": bool(apply),
+    }
+
+    def _fold(into: dict, result: dict) -> None:
+        for bucket in ("deleted", "scrubbed"):
+            for table, n in result.get(bucket, {}).items():
+                into[bucket][table] = into[bucket].get(table, 0) + n
+
+    for gid in guild_removals_due(hold_days=hold_days):
+        if installed is not None and gid in installed:
+            # The bot is in this server right now, so whatever recorded the
+            # removal is stale. Purging a live server is the worst thing this
+            # code could do.
+            merged["rejoined"].append(gid)
+            if apply:
+                clear_guild_removal(gid)
+            continue
+
+        # Both purges are guarded. An unguarded one throws out of the loop,
+        # and because due guilds come oldest first, one deterministic failure
+        # would block every other server every day.
+        try:
+            _fold(merged["config"], purge_guild_data(gid, apply=apply))
+            import alliance_duel_db
+            import champion_duel_db
+
+            _fold(merged["champion_duel"], champion_duel_db.purge_guild_data(gid, apply=apply))
+            # VS scores (#544). A third store rather than a third mechanism:
+            # the spec-table shape and this call are the same as the line
+            # above, and everything it touches is scrubbed rather than deleted.
+            _fold(merged["alliance_duel"], alliance_duel_db.purge_guild_data(gid, apply=apply))
+        except Exception as exc:  # noqa: BLE001 - one server must not block the rest
+            print(f"[REMOVAL] Purge failed for guild={gid}: {exc}")
+            merged["failed"].append(gid)
+            continue
+
+        # Counted only once it actually happened: reporting a purge that threw
+        # would say "purged 1 server" while nothing had moved.
+        merged["guilds"].append(gid)
+        if apply:
+            clear_guild_removal(gid)
+    return merged
+
+
+def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
+    """Remove one person from the guild-config database.
+
+    With `apply=False` (the default) this counts what a run would touch and
+    changes nothing, so the same call can render a preview and then do the work.
+    Both paths walk the same two spec tables above and share every predicate --
+    a preview that ran a different query from the run would be worth less than
+    no preview at all.
+
+    Returns `{"deleted": {table: rows}, "scrubbed": {table: rows},
+    "applied": bool}`, with tables that matched nothing left out. A removal
+    nobody can audit is a removal nobody can trust, so the counts are the point
+    rather than a debugging aid.
+
+    Deleting the `premium_assignments` row drops the assigned guild's Premium.
+    The caller is responsible for clearing the premium cache afterwards, the
+    same obligation `remove_premium_assignment` carries.
+    """
+    uid = int(user_id)
+    sid = str(uid)
+    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    params = {"uid": uid, "sid": sid}
+    with _get_conn() as conn:
+        for table, where in _REMOVAL_DELETES:
+            if apply:
+                n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["deleted"][table] = n
+        for table, sets, where in _REMOVAL_SCRUBS:
+            if apply:
+                n = conn.execute(
+                    f"UPDATE {table} SET {sets} WHERE {where}",  # noqa: S608
+                    params,
+                ).rowcount
+            else:
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}",  # noqa: S608
+                    params,
+                ).fetchone()[0]
+            if n:
+                out["scrubbed"][table] = n
+        draft_scrubbed, draft_deleted = _purge_user_from_roster_drafts(conn, sid, apply=apply)
+        if draft_scrubbed:
+            out["scrubbed"]["storm_roster_drafts"] = draft_scrubbed
+        if draft_deleted:
+            out["deleted"]["storm_roster_drafts"] = draft_deleted
+        if apply:
+            conn.commit()
+    return out

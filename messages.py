@@ -45,19 +45,45 @@ GENERIC_CMD_TIMEOUT = "⏰ Timed out. Run `/{cmd}` to start again."
 # leading slash) as {cmd} and a HUB_BTN_* constant as {hub_btn}.
 HUB_TIMEOUT = "⏰ Timed out. Run `/{cmd}` and click **{hub_btn}** to start again."
 
+# A posted view's buttons expired. Appended (in italics) under the original
+# message by `wizard_registry.expire_view_message`, which every view built on
+# `wizard_registry.ExpiringView` calls from `on_timeout`. {hint} is the view's
+# pre-formatted route back: the slash command in backticks, plus the hub
+# button in bold where the command alone would not get them there. Keeps
+# "the actions for this" because the message above it is still worth reading
+# (a drafted post, a summary), unlike a wizard prompt. "start again" per D1;
+# it said "re-initiate" until 2026-09-11 (#589, sign-off block 12).
+VIEW_TIMEOUT = "⏰ The actions for this have timed out. Use {hint} to start again."
+VIEW_TIMEOUT_NO_HINT = "⏰ The actions for this have timed out."
+# The {hint} for a view reached through a hub button: the command in
+# backticks, the arrow, the button in bold. `storm_event_hub.HUB_COMMAND`
+# already carries the slash.
+ROUTE_HINT = "`{cmd}` → **{btn}**"
+
+# The roster builder's own timeout. Unlike HUB_TIMEOUT it says what was lost:
+# an idle hour ends a builder session and nothing in it persists. {cmd} is
+# the event's hub command with its slash (`storm_event_hub.HUB_COMMAND`),
+# {hub_btn} is `storm_event_hub.HUB_BTN_VIEW_SIGNUPS`. Until 2026-09-11 this
+# promised a save-and-resume feature (#589, sign-off block 13): no roadmap
+# claims in user copy.
+ROSTER_BUILDER_TIMEOUT = (
+    "⏰ The roster builder timed out after an idle hour. Nothing in progress was saved. "
+    "Run `{cmd}` and click **{hub_btn}** to start again."
+)
+
 # User cancelled a top-level command/wizard. Whole flow is dead, no
 # parent state to preserve.
-CANCEL_PLAIN = "❌ Cancelled."
+CANCEL_PLAIN = "❌ Canceled."
 
 # User backed out of a sub-step. Parent flow is intact; the generic
 # "nothing happened, you can continue" reassurance.
-CANCEL_BACKPEDAL_DEFAULT = "↩️ Cancelled. No changes made."
+CANCEL_BACKPEDAL_DEFAULT = "↩️ Canceled. No changes made."
 
 # User backed out of a sub-step with meaningful state context to
 # preserve. Caller passes the contextual sentence as {detail} (e.g.
 # "Your saved draft is still there." or "**Glacieradon** was not
 # deleted."). Always end {detail} with a period.
-CANCEL_BACKPEDAL = "↩️ Cancelled. {detail}"
+CANCEL_BACKPEDAL = "↩️ Canceled. {detail}"
 
 # The app's commands are installed here but the bot user never joined.
 # Happens when a guild install grants `applications.commands` without
@@ -113,6 +139,17 @@ PREMIUM_LOCKED_INLINE = "🔒 The **{feature}** is a 💎 Premium feature. Run `
 # what they tried.
 DENY_NOT_OWNER = "⛔ Only the user who opened this view can use it."
 
+# The pagination triple every paged view renders, through
+# `wizard_registry.ExpiringView.add_pagination_row`. Bare labels, per the
+# button-label rule in the design contract, which names this set. The middle
+# one is a disabled button, so the count sits between the arrows it belongs
+# to rather than in an embed footer or a select placeholder. One wording as
+# of 2026-09-11 (#589): before that the tree had "◀ Prev / Next ▶",
+# "◀️ Prev / ▶️ Next", bare "◀ / ▶", and four places for the count.
+BTN_PAGE_PREV = "◀ Prev"
+BTN_PAGE_NEXT = "Next ▶"
+BTN_PAGE_LABEL = "Page {n} / {m}"
+
 # Admin-or-role permission deny. The caller passes the leadership
 # role display name as {role} and a short action verb phrase as
 # {action} (e.g. "use the setup hub", "run `/setup`").
@@ -130,6 +167,18 @@ LEADERSHIP_NOT_CONFIGURED = "⚠️ Leadership channel isn't configured. Run `/s
 LEADERSHIP_INACCESSIBLE = "⚠️ Could not access the leadership channel."
 LEADERSHIP_NO_READ_PERM = (
     "⚠️ Bot does not have permission to read message history in the leadership channel."
+)
+
+# Leadership approved an announcement but the configured announcement channel
+# couldn't take it (#462). Replaces the "✅ Approved" stamp, which used to post
+# regardless and told leadership their members had been announced to when they
+# hadn't. Caller formats in the setup button and the hub button to re-open the
+# draft, both imported from the modules that own those labels.
+ANNOUNCEMENT_SEND_FAILED = (
+    "⚠️ I couldn't post in your event announcement channel, so **your members "
+    "have not seen this announcement**.\n"
+    "Fix it in `/setup` → **{fix_btn}**, then re-open today's event draft from "
+    "`{hub_cmd}` → **{hub_btn}**."
 )
 
 # Setup-wizard channel-pick step found the previously-configured channel
@@ -186,6 +235,38 @@ DATE_PARSE_RETRY = "⚠️ `{raw}` isn't a date I can parse. Try {examples}. Let
 # Same but after N failed tries — the wizard bails out and tells the user
 # how to re-enter. Caller passes the recovery hint as {recovery}.
 DATE_PARSE_GIVE_UP = "⚠️ Could not read that date after a few tries. Run {recovery} to start again."
+
+
+# ── Support ──────────────────────────────────────────────────────────────────
+
+# Where a crash report goes. Asks for a GitHub account and a written-up
+# reproduction, which is the right trade for a stack trace and the wrong one
+# for a volunteer officer on a phone -- see COMMUNITY_SERVER_URL below.
+ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues"
+
+# Where a user is sent when the thing that is wrong is not theirs to fix.
+# Named "Community Server" to match the website's own link, so somebody who
+# has seen one recognises the other. "Server" is correct here in the glossary's
+# sense: this is the Discord place, not a warzone.
+COMMUNITY_SERVER_URL = "https://discord.gg/J3PMVJ4y4d"
+COMMUNITY_SERVER_NAME = "Community Server"
+
+# Temporary footer text for a hub that just shipped, so the first people to
+# open it know that and know where a bug goes. No headline, no emoji, and it
+# rides in the footer rather than its own field -- Kevin, 18 Sep, on the
+# sign-off page. Caller passes the feature's own name as {feature}. Two call
+# sites today (Champion Duel's and Alliance Duel's hub embeds, both landing
+# in 1.9.0) -- pull it once "new" has stopped being true rather than leaving
+# it to go stale the way NOT_ENTERED nearly did.
+#
+# Says "Support Server", not COMMUNITY_SERVER_NAME above -- Kevin's own
+# wording, verbatim, on the same page. The rest of the bot calls this place
+# "Community Server"; flagged, not changed without him saying so.
+NEW_FEATURE_NOTICE = (
+    "{feature} is a new feature to LW Alliance Helper. If you run into any "
+    "issues, things look wrong or confusing, or you just have questions, "
+    "reach out on the Support Server for help!"
+)
 
 
 # ── Footers ──────────────────────────────────────────────────────────────────

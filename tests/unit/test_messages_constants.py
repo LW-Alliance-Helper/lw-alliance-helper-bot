@@ -55,9 +55,9 @@ def test_hub_timeout():
 
 
 def test_cancel_constants():
-    assert CANCEL_PLAIN == "❌ Cancelled."
-    assert CANCEL_BACKPEDAL_DEFAULT == "↩️ Cancelled. No changes made."
-    assert CANCEL_BACKPEDAL == "↩️ Cancelled. {detail}"
+    assert CANCEL_PLAIN == "❌ Canceled."
+    assert CANCEL_BACKPEDAL_DEFAULT == "↩️ Canceled. No changes made."
+    assert CANCEL_BACKPEDAL == "↩️ Canceled. {detail}"
 
 
 def test_setup_not_complete_constants():

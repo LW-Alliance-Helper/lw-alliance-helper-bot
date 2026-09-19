@@ -25,6 +25,7 @@ from setup_hub import (
     HUB_BTN_SURVEY,
     HUB_BTN_TRAIN,
     HUB_BTN_TRANSFERS,
+    HUB_BTN_VS,
     STORM_SETUP_NAV,
 )
 from survey_hub import (
@@ -35,6 +36,7 @@ from survey_hub import (
     SURVEY_HUB_BTN_REMOVE,
     SURVEY_HUB_BTN_TRANSLATE,
 )
+from wizard_registry import ExpiringView
 
 
 PRIVACY_URL = "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
@@ -82,10 +84,12 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "**Event hub.** Opens an embed showing the alliance's current "
                 "event config plus a button grid.\n"
                 "**Read row:** 📅 Today's events (open the draft editor), "
-                "📆 Upcoming events (next firing dates), 📜 Event log "
-                "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
+                "🔜 Upcoming events (next firing dates), 📜 Event log "
+                "(recent approvals: free 7 days / 💎 Premium 30 days).\n"
                 "**Write row:** ➕ Create an event (pick a preset or define "
-                "your own), ⏸️ Pause or resume (stop an event for a season "
+                "your own), ✏️ Edit 5-minute warning (change what an "
+                "event's warning says, or clear it back to the default), "
+                "⏸️ Pause or resume (stop an event for a season "
                 "and turn it back on later, keeping every setting), "
                 "🗑️ Delete an event (permanent).",
             ),
@@ -96,7 +100,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Train Schedule",
         "description": (
             "Track who's assigned the alliance train each day; optionally "
-            "generate a personalised ChatGPT blurb prompt, or let the bot "
+            "generate a personalized ChatGPT blurb prompt, or let the bot "
             "pick fair conductors with Conductor Rotation."
         ),
         "commands": [
@@ -167,7 +171,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         ],
     },
     "canyonstorm": {
-        "emoji": "🏜️",
+        "emoji": "🛡️",
         "label": "Canyon Storm",
         "description": (
             "Same shape as Desert Storm: mail drafts, strategy presets, "
@@ -248,12 +252,12 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "/buddy",
                 "**Buddy hub.** Everyone can tap 🔍 Who's my buddy? or 📋 View "
                 "buddy list. Leadership gets ✏️ Manage pairings (unpair / pair / "
-                "re-pair) and 📤 Post buddy list.",
+                "re-pair) and 📣 Post buddy list.",
             ),
             (
                 "💎 Auto-assign + self-service",
-                "Premium adds 🪄 Auto-assign (keeps existing pairs), ♻️ Re-pair "
-                "from scratch, 📌 one-click profession buttons members swap "
+                "Premium adds ✨ Auto-assign (keeps existing pairs), ♻️ Re-pair "
+                "from scratch, 📣 one-click profession buttons members swap "
                 "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
@@ -328,6 +332,46 @@ HELP_CATEGORIES: dict[str, dict] = {
             ),
         ],
     },
+    "alliance_duel": {
+        "emoji": "🏆",
+        "label": "Alliance Duel (VS) 💎",
+        "description": (
+            "💎 Premium. Tracks your Alliance Duel league in your own sheet: "
+            "the bracket, each week's day scores and outcomes, and your record "
+            "against the alliances you have faced. Because weekly re-pairing "
+            "follows a fixed rule, the bot can work out your likely path "
+            "through the bracket and name which alliances to scout first."
+        ),
+        "commands": [
+            (
+                f"/setup → {HUB_BTN_VS}",
+                "💎 Set up the tracker: name your alliance, choose whether to "
+                "track your whole 16-alliance League bracket or just your own "
+                "alliance, and get the tab created and explained. You can "
+                "change either choice later.\n"
+                "Also where you switch on the 🔔 Daily score prompt: a post in "
+                "a channel you pick, at a time you pick, asking for the day "
+                "that just finished with a button to record it. Tuesday "
+                "through Sunday, since Sunday is the rest day.\n"
+                "**Free:** 📣 Day theme reminder posts what today rewards for "
+                "your members, Monday to Saturday, and can carry a standing "
+                "note from you. It needs no tracker setup and no sheet.",
+            ),
+            (
+                "/vs",
+                "💎 **Alliance Duel hub** (leadership). Opens this week's matchup "
+                "with its running league-point split.\n"
+                "**Read row:** 📇 Bracket (all 16 alliances and what you have "
+                "recorded), 🆚 This week (every matchup with the evidence behind "
+                "it), 🔍 Scout (one alliance: your record against them, and how "
+                "the week projects), 🛣️ My path (your route through the bracket, "
+                "and which alliances to scout first when it cannot be worked "
+                "out yet).\n"
+                "**Write row:** ✏️ Log today's score, ➕ Add or edit alliance, "
+                "and setup with a sheet check.",
+            ),
+        ],
+    },
     "map_manager": {
         "emoji": "🗺️",
         "label": "Map Manager 💎",
@@ -349,7 +393,35 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "buttons.\n"
                 "**Not linked:** 🔗 Link this server (💎): enter your game server "
                 "number and alliance tag.\n"
-                "**Linked:** ✏️ Change link, 🔌 Unlink, and 🌐 Open Map Manager.",
+                "**Linked:** ✏️ Change link, 🔗 Unlink, and 🗺️ Open Map Manager.",
+            ),
+        ],
+    },
+    "champion_duel": {
+        "emoji": "👑",
+        "label": "Champion Duel",
+        "description": (
+            "Odds for a Champion Duel match, from the same calibrated engine the "
+            "backtest validates, not a rule of thumb. Look up what a registrant "
+            "fields and how they've been seen deploying, and 💎 contribute what "
+            "your alliance scouts. Every squad value says whether it was observed "
+            "or estimated, so a guess never reads as a sighting."
+        ),
+        "commands": [
+            (
+                "/champion_duel",
+                # Kevin settled this on 2026-08-30. Rewritten for the hub session 6
+                # built: the root is four entries plus settings, and this
+                # described the eight-button grid it replaced. Two of its
+                # three lines named controls that are no longer on the root,
+                # and the 💎 was wrong before that -- contributing came
+                # off the Premium gate on 2026-08-17 and nothing has gated it
+                # since.
+                "**Champion Duel hub.**\n"
+                "🏅 Your standing: where you sit in your stage, and 💎 how far you get.\n"
+                "🎯 Head to head: 💎 how to play one opponent.\n"
+                "🔮 Today's picks: the day's matchups as a card you can post.\n"
+                "🏰 Your alliance: where all of your people are, across every group.",
             ),
         ],
     },
@@ -405,12 +477,12 @@ HELP_CATEGORIES: dict[str, dict] = {
             (
                 "DM-mode reminders",
                 f"`/survey` → {SURVEY_HUB_BTN_REMIND} plus the "
-                "**🔔 Send DM reminder to roster** button on `/desertstorm` and "
+                "**📨 Send DM reminder to roster** button on `/desertstorm` and "
                 "`/canyonstorm` all gain DM-via-roster delivery; survey reminders "
                 "can also schedule recurring DMs.",
             ),
             (
-                "✨ More",
+                "More",
                 "Personal birthday DMs, train-assignment DMs, auto-mention "
                 "members in train reminders, threads as destinations, "
                 "multi-template train and storm support, advanced question "
@@ -434,7 +506,7 @@ def build_overview_embed(is_premium: bool) -> discord.Embed:
         color=color,
         description=OVERVIEW_DESCRIPTION,
     )
-    embed.add_field(name="🧰 Always handy", value=ALWAYS_HANDY, inline=False)
+    embed.add_field(name="Always handy", value=ALWAYS_HANDY, inline=False)
     if is_premium:
         embed.set_footer(
             text="💎 Premium is active. Pick a category below for details.",
@@ -502,23 +574,14 @@ class HelpCategorySelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 
-class HelpView(discord.ui.View):
+class HelpView(ExpiringView):
     """Dropdown-driven /help. Stores the originating interaction so the
     select can be disabled in place when the 3-min view timeout fires
     (matches the auto-post-timeout cleanup pattern used elsewhere).
     """
 
-    def __init__(self, is_premium: bool, *, origin: Optional[discord.Interaction] = None):
-        super().__init__(timeout=180)
-        self.origin = origin
-        self.add_item(HelpCategorySelect(is_premium))
+    timeout_hint = "`/help`"
 
-    async def on_timeout(self):
-        for item in self.children:
-            if hasattr(item, "disabled"):
-                item.disabled = True
-        if self.origin is not None:
-            try:
-                await self.origin.edit_original_response(view=self)
-            except discord.HTTPException:
-                pass
+    def __init__(self, is_premium: bool):
+        super().__init__(timeout=180)
+        self.add_item(HelpCategorySelect(is_premium))

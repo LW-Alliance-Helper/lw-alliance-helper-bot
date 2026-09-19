@@ -20,6 +20,7 @@ from datetime import date, timedelta
 import discord
 
 import wizard_registry
+from wizard_registry import ExpiringView
 import train_rotation as tr
 import train_rotation_ui as ui
 
@@ -61,10 +62,12 @@ class _ReasonModal(discord.ui.Modal, title="Reason for this day"):
             pass
 
 
-class WeeklyDraftView(discord.ui.View):
+class WeeklyDraftView(ExpiringView):
     """Leadership-facing weekly draft. A day picker + shared action buttons edit
     the selected day; edits write straight to the Train History `scheduled`
     rows (the draft IS the schedule — no approve step)."""
+
+    timeout_hint = "/train draft_week"
 
     def __init__(
         self, bot, guild_id: int, draft: list[tr.DraftDay], week_start: date, preset_name: str
@@ -118,8 +121,8 @@ class WeeklyDraftView(discord.ui.View):
         for label, style, cb in [
             ("⏭️ Go to next person", discord.ButtonStyle.primary, self._on_next),
             ("✏️ Assign someone", discord.ButtonStyle.secondary, self._on_assign),
-            ("📝 Add reason", discord.ButtonStyle.secondary, self._on_add_reason),
-            ("✋ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
+            ("✏️ Add reason", discord.ButtonStyle.secondary, self._on_add_reason),
+            ("✏️ Set to manual", discord.ButtonStyle.secondary, self._on_set_manual),
             ("🔄 Re-draft the whole week", discord.ButtonStyle.danger, self._on_regen),
         ]:
             btn = discord.ui.Button(label=label, style=style, row=2)
@@ -287,7 +290,7 @@ class WeeklyDraftView(discord.ui.View):
             await interaction.response.send_message(ui.DENY_NOT_LEADER, ephemeral=True)
             return
         confirm = discord.ui.View(timeout=60)
-        yes = discord.ui.Button(label="🔄 Yes, re-draft", style=discord.ButtonStyle.danger)
+        yes = discord.ui.Button(label="♻️ Yes, re-draft", style=discord.ButtonStyle.danger)
         no = discord.ui.Button(label="↩️ Keep current draft", style=discord.ButtonStyle.secondary)
 
         redrafting = {"on": False}
@@ -371,6 +374,3 @@ class WeeklyDraftView(discord.ui.View):
             view=confirm,
             ephemeral=True,
         )
-
-    async def on_timeout(self):
-        await wizard_registry.expire_view_message(self.message, command_hint="/train draft_week")

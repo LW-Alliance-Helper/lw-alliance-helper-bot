@@ -596,7 +596,7 @@ class TestPaginatedRosterMultiSelectView:
         # Flip to page 1.
         inter2 = MagicMock()
         with patch("wizard_registry.safe_edit_response", AsyncMock()):
-            await v._on_next(inter2)
+            await v._on_page(inter2, 1)
         assert v.page == 1
 
         # Simulate a select on page 1 (picks m25 + m27).
@@ -672,10 +672,11 @@ class TestLogDatePickerView:
         """If today or yesterday is in the saved list, the listed
         entry is skipped — the quick-pick row already covers it."""
         from storm_log import _LogDatePickerView
-        from datetime import date as _date, timedelta as _td
+        from time_helpers import server_today
         import discord as _discord
 
-        today_iso = _date.today().isoformat()
+        # The quick picks are in-game (server) days, like the typed "today".
+        today_iso = server_today().isoformat()
         v = _LogDatePickerView(
             recent_dates=[today_iso, "2026-04-01"],
         )
@@ -687,7 +688,7 @@ class TestLogDatePickerView:
     @pytest.mark.asyncio
     async def test_select_today_resolves_to_date(self):
         from storm_log import _LogDatePickerView
-        from datetime import date as _date
+        from time_helpers import server_today
 
         v = _LogDatePickerView(recent_dates=[])
         select = next(c for c in v.children if hasattr(c, "options"))
@@ -695,7 +696,7 @@ class TestLogDatePickerView:
         inter.data = {"values": ["__today__"]}
         inter.response.edit_message = AsyncMock()
         await select.callback(inter)
-        assert v.picked_date == _date.today()
+        assert v.picked_date == server_today()
         assert v.confirmed is True
         assert v.wants_manual is False
 

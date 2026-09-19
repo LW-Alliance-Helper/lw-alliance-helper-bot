@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.9.0** — 2026-09-18
+- `/vs` tracks your Alliance Duel league and projects your path through the bracket
+- "Check my sheet" will tell you the row and column of every entry mistake it finds
+- An optional daily post asks for the duel day that just finished to help you with timely recordings
+- `/champion_duel` gives the odds for a match, with a card that can be shared
+- Champion Duel Premium adds head to head, knockout odds, and recording the squads and line-ups
+
+---
+
 **1.8.11** — 2026-09-08
 - Editing an event's time now schedules it for the next time that clock time comes around, so a time you change for tonight stays on tonight — and its 5-minute warning fires with it
 - Birthday announcements now use your alliance's timezone instead of the bot host's, so they land on the right day wherever your alliance is based
@@ -166,7 +175,7 @@ by the existing notice.
 
 **1.8.5** — 2026-08-07
 - Add a survey from a template or from scratch, in your own wording
-- A survey's two sheet tabs are created and labelled for you
+- A survey's two sheet tabs are created and labeled for you
 - Editing a survey's questions no longer shifts later answers into the wrong columns
 - Two surveys can no longer share a sheet tab
 - Naming a tab another feature already uses now warns you
@@ -214,7 +223,7 @@ by the existing notice.
 **1.7.6** — 2026-07-30
 - Growth Breakdown buckets metrics with thousands separators instead of reporting no members
 - Growth snapshot columns are written with thousands separators, matching your source columns
-- The 0-5% growth bucket is now labelled No Change instead of None
+- The 0-5% growth bucket is now labeled No Change instead of None
 
 ---
 

@@ -243,8 +243,8 @@ class TestBuildEmbed:
         names = [f.name for f in embed.fields]
         assert "Identity" in names
         # Everything missing -> a "More you can track" field listing them
-        assert "💡 More you can track" in names
-        hint = next(f.value for f in embed.fields if f.name == "💡 More you can track")
+        assert "ℹ️ More you can track" in names
+        hint = next(f.value for f in embed.fields if f.name == "ℹ️ More you can track")
         assert "Power trends" in hint and "Storm participation" in hint and "Surveys" in hint
         assert "Train history" not in hint  # leadership-only hint, not in member view
 
@@ -580,8 +580,9 @@ class TestMemberPickerView:
         assert view.total_pages == 2
         selects = [c for c in view.children if isinstance(c, discord_ui_select())]
         assert len(selects[0].options) == 25  # first page full
-        # Prev/Next present
-        assert len([c for c in view.children if isinstance(c, discord_ui_button())]) == 2
+        # The pagination row: Prev, the count, Next
+        buttons = [c for c in view.children if isinstance(c, discord_ui_button())]
+        assert [b.label for b in buttons] == ["◀ Prev", "Page 1 / 2", "Next ▶"]
 
     def test_no_roster_notice_points_to_member_sync(self):
         view = ms.MemberPickerView(GUILD, ["A"], no_roster=True)

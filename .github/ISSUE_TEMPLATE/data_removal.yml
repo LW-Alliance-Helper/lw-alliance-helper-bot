@@ -30,6 +30,7 @@ body:
       options:
         - label: The install-metadata record (guild name, owner ID, installer ID, install / last-seen timestamps)
         - label: The bot's per-server configuration row (`guild_configs` and related setup tables)
+        - label: The Discord information the bot holds about me personally
         - label: All of the above
 
   - type: textarea
@@ -44,4 +45,4 @@ body:
   - type: markdown
     attributes:
       value: |
-        Once this issue is opened we'll confirm the deletion in a follow-up comment and close it. Member data in your Google Sheet is under your control — we don't retain copies of it, so the only step on your side is removing the bot's service-account email from your sheet's sharing settings if you haven't already.
+        Once this issue is opened we'll confirm the deletion in a follow-up comment and close it. If this is a request for a Discord server: member data in your Google Sheet is under your control — we don't retain copies of it, so the only step on your side is removing the bot's service-account email from your sheet's sharing settings if you haven't already.

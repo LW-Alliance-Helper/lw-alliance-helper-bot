@@ -498,7 +498,7 @@ class ExportImportCog(commands.Cog):
 
         view = CategoryPickerView(available)
         await interaction.response.send_message(
-            "📦 **Export Config**\n"
+            "📤 **Export Config**\n"
             "Pick the categories you want to export. Categories with no saved "
             "data are hidden. After confirming, the bot will DM you a JSON "
             "file that you (or another officer) can attach to `/config import` "
@@ -527,7 +527,7 @@ class ExportImportCog(commands.Cog):
         try:
             dm = await user.create_dm()
             await dm.send(
-                "📦 **Your alliance's bot config export** — keep this file "
+                "📤 **Your alliance's bot config export** — keep this file "
                 "private (it contains your sheet ID and channel/role IDs). "
                 "Attach it to `/config import` in the destination server.",
                 file=discord.File(io.BytesIO(payload), filename=filename),
@@ -656,7 +656,7 @@ class ExportImportCog(commands.Cog):
         await channel.send(embed=embed, view=confirm)
         await wizard_registry.wait_view_or_cancel(confirm, cancel_event)
         if cancel_event.is_set() or not confirm.confirmed:
-            await channel.send("❌ Import cancelled.")
+            await channel.send("❌ Import canceled.")
             wizard_registry.unregister(user.id, cancel_event)
             return
 
@@ -687,7 +687,7 @@ class ExportImportCog(commands.Cog):
             )
             await wizard_registry.wait_view_or_cancel(sheet_view, cancel_event)
             if cancel_event.is_set() or sheet_view.decision is None:
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             sheet_decision = sheet_view.decision
@@ -718,7 +718,7 @@ class ExportImportCog(commands.Cog):
             await channel.send(prompt, view=view)
             await wizard_registry.wait_view_or_cancel(view, cancel_event)
             if cancel_event.is_set():
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:
@@ -739,7 +739,7 @@ class ExportImportCog(commands.Cog):
             await channel.send(prompt, view=view)
             await wizard_registry.wait_view_or_cancel(view, cancel_event)
             if cancel_event.is_set():
-                await channel.send("❌ Import cancelled.")
+                await channel.send("❌ Import canceled.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:

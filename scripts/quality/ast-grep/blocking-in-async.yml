@@ -1,0 +1,84 @@
+# Direct blocking I/O inside a coroutine body.
+#
+# "Direct" means the nearest enclosing def is `async def`, and the call is not
+# an argument of asyncio.to_thread / run_in_executor / functools.partial.
+# Run with:  npx --yes --package @ast-grep/cli ast-grep scan -r <this file> --json=compact .
+# Or through scripts/quality/blocking_io.py, which also does the indirect class.
+#
+# `utils:` must be declared inside each rule document; a top-level block fails
+# to parse. Method-name patterns cannot tell a gspread worksheet from a dict or
+# a set, so `.update(` and `.clear(` are deliberately not here; the runner's
+# report lists what to eyeball.
+id: sqlite-in-async
+language: python
+message: sqlite call directly inside a coroutine
+utils:
+  in-async-fn:
+    inside:
+      pattern: "async def $F($$$P): $$$B"
+      stopBy: { kind: function_definition }
+  not-handed-off:
+    not:
+      inside:
+        any:
+          - pattern: "asyncio.to_thread($$$A)"
+          - pattern: "$L.run_in_executor($$$A)"
+          - pattern: "functools.partial($$$A)"
+          - pattern: "partial($$$A)"
+        stopBy: end
+rule:
+  any:
+    - pattern: "$C.execute($$$A)"
+    - pattern: "$C.executemany($$$A)"
+    - pattern: "$C.executescript($$$A)"
+    - pattern: "$C.commit()"
+    - pattern: "sqlite3.connect($$$A)"
+    - pattern: "_get_conn()"
+    - pattern: "$M._get_conn()"
+  all:
+    - matches: in-async-fn
+    - matches: not-handed-off
+---
+id: gspread-in-async
+language: python
+message: gspread call directly inside a coroutine
+utils:
+  in-async-fn:
+    inside:
+      pattern: "async def $F($$$P): $$$B"
+      stopBy: { kind: function_definition }
+  not-handed-off:
+    not:
+      inside:
+        any:
+          - pattern: "asyncio.to_thread($$$A)"
+          - pattern: "$L.run_in_executor($$$A)"
+          - pattern: "functools.partial($$$A)"
+          - pattern: "partial($$$A)"
+        stopBy: end
+rule:
+  any:
+    - pattern: "$S.get_all_records($$$A)"
+    - pattern: "$S.get_all_values($$$A)"
+    - pattern: "$S.open_by_key($$$A)"
+    - pattern: "$S.worksheet($$$A)"
+    - pattern: "$S.worksheets()"
+    - pattern: "$S.add_worksheet($$$A)"
+    - pattern: "$S.append_row($$$A)"
+    - pattern: "$S.append_rows($$$A)"
+    - pattern: "$S.update_cell($$$A)"
+    - pattern: "$S.update_cells($$$A)"
+    - pattern: "$S.batch_update($$$A)"
+    - pattern: "$S.row_values($$$A)"
+    - pattern: "$S.col_values($$$A)"
+    - pattern: "$S.cell($$$A)"
+    - pattern: "$S.findall($$$A)"
+    - pattern: "$S.delete_rows($$$A)"
+    - pattern: "$S.insert_rows($$$A)"
+    - pattern: "get_spreadsheet($$$A)"
+    - pattern: "$M.get_spreadsheet($$$A)"
+    - pattern: "get_spreadsheet_by_id($$$A)"
+    - pattern: "$M.get_spreadsheet_by_id($$$A)"
+  all:
+    - matches: in-async-fn
+    - matches: not-handed-off

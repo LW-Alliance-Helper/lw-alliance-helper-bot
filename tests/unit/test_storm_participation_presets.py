@@ -106,7 +106,7 @@ class TestPresetToQuestion:
                 "label": "Who sat out this week?",
                 "type": "roster_multi_select",
                 "description": "Some picker copy",
-                "emoji": "📝",
+                "emoji": "✏️",
                 "default_checked": True,
             }
         )

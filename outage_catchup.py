@@ -47,12 +47,19 @@ import discord
 
 import config
 import time_helpers
+from wizard_registry import ExpiringView
 
 logger = logging.getLogger(__name__)
 
 # The per-minute loops whose gap reliably bounds an outage window. The
 # scheduler is intentionally absent (variable sleep — see module docstring).
-HEARTBEAT_LOOPS = ("shiny_post", "survey_reminder", "train_reminder", "storm_signup")
+HEARTBEAT_LOOPS = (
+    "shiny_post",
+    "survey_reminder",
+    "train_reminder",
+    "storm_signup",
+    "vs_score_prompt",
+)
 
 # Every loop that stamps a heartbeat, including the ones HEARTBEAT_LOOPS
 # deliberately excludes. Those exclusions are correct for *outage detection*
@@ -513,7 +520,7 @@ async def scan_train_reminder(bot, guild, cfg, window: OutageWindow) -> list[Mis
         display = await dm.mention_or_name(bot, guild.id, name)
         msg = (
             f"🚂 **Reset! Today's train is for {display}.**\n\n"
-            f"To get the ChatGPT prompt, use `/train` → 📋 Schedule overview → 📋 Generate Prompt."
+            f"To get the ChatGPT prompt, use `/train` → 📅 Schedule overview → 📋 Generate Prompt."
         )
         try:
             await ch.send(msg)
@@ -612,6 +619,117 @@ async def scan_storm_signup(bot, guild, cfg, window: OutageWindow) -> list[Misse
     return items
 
 
+async def scan_vs_score_prompt(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
+    """Daily Alliance Duel (VS) score prompt (#405). Premium, re-checked at
+    fire time by the shared post path.
+
+    Catch-up matters more here than for most surfaces: the prompt exists
+    because a day score nobody was asked for is a day score nobody records,
+    and there is no external source to backfill it from. The window is the
+    whole day rather than a few hours, since yesterday's numbers are still
+    yesterday's numbers whenever the officer gets to them.
+
+    The already-recorded check is deliberately left to the fire path, so a
+    prompt that arrives after someone typed the score by hand simply does not
+    post rather than being listed and then quietly doing nothing.
+    """
+    import alliance_duel as ad
+
+    vs_cfg = config.get_vs_config(guild.id)
+    if not vs_cfg.get("enabled") or not vs_cfg.get("score_prompt_enabled"):
+        return []
+    parsed = _parse_hhmm(vs_cfg.get("score_prompt_time") or "")
+    if parsed is None or not vs_cfg.get("score_prompt_channel_id"):
+        return []
+
+    tz = _guild_tz(cfg)
+    scheduled = _scheduled_today(window, tz, *parsed)
+    if not _was_missed(scheduled, window):
+        return []
+
+    target = ad.completed_duel_day(scheduled)
+    if target is None:
+        return []  # the prompt was due on a Monday, which asks nothing
+    day_date, day = target
+    if vs_cfg.get("last_score_prompt_fired") == day_date.isoformat():
+        return []  # it went out before we went down
+
+    channel = bot.get_channel(int(vs_cfg.get("score_prompt_channel_id") or 0))
+    theme = ad.DUEL_DAY_BY_NUMBER[day].theme
+
+    async def _fire() -> bool:
+        from alliance_duel_cog import post_score_prompt
+
+        posted = await post_score_prompt(bot, guild, vs_cfg, day_date, day)
+        if posted:
+            config.save_vs_config(guild.id, last_score_prompt_fired=day_date.isoformat())
+        return posted
+
+    return [
+        MissedItem(
+            surface="vs_score_prompt",
+            title=f"Alliance Duel (VS) score prompt: day {day}, {theme}",
+            scheduled_local=scheduled,
+            destination=f"sent to #{getattr(channel, 'name', 'the VS channel')}",
+            fire=_fire,
+        )
+    ]
+
+
+async def scan_vs_day_theme(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
+    """Member day-theme reminder (#406). Free, and reads nothing, so there is
+    no Premium re-check and no sheet involved.
+
+    Only ever recovers a reminder for the day currently running, which the
+    shared helpers already guarantee rather than this adapter having to check:
+    `_scheduled_today` resolves the slot against the date the bot came back,
+    and `_was_missed` rejects a slot still in the future. So a bot down across
+    Tuesday's 8am slot that returns on Wednesday recovers *Wednesday's*
+    reminder and lets Tuesday's go, which is right. "Today is Base Expansion"
+    posted on Wednesday is not a late reminder, it is a wrong one.
+    """
+    import alliance_duel as ad
+
+    vs_cfg = config.get_vs_config(guild.id)
+    if not vs_cfg.get("day_theme_enabled") or not vs_cfg.get("day_theme_channel_id"):
+        return []
+    parsed = _parse_hhmm(vs_cfg.get("day_theme_time") or "")
+    if parsed is None:
+        return []
+
+    tz = _guild_tz(cfg)
+    scheduled = _scheduled_today(window, tz, *parsed)
+    if not _was_missed(scheduled, window):
+        return []
+
+    day_date = ad.server_today(scheduled)
+    day = ad.duel_day_for_date(day_date)
+    if day is None:
+        return []  # Sunday
+    if vs_cfg.get("last_day_theme_fired") == day_date.isoformat():
+        return []
+
+    channel = bot.get_channel(int(vs_cfg.get("day_theme_channel_id") or 0))
+
+    async def _fire() -> bool:
+        from alliance_duel_cog import post_day_theme
+
+        posted = await post_day_theme(bot, guild, vs_cfg, day)
+        if posted:
+            config.save_vs_config(guild.id, last_day_theme_fired=day_date.isoformat())
+        return posted
+
+    return [
+        MissedItem(
+            surface="vs_day_theme",
+            title=f"Alliance Duel (VS) day theme: {ad.DUEL_DAY_BY_NUMBER[day].theme}",
+            scheduled_local=scheduled,
+            destination=f"sent to #{getattr(channel, 'name', 'the VS channel')}",
+            fire=_fire,
+        )
+    ]
+
+
 async def scan_event_draft(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     """Daily event editor draft (the `EventEditorView` the scheduler posts so
     leadership can approve → announce). Catch-up window: up to the event start
@@ -683,6 +801,8 @@ SURFACE_ADAPTERS: tuple[Callable[..., Awaitable[list[MissedItem]]], ...] = (
     scan_birthday,
     scan_train_reminder,
     scan_storm_signup,
+    scan_vs_score_prompt,
+    scan_vs_day_theme,
 )
 
 
@@ -778,11 +898,13 @@ def render_digest(window: OutageWindow, tz: ZoneInfo, items: list[MissedItem]) -
     return "\n".join([header, *rows])
 
 
-class OutageCatchupView(discord.ui.View):
+class OutageCatchupView(ExpiringView):
     """The digest's interactive controls: a multi-select row picker plus the
     three action buttons. Times out per the auto-post pattern — buttons strip
     and a hint to re-run is appended (``wizard_registry.expire_view_message``).
     """
+
+    timeout_hint = "each item's own command"
 
     def __init__(self, items: list[MissedItem], *, timeout: float = 60 * 60 * 6):
         super().__init__(timeout=timeout)
@@ -872,14 +994,6 @@ class OutageCatchupView(discord.ui.View):
             )
         except Exception:
             pass
-
-    async def on_timeout(self):
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="each item's own command",
-        )
 
 
 def _trim(s: str, n: int) -> str:

@@ -1,14 +1,22 @@
 name: Discord changelog block present
 
-# Every release posts to the support server's #changelog (#92), so the
-# block has to exist before the release lands. Checking it here, on the
-# PR into main, is the whole point: a red check on a PR is harmless,
-# whereas a red job on main would block the Railway deploy.
+# The machine-checkable half of the release checklist (#628): everything
+# a release branch is supposed to satisfy that a grep or a diff can
+# settle without judgment. Checking it here, on the PR into main, is the
+# whole point: a red check on a PR is harmless, whereas a red job on main
+# would block the Railway deploy.
+#
+# The job name/id stayed "changelog-block" so an existing branch
+# protection rule naming that check keeps matching; the checks below
+# grew past just the Discord block.
 #
 # Skips when __version__ is unchanged against main (docs-only PRs, and
 # any PR that isn't a release). Hotfixes pushed straight to main never
 # open a PR, so they bypass this — release-on-main.yml warns loudly in
-# its job summary if their block is missing.
+# its job summary if their block is missing. The branch-name and
+# PR-title/body checks additionally skip for hotfixes even when they do
+# bump __version__, since hotfix branches and titles don't follow the
+# release-branch naming rule.
 
 on:
   pull_request:
@@ -25,6 +33,8 @@ jobs:
 
       - name: Compare version against main
         id: version
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           VERSION=$(grep -oP '__version__ = "\K[^"]+' bot.py)
           if [ -z "$VERSION" ]; then
@@ -44,7 +54,90 @@ jobs:
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
 
+          if [[ "$HEAD_REF" == release/* ]]; then
+            echo "is_release_branch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release_branch=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Require a Discord changelog block
         if: steps.version.outputs.is_release == 'true'
         run: |
           python3 scripts/discord_changelog.py "${{ steps.version.outputs.version }}" --check
+
+      - name: Require the release branch name to match __version__
+        if: steps.version.outputs.is_release_branch == 'true'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH_VERSION="${HEAD_REF#release/}"
+          if [ "$BRANCH_VERSION" != "$VERSION" ]; then
+            echo "Branch is release/$BRANCH_VERSION but bot.py.__version__ is $VERSION." >&2
+            echo "Bump __version__ to match the branch, or rename the branch to match __version__." >&2
+            exit 1
+          fi
+
+      - name: Require a dated CHANGELOG entry for this version
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          python3 - "${{ steps.version.outputs.version }}" <<'PY'
+          import re
+          import sys
+
+          version = sys.argv[1]
+          content = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(
+              r"^## \[" + re.escape(version) + r"\](.*)$", content, re.MULTILINE
+          )
+          if not match:
+              print(f"CHANGELOG.md has no '## [{version}]' heading.", file=sys.stderr)
+              sys.exit(1)
+          rest = match.group(1)
+          if not re.match(r"^ — \d{4}-\d{2}-\d{2}", rest):
+              print(f"CHANGELOG.md heading for {version} isn't dated: {match.group(0)}", file=sys.stderr)
+              print("Expected: ## [VERSION] — YYYY-MM-DD", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Require slim CHANGELOG bullets
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          # Disk == HEAD in CI (already committed), so the script's default
+          # HEAD baseline would treat every bullet as pre-existing. Diff
+          # against the PR's base instead, to catch what this PR adds.
+          CHANGELOG_SLIM_BASELINE_REF: origin/${{ github.base_ref }}
+        run: |
+          python3 scripts/check_changelog_slim.py CHANGELOG.md
+
+      - name: Require the release PR title and body shape
+        if: steps.version.outputs.is_release_branch == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - "${{ steps.version.outputs.version }}" <<'PY'
+          import os
+          import re
+          import sys
+
+          version = sys.argv[1]
+          title = os.environ.get("PR_TITLE", "")
+          body = os.environ.get("PR_BODY", "")
+
+          # "Release X.Y.Z" or "Release X.Y.Z: <suffix>" / "Release X.Y.Z — <suffix>"
+          if not re.match(r"^Release " + re.escape(version) + r"(:| —|$)", title):
+              print(
+                  f"PR title '{title}' doesn't match 'Release {version}'"
+                  " (optionally with a ':' or ' —' suffix).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          if not re.search(r"(closes|fixes|resolves)\s+#\d+", body, re.IGNORECASE):
+              print(
+                  "PR body has no 'Closes #N' (or Fixes/Resolves) for any rolled-in issue.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY

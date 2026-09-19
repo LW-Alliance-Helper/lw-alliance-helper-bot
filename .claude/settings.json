@@ -12,6 +12,17 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd c:/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot && py scripts/release_branch_nudge.py",
+            "shell": "bash",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

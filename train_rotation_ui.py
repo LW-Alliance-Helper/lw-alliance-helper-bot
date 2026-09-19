@@ -34,10 +34,10 @@ from zoneinfo import ZoneInfo
 import discord
 
 import wizard_registry
+from wizard_registry import ExpiringView, OwnedView
 import train_rotation as tr
 
 DENY_NOT_LEADER = "⛔ You need the leadership role to use this."
-DENY_NOT_OWNER = "⛔ Only the person who opened this editor can change it."
 EDITOR_TIMEOUT = 900  # 15 min — Discord's component interaction-token ceiling
 
 
@@ -427,13 +427,13 @@ def build_assignment_logs_embed(
     most = tr.sort_tally(tally, tr.TALLY_SORT_MOST)[:top_n]
     fewest = tr.sort_tally(tally, tr.TALLY_SORT_FEWEST)[:top_n]
     embed.add_field(
-        name="🔝 Most trains",
+        name="Most trains",
         value="\n".join(_tally_line(n, c, l, rank=i + 1) for i, (n, c, l) in enumerate(most))[:1024]
         or "*none yet*",
         inline=False,
     )
     embed.add_field(
-        name="🔻 Fewest trains",
+        name="Fewest trains",
         value="\n".join(_tally_line(n, c, l, rank=i + 1) for i, (n, c, l) in enumerate(fewest))[
             :1024
         ]
@@ -472,7 +472,7 @@ def build_history_page_embed(
     window = rows[start : start + PAGE_SIZE]
 
     embed = discord.Embed(title="🚂 Train History", color=discord.Color.gold())
-    header = f"**{mode_label}** · Sorted by {sort_label} · Page {page + 1} of {total_pages}"
+    header = f"**{mode_label}** · Sorted by {sort_label}"
     if not rows:
         embed.description = f"{header}\n\n*Nothing logged yet.*"
         return embed
@@ -504,7 +504,7 @@ _MEMBER_SORTS = [
 _DATE_SORTS = [("newest", "Newest first"), ("oldest", "Oldest first")]
 
 
-class AssignmentLogsView(discord.ui.View):
+class AssignmentLogsView(OwnedView):
     """Owner-locked, ephemeral Assignment Logs surface. Opens on the summary
     (most / fewest / recent); the View-all button swaps the same message into a
     paged, sortable history that toggles between a by-member tally and the
@@ -515,10 +515,8 @@ class AssignmentLogsView(discord.ui.View):
 
     BTN_VIEW_ALL = "📜 View all history"
     BTN_BY_MEMBER = "👥 By member"
-    BTN_BY_DATE = "🗓️ By date"
-    BTN_PREV = "◀️ Prev"
-    BTN_NEXT = "▶️ Next"
-    BTN_BACK = "🔙 Back"
+    BTN_BY_DATE = "📅 By date"
+    BTN_BACK = "↩️ Back"
 
     def __init__(self, owner_id: int, tally: list, posted: list):
         super().__init__(timeout=300)
@@ -531,12 +529,6 @@ class AssignmentLogsView(discord.ui.View):
         self.sort_member = tr.TALLY_SORT_MOST
         self.sort_date = "newest"
         self._sync()
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     # ── rendering ──────────────────────────────────────────────────────────────
 
@@ -557,46 +549,31 @@ class AssignmentLogsView(discord.ui.View):
         self.clear_items()
         if self.mode == "summary":
             if self.tally or self.posted:
-                self._button(self.BTN_VIEW_ALL, discord.ButtonStyle.primary, 0, self._on_view_all)
+                self.add_button(
+                    self.BTN_VIEW_ALL, discord.ButtonStyle.primary, self._on_view_all, row=0
+                )
             return
 
         # Pager modes: mode toggle, sort select, prev/next/back.
-        self._button(
+        self.add_button(
             self.BTN_BY_MEMBER,
             discord.ButtonStyle.primary if self.mode == "member" else discord.ButtonStyle.secondary,
-            0,
             self._on_by_member,
+            row=0,
             disabled=(self.mode == "member"),
         )
-        self._button(
+        self.add_button(
             self.BTN_BY_DATE,
             discord.ButtonStyle.primary if self.mode == "date" else discord.ButtonStyle.secondary,
-            0,
             self._on_by_date,
+            row=0,
             disabled=(self.mode == "date"),
         )
         self._add_sort_select()
-        total = self._total_pages()
-        self._button(
-            self.BTN_PREV,
-            discord.ButtonStyle.secondary,
-            2,
-            self._on_prev,
-            disabled=(self.page <= 0),
+        self.add_pagination_row(
+            page=self.page, page_count=self._total_pages(), on_page=self._on_page, row=2
         )
-        self._button(
-            self.BTN_NEXT,
-            discord.ButtonStyle.secondary,
-            2,
-            self._on_next,
-            disabled=(self.page >= total - 1),
-        )
-        self._button(self.BTN_BACK, discord.ButtonStyle.secondary, 2, self._on_back)
-
-    def _button(self, label, style, row, cb, *, disabled=False):
-        btn = discord.ui.Button(label=label, style=style, row=row, disabled=disabled)
-        btn.callback = cb
-        self.add_item(btn)
+        self.add_button(self.BTN_BACK, discord.ButtonStyle.secondary, self._on_back, row=2)
 
     def _add_sort_select(self):
         if self.mode == "date":
@@ -645,12 +622,8 @@ class AssignmentLogsView(discord.ui.View):
         self.page = 0
         await self._rerender(inter)
 
-    async def _on_prev(self, inter):
-        self.page = max(0, self.page - 1)
-        await self._rerender(inter)
-
-    async def _on_next(self, inter):
-        self.page = min(self._total_pages() - 1, self.page + 1)
+    async def _on_page(self, inter, page: int):
+        self.page = page
         await self._rerender(inter)
 
     async def _on_back(self, inter):
@@ -725,7 +698,7 @@ def _resolve_name_from_list(names: list[str], typed: str) -> str:
     return hits[0] if len(hits) == 1 else t
 
 
-class _RosterPickerView(discord.ui.View):
+class _RosterPickerView(ExpiringView):
     """Reusable roster-backed conductor picker (dropdown + Save / Cancel / Type a
     name instead), shown ephemerally wherever leadership assigns someone by hand.
 
@@ -797,23 +770,9 @@ class _RosterPickerView(discord.ui.View):
             )
             sel.callback = self._on_select
             self.add_item(sel)
-            if self.total_pages > 1:
-                prev = discord.ui.Button(
-                    label="◀ Prev",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page == 0,
-                    row=1,
-                )
-                prev.callback = self._prev
-                self.add_item(prev)
-                nxt = discord.ui.Button(
-                    label="Next ▶",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=self.page >= self.total_pages - 1,
-                    row=1,
-                )
-                nxt.callback = self._next
-                self.add_item(nxt)
+            self.add_pagination_row(
+                page=self.page, page_count=self.total_pages, on_page=self._on_page, row=1
+            )
             save = discord.ui.Button(label="💾 Save", style=discord.ButtonStyle.success, row=2)
             save.callback = self._on_save
             self.add_item(save)
@@ -846,13 +805,8 @@ class _RosterPickerView(discord.ui.View):
         self._build()
         await interaction.response.edit_message(content=self.content(), view=self)
 
-    async def _prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._build()
-        await interaction.response.edit_message(content=self.content(), view=self)
-
-    async def _next(self, interaction: discord.Interaction):
-        self.page = min(self.total_pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._build()
         await interaction.response.edit_message(content=self.content(), view=self)
 
@@ -873,9 +827,7 @@ class _RosterPickerView(discord.ui.View):
     async def _on_cancel(self, interaction: discord.Interaction):
         self.stop()
         try:
-            await interaction.response.edit_message(
-                content="Cancelled — nothing changed.", view=None
-            )
+            await interaction.response.edit_message(content="Canceled. Nothing changed.", view=None)
         except discord.HTTPException:
             pass
 

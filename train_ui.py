@@ -82,7 +82,7 @@ async def run_blurb_wizard_for_entry(
             return reply.content.strip()
         except asyncio.TimeoutError:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` → **📋 Schedule overview** → **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train` → **📅 Schedule overview** → **📋 Generate Prompt** to try again."
             )
             return None
 
@@ -120,7 +120,7 @@ async def run_blurb_wizard_for_entry(
             return False
         if theme_view.selected is None:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` → **📋 Schedule overview** → **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train` → **📅 Schedule overview** → **📋 Generate Prompt** to try again."
             )
             return False
         theme = theme_view.selected
@@ -137,7 +137,7 @@ async def run_blurb_wizard_for_entry(
             return False
         if tone_view.selected is None:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` → **📋 Schedule overview** → **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train` → **📅 Schedule overview** → **📋 Generate Prompt** to try again."
             )
             return False
         tone = tone_view.selected
@@ -562,6 +562,6 @@ class TrainActionView(discord.ui.View):
             await inter.followup.send("🗑️ Train schedule cleared.", ephemeral=True)
         else:
             await inter.followup.send(
-                "✅ Clear cancelled. Your train schedule is unchanged.",
+                "✅ Clear canceled. Your train schedule is unchanged.",
                 ephemeral=True,
             )

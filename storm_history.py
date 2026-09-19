@@ -22,7 +22,8 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
+from messages import DATE_PARSE_REJECT, ROUTE_HINT
+from wizard_registry import ExpiringView, OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -460,9 +461,9 @@ def render_history_list_embed(
 # ── Officer view ─────────────────────────────────────────────────────────────
 
 
-class _RosterImageLinksView(discord.ui.View):
-    """`[📷 View Team A image]` / `[📷 View Team B image]` (or just
-    `[📷 View image]` for CS / single-team DS) buttons attached below
+class _RosterImageLinksView(OwnedView):
+    """`[🖼️ View Team A image]` / `[🖼️ View Team B image]` (or just
+    `[🖼️ View image]` for CS / single-team DS) buttons attached below
     the event-detail embed. Each click fetches the saved message at
     runtime; on `discord.NotFound` (the image was deleted from the
     original channel), the officer gets a friendly explanation + the
@@ -493,24 +494,15 @@ class _RosterImageLinksView(discord.ui.View):
             # Two-team events (DS or CS with teams=both) get per-team
             # labels; single-team events fall back to "View image".
             if team:
-                label = f"📷 View Team {team} image"
+                label = f"🖼️ View Team {team} image"
             else:
-                label = "📷 View image"
+                label = "🖼️ View image"
             btn = discord.ui.Button(
                 label=label,
                 style=discord.ButtonStyle.secondary,
             )
             btn.callback = self._make_callback(ref)
             self.add_item(btn)
-
-    async def interaction_check(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                DENY_NOT_OWNER,
-                ephemeral=True,
-            )
-            return False
-        return True
 
     def _make_callback(self, ref: dict):
         async def _cb(inter: discord.Interaction):
@@ -552,7 +544,7 @@ class _RosterImageLinksView(discord.ui.View):
 
             link = msg.jump_url
             await inter.response.send_message(
-                f"📷 [Open the saved roster image]({link}) (posted in {channel.mention}).",
+                f"🖼️ [Open the saved roster image]({link}) (posted in {channel.mention}).",
                 ephemeral=True,
             )
 
@@ -589,14 +581,20 @@ class _RosterImageLinksView(discord.ui.View):
             f"⚠️ The saved roster {what}{team_label} can no longer be "
             f"found. It was deleted from the original channel. The link "
             f"has been cleared. To save a new image: open the roster "
-            f"builder, click 🖼️ Render image, then 💾 Save to history.",
+            f"builder, click 🖼️ Render image, then 📜 Save to history.",
             ephemeral=True,
         )
 
 
-class _HistoryListView(discord.ui.View):
+class _HistoryListView(ExpiringView):
     """Lists recent event dates as buttons. Click → re-renders the
     embed for that event."""
+
+    @property
+    def timeout_hint(self) -> str:
+        from storm_event_hub import HUB_BTN_PAST_ROSTERS, HUB_COMMAND
+
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.event_type], btn=HUB_BTN_PAST_ROSTERS)
 
     def __init__(
         self,
@@ -624,12 +622,6 @@ class _HistoryListView(discord.ui.View):
 
     def _make_callback(self, date_str: str):
         async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(
-                    DENY_NOT_OWNER,
-                    ephemeral=True,
-                )
-                return
             # Send the event-detail embed as an ephemeral followup but
             # KEEP the date buttons active so the officer can hop between
             # dates. The prior implementation disabled every button on
@@ -685,15 +677,6 @@ class _HistoryListView(discord.ui.View):
             )
 
         return _cb
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
 
 # ── Entry point invoked by storm_strategy slash commands ────────────────────

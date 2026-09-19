@@ -26,7 +26,7 @@ clickable element.
 
 Setup wizards collapsed into the `/setup` event-hub in #201 — the
 storm wizards live behind `/setup → ⚔️ Desert Storm` and `/setup →
-🏜️ Canyon Storm` buttons, alongside every other feature wizard.
+🛡️ Canyon Storm` buttons, alongside every other feature wizard.
 The storm hub view's `⚙️ Open setup wizard` button dispatches into
 the same `_launch_storm_setup` helper that the /setup hub button
 uses, so both entry points share gating + ack copy.

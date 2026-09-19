@@ -33,6 +33,7 @@ from train import (
     render_conflict_message,
     get_member_tab_name,
 )
+from wizard_registry import ExpiringView
 
 
 # ── Default DM bodies (fallbacks when an alliance hasn't customised) ──────────
@@ -92,7 +93,7 @@ def _pretty_day(iso: str) -> str:
 # ── Birthday conflict alert (interactive) ────────────────────────────────────────
 
 
-class BirthdayConflictView(discord.ui.View):
+class BirthdayConflictView(ExpiringView):
     """Interactive resolution for a birthday→train scheduling conflict.
 
     Replaces the old fire-and-forget text alert. Posted to the leadership
@@ -103,7 +104,7 @@ class BirthdayConflictView(discord.ui.View):
         places the member with one click and writes it to the schedule,
       • 📋 Show next 7 days — an ephemeral read-only view of the surrounding
         schedule so leadership can see what's free,
-      • 🙈 Ignore — persists a dismissal so the *daily* re-post stops
+      • 🔕 Ignore — persists a dismissal so the *daily* re-post stops
         nagging about a conflict that's been handled off-schedule.
 
     Placing a member silences future alerts on its own: the next daily run's
@@ -112,6 +113,8 @@ class BirthdayConflictView(discord.ui.View):
     restart — but the loop re-posts a fresh, working alert each day the
     conflict is still open, so nothing is permanently lost.
     """
+
+    timeout_hint = "`/train` → 🎂 Run birthday check (it also re-posts tonight)"
 
     def __init__(self, cog, guild_id: int, conflicts: list[dict]):
         # 12h window so leadership has the evening + overnight to act; if it
@@ -161,20 +164,9 @@ class BirthdayConflictView(discord.ui.View):
         show_btn.callback = self._on_show
         self.add_item(show_btn)
 
-        ignore_btn = discord.ui.Button(label="🙈 Ignore", style=discord.ButtonStyle.danger)
+        ignore_btn = discord.ui.Button(label="🔕 Ignore", style=discord.ButtonStyle.danger)
         ignore_btn.callback = self._on_ignore
         self.add_item(ignore_btn)
-
-    async def on_timeout(self):
-        """Strip the controls and point leadership at the manual escape
-        hatch. Without this the buttons look live after the view stops
-        listening and clicks fail with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="`/train` → 🎂 Run birthday check (it also re-posts tonight)",
-        )
 
     async def _ensure_leadership(self, interaction: discord.Interaction) -> bool:
         cfg = get_config(self.guild_id)
@@ -264,12 +256,12 @@ class BirthdayConflictView(discord.ui.View):
         for c in self.conflicts:
             mark_conflict_ignored(self.guild_id, c["key"])
         await interaction.response.send_message(
-            "🙈 Dismissed — you won't get this alert again for these birthdays.",
+            "🔕 Dismissed — you won't get this alert again for these birthdays.",
             ephemeral=True,
         )
         try:
             await self.message.edit(
-                content=f"🙈 **Birthday conflict dismissed.** Won't alert again about: {names}.",
+                content=f"🔕 **Birthday conflict dismissed.** Won't alert again about: {names}.",
                 view=None,
             )
         except discord.HTTPException:
@@ -456,7 +448,7 @@ class TrainCog(commands.Cog):
         except ImportError:
             pass
         if cancelled:
-            await interaction.response.send_message("❌ Session cancelled.", ephemeral=True)
+            await interaction.response.send_message("❌ Session canceled.", ephemeral=True)
         else:
             await interaction.response.send_message(
                 "ℹ️ You don't have an active session running.", ephemeral=True
@@ -723,7 +715,7 @@ class TrainCog(commands.Cog):
                     f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
-                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Schedule overview → 📋 Generate Prompt instead.*"
+                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📅 Schedule overview → 📋 Generate Prompt instead.*"
                 )
                 view.message = await channel.send(msg, view=view)
             else:
@@ -748,7 +740,7 @@ class TrainCog(commands.Cog):
         # Clean tick — stamp liveness for the outage catch-up scan (#227).
         # One heartbeat covers both surfaces in this loop (the birthday
         # Discord announcement and the train daily reminder).
-        stamp_loop_heartbeat("train_reminder")
+        await asyncio.to_thread(stamp_loop_heartbeat, "train_reminder")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

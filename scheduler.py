@@ -25,15 +25,50 @@ from zoneinfo import ZoneInfo
 
 import discord
 import discord.ext.commands
+import config_health
 from config import get_config
-from messages import LEADERSHIP_INACCESSIBLE
+from events_hub import EVENTS_HUB_BTN_TODAY, EVENTS_HUB_CMD
+from messages import ANNOUNCEMENT_SEND_FAILED, LEADERSHIP_INACCESSIBLE
+from setup_hub import HUB_BTN_EVENTS
 from time_helpers import next_clock_time
 import wizard_registry
+from wizard_registry import ExpiringView
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
 ET = ZoneInfo("America/New_York")
 
 from config import get_config
+
+# ── Config-health subjects (#462) ──────────────────────────────────────────────
+# The event scheduler was the one clock-driven post loop #379 never reached, so
+# a guild whose draft channel vanished in a reorg simply stopped seeing the
+# daily editor with nothing said. Two subjects rather than one because they are
+# two different fixes: leadership losing the draft is invisible to members,
+# while a broken announcement channel means the alliance never hears about the
+# event at all.
+#
+# Both are configured in the wizard, not the `/events` hub — only event-list
+# management moved there — so pointing the fix anywhere else sends leadership
+# somewhere that cannot help.
+EVENT_DRAFT_CHANNEL_SUBJECT = "events.draft_channel"
+EVENT_ANNOUNCE_CHANNEL_SUBJECT = "events.announce_channel"
+
+config_health.register(
+    config_health.Subject(
+        key=EVENT_DRAFT_CHANNEL_SUBJECT,
+        label="your event draft channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_EVENTS,
+    )
+)
+config_health.register(
+    config_health.Subject(
+        key=EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+        label="your event announcement channel",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_EVENTS,
+    )
+)
 
 # ── Per-guild config helpers ───────────────────────────────────────────────────
 
@@ -52,6 +87,19 @@ BUTTON_TIMEOUT = 3600
 # between approval and the warning firing doesn't lose it silently — see
 # config.save_pending_warning/load_pending_warnings/delete_pending_warning.
 pending_warnings: dict[str, tuple[datetime, list[dict], int]] = {}
+
+
+# ── 5-minute warning default ───────────────────────────────────────────────────
+# What the warning posts when an alliance has not written its own. The events
+# wizard shows this as the default and stores '' when they accept it, so the
+# rendered text lives here and nowhere else — events_hub imports it rather
+# than retyping it, or the preview and the post drift apart (#566).
+#
+# One exclamation mark, not two. UX.md bans them outside genuine celebration;
+# the mark on the event is the urgency a five-minute warning is for, and the
+# instruction after it does not need to shout as well. Kevin, on the #566
+# sign-off: "drop the second mark".
+WARNING_BLURB_DEFAULT = "{name} in 5 minutes! Make sure you're online."
 
 
 # ── Event library ──────────────────────────────────────────────────────────────
@@ -104,6 +152,7 @@ def _resolve_event_info(key: str, guild_id: int = None) -> dict:
                 "name": ev.get("name", key),
                 "blurb": ev.get("announcement_blurb", "")
                 or EVENT_LIBRARY.get(key, {}).get("blurb", ""),
+                "warning_blurb": ev.get("warning_blurb", ""),
                 "optional": True,
             }
     return EVENT_LIBRARY.get(key, {"name": key, "blurb": "", "optional": True})
@@ -127,6 +176,7 @@ def _available_events_for_guild(guild_id: int = None) -> dict:
                 e["short_key"]: {
                     "name": e.get("name", e["short_key"]),
                     "blurb": e.get("announcement_blurb", ""),
+                    "warning_blurb": e.get("warning_blurb", ""),
                     "optional": True,
                 }
                 for e in events
@@ -243,45 +293,58 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
     Build the 5-minute warning based on the first event.
 
     Resolution order for the message body:
-      1. The event's stored `warning_blurb` — a guild-authored 5-minute
-         warning text. Nothing writes this yet; see below.
+      1. The event's stored `warning_blurb`, the text the alliance wrote for
+         this event's 5-minute warning in the events wizard (#566).
       2. Hardcoded special case for `marauder` (legacy compat).
-      3. Generic fallback: "<Name> in 5 minutes!" using the configured name.
+      3. `WARNING_BLURB_DEFAULT`, for the alliances that took the default.
 
-    The **announcement** blurb is deliberately not reused here (#565). Those
-    templates are written around a clock time — the events wizard's default
-    is "{name} at {time} ({server_time} Server Time)." — so substituting the
-    literal "5 minutes" into both slots rendered "Alliance Exercise: Plague
-    Marauder at 5 minutes (5 minutes Server Time)." Every alliance saves an
-    announcement blurb, so that path caught all of them; only `marauder` was
-    exempt. A duration cannot be dropped into a slot the alliance wrote "at"
-    in front of, so the reuse is unfixable in place — the warning needs its
-    own text.
+    Placeholders in a warning blurb resolve to the event's **real clock
+    time**, exactly as they do in the announcement: {name}, {time} in the
+    event's timezone, {server_time} in Server Time.
 
-    Branch 1 is that text, and it has no column, no wizard step and no
-    export field yet, so it never fires today. Giving alliances their own
-    warning wording is #566; until then every event uses the generic line.
+    They deliberately do NOT resolve to "5 minutes". That was #565: the
+    warning used to reuse the *announcement* blurb with the literal string
+    "5 minutes" pushed into both slots, and since the wizard's default
+    announcement is "{name} at {time} ({server_time} Server Time)." every
+    alliance got "Alliance Exercise: Plague Marauder at 5 minutes (5 minutes
+    Server Time)." A duration cannot go in a slot the alliance wrote "at" in
+    front of. The warning gets its own text instead, and its placeholders
+    mean the same thing they mean everywhere else.
     """
     if not event_list:
-        return "Event starting in 5 minutes! Make sure you're online!"
+        return "Event starting in 5 minutes! Make sure you're online."
     first = event_list[0]
     key = first["key"]
 
     info = _resolve_event_info(key, guild_id)
-    custom_warn = (first.get("warning_blurb") or "").strip()
-    if custom_warn:
-        return custom_warn.format(time="5 minutes", server_time="5 minutes", server="5 minutes")
+    # `first` is the draft the scheduler built; `info` re-reads config. Prefer
+    # the draft so a failed guild-event lookup degrades to a stale display
+    # name rather than to the raw short_key.
+    name = first.get("name") or info.get("name") or key
+
+    custom_warn = (first.get("warning_blurb") or info.get("warning_blurb") or "").strip()
+    dt = first.get("dt")
+    if custom_warn and dt is not None:
+        try:
+            sv_str = to_server_time_str(dt)
+            return custom_warn.format(
+                name=name,
+                time=format_et(dt),
+                server_time=sv_str,
+                server=sv_str,
+            )
+        except (KeyError, IndexError):
+            # An unknown placeholder is the alliance's typo, not a reason to
+            # post nothing. Fall through to the default rather than raising
+            # inside the scheduler loop.
+            pass
 
     if key == "marauder":
         return (
             "Marauder (AE) in 5 minutes! Make sure you hop online and get your points! "
             "Zombies right after, check your wall to make sure you have squads on it!"
         )
-    # `first["name"]` is the name the draft was built with; `info` re-reads it
-    # from config. Prefer the former so a failed guild-event lookup downgrades
-    # to a stale display name rather than to the raw short_key.
-    name = first.get("name") or info.get("name") or key
-    return f"{name} in 5 minutes! Make sure you're online!"
+    return WARNING_BLURB_DEFAULT.format(name=name)
 
 
 # ── Time parsing ───────────────────────────────────────────────────────────────
@@ -316,12 +379,14 @@ def first_event_warning_dt(event_list: list[dict]) -> datetime | None:
 # ── Event editor UI ────────────────────────────────────────────────────────────
 
 
-class EventEditorView(discord.ui.View):
+class EventEditorView(ExpiringView):
     """
     Interactive event list editor. Shows the current event list and lets
     leadership add, edit times, or remove optional events before building
     the announcement.
     """
+
+    timeout_hint = "/events"
 
     def __init__(
         self, bot, event_list: list[dict], event_key: str, run_date: date, guild_id: int = None
@@ -358,12 +423,6 @@ class EventEditorView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction):
         """Update the editor message with the current event list."""
         await interaction.message.edit(content=self._render_editor_content(), view=self)
-
-    async def on_timeout(self):
-        """Strip the editor buttons and tell leadership how to re-open it."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint="/events")
 
     @discord.ui.button(label="➕ Add to today's draft", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -616,14 +675,14 @@ class EventEditorView(discord.ui.View):
             "Choose an event to remove:", view=view, ephemeral=True
         )
 
-    @discord.ui.button(label="📝 Add Announcement Text", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="✏️ Add Announcement Text", style=discord.ButtonStyle.secondary, row=1)
     async def add_notes(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel = interaction.channel
         await interaction.response.defer()
 
         current_note = f"\n\nCurrent announcement text:\n> {self.notes}" if self.notes else ""
         prompt = await channel.send(
-            f"📝 {interaction.user.mention} — type the additional announcement text "
+            f"✏️ {interaction.user.mention} — type the additional announcement text "
             f"that should be appended to today's announcement, or type `clear` to remove "
             f"existing text.{current_note}"
         )
@@ -714,7 +773,9 @@ class EventEditorView(discord.ui.View):
 # ── Approval UI ────────────────────────────────────────────────────────────────
 
 
-class ApprovalView(discord.ui.View):
+class ApprovalView(ExpiringView):
+    timeout_hint = "/events"
+
     def __init__(
         self,
         bot,
@@ -735,16 +796,45 @@ class ApprovalView(discord.ui.View):
         # strip the buttons and post the re-initiate hint.
         self.message = None
 
-    async def _post_to_announcements(self, message: str):
+    async def _post_to_announcements(self, message: str) -> bool:
+        """Post the approved announcement. ``False`` if it never went out, so
+        the caller doesn't stamp an approval for something members never saw
+        (#462)."""
         from config import get_config
 
         cfg = get_config(self.guild_id)
-        channel = self.bot.get_channel(cfg.announcement_channel_id) if cfg else None
+        channel = (
+            config_health.resolve_configured_channel(
+                self.bot,
+                self.guild_id,
+                EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+                cfg.announcement_channel_id,
+            )
+            if cfg
+            else None
+        )
         if channel is None:
-            print("[SCHEDULER][ERROR] Announcements channel not found")
-            return
+            print(
+                f"[SCHEDULER][ERROR] Announcement channel not usable for "
+                f"guild {self.guild_id} — approved {self.event_key} announcement not sent"
+            )
+            return False
 
-        await channel.send(message)
+        try:
+            await channel.send(message)
+        except discord.HTTPException as e:
+            config_health.record(
+                self.guild_id,
+                EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+                config_health.CHANNEL_NO_SEND,
+                "",
+                discriminator=str(cfg.announcement_channel_id),
+            )
+            print(
+                f"[SCHEDULER][ERROR] Failed to send approved {self.event_key} "
+                f"announcement for guild {self.guild_id}: {e}"
+            )
+            return False
 
         # Schedule 5-minute warning based on first event time
         if not self.is_shield and self.event_list:
@@ -757,6 +847,7 @@ class ApprovalView(discord.ui.View):
                 print(
                     f"[SCHEDULER] 5-min warning scheduled for {warn_dt.strftime('%Y-%m-%d %H:%M %Z')}"
                 )
+        return True
 
     async def _disable_buttons(self, interaction: discord.Interaction):
         for item in self.children:
@@ -767,20 +858,32 @@ class ApprovalView(discord.ui.View):
     async def send_as_is(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable_buttons(interaction)
-        await self._post_to_announcements(self.draft_message)
+        sent = await self._post_to_announcements(self.draft_message)
 
         from config import get_config
 
         cfg = get_config(self.guild_id)
         leadership = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if leadership:
-            _now = datetime.now(tz=ET)
-            _h12 = _now.hour % 12 or 12
-            _ts = f"{_h12}:{_now:%M%p ET}".lower()
-            await leadership.send(
-                f"✅ **Approved by {interaction.user.display_name} at {_ts}**\n"
-                f"```\n{self.draft_message}\n```"
-            )
+            if not sent:
+                # #462: this used to stamp "Approved" either way, so leadership
+                # read a green tick for an announcement their members never
+                # got. Say what actually happened instead.
+                await leadership.send(
+                    ANNOUNCEMENT_SEND_FAILED.format(
+                        fix_btn=HUB_BTN_EVENTS,
+                        hub_cmd=EVENTS_HUB_CMD,
+                        hub_btn=EVENTS_HUB_BTN_TODAY,
+                    )
+                )
+            else:
+                _now = datetime.now(tz=ET)
+                _h12 = _now.hour % 12 or 12
+                _ts = f"{_h12}:{_now:%M%p ET}".lower()
+                await leadership.send(
+                    f"✅ **Approved by {interaction.user.display_name} at {_ts}**\n"
+                    f"```\n{self.draft_message}\n```"
+                )
         self.stop()
 
     @discord.ui.button(label="✏️ Edit & Send", style=discord.ButtonStyle.primary)
@@ -825,7 +928,7 @@ class ApprovalView(discord.ui.View):
                 guild_id=self.guild_id,
             )
             sent = await channel.send(
-                f"📝 **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
+                f"✏️ **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
                 view=new_view,
             )
             new_view.message = sent
@@ -836,14 +939,6 @@ class ApprovalView(discord.ui.View):
             )
 
         self.stop()
-
-    async def on_timeout(self):
-        """Strip the approval buttons and tell leadership how to re-open
-        the draft. Without the message edit, the buttons stayed on screen
-        but clicks failed silently with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(self.message, command_hint="/events")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────
@@ -918,6 +1013,7 @@ def iter_guild_event_drafts(cfg, today: date) -> list[dict]:
                             "name": ev["name"],
                             "dt": ev_dt,
                             "blurb": ev["announcement_blurb"],
+                            "warning_blurb": ev["warning_blurb"],
                         }
                     )
                     draft_channel_id = ev["draft_channel_id"] or draft_channel_id
@@ -1032,7 +1128,7 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
         # loops define the window. We stamp anyway for observability.
         from config import stamp_loop_heartbeat
 
-        stamp_loop_heartbeat("scheduler")
+        await asyncio.to_thread(stamp_loop_heartbeat, "scheduler")
 
         triggers = []
 
@@ -1123,11 +1219,20 @@ async def post_editor(
         return
     # Use per-event channel if set, fall back to guild leadership channel
     channel_id = draft_channel_id or cfg.leadership_channel_id
-    channel = bot.get_channel(channel_id)
+    # #462: unlike every other channel subject, this one isn't single-valued.
+    # The draft channel is resolved per event group, so a guild running several
+    # groups can have more than one broken at once, and they'd take turns
+    # holding the single (guild, subject) row. Each turn re-opens the notify
+    # window, but this fires once per group per day rather than per tick, so it
+    # settles at about one notice per broken channel per day. That's the honest
+    # answer anyway; it isn't the dedup leaking.
+    channel = config_health.resolve_configured_channel(
+        bot, getattr(cfg, "guild_id", 0), EVENT_DRAFT_CHANNEL_SUBJECT, channel_id
+    )
     if channel is None:
         gid = getattr(cfg, "guild_id", "?")
         print(
-            f"[SCHEDULER][ERROR] Draft channel {channel_id} not found for "
+            f"[SCHEDULER][ERROR] Draft channel {channel_id} not usable for "
             f"guild {gid} — event editor for {event_key} skipped"
         )
         return False
@@ -1145,6 +1250,17 @@ async def post_editor(
     except discord.Forbidden:
         # Bot can't post in the draft channel (missing view/send access).
         # The alliance's to fix — log with context, don't page Sentry (#57).
+        # The resolve above already checks send permission, so reaching here
+        # means it changed underneath us or the channel has a shape
+        # permissions_for can't answer for. Record it either way: leadership
+        # needs telling regardless of which check caught it.
+        config_health.record(
+            getattr(cfg, "guild_id", 0),
+            EVENT_DRAFT_CHANNEL_SUBJECT,
+            config_health.CHANNEL_NO_SEND,
+            "",
+            discriminator=str(channel_id),
+        )
         print(
             f"[SCHEDULER][ERROR] Missing permission to post the {event_key} "
             f"event editor to channel {channel_id} for guild {gid} — check "
@@ -1165,12 +1281,17 @@ async def post_editor(
 async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
     if cfg is None:
         return
-    channel = bot.get_channel(cfg.announcement_channel_id)
+    channel = config_health.resolve_configured_channel(
+        bot,
+        getattr(cfg, "guild_id", 0),
+        EVENT_ANNOUNCE_CHANNEL_SUBJECT,
+        cfg.announcement_channel_id,
+    )
     if channel is None:
         gid = getattr(cfg, "guild_id", "?")
         print(
             f"[SCHEDULER][ERROR] Announcement channel {cfg.announcement_channel_id} "
-            f"not found for guild {gid} — 5-min warning for {event_key} skipped"
+            f"not usable for guild {gid} — 5-min warning for {event_key} skipped"
         )
         return
 
@@ -1198,7 +1319,7 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         _now = datetime.now(tz=ET)
         _h12 = _now.hour % 12 or 12
         _ts = f"{_h12}:{_now:%M%p ET}".lower()
-        await leadership.send(f"⏱️ **5-minute warning auto-posted** at {_ts}")
+        await leadership.send(f"🕒 **5-minute warning auto-posted** at {_ts}")
 
     pending_warnings.pop(event_key, None)
     from config import delete_pending_warning

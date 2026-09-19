@@ -23,13 +23,14 @@ from config import (
     get_config,
     upsert_guild_install_metadata,
     get_guild_install_metadata,
-    delete_guild_install_metadata,
+    record_guild_removal,
+    clear_guild_removal,
     get_app_setting,
     set_app_setting,
 )
 import support_join_watch
 import wizard_registry
-from messages import BOT_NOT_IN_GUILD, NOT_SET_UP
+from messages import BOT_NOT_IN_GUILD, ISSUE_TRACKER_URL, NOT_SET_UP
 
 load_dotenv()
 
@@ -38,14 +39,24 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.8.11"
+__version__ = "1.9.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
 # Initialised only if SENTRY_DSN is set in the environment so local dev runs
 # without a DSN don't ship telemetry. Configuration choices:
 #   * traces_sample_rate=0.0 — errors only, no performance traces.
-#   * send_default_pii=False — no Discord user IDs / IPs in events.
+#   * send_default_pii=False — no user or request context (IDs, IPs)
+#     attached to events. It does NOT cover stack-frame locals; those are
+#     the separate option below.
+#   * include_local_variables=False — no frame locals in the traceback. The
+#     SDK default is True, and nearly every frame in this codebase has a
+#     guild_id, user_id, member name, sheet ID or the Google service-account
+#     JSON in scope at the point something raises, so the default sends all
+#     of it. privacy.html promises crash reports carry none of that, and a
+#     published promise outranks the convenience (#518). The exception type,
+#     message and full frame list are unaffected — only the values are gone,
+#     so diagnosis now leans on a repro rather than a locals dump.
 #   * environment — read from $ENV (defaults to "production"); local dev
 #     should set ENV=development to keep dev errors out of prod alerts.
 #   * before_send — drops upstream failures nobody can fix from the code
@@ -62,6 +73,7 @@ if _sentry_dsn:
         environment=os.getenv("ENV", "production"),
         traces_sample_rate=0.0,
         send_default_pii=False,
+        include_local_variables=False,
         before_send=sentry_before_send,
     )
     print(
@@ -251,7 +263,84 @@ async def on_ready():
 
     # Initialise the config database (creates tables and applies pending migrations)
     init_db()
+
+    # Champion Duel keeps its own database file on the same volume — global
+    # tournament data rather than per-guild config. Failure here must not stop
+    # the bot: it is one feature, and everything else still works.
+    #
+    # It used to say this file "can be wiped between qualifiers and semifinals".
+    # That has not been true since #495: `import_registrants` writes a row's
+    # group and rank to one round of one grouping precisely so loading the
+    # semifinal draw leaves every qualifier group intact, and there is no wipe
+    # path in the module. The line was read as a lifecycle guarantee while
+    # deciding where VS scores should live (#544), so it is corrected here
+    # rather than left to mislead the next reader.
+    try:
+        import champion_duel_db
+
+        champion_duel_db.init_db()
+    except Exception as e:  # noqa: BLE001 - one feature must not block startup
+        print(f"[CHAMPION_DUEL] Database init failed, feature degraded: {e}")
+
+    # VS scores (#544). Its own file for the same reason Champion Duel has one:
+    # game-world records keyed to the in-game alliance rather than per-guild
+    # config. Separate from Champion Duel's because a league season and a
+    # tournament are different grains, not because either gets wiped.
+    try:
+        import alliance_duel_db
+
+        alliance_duel_db.init_db()
+    except Exception as e:  # noqa: BLE001 - one feature must not block startup
+        print(f"[VS] Score database init failed, central scores degraded: {e}")
+
+    # Precomputed odds. Its own try/except rather than sharing the one above:
+    # every row in that table is derivable from the rows next to it, so a store
+    # that will not open costs recomputation on press -- which is what the bot
+    # did before it existed -- and must not take the rest of the feature down
+    # with it.
+    try:
+        import champion_duel_store
+
+        champion_duel_store.init_store()
+        bot._cd_store_ready = True
+    except Exception as e:  # noqa: BLE001 - degrades to computing on press
+        bot._cd_store_ready = False
+        print(f"[CHAMPION_DUEL] Odds store init failed, odds compute on press: {e}")
+
+    # Which font families this container actually carries. Three are
+    # committed to `assets/fonts/`; the rest arrive as an apt package
+    # (`fonts-noto-core`, see `nixpacks.toml`). An environment change
+    # fails silently in a way a code change does not — a build that
+    # quietly drops the package brings empty boxes back to every
+    # non-Latin name on every card, with no error anywhere. This is the
+    # line that says so at boot rather than weeks later off a
+    # screenshot. Resolves paths only; loads no font.
+    try:
+        import storm_renderer
+
+        storm_renderer.log_font_coverage()
+    except Exception as e:  # noqa: BLE001 - a font report must not block boot
+        print(f"[FONTS] Coverage check failed: {e}")
+
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
+
+    # How much parallelism this container actually has, printed once.
+    #
+    # It decides what the most expensive thing the bot does costs everybody
+    # else. A Champion Duel knockout run is pure Python, so it holds the GIL
+    # and never releases it for us; the event loop keeps turning because the
+    # run is on `asyncio.to_thread`, but every `to_thread` database read behind
+    # it has to win the GIL back from a thread that is still running. On ONE
+    # core the scheduler forces that handover and a command slows by about a
+    # third; on sixteen the compute thread keeps winning the race and the same
+    # command slows by 30x. Same code, same run -- the only variable is this
+    # number, and nothing in production has ever reported it.
+    #
+    # `cpu_count` is the machine; `process_cpu_count` (3.13+) is what this
+    # process is actually allowed to use, which is the one that matters under
+    # a container's CPU limit and can be far smaller.
+    usable = getattr(os, "process_cpu_count", lambda: None)() or os.cpu_count()
+    print(f"[INFO] CPUs: {os.cpu_count()} on the machine, {usable} usable by this process")
 
     # Demo guild reset hook. Runs the seed against the configured demo guild
     # whenever SEED_DEMO_ON_BOOT=1 is set in the Railway env. Wipes user-added
@@ -301,6 +390,16 @@ async def on_ready():
     if "transfer_cog" not in bot.extensions:
         await bot.load_extension("transfer_cog")
         print("[INFO] Transfer cog loaded")
+    if "alliance_duel_cog" not in bot.extensions:
+        await bot.load_extension("alliance_duel_cog")
+        print("[INFO] Alliance Duel (VS) cog loaded")
+    # The `/champion_duel` hub. Member-facing (odds and player look-ups), with
+    # contributing behind Premium and the operator tools behind
+    # CHAMPION_DUEL_ADMIN_IDS — the hub resolves both itself, so loading
+    # unconditionally is safe: an empty env var means nobody sees admin buttons.
+    if "champion_duel_cog" not in bot.extensions:
+        await bot.load_extension("champion_duel_cog")
+        print("[INFO] Champion Duel cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:
@@ -425,6 +524,17 @@ async def on_ready():
         print(f"[BUDDY] Failed to re-register buddy views: {e}")
         sentry_sdk.capture_exception(e)
 
+    # Re-register persistent Alliance Duel (VS) score prompt Views (#405) so
+    # yesterday's prompt is still clickable after a redeploy. Fed from
+    # `vs_score_prompt_posts`.
+    try:
+        from alliance_duel_views import register_persistent_vs_views
+
+        register_persistent_vs_views(bot)
+    except Exception as e:
+        print(f"[VS PROMPT] Failed to re-register score prompt views: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Refresh zone emoji IDs from the bot's own Application Emojis
     # (#177). Each environment (dev, prod) ships its own Discord
     # Application with its own emoji set; the bot reads them at boot
@@ -459,10 +569,22 @@ async def on_ready():
         print("[INFO] Growth tracker started")
         stats_publish_task.start()
         print("[INFO] Stats publisher started")
+        guild_removal_sweep_task.start()
+        print("[INFO] Guild removal sweep started")
         shiny_tasks_refresh_task.start()
         print("[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print("[INFO] Shiny tasks per-minute post loop started")
+        # Only against a store that opened. Started regardless, the loop would
+        # hit `no such table: odds_runs` every minute and capture it every
+        # minute -- and on this project every high-priority Sentry event
+        # auto-files a GitHub issue, so a table that failed to create would
+        # arrive as roughly 1,400 of them a day.
+        if getattr(bot, "_cd_store_ready", False):
+            champion_duel_odds_task.start()
+            print("[INFO] Champion Duel odds sweeper started")
+        else:
+            print("[CHAMPION_DUEL] Odds sweeper not started: the store is unavailable")
         try:
             from storm_signup_scheduler import start_storm_signup_scheduler
 
@@ -519,6 +641,15 @@ async def on_guild_join(guild: discord.Guild):
     """
     print(f"[GUILD] Joined {guild.name} (ID: {guild.id}) — {guild.member_count} members")
 
+    # Cancel any pending removal: the data was held, not deleted, so
+    # coming back inside the window costs nothing at all (#543).
+    try:
+        if clear_guild_removal(guild.id):
+            print(f"[GUILD] Cancelled the pending data removal for {guild.name}")
+    except Exception as e:
+        print(f"[GUILD] Could not cancel the removal hold for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Try to identify the inviter via the audit log (requires View Audit Log
     # permission, which the bot's default role normally gets).
     inviter: discord.User | discord.Member | None = None
@@ -566,13 +697,26 @@ async def on_guild_join(guild: discord.Guild):
 @bot.event
 async def on_guild_remove(guild: discord.Guild):
     """Refresh the presence count when the bot is removed from a server,
-    and drop the install metadata row so kicked guilds aren't retained.
+    and start the hold before its data is purged (#543).
     """
     print(f"[GUILD] Removed from {guild.name} (ID: {guild.id})")
     try:
-        delete_guild_install_metadata(guild.id)
+        record_guild_removal(guild.id)
     except Exception as e:
-        print(f"[GUILD] Could not clear install metadata for {guild.name}: {e}")
+        print(f"[GUILD] Could not record removal for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
+
+    # Credentials go now rather than at the end of the hold. The hold is there
+    # so a rejoin costs nothing, not so a write-capable API session outlives
+    # the removal by a month.
+    try:
+        import champion_duel_db
+
+        revoked = champion_duel_db.revoke_guild_sessions(guild.id)
+        if revoked:
+            print(f"[GUILD] Revoked {revoked} API session(s) for {guild.name}")
+    except Exception as e:
+        print(f"[GUILD] Could not revoke API sessions for {guild.name}: {e}")
         sentry_sdk.capture_exception(e)
     await _update_presence()
 
@@ -694,7 +838,8 @@ async def _verification_line(member: discord.Member, *, eligible: bool) -> str |
 # from CommandInvokeError before reporting so Sentry groups errors by
 # the actual cause, not by the wrapper.
 
-ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues"
+# Re-exported: `ISSUE_TRACKER_URL` is imported from here by name in places, and
+# the string itself lives in `messages.py` with the rest of the shared copy.
 
 
 def _format_command_error(error: BaseException, event_id: str | None) -> str:
@@ -891,6 +1036,48 @@ async def stats_publish_task():
 
 @stats_publish_task.before_loop
 async def before_stats_publish_task():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(hours=24)
+async def guild_removal_sweep_task():
+    """Purge servers whose removal hold has run out (#543).
+
+    Daily rather than on the removal itself, because the hold is the point: an
+    admin who kicks the bot and re-adds it an hour later keeps everything. A
+    day's granularity on a thirty-day window costs nothing.
+    """
+    from config import sweep_guild_removals
+
+    try:
+        # The live membership set, not the hold table alone. `on_guild_join`
+        # is not dispatched for a server re-added while the bot was
+        # disconnected -- that arrives in the READY burst -- so a stale hold
+        # would otherwise delete a live server's data.
+        installed = {g.id for g in bot.guilds}
+        # SQLite writes off the event loop, the pattern `growth_task` adopted
+        # under #366 for exactly this shape of work.
+        result = await asyncio.to_thread(sweep_guild_removals, apply=True, installed=installed)
+        if result["guilds"]:
+            print(
+                f"[REMOVAL] Purged {len(result['guilds'])} held server(s): "
+                f"config={result['config']['deleted']} "
+                f"champion_duel={result['champion_duel']} "
+                f"alliance_duel={result['alliance_duel']}"
+            )
+        if result["rejoined"]:
+            print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")
+        if result["failed"]:
+            print(f"[REMOVAL] Purge failed, will retry tomorrow: {result['failed']}")
+    except Exception as e:
+        # Never let the loop die. A purge that fails today is retried
+        # tomorrow, because the hold row is only cleared on success.
+        print(f"[REMOVAL] Sweep failed: {e}")
+        sentry_sdk.capture_exception(e)
+
+
+@guild_removal_sweep_task.before_loop
+async def before_guild_removal_sweep_task():
     await bot.wait_until_ready()
 
 
@@ -1150,11 +1337,85 @@ async def shiny_tasks_post_task():
     # Mark a clean tick so the outage catch-up scan (#227) can tell this
     # loop was alive up to now. Per-guild failures above are isolated and
     # don't count as an outage.
-    stamp_loop_heartbeat("shiny_post")
+    await asyncio.to_thread(stamp_loop_heartbeat, "shiny_post")
 
 
 @shiny_tasks_post_task.before_loop
 async def before_shiny_tasks_post_task():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(minutes=1)
+async def champion_duel_odds_task():
+    """One Champion Duel group per minute, worked out before anybody asks.
+
+    WHY A TIMER AT ALL. An odds run is the most expensive thing this bot does --
+    60 to 90 seconds of pure Python for a knockout bracket -- and the surface
+    work moves it from a deliberate press three clicks deep to the default
+    state of the landing screen. Nobody should be sitting behind that, so the
+    work happens here and the press becomes a read.
+
+    ONE GROUP PER TICK, and that is the rate limit rather than an accident of
+    the interval. A whole grouping is 16 semifinal groups plus a bracket, about
+    six minutes of CPU; taken in one block that is six minutes of a busy
+    machine, and spread a group at a time it is half an hour of background work
+    nobody notices. #509 measured CPU at 1% of the hosting bill and memory at
+    83%, which is what makes this affordable at all.
+
+    THE STORE DECIDES WHAT IS DUE, not this loop. `store.due()` recomputes each
+    group's fingerprint from live rows, drops anything still inside its
+    five-minute quiet window, and returns what is left in last-viewed order.
+    There is no dirty flag to go wrong.
+
+    BOTH CALLS GO THROUGH `to_thread` because both touch SQLite, and the run
+    itself then goes on to a subprocess from there -- so the minute it takes is
+    a minute spent blocked on a pipe rather than holding the GIL against every
+    other guild. That is the whole point of the change this loop arrived with.
+    """
+    try:
+        import champion_duel_store as cd_store
+    except Exception:  # noqa: BLE001 - feature absent, nothing to sweep
+        return
+
+    try:
+        candidates = await asyncio.to_thread(cd_store.due)
+    except Exception as e:  # noqa: BLE001 - a bad tick must not stop the loop
+        # Reported ONCE per run of bad luck, not once a minute for as long as it
+        # lasts. Whatever breaks this call is almost always going to keep
+        # breaking it, and a per-minute capture turns one fault into a thousand
+        # issues a day.
+        print(f"[CHAMPION_DUEL] odds sweep could not list work: {e}")
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
+        return
+
+    bot._cd_sweep_failing = False
+
+    if not candidates:
+        return
+
+    top = candidates[0]
+    label = top["label"] or "the field"
+    try:
+        outcome = await asyncio.to_thread(cd_store.run_one, top)
+    except Exception as e:  # noqa: BLE001 - same, and the group stays due
+        # `run_one` swallows and records what the model raises, so anything
+        # arriving here is the sweep machinery itself and worth one report.
+        print(f"[CHAMPION_DUEL] odds sweep failed on {top['stage']} {label}: {e}")
+        if not getattr(bot, "_cd_sweep_failing", False):
+            bot._cd_sweep_failing = True
+            sentry_sdk.capture_exception(e)
+        return
+
+    print(
+        f"[CHAMPION_DUEL] odds sweep {outcome}: {top['stage']} {label} "
+        f"({len(candidates) - 1} still due)"
+    )
+
+
+@champion_duel_odds_task.before_loop
+async def before_champion_duel_odds_task():
     await bot.wait_until_ready()
 
 
@@ -1420,12 +1681,13 @@ async def help_slash(interaction: discord.Interaction):
         bot=bot,
     )
     embed = build_overview_embed(is_premium_flag)
-    view = HelpView(is_premium_flag, origin=interaction)
+    view = HelpView(is_premium_flag)
     await interaction.response.send_message(
         embed=embed,
         view=view,
         ephemeral=True,
     )
+    view.message = await interaction.original_response()
 
 
 # The owner-only /admin diagnostic toolkit lives in its own module (#372) --

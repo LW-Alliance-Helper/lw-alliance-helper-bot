@@ -1483,7 +1483,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 self.stop()
 
             @discord.ui.button(
-                label="🔧 Remap manually",
+                label="✏️ Remap manually",
                 style=discord.ButtonStyle.secondary,
             )
             async def remap(
@@ -1524,7 +1524,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                     item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content="↩️ Member Sync setup cancelled.",
+                    content="↩️ Member Sync setup canceled.",
                     view=self,
                 )
                 self.stop()

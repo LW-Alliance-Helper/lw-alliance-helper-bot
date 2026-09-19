@@ -11,7 +11,7 @@ disabled on the free tier with a click-upsell.
 This module owns the embed builder and the button view; the actual
 wizard handlers live in their existing modules (setup_cog.run_train_setup,
 run_growth_setup, run_birthday_setup, run_storm_setup, run_event_setup,
-run_survey_setup, run_shiny_tasks_setup, run_growth_breakdown_setup;
+run_shiny_tasks_setup, run_growth_breakdown_setup; survey_setup.run_survey_setup;
 member_roster.run_member_roster_setup; setup_cog.run_setup;
 setup_cog._send_view_configuration; setup_cog._reset_config). Each
 button is a thin dispatcher.
@@ -44,8 +44,15 @@ HUB_BTN_TRAIN = "🚂 Train"
 HUB_BTN_GROWTH = "📈 Growth"
 HUB_BTN_BIRTHDAYS = "🎂 Birthdays"
 HUB_BTN_EVENTS = "📣 Events"
-HUB_BTN_DS = "⚔️ Desert Storm"
-HUB_BTN_CS = "🏜️ Canyon Storm"
+# The storm pair, split from its labels so the glyph can be imported on its
+# own. `notes/DESIGN.md` emoji rule 4 says feature emoji come from the
+# `HUB_BTN_*` constant rather than being retyped — but a welded
+# "glyph + label" string cannot be reused by the seven surfaces that need only
+# the mark, so they all hardcoded it, and two of them drifted to 🔥 / ⚡ before
+# anyone noticed. Import STORM_GLYPH; do not retype the emoji.
+STORM_GLYPH = {"DS": "⚔️", "CS": "🛡️"}
+HUB_BTN_DS = f"{STORM_GLYPH['DS']} Desert Storm"
+HUB_BTN_CS = f"{STORM_GLYPH['CS']} Canyon Storm"
 HUB_BTN_SHINY = "🌟 Shiny Tasks"
 HUB_BTN_MEMBERS = "👥 Member Sync"
 HUB_BTN_SURVEY = "📋 Survey"
@@ -53,6 +60,12 @@ HUB_BTN_BREAKDOWN = "📊 Growth Breakdown"
 HUB_BTN_BUDDY = "🤝 Buddy System"
 HUB_BTN_TRANSFERS = "🔁 Transfers"
 HUB_BTN_MAP_MANAGER = "🗺️ Map Manager"
+# 🏆 mirrors the game's own iconography: Last War renders the Duel League with
+# a trophy (in several styles), so the surface we control reads as continuous
+# with the one we don't. That cohesion is the reason for this emoji, not
+# aesthetics — don't swap it for something that merely looks better here.
+# Where the game already has an icon for a thing, match it.
+HUB_BTN_VS = "🏆 Alliance Duel (VS)"
 
 STORM_SETUP_NAV = {
     "DS": f"/setup → {HUB_BTN_DS}",
@@ -67,7 +80,7 @@ def _state_dot(is_configured: bool, *, premium_locked: bool = False) -> str:
     """Compact configured/unconfigured/locked indicator for the embed body."""
     if premium_locked:
         return "💎"
-    return "✅" if is_configured else "⚪"
+    return "✅" if is_configured else "❌"
 
 
 def _build_setup_hub_embed(
@@ -79,7 +92,7 @@ def _build_setup_hub_embed(
 
     Foundations come from `guild_configs`; per-feature state comes from
     each feature's own config helper. Premium-only features show 💎 on
-    the free tier rather than ⚪ so officers see at a glance which
+    the free tier rather than ❌ so officers see at a glance which
     capabilities are locked vs simply unconfigured.
     """
     import config
@@ -168,8 +181,12 @@ def _build_setup_hub_embed(
         mapmanager_on = bool(config.get_guild_alliance_mapping(guild.id))
     except Exception:
         mapmanager_on = False
+    try:
+        vs_on = bool((config.get_vs_config(guild.id) or {}).get("enabled"))
+    except Exception:
+        vs_on = False
 
-    # Premium-gated features show 💎 on free tier instead of ⚪.
+    # Premium-gated features show 💎 on free tier instead of ❌.
     def _free(state: bool) -> str:
         return _state_dot(state)
 
@@ -195,6 +212,7 @@ def _build_setup_hub_embed(
         f"{_premium(members_on)} Member Sync",
         f"{_free(buddy_on)} Profession Buddy System",
         f"{_premium(transfers_on)} Transfer Management",
+        f"{_premium(vs_on)} Alliance Duel (VS)",
     ]
     # Map Manager is hidden until MAP_MANAGER_COMMANDS_ENABLED is set (#316/#338).
     from api_server import map_manager_commands_enabled
@@ -240,7 +258,7 @@ class _SetupHubView(discord.ui.View):
         Row 1 (free-tier features):
           🚂 Train | 📈 Growth | 🎂 Birthdays | 📣 Events | 🤝 Buddy System
         Row 2 (Premium event flow):
-          ⚔️ Desert Storm | 🏜️ Canyon Storm | 🌟 Shiny Tasks
+          ⚔️ Desert Storm | 🛡️ Canyon Storm | 🌟 Shiny Tasks
         Row 3 (Premium roster + survey + growth breakdown):
           👥 Member Sync 💎 | 📋 Survey 💎 | 📊 Growth Breakdown 💎
 
@@ -284,6 +302,10 @@ class _SetupHubView(discord.ui.View):
             self.btn_growth_breakdown,
             self.btn_transfers,
             self.btn_map_manager,
+            # Alliance Duel (VS) is Premium apart from the member day-theme
+            # reminder, which is a member-facing scheduled post rather than
+            # anything reachable from this wizard.
+            self.btn_vs,
         ):
             button.disabled = True
             if not button.label.startswith("💎"):
@@ -293,10 +315,26 @@ class _SetupHubView(discord.ui.View):
         """Reflect current opt-in state in the toggle button label so
         officers see the state at a glance without clicking. Called
         from `__init__` so each hub render picks up the latest value
-        from `guild_configs`."""
+        from `guild_configs`.
+
+        A read failure falls through to the same default as a guild with
+        no row yet. This runs inside `__init__`, so letting the error
+        escape would take the whole of `/setup` down over a transient
+        database problem, which is a bad trade for a button label. It
+        also made three tests environment-dependent: they only passed
+        where a real database file happened to exist, and went red the
+        moment CI started running on `dev`."""
         from config import get_config
 
-        cfg = get_config(self.guild_id)
+        try:
+            cfg = get_config(self.guild_id)
+        except Exception as e:
+            logger.warning(
+                "[SETUP HUB] release-announcement state unreadable for guild %s: %s",
+                self.guild_id,
+                e,
+            )
+            cfg = None
         enabled = bool(cfg.release_announcements_enabled) if cfg else True
         state = "ON" if enabled else "OFF"
         self.btn_release_announcements.label = f"📢 Release announcements: {state}"
@@ -455,6 +493,12 @@ class _SetupHubView(discord.ui.View):
         from setup_cog import _launch_shiny_tasks_setup
 
         await _launch_shiny_tasks_setup(inter, self.bot)
+
+    @discord.ui.button(label=HUB_BTN_VS, style=discord.ButtonStyle.secondary, row=2)
+    async def btn_vs(self, inter: discord.Interaction, _b: discord.ui.Button):
+        from alliance_duel_wizard import run_vs_setup
+
+        await run_vs_setup(inter, self.bot)
 
     # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 

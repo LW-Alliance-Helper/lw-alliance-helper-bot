@@ -2894,7 +2894,7 @@ class TestApprovePostButtonSplit:
         approve_image_row = next(r for l, r in rows_by_label.items() if "with image" in l)
         approve_text_row = next(r for l, r in rows_by_label.items() if "text only" in l)
         # #240 follow-up renamed the structured-mode close button from
-        # "❌ Cancel" to "👋 Close (draft saved)" since the draft now
+        # "❌ Cancel" to "Close (draft saved)" since the draft now
         # persists and there's nothing to "cancel" anymore.
         close_row = next(r for l, r in rows_by_label.items() if "Close" in l)
         assert approve_image_row == approve_text_row == close_row
@@ -3403,9 +3403,9 @@ class TestRenderActionView:
     def test_three_buttons_present(self):
         view = self._make_view()
         labels = [getattr(c, "label", "") for c in view.children]
-        assert "📥 Download" in labels
-        assert "💾 Save to history" in labels
-        assert "📢 Post to channel..." in labels
+        assert "💾 Download" in labels
+        assert "📜 Save to history" in labels
+        assert "📣 Post to channel..." in labels
 
     @pytest.mark.asyncio
     async def test_non_owner_blocked_by_interaction_check(self):
@@ -3434,7 +3434,7 @@ class TestRenderActionView:
         inter.response.send_message = AsyncMock()
 
         # Find the save button and drive its callback.
-        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "📜 Save to history")
         await save_btn.callback(inter)
 
         refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
@@ -3461,7 +3461,7 @@ class TestRenderActionView:
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        save_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Save to history")
+        save_btn = next(c for c in view.children if getattr(c, "label", "") == "📜 Save to history")
         await save_btn.callback(inter)
 
         # Nothing was written.
@@ -3489,7 +3489,7 @@ class TestRenderActionView:
         inter.response = MagicMock()
         inter.response.send_message = AsyncMock()
 
-        download_btn = next(c for c in view.children if getattr(c, "label", "") == "📥 Download")
+        download_btn = next(c for c in view.children if getattr(c, "label", "") == "💾 Download")
         await download_btn.callback(inter)
 
         inter.response.send_message.assert_awaited_once()
@@ -3527,6 +3527,30 @@ class TestBuilderViewTimeoutCleanup:
             user_id=99,
         )
         assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_names_the_route_back_and_promises_nothing(self, seeded_db):
+        """Signed off 2026-09-11 (#589, block 13): the notice says what was
+        lost and which hub button re-opens the builder, and no longer
+        promises a save-and-resume feature that does not exist."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        session = _make_session(team="A")
+        session.event_type = "CS"
+        view = srb.RosterBuilderView(session)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock()
+
+        await view.on_timeout()
+
+        body = view.message.edit.await_args.kwargs["content"]
+        assert body.startswith("⏰ The roster builder timed out after an idle hour.")
+        assert "Nothing in progress was saved." in body
+        assert "`/canyonstorm`" in body
+        assert f"**{srb.HUB_BTN_VIEW_SIGNUPS}**" in body
+        assert body.endswith("to start again.")
+        assert "save-and-resume" not in body
+        assert all(item.disabled for item in view.children)
 
     @pytest.mark.asyncio
     async def test_on_timeout_manual_mode_is_a_noop(self, seeded_db):
@@ -4020,7 +4044,7 @@ class TestFinalizePostOutcomes:
             (
                 c
                 for c in inter.followup.send.await_args_list
-                if "Cancelled" in (c.args[0] if c.args else "")
+                if "Canceled" in (c.args[0] if c.args else "")
             ),
             None,
         )
@@ -5679,7 +5703,7 @@ class TestEmbedLayoutOverhaul:
     def test_title_drops_team_label(self):
         sess = _make_session(team="A")
         embed = srb._render_builder_embed(sess)
-        assert embed.title == "🛡️ Roster Builder Template: Standard"
+        assert embed.title == "📋 Roster Builder Template: Standard"
 
     def test_body_opens_with_bulleted_event_and_team(self):
         sess = _make_session(team="B")
@@ -5713,8 +5737,8 @@ class TestEmbedLayoutOverhaul:
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
         # `←` no longer appears on the Power Tower zone line. The
-        # `🎯 Active zone:` line below already calls it out.
-        # (`🎯 Active zone:` is its own line; the marker we're checking
+        # `⭐ Active zone:` line below already calls it out.
+        # (`⭐ Active zone:` is its own line; the marker we're checking
         # is the inline one next to the zone name.)
         zone_line = next(
             line for line in body.splitlines() if "Power Tower" in line and "/" in line
@@ -5797,9 +5821,9 @@ class TestEmbedLayoutOverhaul:
         srb._auto_fill_session(sess)
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
-        assert "## 🎯 Auto-fill summary" in body
+        assert "## ✨ Auto-fill summary" in body
         # The summary section uses `- ` bullets instead of `• `.
-        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_idx = body.index("## ✨ Auto-fill summary")
         summary_block = body[summary_idx:]
         assert "- Per-member rules applied" in summary_block
         assert "- Auto-filled by power" in summary_block
@@ -5825,7 +5849,7 @@ class TestEmbedLayoutOverhaul:
         assert "- Auto-paired subs: " in body
         # The explicit `Primary ↔ Sub` strings should NOT appear inside
         # the summary block (they're in the section above).
-        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_idx = body.index("## ✨ Auto-fill summary")
         summary_block = body[summary_idx:]
         assert "↔" not in summary_block
 
@@ -5881,7 +5905,7 @@ class TestEmbedLayoutOverhaul:
         embed = srb._render_builder_embed(sess)
         body = embed.description or ""
         filled_line = next(line for line in body.splitlines() if line.startswith("📊 Filled:"))
-        active_line = next(line for line in body.splitlines() if line.startswith("🎯 Active zone:"))
+        active_line = next(line for line in body.splitlines() if line.startswith("⭐ Active zone:"))
         # No `**` markdown bold around the labels or counts.
         assert "**" not in filled_line
         # The `_(preset minimum ... relaxed)_` italic note can use
@@ -6815,8 +6839,9 @@ class TestAssignConfirmView:
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
         inter.response.send_message = AsyncMock()
-        await confirm.yes(inter)
-        # No assignment landed; rejection sent.
+        # The guard is the view's inherited `interaction_check`, which discord.py
+        # runs before any button callback; a stranger never reaches `yes`.
+        assert await confirm.interaction_check(inter) is False
         assert "1005" not in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         args = inter.response.send_message.call_args.args
@@ -7082,8 +7107,9 @@ class TestZoneMemberEditView:
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
         inter.response.send_message = AsyncMock()
-        await v._on_apply(inter)
-        # No state change; rejection sent.
+        # The guard is the view's inherited `interaction_check`, which discord.py
+        # runs before any callback; a stranger never reaches `_on_apply`.
+        assert await v.interaction_check(inter) is False
         assert "1001" in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         assert (
@@ -7149,7 +7175,7 @@ class TestZoneMemberEditView:
 
     def test_main_picker_renders_renamed_clear_button(self):
         """`Remove current zone assignees` was a destructive name that
-        invited misclicks; it's now `🧹 Clear this zone`."""
+        invited misclicks; it's now `🗑️ Clear this zone`."""
         from unittest.mock import patch
 
         members = {

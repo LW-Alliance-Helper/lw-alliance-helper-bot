@@ -594,7 +594,7 @@ class TestStormCommandsGate:
         seeded_db,
         event_type,
     ):
-        """The hub's `🧮 Manage strategy presets` button calls
+        """The hub's `📋 Manage strategy presets` button calls
         `open_strategy_list`. Confirm that path enforces the same
         leadership gate the legacy `/<event> strategy list` subcommand
         did."""
@@ -820,7 +820,7 @@ class TestHelpCommand:
         from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
         from help_content import HelpView, HELP_CATEGORIES
 
-        view = HelpView(is_premium=False, origin=None)
+        view = HelpView(is_premium=False)
         select = view.children[0]
 
         # Pick the first real category (not the Overview sentinel).

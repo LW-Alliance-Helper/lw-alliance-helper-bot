@@ -511,7 +511,7 @@ _REASONS = {
         "different account, or the link saved in setup is wrong."
     ),
     NO_ACCESS: (
-        "I don't have permission to open that spreadsheet any more. Its sharing "
+        "I don't have permission to open that spreadsheet anymore. Its sharing "
         "settings were most likely changed."
     ),
     CHANNEL_GONE: (
@@ -519,7 +519,7 @@ _REASONS = {
         "**View Channel** there so I can no longer see it."
     ),
     CHANNEL_NO_VIEW: (
-        "I can't see that channel any more. My role most likely lost **View Channel** "
+        "I can't see that channel anymore. My role most likely lost **View Channel** "
         "there, which happens easily during a channel reorg."
     ),
     CHANNEL_NO_SEND: "I can see that channel but I'm not allowed to post in it.",

@@ -367,7 +367,7 @@ class TestCheckAndAddBirthdays:
         assert "ShadowHunter" in msg
         assert "Phoenix99" in msg
         # Header only renders once at the top, not per member.
-        assert msg.count("🚨 **Birthday scheduling conflict") == 1
+        assert msg.count("⚠️ **Birthday scheduling conflict") == 1
         # Plural copy when more than one member is affected.
         assert "these members" in msg
 

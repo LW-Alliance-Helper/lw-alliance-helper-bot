@@ -460,7 +460,7 @@ STORM_PARTICIPATION_PRESETS_FREE = [
         "label": "Who sat out this week?",
         "type": "roster_multi_select",
         "description": "Roster multi-select against your full roster.",
-        "emoji": "📝",
+        "emoji": "✏️",
     },
     {
         "key": "didnt_vote",

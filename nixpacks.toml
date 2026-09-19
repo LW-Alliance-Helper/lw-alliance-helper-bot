@@ -1,0 +1,38 @@
+# Nixpacks build config. Only here for fonts.
+#
+# The bot draws player names into PNGs — the Desert / Canyon Storm
+# roster image, the Champion Duel VS card, the picks card. A glyph
+# lives inside a typeface: Unicode gives a codepoint a meaning, not a
+# shape, so a name in a script no installed font covers is not a
+# degraded render, it is a row of empty boxes.
+#
+# `assets/fonts/` commits three files, covering Latin, CJK and Arabic.
+# `fonts-noto-core` covers what the rest of the player base writes in —
+# Latin Extended-A (Turkish, Polish, Czech, Romanian, Hungarian,
+# Croatian, Slovak — about 45,000 players and the largest single gap),
+# Thai, Devanagari, Tamil, Hebrew, Georgian, Khmer, Bengali, Myanmar,
+# Lao, Armenian, Sinhala, and the full Cyrillic and Greek that the
+# bundled Latin subset does not have. Installing beats committing here:
+# nothing enters a public repo, and Noto ships as a set of ~150 files
+# because no single font can hold Unicode — the format caps at 65,535
+# glyphs against roughly 150,000 assigned codepoints.
+#
+# `fonts-dejavu-core` is the last-resort broad face `storm_renderer`
+# has always named in its fallback chain. Pinned here rather than
+# assumed, so the chain's last link is a fact about this image.
+#
+# This is a runtime dependency, not a build one: the fonts are read
+# when a card is drawn. Nixpacks builds and runs in one image, so the
+# setup phase is the right place.
+#
+# `'...'` extends the provider's list. Without it this REPLACES
+# whatever the Python provider asked for.
+#
+# `railpack.json` says the same thing for Railway's other builder.
+# There is no `railway.json` in this repo pinning which one runs, so
+# both are shipped and each ignores the other's file. If fonts go
+# missing after a deploy, `[FONTS]` in the boot log names what is gone
+# — see `storm_renderer.log_font_coverage`.
+
+[phases.setup]
+aptPkgs = ['...', 'fonts-noto-core', 'fonts-dejavu-core']

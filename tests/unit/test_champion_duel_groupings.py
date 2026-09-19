@@ -1,0 +1,629 @@
+"""Groupings: the 16 warzones drawn together.
+
+Champion Duel timing and structure are per grouping, not global. Everything
+built before this assumed there was one, which was true of the imported draw
+and false as a product: about 50 alliances use the bot and that draw covers
+roughly two of them.
+
+The failure being prevented is silent. An officer in warzone 1500 recording an
+opponent as "Group D" landed that player in the imported grouping's Group D,
+because a group letter was a bare TEXT meaning the same thing everywhere.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import pytest
+
+import champion_duel_db as db
+
+
+@pytest.fixture
+def cd_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "champion_duel.sqlite3"))
+    db.init_db()
+    return None
+
+
+def started_so_today_is(phase: str) -> str:
+    """A start date putting today in `phase`, computed rather than hardcoded so
+    these do not start failing on a date nobody chose."""
+    first_day = {key: first for key, first, _ in db.PHASES}[phase]
+    return (db._server_today() - timedelta(days=first_day)).isoformat()
+
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+
+
+def test_the_warzone_line_parses_the_way_the_game_prints_it(cd_db):
+    """Copied off a phone screen. Rejecting it over a separator would be a
+    validation failure with nothing wrong behind it."""
+    line = "#773 , #800 , #744 , #677 , #681 , #804 , #699 , #736"
+    assert db.parse_warzones(line) == ["677", "681", "699", "736", "744", "773", "800", "804"]
+
+    # Same sixteen, any way they are typed.
+    assert db.parse_warzones("800 773") == db.parse_warzones("#773,#800")
+
+
+def test_the_set_is_the_identity_not_the_order(cd_db):
+    """The game lists them in an arbitrary order, so two people entering the
+    same grouping must not produce two groupings."""
+    a = db.create_grouping("773, 800, 744", started_so_today_is("qualifiers"))
+    assert a["warzones"] == ["744", "773", "800"]
+
+
+def test_a_warzone_resolves_to_its_grouping(cd_db):
+    """One number a member knows without looking anything up. A warzone is in
+    at most one grouping per Champion Duel, so it is enough on its own."""
+    made = db.create_grouping("773, 800, 744", started_so_today_is("qualifiers"))
+
+    assert db.find_grouping_by_warzone("800")["id"] == made["id"]
+    assert db.find_grouping_by_warzone("#800")["id"] == made["id"]
+    assert db.find_grouping_by_warzone(800)["id"] == made["id"]
+    assert db.find_grouping_by_warzone("1500") is None
+
+
+def test_repeats_survive_when_validation_asks_for_them(cd_db):
+    """Sixteen numbers with one typed twice dedupe to sixteen, and the count
+    check would then pass on a grouping that is short one warzone."""
+    assert db.parse_warzones("773 800 773") == ["773", "800"]
+    assert db.parse_warzones("773 800 773", unique=False) == ["773", "800", "773"]
+
+
+def test_a_warzone_in_two_concurrent_groupings_is_a_contradiction(cd_db):
+    """A warzone is drawn into exactly one grouping per Champion Duel, so an
+    overlap that is not the whole set means one of the two entries is wrong."""
+    mine = db.create_grouping("773, 800, 744", started_so_today_is("qualifiers"))
+
+    overlaps = db.overlapping_groupings(["800", "1500"], started_so_today_is("qualifiers"))
+
+    assert [(g["id"], z) for g, z in overlaps] == [(mine["id"], "800")]
+
+
+def test_the_same_sixteen_next_season_is_not_a_conflict(cd_db):
+    """Groupings a whole event apart are different Champion Duels. They share
+    warzones by design, and refusing that would block every new season."""
+    db.create_grouping("773, 800", "2026-01-01")
+
+    assert db.overlapping_groupings(["773", "800"], "2026-08-04") == []
+
+
+def test_an_overlap_stands_when_either_side_has_no_dates(cd_db):
+    """We cannot show the two are separate events, and a false stop costs one
+    message where a false pass costs a grouping nobody can untangle."""
+    db.create_grouping("773, 800")  # imported before anyone read its dates
+
+    overlaps = db.overlapping_groupings(["773", "1500"], "2026-08-04")
+
+    assert [z for _, z in overlaps] == ["773"]
+
+
+# ── What a server can read ────────────────────────────────────────────────────
+
+
+def test_a_server_can_read_a_champion_duel_it_is_not_in(cd_db):
+    """Somebody is sent a Champion Duel and records it. It holds none of their
+    warzones, so the warzone lookup alone would leave it stored and reachable
+    from nowhere, which is the dead end recording it exists to close."""
+    theirs = db.create_grouping("900, 901, 902", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+
+    assert db.groupings_for_warzone("738") == [], "not drawn into it"
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [theirs["id"]]
+
+
+def test_reading_one_you_entered_is_not_the_same_as_resolving_to_it(cd_db):
+    """The line the whole separation rests on. Entering somebody else's
+    Champion Duel is a contribution, and it must never re-point the hub."""
+    theirs = db.create_grouping("900, 901, 902", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+    db.set_guild_warzone("999", "738")
+
+    assert db.groupings_readable_by("738", "999"), "readable"
+    assert db.resolve_grouping_for_guild("999") is None, "and still not ours"
+
+
+def test_both_sources_come_back_as_one_timeline(cd_db):
+    """Newest first across both, rather than one list appended to the other:
+    the picker is read as a history and an interleaved date order is what makes
+    it one."""
+    ours_old = db.create_grouping("738, 800", "2026-06-01")
+    theirs = db.create_grouping("900, 901", "2026-07-01")
+    db.note_grouping_reader(theirs["id"], "999")
+    ours_new = db.create_grouping("738, 801", "2026-08-01")
+
+    ids = [g["id"] for g in db.groupings_readable_by("738", "999")]
+
+    assert ids == [ours_new["id"], theirs["id"], ours_old["id"]]
+
+
+def test_a_server_that_entered_nothing_reads_exactly_what_it_did_before(cd_db):
+    """The common case, and it must not gain rows. Every alliance but the one
+    that was sent something is in it."""
+    mine = db.create_grouping("738, 800", "2026-08-04")
+    theirs = db.create_grouping("900, 901", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "other")
+
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [mine["id"]]
+    assert db.groupings_readable_by("738", None) == db.groupings_for_warzone("738")
+
+
+def test_a_champion_duel_is_listed_once_when_it_is_both(cd_db):
+    """Entering your own sixteen records you as a reader as well as putting you
+    in it by warzone. Two sources, one row."""
+    mine = db.create_grouping("738, 800", "2026-08-04")
+    db.note_grouping_reader(mine["id"], "999")
+
+    assert [g["id"] for g in db.groupings_readable_by("738", "999")] == [mine["id"]]
+
+
+def test_two_servers_can_both_hold_a_record_of_one_champion_duel(cd_db):
+    """`created_by_guild_id` is single-valued, so a second server joining a set
+    somebody else already entered had nowhere to be recorded. That is why this
+    is its own table rather than a column on `groupings`."""
+    theirs = db.create_grouping("900, 901", "2026-08-04")
+    db.note_grouping_reader(theirs["id"], "999")
+    db.note_grouping_reader(theirs["id"], "888")
+    db.note_grouping_reader(theirs["id"], "999")  # the same person, twice
+
+    for guild in ("999", "888"):
+        assert [g["id"] for g in db.groupings_readable_by(None, guild)] == [theirs["id"]]
+
+
+def test_forgetting_a_person_does_not_take_a_servers_records_with_them(cd_db):
+    """`_REMOVAL_SCRUBS` nulls `created_by_guild_id` when the person who entered
+    a grouping is forgotten. Hanging reachability off that column would have
+    orphaned every Champion Duel their alliance was sent."""
+    theirs = db.create_grouping("900, 901", "2026-08-04", guild_id="999", discord_id="42")
+    db.note_grouping_reader(theirs["id"], "999")
+
+    db.purge_user_data("42", apply=True)
+
+    assert db.get_grouping(theirs["id"])["created_by_guild_id"] is None, "scrubbed"
+    assert [g["id"] for g in db.groupings_readable_by(None, "999")] == [theirs["id"]]
+
+
+# ── Reading a pasted group listing ────────────────────────────────────────────
+
+
+def test_a_score_keeps_its_thousands_separators(cd_db):
+    """The whole reason for splitting on three commas. People type `33,500,000`
+    because that is what the card shows, and a naive split makes it 33."""
+    row = db.parse_placement_line("Kestrel, 738, 1, 33,500,000")
+
+    assert row["name"] == "Kestrel"
+    assert row["server"] == "738"
+    assert row["rank"] == 1
+    assert row["score"] == 33_500_000
+    assert row["problem"] is None
+
+
+def test_a_line_can_stop_early(cd_db):
+    """Only the name is required. An alliance recording just its own members'
+    placements knows the rank and often not the score."""
+    assert db.parse_placement_line("Wren")["name"] == "Wren"
+    assert db.parse_placement_line("Wren")["server"] is None
+
+    partial = db.parse_placement_line("Wren, 744, 25")
+    assert (partial["server"], partial["rank"], partial["score"]) == ("744", 25, None)
+
+
+def test_the_alliance_tag_is_kept_rather_than_discarded(cd_db):
+    """`normalize_name` already ignores it for matching, so this is only about
+    not throwing away the one field we would otherwise have to ask for."""
+    row = db.parse_placement_line("[OGV]Kestrel, 738, 1")
+
+    assert row["name"] == "Kestrel"
+    assert row["alliance"] == "OGV"
+
+
+def test_the_game_formatting_is_tolerated(cd_db):
+    row = db.parse_placement_line("Kestrel, #738, 1")
+    assert row["server"] == "738"
+
+
+def test_a_name_with_a_comma_is_flagged_not_mangled(cd_db):
+    """Its second half lands in the warzone slot. That is not recoverable here,
+    so it goes to the reconcile view for a human rather than being guessed at."""
+    row = db.parse_placement_line("Smith, Jr, 738, 1")
+
+    assert row["problem"] == "bad_server"
+    assert row["server"] is None
+
+
+def test_non_numeric_ranks_and_scores_are_flagged(cd_db):
+    """Named by the slot the unreadable token was standing in. Hero power sits
+    fourth now, so a fourth field that is not a number is a bad power and the
+    score is the one after it."""
+    assert db.parse_placement_line("Wren, 744, first")["problem"] == "bad_rank"
+    assert db.parse_placement_line("Wren, 744, 1, lots")["problem"] == "bad_thp"
+    assert db.parse_placement_line("Wren, 744, 1, 325.8M, lots")["problem"] == "bad_score"
+
+
+# ── Total Hero Power in the paste ─────────────────────────────────────────────
+#
+# The format is `name, warzone, rank, thp, score`, and every case below was a
+# real worry rather than a hypothetical: the four numbers are separated by
+# commas and three of them can contain commas.
+
+
+@pytest.mark.parametrize(
+    "line, server, rank, thp, score",
+    [
+        # A warzone typed plainly, and the same line with the warzone grouped.
+        ("pincatboiiii,2308,225,10,200,000,436,873", "2308", 225, 10_200_000, 436_873),
+        ("pincatboiiii,2,308,225,10,200,000,436,873", "2308", 225, 10_200_000, 436_873),
+        # An unrounded hero power against an unrounded score. `33` cannot
+        # continue a digit group, so the cut between them is forced.
+        ("Kevin,738,5,327,159,292,33,500,000", "738", 5, 327_159_292, 33_500_000),
+        # A rank past a thousand, which is a grouped number in the rank slot.
+        ("Deep,738,1,103,327,159,292,33,500,000", "738", 1103, 327_159_292, 33_500_000),
+        # No separators at all, which is what an AI-generated CSV produces.
+        # This is the rule an earlier prototype got wrong: a single token is a
+        # plain integer of ANY length, and requiring a 1-3 digit lead here
+        # rejected everybody who types plainly while still passing a suite
+        # built only from grouped examples.
+        ("Name,738,5,325800000,33500000", "738", 5, 325_800_000, 33_500_000),
+        # The way the game itself writes a power.
+        ("[OGV]Kestrel,738,1,325.8M,33,500,000", "738", 1, 325_800_000, 33_500_000),
+        # Out of a spreadsheet. A tab cannot collide with a digit group.
+        ("Name	738	5	327,159,292	33,500,000", "738", 5, 327_159_292, 33_500_000),
+        # Stops early, which is most of what an alliance actually pastes.
+        ("Wren,744,25", "744", 25, None, None),
+    ],
+)
+def test_no_format_is_imposed_on_the_person_pasting(cd_db, line, server, rank, thp, score):
+    """Being errored for typing a number the way you naturally type it is the
+    phone-field pattern, and it is miserable to be on the wrong end of. Every
+    one of these parses without complaint."""
+    row = db.parse_placement_line(line)
+
+    assert row["problem"] is None
+    assert (row["server"], row["rank"], row["score"]) == (server, rank, score)
+    assert (row["thp"] and int(row["thp"])) == thp
+
+
+def test_a_four_number_line_in_the_old_order_still_reads_its_score_as_a_score(cd_db):
+    """Everyone who used this before hero power was asked for still has
+    `name, warzone, rank, score` in their fingers. Filing their score as a hero
+    power would put a number an order of magnitude too small into the one field
+    the odds cannot run without, so the measured gap between the two bands is
+    what tells them apart: no duel score has ever reached 48.4M and no hero
+    power has ever been under 164M."""
+    old = db.parse_placement_line("Kestrel, 738, 1, 33,500,000")
+    assert (old["thp"], old["score"]) == (None, 33_500_000)
+
+    new = db.parse_placement_line("Kestrel, 738, 1, 327,159,292")
+    assert (new["thp"], new["score"]) == (327_159_292, None)
+
+
+def test_the_guilds_own_warzone_settles_a_line_that_structure_cannot(cd_db):
+    """`Someone,1,200,1,103` is warzone 1200 and rank 1103 to an alliance on
+    1200, and warzone 1 rank 200 with a score of 1103 to anybody else. Both
+    readings are structurally sound and both are plausible, so the tie is
+    broken by the one thing that is actually evidence: most lines an alliance
+    pastes are its own warzone. This is why the prior is threaded through, and
+    the grouping's own sixteen do the same job for an opponent's line."""
+    line = "Someone,1,200,1,103"
+
+    assert db.parse_placement_line(line)["server"] == "1", "nothing to go on"
+
+    for prior in ({"warzone": "1200"}, {"known_warzones": {"1200"}}):
+        settled = db.parse_placement_line(line, **prior)
+        assert (settled["server"], settled["rank"]) == ("1200", 1103)
+        assert settled["problem"] is None
+
+
+def test_a_reading_is_judged_on_how_well_it_fits_not_on_how_much_it_fills(cd_db):
+    """Every reading consumes all of the tokens, so the number of fields one of
+    them happens to fill is not evidence about anything. Scoring by the sum
+    said otherwise: `Kestrel, 2,308` came out as warzone 2 with a rank of 308,
+    because the wrong answer used two fields and the right one used one."""
+    short = db.parse_placement_line("Kestrel, 2,308")
+    assert (short["server"], short["rank"]) == ("2308", None)
+
+    longer = db.parse_placement_line("Player, 2,308, 1,500")
+    assert (longer["server"], longer["rank"], longer["score"]) == ("2308", 1500, None)
+
+
+def test_a_space_inside_a_number_is_a_thousands_separator(cd_db):
+    """Most of the world writes them this way, and the parser this replaced
+    already stripped them out of the score field."""
+    row = db.parse_placement_line("Wren, 744, 25, 1 000 000")
+
+    assert (row["server"], row["rank"], row["score"]) == ("744", 25, 1_000_000)
+
+
+def test_an_unreadable_field_is_only_named_when_its_position_is_certain(cd_db):
+    """A three-digit token might be a continuation of the number in front of
+    it, which puts everything after it one field to the right of where it
+    looks. `Wren, 2,308, first` has an unreadable RANK, and calling it a bad
+    hero power because it is the third token is worse than saying nothing:
+    a message naming the wrong field sends somebody to fix the wrong thing."""
+    assert db.parse_placement_line("Wren, 744, first")["problem"] == "bad_rank"
+    assert db.parse_placement_line("Wren, 2,308, first")["problem"] == "bad_numbers"
+
+
+def test_a_suffixed_number_survives_binary_floating_point(cd_db):
+    """`8.2 * 1_000_000` is 8199999.999999999, which is not a whole number.
+    Unrounded, that failed the score check and took the whole line with it, and
+    a power written `4.1M` reached the database as 4099999.9999999995."""
+    row = db.parse_placement_line("Wren, 738, 5, 325.7M, 8.2M")
+
+    assert row["problem"] is None
+    assert (row["thp"], row["score"]) == (325_700_000, 8_200_000)
+    assert float(row["thp"]).is_integer()
+
+
+def test_a_score_of_zero_does_not_discard_the_line(cd_db):
+    """Somebody who did not play scored nothing, and that is a real reading.
+    Refusing it left no reading standing at all, so the hero power this field
+    exists to collect went out with it."""
+    row = db.parse_placement_line("Wren, 738, 5, 327,159,292, 0")
+
+    assert (row["thp"], row["score"], row["problem"]) == (327_159_292, 0, None)
+
+
+def test_a_padded_number_reads_as_the_number(cd_db):
+    """`05` is a rank of 5 and `0738` is warzone 738, both of which the parser
+    this replaced accepted. Three digits are left alone, because that is the
+    one width where a leading zero might be continuing the number in front of
+    it and `33,500,000` would otherwise read as a number followed by a zero."""
+    padded = db.parse_placement_line("Wren, 0738, 05")
+    assert (padded["server"], padded["rank"]) == ("738", 5)
+
+    grouped = db.parse_placement_line("Wren, 738, 1, 33,500,000")
+    assert grouped["score"] == 33_500_000
+
+
+def test_a_line_with_no_readable_answer_is_flagged_rather_than_guessed_at(cd_db):
+    """Every token three digits and nothing structural to break the tie. There
+    is no correct answer available, so the parser says so and the reconcile view
+    puts it in front of a human. It does not have to be perfect, only honest
+    about when it is not."""
+    row = db.parse_placement_line("Odd,738,5,325,800,123,456")
+
+    assert row["problem"] == "bad_numbers"
+    assert row["thp"] is None
+
+
+def test_an_empty_slot_holds_its_position(cd_db):
+    """`AlphaOne, , 3` is somebody saying they do not know the warzone but do
+    know the rank. Sweeping the empty comma up would slide the rank into the
+    warzone slot and record a player on warzone 3."""
+    row = db.parse_placement_line("AlphaOne, , 3")
+
+    assert (row["server"], row["rank"]) == (None, 3)
+    assert row["problem"] is None
+
+
+def test_a_hero_power_lands_on_the_registrant(cd_db):
+    """The reason the field was added: `group_advance_odds` refuses a group
+    where anybody has neither a power nor a squad, and this is the only bulk
+    path that can supply eight of them."""
+    player = db.upsert_registrant("Kestrel", server="738")
+    assert player["thp"] is None
+
+    db.set_registrant_thp(player["id"], 325_800_000)
+
+    assert db.find_registrants("Kestrel", "738")[0]["thp"] == 325_800_000
+
+
+def test_a_paste_drops_blank_lines_and_keeps_the_rest(cd_db):
+    rows = db.parse_placement_lines("Kestrel, 738, 1\n\n  \nWren, 744, 25\n")
+
+    assert [r["name"] for r in rows] == ["Kestrel", "Wren"]
+
+
+# ── The collision this exists to stop ─────────────────────────────────────────
+
+
+def test_two_groupings_can_both_have_a_group_d(cd_db):
+    """The whole point. A group letter is not an identity; the row is."""
+    mine = db.create_grouping("738, 800", started_so_today_is("semifinals"))
+    theirs = db.create_grouping("1500, 1501", started_so_today_is("semifinals"))
+
+    db.import_registrants([{"name": "AlphaOne", "server": "738"}])
+    db.import_registrants([{"name": "Stranger", "server": "1500"}])
+    alpha = db.resolve_registrant("AlphaOne", "738")["id"]
+    stranger = db.resolve_registrant("Stranger", "1500")["id"]
+
+    db.set_stage(alpha, "semifinals", grp="D", rank=1, grouping_id=mine["id"])
+    db.set_stage(stranger, "semifinals", grp="D", rank=1, grouping_id=theirs["id"])
+
+    mine_d = db.get_roster(group="D", grouping_id=mine["id"], stage="semifinals")
+    theirs_d = db.get_roster(group="D", grouping_id=theirs["id"], stage="semifinals")
+
+    assert [p["display_name"] for p in mine_d] == ["AlphaOne"]
+    assert [p["display_name"] for p in theirs_d] == ["Stranger"]
+
+
+def test_group_counts_do_not_span_groupings(cd_db):
+    """A count over every grouping describes several tournaments at once and
+    belongs to none of them."""
+    mine = db.create_grouping("738", started_so_today_is("qualifiers"))
+    theirs = db.create_grouping("1500", started_so_today_is("qualifiers"))
+    db.import_registrants(
+        [{"name": "AlphaOne", "group": "M", "server": "738"}],
+        stage="qualifiers",
+        grouping_id=mine["id"],
+    )
+    db.import_registrants(
+        [{"name": "Stranger", "group": "M", "server": "1500"}],
+        stage="qualifiers",
+        grouping_id=theirs["id"],
+    )
+
+    assert db.get_groups(grouping_id=mine["id"]) == [{"group": "M", "registrants": 1}]
+    assert db.get_groups(grouping_id=theirs["id"]) == [{"group": "M", "registrants": 1}]
+
+
+def test_a_round_without_a_resolvable_grouping_is_refused(cd_db):
+    """Guessing files 1600 players into another alliance's tournament."""
+    db.create_grouping("738", started_so_today_is("qualifiers"))
+    db.create_grouping("1500", started_so_today_is("qualifiers"))
+
+    with pytest.raises(ValueError, match="grouping"):
+        db.import_registrants([{"name": "Nobody", "group": "M"}], stage="qualifiers")
+
+
+# ── Resolution ────────────────────────────────────────────────────────────────
+
+
+def test_a_payload_finds_its_own_grouping_by_warzone(cd_db):
+    """A semifinal payload carries the same warzones as its qualifier draw but
+    only the advancers, so matching on the exact set would fork a second
+    grouping over one event every time."""
+    first = db.import_registrants(
+        [
+            {"name": "A", "group": "M", "server": "738"},
+            {"name": "B", "group": "M", "server": "800"},
+        ],
+        stage="qualifiers",
+    )
+    second = db.import_registrants(
+        [{"name": "A", "group": "D", "server": "738"}], stage="semifinals"
+    )
+
+    assert second["grouping_id"] == first["grouping_id"]
+    assert len(db.list_groupings()) == 1
+
+
+def test_a_guild_resolves_through_its_own_warzone(cd_db):
+    made = db.create_grouping("738, 800", started_so_today_is("qualifiers"))
+    db.set_guild_warzone("999", "738", discord_id="111")
+
+    assert db.resolve_grouping_for_guild("999")["id"] == made["id"]
+
+
+def test_a_map_manager_link_resolves_without_asking(cd_db):
+    """`guild_alliance_mappings.server` is an INTEGER there and TEXT here, and
+    the boundary is the kind of thing that silently matches nothing."""
+    made = db.create_grouping("738, 800", started_so_today_is("qualifiers"))
+
+    resolved = db.resolve_grouping_for_guild("999", fallback_warzone=738)
+
+    assert resolved["id"] == made["id"]
+    assert db.get_guild_warzone("999") is None, "an inference is not a pin"
+
+
+def test_the_guilds_own_answer_beats_an_inference(cd_db):
+    mine = db.create_grouping("738", started_so_today_is("qualifiers"))
+    db.create_grouping("1500", started_so_today_is("qualifiers"))
+    db.set_guild_warzone("999", "738")
+
+    assert db.resolve_grouping_for_guild("999", fallback_warzone=1500)["id"] == mine["id"]
+
+
+def test_an_unknown_warzone_resolves_to_nothing_rather_than_guessing(cd_db):
+    """The normal state for a new alliance: their grouping does not exist until
+    somebody enters it."""
+    db.create_grouping("738", started_so_today_is("qualifiers"))
+
+    assert db.resolve_grouping_for_guild("999", fallback_warzone=1500) is None
+
+
+def test_a_warzone_is_confirmed_once_per_champion_duel(cd_db):
+    """An alliance that moves warzone still resolves, silently and wrongly: the
+    old number keeps being drawn into somebody's grouping. So the answer is
+    re-confirmed per grouping rather than trusted forever."""
+    first = db.create_grouping("738", started_so_today_is("results"))
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=first["id"])
+    assert db.needs_warzone_confirmation("999", first["id"]) is False
+
+    next_duel = db.create_grouping("738, 900", started_so_today_is("signup"))
+    assert db.needs_warzone_confirmation("999", next_duel["id"]) is True
+
+    db.set_guild_warzone("999", "738", confirmed_grouping_id=next_duel["id"])
+    assert db.needs_warzone_confirmation("999", next_duel["id"]) is False
+
+
+def test_next_season_resolves_itself_once_somebody_enters_it(cd_db):
+    """Why the guild's *warzone* is stored rather than its grouping: nothing
+    needs re-pinning when the event comes round again."""
+    db.set_guild_warzone("999", "738")
+    assert db.resolve_grouping_for_guild("999") is None
+
+    new_duel = db.create_grouping("738, 1200", started_so_today_is("signup"))
+
+    assert db.resolve_grouping_for_guild("999")["id"] == new_duel["id"]
+
+
+# ── The draw and the standings are different numbers ──────────────────────────
+
+
+def test_recording_the_standings_does_not_erase_the_draw(cd_db):
+    """Every player has a rank from the moment a group is drawn -- the seed
+    position -- and a different one after it is played. Writing one must never
+    destroy the other; that is the same failure groupings exist to stop."""
+    made = db.create_grouping("738", started_so_today_is("semifinals"))
+    db.import_registrants([{"name": "AlphaOne", "server": "738"}])
+    rid = db.resolve_registrant("AlphaOne", "738")["id"]
+    group = db.get_or_create_group(made["id"], "semifinals", "D")
+
+    db.set_placement(group["id"], rid, seed_rank=3, recording="draw")
+    db.set_placement(group["id"], rid, rank=22, score=15_900_000, recording="final")
+
+    row = db.get_group_members(group["id"])[0]
+    assert row["seed_rank"] == 3
+    assert row["rank"] == 22
+    assert row["score"] == 15_900_000
+
+
+def test_a_second_entry_that_knows_less_does_not_blank_what_we_had(cd_db):
+    made = db.create_grouping("738", started_so_today_is("semifinals"))
+    db.import_registrants([{"name": "AlphaOne", "server": "738"}])
+    rid = db.resolve_registrant("AlphaOne", "738")["id"]
+    group = db.get_or_create_group(made["id"], "semifinals", "D")
+    db.set_placement(group["id"], rid, seed_rank=3, rank=1, score=40_000_000)
+
+    db.set_placement(group["id"], rid)
+
+    row = db.get_group_members(group["id"])[0]
+    assert (row["seed_rank"], row["rank"], row["score"]) == (3, 1, 40_000_000)
+
+
+# ── Migration ─────────────────────────────────────────────────────────────────
+
+
+def test_the_pre_grouping_draw_becomes_a_real_grouping(tmp_path, monkeypatch):
+    """Everything imported before groupings existed belongs to one, because a
+    grouping is what the importer had no concept of."""
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "legacy.sqlite3"))
+    db.init_db()
+    with db._get_conn() as conn:
+        conn.execute("DELETE FROM groupings")
+        for i, (name, server) in enumerate(
+            [("AlphaOne", "738"), ("BetaTwo", "800"), ("Stranger", "1500")]
+        ):
+            origin = "self_reported" if name == "Stranger" else "imported"
+            conn.execute(
+                "INSERT INTO registrants (player_key, display_name, server, grp, rank, "
+                "origin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (name.lower(), name, server, "M", i + 1, origin, "2026-08-01", "2026-08-01"),
+            )
+
+    db.init_db()
+
+    groupings = db.list_groupings()
+    assert len(groupings) == 1
+    # Seeded from imported registrants only. A self-reported row carries the
+    # warzone of whoever met them, and pulling it in would make another
+    # alliance's warzone resolve to this grouping forever.
+    assert groupings[0]["warzones"] == ["738", "800"]
+    assert groupings[0]["origin"] == "imported"
+
+    placed = db.get_groups(stage="qualifiers", grouping_id=groupings[0]["id"])
+    assert placed == [{"group": "M", "registrants": 2}], "the self-reported placement is dropped"
+
+
+def test_the_migration_runs_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "once.sqlite3"))
+    db.init_db()
+    db.import_registrants([{"name": "AlphaOne", "group": "M", "server": "738"}], stage="qualifiers")
+
+    db.init_db()
+    db.init_db()
+
+    assert len(db.list_groupings()) == 1

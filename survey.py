@@ -136,6 +136,12 @@ def _parse_magnitude_input(raw: str, magnitude: str | None = None) -> int | None
     return int(round(value * multiplier))
 
 
+#: Public alias. `alliance_duel.py` parses power and duel-score cells with the
+#: same shorthand rules members type into surveys (#400); reaching into the
+#: underscore name from another module would hide that dependency.
+parse_magnitude_input = _parse_magnitude_input
+
+
 def _fmt_response_value(value, qtype: str | None) -> str:
     """Comma-format numeric responses for the leadership notification embed.
 
@@ -517,7 +523,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -618,7 +624,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -698,7 +704,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: 
 
         await thread.send(
             "⚠️ Too many invalid attempts on this question. "
-            "Cancelling the survey — click the Answer button to start over when you're ready."
+            "Canceling the survey. Click the Answer button to start over when you're ready."
         )
         return None
 
@@ -1014,7 +1020,7 @@ class _TranslationHelperView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="🚫 Remove helper", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="🗑️ Remove helper", style=discord.ButtonStyle.danger)
     async def btn_clear(self, inter: discord.Interaction, _b: discord.ui.Button):
         from config import update_config_field
 
@@ -1024,7 +1030,7 @@ class _TranslationHelperView(discord.ui.View):
         await wizard_registry.safe_edit_response(
             inter,
             content=(
-                "🚫 **Translation helper removed.** New survey threads will only "
+                "🗑️ **Translation helper removed.** New survey threads will only "
                 "contain the member and me."
             ),
             embed=None,
@@ -1107,7 +1113,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
         return
 
     await interaction.response.send_message(
-        "🚀 Let's get started! Your private thread is being created...",
+        "⏳ Let's get started! Your private thread is being created...",
         ephemeral=True,
     )
 
@@ -1133,7 +1139,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id:
     await add_translation_helper(thread, interaction.guild, cfg.survey_translate_bot_id)
 
     await interaction.followup.send(
-        f"🚀 Your thread is ready — head over here to get started: {thread.mention}",
+        f"✅ Your thread is ready — head over here to get started: {thread.mention}",
         ephemeral=True,
     )
 
@@ -1466,7 +1472,7 @@ class SurveyCog(commands.Cog):
                 print(f"[SURVEY] Error firing scheduled reminder for guild {gid}: {e}")
 
         # Clean tick — stamp liveness for the outage catch-up scan (#227).
-        stamp_loop_heartbeat("survey_reminder")
+        await asyncio.to_thread(stamp_loop_heartbeat, "survey_reminder")
 
     @check_scheduled_reminders.before_loop
     async def _before_check_scheduled(self):
@@ -1678,7 +1684,7 @@ class _ReminderHubView(discord.ui.View):
         super().__init__(timeout=120)
         self.choice: str | None = None  # "send" | "schedule" | None
 
-    @discord.ui.button(label="📤 Send reminder now", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="📬 Send reminder now", style=discord.ButtonStyle.success)
     async def send_now(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "send"
         for item in self.children:
@@ -1686,7 +1692,7 @@ class _ReminderHubView(discord.ui.View):
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
-    @discord.ui.button(label="⚙️ Manage scheduled reminders", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📅 Manage scheduled reminders", style=discord.ButtonStyle.primary)
     async def manage(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "schedule"
         for item in self.children:
@@ -1699,7 +1705,7 @@ class _ReminderHubView(discord.ui.View):
         self.choice = None
         for item in self.children:
             item.disabled = True
-        await wizard_registry.safe_edit_response(inter, content="Cancelled.", view=self)
+        await wizard_registry.safe_edit_response(inter, content="Canceled.", view=self)
         self.stop()
 
 
@@ -1738,7 +1744,7 @@ class _DestinationPickView(discord.ui.View):
         self.choice: str | None = None  # "channel" | "dm" | None
 
         ch_btn = discord.ui.Button(
-            label="📢 Post to a channel",
+            label="📣 Post to a channel",
             style=discord.ButtonStyle.primary,
         )
 
@@ -1931,7 +1937,7 @@ class _DayPickView(discord.ui.View):
 async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
     """Walk leadership through configuring a survey's scheduled reminder."""
     from config import save_survey_reminder, get_config
-    from setup_cog import _format_time_with_tz
+    from wizard_time import _format_time_with_tz
 
     # Pick which survey
     survey = await _pick_survey(
@@ -2116,7 +2122,7 @@ async def _ask_time(
     is used only to render the "current:" hint in the button label as
     e.g. `8:00am EDT` — saved values are still HH:MM 24h.
     """
-    from setup_cog import _parse_12h_time, _format_time_with_tz
+    from wizard_time import _parse_12h_time, _format_time_with_tz
 
     current_label = _format_time_with_tz(default, tz_name) or default
 

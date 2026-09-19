@@ -28,6 +28,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import premium
+from wizard_registry import OwnedView
 
 
 # Default Ko-fi link is set so the command works out-of-the-box for the
@@ -39,10 +40,10 @@ DONATION_PLATFORMS = [
         "emoji": "☕",
         "default": "https://ko-fi.com/pinkcatboi",
     },
-    {"env": "BUYMEACOFFEE_URL", "name": "Buy Me a Coffee", "emoji": "🥤", "default": ""},
+    {"env": "BUYMEACOFFEE_URL", "name": "Buy Me a Coffee", "emoji": "", "default": ""},
     {"env": "GITHUB_SPONSORS_URL", "name": "GitHub Sponsors", "emoji": "💖", "default": ""},
-    {"env": "PATREON_URL", "name": "Patreon", "emoji": "🎁", "default": ""},
-    {"env": "PAYPAL_URL", "name": "PayPal", "emoji": "💵", "default": ""},
+    {"env": "PATREON_URL", "name": "Patreon", "emoji": "", "default": ""},
+    {"env": "PAYPAL_URL", "name": "PayPal", "emoji": "", "default": ""},
 ]
 
 
@@ -88,7 +89,7 @@ async def _resolve_user_label(bot: commands.Bot, user_id: int) -> str:
 # ── Confirmation views ────────────────────────────────────────────────────────
 
 
-class _ConfirmActionView(discord.ui.View):
+class _ConfirmActionView(OwnedView):
     """Generic two-button confirm/cancel used by /premium assign (both fresh
     and switch flows) and /premium unassign. The confirm button label is
     configurable so each call site reads naturally."""
@@ -109,15 +110,6 @@ class _ConfirmActionView(discord.ui.View):
         # "Switch to this server", "Release pin").
         self.confirm.label = confirm_label
         self.confirm.style = confirm_style
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only the user who ran the command can use these buttons.",
-                ephemeral=True,
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, _btn: discord.ui.Button):
@@ -212,7 +204,10 @@ class DonateCog(commands.Cog):
         )
 
         if platforms:
-            lines = [f"{emoji} **[{name}]({url})**" for name, emoji, url in platforms]
+            lines = [
+                f"{emoji + ' ' if emoji else ''}**[{name}]({url})**"
+                for name, emoji, url in platforms
+            ]
             embed.add_field(name="Ways to Donate", value="\n".join(lines), inline=False)
         else:
             embed.add_field(
@@ -524,7 +519,7 @@ class DonateCog(commands.Cog):
 
             if not view.confirmed:
                 await interaction.followup.send(
-                    "Cancelled — your subscription is unchanged.",
+                    "Canceled. Your subscription is unchanged.",
                     ephemeral=True,
                 )
                 return
@@ -578,7 +573,7 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your subscription is unchanged.",
+                "Canceled. Your subscription is unchanged.",
                 ephemeral=True,
             )
             return
@@ -656,7 +651,7 @@ class DonateCog(commands.Cog):
 
         if not view.confirmed:
             await interaction.followup.send(
-                "Cancelled — your assignment is unchanged.",
+                "Canceled. Your assignment is unchanged.",
                 ephemeral=True,
             )
             return

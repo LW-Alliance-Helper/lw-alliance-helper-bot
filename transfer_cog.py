@@ -51,6 +51,7 @@ import premium
 import transfer
 import transfer_sheets
 import wizard_registry
+from wizard_registry import ExpiringView
 from transfers_hub import SETUP_TRANSFERS_BTN, TRANSFERS_HUB_CMD
 
 try:
@@ -66,9 +67,9 @@ _MAX_EACH = 25
 _NOTICE_TIMEOUT = 21600  # 6h — act-now window; older applicants via the hub
 
 _TEMPLATE_BTN = {
-    "apply_invitation": "📩 Apply message",
-    "confirm_request": "📩 Confirm message",
-    "decline": "📩 Decline message",
+    "apply_invitation": "Apply message",
+    "confirm_request": "Confirm message",
+    "decline": "Decline message",
 }
 
 
@@ -158,7 +159,7 @@ def _problem_reason(kind: str, tab: str, tabs_hint: str = "") -> str:
         )
     if kind == NO_ACCESS:
         return (
-            "I don't have permission to open that spreadsheet any more. Its sharing settings "
+            "I don't have permission to open that spreadsheet anymore. Its sharing settings "
             "were most likely changed."
         )
     return "I couldn't read that spreadsheet."
@@ -256,7 +257,7 @@ def _display_status_value(value) -> str:
 
 def _new_applicant_embed(name: str, display_pairs: list) -> discord.Embed:
     embed = discord.Embed(
-        title=f"📥 New transfer applicant: {name}"[:256], color=discord.Color.green()
+        title=f"🔔 New transfer applicant: {name}"[:256], color=discord.Color.green()
     )
     body = "\n".join(f"**{h}:** {v}" for h, v in display_pairs)
     embed.description = body[:4000] if body else "*(no display columns configured)*"
@@ -332,7 +333,7 @@ class _WriteConfirmView(discord.ui.View):
         self.add_item(cancel)
 
     async def _cancel(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content="Cancelled. Nothing written.", view=None)
+        await interaction.response.edit_message(content="Canceled. Nothing written.", view=None)
 
     def _make(self, raw_value: str, label: str):
         async def _cb(interaction: discord.Interaction):
@@ -383,7 +384,9 @@ class _WriteConfirmView(discord.ui.View):
         )
 
 
-class _NoticeView(discord.ui.View):
+class _NoticeView(ExpiringView):
+    timeout_hint = "`/transfers`"
+
     def __init__(
         self, *, guild_id, name, header, row, display_pairs, template_kinds, writeback=None
     ):
@@ -404,7 +407,7 @@ class _NoticeView(discord.ui.View):
         self.add_item(details)
         for kind in template_kinds:
             btn = discord.ui.Button(
-                label=_TEMPLATE_BTN.get(kind, "📩 Message"),
+                label=_TEMPLATE_BTN.get(kind, "Message"),
                 style=discord.ButtonStyle.primary,
                 row=0,
             )
@@ -421,9 +424,6 @@ class _NoticeView(discord.ui.View):
                 )
                 btn.callback = self._make_writeback_cb(decision)
                 self.add_item(btn)
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(self.message, command_hint="`/transfers`")
 
     async def _full_details(self, interaction: discord.Interaction):
         await interaction.response.send_message(
@@ -657,7 +657,7 @@ class TransferCog(commands.Cog):
             except Exception as e:
                 logger.warning("[TRANSFER] poll error for guild %s: %s", cfg.get("guild_id"), e)
                 _capture(e)
-        config.stamp_loop_heartbeat("transfer_poll")
+        await asyncio.to_thread(config.stamp_loop_heartbeat, "transfer_poll")
 
     @poll.before_loop
     async def _before(self):
@@ -934,7 +934,7 @@ class TransferCog(commands.Cog):
     async def _post_digest(self, channel, hidx, name_header, display_headers, diff, deletions):
         if not (diff.new_applicants or diff.status_changes or deletions):
             return
-        embed = discord.Embed(title="📥 Transfer update", color=discord.Color.green())
+        embed = discord.Embed(title="🔔 Transfer update", color=discord.Color.green())
 
         if diff.new_applicants:
             lines = []

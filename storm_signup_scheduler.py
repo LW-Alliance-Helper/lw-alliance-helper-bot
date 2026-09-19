@@ -22,6 +22,7 @@ one-shot-per-minute event.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 from typing import Optional
@@ -278,7 +279,7 @@ async def storm_signup_loop_task():
     # Clean tick — stamp liveness for the outage catch-up scan (#227).
     from config import stamp_loop_heartbeat
 
-    stamp_loop_heartbeat("storm_signup")
+    await asyncio.to_thread(stamp_loop_heartbeat, "storm_signup")
 
 
 @storm_signup_loop_task.before_loop

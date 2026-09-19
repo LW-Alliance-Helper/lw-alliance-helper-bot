@@ -33,3 +33,14 @@ def test_unchanged_changelog_passes_main():
     # The exit-0 contract on an unmodified CHANGELOG: every bullet
     # already exists in HEAD, so the new-only filter drops them all.
     assert check_changelog_slim.main(ROOT / "CHANGELOG.md") == 0
+
+
+def test_baseline_ref_env_var_overrides_head(monkeypatch):
+    # CI (#628): disk == HEAD on a checked-out PR, so the default HEAD
+    # baseline would treat every bullet as pre-existing. A CI-only ref
+    # (a commit before CHANGELOG.md existed) must produce an empty
+    # baseline, proving the override is honored rather than ignored.
+    root_commit = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty-tree hash
+    monkeypatch.setenv("CHANGELOG_SLIM_BASELINE_REF", root_commit)
+    baseline = check_changelog_slim._baseline_lines(ROOT / "CHANGELOG.md")
+    assert baseline == set()

@@ -5,7 +5,7 @@ compute_next_snapshot helper used to surface "next fire" date in
 /setup_growth and /growth.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import pytest
 from unittest.mock import patch, MagicMock, call
 import sys, os
@@ -13,6 +13,41 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.constants import TEST_GUILD_ID
+import growth
+
+# The instant CI was standing on when `dev` went red on 2026-09-01. In UTC it
+# is already September; in `America/New_York`, the clock `growth.py` snapshots
+# on, it is still 23:19 on 31 August.
+#
+# Freezing here rather than at some quiet mid-month moment is the point. Every
+# period label below is the **ET** month, so a snapshot that read the runner's
+# wall clock -- or UTC, or anything but ET -- labels these columns `Sep 2026`
+# and all seven of these tests fail. The bug that took `dev` red is what these
+# assertions are now pinned against.
+FROZEN_UTC = datetime(2026, 9, 1, 3, 19, 48, tzinfo=timezone.utc)
+FROZEN_PERIOD = "Aug 2026"
+FROZEN_PERIOD_UTC = "Sep 2026"  # what the naive clock used to produce
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Pin `growth`'s `datetime.now` to `FROZEN_UTC`, leaving the rest alone.
+
+    `growth.py` does `from datetime import datetime`, so the module global is
+    the seam. `strptime` and friends are inherited untouched, and the naive
+    branch deliberately returns UTC -- that is exactly what a GitHub runner
+    hands a caller that forgets the timezone.
+    """
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return FROZEN_UTC.replace(tzinfo=None)
+            return FROZEN_UTC.astimezone(tz)
+
+    monkeypatch.setattr(growth, "datetime", _Frozen)
+    return FROZEN_UTC
 
 
 class TestLoadMemberData:
@@ -348,7 +383,7 @@ class TestRunGrowthSnapshotInner:
             _run_growth_snapshot_inner(TEST_GUILD_ID)
             mock_sh.assert_not_called()
 
-    def test_skips_duplicate_period(self, seeded_db):
+    def test_skips_duplicate_period(self, seeded_db, frozen_clock):
         from growth import _run_growth_snapshot_inner
         from config import save_growth_config
         from datetime import datetime
@@ -366,7 +401,7 @@ class TestRunGrowthSnapshotInner:
             data_start_row=2,
         )
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
 
         # Sheet already has this period's column
         existing_headers = ["Name", f"Power ({month_label})"]
@@ -377,16 +412,28 @@ class TestRunGrowthSnapshotInner:
         mock_sh = MagicMock()
         mock_sh.worksheet = MagicMock(return_value=mock_ws)
 
+        # A real roster, deliberately. `_run_growth_snapshot_inner` returns at
+        # `if not members` *before* it ever reaches the duplicate-period check,
+        # so an empty one made this test vacuous: it passed whether the period
+        # was recognised as a duplicate or not.
+        members = [{"name": "Alice", "row_index": 2, "Power": 130.0}]
         with (
             patch("growth._get_spreadsheet", return_value=mock_sh),
-            patch("growth.load_member_data", return_value=[]),
+            patch("growth.load_member_data", return_value=members),
         ):
             _run_growth_snapshot_inner(TEST_GUILD_ID)
 
-        # batch_update should not have been called
+        # The metric-column write is what a duplicate period skips, and the
+        # header rewrite is the visible half of it. Asserting on the header
+        # rather than on "nothing happened" is deliberate: #85 has the
+        # breakdown writer fire either way, so this run is not silent.
+        header_writes = [c for c in mock_ws.update.call_args_list if c[0][0] == "A1"]
+        assert header_writes == [], (
+            f"header rewritten for a period already present: {header_writes}"
+        )
         mock_ws.batch_update.assert_not_called()
 
-    def test_writes_member_data(self, seeded_db):
+    def test_writes_member_data(self, seeded_db, frozen_clock):
         from growth import _run_growth_snapshot_inner
         from config import save_growth_config
         from datetime import datetime
@@ -404,7 +451,7 @@ class TestRunGrowthSnapshotInner:
             data_start_row=2,
         )
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
         col_name = f"Power ({month_label})"
 
         mock_ws = MagicMock()
@@ -430,6 +477,56 @@ class TestRunGrowthSnapshotInner:
         header_call = mock_ws.update.call_args_list[0]
         updated_header = header_call[0][1][0]
         assert col_name in updated_header
+
+    def test_the_period_is_the_et_month_not_the_runners(self, seeded_db, frozen_clock):
+        """The regression that took `dev` red on 2026-09-01.
+
+        `growth.py` snapshots on `America/New_York`, because that is the clock
+        the scheduler fires on. The runner's is UTC, up to four hours ahead --
+        so for the four hours after 00:00 UTC on the first of a month the two
+        disagree about which month it is, and a snapshot that read the wrong
+        one files a whole alliance's power under the month that has not started.
+
+        The frozen instant is exactly that window. Anything but ET labels this
+        column `Sep 2026`.
+        """
+        from growth import _run_growth_snapshot_inner
+        from config import save_growth_config
+
+        save_growth_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Powers",
+            name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth",
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
+            data_start_row=2,
+        )
+
+        mock_ws = MagicMock()
+        mock_ws.row_count = 10
+        mock_ws.row_values = MagicMock(return_value=["Name"])
+        mock_ws.get_all_values = MagicMock(return_value=[["Name"]])
+        mock_sh = MagicMock()
+        mock_sh.worksheet = MagicMock(return_value=mock_ws)
+
+        with (
+            patch("growth._get_spreadsheet", return_value=mock_sh),
+            patch(
+                "growth.load_member_data",
+                return_value=[{"name": "Alice", "row_index": 2, "Power": 43.27}],
+            ),
+        ):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        written = mock_ws.update.call_args_list[0][0][1][0]
+        assert f"Power ({FROZEN_PERIOD})" in written, written
+        assert f"Power ({FROZEN_PERIOD_UTC})" not in written, (
+            f"snapshot used the runner's clock, not ET: {written}"
+        )
 
     def test_new_members_appended_in_one_batched_call(self, seeded_db):
         """Regression for #40: a populated roster (60+ members) on a first-ever
@@ -846,13 +943,13 @@ class TestSnapshotBreakdownWriting:
         bd_ws.batch_update.assert_not_called()
         bd_ws.append_rows.assert_not_called()
 
-    def test_second_snapshot_writes_breakdown(self, seeded_db):
+    def test_second_snapshot_writes_breakdown(self, seeded_db, frozen_clock):
         from datetime import datetime
         from growth import _run_growth_snapshot_inner
 
         self._seed_config()
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
         prev_label = "Apr 2026"  # any label that isn't the current month
         # Pre-existing growth tab: one prev-period column with Alice's value.
         growth_header = ["Name", f"Power ({prev_label})"]
@@ -907,7 +1004,7 @@ class TestSnapshotBreakdownWriting:
         assert sum(1 for v in values_only if v == "Increased") == 1
         assert not any(v == "Decline" for v in values_only)
 
-    def test_breakdown_baseline_parses_comma_formatted_prev(self, seeded_db):
+    def test_breakdown_baseline_parses_comma_formatted_prev(self, seeded_db, frozen_clock):
         """#417: the growth tab carries a thousands-separator number format, so
         gspread returns "100,000,000" for the previous period. A bare float()
         raised, the except zeroed the baseline, and classify_bucket treats
@@ -919,7 +1016,6 @@ class TestSnapshotBreakdownWriting:
 
         self._seed_config()
 
-        month_label = datetime.now().strftime("%b %Y")
         prev_label = "Apr 2026"
         growth_header = ["Name", f"Power ({prev_label})"]
         # The formatted read, exactly as gspread hands it back.
@@ -946,7 +1042,7 @@ class TestSnapshotBreakdownWriting:
         )
         assert any(v == "Increased" for v in values_only)
 
-    def test_snapshot_formats_new_period_columns(self, seeded_db):
+    def test_snapshot_formats_new_period_columns(self, seeded_db, frozen_clock):
         """#417: a fresh period must land with the same thousands-separator
         format the alliance keeps on their source columns, instead of a bare
         65190000 beside the previous period's 57,150,000."""
@@ -955,7 +1051,7 @@ class TestSnapshotBreakdownWriting:
 
         self._seed_config()
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
         mock_sh, growth_ws, bd_ws = self._build_mocks(
             growth_header=["Name", "Power (Apr 2026)"],
             growth_rows=[["Alice", "100"]],
@@ -975,6 +1071,11 @@ class TestSnapshotBreakdownWriting:
         # Column C is this period's `Power ({month})`, appended after
         # Name + Power (Apr 2026). Formatted row 2 down so the header keeps
         # its own styling.
+        # C is the right target only because it is *this period's* column.
+        # Assert that rather than assume the position -- a snapshot that
+        # resolved the wrong month appends a third column here just the same.
+        header_written = growth_ws.update.call_args_list[0][0][1][0]
+        assert header_written[2] == f"Power ({month_label})", header_written
         assert ranges == ["C2:C"], f"unexpected format target for {month_label}: {ranges}"
 
     def test_number_format_failure_does_not_fail_snapshot(self, seeded_db):
@@ -999,7 +1100,7 @@ class TestSnapshotBreakdownWriting:
 
         assert growth_ws.batch_update.called
 
-    def test_duplicate_period_still_writes_missing_breakdown(self, seeded_db):
+    def test_duplicate_period_still_writes_missing_breakdown(self, seeded_db, frozen_clock):
         """Regression for #85. The seeder (or a previous in-period
         manual run) leaves the current period's columns on the growth
         tab. Re-running 'Snapshot Now' must NOT skip silently — the
@@ -1010,7 +1111,7 @@ class TestSnapshotBreakdownWriting:
 
         self._seed_config()
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
         prev_label = "Apr 2026"
         # Growth tab already carries the current period's columns
         # (period_already_exists=True path) AND a previous period.
@@ -1041,7 +1142,7 @@ class TestSnapshotBreakdownWriting:
         assert f"{prev_label} - {month_label} Power %" in bd_header_written
         assert f"{prev_label} - {month_label} Power Bucket" in bd_header_written
 
-    def test_second_snapshot_idempotent_on_rerun(self, seeded_db):
+    def test_second_snapshot_idempotent_on_rerun(self, seeded_db, frozen_clock):
         """Re-running the same snapshot must not write breakdown rows
         twice — idempotency check on the transition columns in the
         breakdown tab header."""
@@ -1050,7 +1151,7 @@ class TestSnapshotBreakdownWriting:
 
         self._seed_config()
 
-        month_label = datetime.now().strftime("%b %Y")
+        month_label = FROZEN_PERIOD
         prev_label = "Apr 2026"
         # The growth-tab side already carries the current period (idempotent
         # path of the snapshot itself), and the breakdown tab already has

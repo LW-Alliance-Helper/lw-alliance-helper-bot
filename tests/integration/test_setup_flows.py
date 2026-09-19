@@ -14,6 +14,7 @@ defaults so the wizard advances past them.
 """
 
 import asyncio
+import contextlib
 from unittest.mock import patch, MagicMock, AsyncMock
 import sys, os
 
@@ -87,9 +88,12 @@ def make_send_handler(channel, *, view_overrides=None):
 
 
 def patch_keep_or_change(values):
-    """Return a patch context manager for setup_cog.ask_keep_or_change.
+    """Return a patch context manager for `ask_keep_or_change`.
 
-    `values` is a list consumed in order — one per call.
+    Patches both homes: `setup_cog.ask_keep_or_change` for the wizards
+    still in `setup_cog`, and `wizard_steps.ask_keep_or_change` for the
+    companions that import it from there. `values` is a list consumed
+    in order — one per call, across both.
     """
     it = iter(values)
 
@@ -100,7 +104,15 @@ def patch_keep_or_change(values):
             # Tests should provide enough values; missing → default
             return kwargs.get("default", "default")
 
-    return patch("setup_cog.ask_keep_or_change", side_effect=fake)
+    @contextlib.contextmanager
+    def _both():
+        with (
+            patch("setup_cog.ask_keep_or_change", side_effect=fake),
+            patch("wizard_steps.ask_keep_or_change", side_effect=fake),
+        ):
+            yield
+
+    return _both()
 
 
 # ── /setup wizard ─────────────────────────────────────────────────────────────
@@ -296,7 +308,7 @@ class TestRunTrainSetup:
 
         # YesNoView order: blurbs → reminders → Conductor Rotation (Step 9).
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
             patch_keep_or_change(["My Train Tab"]),
         ):
             make_send_handler(interaction.channel)
@@ -324,8 +336,8 @@ class TestRunTrainSetup:
         ch_view = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
-            patch("setup_cog.ChannelSelectStep", return_value=ch_view),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.ChannelSelectStep", return_value=ch_view),
             patch_keep_or_change(["Train Schedule", "10:00pm"]),
         ):
             make_send_handler(interaction.channel)
@@ -418,8 +430,8 @@ class TestRunTrainSetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", side_effect=[blurb_view, remind_view, rotation_no]),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["My Tab", "10:00pm", ""]),
         ):
             # `view_overrides` covers the summary EditOrCancelView ->
@@ -451,7 +463,7 @@ class TestRunBirthdaySetup:
 
         enabled_view = MagicMock(selected=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", return_value=enabled_view):
+        with patch("wizard_steps.YesNoView", return_value=enabled_view):
             make_send_handler(interaction.channel)
             await run_birthday_setup(interaction, bot)
 
@@ -475,7 +487,7 @@ class TestRunBirthdaySetup:
 
         # Tab → "Members", name col → "A", bday col → "B"
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
             patch_keep_or_change(["Members", "A", "B"]),
         ):
             make_send_handler(interaction.channel)
@@ -576,8 +588,8 @@ class TestRunBirthdaySetup:
             return ch_view
 
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Members", "A", "B", "8:00am", ""]),
         ):
             make_send_handler(
@@ -627,7 +639,7 @@ class TestRunBirthdaySetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -663,7 +675,7 @@ class TestRunBirthdaySetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)
@@ -698,8 +710,8 @@ class TestRunSurveySetup:
         bot.wait_for = AsyncMock(return_value=MagicMock(content="Please submit weekly!"))
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=ch_views),
-            patch("setup_cog._ensure_survey_tab", AsyncMock()),
+            patch("wizard_steps.ChannelSelectStep", side_effect=ch_views),
+            patch("survey_setup._ensure_survey_tab", AsyncMock()),
             patch_keep_or_change(["Squad Powers", "Survey History"]),
         ):
             # The wizard builds its step views inline, so the choices are
@@ -809,7 +821,7 @@ class TestRunSurveySetup:
             return next(ch_iter)
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Squad Powers", "Survey History"]),
         ):
             make_send_handler(
@@ -890,7 +902,7 @@ class TestRunStormSetup:
 
         # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
         with (
-            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("wizard_steps.ChannelSelectStep", return_value=log_view),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch(
                 "setup_cog._run_structured_flow_setup_step",
@@ -931,7 +943,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("wizard_steps.ChannelSelectStep", return_value=log_view),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch(
                 "setup_cog._run_structured_flow_setup_step",
@@ -1040,7 +1052,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch_keep_or_change(["DS Assignments", ""]),
         ):
@@ -1130,7 +1142,7 @@ class TestRunStormSetup:
             }
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
             patch_keep_or_change(["DS Assignments", ""]),
         ):
@@ -1172,7 +1184,7 @@ class TestRunGrowthSetup:
 
         yn = MagicMock(selected=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", return_value=yn):
+        with patch("wizard_steps.YesNoView", return_value=yn):
             make_send_handler(interaction.channel)
             await run_growth_setup(interaction, bot)
 
@@ -1212,7 +1224,7 @@ class TestRunGrowthSetup:
         # 5. Snapshot Day   → "1"
         keep_values = ["Squad Powers", "2", "A", "Growth Tracking", "1"]
 
-        with patch("setup_cog.YesNoView", return_value=yn), patch_keep_or_change(keep_values):
+        with patch("wizard_steps.YesNoView", return_value=yn), patch_keep_or_change(keep_values):
             # MetricsActionView and FrequencyView are inline; resolve via
             # send-handler with their respective attribute overrides.
             make_send_handler(
@@ -1293,7 +1305,7 @@ class TestRunGrowthSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -1327,7 +1339,7 @@ class TestRunGrowthSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)
@@ -1424,10 +1436,10 @@ class TestRunShinyTasksSetup:
             return ch_view
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
-            patch("setup_cog.YesNoView", return_value=enable_yes),
-            patch("setup_cog.ConfirmView", return_value=confirm),
-            patch("setup_cog.ModalLaunchView", return_value=range_launcher),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", return_value=enable_yes),
+            patch("wizard_steps.ConfirmView", return_value=confirm),
+            patch("wizard_steps.ModalLaunchView", return_value=range_launcher),
             patch_keep_or_change(["9:00am", ""]),
         ):  # Step 4 time + Step 5 template
             make_send_handler(
@@ -1466,7 +1478,7 @@ class TestRunShinyTasksSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(
@@ -1498,7 +1510,7 @@ class TestRunShinyTasksSetup:
             captured.update(kwargs)
 
         with (
-            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("wizard_steps.YesNoView", return_value=enabled_no),
             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
         ):
             make_send_handler(interaction.channel)
@@ -1609,8 +1621,8 @@ class TestRunGrowthBreakdownSetup:
         autopost_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", return_value=autopost_yes),
-            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("wizard_steps.YesNoView", return_value=autopost_yes),
+            patch("wizard_steps.ChannelSelectStep", side_effect=_record_ch),
             patch_keep_or_change(["Growth Breakdown"]),
         ):  # Step 1 tab name
             # Summary proceed=True; inline bucket-filter / thresholds /
@@ -1657,7 +1669,7 @@ class TestRunGrowthBreakdownSetup:
         autopost_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
 
         with (
-            patch("setup_cog.YesNoView", return_value=autopost_no),
+            patch("wizard_steps.YesNoView", return_value=autopost_no),
             patch_keep_or_change(["Growth Breakdown"]),
         ):
             make_send_handler(
@@ -1850,7 +1862,7 @@ class TestPremiumCaps:
         # path returns the user's typed string). The first response feeds
         # the tab-name step; the next two feed themes and tones.
         with (
-            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch("wizard_steps.YesNoView", side_effect=yn_views),
             patch_keep_or_change(
                 [
                     "Train Schedule",
@@ -1915,7 +1927,7 @@ class TestPremiumCaps:
 
         yn = MagicMock(selected=True, wait=AsyncMock())
         with (
-            patch("setup_cog.YesNoView", return_value=yn),
+            patch("wizard_steps.YesNoView", return_value=yn),
             patch_keep_or_change(["Squad Powers", "2", "A", "Growth Tracking", "1"]),
         ):
             await run_growth_setup(interaction, bot)

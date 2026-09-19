@@ -1,7 +1,7 @@
 """
 Post-event attendance tracking (#133 — Step 7 of the #38 8-step flow).
 
-Reached via the `📋 Record attendance` button on `/desertstorm` and
+Reached via the `✏️ Record attendance` button on `/desertstorm` and
 `/canyonstorm` (hub-restructure #187; legacy
 `/desertstorm attendance event_date:YYYY-MM-DD` subcommand pre-#187).
 Opens an officer view that lets leadership mark who actually showed
@@ -23,13 +23,14 @@ from typing import Optional
 
 import discord
 
-from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
+from messages import DATE_PARSE_REJECT, ROUTE_HINT
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
     HUB_BTN_POST_SIGNUP,
     HUB_BTN_ATTENDANCE,
 )
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -551,7 +552,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
     return embed
 
 
-class _AttendanceView(discord.ui.View):
+class _AttendanceView(OwnedView):
     """Member-select + ✅/❌ + Save (#171 / Decision #5).
 
     The view's two action buttons branch on whether a slot is currently
@@ -569,6 +570,14 @@ class _AttendanceView(discord.ui.View):
     the three-state pick (✅/❌/🔄) shrinks to a two-state in-place
     action because 🔄 Sub activated was dropped from the UI.
     """
+
+    @property
+    def timeout_hint(self) -> str:
+        return ROUTE_HINT.format(cmd=HUB_COMMAND[self.session.event_type], btn=HUB_BTN_ATTENDANCE)
+
+    @property
+    def owner_id(self) -> int:
+        return self.session.user_id
 
     def __init__(self, session: _AttendanceSession):
         super().__init__(timeout=900)
@@ -626,8 +635,6 @@ class _AttendanceView(discord.ui.View):
         )
 
         async def _on_pick(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             raw = picker.values[0]
             parts = raw.split("|", 2)
             if len(parts) != 3:
@@ -677,8 +684,6 @@ class _AttendanceView(discord.ui.View):
         )
 
         async def _on_clear(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             if self.selected_key is not None:
                 s.statuses[self.selected_key] = STATUS_UNRECORDED
             self.selected_key = None
@@ -687,39 +692,13 @@ class _AttendanceView(discord.ui.View):
         clear_btn.callback = _on_clear
         self.add_item(clear_btn)
 
-        # Row 3 — pagination (only rendered when total slots > one page).
-        if s.total_pages() > 1:
-            prev_btn = discord.ui.Button(
-                label="◀ Prev",
-                style=discord.ButtonStyle.secondary,
-                row=3,
-                disabled=s.page == 0,
-            )
-            next_btn = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                row=3,
-                disabled=s.page >= s.total_pages() - 1,
-            )
+        # Row 3: pagination (only rendered when total slots > one page).
+        async def _on_page(inter: discord.Interaction, page: int):
+            s.page = page
+            self.selected_key = None
+            await self._redraw(inter)
 
-            async def _prev(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                s.page = max(0, s.page - 1)
-                self.selected_key = None
-                await self._redraw(inter)
-
-            async def _next(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                s.page = min(s.total_pages() - 1, s.page + 1)
-                self.selected_key = None
-                await self._redraw(inter)
-
-            prev_btn.callback = _prev
-            next_btn.callback = _next
-            self.add_item(prev_btn)
-            self.add_item(next_btn)
+        self.add_pagination_row(page=s.page, page_count=s.total_pages(), on_page=_on_page, row=3)
 
         # Row 4 — Save.
         save_btn = discord.ui.Button(
@@ -732,8 +711,6 @@ class _AttendanceView(discord.ui.View):
 
     def _make_mark_callback(self, status: str):
         async def _cb(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
             s = self.session
             if self.selected_key is not None:
                 # Single-slot write.
@@ -752,8 +729,6 @@ class _AttendanceView(discord.ui.View):
         return _cb
 
     async def _on_save(self, inter: discord.Interaction):
-        if not await self._guard_owner(inter):
-            return
         s = self.session
         await inter.response.defer(ephemeral=True, thinking=True)
         errors = await asyncio.to_thread(
@@ -791,12 +766,6 @@ class _AttendanceView(discord.ui.View):
                 pass
         self.stop()
 
-    async def _guard_owner(self, inter: discord.Interaction) -> bool:
-        if inter.user.id != self.session.user_id:
-            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     async def _redraw(self, inter: discord.Interaction):
         self._build()
         await inter.response.edit_message(
@@ -804,22 +773,13 @@ class _AttendanceView(discord.ui.View):
             view=self,
         )
 
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
 
 # ── Slash command ────────────────────────────────────────────────────────────
 
 
 # ── Hub button handler ───────────────────────────────────────────────────────
 #
-# Wired from the `📋 Record attendance` button on the `/desertstorm`
+# Wired from the `✏️ Record attendance` button on the `/desertstorm`
 # and `/canyonstorm` event hubs (storm_event_hub.py). This module
 # exposes the handler body so the hub stays a thin dispatcher.
 

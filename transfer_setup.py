@@ -41,11 +41,11 @@ import premium
 import transfer
 import transfer_sheets
 import wizard_registry
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
 _STEP_TIMEOUT = 300
-_DENY_NOT_OWNER = "⛔ Only the person who started setup can use these controls."
 _TIMEOUT_MSG = "⏰ Timed out. Run `/transfers` → **⚙️ Setup Transfers** to start again."
 
 # Setup-shape modes (stored in `setup_mode`).
@@ -253,7 +253,7 @@ class _SheetModal(discord.ui.Modal, title="Transfer sheet"):
         await self._on_submit(interaction, self.sheet_id.value.strip(), self.tab.value.strip())
 
 
-class _SheetStepView(discord.ui.View):
+class _SheetStepView(OwnedView):
     """Enter (or keep) a sheet, verifying read access before advancing. On
     success ``result`` is ``(sheet_id, tab, header, rows)``. Used for the
     optional intake-source sheets."""
@@ -269,20 +269,12 @@ class _SheetStepView(discord.ui.View):
 
         # Keep current goes first + green (the repo-wide keep/change convention).
         if default_id and default_tab:
-            keep = discord.ui.Button(
-                label="✅ Keep current sheet", style=discord.ButtonStyle.success
-            )
+            keep = discord.ui.Button(label="Keep current sheet", style=discord.ButtonStyle.success)
             keep.callback = self._keep
             self.add_item(keep)
-        enter = discord.ui.Button(label="📝 Enter sheet", style=discord.ButtonStyle.primary)
+        enter = discord.ui.Button(label="✏️ Enter sheet", style=discord.ButtonStyle.primary)
         enter.callback = self._enter
         self.add_item(enter)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _enter(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
@@ -386,7 +378,7 @@ class _Mode1Modal(discord.ui.Modal, title="Your two sheets"):
         )
 
 
-class _ModeStepView(discord.ui.View):
+class _ModeStepView(OwnedView):
     """Three setup shapes. Each button opens the right modal; on submit the
     sheet(s) are read to verify access, and ``mode`` + ``result`` carry the
     choice. ``result`` maps a role (``"intake"`` / ``"alliance"``) to a
@@ -406,21 +398,19 @@ class _ModeStepView(discord.ui.View):
         r = 0
         if current.get("setup_mode") and current.get("alliance_sheet_id"):
             keep = discord.ui.Button(
-                label="✅ Keep current sheets & setup", style=discord.ButtonStyle.success, row=0
+                label="Keep current sheets & setup", style=discord.ButtonStyle.success, row=0
             )
             keep.callback = self._keep_current
             self.add_item(keep)
             r = 1
         b1 = discord.ui.Button(
-            label="🔀 A shared sheet that populates my own sheet",
+            label="📥 A shared sheet that populates my own sheet",
             style=discord.ButtonStyle.primary,
             row=r,
         )
         b1.callback = self._pick_source_to_own
         self.add_item(b1)
-        b2 = discord.ui.Button(
-            label="🏠 My own sheet", style=discord.ButtonStyle.primary, row=r + 1
-        )
+        b2 = discord.ui.Button(label="✏️ My own sheet", style=discord.ButtonStyle.primary, row=r + 1)
         b2.callback = self._pick_own
         self.add_item(b2)
         b3 = discord.ui.Button(
@@ -428,12 +418,6 @@ class _ModeStepView(discord.ui.View):
         )
         b3.callback = self._pick_watch
         self.add_item(b3)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _pick_source_to_own(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
@@ -559,7 +543,7 @@ def _mode_embed() -> discord.Embed:
         ),
     )
     embed.add_field(
-        name="🔀 A shared sheet that populates my own sheet",
+        name="📥 A shared sheet that populates my own sheet",
         value=(
             "This is a two-sheet setup where you have one that is the entry point for data and "
             "then one that you edit separately. (E.g. your entire server shares a sheet but your "
@@ -568,7 +552,7 @@ def _mode_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🏠 My own sheet",
+        name="✏️ My own sheet",
         value=(
             "This is when you have a single sheet that you add transfers to, record statuses, and "
             "make edits all in one place."
@@ -590,7 +574,7 @@ def _mode_embed() -> discord.Embed:
 # ── Column mapping (category pickers) ─────────────────────────────────────────
 
 
-class _PagedColumnPickerView(discord.ui.View):
+class _PagedColumnPickerView(OwnedView):
     """Shared machinery for the paged, global-index column pickers below
     (``_ColumnMapView``, ``_AdaptiveColumnMapView``, ``_SourceMapView``): the
     owner-only gate, page/pages bookkeeping, and the global-index selection
@@ -614,14 +598,7 @@ class _PagedColumnPickerView(discord.ui.View):
         self.pages = _page_count(headers, self.per_page)
         self.message: discord.Message | None = None
         self.saved = False
-        self._prev: discord.ui.Button | None = None
-        self._next: discord.ui.Button | None = None
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
+        self._nav: wizard_registry.PaginationRow | None = None
 
     # ── global-index helpers, page-scoped so subclasses don't repeat args ──
     def _page_index_set(self) -> set:
@@ -668,22 +645,16 @@ class _PagedColumnPickerView(discord.ui.View):
         return sel
 
     def _add_nav_buttons(self, row: int) -> None:
-        """Prev/Next buttons, only if the sheet spans more than one page;
-        ``_render()``/``_update_nav_disabled()`` keep their disabled state
-        current."""
-        if self.pages <= 1:
-            return
-        self._prev = discord.ui.Button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=row)
-        self._prev.callback = self._on_prev
-        self.add_item(self._prev)
-        self._next = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, row=row)
-        self._next.callback = self._on_next
-        self.add_item(self._next)
+        """The pagination row, only if the sheet spans more than one page;
+        ``_render()``/``_update_nav_disabled()`` keep it current, because
+        these pickers re-point their selects rather than rebuilding."""
+        self._nav = self.add_pagination_row(
+            page=self.page, page_count=self.pages, on_page=self._on_page, row=row
+        )
 
     def _update_nav_disabled(self) -> None:
-        if self._prev is not None:
-            self._prev.disabled = self.page <= 0
-            self._next.disabled = self.page >= self.pages - 1
+        if self._nav is not None:
+            self._nav.sync(self.page)
 
     # ── page flip / save — subclasses supply the render hook + edit kwargs ──
     def _render(self) -> None:
@@ -697,13 +668,8 @@ class _PagedColumnPickerView(discord.ui.View):
         overrides this to also carry a rebuilt embed."""
         return {"view": self}
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._render()
-        await wizard_registry.safe_edit_response(interaction, **self._render_kwargs())
-
-    async def _on_next(self, interaction: discord.Interaction):
-        self.page = min(self.pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._render()
         await wizard_registry.safe_edit_response(interaction, **self._render_kwargs())
 
@@ -945,20 +911,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
         )
         sel.callback = self._on_field_select
         self.add_item(sel)
-        if self.pages > 1:
-            prev = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1, disabled=self.page <= 0
-            )
-            prev.callback = self._on_prev
-            self.add_item(prev)
-            nxt = discord.ui.Button(
-                label="Next ▶",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                disabled=self.page >= self.pages - 1,
-            )
-            nxt.callback = self._on_next
-            self.add_item(nxt)
+        self.add_pagination_row(page=self.page, page_count=self.pages, on_page=self._on_page, row=1)
         done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.primary, row=1)
         done.callback = self._on_field_done
         self.add_item(done)
@@ -971,10 +924,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
             label, desc = self._FIELDS[self.mode]
             lines.append(f"**Editing {label}:** {desc}.")
             if self.pages > 1:
-                lines.append(
-                    f"Page **{self.page + 1} of {self.pages}** — ◀ ▶ shows more columns. "
-                    "**Done** goes back to the field list."
-                )
+                lines.append("◀ ▶ shows more columns. **Done** goes back to the field list.")
         body = "\n".join(lines) + "\n\n" + transfer.summarize_column_map(self.column_map())
         if self._warn:
             body += f"\n\n{self._warn}"
@@ -984,7 +934,7 @@ class _AdaptiveColumnMapView(_PagedColumnPickerView):
 
     # ── interactions ─────────────────────────────────────────────────────────
     def _render(self):
-        """Base ``_on_prev``/``_on_next`` hook — re-render whichever field is
+        """Base ``_on_page`` hook — re-render whichever field is
         currently open. Only called while ``mode`` is a field (the hub has no
         nav buttons wired to it)."""
         self._render_field(self.mode)
@@ -1079,7 +1029,7 @@ async def _map_step(
 # ── Notification channel / style ──────────────────────────────────────────────
 
 
-class _ChannelStepView(discord.ui.View):
+class _ChannelStepView(OwnedView):
     """Pick the text channel new-applicant / status-change notices post to."""
 
     def __init__(self, owner_id: int, *, current_id: int = 0):
@@ -1091,7 +1041,7 @@ class _ChannelStepView(discord.ui.View):
         # Keep current goes first + green (the repo-wide keep/change convention).
         if current_id:
             keep = discord.ui.Button(
-                label="✅ Keep current channel", style=discord.ButtonStyle.success
+                label="Keep current channel", style=discord.ButtonStyle.success
             )
             keep.callback = self._make_keep(current_id)
             self.add_item(keep)
@@ -1107,12 +1057,6 @@ class _ChannelStepView(discord.ui.View):
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _make_keep(self, current_id: int):
         async def _cb(interaction: discord.Interaction):
@@ -1134,7 +1078,7 @@ class _ChannelStepView(discord.ui.View):
         self.stop()
 
 
-class _StyleStepView(discord.ui.View):
+class _StyleStepView(OwnedView):
     """Per-applicant message vs a batched digest when several land at once."""
 
     def __init__(self, owner_id: int, *, current: str | None = None):
@@ -1156,12 +1100,6 @@ class _StyleStepView(discord.ui.View):
         )
         digest.callback = self._make("digest")
         self.add_item(digest)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _make(self, value: str):
         async def _cb(interaction: discord.Interaction):
@@ -1196,7 +1134,7 @@ _FILTER_OPS = [
 ]
 
 
-class _ButtonChoiceView(discord.ui.View):
+class _ButtonChoiceView(OwnedView):
     """Generic labelled-button row → ``value`` (+ ``confirmed`` / ``cancelled``).
     Reused for yes/no, operator pick, and add-another."""
 
@@ -1210,12 +1148,6 @@ class _ButtonChoiceView(discord.ui.View):
             btn.callback = self._make(value)
             self.add_item(btn)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
     def _make(self, value):
         async def _cb(interaction: discord.Interaction):
             self.value = value
@@ -1228,7 +1160,7 @@ class _ButtonChoiceView(discord.ui.View):
         return _cb
 
 
-class _FilterColumnView(discord.ui.View):
+class _FilterColumnView(OwnedView):
     """Single-select of the sheet's columns to filter on, paged for wide
     sheets (◀ ▶). Picking a column confirms and stops."""
 
@@ -1251,18 +1183,9 @@ class _FilterColumnView(discord.ui.View):
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
-        self._prev = self._next = None
-        if self.pages > 1:
-            self._prev = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, row=1
-            )
-            self._prev.callback = self._on_prev
-            self.add_item(self._prev)
-            self._next = discord.ui.Button(
-                label="Next ▶", style=discord.ButtonStyle.secondary, row=1
-            )
-            self._next.callback = self._on_next
-            self.add_item(self._next)
+        self._nav = self.add_pagination_row(
+            page=self.page, page_count=self.pages, on_page=self._on_page, row=1
+        )
         back = discord.ui.Button(label=self._back_label, style=discord.ButtonStyle.secondary, row=1)
         back.callback = self._on_back
         self.add_item(back)
@@ -1270,15 +1193,8 @@ class _FilterColumnView(discord.ui.View):
 
     def _render(self):
         self._sel.options = _page_options(self.all_headers, self.page, set())
-        if self._prev is not None:
-            self._prev.disabled = self.page <= 0
-            self._next.disabled = self.page >= self.pages - 1
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
+        if self._nav is not None:
+            self._nav.sync(self.page)
 
     async def _cb(self, interaction: discord.Interaction):
         picked = _selected_indices(interaction.data["values"])
@@ -1292,13 +1208,8 @@ class _FilterColumnView(discord.ui.View):
         await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
-    async def _on_prev(self, interaction: discord.Interaction):
-        self.page = max(0, self.page - 1)
-        self._render()
-        await wizard_registry.safe_edit_response(interaction, view=self)
-
-    async def _on_next(self, interaction: discord.Interaction):
-        self.page = min(self.pages - 1, self.page + 1)
+    async def _on_page(self, interaction: discord.Interaction, page: int):
+        self.page = page
         self._render()
         await wizard_registry.safe_edit_response(interaction, view=self)
 
@@ -1310,7 +1221,7 @@ class _FilterColumnView(discord.ui.View):
         self.stop()
 
 
-class _FilterMultiView(discord.ui.View):
+class _FilterMultiView(OwnedView):
     """Multi-select of a column's distinct values (the ``in`` control)."""
 
     def __init__(self, owner_id: int, distinct: list):
@@ -1333,12 +1244,6 @@ class _FilterMultiView(discord.ui.View):
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _cb(self, interaction: discord.Interaction):
         picked = []
@@ -1368,7 +1273,7 @@ class _FilterValueModal(discord.ui.Modal):
         await self._on_submit(interaction, self.value_input.value.strip())
 
 
-class _FilterValueView(discord.ui.View):
+class _FilterValueView(OwnedView):
     """Button → modal for a free-text value (filter threshold, decision
     options, …). ``default`` pre-fills the modal for an edit."""
 
@@ -1384,12 +1289,6 @@ class _FilterValueView(discord.ui.View):
         btn = discord.ui.Button(label="✏️ Enter value", style=discord.ButtonStyle.primary)
         btn.callback = self._enter
         self.add_item(btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _enter(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
@@ -1449,7 +1348,7 @@ async def _build_clause(channel, owner_id, col, kind, distinct, cancel_event):
             owner_id,
             [
                 ("🔤 Contains text", "contains", discord.ButtonStyle.primary),
-                ("🎯 Is one of specific values", "in", discord.ButtonStyle.secondary),
+                ("🔽 Is one of specific values", "in", discord.ButtonStyle.secondary),
                 ("↩️ Back", "BACK", discord.ButtonStyle.secondary),
             ],
         )
@@ -1494,7 +1393,7 @@ async def _build_filter(
     *,
     intro: str | None = None,
     none_label: str = "✅ Every new applicant",
-    build_label: str = "🔎 Only ones matching a filter",
+    build_label: str = "🔍 Only ones matching a filter",
     current_filter=None,
 ):
     """Walk the recruiter through an AND/OR filter. Returns the filter dict,
@@ -1783,7 +1682,7 @@ async def _configure_source(
             "For example: only rows where *Requested Landing Alliance* contains your tag."
         ),
         none_label="📥 Pull every row",
-        build_label="🔎 Only rows matching a filter",
+        build_label="🔍 Only rows matching a filter",
         current_filter=cur_pull_filter,
     )
     if filt in ("CANCEL", "TIMEOUT"):
@@ -1965,7 +1864,7 @@ async def _step_frequency(channel, owner_id, current_freq, cancel_event):
 async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
     """Walk the three in-game message templates. Returns ``"OK"`` or
     ``"ABORT"`` (``ask_keep_or_change`` posts its own cancel/timeout notice)."""
-    from setup_cog import ask_keep_or_change
+    from wizard_steps import ask_keep_or_change
     from defaults import DEFAULT_TRANSFER_TEMPLATES
 
     await channel.send(
@@ -1993,7 +1892,7 @@ async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
 
 
 async def _step_removal(channel, guild_id, owner_id, cancel_event):
-    from setup_cog import YesNoView
+    from wizard_steps import YesNoView
 
     view = YesNoView()
     await channel.send(
@@ -2013,7 +1912,7 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
 
 async def _step_enrich(channel, guild_id, owner_id, cancel_event):
     """Opt into blank-cell enrichment of existing rows from the source (#9)."""
-    from setup_cog import YesNoView
+    from wizard_steps import YesNoView
 
     view = YesNoView()
     await channel.send(
@@ -2147,7 +2046,7 @@ async def _add_one_decision(channel, user_id, sheet_id, tab, cancel_event):
     srcv = _ButtonChoiceView(
         user_id,
         [
-            ("🆕 Create a new column", "new", discord.ButtonStyle.primary),
+            ("➕ Create a new column", "new", discord.ButtonStyle.primary),
             ("🗂️ Use an existing column", "existing", discord.ButtonStyle.secondary),
         ],
     )
@@ -2266,7 +2165,7 @@ async def _edit_one_decision(channel, user_id, sheet_id, tab, decision, cancel_e
 
 
 def _decisions_embed(decisions: list) -> discord.Embed:
-    embed = discord.Embed(title="🧭 Decisions", color=discord.Color.blurple())
+    embed = discord.Embed(title="📋 Decisions", color=discord.Color.blurple())
     if not decisions:
         embed.description = (
             "No decisions yet.\n\n"
@@ -2289,7 +2188,7 @@ def _decisions_embed(decisions: list) -> discord.Embed:
     return embed
 
 
-class _DecisionPickView(discord.ui.View):
+class _DecisionPickView(OwnedView):
     """Single-select of the configured decisions, to choose one to edit/delete."""
 
     def __init__(self, owner_id: int, decisions: list, verb: str):
@@ -2310,12 +2209,6 @@ class _DecisionPickView(discord.ui.View):
         )
         self._sel.callback = self._cb
         self.add_item(self._sel)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     async def _cb(self, interaction: discord.Interaction):
         try:
@@ -2641,7 +2534,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                     "*Requested Alliance contains your tag*)?"
                 ),
                 none_label="✅ Every new applicant on the sheet",
-                build_label="🔎 Only ones matching a filter",
+                build_label="🔍 Only ones matching a filter",
                 current_filter=cur_filter,
             )
             if filt == "CANCEL":
@@ -2821,7 +2714,7 @@ async def _finalize_and_enable(guild_id: int, sheet_id: str, tab: str, column_ma
 # after each edit so the actionable view stays the most-recent message.
 
 
-class _EditMenuView(discord.ui.View):
+class _EditMenuView(OwnedView):
     """Section picker. Each button records the chosen section in ``choice``;
     the menu loop runs that section's editor then re-posts. Buttons shown
     depend on the setup mode (watch hides Filter-as-notification, Intake, and
@@ -2840,12 +2733,12 @@ class _EditMenuView(discord.ui.View):
         # menu stays short and the labels say plainly what they touch.
         specs = [("🗂️ Your Sheet Columns", "columns", 0)]
         if mode in (_MODE_OWN, _MODE_WATCH):
-            specs.append(("🔎 Filter", "filter", 0))
+            specs.append(("🔍 Filter", "filter", 0))
         if mode in (_MODE_SOURCE_TO_OWN, _MODE_OWN):
             specs.append(("📥 Shared sheet configuration", "shared", 1))
         specs.append(("🔔 Notifications", "notifications", 1))
-        specs.append(("✉️ Message templates", "templates", 2))
-        specs.append(("📑 Change Setup", "resetup", 2))
+        specs.append(("📄 Message templates", "templates", 2))
+        specs.append(("⚙️ Change Setup", "resetup", 2))
         for label, value, row in specs:
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, row=row)
             btn.callback = self._make(value)
@@ -2853,12 +2746,6 @@ class _EditMenuView(discord.ui.View):
         done = discord.ui.Button(label="✅ Done", style=discord.ButtonStyle.success, row=3)
         done.callback = self._make("done")
         self.add_item(done)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _make(self, value: str):
         async def _cb(interaction: discord.Interaction):
@@ -3067,7 +2954,7 @@ async def _edit_style(channel, guild_id, user, cfg, cancel_event) -> str:
         if (cfg.get("notification_style") or "each") == "each"
         else "a digest"
     )
-    g = await _edit_gate(channel, user.id, "Notification style", cur, cancel_event)
+    g = await _edit_gate(channel, user.id, "Delivery", cur, cancel_event)
     if g != "change":
         return g
     st, style = await _step_style(channel, user.id, cancel_event)
@@ -3117,7 +3004,7 @@ async def _edit_filter(channel, guild_id, user, cfg, cancel_event) -> str:
                 "Get pinged for every new row, or only the ones matching a filter?"
             ),
             none_label="✅ Every new applicant on the sheet",
-            build_label="🔎 Only ones matching a filter",
+            build_label="🔍 Only ones matching a filter",
         )
     else:
         filt = await _build_filter(channel, user.id, header, rows, cancel_event)
@@ -3253,7 +3140,7 @@ async def _edit_enrich(channel, guild_id, user, cfg, cancel_event) -> str:
 # through every sub-step.
 
 
-class _SectionPickerView(discord.ui.View):
+class _SectionPickerView(OwnedView):
     """A secondary section picker. ``specs`` is ``[(label, value), …]``; the
     chosen value lands in ``choice``. A green ↩️ Back returns to the main menu."""
 
@@ -3272,12 +3159,6 @@ class _SectionPickerView(discord.ui.View):
         )
         back.callback = self._make("back")
         self.add_item(back)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
 
     def _make(self, value: str):
         async def _cb(interaction: discord.Interaction):
@@ -3330,7 +3211,7 @@ async def _edit_columns(channel, guild_id, user, cfg, cancel_event) -> str:
     specs = [("🗂️ Map columns", "mapping")]
     handlers = {"mapping": _edit_mapping, "decisions": _edit_decisions}
     if mode != _MODE_WATCH:
-        specs.append(("🧭 Decision columns", "decisions"))
+        specs.append(("📋 Decision columns", "decisions"))
     return await _run_submenu(
         channel,
         guild_id,
@@ -3352,7 +3233,7 @@ async def _edit_shared(channel, guild_id, user, cfg, cancel_event) -> str:
         title="Shared sheet configuration",
         specs=[
             ("📥 Sheets & column matching", "intake"),
-            ("🧩 Fill-in from source", "enrich"),
+            ("✏️ Fill-in from source", "enrich"),
         ],
         handlers={"intake": _edit_intake, "enrich": _edit_enrich},
     )
@@ -3363,8 +3244,8 @@ async def _edit_notifications(channel, guild_id, user, cfg, cancel_event) -> str
     mode = cfg.get("setup_mode") or ""
     specs = [
         ("📢 Channel", "channel"),
-        ("🎚️ Style", "style"),
-        ("⏱️ Frequency", "frequency"),
+        ("📬 Delivery", "style"),
+        ("🕒 Frequency", "frequency"),
     ]
     handlers = {
         "channel": _edit_channel,

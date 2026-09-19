@@ -1,0 +1,66 @@
+{
+  "note": "Provenance for the picks card's artwork. NOTHING LOADS THIS FILE. The renderer reads `lw_alliance_helper_picks_layout.json`, which names the runtime pieces; this records where each of them came from so a revision can be redone the same way. `scripts/build_champion_duel_picks_assets.py` is the script that does it.",
+  "delivered": "Kevin, 28 Aug 2026, as separable pieces rather than composed cards -- which is better than the brief asked for, because the renderer assembles instead of cropping and the every-row-identical worry disappears. No text is baked into any piece.",
+  "master_scale": 4,
+  "repairs": [
+    "`champion_duel_matchup_row_MASTER_3440x652.png` as delivered carried a `(1)` duplicate-download suffix, which is why the first manifest's reference to it did not resolve.",
+    "The PICK cap arrived as a bare UUID, `a4e228d8-b035-4255-b9b6-cbbf1bab3949.png`, because it was drawn in a separate session after the first attempts failed to render. It has an entry here now.",
+    "`footer_single` and `footer_wide` pointed at the uncorrected footers. They point at the `_fixed` files and the `_fixed` keys are gone, so there is one name per piece. Verified rather than assumed: the plain footers' top-left pixel is (5, 7, 31) and the fixed ones' is exactly (4, 6, 22), the ground this card composites onto."
+  ],
+  "assets": {
+    "header_single": {
+      "master": "champion_duel_header_single_MASTER_3800x600.png",
+      "master_size": [3800, 600],
+      "committed_master": "picks_header_single_master.webp",
+      "runtime": "picks_header_single.webp",
+      "runtime_size": [950, 150]
+    },
+    "header_wide": {
+      "master": "champion_duel_header_wide_MASTER_7600x600.png",
+      "master_size": [7600, 600],
+      "committed_master": "picks_header_wide_master.webp",
+      "runtime": "picks_header_wide.webp",
+      "runtime_size": [1900, 150]
+    },
+    "footer_single": {
+      "master": "champion_duel_footer_single_MASTER_3800x360_fixed.png",
+      "master_size": [3800, 360],
+      "committed_master": "picks_footer_single_master.webp",
+      "runtime": "picks_footer_single.webp",
+      "runtime_size": [950, 90],
+      "note": "Top and side fade corrected to dissolve into #040616 like the header. The uncorrected file is superseded and is not committed."
+    },
+    "footer_wide": {
+      "master": "champion_duel_footer_wide_MASTER_7600x360_fixed.png",
+      "master_size": [7600, 360],
+      "committed_master": "picks_footer_wide_master.webp",
+      "runtime": "picks_footer_wide.webp",
+      "runtime_size": [1900, 90],
+      "note": "Same correction as the single footer."
+    },
+    "matchup_row": {
+      "master": "champion_duel_matchup_row_MASTER_3440x652(1).png",
+      "master_size": [3440, 652],
+      "committed_master": "picks_row_master.webp",
+      "runtime": "picks_row.webp",
+      "runtime_size": [860, 163],
+      "bar_master": { "y": 212, "h": 232 },
+      "bar_runtime": { "y": 53, "h": 58 },
+      "emblem_master": { "x": 1519, "w": 408 },
+      "emblem_runtime": { "x": 380, "w": 102 },
+      "note": "The bar's 212/232 was carried from the first manifest and is confirmed exactly. The emblem span is new, measured off the master by isolating the scanlines above and below the bar where nothing else has ink."
+    },
+    "pick_cap": {
+      "master": "a4e228d8-b035-4255-b9b6-cbbf1bab3949.png",
+      "master_size": [1672, 941],
+      "committed_master": "picks_pick_cap_master.webp",
+      "runtime": "picks_pick_cap.webp",
+      "runtime_size": [412, 232],
+      "lands_at": [103, 58],
+      "anchor": "The outer terminal of the picked player's bar -- flush left on blue, flush right on red, mirrored horizontally for red. Height equals the bar's.",
+      "zone_split": { "native_y": 399, "runtime_y": 98 },
+      "note": "Not on the 4x grid, which is why it was outside the first manifest. Its committed runtime file is 412x232 rather than the 103x58 it occupies, because the renderer sets its two lines of type at 4x and downsamples the finished cap."
+    }
+  },
+  "originals": "The delivered PNGs are 12 MB in total and are not in the repo: `check-added-large-files` runs with no args, so its 500 KB default applies and the largest master is 2.4 MB. Every piece is committed twice as WebP -- once at runtime scale and once at 4x master scale, all under the limit -- so no piece exists in only one place. The PNGs themselves are on Kevin's disk in the bot checkout's `assets/champion_duel/`, untracked."
+}

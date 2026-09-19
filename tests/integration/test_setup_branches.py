@@ -109,7 +109,7 @@ class TestStormSetupWithParticipation:
             return _fake_structured_flow_opted_out()
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=fake_participation),
             patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
             patch_keep_or_change(["DS Assignments"]),
@@ -162,7 +162,7 @@ class TestStormSetupWithParticipation:
             return _fake_structured_flow_opted_out()
 
         with (
-            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("wizard_steps.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
             patch("setup_cog._run_storm_participation_step", side_effect=disabled_participation),
             patch("setup_cog._run_structured_flow_setup_step", side_effect=fake_structured),
             patch_keep_or_change(["CS Assignments"]),
@@ -228,7 +228,7 @@ class TestSetupResetBranches:
     @pytest.mark.asyncio
     async def test_reset_flow_cancel_keeps_config(self, seeded_db):
         """Clicking Cancel preserves the existing config and surfaces the
-        explicit 'Reset cancelled' message."""
+        explicit 'Reset canceled' message."""
         import config
         import setup_cog
 

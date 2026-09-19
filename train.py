@@ -2,7 +2,7 @@
 train.py — Train schedule blurb generator + schedule management
 
 Slash commands (leadership role + channel only):
-  /train              — Train hub (📋 Schedule overview, 📜 Prompt log,
+  /train              — Train hub (📅 Schedule overview, 📜 Prompt log,
                         🎂 Run birthday check; rotation guilds also get
                         📋 This week's draft / 📅 Schedule presets / 👤 Member rules)
   /birthdays          — Show upcoming birthdays in the next 14 days (standalone)
@@ -23,16 +23,19 @@ from discord.ext import commands
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import wizard_registry
+from wizard_registry import ExpiringView
 
 import config_health
 from config import get_config
 from messages import NOT_SET_UP
+from setup_hub import HUB_BTN_BIRTHDAYS
 
 # Birthday helpers + member-sheet loader live in train_birthdays.py.
 # Re-export here so existing imports (`from train import load_birthdays`,
 # `check_and_add_birthdays`, etc.) keep working.
 from train_birthdays import (
     BIRTHDAY_LOOKAHEAD,
+    BIRTHDAY_TAB_SUBJECT,
     load_birthdays,
     get_member_tab_name,
     parse_birthday,
@@ -84,6 +87,24 @@ config_health.register(
         label="your Train Schedule tab",
         fix_hub="/setup",
         fix_btn="🚂 Train",
+    )
+)
+
+# #463: the birthday tab's subject is registered here rather than in
+# train_birthdays.py, which stays free of Discord types (config_health imports
+# discord) so both train.py and the cog can import it. The key is defined there
+# next to the code that records against it; this only supplies the copy.
+config_health.register(
+    config_health.Subject(
+        key=BIRTHDAY_TAB_SUBJECT,
+        # Not "your Birthdays tab": the tab is whatever the alliance pointed
+        # the wizard at, and production has them on `Roster` and `Season 6` as
+        # well as `Birthdays`. A heading naming a tab they don't have would
+        # send them looking for the wrong thing. This is the wizard's own
+        # wording ("Which tab in your Google Sheet contains birthday data?").
+        label="your birthday data tab",
+        fix_hub="/setup",
+        fix_btn=HUB_BTN_BIRTHDAYS,
     )
 )
 
@@ -502,9 +523,9 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
                 bday = " 🎂" if is_bday else ""
                 done = date_str in blurb_log
                 status = "✅ Done" if done else "⏳ Pending"
-                upcoming_lines.append(f"🟢 {day_str} — {name}{bday} — {status}")
+                upcoming_lines.append(f"➡️ {day_str} — {name}{bday} — {status}")
             else:
-                upcoming_lines.append(f"🟢 {day_str} — [Empty]")
+                upcoming_lines.append(f"➡️ {day_str} — [Empty]")
         else:
             if entry:
                 name = entry.get("name", "Unknown")
@@ -574,7 +595,9 @@ class ToneSelectView(discord.ui.View):
         self.stop()
 
 
-class ReminderView(discord.ui.View):
+class ReminderView(ExpiringView):
+    timeout_hint = "`/train` → 📅 Schedule overview → 📋 Generate Prompt"
+
     def __init__(self, cog, date_str: str, name: str):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -583,17 +606,6 @@ class ReminderView(discord.ui.View):
         # Set by the reminder loop right after channel.send so on_timeout
         # can strip the button + post the re-initiate hint.
         self.message = None
-
-    async def on_timeout(self):
-        """Strip the prompt button and tell the assignee how to re-open
-        it. Without this, the button looks live for an hour after the
-        view stopped listening — clicks fail with 'Interaction failed'."""
-        from wizard_registry import expire_view_message
-
-        await expire_view_message(
-            self.message,
-            command_hint="`/train` → 📋 Schedule overview → 📋 Generate Prompt",
-        )
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):

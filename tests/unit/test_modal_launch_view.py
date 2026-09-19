@@ -72,7 +72,7 @@ class TestKeepCurrent:
 
     def test_current_display_overrides_label_for_long_values(self):
         """44-char Sheet IDs blow past Discord's 80-char button label
-        cap once "✅ Keep current: " is prepended. Wizards truncate
+        cap once "Keep current: " is prepended. Wizards truncate
         the display via the `current_display` kwarg."""
         from setup_cog import ModalLaunchView
 

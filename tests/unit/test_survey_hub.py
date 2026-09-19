@@ -82,8 +82,8 @@ class TestEditDispatch:
         inter = AsyncMock()
 
         with (
-            patch("setup_cog.run_survey_setup", new=AsyncMock()) as direct,
-            patch("setup_cog.run_pick_survey_to_edit", new=AsyncMock()) as picker,
+            patch("survey_setup.run_survey_setup", new=AsyncMock()) as direct,
+            patch("survey_setup.run_pick_survey_to_edit", new=AsyncMock()) as picker,
             patch("setup_cog._check_wizard_can_run", new=AsyncMock(return_value=True)),
             patch("wizard_registry.safe_edit_response", new=AsyncMock()),
         ):
@@ -97,8 +97,8 @@ class TestEditDispatch:
         inter = AsyncMock()
 
         with (
-            patch("setup_cog.run_survey_setup", new=AsyncMock()) as direct,
-            patch("setup_cog.run_pick_survey_to_edit", new=AsyncMock()) as picker,
+            patch("survey_setup.run_survey_setup", new=AsyncMock()) as direct,
+            patch("survey_setup.run_pick_survey_to_edit", new=AsyncMock()) as picker,
             patch("setup_cog._check_wizard_can_run", new=AsyncMock(return_value=True)),
             patch("wizard_registry.safe_edit_response", new=AsyncMock()),
         ):
@@ -115,7 +115,7 @@ class TestEditDispatch:
         inter = AsyncMock()
 
         with (
-            patch("setup_cog.run_survey_setup", new=AsyncMock()) as direct,
+            patch("survey_setup.run_survey_setup", new=AsyncMock()) as direct,
             patch("setup_cog._check_wizard_can_run", new=AsyncMock(return_value=False)),
             patch("wizard_registry.safe_edit_response", new=AsyncMock()),
         ):
@@ -128,7 +128,7 @@ class TestEditDispatch:
         inter = AsyncMock()
 
         with (
-            patch("setup_cog.run_create_new_extra_survey", new=AsyncMock()) as add,
+            patch("survey_setup.run_create_new_extra_survey", new=AsyncMock()) as add,
             patch("setup_cog._check_wizard_can_run", new=AsyncMock(return_value=False)),
             patch("wizard_registry.safe_edit_response", new=AsyncMock()),
         ):

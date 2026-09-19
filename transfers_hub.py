@@ -20,6 +20,7 @@ import premium
 import transfer
 import transfer_sheets
 import wizard_registry
+from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,6 @@ TRANSFERS_HUB_CMD = "/transfers"
 # constant rather than a duplicated literal.
 SETUP_TRANSFERS_BTN = "⚙️ Setup Transfers"
 
-_DENY_NOT_OWNER = "⛔ Only the person who opened this hub can use these buttons."
 
 # Mirrors transfer_setup._MODE_LABELS (kept local to avoid importing the wizard
 # module at hub-load time; the wizard is imported lazily on the Setup button).
@@ -191,7 +191,9 @@ def _applicants_embed(header, rows, hidx, name_header, display_headers) -> disco
 # ── Hub view ──────────────────────────────────────────────────────────────────
 
 
-class _TransfersHubView(discord.ui.View):
+class _TransfersHubView(OwnedView):
+    timeout_hint = f"`{TRANSFERS_HUB_CMD}`"
+
     def __init__(self, bot, guild_id: int, owner_id: int, *, configured: bool):
         super().__init__(timeout=900)
         self.bot = bot
@@ -217,17 +219,6 @@ class _TransfersHubView(discord.ui.View):
             )
         setup_btn.callback = self._setup
         self.add_item(setup_btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(_DENY_NOT_OWNER, ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        await wizard_registry.expire_view_message(
-            self.message, command_hint=f"`{TRANSFERS_HUB_CMD}`"
-        )
 
     async def _setup(self, interaction: discord.Interaction):
         from transfer_setup import _launch_transfer_setup

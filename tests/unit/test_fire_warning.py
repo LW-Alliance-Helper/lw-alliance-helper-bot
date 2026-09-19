@@ -48,6 +48,18 @@ def _make_cfg():
 
 
 def _make_bot(channels: dict):
+    for channel in channels.values():
+        # #462 routed the announcement channel through config_health, which
+        # asks `permissions_for(guild.me)`. A bare AsyncMock answers with a
+        # coroutine nobody awaits: harmless, since an unreadable shape resolves
+        # to "no problem", but it warns on every run. These are all meant to be
+        # working channels, so answer plainly.
+        perms = MagicMock()
+        perms.view_channel = True
+        perms.send_messages = True
+        channel.guild = MagicMock()
+        channel.permissions_for = MagicMock(return_value=perms)
+
     bot = MagicMock()
     bot.get_channel = MagicMock(side_effect=lambda cid: channels.get(cid))
     return bot
@@ -55,9 +67,10 @@ def _make_bot(channels: dict):
 
 def _event_list_with_blurb(blurb: str | None = None):
     """A minimal event_list. The marauder key has a hardcoded warning
-    in scheduler.build_warning_message; any other key falls to the
-    generic '<Name> in 5 minutes!' line. The `blurb` is the
-    announcement blurb, which the warning deliberately ignores (#565)."""
+    in scheduler.build_warning_message; any other key falls to
+    WARNING_BLURB_DEFAULT unless the event carries a `warning_blurb`.
+    The `blurb` here is the ANNOUNCEMENT blurb, which the warning
+    deliberately ignores (#565)."""
     return [
         {
             "key": "test_event",
@@ -223,11 +236,11 @@ class TestFireWarningMessageContent:
     than a generic placeholder."""
 
     @pytest.mark.asyncio
-    async def test_body_names_the_event_and_ignores_announcement_blurb(self, temp_db):
+    async def test_body_ignores_announcement_blurb(self, temp_db):
         """Regression (#565): the warning used to reuse the announcement
-        blurb with "5 minutes" substituted into its `{time}` and
-        `{server_time}` slots, rendering "Cool Raid at 5 minutes
-        (5 minutes Server Time)." It now uses the generic line instead."""
+        blurb with "5 minutes" pushed into its `{time}` and `{server_time}`
+        slots, rendering "Cool Raid at 5 minutes (5 minutes Server Time)."
+        With no warning_blurb set it now uses the default line."""
         from scheduler import fire_warning, pending_warnings
 
         pending_warnings.clear()
@@ -247,7 +260,7 @@ class TestFireWarningMessageContent:
         await fire_warning(bot, "evt-content", evt_list, cfg=_make_cfg())
 
         body = announcements.send.await_args.args[0]
-        assert body == "Cool Raid in 5 minutes! Make sure you're online!"
+        assert body == "Cool Raid in 5 minutes! Make sure you're online."
         # The announcement blurb's clock-time phrasing must not leak in.
         assert "at 5 minutes" not in body
         assert "Server Time" not in body

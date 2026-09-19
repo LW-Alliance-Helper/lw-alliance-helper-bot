@@ -9,10 +9,58 @@ repo auto-load this; chats outside this repo don't see it. Companion
 repo `../lw-alliance-helper.github.io` (the website) has its own
 `CLAUDE.md`.
 
+**Changing anything a user sees? Read `notes/UX.md` and
+`notes/DESIGN.md` first.** They're the contract for every user-facing
+surface, and they live in the **private** notes repo rather than here.
+This file owns engineering patterns, workflow, and release process;
+those two own the product's users, language, and visual conventions,
+and `messages.py` owns the shared copy constants themselves.
+
+| File | Owns | Read it when |
+|---|---|---|
+| `notes/UX.md` | Audiences, operating constraints, principles, interaction standards, naming, glossary, voice | Any slash command, hub, wizard, embed, button label, DM, scheduled post, or error message changes |
+| `notes/DESIGN.md` | Surface types, color semantics, emoji catalog, button styles + grid, embed anatomy, Discord limits, ephemerality, view timeouts | Same trigger, plus anything that renders |
+
+`/ux-review` runs both as a checklist: with no argument it audits the
+diff; given a surface name or issue it produces a pre-flight brief
+before the code is written. Without the notes repo cloned it has no
+contract to check against and will say so instead of guessing.
+
+**They're private deliberately** (settled 2026-08-08). They're our own
+design and UX reasoning, which is worth more to a competitor than to
+any user, and the closest competitor's known weakness is precisely a
+lack of this kind of context. Don't copy them into this tree, don't
+quote them into this file, and see `notes/README.md` for the full
+reasoning. Verifying their contents is
+[#451](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/451).
+
 ---
 
 ## Working agreement
 
+- **Bot work starts in this folder.** Skills, this file and the project
+  memory load from the folder a session *starts* in, and from nowhere
+  else: registering this folder as an additional directory from a session
+  started elsewhere does not load them (verified 2026-09-09, when the
+  Skill tool answered "unknown skill" with the folder registered and every
+  skill on disk). A session working on the bot from another repo's folder
+  is working without this contract, and that is what "sloppy" sessions
+  turned out to be. Open the bot folder; then start.
+- **Kevin works in UIs, not the terminal. Design for that, always.**
+  A terminal step is the path of least resistance for an agent and the
+  path of most resistance for him — if there is any other way to do a
+  thing, build that way instead. Prefer, in order: a Discord command or
+  hub button, a web UI, a file he can drag into Discord, a dashboard
+  toggle. A CLI script is a last resort, and when one is genuinely
+  unavoidable it needs a one-line invocation, no environment plumbing,
+  and no expectation that he keeps a shell open.
+  This is not a preference to accommodate where convenient — it decides
+  designs. `/admin champion_duel_import` taking a JSON attachment exists
+  because the first version needed a public host, a service key, three
+  environment variables and a shell with a second repo checked out. Same
+  data, same gate, same data-layer functions; the delivery mechanism was
+  the entire difference between usable and not. Ask "what does he
+  actually have to *do*" before calling something finished.
 - **Solo project**, but the bot repo uses a release-branch workflow:
   work is tracked as GitHub issues; a feature branch (descriptive
   kebab-case slug, may bundle multiple related issues) is PR'd into
@@ -37,8 +85,14 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
     rule below. They skip `dev` and the release branch, not review.
   - **Keep `dev` in sync:** when `main` moves forward and `dev`
     is *not* ahead with feature work in progress, fast-forward `dev`
-    to `main`. If `dev` has uncommitted-to-main feature work, leave
-    it alone — it'll resync after that feature ships.
+    to `main`. **When `dev` is ahead and `main` takes a hotfix, merge
+    `main` into `dev` by pull request the same day**, before the next
+    feature merges into `dev`, while the conflict is one commit wide.
+    The old rule had only two cases, fast-forward or leave alone, and
+    "leave alone" for a month produced an eleven-file conflict
+    ([#588](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/588):
+    three releases and a CI fix, resolved by hand). A hotfix PR into
+    `main` is not finished until its sync PR into `dev` is open.
   - **`dev` carries the next patch `__version__` over `main`** (e.g.
     `main` at `1.4.5` → `dev` at `1.4.6`) so the staging Railway
     service's Sentry release tag is distinct from production's and
@@ -143,6 +197,18 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   release-on-main workflow uses the CHANGELOG section as the GitHub
   Release notes, and the PR body is what reviewers (and your future
   self when bisecting) see first.
+- **The release checklist is split machine-checkable / judgment
+  ([#628](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/628)).**
+  `release-changelog-check.yml` hard-gates the PR into `main` on the
+  machine half: `__version__` matches the branch name, `CHANGELOG.md`
+  has a dated (not "Unreleased") entry, the slim-changelog rule, the
+  Discord changelog block, and the PR title/body shape. A
+  `PostToolUse` hook nudges toward the `/release-check` skill the
+  moment a `release/*` branch is created; run that skill before
+  opening the PR — it covers what CI can't (copy sign-off actually
+  happened, the Discord post reviewed against what shipped, an
+  announcement-post decision made, any cross-repo dependency
+  resolved).
 - **Pre-commit hooks run on staged files** (`pre-commit` framework, config
   in `.pre-commit-config.yaml`): stock `pre-commit-hooks` file checks
   (check-merge-conflict, check-yaml, check-toml, check-added-large-files),
@@ -177,6 +243,16 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   branches without confirming. Feature branches are deleted after
   merging into release; release branches are deleted after merging
   into main.
+- **Worktrees live under the session scratchpad, and only there.**
+  Parallel sessions share this checkout, so branch work happens in
+  `git worktree add <scratchpad>/wt-<slug> -b <branch> origin/dev`, and
+  the worktree is removed (`git worktree remove`) the moment its branch
+  merges. Never a sibling folder beside the repo, never `C:/tmp`: on
+  2026-09-10 the cleanup found 36 stale worktrees, two sibling folders and
+  a stale copy of this file in `C:/tmp` that every worktree under it had
+  been reading. A worktree has no `notes/`, no `.venv` and no
+  `champion_duel_engine`; run tests with the main checkout's interpreter
+  by absolute path.
 - **Companion repo `../lw-alliance-helper.github.io`** (the website)
   keeps the older direct-to-main rule — push commits straight to
   `main` there.
@@ -194,21 +270,38 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | File | Role | Size |
 |---|---|---|
 | `bot.py` | Entry point. Gateway intents (`members` is privileged), slash command tree, `on_ready`, and the four `@tasks.loop` background loops (`growth_task`, `stats_publish_task`, `shiny_tasks_refresh_task`, `shiny_tasks_post_task`). The loops and the ~241-line `on_ready` are the unfinished half of [#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372) — don't assume the split is done. | ~1.3K |
-| `bot_admin.py` / `bot_state.py` | Owner-only `/admin` toolkit extracted from `bot.py` ([#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372), partial), plus the shared bot-state accessor both sides import to avoid a circular import. | ~1K total |
+| `bot_admin.py` / `bot_state.py` | Owner-only `/admin` toolkit extracted from `bot.py` ([#372](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/372), partial), plus the shared bot-state accessor both sides import to avoid a circular import. `/admin db_timings` reads `db_timings.py`. | ~1.1K total |
 | `api_server.py` | aiohttp server backing the Map Manager integration. Gated by `MAPMANAGER_API_KEY`; the Procfile runs the bot as a `web` service for it. | ~175 |
-| `setup_cog.py` | The `/setup` hub launcher (`setup_hub`) + every feature wizard (foundations, birthdays, growth, storm, members, shiny tasks, etc.), reachable as hub buttons. Largest file in the repo. | ~11.2K |
+| `setup_cog.py` | The `/setup` slash command, the foundations wizard (`run_setup`), the events wizard (`run_event_setup`), the view-configuration and reset screens, the `_launch_*` helpers the hub dispatches into, and the helpers every wizard shares (`ask_proceed_with_existing_config`, `ask_disable_with_clear`, `warn_if_tab_claimed`, `_locked_types_note`, the column-letter pair). Every feature wizard lives in its own module now (round 2 of [#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)): the wizard pieces they share in `wizard_steps.py` and `wizard_time.py`, the storm wizard in `storm_setup.py` with its participation step in `storm_setup_participation.py` and its structured step in `storm_setup_structured.py`, the Buddy System in `buddy_setup.py`, the train wizard in `train_setup.py` and `train_setup_rotation.py`, survey in `survey_setup.py`, birthday in `birthday_setup.py`, Growth Breakdown in `growth_breakdown_setup.py`, Shiny Tasks in `shiny_tasks_setup.py`, growth in `growth_setup.py`; all are imported back by name, so `from setup_cog import run_*` and `patch("setup_cog.run_*")` keep resolving. 10,596 lines at the start of round 2. | ~1.6K |
+| `storm_setup_structured.py` | The storm wizard's structured-flow step (Premium opt-in, power data source, sub mode, sign-up channel + schedule, tab names, power-refresh / stale-power DMs, roster DM templates, preset library), split out of `setup_cog.py` in the #589 step 11 refactor ([#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)). One `_ask_*` function per question, a `_Wizard` for the shared handles, one `_Abort` exit for cancel / timeout, one `_ChoiceView` behind every picker. It takes the shared wizard pieces from `wizard_steps` and the schedule sub-flow from `wizard_time` (tests patch them there) and reaches back into `setup_cog` at call time only for the inline-create offers; `setup_cog` keeps the old name as an import alias. Characterized by `tests/integration/test_storm_setup_structured.py`. | ~1.2K |
+| `storm_setup.py` | The storm setup wizard itself (`run_storm_setup`: re-entry summary, Sheet tab, teams and time slots, log and post channels, per-team templates with Keep current, the participation and structured steps, reminder DM, save, summary, first sign-up offer), moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)). Same shape as `storm_setup_structured.py`: `_Wizard` / `_Saved` / `_Answers`, one function per step, one `_Abort` exit; the four views are module classes under their old names. Takes the shared pieces from `wizard_steps` (tests patch them there); reaches back into `setup_cog` at call time only for the participation and structured steps, the re-entry summary and the sign-up offer; `setup_cog` imports the entry point back. Characterized by `tests/integration/test_storm_setup.py`, views clicked in `tests/unit/test_storm_setup_views.py`. | ~1K |
+| `storm_setup_participation.py` | The storm wizard's participation step (#20): enable or keep, the participation tab, the roster source, the preset picker (#247) and the question builder loop with its per-type extras (#244). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)): a `_Walk` for the shared handles with `ask` / `ask_strict` / `reply` / `keep_or_change` as the four ways a question ends, one function per question, the per-type extras dispatched from a table, the six views as module classes. The type constants and `wait_for_msg_simple` live here too; `setup_cog` imports everything back under the old names. Characterized by `tests/integration/test_storm_setup_participation.py`, views clicked in `tests/unit/test_storm_setup_participation_views.py`. | ~1K |
+| `buddy_setup.py` | The Profession Buddy System wizard (`run_buddy_setup`, #289): enable or keep, the buddy and preset tabs, the opt-out column, the roster filter, Engineer doubling, scarcity priority, the reliability source, the alerts channel, the buddy DM. Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; `setup_cog` imports the entry point back. Characterized by `tests/integration/test_buddy_setup.py`, the reliability view clicked in `tests/unit/test_buddy_setup_views.py`. | ~600 |
+| `train_setup.py` / `train_setup_rotation.py` | The train wizard (`run_train_setup`: re-entry summary, schedule tab, blurbs with themes / tones / default tone / prompt templates, reminders with channel, time and DM) and its Conductor Rotation step (`run_rotation_step`, #55 / #302: toggle, roster source, channel and time, draft day, public posts, role-scoped days, counted reasons, Sheet tabs, weekly pattern). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; `setup_cog` imports the entry points and the two rotation views back under the old names. Characterized by `tests/integration/test_train_setup.py`, views clicked in `tests/unit/test_train_setup_views.py`. | ~1.5K total |
+| `survey_setup.py` | The survey wizard (`run_survey_setup`: re-entry summary, survey and notification channels, the survey's own pair of tabs with the one-pair-per-survey rule, the intro message, the Step 6 question choice and the question builder with its per-type extras, the save, header seeding, the confirmation embed with Post / Edit) and the `/survey` hub's add, edit-picker and remove flows (`run_create_new_extra_survey`, `run_pick_survey_to_edit`, `run_remove_extra_survey`). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape, the builder laid out like the storm participation one (one function per question part, extras from a table); `setup_cog` imports the four entry points back and `survey_hub` imports them from here; the module reaches back into `setup_cog` only for the re-entry summary, the tab-claim warning and the Premium answer types. Characterized by `tests/integration/test_survey_setup.py`, views clicked in `tests/unit/test_survey_setup_views.py`. | ~1.7K |
+| `birthday_setup.py` | The birthday wizard (`run_birthday_setup`: re-entry summary, enable or disable with the saved settings kept, sheet tab, name and birthday columns, train integration with placement and lookahead, reminders with channel, time and the Premium birthday DM, save, confirmation embed). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; `setup_cog` imports the entry point back; the module reaches back into `setup_cog` only for the re-entry summary, the disable-with-clear helper, the tab-claim warning and the column-letter helpers. Characterized by `tests/integration/test_birthday_setup.py`, the placement view clicked in `tests/unit/test_birthday_setup_views.py`. | ~550 |
+| `growth_breakdown_setup.py` | The Growth Breakdown wizard (`run_growth_breakdown_setup`, Premium: the growth guard, re-entry summary, breakdown tab, auto-post toggle with channel and bucket filter, custom thresholds and bucket labels through their modals, save, confirmation embed). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; the two Keep / Use defaults / Customize views share one base; `setup_cog` imports the entry point back; the module reaches back into `setup_cog` only for the re-entry summary and the tab-claim warning. Characterized by `tests/integration/test_growth_breakdown_setup.py`, views and modals clicked in `tests/unit/test_growth_breakdown_setup_views.py`. | ~600 |
+| `shiny_tasks_setup.py` | The Shiny Tasks wizard (`run_shiny_tasks_setup`: re-entry summary, enable or disable with the saved settings kept, announcement channel, the server range through its two-field modal with retries, post time, message template, final review, save). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; `setup_cog` imports the entry point back; the module reaches back into `setup_cog` only for the re-entry summary and the disable-with-clear helper. Characterized by `tests/integration/test_shiny_tasks_setup.py`, the modal and its launcher in `tests/unit/test_shiny_tasks_setup_views.py`. | ~440 |
+| `growth_setup.py` | The growth wizard (`run_growth_setup`: re-entry summary, enable or disable with the saved settings kept, source tab, data start row, name column, the metrics editor with its modal, picker and launcher and the free-tier cap, growth tab, snapshot frequency with its day or interval, save, confirmation embed with the next snapshot's time). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) in the `storm_setup.py` shape; `setup_cog` imports the entry point back; the module reaches back into `setup_cog` only for the re-entry summary, the disable-with-clear helper and the tab-claim warning. Characterized by `tests/integration/test_growth_setup.py`, views and modal clicked in `tests/unit/test_growth_setup_views.py`. | ~640 |
 | `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. `iter_guild_event_drafts` (the per-guild draft computation) is extracted so the live loop and the #227 catch-up scan share one code path. | ~970 LOC |
 | `outage_catchup.py` | Outage catch-up digest (#227). Detects downtime from the per-minute loop heartbeats, scans every clock-driven surface (event draft, shiny, survey, birthday, train, storm sign-up) for posts missed during the window that are still in their catch-up window, and posts one leadership-channel digest with a multi-select + Send/Dismiss view for one-click recovery. Per-surface adapters; Premium re-checked at fire time for the paid paths. | ~840 LOC |
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
 | `train_rotation.py` / `train_rotation_ui*.py` / `train_hub.py` | Train Conductor Rotation (#55, free, opt-in): fairness selection (fewest drives → oldest last-driven → **stable random** tie-break seeded by the day, replacing the old alphabetical fallback) + `Train History`/`Member Rules`/`Day Rules` Sheet I/O. Fairness counts the **whole** history sheet as fact — any membered row counts (no posted/reason needed, blank reason counts), only the drafted week + future excluded via the `before` boundary; identity is **Discord-ID-first, name-fallback** (`canonicalize_history` + the appended `Discord ID` history column, stamped on write via `roster_id_map`). UI = buffered preset editor, weekly draft view (with ◀/▶ week nav), daily confirmation view. `train_hub.py` is the single `/train` hub (embed + button grid, Events-hub pattern) that fronts both rotation and the legacy blurb surface. The `check_rotation` loop (weekly draft + daily confirm) lives in `train_cog.py`; rotation gates on the `rotation_enabled` train-config flag. No strategy axis — auto/manual is derived from rule type + role; per-rule-type roles scope candidate pools; birthday mode is derived from the Birthday setup. `train_rotation_ui.py` was split by surface in 1.8.0 ([#373](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/373)) into `_draft`, `_confirm` and `_presets` companions. | ~3.1K total |
-| `storm.py` / `storm_log.py` | Desert/Canyon Storm: drafts, participation, reminders. | ~2.5K total |
+| `storm.py` / `storm_log.py` / `storm_log_flow.py` | Desert/Canyon Storm: drafts, participation, reminders. `storm_log_flow.py` is the participation log walk (date, one handler per configured question type, save, summary), split out of `storm_log.py` in the #589 step 11 refactor in the `storm_setup_structured.py` shape (a `_Walk` for the shared handles, one `_Abort` exit, one retry loop); it reaches back into `storm_log` at call time, so `patch("storm_log.X")` still works. Characterized by `tests/integration/test_storm_log_flow.py`. | ~3.1K total |
 | `storm_strategy.py` / `storm_strategy_ui.py` | Storm strategy data layer and its Discord UI, split in 1.8.0 ([#371](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/371)). Keep new work on the matching side of the seam. | ~2.7K total |
 | `transfer.py` / `transfer_cog.py` / `transfer_setup.py` / `transfer_sheets.py` / `transfers_hub.py` | Transfer Management ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16), Premium, 1.6.0): passive sheet-watcher over an alliance's recruiting sheet. `transfer.py` is the Discord-free core (header-name column addressing, AND-filter DSL, `compute_poll_diff` against `last_seen_state_json`, template render). `transfer_cog.py` is the per-minute poll loop posting new-applicant / status-change / removal notices (each or digest) with message drafts, full-record view, and opt-in decision write-back to the alliance's **own** sheet. `transfer_setup.py` is the wizard (largest piece); `transfers_hub.py` the `/transfers` front door. Optional server-wide / intake-form source pulls auto-copy filter-matching rows. Only Name is privileged; everything else is free-choice display/filter. State-diff poll self-heals after outages → no `outage_catchup` adapter (by design). A sheet problem the alliance owns (renamed/deleted tab, deleted sheet, revoked access) posts one leadership-channel notice plus a `/transfers` hub warning instead of failing silently — deduplicated by `transfer.sheet_error_signature` via the `sheet_error_*` columns with a 24h re-nudge, cleared with a recovery line on the first clean read (#413). 429s and bot bugs deliberately don't alert (`sheet_problem_kind` vs `config.is_user_config_sheet_error` answer two different questions). | ~4.8K total |
+| `storm_roster_powers.py` | The roster power reader behind the roster builder, the sign-up buttons, the write-back and the buddy system: `resolve_columns` (header + configs → `RosterColumns`, pure), `parse_member_row` (one row → one member: name cascade, power cell, not-on-Discord verdict), `read_roster_powers` (configs, sheet, rows, then the cross-tab power and last-updated overlays), plus the cross-tab index helpers and the DM header-label reader, split out of `storm_roster_builder.py` in the #589 step 11 refactor. `storm_roster_builder` imports every name back under its old underscore name, so `storm_roster_builder._read_roster_powers` and friends still resolve and every test patch keeps its target. Characterized by `tests/unit/test_storm_roster_powers.py`. | ~740 |
+| `storm_roster_autofill.py` | The roster builder's auto-fill, split out of `storm_roster_builder.py` in the #589 step 11 refactor: one function per step of the algorithm (zone rules, the starter / sub split by power or saved team plan, the per-phase fill by strategy, sub pairing and its unpaired-sub reasons, spill-over), the two fill strategies dispatched from a table. `storm_roster_builder` imports every name back under its old underscore name (`_auto_fill_session`, `_fill_balanced`, ...); the module reaches back at call time for the session's floor and rule-subject helpers. Held to the old end state by the ten golden scenarios in `tests/unit/test_storm_roster_autofill.py` (regenerated by `tests/unit/_autofill_scenarios.py`). | ~550 |
+| `storm_roster_post.py` | The roster builder's Approve & Post, split out of `storm_roster_builder.py` in the #589 step 11 refactor: one function per stage in the order they happen (refresh powers, render the image, ask the long-mail format, post in one of three shapes, the officer summary, the confirmation with its fallback, the DM offer, the overflow warning), with a `_PostResult` carrying the outcome from the post to the summary. `storm_roster_builder` imports it back as `_finalize_structured_roster`; the module reaches back at call time for the mail body, the picker and DM views, the sheet write, the embed, the power reader and the size limits, so every `patch("storm_roster_builder.X")` still lands. Characterized by `tests/unit/test_storm_roster_post.py`. | ~540 |
+| `alliance_duel.py` | Alliance Duel (VS) tracker ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398), Premium except the member day-theme reminder) — Discord-free core for the `/vs` hub. Fixed game constants (day themes, the 1/2/2/2/2/4 **league** point values, tier ordering), the one-row-per-alliance-per-league-week dataclasses, header-name sheet I/O, server-time league/week/day resolution, and both pairing functions. `compute_week_pairing` re-ranks on the weighted `[8,4,2,1]` score; `project_own_path` walks the bracket lineage instead, and a randomized unit test asserts the two agree — they're deliberately independent derivations. Sheet writes split into a pure `plan_upsert` (unit-testable never-clobber guarantee) and a thin `apply_upsert`. Bracket-dependent calls return `BracketIncomplete` carrying `is_choice`, which separates an own-alliance tracking-mode decision ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)) from genuinely missing data. **Per-action award points are not constants** — Tech research raises them per player, so no surface may print them as fact. Design: `notes/DESIGN_alliance_duel_vs.md`. | ~1K |
 | `survey.py` | Squad-power surveys + scheduled reminders. | ~1.6K |
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
-| `wizard_registry.py` | `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~200 |
+| `db_timings.py` | Per-helper timing of every config database call, on and off the event loop, recorded by `config._get_conn` and read by `/admin db_timings`. The measurement behind the on-loop-reads rule ([#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589) step 10); one warning per helper per ten minutes for a call over 50 ms. | ~170 |
+| `wizard_registry.py` | The two view base classes every hub, picker and confirm inherits (`OwnedView`, `ExpiringView`; see § Patterns to reuse), plus `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~280 |
+| `wizard_steps.py` | The wizard pieces every `/setup` flow is built from: `RoleSelectStep` / `ChannelSelectStep` with their create-one modals, `ConfirmView`, `YesNoView`, `TextInputModal` + `ModalLaunchView`, `ask_keep_or_change`, `TimezoneSelectView` + `TIMEZONE_OPTIONS` / `TIMEZONE_LABELS`, `ScheduleTypeView`, `_KeepOrFlipYesNoGate`, `WIZARD_STEP_TIMEOUT`. Moved out of `setup_cog.py` in round 2 step 1 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)); `setup_cog` re-imports every name, so `patch("setup_cog.X")` still lands for the wizards that live there, and a new caller imports from here. Knows no feature: a view that does belongs next to its wizard. `tests/unit/test_wizard_steps.py` holds both halves. | ~1K |
+| `wizard_time.py` | Clock and calendar text for the wizards: `_parse_12h_time` / `_format_24h_to_12h`, `_format_time_with_tz`, `_parse_month_day`, `_normalise_hhmm`, `_DOW_NAMES`, and `_ask_signup_schedule` (weekday + time with Keep current). Moved out of `setup_cog.py` in round 2 ([#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611)) because the events, survey and train hubs and the storm companion all imported them from there; `setup_cog` imports every name back. Names keep their underscore until a rename sweep. `tests/unit/test_time_utils.py` and `tests/unit/test_wizard_time.py`. | ~400 |
 | `defaults.py` | Hardcoded copy: themes/tones, default mail templates, default DM bodies. | ~100 |
 | `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
 | `dm.py` | DM helpers. | ~80 |
@@ -217,7 +310,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 | `shiny_tasks.py` | Daily Shiny Tasks announcement (3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. **Refresh is disabled (`SERVER_REFRESH_ENABLED=False`, #293)** — the upstream source gated its data behind an API key, so the feature serves the frozen `shiny_task_servers` snapshot and new servers are added manually. See `docs/hedge_data_source.md`. | ~250 |
 
-Tests: `tests/unit/` and `tests/integration/`. 3073 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. ~5,600 collected, 31 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -227,8 +320,50 @@ lane).
 
 These are deliberate and tested. Don't refactor away:
 
+**A helper used by a second feature moves to a shared module the day it is
+used the second time, and gets a line here.** The Champion Duel feature
+copied its siblings instead of reusing them because the helpers it needed
+were private to whichever module wrote them first, and nothing here named
+them. All four now live on the shared base views below (2026-09-11 and
+12, [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589)).
+Do not write a copy of any of them.
+
+### New views inherit a base view, never `discord.ui.View` directly
+- `wizard_registry.OwnedView` for anything one person opened (a hub, a
+  picker, a confirm, an editor): set `self.owner_id` in `__init__`, or
+  define `owner_id` as a property when the owner lives on a parent view
+  or a builder session. Its `interaction_check` refuses everyone else
+  with `messages.DENY_NOT_OWNER`, so callbacks carry no guard of their
+  own. A view that never sets an owner refuses everyone (fail closed).
+- `wizard_registry.ExpiringView` for a view anyone present may use (the
+  scheduler's editor and approval, the train reminder, the outage
+  digest). `OwnedView` extends it, so both get the timeout cleanup,
+  `add_button(label, style, callback, *, row=None, disabled=False)` and
+  `add_pagination_row(*, page, page_count, on_page, row=None)`.
+- **Paging is one row: `◀ Prev`, a disabled `Page n / m`, `Next ▶`**
+  (`messages.BTN_PAGE_*`; the design contract's button-label rule names
+  this set). `on_page(interaction, page)` is the view's own page turn;
+  the row is absent below two pages. A view that re-points its controls
+  instead of rebuilding them keeps the returned `PaginationRow` and calls
+  `sync(page)`. The count lives in the row, not in an embed footer or a
+  header line; a select's placeholder may still say which page it shows
+  when several selects share a screen and only one of them pages. Twelve
+  views across ten modules rendered five different pagers before this
+  (2026-09-12, #589).
+- About fifty views still subclass `discord.ui.View`: persistent panels,
+  wizard yes/no prompts and the like, with neither an owner nor a
+  timeout notice. They are not wrong, and they move over as they are
+  touched; a new view starts on a base view.
+- The fold that made this the rule (2026-09-11,
+  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589))
+  replaced 75 pasted `interaction_check` methods, 56 `on_timeout`
+  copies, 13 `_guard_owner` methods with their call lines, 27 inline
+  per-callback checks and 12 add-a-button helpers. The check that finds
+  a new copy is `scripts/quality/ast-grep/view-handlers.yml`; its
+  preserved set is on the issue.
+
 ### Wizard "Use default vs Keep current vs Define my own"
-- `setup_cog.ask_keep_or_change(default=, current=, ...)` — pass the
+- `wizard_steps.ask_keep_or_change(default=, current=, ...)` — pass the
   hardcoded baseline as `default=` and the saved guild value as
   `current=`. Renders 2-button or 3-button view automatically.
 - Don't pre-resolve to one value (the old pattern that mislabelled
@@ -240,18 +375,41 @@ These are deliberate and tested. Don't refactor away:
   this helper, `/cancel` mid-wizard left views hanging until their own
   timeout fired and posted a misleading "⏰ Timed out" message.
 
-### Auto-posted approval/review views must clean up on timeout
-- Any background task that posts a `discord.ui.View` to a channel
-  (daily event editor, the approval review that follows, the train
-  reminder, etc.) must capture the sent message
-  (`view.message = await ch.send(...)`) and override `on_timeout` to
-  call `wizard_registry.expire_view_message(self.message,
-  command_hint="/X")`.
+### Every view that can time out says how to get back
+- Whether a background task posted it to a channel or an officer opened
+  it ephemerally, a view captures its message (`view.message = await
+  ch.send(...)` or `await inter.original_response()`) and declares the
+  route back as `timeout_hint`: a class attribute, an `__init__` kwarg,
+  or a property when it depends on the event type or lives on a parent
+  view. For a hub button the shape is `messages.ROUTE_HINT` (the slash
+  command in backticks, the arrow, the button in bold); a bare command
+  in backticks where the command alone gets them there. The base view's
+  `on_timeout` then calls `wizard_registry.expire_view_message`, which
+  strips the buttons and appends `messages.VIEW_TIMEOUT`. Settled
+  2026-09-12 (`notes/UX.md`, Settled): the twenty-one views that greyed
+  out silently declare a hint like the rest.
 - Without this, expired views render apparently-active buttons that
   fail with "Interaction failed" on click — there's no signal that
   the draft has gone stale. Canonical callsites:
   `scheduler.EventEditorView`, `scheduler.ApprovalView`,
   `train.ReminderView`.
+- Two views keep their own `on_timeout`, each settled by its own design:
+  `survey.CloseThreadView` (its thread deletes itself a minute later)
+  and `storm_roster_builder.RosterBuilderView` (posts
+  `messages.ROSTER_BUILDER_TIMEOUT`, which names the route). Nothing
+  else overrides it; `scripts/quality/ast-grep/view-handlers.yml`
+  counts three `on_timeout` definitions including the base class.
+- **An ephemeral message can be edited for 15 minutes after it was
+  sent, and Discord restarts a view's timer on every click.** The base
+  view handles it: once it holds an ephemeral message it shrinks its own
+  timer on each click so the timeout fires inside
+  `wizard_registry.TOKEN_WINDOW`, and the notice lands while the message
+  can still be edited. Do not shorten a view's timeout to work around
+  this, and do not write a fresh-post dance; the tiers in
+  `notes/DESIGN.md` (View timeouts) stand. Restarts are the gap that
+  remains: no `on_timeout` fires after a redeploy, and nothing sweeps
+  those views; open on
+  [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589).
 
 ### DM body templates (configurable per alliance)
 - Schema column stores user template; empty string = "use hardcoded
@@ -326,6 +484,20 @@ These are deliberate and tested. Don't refactor away:
   the 1.0.2/1.0.5/1.0.8 transition for `storm_log_thread_id` et al.
   added defensive filters that had to be removed once the DROP
   COLUMN ran.)
+- **Both SQLite files run `journal_mode=WAL`, and it is load-bearing
+  for storage rather than a concurrency tweak.** Don't remove it, and
+  set it on any new database file. The Railway volume is a
+  thin-provisioned ZFS zvol: it allocates blocks on write and does not
+  return them when a file is deleted. The default rollback journal
+  creates and deletes a `-journal` file on *every* write transaction,
+  and the background loops write continuously — so the volume's
+  reported usage climbed ~55 MB/day while the filesystem itself held
+  under 2 MB, reaching 3.7 GB of 5 GB before anyone looked. `fstrim`
+  can't recover it (the container is refused the FITRIM ioctl); only
+  wiping the volume can. WAL keeps one `-wal` file that is reused in
+  place, so the allocation stays flat. Note the failure mode: `df`
+  inside the container and Railway's volume graph disagree by three
+  orders of magnitude, and the graph is the one that hits the ceiling.
 
 ### Background `tasks.loop`
 - Test by calling `task_name.coro(*args)` directly with patched
@@ -333,8 +505,10 @@ These are deliberate and tested. Don't refactor away:
 - See `bot.growth_task`, `train_cog.check_reminder`,
   `survey.check_scheduled_reminders` for canonical examples.
 - **Clock-driven loops stamp a heartbeat** at the end of each clean tick
-  via `config.stamp_loop_heartbeat("<name>")` so the #227 outage catch-up
-  can detect downtime. The four per-minute loops (`shiny_post`,
+  via `await asyncio.to_thread(config.stamp_loop_heartbeat, "<name>")`
+  so the #227 outage catch-up can detect downtime. The stamp is a write,
+  so it goes through the thread hand-off (see the config-database rule
+  below); the tests still patch `config.stamp_loop_heartbeat`. The four per-minute loops (`shiny_post`,
   `survey_reminder`, `train_reminder`, `storm_signup`) are the reliable
   outage signal; `scheduler` stamps too but is excluded from window
   detection (variable sleep). Adding a new clock-driven member-facing
@@ -383,6 +557,28 @@ These are deliberate and tested. Don't refactor away:
   they need the same fix. A canonical helper existing (`storm_permissions
   .is_leader_or_admin`, `time_helpers.server_today`, the DB-backed
   `last_*_fired` column pattern) doesn't mean every call site uses it.
+- **An audit finding that names a *class* of problem ships the check that
+  finds the class**, under `scripts/quality/`, in the same PR. A finding
+  that only lists sites closes on the sites: the 1.8.0 blocking-I/O sweep
+  ([#366](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/366))
+  called the config-helper class "worth a repo-wide look" and closed with
+  284 of them untouched, because nothing could find them again.
+  `scripts/quality/blocking_io.py` is what that look should have been.
+  Whether those 284 were a convention or a bug was decided by
+  measurement, not argument: `/admin db_timings` shows what each config
+  helper costs on the loop (#589 step 10).
+- **Config database: reads stay on the loop, writes in a loop tick go
+  through `asyncio.to_thread`.** Measured over a day on staging
+  (2026-09-16, 27,403 calls): every read helper the per-minute loops
+  call averaged under a millisecond with a worst case of 75 ms, so the
+  284 on-loop reads are a convention, and a thread hop per read would
+  cost more than it saves. Writes are the tail: they fsync under WAL on
+  the volume, and the heartbeat stamp alone (3.8 ms average, 251 ms
+  worst, nine loops once a minute) was 33 of the 46 seconds the
+  database took from the loop all day. A write that runs once when a
+  person clicks is fine where it is; a write inside a `tasks.loop` body
+  is threaded. The numbers are staging's; re-read `/admin db_timings`
+  in production after 1.9.0 and revise this line if they disagree.
 - **Dates: never call `date.today()`.** It answers without being asked
   which calendar, and hands back the container's UTC day — nobody's.
   `time_helpers` is the single home: `server_today()` is the default
@@ -391,6 +587,41 @@ These are deliberate and tested. Don't refactor away:
   hold a correctly-zoned datetime just call `.date()` on it. 1.8.11
   came out of `date.today()` being used in four places that each
   needed a different one of those answers.
+
+---
+
+## Cleanup skills
+
+Five skills in `.claude/skills/` automate the "grep for siblings before
+closing it" discipline above. Run them in this order; each narrows what
+the next has to look at.
+
+- **`code-complexity`** — ranks functions by measured complexity. Run it
+  first in any cleanup session: it turns "this feels messy" into a target
+  list. `radon` is in the shared venv.
+- **`dry-consolidation`** — finds code duplicated across modules with a
+  real clone detector, then extracts it into one helper. Reads § Patterns
+  to reuse above and treats everything there as preserved.
+- **`code-dead-code`** — finds what nothing reaches. Outputs suspects,
+  never a delete list: framework-dispatched callbacks, module re-exports
+  and the inline-config hook all look dead and are not. Needs `vulture`.
+- **`ast-grep-search`** — searches by AST shape rather than text. This is
+  the "human grep" `ruff.toml` says the ASYNC rule still needs for our own
+  non-stdlib blocking I/O (gspread, sqlite).
+- **`bulk-sweep-classify`** — classify every match before any repo-wide
+  find-replace. The success test is never "the grep returns zero".
+
+**The measurements are committed under `scripts/quality/`** (the
+complexity map, the blocking-I/O check, the dead-code runner, and the
+ast-grep rule files they use). Each skill calls its script rather than
+describing it, so a run starts where the last one ended and a re-run after
+a cleanup can be put beside the run before it. See `scripts/quality/README.md`.
+The 2026-09-09 walkthrough that produced them, one skill per turn with its
+findings, is [#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589).
+
+Adapted from a third-party MIT plugin; provenance and what changed is in
+`.claude/skills/THIRD_PARTY.md`. Their tooling is dev-only and must never
+reach `requirements.txt`.
 
 ---
 
@@ -414,142 +645,146 @@ These are deliberate and tested. Don't refactor away:
   `sqlite3.OperationalError: unable to open database file`.
   See `_bypass_guard` fixture in `tests/unit/test_storm_remind.py`
   for the right pattern.
+- `setup_cog` re-exports the wizard pieces from `wizard_steps` by name at
+  import time. A test file that patches `wizard_steps.X` must import
+  `setup_cog` at module level first: if `setup_cog`'s first import in the
+  process happens inside a patched block, it binds the mock and every later
+  test sees it (`test_wizard_steps.py` is the canary, but only when it runs
+  after the culprit).
 
 ---
 
 ## Recent shipped highlights
 
-Versioned releases since 1.0.0 (the launch). See `CHANGELOG.md` for
-the long form on each.
+The full per-release table, from 1.0.0, is `docs/RELEASE_HISTORY.md`;
+`CHANGELOG.md` is the authoritative long form. The three most recent
+entries the table carried when it moved (2026-09-10) are kept here so a
+session has the shape of a recent release in front of it. Production is
+at 1.8.11; the 1.8.1 to 1.8.11 entries live in `CHANGELOG.md`.
 
 | Version | What |
 |---|---|
 | `1.8.0` | Survey threads can carry a named translate bot so non-English members can read their prompts (private threads hide server-wide translate bots) ([#422](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/422)). `/events` gains **⏸️ Pause or resume** — stop an event for a season and turn it back on with every setting intact, re-anchoring repeating events on the way back; **🗑️ Delete** becomes permanent and says so ([#421](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/421)). Event anchor dates accept `7/30` / ISO / `today` / weekday names and retry instead of ending the wizard ([#420](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/420)). Transfer watcher reports a renamed/deleted/inaccessible sheet tab instead of failing silently ([#413](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/413)). First batch of the 2026-07-17 audit lands: blocking-I/O sweep + ruff ASYNC ([#366](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/366)), train reminder loop off the event loop ([#362](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/362)), `pending_warnings` restart-safe ([#363](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/363)), outage-catchup server-time dates ([#364](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/364)), storm sign-up tick drift ([#365](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/365)), unpropagated-fix sweep ([#367](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/367)), plus structural splits of `storm_strategy.py` ([#371](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/371)) and `train_rotation_ui.py` ([#373](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/373)) and dedupes in `transfer_setup.py` ([#374](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/374)) / `storm_officer_view.py` ([#375](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/375)). |
 | `1.7.6` | Growth Breakdown bucketed nothing for comma-formatted metrics; snapshot columns now written with thousands separators and the 0-5% bucket relabelled "No Change" ([#417](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/417)). |
 | `1.7.5` | Growth snapshots recorded `0` for every comma-formatted metric (squad power, total kills) and broke past column Z; both fixed, and `/my_stats` / `/member_stats` show real numbers again ([#415](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/415)). |
-| `1.7.4` | Hotfix: Daily Shiny Tasks stopped posting fleet-wide from July 17 — a freshness check was discarding the frozen (#293) server list. Also fires as soon as possible after a missed minute, plus owner-only `/admin shiny_dump` / `shiny_reset` / `shiny_reset_all`. |
-| `1.7.3` | Dependency bumps: Pillow 12.3.0, aiohttp 3.14.1, sentry-sdk 2.64.0, google-auth 2.55.1, tzdata 2026.2. |
-| `1.7.2` | Owner-only auto-verify: the join watch can assign a Verified-style role to anyone joining the support server who already belongs to a bot-installed server, with a backfill scan. Join-watch tooling consolidated into one `/admin verify`. |
-| `1.7.1` | Owner-only support tooling: `/admin set_join_watch` (notice on support-server joins listing the other bot-installed servers they're in) and `/admin scan_members` for spotting spam accounts. |
-| `1.7.0` | Map Manager integration groundwork (Premium): authenticated per-alliance HTTP API exposing roster / growth / storm data to the Map Manager web app, read from the alliance's Sheet on demand. In-Discord surfaces ship hidden behind `MAP_MANAGER_COMMANDS_ENABLED` ([#316](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/316), [#338](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/338)). **Procfile flipped `worker` → `web` this release.** |
-| `1.6.7` | Sentry hardening: the daily event editor no longer errors on an unpostable draft channel ([#57](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/57)), and a deleted/revoked Sheet is logged-and-skipped during the growth snapshot instead of flooding error tracking ([#285](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/285), [#286](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/286)). |
-| `1.6.6` | `/setup` survives its channel being deleted mid-wizard ([#319](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/319)); `/train` preset/rule buttons stop failing on a slow roster load ([#332](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/332)); `!help` ignored like other `!` commands ([#333](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/333)); **Keep current** shown first on the remaining stragglers ([#300](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/300)); Pillow 11→12 + dep bumps ([#280](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/280)-[#284](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/284)). |
-| `1.6.5` | Weekly train draft gains an **Add reason** button, shown as a sub-line under the conductor and carried into the daily confirmation ([#344](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/344)). |
-| `1.6.4` | Transfer filters combine with **AND or OR**; re-running transfer setup offers Keep-current for channel/style/filters; edit menu regrouped ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)). |
-| `1.6.3` | Buddy **Unpair / Pair / Re-pair** picker pages with ◀/▶ instead of stopping at 25 ([#341](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/341)). |
-| `1.6.2` | `/transfers` **🔄 Check now** button with a read/matched/copied breakdown; re-running setup re-pulls from scratch; shared-sheet pull dedupes against the real sheet ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)). |
-| `1.6.1` | Transfer blank-cell fill for existing rows, source→own column mapping, decisions mapped onto an existing column, notifications to a thread, plus filter Back path and Keep-current consistency ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)). |
-| `1.6.0` | **Transfer Management** (💎 Premium, [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)): passive recruiting-sheet watcher posting new-applicant and status-change notices with one-click in-game message drafts, full applicant record, optional server-wide / intake-form auto-copy, and opt-in Want/Confirmed/Declined write-back. |
-| `1.5.10` | Free alliances can point Conductor Rotation at any roster tab + name column (no Premium member sync needed); role-scoped train days become Premium, with a lapsed subscription falling back to full-roster rotation ([#337](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/337)). |
-| `1.5.9` | Birthday scheduling-conflict alert stops re-posting once resolved and becomes interactive — place the member, show the surrounding week, or dismiss ([#334](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/334)). |
-| `1.5.8` | Daily Shiny Tasks follows the in-game server day, so a post just after reset no longer lists the prior day's servers ([#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330)). |
-| `1.5.7` | Train conductor announcements name the in-game day that's starting, not the one that just ended ([#318](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/318)). |
-| `1.5.6` | Weekly train draft renders conductors as @mentions with shorter rule labels, replacing the mobile-wrapping code block ([#314](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/314)). |
-| `1.5.5` | Re-drafting the train week is one click and can no longer wipe a day's rule when Sheets is briefly slow ([#312](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/312)). |
-| `1.5.4` | `/train` buttons show a loading state instead of looking hung; role-day conductor assignment lists just that role with a 🔁 full-roster toggle ([#310](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/310)). |
-| `1.5.3` | Train schedule editing: **Assign someone** uses a roster dropdown, **Re-draft** clears its prompt, **Go to next person** advances on Leadership days ([#308](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/308)). |
-| `1.5.2` | Outage catch-up ([#227](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/227)): on return from downtime the bot posts one leadership-channel digest of every clock-driven post it missed (event draft, Shiny, survey, birthday, train, storm sign-up) with a multi-select Send/Dismiss view — `outage_catchup.py` + per-loop `loop_heartbeat` stamps. Member stats ([#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56), [#299](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/299)): `/my_stats` (member-safe self view) + `/member_stats` (leadership picker) consolidate identity/power/storm/train/survey into one embed; storm section adds sign-up counts, primary/sub/sit-out placement, and leadership-only recency dates. Buddy engineer reliability ranking ([#303](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/303)): optional 1-5 score (Step 5a, train-rotation-style Keep/Default/Custom; matches members like power reading) orders engineers so the most reliable pair with the strongest War Leaders; Re-pair from scratch applies it. Train Conductor Rotation setup reworked into its own gated Step 9 with lettered sub-steps, condensed sheet-tabs, reworked preset editor, roster-based conductor picker ([#302](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/302)). Stale slash/button refs swept after the train/events/storm hub consolidations ([#298](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/298)). Train rotation fairness overhaul: counts the whole Train History sheet as fact (back-fill = add rows; no posted/reason needed), random tie-break replaces alphabetical, Discord-ID-first matching via an appended history column ([#305](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/305), [#306](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/306)); weekly-draft ◀/▶ week picker + Sunday default fix ([#304](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/304)). |
-| `1.5.1` | Bug-fix batch: buddy self-profession-change sends one DM listing all your buddies; `/setup` survives a DM context ([#271](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/271)); storm sign-up/roster screens stop hitting the Sheets read limit on quick click-through ([#269](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/269)); storm roster builder ignores a leftover prior-event draft ([#277](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/277)); Shiny Tasks keeps posting from the saved server list with the upstream refresh disabled ([#293](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/293)). |
-| `1.5.0` | Train Conductor Rotation ([#55](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/55), free/opt-in): deterministic daily conductor rotation with presets, per-member/per-day rules, weekly draft + daily confirmation in the `/train` hub. Profession Buddy System ([#289](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/289)): pair War Leaders with Engineers; free buddy lookup, Premium auto-assign / re-pair / DMs. Storm sign-up officer buttons to clear all or on-behalf votes ([#287](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/287)). Setup step-timeout crash fixed ([#290](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/290)). |
-| `1.4.7` | Hotfix: **Today's events** opens the editor even when every event is Manual, so you can add a one-off to today's draft ([#291](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/291)). Direct-to-main per the hotfix exception. |
-| `1.4.6` | `/events` becomes a hub command with a preset library matching `/desertstorm` / `/canyonstorm` ([#249](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/249)); consistent wording across wizards/errors/timeouts ([#267](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/267), [#208](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/208)); storm fixes — Strength-to-priority balances power across shared-priority buildings ([#273](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/273)), return a sub to the pool ([#274](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/274)), no double-pool players once placed ([#275](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/275)). |
-| `1.4.5` | Hotfix: choosing **Edit** to paste a custom roster DM template during Premium storm setup no longer crashes the wizard — the structured-flow Edit branch called `bot.wait_for(check=check)` without defining `check`. Surfaced by the ruff `F821` lint sweep landing on `dev`. Direct-to-main per the hotfix exception. |
-| `1.4.4` | Hotfix: Team A / Team B plan picker lists candidate members by name instead of their raw Discord ID ([#270](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/270)). Direct-to-main per the hotfix exception. |
-| `1.4.3` | Hotfix: storm roster readers fall back to the Name column (then the live Discord member) when Display Name is blank, so the sign-up poll and Team Plan render names instead of IDs ([#268](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/268)). Direct-to-main per the hotfix exception. |
-| `1.4.2` | Sign-up vote click shows a poll-style ephemeral with per-option totals and a ✓ on your vote, plus a leadership 👁️ View sign-ups breakdown ([#258](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/258)); Premium stale-power DM nudges members whose roster power hasn't refreshed in N days ([#255](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/255)); sign-up messages can be re-posted with votes aggregating across every post ([#265](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/265)). Name-match column renamed Member-match for clarity ([#260](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/260)); member sync preserves hand-typed non-Discord roster rows ([#262](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/262)); power-refresh DM leads with the ✅ vote-recorded confirmation so it isn't mistaken for a failure ([#259](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/259)). |
-| `1.4.1` | Hotfix: power-refresh DM names the column on the configured Power Data Source tab instead of always reading the Member Roster ([#256](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/256)). Direct-to-main per the hotfix exception. |
-| `1.4.0` | Premium Storm Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)): structured sign-up → roster builder → PNG mail flow with auto-fill, per-event team plan picker, per-team time-slot mapping with weekly override, per-member assignment DMs with role-keyed templates, unified DS + CS mail body, and `/desertstorm` / `/canyonstorm` event hubs that consolidate every storm action under one command per event type. Participation Tracking 2.0 (Premium, [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)): per-member question types written to a Per-Member Log tab, parameterized Trends Viewer for cross-event queries, and preset question templates during setup. Member Sync renamed with Power Data Source flexibility, collision protection, and a presence column surfaced in the sync preview; storm + participation now share one Alias Column instead of duplicating it. 📢 Release announcements toggle lands on the `/setup` hub — the first leadership-channel embed posts to every alliance as part of this release ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253) infra shipped in 1.3.4). Setup wizard re-entry covers mail template choices ([#231](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/231)) and the shared/separate picker without clobbering saved bodies; officers with the Leadership role can run `/setup` ([#229](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/229)) without server-admin permission. Stale post-consolidation slash refs in Steps 5 and 9 of the storm wizard fixed ([#242](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/242)). |
-| `1.3.4` | Release-announcement infrastructure ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253)): `last_seen_version` column on `guild_install_metadata`, `release_announcements_enabled` on `guild_configs`, and an `on_ready` handler that posts a short embed to each alliance's leadership channel when the running version's major.minor changes. The `RELEASE_ANNOUNCEMENTS` dict is empty in 1.3.4 itself so the deploy is silent; existing rows backfill to `'1.3.3'` so 1.4.0 fires the first real announcement. Opt-out toggle ships with 1.4.0's `/setup` hub. Changelog-slim hook resolves absolute hook paths to repo-relative so historical bullets stop flagging as new violations ([#250](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/250)). |
-| `1.3.0` | Setup wizard re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)): every `/setup_*` command (plus `/setup_members`) opens with a saved-config summary on re-entry; Keep current buttons across every channel, role, timezone, sheet ID, time, default tone, intro message, and `ask_keep_or_change` step; enable-toggle wizards (`/setup_birthdays`, `/setup_growth`, `/setup_shiny_tasks`) preserve config on disable with an optional 🗑️ Clear my saved configuration button. Shiny-tasks weekly refresh no longer thrashes cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)). |
-| `1.2.0` | Growth Breakdown classifies snapshot deltas into Increased / Steady / Low / None / Decline buckets, with optional Premium auto-post + bucket filter + custom thresholds/labels ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)). Daily Shiny Tasks free-tier announcement posts every LW server in the alliance's transfer range that has shiny tasks today, refreshed weekly from cpt-hedge ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)). `/export_config` + `/import_config` move config across guilds via JSON with a channel/role remap wizard ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)). DS/CS zones lock to canonical game-defined names ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)); DS/CS subs flatten to plain name lists ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)). Multiple breakdown auto-post fixes ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84), [#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85), [#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)) and birthday→train conflict spam consolidated with restart-survival via persisted dedup ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)). |
-| `1.1.7` | Hotfix: `/train` Add Entry and Update Entry modals now defer the interaction before their Google Sheets round-trip, so a slow gspread call no longer expires the 3-second initial-response token and crashes the submit with `NotFound 10062 Unknown interaction` ([#76](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/76)). Direct-to-main per the hotfix exception. |
-| `1.1.6` | Operational record of bot installs ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)): new `guild_install_metadata` SQLite table captures guild name, owner ID, audit-log inviter, and install / last-seen timestamps per server, so logged `guild_id`s can be matched to an alliance for support. Owner-only `/admin_guild_info` and `/admin_forget_guild` slash commands scoped via the new `BOT_ADMIN_GUILD_IDS` env var, plus a `data_removal.yml` issue template and updated privacy/terms/README disclosures. |
-| `1.1.5` | Numeric survey question type promoted from Premium to Free ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)) — min/max bounds remain the Premium differentiator. Numeric questions now require a magnitude (Exact / K / M / B), and `survey.ask_numeric` parses members' shorthand (`301` → 301M, `300m`, `1.2b`, `304,743,912`) into the stored full integer. Default LW survey questions ship as numeric with the right magnitude; a one-shot `init_db` backfill upgrades existing saved configs idempotently. Submission embed comma-formats numeric responses. |
-| `1.1.4` | Hotfix: a single guild's `discord.Forbidden` on the configured birthday channel was aborting `train_cog.check_reminder`'s entire birthday loop for that minute, silently skipping every other guild. Per-guild `try/except` now isolates failures, and the channel-send path catches `Forbidden` specifically and logs `guild_id` + `channel_id` + channel name so leadership can be told which alliance has broken perms. Direct-to-main per the hotfix exception. |
-| `1.1.3` | Storm time-slot rendering reworked ([#58](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/58)): DS and CS slots are game-defined constants (DS 18:00 + 23:00, CS 12:00 + 23:00 server time, UTC-2 / no DST), so `TimeSelectView` buttons now render `4pm EDT (18:00 server time)` style — local clock computed from the guild's `timezone` at click time, server-time portion always spelled out (no "ST" abbreviation). All six `time_option_*` columns dropped from `guild_storm_config` via `ALTER TABLE … DROP COLUMN`. `/growth` Edit Config button now opens the wizard inline instead of telling the user to run `/setup_growth` themselves ([#59](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/59)). Birthday parser accepts dash, dot, ISO 8601, abbreviated months, day-first (`7 Dec`, `7th December`), 2-digit years; bare numeric defaults to M/D unless first > 12; rejects impossible dates (`Feb 30`, `13/45`) instead of writing garbage ([#60](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/60)). |
-| `1.1.2` | Hotfix: daily event announcements now print the local timezone alongside server time — `format_et` appends `dt.tzname()` so `{time}` renders as `5:00pm EDT` instead of bare `5:00pm`, leaving every existing custom blurb to surface the tz automatically. Add Event / Edit Time in the daily-draft editor used to call `make_et_datetime` which silently coerced every leadership-entered time to America/New_York; renamed to `make_event_datetime(tz=...)`, with Add Event looking up the per-event tz via `get_guild_event` and Edit Time preserving the existing `dt.tzinfo`. Direct-to-main per the hotfix exception. |
-| `1.1.1` | Hotfix: `/help` rebuilt as a category-dropdown view (overview + `discord.ui.Select`) — the 1.1.0 data-ownership copy pushed the embed past Discord's 6000-char limit, causing `HTTPException 50035` on every invocation; new `help_content.py` module owns the content + view so future categories are an append, not a rewrite. Storm and train sheet-load logs now route through a new `config.describe_sheet_error` helper that distinguishes missing-tab from spreadsheet 404 / 403 / rate-limit, replacing opaque gspread reprs (e.g. `<Response [404]>`). Direct-to-main per the hotfix exception. |
-| `1.1.0` | Premium per-user assignment layer ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)) — the SKU is now User Subscription, so the bot needs its own one-license-one-guild gate; new `/premium_assign` and `/premium_unassign` commands (with confirmation prompts) plus the `premium_assignments` SQLite table consulted on every premium check. Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)). Setup wizard's "➕ Create a new channel" button no longer suppressed on Premium guilds ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)). Leadership commands no longer gated by channel category — role check is the security boundary, fixing `/cancel` mid-wizard and the empty-category edge case; `leadership_category_id` dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)). Working-agreement docs updated for the dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)). |
-| `1.0.19` | Hotfix: growth snapshots called `ws.append_row` per new member inside the loop, so any first-ever snapshot of a populated roster (60+ members) blew the 60/min Sheets write quota and aborted with a 429 ([#40](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/40)). Collapsed into a single `ws.append_rows` after the loop. Direct-to-main per the hotfix exception. |
-| `1.0.18` | Birthday → train auto-population now fires at 22:00 ET (10pm ET == 00:00 server time) instead of UTC midnight, and stops re-firing on every Railway redeploy ([#29](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/29)); plus a fleet-wide logging-gaps audit ([#31](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/31)) — DM-Forbidden now logs the (guild, user) pair, missing-channel scheduler/train/birthday fall-throughs log, `train.py` sheet I/O logs gain `guild_id`, `premium.is_premium` emits once-per-process warnings on missing SKU/bot, and several non-Discord exception paths now Sentry-capture instead of Railway-stdout-only. |
-| `1.0.17` | Hotfix: `bot.entitlements()` was being called with the pre-2.4 `sku_ids=` kwarg instead of `skus=`, silently downgrading paying customers to free-tier in every background-task premium check ([#28](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/28)). Direct-to-main per the hotfix exception. |
-| `1.0.16` | Docs-only release: slim CHANGELOG (746 → 159 lines), CLAUDE.md working-agreement rewrite for the new release-branch workflow, version-table sync to 1.0.15, and follow-up workflow corrections (merge commit, descriptive feature branches). Bumped `__version__` for accurate Sentry release tagging. |
-| `1.0.15` | Sheet-CI rerun-filter fix — too-narrow `--only-rerun` filters were preventing legitimate quota-pressure retries on the live-Sheets job |
-| `1.0.14` | Removed `docs/OGV_STRIP_INVENTORY.md` (resolved working doc; never linked) |
-| `1.0.13` | README sync after post-1.0.11 audit (wizard step counts rewritten, customisable DM body row added, removed Canyon Storm fixed-time claim) |
-| `1.0.12` | Fixed stale `__version__` constant (Sentry release tag was bucketing every error under `1.0.0`) and stale wizard step label `Step 6 of 7` → `of 8` |
-| `1.0.11` | Doc sync that should have ridden with 1.0.7 (CLAUDE.md `wizard_registry` row + new auto-post-timeout pattern, CONTENT_AUDIT.md view-timeout rows) |
-| `1.0.10` | Birthday → train auto-population: persistence bug fixed (in-place dict mutation defeated the change check) and gated to once-per-day instead of every-minute (was burning ~1440 sheet reads/day per guild) |
-| `1.0.9` | Wizard views no longer hang on Discord interaction-token expiry — new `safe_edit_response` helper threaded through ~100 sites |
-| `1.0.8` | Removed legacy-column shims (filter + scheduler patch + migration block) once production confirmed the 1.0.5 DROP COLUMN ran |
-| `1.0.7` | Timed-out automated-post buttons now strip themselves and tell leadership how to re-open |
-| `1.0.6` | (superseded by 1.0.8) Defensive scheduler filter for production DBs carrying retired columns — patched a misdiagnosed crash |
-| `1.0.5` | Physically dropped 10 retired `guild_configs` columns via one-shot migration |
-| `1.0.4` | Audit Round 4 — polish: dead local vars, narrow exceptions, sanitised storm defaults, dead `__init__` params, docstring refresh |
-| `1.0.3` | Audit Round 3 — column-letter helpers consolidated, `EventEditorView` content rendering deduplicated, `_get_spreadsheet` extracted to `config.get_spreadsheet`, train themes/tones migrated to `ask_keep_or_change`, storm setup step counter `6 → 7` |
-| `1.0.2` | Audit Round 2 — dropped 10 dead `guild_configs` schema columns + dataclass fields |
-| `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
-| `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **3073 collected**, 18 skipped on the free-tier lane and
-35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~80K application,
-~57K tests.
+Test suite: **~5,600 tests** (5,601 passed, 31 skipped on the free lane,
+2026-09-09). Total LOC: ~80K application, ~57K tests.
 
 ---
 
-## Parked work (local-only docs)
+## Where things get pushed (three repos, read before you commit)
 
-Working docs that don't belong in the public tree live under `notes/`
-(gitignored). They're cross-session scratch space for planning, design
-parks, audit notes, recruiter prep, and ad-hoc test plans. Anything
-that should ship as a tracked reference belongs in `docs/` instead.
+**This repo is PUBLIC.** So is the website. Assume anything you commit
+here is world-readable the moment it's pushed.
 
-Current contents (worth being aware of when picking up new work):
+| Repo | Visibility | Lives at | Push rule |
+|---|---|---|---|
+| `lw-alliance-helper-bot` | **Public** | this directory | Release-branch workflow (see Working agreement) |
+| `lw-alliance-helper.github.io` | **Public** | `../lw-alliance-helper.github.io` | Straight to `main` |
+| `lw-alliance-helper-notes` | **Private** | `notes/`, nested inside this repo | Straight to `main`, from inside `notes/` |
 
-- **`notes/AUDIT_2026-04-30.md`** — pre-launch code-quality audit,
-  **fully shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema
-  drops ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit
-  was structured but should not generate new work.
+`notes/` is its own independent git repo cloned into this one, and is
+listed in this repo's `.gitignore`, so the outer repo never descends
+into it. From inside `notes/`, git commands act on the private repo;
+from here, they act on the bot. **Two repos, two commit habits** — work
+that touches both needs a commit in each.
+
+It is deliberately **not a submodule**: a submodule writes
+`.gitmodules` into this public repo, which would publish the private
+repo's URL and its existence.
+
+### What goes where
+
+- **`notes/` (private)** holds anything whose reasoning is worth more
+  to a competitor than to a user: the `UX.md` / `DESIGN.md` contracts,
+  `STRATEGY.md`, design parks, competitive research, planning, audit
+  notes, ad-hoc test plans.
+- **`docs/` (public)** is tracked reference that ships with the repo.
+  **Not a place for captured data.** Third-party datasets, scraped
+  snapshots, and anything pulled from behind someone else's auth wall
+  do not belong in a public repo even transiently.
+- **This file (public)** may *name* a file in `notes/`, the way the
+  list below does, but **must not quote its content**. A rule or
+  decision that lives in `notes/` gets referenced here, not restated.
+
+That boundary was set on 2026-08-08, after competitor-teardown examples
+were inlined into the design docs and had to be stripped back out
+before the branch was pushed, and again after the design docs
+themselves were found to belong on the private side.
+
+### Parked work
+
+Current contents, verified 2026-08-08 (worth being aware of when
+picking up new work):
+
+- **`notes/README.md`** — what the private repo is, how it's wired into
+  this one, and why the design docs live there.
+- **`notes/UX.md`** / **`notes/DESIGN.md`** — the user-facing contract.
+  See the pointer at the top of this file.
+- **`notes/STRATEGY.md`** — commercial positions (pricing, localisation,
+  self-host, fork). Moved out of this file on 2026-08-08 because this
+  file is public.
 - **`notes/DESIGN_transfer_management.md`** — spec + build log for the
   Premium transfer-tracking feature ([#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)),
   now **built and shipping in 1.6.0**. Kept for the reconciliation
   decisions (header-name addressing, only-Name-is-special, the
   intentional no-outage-adapter call).
+- **`notes/DESIGN_alliance_duel_vs.md`** — Alliance Duel (VS) design,
+  ground truth for [#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398).
+- **`notes/DESIGN_config_health.md`** — shared config-health notices,
+  ground truth for the #414 / #379 work.
+- **`notes/COMPETITOR_*.md`** — competitive research, each with its own
+  intake protocol for filing a new dump. **Don't name the subjects in
+  this file** — see the boundary rule above.
 - **`notes/PLANNING.md`** — cross-session work tracker.
-- **`notes/DEV_TEST_PLAN_*.md`** — ad-hoc test plans for a specific
-  release-batch dev validation session. Delete after the batch ships
-  unless something in there warrants tracking as an issue.
 
-When a chat session starts on `notes/DESIGN_transfer_management.md`,
-that doc is the ground truth.
+The pre-launch `AUDIT_2026-04-30.md` and the per-batch
+`DEV_TEST_PLAN_*.md` files listed here previously are gone; both had
+shipped. Don't go looking for them.
+
+When a chat session starts on a `notes/DESIGN_*.md`, that doc is the
+ground truth for its feature.
+
+### Capture artifacts
+
+`docs/server_json.json` (untracked, ~1MB) is a Shiny Tasks server
+snapshot captured for `/admin shiny_import`, per the manual maintenance
+process in `docs/hedge_data_source.md`. It is third-party data from
+behind an auth wall, which is why it's gitignored rather than
+committed.
+
+**Captures are disposable.** The source rotates its chunk URL every
+deploy, so the process says to capture fresh each time. A stale
+snapshot on disk is a hazard (someone imports it and reintroduces the
+drifted dates from
+[#330](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/330) /
+[#331](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/331)),
+not an asset. Delete after importing.
+
+Note the gitignore entry for it currently exists only on the
+`alliance-duel-vs-core` branch, not on `main`.
 
 ---
 
-## Strategic decisions (don't second-guess in passing)
+## Strategic decisions
 
-These have been thought through. Reopening them needs a real reason:
+Moved to `notes/STRATEGY.md` on 2026-08-08. Pricing, localisation,
+self-host, and fork positions are commercial decisions with their
+reasoning attached, which is worth real money to a competitor and
+nothing to a user, and this file is public.
 
-- **Localisation:** English only at launch. Korean first when signal
-  demands it (non-English alliances install but don't convert).
-- **Pricing:** single Premium tier at $4.99/mo. Don't introduce a Pro
-  tier without 6+ months of usage data. **Never** move existing
-  Premium features to a higher tier — that's a takeaway and customers
-  resent it.
-- **Attribution footer:** post-first-customer, not pre-launch.
-- **Self-host pivot:** kill criteria = user stops playing LW. Until
-  then, hosted by user.
-- **Game-agnostic abstraction:** keep architecture clean enough that
-  a fork to another First Fun game (or similar mobile 4X) is plausible
-  in 2–4 weeks if the opportunity arises. Don't preemptively
-  abstract — fork when needed.
+They still bind: **don't second-guess them in passing.** Read them
+there before proposing anything that touches pricing, tiers, language
+support, or hosting.
 
 ---
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. **Production is `1.8.0`** (shipped
-  2026-08-01), `dev` carries `1.8.1`. No release branch is currently
-  open. See `CHANGELOG.md` and the version table above for per-release
+- 1.0.0 launched 2026-04-28. **Production is `1.8.11`** (shipped
+  2026-09-09), `dev` carries `1.9.0`. No release branch is currently
+  open. See `CHANGELOG.md` and `docs/RELEASE_HISTORY.md` for per-release
   detail.
 - **Map Manager integration is live in code but invisible.** The
   authenticated bot-side HTTP API (`api_server.py`) + the
@@ -581,7 +816,7 @@ These have been thought through. Reopening them needs a real reason:
   `stats_publish_task`, `shiny_tasks_refresh_task`,
   `shiny_tasks_post_task`) are still in `bot.py`, and `on_ready` is
   still ~241 lines. Remaining audit items are tracked on the board.
-- ~3055 tests pass on the default (non-sheets) lane (18 skipped).
+- ~5,600 tests pass on the default (non-sheets) lane (31 skipped).
 - Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
   large-files), ruff lint + format (line-length 100), codespell, a

@@ -259,7 +259,7 @@ class SignupView(discord.ui.View):
 
     def _add_view_signups_button(self):
         btn = discord.ui.Button(
-            label="👁️ View sign-ups",
+            label="👀 View sign-ups",
             style=discord.ButtonStyle.secondary,
             custom_id=make_view_signups_custom_id(
                 self.guild_id,
@@ -746,7 +746,7 @@ async def _handle_view_signups_click(
     event_type: str,
     event_date: str,
 ) -> None:
-    """Leadership-only click handler for the `👁️ View sign-ups` button
+    """Leadership-only click handler for the `👀 View sign-ups` button
     on the public sign-up post (#258).
 
     Reuses the breakdown embed from the officer view (`/desertstorm` →

@@ -216,6 +216,9 @@ class TestLoopSubjectsAreRegistered:
             ("train_cog", "TRAIN_REMINDER_CHANNEL_SUBJECT"),
             ("survey", "SURVEY_REMINDER_CHANNEL_SUBJECT"),
             ("storm_signup_scheduler", "SIGNUP_CHANNEL_SUBJECT"),
+            # #462: the event scheduler was the loop #379 never reached.
+            ("scheduler", "EVENT_DRAFT_CHANNEL_SUBJECT"),
+            ("scheduler", "EVENT_ANNOUNCE_CHANNEL_SUBJECT"),
         ],
     )
     def test_subject_has_copy(self, module_name, attr):

@@ -1483,6 +1483,54 @@ def test_the_week_picker_skips_a_week_with_no_roster_yet():
     assert [b.label for b in picker.children] == ["Week 1", "Week 2"]
 
 
+def test_the_rank_week_picker_also_skips_a_week_with_no_roster():
+    state = _state(_bracket(week=1))
+    picker = entry.AllianceRankWeekPickerView(state, 1)
+
+    assert [b.label for b in picker.children] == ["Week 1"]
+
+
+def test_the_rank_picker_shows_the_current_rank_per_alliance():
+    """Picking blind is a guess at who is who -- the option itself says what
+    is already on record, so correcting one is an informed choice."""
+    state = _state(_bracket(week=2))
+    picker = entry.AllianceRankPickerView(state, 2, 1)
+
+    select = picker.children[0]
+    by_label = {opt.label: opt.description for opt in select.options}
+    assert by_label[state.display_name(OWN)].startswith("Currently rank")
+    assert state.display_name(OWN) in [o.label for o in select.options]
+
+
+@pytest.mark.asyncio
+async def test_the_rank_modal_writes_only_that_weeks_row(_captured):
+    """Ranking lives per row, per week -- correcting week 2's must not touch
+    week 1's, unlike `start_new_league`'s blanket stamp across every week."""
+    state = _state(_bracket(week=1) + _bracket(week=2))
+    modal = entry.AllianceRankModal(state, 2, _key("A02"))
+    modal.rank._value = "3"
+
+    await modal.on_submit(_FakeInteraction())
+
+    assert len(_captured) == 1
+    assert _captured[0].week == 2
+    assert _captured[0].alliance == _key("A02")
+    assert _captured[0].ranking == 3
+
+
+@pytest.mark.asyncio
+async def test_the_rank_modal_refuses_an_out_of_range_value(_captured):
+    state = _state(_bracket(week=2))
+    modal = entry.AllianceRankModal(state, 2, _key("A02"))
+    modal.rank._value = "99"
+    interaction = _FakeInteraction()
+
+    await modal.on_submit(interaction)
+
+    assert _captured == []
+    assert any("1 to" in (msg or "") for msg in interaction.followed)
+
+
 @pytest.mark.asyncio
 async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
     """The results screen is a reading of the week. Saving into it and leaving

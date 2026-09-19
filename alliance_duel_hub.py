@@ -1226,6 +1226,22 @@ class VSHubView(OwnedView):
         backfill.callback = self._backfill_results
         self.add_item(backfill)
 
+        rank = discord.ui.Button(
+            label=ad_entry.VS_BTN_SET_RANK,
+            style=discord.ButtonStyle.secondary,
+            disabled=not has_league,
+            row=2,
+        )
+        rank.callback = self._set_rank
+        self.add_item(rank)
+
+    async def _set_rank(self, interaction: discord.Interaction):
+        view = ad_entry.AllianceRankWeekPickerView(self.state, interaction.user.id)
+        await interaction.response.send_message(
+            ad_entry.VS_BACKFILL_PICK_PROMPT, view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
     async def _backfill_results(self, interaction: discord.Interaction):
         view = ad_entry.BackfillWeekPickerView(self.state, interaction.user.id)
         await interaction.response.send_message(

@@ -2457,3 +2457,131 @@ class BackfillWeekPickerView(OwnedView):
             )
 
         return _open
+
+
+VS_BTN_SET_RANK = "🔢 Set an alliance's rank"
+VS_RANK_PICK_ALLIANCE_PROMPT = "Which alliance?"
+VS_RANK_MODAL_TITLE = "Set {tag}'s rank"
+VS_RANK_FIELD_LABEL = "Rank for week {week}"
+RANK_SAVED = "✅ Set {tag}'s week {week} rank to {rank}."
+RANK_BAD_VALUE = "A rank is a number from 1 to {size}."
+
+
+class AllianceRankWeekPickerView(OwnedView):
+    """Same shape as `BackfillWeekPickerView`: one button per week that has a
+    roster to correct a rank on. A separate flow from "Add or edit alliance"
+    rather than a sixth field there -- Discord caps a modal at five, and
+    that one is already full (tag, warzone, power, members, gift)."""
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        for week in range(1, ad.LEAGUE_WEEKS + 1):
+            if not state.league_rows(week):
+                continue
+            button = discord.ui.Button(
+                label=VS_BACKFILL_WEEK_LABEL.format(week=week), style=discord.ButtonStyle.secondary
+            )
+            button.callback = self._make_open(week)
+            self.add_item(button)
+
+    def _make_open(self, week: int):
+        async def _open(interaction: discord.Interaction):
+            view = AllianceRankPickerView(self.state, week, self.owner_id)
+            await interaction.response.edit_message(content=VS_RANK_PICK_ALLIANCE_PROMPT, view=view)
+            view.message = await interaction.original_response()
+
+        return _open
+
+
+class AllianceRankPickerView(OwnedView):
+    """A select of the chosen week's roster, each option showing its current
+    rank so picking one is informed rather than a guess at who is who."""
+
+    timeout_hint = "`/vs`"
+
+    def __init__(self, state, week: int, user_id: int):
+        super().__init__(timeout=ENTRY_TIMEOUT)
+        self.state = state
+        self.week = week
+        self.owner_id = user_id
+        self.message: discord.Message | None = None
+
+        rows = sorted(state.league_rows(week), key=lambda r: state.display_name(r.alliance))
+        self._alliances = [r.alliance for r in rows][:25]
+        options = [
+            discord.SelectOption(
+                label=state.display_name(r.alliance)[:100],
+                value=str(i),
+                description=(
+                    f"Currently rank {r.ranking}" if r.ranking else "No rank recorded yet"
+                ),
+            )
+            for i, r in enumerate(rows[:25])
+        ]
+
+        select = discord.ui.Select(placeholder=VS_RANK_PICK_ALLIANCE_PROMPT, options=options)
+        select.callback = self._picked
+        self.add_item(select)
+
+    async def _picked(self, interaction: discord.Interaction):
+        select = self.children[0]
+        alliance = self._alliances[int(select.values[0])]
+        await interaction.response.send_modal(AllianceRankModal(self.state, self.week, alliance))
+
+
+class AllianceRankModal(discord.ui.Modal):
+    """One field: this alliance's rank for this specific week.
+
+    Ranking lives per row, per week (`AllianceWeek.ranking`), not once for
+    the whole league -- `start_new_league` just always stamped the same
+    value across every backfilled week. Correcting one week's here never
+    touches another week's."""
+
+    def __init__(self, state, week: int, alliance: ad.AllianceKey):
+        super().__init__(
+            title=VS_RANK_MODAL_TITLE.format(tag=state.display_name(alliance))[:45],
+            timeout=ENTRY_TIMEOUT,
+        )
+        self.state = state
+        self.week = week
+        self.alliance = alliance
+
+        existing = state.row_for(alliance, week)
+        self.rank = discord.ui.TextInput(
+            label=VS_RANK_FIELD_LABEL.format(week=week)[:45],
+            placeholder="9",
+            default=str(existing.ranking) if existing and existing.ranking else None,
+            required=True,
+            max_length=4,
+        )
+        self.add_item(self.rank)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        rank = ad.parse_int(self.rank.value)
+        if rank is None or not 1 <= rank <= ad.BRACKET_SIZE:
+            await interaction.followup.send(
+                f"⚠️ {RANK_BAD_VALUE.format(size=ad.BRACKET_SIZE)}", ephemeral=True
+            )
+            return
+
+        row = _row_for_write(self.state, self.alliance, self.week)
+        row.ranking = rank
+        problem = await save_rows(self.state, [row], actor=interaction)
+        if problem:
+            await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            RANK_SAVED.format(
+                tag=self.state.display_name(self.alliance), week=self.week, rank=rank
+            ),
+            ephemeral=True,
+        )

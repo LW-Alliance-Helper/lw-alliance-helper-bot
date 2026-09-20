@@ -46,7 +46,7 @@ ENTRY_TIMEOUT = 300
 
 #: Button labels on the entry surfaces, as constants so other modules' copy can
 #: name them without retyping the words.
-VS_BTN_LOG_SCORE = "✏️ Log today's score"
+VS_BTN_LOG_SCORE = "✏️ Enter daily score"
 VS_BTN_ADD_ALLIANCE = "➕ Add or edit alliance"
 VS_BTN_DETAILS = "✏️ Add or edit notes"
 #: ✏️ rather than 🔍: recording a read is an edit, and 🔍 names looking one up.
@@ -180,8 +180,12 @@ def _patch_snapshot(state, rows: list[ad.AllianceWeek]) -> None:
             state.rows.append(row)
             continue
         for field, value in vars(row).items():
-            if value not in (None, "", {}, 0) or field in ("day_scores", "day_outcomes"):
-                setattr(existing, field, value or getattr(existing, field))
+            if field in ("day_scores", "day_outcomes"):
+                # A day's write carries only that day, so replacing the dict
+                # dropped every other day the session had already saved.
+                setattr(existing, field, {**getattr(existing, field), **value})
+            elif value not in (None, "", {}, 0):
+                setattr(existing, field, value)
     state.profiles = ad.build_profiles(state.rows)
 
 
@@ -298,8 +302,22 @@ def target_day(state) -> tuple[int, int] | None:
 # ── Score entry ───────────────────────────────────────────────────────────────
 
 
+#: The button's words without its glyph. The day is a dropdown inside, so a title
+#: naming one day would go stale on the first pick.
+VS_SCORE_MODAL_TITLE = "Enter daily score"
+#: Both score boxes name their alliance, so the numbers cannot land on the wrong
+#: side. Without a known opponent the second box falls back to the generic word.
+VS_SCORE_LABEL = "{tag}'s score"
+VS_SCORE_LABEL_OURS = "Your score"
+VS_SCORE_LABEL_THEIRS = "Their score"
+
+
 class ScoreModal(discord.ui.Modal):
-    """Two numbers. Week and duel day come from the date, not from the user.
+    """One day's score. The week comes from the date; the day is a dropdown.
+
+    Whichever screen opens it says which day the dropdown starts on (today from
+    the hub, the prompt's own day from a prompt post), so the same modal logs
+    today and catches up on an earlier day.
 
     Day scores are read **literally**: a bare `500` is five hundred, and a big
     number needs a unit or its full digits. Power uses the opposite convention
@@ -309,37 +327,53 @@ class ScoreModal(discord.ui.Modal):
     real score by a million.
     """
 
-    def __init__(self, state, week: int, day: int, opponent: ad.AllianceKey | None, view=None):
-        theme = ad.DUEL_DAY_BY_NUMBER[day].theme
-        super().__init__(title=f"Day {day}: {theme}"[:45], timeout=ENTRY_TIMEOUT)
+    def __init__(self, state, week: int, day: int, opponent: ad.AllianceKey | None):
+        super().__init__(title=VS_SCORE_MODAL_TITLE, timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.day = day
         self.opponent = opponent
-        #: The screen that opened this, if it shows anything the save changes.
-        #: The hub's own score button passes nothing, because its message is a
-        #: menu rather than a reading.
-        self.view = view
 
+        self.day_select = discord.ui.Select(
+            placeholder=VS_DAY_PICK_PLACEHOLDER,
+            options=day_options(state, week, default_day=day),
+            min_values=1,
+            max_values=1,
+        )
         self.ours = discord.ui.TextInput(
-            label="Your score",
-            placeholder="1.2b, 500m, or the full digits",
-            required=True,
-            max_length=32,
+            placeholder="1.2b, 500m, or the full digits", required=True, max_length=32
         )
         self.theirs = discord.ui.TextInput(
-            label="Their score",
-            placeholder="Leave blank if you have not seen it",
-            required=False,
-            max_length=32,
+            placeholder="Leave blank if you have not seen it", required=False, max_length=32
         )
-        self.add_item(self.ours)
-        self.add_item(self.theirs)
+        ours_label = (
+            VS_SCORE_LABEL.format(tag=state.display_name(state.own))
+            if state.own is not None
+            else VS_SCORE_LABEL_OURS
+        )
+        theirs_label = (
+            VS_SCORE_LABEL.format(tag=state.display_name(opponent))
+            if opponent is not None
+            else VS_SCORE_LABEL_THEIRS
+        )
+        self.add_item(discord.ui.Label(text=VS_DAY_PICK_PROMPT[:45], component=self.day_select))
+        self.add_item(discord.ui.Label(text=ours_label[:45], component=self.ours))
+        self.add_item(discord.ui.Label(text=theirs_label[:45], component=self.theirs))
+
+    def _picked_day(self) -> int:
+        """The dropdown's answer, or the day it opened on when it has none."""
+        values = self.day_select.values
+        try:
+            day = int(values[0]) if values else self.day
+        except (TypeError, ValueError):
+            return self.day
+        return day if day in ad.DUEL_DAY_BY_NUMBER else self.day
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        day = self._picked_day()
         ours = ad.parse_score(self.ours.value)
         if ours is None:
             await interaction.followup.send(
@@ -354,7 +388,7 @@ class ScoreModal(discord.ui.Modal):
         state = self.state
         rows = []
         mine = _row_for_write(state, state.own, self.week)
-        mine.day_scores = {self.day: ours}
+        mine.day_scores = {day: ours}
         rows.append(mine)
 
         # The higher day score takes the day. That is the game's rule, not an
@@ -364,12 +398,12 @@ class ScoreModal(discord.ui.Modal):
         if theirs is not None:
             outcome = "W" if ours > theirs else ("L" if ours < theirs else None)
             if outcome:
-                mine.day_outcomes = {self.day: outcome}
+                mine.day_outcomes = {day: outcome}
             if self.opponent is not None:
                 other = _row_for_write(state, self.opponent, self.week)
-                other.day_scores = {self.day: theirs}
+                other.day_scores = {day: theirs}
                 if outcome:
-                    other.day_outcomes = {self.day: "L" if outcome == "W" else "W"}
+                    other.day_outcomes = {day: "L" if outcome == "W" else "W"}
                 rows.append(other)
 
         problem = await save_rows(state, rows, actor=interaction)
@@ -377,22 +411,13 @@ class ScoreModal(discord.ui.Modal):
             await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
             return
 
-        # The results screen behind this is now a week out of date on the very
-        # day it was opened to fill in.
-        if self.view is not None:
-            await self.view.refresh(interaction)
-
-        await interaction.followup.send(
-            embed=_score_ack(state, self.week, self.day), ephemeral=True
-        )
+        await interaction.followup.send(embed=_score_ack(state, self.week, day), ephemeral=True)
 
         # The officer already has their answer, so anything the alliance opted
         # into is announced afterwards and cannot delay or break the save.
         import alliance_duel_events as ad_events
 
-        await ad_events.announce_after_write(
-            interaction.client, state, week=self.week, day=self.day
-        )
+        await ad_events.announce_after_write(interaction.client, state, week=self.week, day=day)
 
 
 def _score_ack(state, week: int, day: int) -> discord.Embed:
@@ -1942,25 +1967,14 @@ class PredictionsView(OwnedView):
         self.stop()
 
 
-# ── Results for the week (#404) ───────────────────────────────────────────────
+# ── The day dropdown (#404) ───────────────────────────────────────────────────
 
-#: Screen 3, from the signed-off mockups. `Enter this week's results` is the
-#: path-screen button that opens it; the rest are its own.
-VS_BTN_RESULTS_WEEK = "Enter this week's results"
-VS_BTN_DAY_SCORES = "Enter a day's scores"
-VS_BTN_BACK_TO_PATH = "Back to your path"
-
-VS_RESULTS_REST = "The rest of the League"
+#: What a day already holds, shown against it in the dropdown.
 VS_RESULTS_NOT_ENTERED = "Not entered"
 VS_RESULTS_WON = "Won"
 VS_RESULTS_LOST = "Lost"
-VS_RESULTS_FOOTER = (
-    "Every week score adds to 13. Day scores build the history behind every "
-    "prediction I make later."
-)
-#: The day picker behind `Enter a day's scores`. The hub's own score button
-#: only ever offers *today*, which is no use on a screen showing four days
-#: nobody has entered.
+#: The day dropdown inside the score modal, which opens on today (or the day a
+#: prompt asked about) and can be moved to any of the week's six.
 VS_DAY_PICK_PROMPT = "Which day are you entering?"
 #: Short: the question is already on the line above it.
 VS_DAY_PICK_PLACEHOLDER = "Pick a day"
@@ -1974,8 +1988,9 @@ def own_day_lines(state, week: int, own, opponent) -> list[str]:
     and says nothing, because `ScoreModal` only calls a day once it has both.
     """
     mine = state.row_for(own, week)
-    theirs = state.row_for(opponent, week)
-    ours_name, theirs_name = state.display_name(own), state.display_name(opponent)
+    theirs = state.row_for(opponent, week) if opponent is not None else None
+    ours_name = state.display_name(own)
+    theirs_name = state.display_name(opponent) if opponent is not None else ""
 
     lines = []
     block = False
@@ -2007,77 +2022,11 @@ def own_day_lines(state, week: int, own, opponent) -> list[str]:
     return lines
 
 
-def rest_of_league_lines(state, week: int) -> list[str]:
-    """Every other match on its week split, which is all the game shows.
+def day_options(state, week: int, default_day: int | None = None) -> list[discord.SelectOption]:
+    """The six days, each carrying what is already recorded against it.
 
-    One side is enough: a matchup's two week scores total 13, which is already
-    a validation rule, so a half-recorded match reads as a whole one rather
-    than as missing.
-
-    **A recorded match puts its winner first**, which is what Match Record
-    does -- confirmed across all eight rows of a real week, three of them
-    against seed order. Reading the two screens side by side is the whole job
-    here, and a line that needs flipping first is a line that gets misread.
-    An unrecorded match has no winner to lead with, so it stays in seed order.
+    `default_day` is the one the dropdown opens on.
     """
-    lines = []
-    for match in week_matches(state, week):
-        row_a, row_b = state.row_for(match.a, week), state.row_for(match.b, week)
-        score_a = row_a.week_score if row_a else None
-        score_b = row_b.week_score if row_b else None
-
-        if score_a is None and score_b is None:
-            lines.append(
-                f"{state.display_name(match.a)} v {state.display_name(match.b)}"
-                f" - {VS_RESULTS_NOT_ENTERED}"
-            )
-            continue
-        if score_a is None:
-            score_a = ad.WEEK_POINTS_TOTAL - score_b
-        if score_b is None:
-            score_b = ad.WEEK_POINTS_TOTAL - score_a
-
-        side_a, side_b = match.a, match.b
-        if score_b > score_a:
-            side_a, side_b = side_b, side_a
-            score_a, score_b = score_b, score_a
-        lines.append(
-            f"{state.display_name(side_a)} {score_a} - {score_b} {state.display_name(side_b)}"
-        )
-    return lines
-
-
-def results_embed(state, week: int) -> discord.Embed:
-    """Screen 3: what actually happened.
-
-    **Two grains, on purpose.** Your own week is six days, because you watch it
-    happen and those day scores are the history every later prediction reads
-    from. Every other match is one line, because the week split is the only
-    thing the game shows you about it.
-    """
-    embed = discord.Embed(title=f"Week {week} results", color=discord.Color.blurple())
-    league = state.league
-    embed.description = f"**{league.season} · {league.tier} {league.group}**"
-
-    own = state.own
-    opponent = own_opponent(state, week)
-    if own is not None and opponent is not None:
-        embed.add_field(
-            name=f"{state.display_name(own)} v {state.display_name(opponent)}",
-            value="\n".join(own_day_lines(state, week, own, opponent))[:1024],
-            inline=False,
-        )
-
-    rest = rest_of_league_lines(state, week)
-    if rest:
-        embed.add_field(name=VS_RESULTS_REST, value="\n".join(rest)[:1024], inline=False)
-
-    embed.set_footer(text=VS_RESULTS_FOOTER)
-    return embed
-
-
-def day_options(state, week: int) -> list[discord.SelectOption]:
-    """The six days, each carrying what is already recorded against it."""
     own = state.own
     mine = state.row_for(own, week) if own is not None else None
     options = []
@@ -2093,63 +2042,19 @@ def day_options(state, week: int) -> list[discord.SelectOption]:
             note = VS_RESULTS_NOT_ENTERED
         options.append(
             discord.SelectOption(
-                label=f"Day {day} {theme}"[:100], value=str(day), description=note[:100]
+                label=f"Day {day} {theme}"[:100],
+                value=str(day),
+                description=note[:100],
+                default=day == default_day,
             )
         )
     return options
 
 
-class DayPickerView(OwnedView):
-    """Pick which day to enter, then hand off to the modal that already exists.
-
-    A separate step rather than six buttons: the modal is the same one the hub
-    opens for today, and the only thing missing from it was a way to say
-    *which* day when today is not the one you are catching up on.
-    """
-
-    timeout_hint = "`/vs`"
-
-    def __init__(self, state, week: int, owner_id: int, view=None):
-        super().__init__(timeout=ENTRY_TIMEOUT)
-        self.state = state
-        self.week = week
-        self.owner_id = owner_id
-        self.view = view
-        self.message: discord.Message | None = None
-
-        select = discord.ui.Select(
-            placeholder=VS_DAY_PICK_PLACEHOLDER,
-            options=day_options(state, week),
-            min_values=1,
-            max_values=1,
-        )
-        select.callback = self._picked
-        self.add_item(select)
-
-    async def _picked(self, interaction: discord.Interaction):
-        day = int((interaction.data.get("values") or ["1"])[0])
-        await interaction.response.send_modal(
-            ScoreModal(self.state, self.week, day, self.state.own_match(self.week), view=self.view)
-        )
-
-
 # ── The rest of the league's results, one box (#404) ──────────────────────────
-
-#: Screen 3's second write path. Every string signed off 2026-08-30.
-
-#: **Not "the other results".** The mockups called it that, and it stopped
-#: being true when Kevin put the guild's own match in the same box.
-VS_BTN_OTHER_RESULTS = "Enter the week's results"
 
 #: Takes the week, because the box can be opened for one that is not live.
 VS_RESULTS_MODAL_TITLE = "Week {week} results"
-
-#: The only instruction anyone gets: a modal covers the screen behind it.
-#: Strictly the tag says whose score comes *first* rather than who won, and
-#: `parse_results` accepts either -- but leading with the winner is how the
-#: game lists them, and the forgiving parse is a safety net, not a rule worth
-#: spending 45 characters on.
-VS_RESULTS_FIELD_LABEL = "Winner first, then the split"
 
 #: Named back one by one, the shape settled for predictions: a count alone
 #: cannot show a mistyped line.
@@ -2173,8 +2078,6 @@ RESULTS_BAD_LINE = """{label}: I couldn't read "{text}". It needs a tag and a sp
 #: Word for word what the new-league paste says, because it is the same
 #: situation: a refused paste with a way back into it.
 VS_BTN_RETRY_RESULTS = VS_BTN_RETRY_NEW_LEAGUE
-
-RESULTS_UNKNOWN_MATCH = """I don't recognize "{label}" as a match this week."""
 
 #: Separates a line's match from its result. The prefill writes it; the person
 #: types after it.
@@ -2212,10 +2115,10 @@ def own_opponent(state, week: int) -> ad.AllianceKey | None:
     """Who the guild faces in `week`, recorded first, computed second.
 
     `state.own_match` reads the Opponent column alone, and `start_new_league`
-    deliberately leaves that blank on the rows it writes. Screen 3 was taking
-    the own matchup from it while excluding the *computed* one from the rest
-    of the league, so with the column blank the guild's own match vanished
-    from the screen while still appearing in the box that writes to it.
+    deliberately leaves that blank on the rows it writes. Reading it alone put
+    "no opponent recorded" on the hub all week for an alliance whose pairing
+    the bracket already knew. The computed pairing is guarded on the week
+    before it being recorded, so it is never a guess.
     """
     recorded = state.own_match(week)
     if recorded is not None:
@@ -2237,99 +2140,46 @@ def all_week_matches(state, week: int) -> list[ad.Match]:
     return week_matches(state, week, exclude_own=False)
 
 
-def _match_by_label(state, week: int, label: str) -> ad.Match | None:
-    """Find the match a prefilled label names, whichever way round it reads.
+_MATCHUP_SEP = re.compile(r"\s+vs?\s+", re.IGNORECASE)
 
-    Compared as an ordered pair, not a set. `display_name` is the tag alone, and
-    a bracket draws from more than one warzone, so two different alliances can
-    share one. A set turned the bot's own `KTI v KTI:` line into a single name,
-    failed to match any pairing, and refused the whole box -- which nobody could
-    fix, because the line they were being refused for was prefilled.
+
+def _split_matchup(label: str) -> list[str]:
+    """The names on either side of a matchup label.
+
+    The prefill writes ` v `, but people retype it as `V` or `vs`, and a
+    case-sensitive split read `DXL V KTL` as one name and refused the line with
+    a message about the split, which was fine.
     """
-    parts = [part.strip().casefold() for part in label.split(" v ")]
-    if len(parts) != 2 or not all(parts):
-        return None
-    for match in all_week_matches(state, week):
-        names = [state.display_name(match.a).casefold(), state.display_name(match.b).casefold()]
-        if names == parts or names[::-1] == parts:
-            return match
-    return None
+    return [part.strip() for part in _MATCHUP_SEP.split(label.strip())]
 
 
-def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
-    """Read the whole box. Returns rows to write and problems to report.
-
-    **A problem anywhere means nothing is written** -- the caller checks the
-    problem list before the rows. Half-saving a week and leaving someone to
-    work out which half landed is worse than refusing it, and it is what the
-    new-league paste already does.
-
-    The leading tag says whose score comes first, not who won: `QQQ 7-6` and
-    `ZZZ 6-7` are the same result, and the winner falls out of the numbers. A
-    week is 13, which is odd, so there is no tie to resolve.
-    """
-    rows: list[ad.AllianceWeek] = []
-    problems: list[str] = []
-
-    for raw in text.splitlines():
-        label, _, value = raw.partition(_RESULT_SEP)
-        label, value = label.strip(), value.strip()
-        if not label or not value:
-            continue
-
-        match = _match_by_label(state, week, label)
-        if match is None:
-            problems.append(RESULTS_UNKNOWN_MATCH.format(label=label))
-            continue
-
-        name_a, name_b = state.display_name(match.a), state.display_name(match.b)
-        # The split is whatever trails the tag, and the spaces around its
-        # separator are the typist's business: `9 - 4` is `9-4`. Reading only
-        # the last whitespace-delimited token missed that, and because one bad
-        # line refuses the whole box it threw away the rest of the week's
-        # typing with it. A separator is still required, so `9 4` and `94` are
-        # refused exactly as before.
-        split = re.match(r"^(?P<tag>.*?)\s*(?P<x>\d+)\s*[^\d\s]\s*(?P<y>\d+)$", value.strip())
-        if split is None or not split.group("tag").strip():
-            problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
-            continue
-        digits = (split.group("x"), split.group("y"))
-
-        tag = split.group("tag").strip()
-        if tag.casefold() == name_a.casefold():
-            first, second = match.a, match.b
-        elif tag.casefold() == name_b.casefold():
-            first, second = match.b, match.a
-        else:
-            problems.append(RESULTS_BAD_TAG.format(label=label, tag=tag, a=name_a, b=name_b))
-            continue
-
-        x, y = int(digits[0]), int(digits[1])
-        if x + y != ad.WEEK_POINTS_TOTAL:
-            problems.append(
-                RESULTS_BAD_TOTAL.format(label=label, x=x, y=y, total=ad.WEEK_POINTS_TOTAL)
-            )
-            continue
-
-        for side, other, score in ((first, second, x), (second, first, y)):
-            row = _row_for_write(state, side, week)
-            row.week_score = score
-            row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
-            row.opponent = other
-            rows.append(row)
-
-    return rows, problems
+def result_rows(
+    state, week: int, first: ad.AllianceKey, x: int, second: ad.AllianceKey, y: int
+) -> list[ad.AllianceWeek]:
+    """The two rows one finished match writes: each side's week score, its
+    outcome, and who it faced. The caller has already checked `x + y` makes a
+    week."""
+    rows = []
+    for side, other, score in ((first, second, x), (second, first, y)):
+        row = _row_for_write(state, side, week)
+        row.week_score = score
+        row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
+        row.opponent = other
+        rows.append(row)
+    return rows
 
 
-#: Reached from the hub directly, not from Screen 3 -- backfilling a week is
-#: not "this week's" business. Kevin's own name for it, 19 Sep.
-VS_BTN_BACKFILL_RESULTS = "Enter past week results"
+#: The hub's button for a week's match results. Any week with a roster is
+#: offered, this one included, which is why it says weekly and not past.
+VS_BTN_BACKFILL_RESULTS = "Enter weekly results"
 
-#: A shorter instruction than the live-week box needs, because the box itself
-#: is empty here: nothing is prefilled to correct, only an example to follow.
-#: The format itself lives in the wrapping Label's description (19 Sep) so
-#: it survives typing -- see `OtherResultsModal.__init__`.
+#: A short instruction, because the box opens with the matchups the bot can
+#: work out (or empty, when it cannot) and an example to follow. The format itself lives in the wrapping Label's
+#: description (19 Sep) so it survives typing -- see `OtherResultsModal.__init__`.
 VS_BACKFILL_FIELD_LABEL = "Who played whom, and the split"
+#: Every tag in the week's bracket, in a box of their own to copy from, so a
+#: tag is pasted rather than retyped. Its contents are never read back.
+VS_BACKFILL_TAGS_LABEL = "Alliance tags to copy from"
 
 BACKFILL_UNKNOWN_ALLIANCE = "{label}: I don't know {tag}. Check it against the bracket."
 BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
@@ -2338,25 +2188,55 @@ BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
 BACKFILL_DUPLICATE_ALLIANCE = "{tag} already has a result recorded elsewhere in this box."
 
 
-def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
-    """Read a past week's box. Same line shape as `parse_results` -- a label,
-    `_RESULT_SEP`, a tag and a split -- but for a week nothing has recorded
-    yet, there is nothing for `_match_by_label` to check a line against.
+def _resolve_pair(state, week: int, roster: dict, names: list[str]):
+    """The two alliances a label's names point at, or `(None, the unknown name)`.
 
-    `parse_results` refuses any pairing `all_week_matches` has not already
-    predicted or recorded, which is exactly backwards for backfilling: the
-    whole point is stating what actually happened, not correcting an
-    inference. So a line names its own pairing, checked only against the
-    league's roster for that week -- every alliance already has a blank row
-    there, written when the league (or a later week's roster) was set up --
-    never against a computed or recorded opponent.
+    A bracket can draw from more than one warzone, so two alliances can share a
+    tag and one name can point at several. The pairing the bracket already
+    knows settles which; failing that, the first two that differ. The bot's own
+    prefilled `KTI v KTI:` line has to be readable, since nobody typed it.
+    """
+    choices = [roster.get(name.casefold(), []) for name in names]
+    for name, options in zip(names, choices):
+        if not options:
+            return None, name
+    first_options, second_options = choices
+    if len(first_options) == 1 and len(second_options) == 1:
+        return (first_options[0], second_options[0]), None
+    for match in all_week_matches(state, week):
+        for x, y in ((match.a, match.b), (match.b, match.a)):
+            if x in first_options and y in second_options:
+                return (x, y), None
+    for x in first_options:
+        for y in second_options:
+            if x != y:
+                return (x, y), None
+    return (first_options[0], second_options[0]), None
+
+
+def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
+    """Read a week's box: a label, `_RESULT_SEP`, a tag and a split per line.
+
+    **A problem anywhere means nothing is written** -- the caller checks the
+    problem list before the rows. Half-saving a week and leaving someone to
+    work out which half landed is worse than refusing it.
+
+    A line names its own pairing, checked only against the league's roster for
+    that week -- every alliance already has a blank row there, written when the
+    league (or a later week's roster) was set up -- never against a computed or
+    recorded opponent: the point is stating what actually happened, not
+    correcting an inference. The leading tag says whose score comes first, not
+    who won; the winner falls out of the numbers, and a week is 13, so there
+    is no tie to resolve.
 
     An alliance assigned two different results in the same box is refused:
     that is a typo, not two matches.
     """
-    roster = {
-        state.display_name(r.alliance).casefold(): r.alliance for r in state.league_rows(week)
-    }
+    roster: dict[str, list[ad.AllianceKey]] = {}
+    for r in state.league_rows(week):
+        options = roster.setdefault(state.display_name(r.alliance).casefold(), [])
+        if r.alliance not in options:
+            options.append(r.alliance)
     rows: list[ad.AllianceWeek] = []
     problems: list[str] = []
     assigned: set[ad.AllianceKey] = set()
@@ -2367,18 +2247,15 @@ def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.Allianc
         if not label or not value:
             continue
 
-        names = [part.strip() for part in label.split(" v ")]
+        names = _split_matchup(label)
         if len(names) != 2 or not all(names):
             problems.append(RESULTS_BAD_LINE.format(label=label, text=value))
             continue
-        a, b = roster.get(names[0].casefold()), roster.get(names[1].casefold())
-        if a is None or b is None:
-            problems.append(
-                BACKFILL_UNKNOWN_ALLIANCE.format(
-                    label=label, tag=names[0] if a is None else names[1]
-                )
-            )
+        pair, missing = _resolve_pair(state, week, roster, names)
+        if pair is None:
+            problems.append(BACKFILL_UNKNOWN_ALLIANCE.format(label=label, tag=missing))
             continue
+        a, b = pair
         if a == b:
             problems.append(BACKFILL_SAME_ALLIANCE.format(label=label))
             continue
@@ -2411,12 +2288,7 @@ def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.Allianc
         else:
             assigned.add(first)
             assigned.add(second)
-            for side, other, score in ((first, second, x), (second, first, y)):
-                row = _row_for_write(state, side, week)
-                row.week_score = score
-                row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
-                row.opponent = other
-                rows.append(row)
+            rows.extend(result_rows(state, week, first, x, second, y))
 
     return rows, problems
 
@@ -2443,83 +2315,71 @@ def results_saved_lines(state, rows: list[ad.AllianceWeek]) -> list[str]:
 
 
 class OtherResultsModal(discord.ui.Modal):
-    """The whole week in one box (#404).
+    """The whole week in one box (#404), behind "Add using text block instead".
 
     One paragraph field rather than five short ones, because the source is a
     list: Match Record puts every match of the week on one scrollable screen,
     already split into two numbers. An input that mirrors that is two presses
     for a week where a match-at-a-time flow is twenty-two.
 
-    **`backfill=True`** is the same modal used for "Enter past week results"
-    (#630-adjacent, 19 Sep): a week nothing has recorded, opened directly off
-    the hub rather than off Screen 3. Nothing here is prefilled to correct --
+    It opens with the matchups the bot can work out, but
     `parse_backfill_results` reads a line as *stating* a pairing rather than
-    confirming one already known, which is the whole point of backfilling
-    real history instead of waiting on the algorithm to infer it.
+    confirming one, so any line can be overwritten with what actually
+    happened. Above the box sits every tag in the week's bracket, to copy from.
     """
 
-    def __init__(
-        self,
-        state,
-        week: int,
-        view=None,
-        typed: str | None = None,
-        *,
-        backfill: bool = False,
-    ):
+    def __init__(self, state, week: int, typed: str | None = None):
         super().__init__(title=VS_RESULTS_MODAL_TITLE.format(week=week)[:45], timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
-        self.view = view
-        self.backfill = backfill
 
-        default = typed if typed is not None else ("" if backfill else results_prefill(state, week))
-        if backfill:
-            # A placeholder alone isn't enough here -- Discord clears it the
-            # moment someone starts typing, and a blank backfill box has
-            # nothing prefilled to fall back on for the format. Same fix as
-            # the new-league bracket field (#630, 19 Sep, and Kevin's own
-            # callback to it here): `Label.description` sits above the box
-            # and survives typing; the field itself carries no `label=` of
-            # its own once a `Label` wraps it.
-            self.box = discord.ui.TextInput(
-                style=discord.TextStyle.paragraph,
-                placeholder="OGV v nWA: OGV 7-6",
-                default=default,
-                required=False,
-                max_length=1500,
+        default = typed if typed is not None else results_prefill(state, week)
+        tags = sorted(
+            {state.display_name(r.alliance) for r in state.league_rows(week)}, key=str.casefold
+        )
+        if tags:
+            self.add_item(
+                discord.ui.Label(
+                    text=VS_BACKFILL_TAGS_LABEL[:45],
+                    component=discord.ui.TextInput(
+                        style=discord.TextStyle.paragraph,
+                        default=", ".join(tags),
+                        required=False,
+                        max_length=1000,
+                    ),
+                )
             )
-            self._box_label = discord.ui.Label(
-                text=VS_BACKFILL_FIELD_LABEL[:45],
-                description=(
-                    "One match per line: Tag v Tag: Tag score-score, e.g. OGV v nWA: OGV 7-6."
-                )[:100],
-                component=self.box,
-            )
-            self.add_item(self._box_label)
-        else:
-            self.box = discord.ui.TextInput(
-                label=VS_RESULTS_FIELD_LABEL[:45],
-                style=discord.TextStyle.paragraph,
-                default=default,
-                required=False,
-                max_length=1500,
-            )
-            self.add_item(self.box)
+        # A placeholder alone isn't enough here -- Discord clears it the moment
+        # someone starts typing, and the format would vanish with it. Same fix
+        # as the new-league bracket field (#630, 19 Sep): `Label.description`
+        # sits above the box and survives typing; the field itself carries no
+        # `label=` of its own once a `Label` wraps it.
+        self.box = discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            placeholder="OGV v nWA: OGV 7-6",
+            default=default,
+            required=False,
+            max_length=1500,
+        )
+        self._box_label = discord.ui.Label(
+            text=VS_BACKFILL_FIELD_LABEL[:45],
+            description="One match per line: Tag v Tag: Tag score-score, e.g. OGV v nWA: OGV 7-6."[
+                :100
+            ],
+            component=self.box,
+        )
+        self.add_item(self._box_label)
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         typed = self.box.value or ""
-        parser = parse_backfill_results if self.backfill else parse_results
-        rows, problems = parser(self.state, self.week, typed)
+        rows, problems = parse_backfill_results(self.state, self.week, typed)
         if problems:
             # Discord will not open a modal off a modal submit, so the way
             # back in has to be a button. Same shape as the new-league paste.
-            retry = _RetryResultsView(
-                self.state, self.week, interaction.user.id, typed, self.view, backfill=self.backfill
-            )
+            retry = _RetryResultsView(self.state, self.week, interaction.user.id, typed)
             retry.message = await interaction.followup.send(
                 "\n".join([RESULTS_REFUSED, *problems])[:1900],
                 view=retry,
@@ -2536,10 +2396,6 @@ class OtherResultsModal(discord.ui.Modal):
             await interaction.followup.send(f"⚠️ {problem}", ephemeral=True)
             return
 
-        # The screen behind this is now stale in two ways -- the results are in,
-        # and its own button state was computed before them.
-        if self.view is not None:
-            await self.view.refresh(interaction)
         await interaction.followup.send(
             RESULTS_SAVED.format(n=len(said), s="" if len(said) == 1 else "s")
             + " "
@@ -2558,16 +2414,12 @@ class _RetryResultsView(OwnedView):
 
     timeout_hint = "`/vs`"
 
-    def __init__(
-        self, state, week: int, user_id: int, typed: str, view=None, *, backfill: bool = False
-    ):
+    def __init__(self, state, week: int, user_id: int, typed: str):
         super().__init__(timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.owner_id = user_id
         self.typed = typed
-        self.view = view
-        self.backfill = backfill
         self.message: discord.Message | None = None
 
         button = discord.ui.Button(label=VS_BTN_RETRY_RESULTS, style=discord.ButtonStyle.primary)
@@ -2576,9 +2428,7 @@ class _RetryResultsView(OwnedView):
 
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
-            OtherResultsModal(
-                self.state, self.week, view=self.view, typed=self.typed, backfill=self.backfill
-            )
+            OtherResultsModal(self.state, self.week, typed=self.typed)
         )
 
 
@@ -2587,8 +2437,8 @@ VS_BACKFILL_WEEK_LABEL = "Week {week}"
 
 
 class BackfillWeekPickerView(OwnedView):
-    """One button per week, reached from the hub rather than from Screen 3 --
-    backfilling is not tied to whichever week is live right now.
+    """One button per week, reached from the hub --
+    entering results is not tied to whichever week is live right now.
 
     A week with no roster yet (the league was started with `upto_week` short
     of it) is left off rather than shown disabled: nothing typed there could
@@ -2615,9 +2465,13 @@ class BackfillWeekPickerView(OwnedView):
 
     def _make_open(self, week: int):
         async def _open(interaction: discord.Interaction):
-            await interaction.response.send_modal(
-                OtherResultsModal(self.state, week, backfill=True)
-            )
+            # Late import: the builder imports this module for its copy and rows.
+            import alliance_duel_results_builder as builder
+
+            view = builder.ResultsBuilderView(self.state, week, self.owner_id)
+            await interaction.response.edit_message(content=None, embed=view.embed(), view=view)
+            view.message = await interaction.original_response()
+            self.stop()
 
         return _open
 

@@ -121,7 +121,8 @@ def test_the_clinch_post_says_what_would_settle_the_week():
     rows = [_row(OWN_TAG, opponent=THEM, day_outcomes={1: "W", 2: "W", 3: "W"}), _row("A02")]
     text = _text(events.clinch_embed(_state(rows), 1))
     assert "5-0" in text
-    assert "clinches the week" in text
+    assert "wins the week" in text
+    assert "clinch" not in text.lower()
 
 
 def test_a_clinched_week_says_so_plainly():

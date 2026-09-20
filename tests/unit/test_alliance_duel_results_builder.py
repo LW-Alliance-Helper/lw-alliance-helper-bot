@@ -18,7 +18,7 @@ def _key(tag):
     return ad.AllianceKey.of(tag, "999")
 
 
-def _state(week=1):
+def _state(week=1, own_outcomes=None, own_week_score=None):
     rows = [
         ad.AllianceWeek(
             league=LEAGUE,
@@ -30,6 +30,8 @@ def _state(week=1):
         )
         for rank, tag in enumerate(TAGS, start=1)
     ]
+    rows[0].day_outcomes = dict(own_outcomes or {})
+    rows[0].week_score = own_week_score
     cfg = {
         "guild_id": 1,
         "enabled": 1,
@@ -148,16 +150,89 @@ async def test_an_alliance_picked_on_one_side_is_not_offered_on_the_other():
     assert [o.value for o in _selects(view)[0].options if o.default] == ["0"]
 
 
-async def test_a_score_names_its_alliance_once_that_alliance_is_picked():
+async def test_a_score_dropdown_names_its_alliance_but_its_options_are_plain_numbers():
     view = builder.ResultsBuilderView(_state(), 1, OWNER)
     tag = view.state.display_name(view.roster[0])
 
     await _pick(view, "first", 0)
-    await _pick(view, "first_score", 9)
 
     score = _selects(view)[1]
     assert score.placeholder == entry.VS_SCORE_LABEL.format(tag=tag)
-    assert [o.label for o in score.options if o.default] == [f"{tag} 9"]
+    assert [o.label for o in score.options] == [str(n) for n in range(ad.WEEK_POINTS_TOTAL + 1)]
+
+    await _pick(view, "first_score", 9)
+    assert [o.label for o in _selects(view)[1].options if o.default] == ["9"]
+
+
+async def test_picking_the_first_score_fills_in_the_second_and_it_stays_changeable():
+    view = builder.ResultsBuilderView(_state(), 1, OWNER)
+    await _pick(view, "first", 0)
+    await _pick(view, "second", 1)
+
+    await _pick(view, "first_score", 9)
+
+    assert view.second_score == 4
+    assert [o.label for o in _selects(view)[3].options if o.default] == ["4"]
+
+    await _pick(view, "second_score", 3)
+    assert (view.first_score, view.second_score) == (9, 3)
+
+
+async def test_picking_the_second_score_first_leaves_the_first_alone():
+    view = builder.ResultsBuilderView(_state(), 1, OWNER)
+
+    await _pick(view, "second_score", 4)
+
+    assert view.first_score is None
+
+
+async def test_your_own_match_starts_in_the_list_when_all_six_days_are_recorded():
+    outcomes = {1: "W", 2: "W", 3: "L", 4: "W", 5: "L", 6: "W"}  # 1 + 2 + 2 + 4 = 9
+    state = _state(own_outcomes=outcomes)
+    opponent = entry.own_opponent(state, 1)
+
+    view = builder.ResultsBuilderView(state, 1, OWNER)
+
+    assert view.matches == [(_key(TAGS[0]), 9, opponent, 4)]
+    assert view.embed().fields[0].value == f"{TAGS[0]} 9 - 4 {state.display_name(opponent)}"
+    offered = {o.label for o in _selects(view)[0].options}
+    assert TAGS[0] not in offered and state.display_name(opponent) not in offered
+    assert not _buttons(view)[builder.VS_BTN_BUILDER_SAVE].disabled
+
+
+async def test_a_recorded_week_score_seeds_your_own_match_too():
+    state = _state(own_week_score=5)
+    opponent = entry.own_opponent(state, 1)
+
+    view = builder.ResultsBuilderView(state, 1, OWNER)
+
+    assert view.matches == [(_key(TAGS[0]), 5, opponent, 8)]
+
+
+async def test_your_own_match_is_not_assumed_from_a_part_played_week():
+    view = builder.ResultsBuilderView(_state(own_outcomes={1: "W", 2: "W"}), 1, OWNER)
+
+    assert view.matches == []
+
+
+async def test_your_own_match_is_not_assumed_when_no_opponent_can_be_named():
+    """Week 2 with week 1 never recorded has no pairing, so there is no match to
+    put in the list even with six days on the row."""
+    outcomes = {day: "W" for day in range(1, 7)}
+    view = builder.ResultsBuilderView(_state(week=2, own_outcomes=outcomes), 2, OWNER)
+
+    assert view.matches == []
+
+
+async def test_a_seeded_match_can_be_removed():
+    state = _state(own_outcomes={1: "W", 2: "W", 3: "L", 4: "W", 5: "L", 6: "W"})
+    view = builder.ResultsBuilderView(state, 1, OWNER)
+
+    await view._start_remove(_Interaction())
+    await view._pick_doomed(_Interaction(["0"]))
+    await view._remove_selected(_Interaction())
+
+    assert view.matches == []
 
 
 async def test_adding_needs_both_alliances_and_both_scores():

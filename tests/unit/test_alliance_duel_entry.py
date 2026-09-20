@@ -892,6 +892,10 @@ class _FakeResponse:
     def __init__(self):
         self.edited = None
         self.sent = None
+        self.modal = None
+
+    async def send_modal(self, modal):
+        self.modal = modal
 
     async def edit_message(self, **kw):
         self.edited = kw
@@ -1234,8 +1238,8 @@ def test_your_own_match_is_not_in_the_rest_of_the_league():
 
 
 def test_the_day_picker_carries_what_each_day_already_holds():
-    """The hub's score button only ever offers today, which is no use on a
-    screen showing four days nobody entered."""
+    """The dropdown shows what each day holds, so the gaps are visible before
+    one is picked."""
     rows = _bracket(
         **{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": {1: "W"}, "day_scores": {1: 5}}}
     )
@@ -1244,6 +1248,76 @@ def test_the_day_picker_carries_what_each_day_already_holds():
     assert len(options) == 6
     assert options[0].description == entry.VS_RESULTS_WON
     assert options[1].description == entry.VS_RESULTS_NOT_ENTERED
+
+
+def test_the_score_modal_names_both_alliances_and_opens_on_the_given_day():
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 3, _key("A02"))
+
+    day_label, ours_label, theirs_label = modal.children
+    assert modal.title == entry.VS_SCORE_MODAL_TITLE
+    assert day_label.text == entry.VS_DAY_PICK_PROMPT
+    assert len(modal.day_select.options) == 6
+    assert [o.value for o in modal.day_select.options if o.default] == ["3"]
+    assert ours_label.text == f"{state.display_name(OWN)}'s score"
+    assert theirs_label.text == f"{state.display_name(_key('A02'))}'s score"
+
+
+def test_without_a_known_opponent_the_second_score_box_keeps_the_generic_word():
+    modal = entry.ScoreModal(_state(_bracket()), 1, 1, None)
+
+    assert modal.children[2].text == entry.VS_SCORE_LABEL_THEIRS
+
+
+async def _submit_score(modal, ours="500", theirs="400"):
+    modal.ours = type("F", (), {"value": ours})()
+    modal.theirs = type("F", (), {"value": theirs})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+
+async def test_the_day_picked_in_the_modal_is_the_day_saved(_captured):
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"))
+    modal.day_select._values = ["4"]
+
+    await _submit_score(modal)
+
+    mine = next(r for r in _captured if r.alliance == OWN)
+    theirs = next(r for r in _captured if r.alliance == _key("A02"))
+    assert mine.day_scores == {4: 500} and mine.day_outcomes == {4: "W"}
+    assert theirs.day_scores == {4: 400} and theirs.day_outcomes == {4: "L"}
+
+
+async def test_a_modal_left_on_its_opening_day_saves_that_day(_captured):
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 5, _key("A02"))
+
+    await _submit_score(modal, theirs="")
+
+    mine = next(r for r in _captured if r.alliance == OWN)
+    assert mine.day_scores == {5: 500}
+
+
+def test_the_modal_opens_on_today_for_the_live_week_and_on_the_first_gap_otherwise():
+    later = {OWN_TAG: {"opponent": _key("A02"), "day_scores": {1: 5}, "day_outcomes": {1: "W"}}}
+    state = _state(_bracket(week=1) + _bracket(week=2, **later))
+
+    live_week, live_day = entry.target_day(state)
+    assert live_week == 1
+    assert entry.default_day(state, 1) == live_day
+    assert entry.default_day(state, 2) == 2
+
+
+async def test_the_results_screens_day_button_opens_the_score_modal_directly():
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    view = hub.ResultsView(state, 1, owner_id=7)
+    interaction = _FakeInteraction(user_id=7)
+
+    await view._day_scores(interaction)
+
+    assert isinstance(interaction.response.modal, entry.ScoreModal)
 
 
 def test_scored_days_get_air_and_empty_ones_stay_packed():
@@ -1514,15 +1588,43 @@ def test_backfill_refuses_an_alliance_assigned_twice():
     assert {r.alliance for r in rows} == {_key(OWN_TAG), _key("A02")}
 
 
-def test_backfill_modal_starts_blank_with_its_own_label():
-    """Nothing is prefilled -- there is nothing on the sheet yet to prefill
-    from, which is the entire reason this mode exists."""
+def test_backfill_modal_opens_blank_when_no_pairing_can_be_worked_out():
+    """Week 3 with nothing recorded before it has no pairing worth offering, so
+    the box stays empty rather than showing invented matchups."""
     state = _state(_bracket(week=3))
     modal = entry.OtherResultsModal(state, 3, backfill=True)
 
     assert modal.box.default == ""
     assert modal._box_label.text == entry.VS_BACKFILL_FIELD_LABEL
     assert modal._box_label.text != entry.VS_RESULTS_FIELD_LABEL
+
+
+def test_the_past_week_box_opens_with_the_matchups_the_bot_can_work_out():
+    """Week 1 follows from the rankings, so its matches come prefilled and the
+    person only types who won and the split."""
+    modal = entry.OtherResultsModal(_state(_bracket(week=1)), 1, backfill=True)
+
+    lines = modal.box.default.splitlines()
+    assert len(lines) == ad.BRACKET_SIZE // 2
+    assert all(" v " in line and line.endswith(": ") for line in lines)
+
+
+def test_the_past_week_box_lists_every_tag_to_copy_from():
+    state = _state(_bracket(week=1))
+    modal = entry.OtherResultsModal(state, 1, backfill=True)
+
+    tags_label = modal.children[0]
+    listed = tags_label.component.default.split(", ")
+    assert tags_label.text == entry.VS_BACKFILL_TAGS_LABEL
+    assert len(listed) == ad.BRACKET_SIZE
+    assert listed == sorted(listed, key=str.casefold)
+    assert set(listed) == {state.display_name(r.alliance) for r in state.league_rows(1)}
+
+
+def test_the_current_week_box_has_no_tag_list():
+    modal = entry.OtherResultsModal(_state(_bracket(week=1)), 1)
+
+    assert len(modal.children) == 1
 
 
 def test_backfill_boxs_format_survives_typing():

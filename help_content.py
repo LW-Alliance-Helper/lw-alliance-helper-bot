@@ -367,7 +367,7 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "the week projects), 🛣️ My path (your route through the bracket, "
                 "and which alliances to scout first when it cannot be worked "
                 "out yet).\n"
-                "**Write row:** ✏️ Log today's score, ➕ Add or edit alliance, "
+                "**Write row:** ✏️ Enter daily score, ➕ Add or edit alliance, "
                 "and setup with a sheet check.",
             ),
         ],

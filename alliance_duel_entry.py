@@ -46,7 +46,7 @@ ENTRY_TIMEOUT = 300
 
 #: Button labels on the entry surfaces, as constants so other modules' copy can
 #: name them without retyping the words.
-VS_BTN_LOG_SCORE = "✏️ Log today's score"
+VS_BTN_LOG_SCORE = "✏️ Enter daily score"
 VS_BTN_ADD_ALLIANCE = "➕ Add or edit alliance"
 VS_BTN_DETAILS = "✏️ Add or edit notes"
 #: ✏️ rather than 🔍: recording a read is an edit, and 🔍 names looking one up.
@@ -302,8 +302,22 @@ def target_day(state) -> tuple[int, int] | None:
 # ── Score entry ───────────────────────────────────────────────────────────────
 
 
+#: The button's words without its glyph. The day is a dropdown inside, so a title
+#: naming one day would go stale on the first pick.
+VS_SCORE_MODAL_TITLE = "Enter daily score"
+#: Both score boxes name their alliance, so the numbers cannot land on the wrong
+#: side. Without a known opponent the second box falls back to the generic word.
+VS_SCORE_LABEL = "{tag}'s score"
+VS_SCORE_LABEL_OURS = "Your score"
+VS_SCORE_LABEL_THEIRS = "Their score"
+
+
 class ScoreModal(discord.ui.Modal):
-    """Two numbers. Week and duel day come from the date, not from the user.
+    """One day's score. The week comes from the date; the day is a dropdown.
+
+    Whichever screen opens it says which day the dropdown starts on (today from
+    the hub, the prompt's own day from a prompt post), so the same modal logs
+    today and catches up on an earlier day.
 
     Day scores are read **literally**: a bare `500` is five hundred, and a big
     number needs a unit or its full digits. Power uses the opposite convention
@@ -314,8 +328,7 @@ class ScoreModal(discord.ui.Modal):
     """
 
     def __init__(self, state, week: int, day: int, opponent: ad.AllianceKey | None, view=None):
-        theme = ad.DUEL_DAY_BY_NUMBER[day].theme
-        super().__init__(title=f"Day {day}: {theme}"[:45], timeout=ENTRY_TIMEOUT)
+        super().__init__(title=VS_SCORE_MODAL_TITLE, timeout=ENTRY_TIMEOUT)
         self.state = state
         self.week = week
         self.day = day
@@ -325,25 +338,46 @@ class ScoreModal(discord.ui.Modal):
         #: menu rather than a reading.
         self.view = view
 
+        self.day_select = discord.ui.Select(
+            placeholder=VS_DAY_PICK_PLACEHOLDER,
+            options=day_options(state, week, default_day=day),
+            min_values=1,
+            max_values=1,
+        )
         self.ours = discord.ui.TextInput(
-            label="Your score",
-            placeholder="1.2b, 500m, or the full digits",
-            required=True,
-            max_length=32,
+            placeholder="1.2b, 500m, or the full digits", required=True, max_length=32
         )
         self.theirs = discord.ui.TextInput(
-            label="Their score",
-            placeholder="Leave blank if you have not seen it",
-            required=False,
-            max_length=32,
+            placeholder="Leave blank if you have not seen it", required=False, max_length=32
         )
-        self.add_item(self.ours)
-        self.add_item(self.theirs)
+        ours_label = (
+            VS_SCORE_LABEL.format(tag=state.display_name(state.own))
+            if state.own is not None
+            else VS_SCORE_LABEL_OURS
+        )
+        theirs_label = (
+            VS_SCORE_LABEL.format(tag=state.display_name(opponent))
+            if opponent is not None
+            else VS_SCORE_LABEL_THEIRS
+        )
+        self.add_item(discord.ui.Label(text=VS_DAY_PICK_PROMPT[:45], component=self.day_select))
+        self.add_item(discord.ui.Label(text=ours_label[:45], component=self.ours))
+        self.add_item(discord.ui.Label(text=theirs_label[:45], component=self.theirs))
+
+    def _picked_day(self) -> int:
+        """The dropdown's answer, or the day it opened on when it has none."""
+        values = self.day_select.values
+        try:
+            day = int(values[0]) if values else self.day
+        except (TypeError, ValueError):
+            return self.day
+        return day if day in ad.DUEL_DAY_BY_NUMBER else self.day
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        day = self._picked_day()
         ours = ad.parse_score(self.ours.value)
         if ours is None:
             await interaction.followup.send(
@@ -358,7 +392,7 @@ class ScoreModal(discord.ui.Modal):
         state = self.state
         rows = []
         mine = _row_for_write(state, state.own, self.week)
-        mine.day_scores = {self.day: ours}
+        mine.day_scores = {day: ours}
         rows.append(mine)
 
         # The higher day score takes the day. That is the game's rule, not an
@@ -368,12 +402,12 @@ class ScoreModal(discord.ui.Modal):
         if theirs is not None:
             outcome = "W" if ours > theirs else ("L" if ours < theirs else None)
             if outcome:
-                mine.day_outcomes = {self.day: outcome}
+                mine.day_outcomes = {day: outcome}
             if self.opponent is not None:
                 other = _row_for_write(state, self.opponent, self.week)
-                other.day_scores = {self.day: theirs}
+                other.day_scores = {day: theirs}
                 if outcome:
-                    other.day_outcomes = {self.day: "L" if outcome == "W" else "W"}
+                    other.day_outcomes = {day: "L" if outcome == "W" else "W"}
                 rows.append(other)
 
         problem = await save_rows(state, rows, actor=interaction)
@@ -386,17 +420,13 @@ class ScoreModal(discord.ui.Modal):
         if self.view is not None:
             await self.view.refresh(interaction)
 
-        await interaction.followup.send(
-            embed=_score_ack(state, self.week, self.day), ephemeral=True
-        )
+        await interaction.followup.send(embed=_score_ack(state, self.week, day), ephemeral=True)
 
         # The officer already has their answer, so anything the alliance opted
         # into is announced afterwards and cannot delay or break the save.
         import alliance_duel_events as ad_events
 
-        await ad_events.announce_after_write(
-            interaction.client, state, week=self.week, day=self.day
-        )
+        await ad_events.announce_after_write(interaction.client, state, week=self.week, day=day)
 
 
 def _score_ack(state, week: int, day: int) -> discord.Embed:
@@ -1962,9 +1992,8 @@ VS_RESULTS_FOOTER = (
     "Every week score adds to 13. Day scores build the history behind every "
     "prediction I make later."
 )
-#: The day picker behind `Enter a day's scores`. The hub's own score button
-#: only ever offers *today*, which is no use on a screen showing four days
-#: nobody has entered.
+#: The day dropdown inside the score modal, which opens on today (or the day a
+#: prompt asked about) and can be moved to any of the week's six.
 VS_DAY_PICK_PROMPT = "Which day are you entering?"
 #: Short: the question is already on the line above it.
 VS_DAY_PICK_PLACEHOLDER = "Pick a day"
@@ -2080,8 +2109,11 @@ def results_embed(state, week: int) -> discord.Embed:
     return embed
 
 
-def day_options(state, week: int) -> list[discord.SelectOption]:
-    """The six days, each carrying what is already recorded against it."""
+def day_options(state, week: int, default_day: int | None = None) -> list[discord.SelectOption]:
+    """The six days, each carrying what is already recorded against it.
+
+    `default_day` is the one the dropdown opens on.
+    """
     own = state.own
     mine = state.row_for(own, week) if own is not None else None
     options = []
@@ -2097,44 +2129,29 @@ def day_options(state, week: int) -> list[discord.SelectOption]:
             note = VS_RESULTS_NOT_ENTERED
         options.append(
             discord.SelectOption(
-                label=f"Day {day} {theme}"[:100], value=str(day), description=note[:100]
+                label=f"Day {day} {theme}"[:100],
+                value=str(day),
+                description=note[:100],
+                default=day == default_day,
             )
         )
     return options
 
 
-class DayPickerView(OwnedView):
-    """Pick which day to enter, then hand off to the modal that already exists.
+def default_day(state, week: int) -> int:
+    """The day a score modal opens on for `week`.
 
-    A separate step rather than six buttons: the modal is the same one the hub
-    opens for today, and the only thing missing from it was a way to say
-    *which* day when today is not the one you are catching up on.
+    Today's when `week` is the live one. Any other week opens on its first day
+    with nothing recorded, so catching up starts at the gap.
     """
-
-    timeout_hint = "`/vs`"
-
-    def __init__(self, state, week: int, owner_id: int, view=None):
-        super().__init__(timeout=ENTRY_TIMEOUT)
-        self.state = state
-        self.week = week
-        self.owner_id = owner_id
-        self.view = view
-        self.message: discord.Message | None = None
-
-        select = discord.ui.Select(
-            placeholder=VS_DAY_PICK_PLACEHOLDER,
-            options=day_options(state, week),
-            min_values=1,
-            max_values=1,
-        )
-        select.callback = self._picked
-        self.add_item(select)
-
-    async def _picked(self, interaction: discord.Interaction):
-        day = int((interaction.data.get("values") or ["1"])[0])
-        await interaction.response.send_modal(
-            ScoreModal(self.state, self.week, day, self.state.own_match(self.week), view=self.view)
-        )
+    target = target_day(state)
+    if target is not None and target[0] == week:
+        return target[1]
+    mine = state.row_for(state.own, week) if state.own is not None else None
+    for day in range(1, 7):
+        if mine is None or (day not in mine.day_scores and day not in mine.day_outcomes):
+            return day
+    return 6
 
 
 # ── The rest of the league's results, one box (#404) ──────────────────────────
@@ -2273,6 +2290,22 @@ def _match_by_label(state, week: int, label: str) -> ad.Match | None:
     return None
 
 
+def result_rows(
+    state, week: int, first: ad.AllianceKey, x: int, second: ad.AllianceKey, y: int
+) -> list[ad.AllianceWeek]:
+    """The two rows one finished match writes: each side's week score, its
+    outcome, and who it faced. The caller has already checked `x + y` makes a
+    week."""
+    rows = []
+    for side, other, score in ((first, second, x), (second, first, y)):
+        row = _row_for_write(state, side, week)
+        row.week_score = score
+        row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
+        row.opponent = other
+        rows.append(row)
+    return rows
+
+
 def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], list[str]]:
     """Read the whole box. Returns rows to write and problems to report.
 
@@ -2328,12 +2361,7 @@ def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], l
             )
             continue
 
-        for side, other, score in ((first, second, x), (second, first, y)):
-            row = _row_for_write(state, side, week)
-            row.week_score = score
-            row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
-            row.opponent = other
-            rows.append(row)
+        rows.extend(result_rows(state, week, first, x, second, y))
 
     return rows, problems
 
@@ -2342,11 +2370,14 @@ def parse_results(state, week: int, text: str) -> tuple[list[ad.AllianceWeek], l
 #: not "this week's" business. Kevin's own name for it, 19 Sep.
 VS_BTN_BACKFILL_RESULTS = "Enter past week results"
 
-#: A shorter instruction than the live-week box needs, because the box itself
-#: is empty here: nothing is prefilled to correct, only an example to follow.
-#: The format itself lives in the wrapping Label's description (19 Sep) so
-#: it survives typing -- see `OtherResultsModal.__init__`.
+#: A shorter instruction than the live-week box needs, because the box opens
+#: with the matchups the bot can work out (or empty, when it cannot) and an
+#: example to follow. The format itself lives in the wrapping Label's
+#: description (19 Sep) so it survives typing -- see `OtherResultsModal.__init__`.
 VS_BACKFILL_FIELD_LABEL = "Who played whom, and the split"
+#: Every tag in the week's bracket, in a box of their own to copy from, so a
+#: tag is pasted rather than retyped. Its contents are never read back.
+VS_BACKFILL_TAGS_LABEL = "Alliance tags to copy from"
 
 BACKFILL_UNKNOWN_ALLIANCE = "{label}: I don't know {tag}. Check it against the bracket."
 BACKFILL_SAME_ALLIANCE = "{label}: that's the same alliance on both sides."
@@ -2428,12 +2459,7 @@ def parse_backfill_results(state, week: int, text: str) -> tuple[list[ad.Allianc
         else:
             assigned.add(first)
             assigned.add(second)
-            for side, other, score in ((first, second, x), (second, first, y)):
-                row = _row_for_write(state, side, week)
-                row.week_score = score
-                row.week_outcome = "W" if score * 2 > ad.WEEK_POINTS_TOTAL else "L"
-                row.opponent = other
-                rows.append(row)
+            rows.extend(result_rows(state, week, first, x, second, y))
 
     return rows, problems
 
@@ -2469,10 +2495,11 @@ class OtherResultsModal(discord.ui.Modal):
 
     **`backfill=True`** is the same modal used for "Enter past week results"
     (#630-adjacent, 19 Sep): a week nothing has recorded, opened directly off
-    the hub rather than off Screen 3. Nothing here is prefilled to correct --
-    `parse_backfill_results` reads a line as *stating* a pairing rather than
-    confirming one already known, which is the whole point of backfilling
-    real history instead of waiting on the algorithm to infer it.
+    the hub rather than off Screen 3. It opens with the matchups the bot can
+    work out, but `parse_backfill_results` reads a line as *stating* a pairing
+    rather than confirming one, so any line can be overwritten with what
+    actually happened. Above the box sits every tag in the week's bracket, to
+    copy from.
     """
 
     def __init__(
@@ -2490,8 +2517,23 @@ class OtherResultsModal(discord.ui.Modal):
         self.view = view
         self.backfill = backfill
 
-        default = typed if typed is not None else ("" if backfill else results_prefill(state, week))
+        default = typed if typed is not None else results_prefill(state, week)
         if backfill:
+            tags = sorted(
+                {state.display_name(r.alliance) for r in state.league_rows(week)}, key=str.casefold
+            )
+            if tags:
+                self.add_item(
+                    discord.ui.Label(
+                        text=VS_BACKFILL_TAGS_LABEL[:45],
+                        component=discord.ui.TextInput(
+                            style=discord.TextStyle.paragraph,
+                            default=", ".join(tags),
+                            required=False,
+                            max_length=1000,
+                        ),
+                    )
+                )
             # A placeholder alone isn't enough here -- Discord clears it the
             # moment someone starts typing, and a blank backfill box has
             # nothing prefilled to fall back on for the format. Same fix as
@@ -2632,9 +2674,13 @@ class BackfillWeekPickerView(OwnedView):
 
     def _make_open(self, week: int):
         async def _open(interaction: discord.Interaction):
-            await interaction.response.send_modal(
-                OtherResultsModal(self.state, week, backfill=True)
-            )
+            # Late import: the builder imports this module for its copy and rows.
+            import alliance_duel_results_builder as builder
+
+            view = builder.ResultsBuilderView(self.state, week, self.owner_id)
+            await interaction.response.edit_message(content=None, embed=view.embed(), view=view)
+            view.message = await interaction.original_response()
+            self.stop()
 
         return _open
 

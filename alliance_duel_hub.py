@@ -1057,11 +1057,15 @@ class ResultsView(OwnedView):
         self.add_item(back)
 
     async def _day_scores(self, interaction: discord.Interaction):
-        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id, view=self)
-        await interaction.response.send_message(
-            ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
+        await interaction.response.send_modal(
+            ad_entry.ScoreModal(
+                self.state,
+                self.week,
+                ad_entry.default_day(self.state, self.week),
+                self.state.own_match(self.week),
+                view=self,
+            )
         )
-        view.message = await interaction.original_response()
 
     async def _other_results(self, interaction: discord.Interaction):
         await interaction.response.send_modal(

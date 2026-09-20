@@ -369,11 +369,11 @@ def _own_matchup_line(state: HubState) -> str:
         else:
             line += f"\n**{score}** on league points"
             if clinch.clinching_days:
-                days = ", ".join(
+                days = " or ".join(
                     f"day {d} ({ad.DUEL_DAY_BY_NUMBER[d].points} pts)"
                     for d in clinch.clinching_days
                 )
-                line += f". Winning {days} clinches it."
+                line += f". Winning {days} wins the week."
             else:
                 line += f". {clinch.points_needed} more to take the week."
     return f"{line}\n\n{day_lines}"[:1024]

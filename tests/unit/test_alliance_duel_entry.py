@@ -2178,7 +2178,7 @@ def test_the_day_lines_survive_a_clinch_line_naming_days():
 
     field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
 
-    assert "clinches it" in field.value, "the scenario must reach the clinch line"
+    assert "wins the week" in field.value, "the scenario must reach the winning-day line"
     for day in range(1, 7):
         assert f"Day {day} " in field.value
 

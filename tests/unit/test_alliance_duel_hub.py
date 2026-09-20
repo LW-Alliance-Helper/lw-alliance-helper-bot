@@ -157,8 +157,9 @@ def test_the_hub_shows_the_running_split_and_what_clinches_it():
     text = _text(hub.hub_embed(_state(rows)))
     assert "**5-2**" in text
     # The single most actionable mid-week sentence: which day ends it.
-    assert "clinches it" in text
-    assert "day 5 (2 pts)" in text
+    assert "wins the week" in text
+    assert "day 5 (2 pts) or day 6 (4 pts)" in text
+    assert "clinch" not in text.lower(), "19 Sep: Kevin does not want the word"
 
 
 def test_an_empty_tab_says_what_to_do_rather_than_rendering_nothing():

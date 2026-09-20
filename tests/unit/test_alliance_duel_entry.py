@@ -391,6 +391,41 @@ def test_every_modal_defers_before_touching_the_sheet():
                 assert source.index(call) > defer_at, f"{modal.__name__} touches the sheet first"
 
 
+def _day_row(state, day, score, outcome):
+    row = entry._row_for_write(state, OWN, 1)
+    row.day_scores = {day: score}
+    row.day_outcomes = {day: outcome}
+    return row
+
+
+def test_a_later_day_keeps_the_days_already_in_the_snapshot():
+    """19 Sep, in production: entering days 2 to 5 in one `/vs` session, every
+    'Saved day N' card counted only the day just saved (day 3 read 0-2 where two
+    lost days make 0-4), because the snapshot patch replaced the day dicts
+    instead of merging them. The sheet was right; the screen was not."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+
+    entry._patch_snapshot(state, [_day_row(state, 2, 700, "L")])
+    entry._patch_snapshot(state, [_day_row(state, 3, 900, "L")])
+
+    own = state.row_for(OWN, 1)
+    assert own.day_scores == {2: 700, 3: 900}
+    assert own.day_outcomes == {2: "L", 3: "L"}
+    assert "**0-4**" in _text(entry._score_ack(state, 1, 3))
+
+
+def test_a_corrected_day_replaces_that_day_and_leaves_the_others():
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    entry._patch_snapshot(state, [_day_row(state, 2, 700, "L")])
+    entry._patch_snapshot(state, [_day_row(state, 3, 900, "L")])
+
+    entry._patch_snapshot(state, [_day_row(state, 2, 950, "W")])
+
+    own = state.row_for(OWN, 1)
+    assert own.day_scores == {2: 950, 3: 900}
+    assert own.day_outcomes == {2: "W", 3: "L"}
+
+
 def test_the_day_outcome_is_derived_from_the_two_scores():
     """The higher day score takes the day. That is the game's rule, so it is
     safe to derive rather than ask for twice, and the ack names it."""

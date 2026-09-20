@@ -180,8 +180,12 @@ def _patch_snapshot(state, rows: list[ad.AllianceWeek]) -> None:
             state.rows.append(row)
             continue
         for field, value in vars(row).items():
-            if value not in (None, "", {}, 0) or field in ("day_scores", "day_outcomes"):
-                setattr(existing, field, value or getattr(existing, field))
+            if field in ("day_scores", "day_outcomes"):
+                # A day's write carries only that day, so replacing the dict
+                # dropped every other day the session had already saved.
+                setattr(existing, field, {**getattr(existing, field), **value})
+            elif value not in (None, "", {}, 0):
+                setattr(existing, field, value)
     state.profiles = ad.build_profiles(state.rows)
 
 

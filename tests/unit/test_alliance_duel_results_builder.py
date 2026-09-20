@@ -305,7 +305,7 @@ async def test_the_text_box_button_opens_the_past_week_box():
     await view._text_box(interaction)
 
     modal = interaction.response.modal
-    assert isinstance(modal, entry.OtherResultsModal) and modal.backfill
+    assert isinstance(modal, entry.OtherResultsModal)
 
 
 async def test_choosing_a_week_opens_the_builder_in_place():

@@ -268,9 +268,7 @@ class ResultsBuilderView(OwnedView):
         await self._redraw(interaction)
 
     async def _text_box(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            ad_entry.OtherResultsModal(self.state, self.week, backfill=True)
-        )
+        await interaction.response.send_modal(ad_entry.OtherResultsModal(self.state, self.week))
 
     async def _save(self, interaction: discord.Interaction):
         # Defer before any sheet round-trip (CLAUDE.md 1.1.7 / #76).

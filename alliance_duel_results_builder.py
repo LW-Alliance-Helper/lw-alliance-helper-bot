@@ -63,12 +63,36 @@ class ResultsBuilderView(OwnedView):
         self.total = len(self.roster) // 2
         #: (first, first score, second, second score), in the order entered.
         self.matches: list[tuple[ad.AllianceKey, int, ad.AllianceKey, int]] = []
+        own_match = self._own_match()
+        if own_match is not None:
+            self.matches.append(own_match)
         self._clear_picks()
         self.removing = False
         self.doomed: int | None = None
         self._build()
 
     # ── State ────────────────────────────────────────────────────────────────
+
+    def _own_match(self) -> tuple[ad.AllianceKey, int, ad.AllianceKey, int] | None:
+        """The guild's own match, when its final split is already on record.
+
+        Six recorded day outcomes settle the week's points (a week is the sum of
+        the days won), and a recorded week score says it outright. Either way
+        typing it again is work the bot can skip; Remove match takes it out if
+        the pairing it assumed is wrong.
+        """
+        own = self.state.own
+        opponent = ad_entry.own_opponent(self.state, self.week)
+        row = self.state.row_for(own, self.week) if own is not None else None
+        if row is None or opponent is None or own not in self.roster or opponent not in self.roster:
+            return None
+        if row.week_score is not None:
+            points = row.week_score
+        elif row.has_all_day_outcomes:
+            points = ad.clinch_state(row.day_outcomes).own_points
+        else:
+            return None
+        return own, points, opponent, ad.WEEK_POINTS_TOTAL - points
 
     def _clear_picks(self) -> None:
         self.first: ad.AllianceKey | None = None
@@ -118,12 +142,9 @@ class ResultsBuilderView(OwnedView):
         return select
 
     def _score_select(self, owner, chosen, placeholder, attr, row) -> discord.ui.Select:
-        # Once the alliance is known, each score option carries its tag, so the
-        # collapsed dropdown reads "ABC 9" and the number cannot pass for the
-        # other side's.
-        prefix = f"{self._name(owner)} " if owner is not None else ""
+        # Options are the bare numbers; only the placeholder names the alliance.
         options = [
-            discord.SelectOption(label=f"{prefix}{n}", value=str(n), default=n == chosen)
+            discord.SelectOption(label=str(n), value=str(n), default=n == chosen)
             for n in range(ad.WEEK_POINTS_TOTAL + 1)
         ]
         if owner is not None:
@@ -219,6 +240,10 @@ class ResultsBuilderView(OwnedView):
             if raw is None:
                 return
             setattr(self, attr, self.roster[int(raw)] if alliance else int(raw))
+            if attr == "first_score":
+                # A week is 13 points, so the other side is already known. It
+                # stays a dropdown value the person can change.
+                self.second_score = ad.WEEK_POINTS_TOTAL - self.first_score
             await self._redraw(interaction)
 
         return _callback

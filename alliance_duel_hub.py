@@ -361,18 +361,21 @@ def _own_matchup_line(state: HubState) -> str:
     clinch = ad.clinch_state(row.day_outcomes)
     line = f"{state.display_name(state.own)} vs {state.display_name(opponent)}"
     if clinch.own_points or clinch.opponent_points:
-        line += f"\n**{clinch.own_points}-{clinch.opponent_points}** on league points"
+        score = f"{clinch.own_points}-{clinch.opponent_points}"
         if clinch.clinched:
-            line += ", already clinched."
+            line += f"\nScore is {score}. {state.display_name(state.own)} won this week."
         elif clinch.lost:
-            line += ", already lost."
-        elif clinch.clinching_days:
-            days = ", ".join(
-                f"day {d} ({ad.DUEL_DAY_BY_NUMBER[d].points} pts)" for d in clinch.clinching_days
-            )
-            line += f". Winning {days} clinches it."
+            line += f"\nScore is {score}. {state.display_name(opponent)} won this week."
         else:
-            line += f". {clinch.points_needed} more to take the week."
+            line += f"\n**{score}** on league points"
+            if clinch.clinching_days:
+                days = ", ".join(
+                    f"day {d} ({ad.DUEL_DAY_BY_NUMBER[d].points} pts)"
+                    for d in clinch.clinching_days
+                )
+                line += f". Winning {days} clinches it."
+            else:
+                line += f". {clinch.points_needed} more to take the week."
     return f"{line}\n\n{day_lines}"[:1024]
 
 

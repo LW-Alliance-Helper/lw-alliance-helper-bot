@@ -39,7 +39,7 @@ VS_BTN_BUILDER_ADD = "➕ Add to results list"
 VS_BTN_BUILDER_SAVE = "✅ Save week"
 VS_BTN_BUILDER_REMOVE = "🗑️ Remove match"
 VS_BTN_BUILDER_REMOVE_SELECTED = "🗑️ Remove selected match"
-VS_BTN_BUILDER_TEXT_BOX = "✏️ Use the text box instead"
+VS_BTN_BUILDER_TEXT_BOX = "➕ Add using text block instead"
 #: The same words the predictions screen uses for the same step back.
 VS_BTN_BUILDER_BACK = ad_entry.VS_BTN_CANCEL_PREDICTIONS
 

@@ -2343,15 +2343,15 @@ class WeekProjection:
         state = self.clinch
         if state == CLINCH_BEFORE_ENEMY_BUSTER:
             return (
-                f"Projected to clinch before Enemy Buster: {self.low} of "
-                f"{GRIND_POINTS_TOTAL} at worst, and {GRIND_CLINCH_POINTS} takes the week."
+                f"Projected to win the week before Enemy Buster: {self.low} of "
+                f"{GRIND_POINTS_TOTAL} at worst, and {GRIND_CLINCH_POINTS} is enough."
             )
         if state == CLINCH_CONCEDED:
             return (
                 f"Projected at most {self.high} of {GRIND_POINTS_TOTAL} on the grind days, "
                 "so Enemy Buster cannot save the week."
             )
-        need = f"You need {GRIND_CLINCH_POINTS} of {GRIND_POINTS_TOTAL} to clinch before Saturday."
+        need = f"You need {GRIND_CLINCH_POINTS} of {GRIND_POINTS_TOTAL} to win the week before Saturday."
         if state == CLINCH_DAY_SIX_DECIDES:
             need = "Enemy Buster decides this week on the projection."
         return need if self.has_combat_read else f"{need} Get a read."

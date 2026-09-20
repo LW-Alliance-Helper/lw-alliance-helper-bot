@@ -501,3 +501,9 @@ def test_declining_the_offer_is_a_real_answer():
     # One primary per view: the affirmative. Declining is secondary, not danger.
     assert source.count("ButtonStyle.primary") == 1
     assert "ButtonStyle.danger" not in source
+
+
+def test_no_event_post_toggle_is_labeled_with_the_word_clinch():
+    import alliance_duel_wizard as wizard
+
+    assert all("clinch" not in label.lower() for _key, label in wizard.EVENT_TOGGLES)

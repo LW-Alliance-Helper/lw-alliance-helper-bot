@@ -2178,7 +2178,7 @@ def test_the_day_lines_survive_a_clinch_line_naming_days():
 
     field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
 
-    assert "clinches it" in field.value, "the scenario must reach the clinch line"
+    assert "wins the week" in field.value, "the scenario must reach the winning-day line"
     for day in range(1, 7):
         assert f"Day {day} " in field.value
 
@@ -2207,3 +2207,24 @@ async def test_the_hub_score_button_names_the_worked_out_opponent():
 
     modal = interaction.response.modal
     assert modal.children[2].text == f"{state.display_name(opponent)}'s score"
+
+
+def test_a_won_week_reads_as_a_score_and_a_winner():
+    """19 Sep: "already clinched" read as jargon. The week says who won it."""
+    outcomes = {1: "W", 2: "W", 3: "W", 4: "W", 5: "L", 6: "L"}  # 1 + 2 + 2 + 2 = 7 to 6
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": outcomes}}))
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert f"Score is 7-6. {state.display_name(OWN)} won this week." in field.value
+    assert "clinched" not in field.value
+
+
+def test_a_lost_week_names_the_opponent_as_the_winner():
+    outcomes = {1: "L", 2: "L", 3: "L", 4: "L", 5: "W", 6: "W"}
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": outcomes}}))
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert f"Score is 6-7. {state.display_name(_key('A02'))} won this week." in field.value
+    assert "already lost" not in field.value

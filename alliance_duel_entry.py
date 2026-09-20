@@ -463,10 +463,10 @@ def _score_ack(state, week: int, day: int) -> discord.Embed:
     elif clinch.own_points or clinch.opponent_points:
         detail = f"**{clinch.own_points}-{clinch.opponent_points}**, {clinch.points_needed} to go."
         if clinch.clinching_days:
-            days = ", ".join(
+            days = " or ".join(
                 f"day {d} ({ad.DUEL_DAY_BY_NUMBER[d].points} pts)" for d in clinch.clinching_days
             )
-            detail += f" Winning {days} clinches it."
+            detail += f" Winning {days} wins the week."
         embed.add_field(name="Where the week stands", value=detail, inline=False)
     return embed
 

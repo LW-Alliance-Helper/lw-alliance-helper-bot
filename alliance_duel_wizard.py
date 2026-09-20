@@ -160,7 +160,7 @@ VS_BTN_PROMPT_OFF = "🔕 Turn it off"
 #: readable at a glance more than they need three different icons.
 VS_BTN_EVENT_POSTS = "📣 Event posts"
 EVENT_TOGGLES = (
-    ("clinch_status_enabled", "Mid-week clinch status"),
+    ("clinch_status_enabled", "Mid-week score"),
     ("opponent_reveal_enabled", "Next opponent"),
     ("season_recap_enabled", "Season recap"),
 )

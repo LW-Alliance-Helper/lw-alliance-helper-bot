@@ -353,10 +353,10 @@ def _own_matchup_line(state: HubState) -> str:
         return f"No row for {state.display_name(state.own)} in this week yet."
 
     opponent = ad_entry.own_opponent(state, state.week)
-    days = "\n".join(ad_entry.own_day_lines(state, state.week, state.own, opponent))
+    day_lines = "\n".join(ad_entry.own_day_lines(state, state.week, state.own, opponent))
     if opponent is None:
         head = f"{state.display_name(state.own)}, with no opponent recorded for this week yet."
-        return f"{head}\n\n{days}"[:1024]
+        return f"{head}\n\n{day_lines}"[:1024]
 
     clinch = ad.clinch_state(row.day_outcomes)
     line = f"{state.display_name(state.own)} vs {state.display_name(opponent)}"
@@ -373,7 +373,7 @@ def _own_matchup_line(state: HubState) -> str:
             line += f". Winning {days} clinches it."
         else:
             line += f". {clinch.points_needed} more to take the week."
-    return f"{line}\n\n{days}"[:1024]
+    return f"{line}\n\n{day_lines}"[:1024]
 
 
 def _add_sheet_problem_field(embed: discord.Embed, guild_id: int) -> None:

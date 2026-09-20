@@ -2160,6 +2160,29 @@ def test_the_hub_lists_each_duel_day_under_this_week():
     assert "1,204,000,000" in field.value and "980,000,000" in field.value
 
 
+def test_the_day_lines_survive_a_clinch_line_naming_days():
+    """The clinch text builds its own list of days, and reusing the name for
+    the day lines replaced them with it (caught rendering the real hub)."""
+    state = _state(
+        _bracket(
+            **{
+                OWN_TAG: {
+                    "opponent": _key("A02"),
+                    "day_scores": {2: 700, 3: 900, 4: 950, 5: 1500},
+                    "day_outcomes": {2: "L", 3: "L", 4: "W", 5: "W"},
+                },
+                "A02": {"opponent": OWN, "day_scores": {2: 800, 3: 950, 4: 900, 5: 1400}},
+            }
+        )
+    )
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert "clinches it" in field.value, "the scenario must reach the clinch line"
+    for day in range(1, 7):
+        assert f"Day {day} " in field.value
+
+
 def test_the_hub_still_lists_the_days_when_no_opponent_can_be_named():
     rows = _bracket(week=2)  # week 1 was never recorded, so week 2 has no pairing
     state = _state(rows)

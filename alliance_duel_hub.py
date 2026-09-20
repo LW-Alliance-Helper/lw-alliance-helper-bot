@@ -337,7 +337,13 @@ def _add_new_feature_field(embed: discord.Embed) -> None:
 
 
 def _own_matchup_line(state: HubState) -> str:
-    """The guild's own matchup for the live week, with its running split."""
+    """The guild's own matchup for the live week: the running split, then each
+    duel day with what was scored.
+
+    The opponent is the recorded one, else the one the bracket works out. The
+    Opponent column is left blank when a league starts, so reading it alone
+    reported no opponent all week for an alliance whose pairing was known.
+    """
     if state.own is None:
         return (
             f"You have not told me which alliance is yours yet. Set it in {ad_setup.VS_SETUP_NAV}."
@@ -346,9 +352,11 @@ def _own_matchup_line(state: HubState) -> str:
     if row is None:
         return f"No row for {state.display_name(state.own)} in this week yet."
 
-    opponent = row.opponent
+    opponent = ad_entry.own_opponent(state, state.week)
+    day_lines = "\n".join(ad_entry.own_day_lines(state, state.week, state.own, opponent))
     if opponent is None:
-        return f"{state.display_name(state.own)}, with no opponent recorded for this week yet."
+        head = f"{state.display_name(state.own)}, with no opponent recorded for this week yet."
+        return f"{head}\n\n{day_lines}"[:1024]
 
     clinch = ad.clinch_state(row.day_outcomes)
     line = f"{state.display_name(state.own)} vs {state.display_name(opponent)}"
@@ -365,7 +373,7 @@ def _own_matchup_line(state: HubState) -> str:
             line += f". Winning {days} clinches it."
         else:
             line += f". {clinch.points_needed} more to take the week."
-    return line
+    return f"{line}\n\n{day_lines}"[:1024]
 
 
 def _add_sheet_problem_field(embed: discord.Embed, guild_id: int) -> None:
@@ -976,15 +984,6 @@ class VSPathView(OwnedView):
         predict.callback = self._predict
         self.add_item(predict)
 
-        results = discord.ui.Button(
-            label=ad_entry.VS_BTN_RESULTS_WEEK,
-            style=discord.ButtonStyle.secondary,
-            disabled=state.own is None or state.week is None,
-            row=1,
-        )
-        results.callback = self._results
-        self.add_item(results)
-
     def _preview(self, outcome: str):
         async def _open(interaction: discord.Interaction):
             await interaction.response.send_message(
@@ -1009,81 +1008,6 @@ class VSPathView(OwnedView):
         # The view edits this message on save and strips it on timeout, and it
         # can do neither without the handle. Same pattern as the hub's own.
         view.message = await interaction.original_response()
-
-    async def _results(self, interaction: discord.Interaction):
-        week = self.state.week or 1
-        view = ResultsView(self.state, week, interaction.user.id)
-        await interaction.response.send_message(
-            embed=ad_entry.results_embed(self.state, week), view=view, ephemeral=True
-        )
-        view.message = await interaction.original_response()
-
-
-class ResultsView(OwnedView):
-    """Screen 3's controls. Lives here rather than in `alliance_duel_entry`
-    because Back re-renders the path, and entry cannot import the hub."""
-
-    timeout_hint = f"`{VS_HUB_CMD}`"
-
-    def __init__(self, state: HubState, week: int, owner_id: int):
-        super().__init__(timeout=900)
-        self.state = state
-        self.week = week
-        self.owner_id = owner_id
-        self.message: discord.Message | None = None
-
-        day = discord.ui.Button(
-            label=ad_entry.VS_BTN_DAY_SCORES,
-            style=discord.ButtonStyle.primary,
-            disabled=state.own is None,
-            row=0,
-        )
-        day.callback = self._day_scores
-        self.add_item(day)
-
-        others = discord.ui.Button(
-            label=ad_entry.VS_BTN_OTHER_RESULTS,
-            style=discord.ButtonStyle.secondary,
-            disabled=not ad_entry.all_week_matches(state, week),
-            row=0,
-        )
-        others.callback = self._other_results
-        self.add_item(others)
-
-        back = discord.ui.Button(
-            label=ad_entry.VS_BTN_BACK_TO_PATH, style=discord.ButtonStyle.secondary, row=0
-        )
-        back.callback = self._back
-        self.add_item(back)
-
-    async def _day_scores(self, interaction: discord.Interaction):
-        view = ad_entry.DayPickerView(self.state, self.week, interaction.user.id, view=self)
-        await interaction.response.send_message(
-            ad_entry.VS_DAY_PICK_PROMPT, view=view, ephemeral=True
-        )
-        view.message = await interaction.original_response()
-
-    async def _other_results(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            ad_entry.OtherResultsModal(self.state, self.week, view=self)
-        )
-
-    async def refresh(self, interaction: discord.Interaction) -> None:
-        """Re-render after a write. The modal defers with `thinking=True`, so
-        `edit_original_response` would edit that placeholder rather than the
-        screen -- the view's own message is the one that has to change."""
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(embed=ad_entry.results_embed(self.state, self.week), view=self)
-        except discord.HTTPException:
-            pass
-
-    async def _back(self, interaction: discord.Interaction):
-        view = VSPathView(self.state, self.owner_id)
-        await interaction.response.edit_message(embed=path_embed(self.state), view=view)
-        view.message = self.message
-        self.stop()
 
 
 class VSHubView(OwnedView):
@@ -1216,7 +1140,7 @@ class VSHubView(OwnedView):
         self.add_item(setup)
 
         # Row 1 is full at five. Backfilling a week is its own row rather than
-        # a corner of Screen 3, since it is reached by week, not by "today".
+        # a corner of another screen, since it is reached by week, not by "today".
         backfill = discord.ui.Button(
             label=ad_entry.VS_BTN_BACKFILL_RESULTS,
             style=discord.ButtonStyle.secondary,
@@ -1326,7 +1250,7 @@ class VSHubView(OwnedView):
             return
         week, day = target
         await interaction.response.send_modal(
-            ad_entry.ScoreModal(self.state, week, day, self.state.own_match(week))
+            ad_entry.ScoreModal(self.state, week, day, ad_entry.own_opponent(self.state, week))
         )
 
     async def _add_alliance(self, interaction: discord.Interaction):

@@ -743,7 +743,7 @@ def resolve_live_week(
 
     Because the schedule is rigid (days 1-6 are Monday to Saturday, Sunday
     always off), today's date alone tells the bot which week and duel day is
-    live — so "log today's score" needs two numbers and nothing else.
+    live — so a daily score needs two numbers and nothing else.
 
     `today` must be a **server** date; defaults to :func:`server_today`.
     Returns ``None`` when no recorded week covers today, which is the normal

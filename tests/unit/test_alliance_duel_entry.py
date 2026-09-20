@@ -391,6 +391,41 @@ def test_every_modal_defers_before_touching_the_sheet():
                 assert source.index(call) > defer_at, f"{modal.__name__} touches the sheet first"
 
 
+def _day_row(state, day, score, outcome):
+    row = entry._row_for_write(state, OWN, 1)
+    row.day_scores = {day: score}
+    row.day_outcomes = {day: outcome}
+    return row
+
+
+def test_a_later_day_keeps_the_days_already_in_the_snapshot():
+    """19 Sep, in production: entering days 2 to 5 in one `/vs` session, every
+    'Saved day N' card counted only the day just saved (day 3 read 0-2 where two
+    lost days make 0-4), because the snapshot patch replaced the day dicts
+    instead of merging them. The sheet was right; the screen was not."""
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+
+    entry._patch_snapshot(state, [_day_row(state, 2, 700, "L")])
+    entry._patch_snapshot(state, [_day_row(state, 3, 900, "L")])
+
+    own = state.row_for(OWN, 1)
+    assert own.day_scores == {2: 700, 3: 900}
+    assert own.day_outcomes == {2: "L", 3: "L"}
+    assert "**0-4**" in _text(entry._score_ack(state, 1, 3))
+
+
+def test_a_corrected_day_replaces_that_day_and_leaves_the_others():
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    entry._patch_snapshot(state, [_day_row(state, 2, 700, "L")])
+    entry._patch_snapshot(state, [_day_row(state, 3, 900, "L")])
+
+    entry._patch_snapshot(state, [_day_row(state, 2, 950, "W")])
+
+    own = state.row_for(OWN, 1)
+    assert own.day_scores == {2: 950, 3: 900}
+    assert own.day_outcomes == {2: "W", 3: "L"}
+
+
 def test_the_day_outcome_is_derived_from_the_two_scores():
     """The higher day score takes the day. That is the game's rule, so it is
     safe to derive rather than ask for twice, and the ack names it."""
@@ -857,6 +892,10 @@ class _FakeResponse:
     def __init__(self):
         self.edited = None
         self.sent = None
+        self.modal = None
+
+    async def send_modal(self, modal):
+        self.modal = modal
 
     async def edit_message(self, **kw):
         self.edited = kw
@@ -1104,14 +1143,14 @@ async def test_save_is_dead_until_something_is_staged(_captured):
     assert saves and not saves[0].disabled
 
 
-# ── Screen 3: entering results (#404) ─────────────────────────────────────────
+# ── The day lines and week results (#404) ─────────────────────────────────────────
 
 
 def test_every_duel_day_shows_even_the_ones_nobody_entered():
     """The gaps are the point of the screen: four blank days is the thing it
     exists to tell you."""
     rows = _bracket(**{OWN_TAG: {"opponent": _key("A02")}})
-    text = _text(entry.results_embed(_state(rows), 1))
+    text = "\n".join(entry.own_day_lines(_state(rows), 1, OWN, _key("A02")))
 
     for day in range(1, 7):
         assert f"Day {day} " in text
@@ -1131,7 +1170,7 @@ def test_a_played_day_names_the_verdict_and_never_abbreviates_a_score():
             "A02": {"opponent": OWN, "day_scores": {1: 980000000}},
         }
     )
-    text = _text(entry.results_embed(_state(rows), 1))
+    text = "\n".join(entry.own_day_lines(_state(rows), 1, OWN, _key("A02")))
 
     assert "1,204,000,000" in text
     assert "980,000,000" in text
@@ -1149,58 +1188,9 @@ def test_a_day_with_scores_but_no_verdict_says_nothing_rather_than_guessing():
     assert entry.VS_RESULTS_LOST not in lines[0]
 
 
-def test_a_half_recorded_week_split_fills_in_from_thirteen():
-    """A matchup's two week scores total 13, which is already a validation
-    rule, so one side is enough and the match reads whole."""
-    match = entry.week_matches(_state(_bracket()), 1)[0]
-    rows = _bracket()
-    for row in rows:
-        if row.alliance == match.a:
-            row.week_score = 5
-    lines = entry.rest_of_league_lines(_state(rows), 1)
-
-    # 5 for one side derives 8 for the other, and 8 won, so 8 leads.
-    assert any(" 8 - 5 " in line for line in lines)
-
-
-def test_a_recorded_match_puts_its_winner_first():
-    """Match Record leads with the winner -- all eight rows of a real week,
-    three of them against seed order. Reading the two screens side by side is
-    the job, and a line needing a mental flip is a line that gets misread."""
-    state = _state(_bracket())
-    match = entry.week_matches(state, 1)[0]
-    loser, winner = match.a, match.b  # seed order puts the loser first
-    rows = _bracket()
-    for row in rows:
-        if row.alliance == winner:
-            row.week_score = 9
-        elif row.alliance == loser:
-            row.week_score = 4
-    line = entry.rest_of_league_lines(_state(rows), 1)[0]
-
-    assert line == (f"{state.display_name(winner)} 9 - 4 {state.display_name(loser)}")
-
-
-def test_an_unrecorded_match_keeps_seed_order():
-    """No winner yet, so there is nothing to lead with."""
-    state = _state(_bracket())
-    match = entry.week_matches(state, 1)[0]
-    line = entry.rest_of_league_lines(state, 1)[0]
-
-    assert line.startswith(state.display_name(match.a))
-
-
-def test_your_own_match_is_not_in_the_rest_of_the_league():
-    """It is the field above, at a completely different grain."""
-    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
-    own = state.display_name(OWN)
-
-    assert all(own not in line.split() for line in entry.rest_of_league_lines(state, 1))
-
-
 def test_the_day_picker_carries_what_each_day_already_holds():
-    """The hub's score button only ever offers today, which is no use on a
-    screen showing four days nobody entered."""
+    """The dropdown shows what each day holds, so the gaps are visible before
+    one is picked."""
     rows = _bracket(
         **{OWN_TAG: {"opponent": _key("A02"), "day_outcomes": {1: "W"}, "day_scores": {1: 5}}}
     )
@@ -1209,6 +1199,56 @@ def test_the_day_picker_carries_what_each_day_already_holds():
     assert len(options) == 6
     assert options[0].description == entry.VS_RESULTS_WON
     assert options[1].description == entry.VS_RESULTS_NOT_ENTERED
+
+
+def test_the_score_modal_names_both_alliances_and_opens_on_the_given_day():
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 3, _key("A02"))
+
+    day_label, ours_label, theirs_label = modal.children
+    assert modal.title == entry.VS_SCORE_MODAL_TITLE
+    assert day_label.text == entry.VS_DAY_PICK_PROMPT
+    assert len(modal.day_select.options) == 6
+    assert [o.value for o in modal.day_select.options if o.default] == ["3"]
+    assert ours_label.text == f"{state.display_name(OWN)}'s score"
+    assert theirs_label.text == f"{state.display_name(_key('A02'))}'s score"
+
+
+def test_without_a_known_opponent_the_second_score_box_keeps_the_generic_word():
+    modal = entry.ScoreModal(_state(_bracket()), 1, 1, None)
+
+    assert modal.children[2].text == entry.VS_SCORE_LABEL_THEIRS
+
+
+async def _submit_score(modal, ours="500", theirs="400"):
+    modal.ours = type("F", (), {"value": ours})()
+    modal.theirs = type("F", (), {"value": theirs})()
+    interaction = _FakeInteraction(user_id=7)
+    interaction.client = None
+    await modal.on_submit(interaction)
+
+
+async def test_the_day_picked_in_the_modal_is_the_day_saved(_captured):
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 1, _key("A02"))
+    modal.day_select._values = ["4"]
+
+    await _submit_score(modal)
+
+    mine = next(r for r in _captured if r.alliance == OWN)
+    theirs = next(r for r in _captured if r.alliance == _key("A02"))
+    assert mine.day_scores == {4: 500} and mine.day_outcomes == {4: "W"}
+    assert theirs.day_scores == {4: 400} and theirs.day_outcomes == {4: "L"}
+
+
+async def test_a_modal_left_on_its_opening_day_saves_that_day(_captured):
+    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
+    modal = entry.ScoreModal(state, 1, 5, _key("A02"))
+
+    await _submit_score(modal, theirs="")
+
+    mine = next(r for r in _captured if r.alliance == OWN)
+    assert mine.day_scores == {5: 500}
 
 
 def test_scored_days_get_air_and_empty_ones_stay_packed():
@@ -1272,8 +1312,8 @@ def test_the_leading_tag_says_whose_score_is_first_not_who_won():
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
 
-    forward, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 6-7")
-    backward, _ = entry.parse_results(state, 1, f"{a} v {b}: {b} 7-6")
+    forward, _ = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 6-7")
+    backward, _ = entry.parse_backfill_results(state, 1, f"{a} v {b}: {b} 7-6")
 
     winners = {
         tuple(r.alliance for r in rows if r.week_outcome == "W") for rows in (forward, backward)
@@ -1285,7 +1325,7 @@ def test_a_split_that_is_not_thirteen_is_refused():
     state = _state(_bracket())
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
-    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 8-4")
+    rows, problems = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 8-4")
 
     assert rows == [] and len(problems) == 1
 
@@ -1294,7 +1334,7 @@ def test_a_tag_on_neither_side_is_refused():
     state = _state(_bracket())
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
-    rows, problems = entry.parse_results(state, 1, f"{a} v {b}: ZQX 7-6")
+    rows, problems = entry.parse_backfill_results(state, 1, f"{a} v {b}: ZQX 7-6")
 
     assert rows == [] and len(problems) == 1
 
@@ -1303,7 +1343,7 @@ def test_a_blank_line_records_nothing_and_is_not_a_problem():
     """The box opens with eight empty lines. Leaving one alone is the normal
     case, not an error."""
     state = _state(_bracket())
-    rows, problems = entry.parse_results(state, 1, entry.results_prefill(state, 1))
+    rows, problems = entry.parse_backfill_results(state, 1, entry.results_prefill(state, 1))
 
     assert rows == [] and problems == []
 
@@ -1317,7 +1357,7 @@ def test_one_bad_line_stops_the_whole_write():
         f"{state.display_name(m0.a)} v {state.display_name(m0.b)}: {state.display_name(m0.a)} 9-4"
     )
     bad = f"{state.display_name(m1.a)} v {state.display_name(m1.b)}: {state.display_name(m1.a)} 8-4"
-    rows, problems = entry.parse_results(state, 1, f"{good}\n{bad}")
+    rows, problems = entry.parse_backfill_results(state, 1, f"{good}\n{bad}")
 
     assert problems, "the bad line must be reported"
     assert len(rows) == 2, "the good line still parses; the caller is what refuses"
@@ -1328,7 +1368,7 @@ def test_the_confirmation_names_each_winner_once_not_twice():
     state = _state(_bracket())
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
-    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    rows, _ = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 9-4")
     said = entry.results_saved_lines(state, rows)
 
     assert len(rows) == 2
@@ -1342,14 +1382,14 @@ def test_the_signed_off_results_copy_renders_as_approved():
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
 
-    rows, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    rows, _ = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 9-4")
     said = entry.results_saved_lines(state, rows)
     assert entry.RESULTS_SAVED.format(n=1, s="") + " " + said[0] == (
         f"✅ Saved 1 result: {a} beat {b} 9-4"
     )
     assert entry.RESULTS_SAVED.format(n=3, s="s") == "✅ Saved 3 results:"
     assert entry.RESULTS_NOTHING_TO_SAVE == "Nothing to save."
-    assert entry.VS_BTN_OTHER_RESULTS == "Enter the week's results"
+    assert entry.VS_BTN_BACKFILL_RESULTS == "Enter weekly results"
     assert entry.VS_RESULTS_MODAL_TITLE.format(week=2) == "Week 2 results"
 
 
@@ -1361,16 +1401,16 @@ def test_each_refusal_names_its_own_cause():
     a0, b0 = state.display_name(m0.a), state.display_name(m0.b)
     a1, b1 = state.display_name(m1.a), state.display_name(m1.b)
 
-    _, problems = entry.parse_results(
+    _, problems = entry.parse_backfill_results(
         state,
         1,
-        f"{a0} v {b0}: ZQX 7-6\n{a1} v {b1}: {a1} 8-4\n{a0} v {b1}: {a0} 7-6",
+        f"{a0} v {b0}: ZQX 7-6\n{a1} v {b1}: {a1} 8-4\n{a0} v ZQY: {a0} 7-6",
     )
 
     assert problems == [
         f"{a0} v {b0}: I don't know ZQX. Use {a0} or {b0}.",
         f"{a1} v {b1}: 8 and 4 don't make 13.",
-        f"""I don't recognize "{a0} v {b1}" as a match this week.""",
+        f"{a0} v ZQY: I don't know ZQY. Check it against the bracket.",
     ]
 
 
@@ -1378,7 +1418,7 @@ def test_an_unreadable_line_quotes_back_what_was_typed():
     state = _state(_bracket())
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
-    _, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} won")
+    _, problems = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} won")
 
     assert problems == [
         f"""{a} v {b}: I couldn't read "{a} won". It needs a tag and a split, like 9-4."""
@@ -1408,9 +1448,9 @@ def test_a_fresh_box_opens_on_the_sheet_not_on_a_retry():
 
 def test_backfill_declares_a_pairing_nothing_has_recorded():
     """#630-adjacent, 19 Sep: a backfilled week has no recorded opponent and
-    no prior week decided, so `parse_results` would refuse every line as an
-    unrecognised match. `parse_backfill_results` reads the line as stating
-    the pairing rather than confirming one the algorithm already knows."""
+    no prior week decided, so a parser that only confirmed known pairings would
+    refuse every line. `parse_backfill_results` reads the line as stating the
+    pairing rather than confirming one the algorithm already knows."""
     state = _state(_bracket(week=3))
     a, b = OWN_TAG, "A02"
 
@@ -1422,6 +1462,20 @@ def test_backfill_declares_a_pairing_nothing_has_recorded():
     loser = next(r for r in rows if r.alliance == _key(b))
     assert winner.week_score == 9 and winner.week_outcome == "W" and winner.opponent == _key(b)
     assert loser.week_score == 4 and loser.week_outcome == "L" and loser.opponent == _key(a)
+
+
+@pytest.mark.parametrize("sep", ["v", "V", "vs", "Vs", "VS"])
+def test_backfill_reads_a_matchup_however_the_v_was_typed(sep):
+    """19 Sep, in production: eight lines typed `DXL V KTL: DXL 13-0` were all
+    refused with a message about the split, because the label was split on a
+    lowercase ` v ` only. The prefill writes lowercase, but people retype it."""
+    state = _state(_bracket(week=3))
+    a, b = OWN_TAG, "A02"
+
+    rows, problems = entry.parse_backfill_results(state, 3, f"{a} {sep} {b}: {a} 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in rows} == {_key(a), _key(b)}
 
 
 def test_backfill_refuses_an_alliance_not_in_that_weeks_roster():
@@ -1453,15 +1507,36 @@ def test_backfill_refuses_an_alliance_assigned_twice():
     assert {r.alliance for r in rows} == {_key(OWN_TAG), _key("A02")}
 
 
-def test_backfill_modal_starts_blank_with_its_own_label():
-    """Nothing is prefilled -- there is nothing on the sheet yet to prefill
-    from, which is the entire reason this mode exists."""
+def test_backfill_modal_opens_blank_when_no_pairing_can_be_worked_out():
+    """Week 3 with nothing recorded before it has no pairing worth offering, so
+    the box stays empty rather than showing invented matchups."""
     state = _state(_bracket(week=3))
-    modal = entry.OtherResultsModal(state, 3, backfill=True)
+    modal = entry.OtherResultsModal(state, 3)
 
     assert modal.box.default == ""
     assert modal._box_label.text == entry.VS_BACKFILL_FIELD_LABEL
-    assert modal._box_label.text != entry.VS_RESULTS_FIELD_LABEL
+
+
+def test_the_past_week_box_opens_with_the_matchups_the_bot_can_work_out():
+    """Week 1 follows from the rankings, so its matches come prefilled and the
+    person only types who won and the split."""
+    modal = entry.OtherResultsModal(_state(_bracket(week=1)), 1)
+
+    lines = modal.box.default.splitlines()
+    assert len(lines) == ad.BRACKET_SIZE // 2
+    assert all(" v " in line and line.endswith(": ") for line in lines)
+
+
+def test_the_past_week_box_lists_every_tag_to_copy_from():
+    state = _state(_bracket(week=1))
+    modal = entry.OtherResultsModal(state, 1)
+
+    tags_label = modal.children[0]
+    listed = tags_label.component.default.split(", ")
+    assert tags_label.text == entry.VS_BACKFILL_TAGS_LABEL
+    assert len(listed) == ad.BRACKET_SIZE
+    assert listed == sorted(listed, key=str.casefold)
+    assert set(listed) == {state.display_name(r.alliance) for r in state.league_rows(1)}
 
 
 def test_backfill_boxs_format_survives_typing():
@@ -1470,21 +1545,12 @@ def test_backfill_boxs_format_survives_typing():
     nothing prefilled to fall back on. The format lives in the wrapping
     Label's description instead, which stays put. Kevin, 19 Sep."""
     state = _state(_bracket(week=3))
-    modal = entry.OtherResultsModal(state, 3, backfill=True)
+    modal = entry.OtherResultsModal(state, 3)
 
     assert modal.box.label is None  # unwrapped -- the Label carries the text
     description = modal._box_label.description
     assert "v" in description and "score" in description.lower()
     assert modal._box_label.component is modal.box
-
-
-def test_backfill_retry_reopens_in_backfill_mode():
-    """A refused backfill submission has to reopen as a backfill modal, not
-    the live-week one -- otherwise the retry silently switches parsers."""
-    state = _state(_bracket(week=3))
-    retry = entry._RetryResultsView(state, 3, 1, "typed", backfill=True)
-
-    assert retry.backfill is True
 
 
 def test_the_week_picker_skips_a_week_with_no_roster_yet():
@@ -1679,43 +1745,6 @@ def test_edit_league_modal_defaults_to_the_current_tier():
     assert not any(opt.default for opt in modal.tier.options)
 
 
-@pytest.mark.asyncio
-async def test_a_day_score_refreshes_the_screen_that_asked_for_it(_captured):
-    """The results screen is a reading of the week. Saving into it and leaving
-    it showing the old one is the same defect the predictions save had."""
-    refreshed = []
-
-    class _Screen:
-        async def refresh(self, interaction):
-            refreshed.append(interaction)
-
-    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
-    modal = entry.ScoreModal(state, 1, 1, _key("A02"), view=_Screen())
-    modal.ours = type("F", (), {"value": "500"})()
-    modal.theirs = type("F", (), {"value": "400"})()
-    interaction = _FakeInteraction(user_id=7)
-    interaction.client = None
-    await modal.on_submit(interaction)
-
-    assert refreshed, "the screen behind it was left showing the old week"
-
-
-@pytest.mark.asyncio
-async def test_the_hub_score_button_has_no_screen_to_refresh(_captured):
-    """Its message is a menu, not a reading, so `view` stays None and nothing
-    tries to re-render it."""
-    state = _state(_bracket(**{OWN_TAG: {"opponent": _key("A02")}}))
-    modal = entry.ScoreModal(state, 1, 1, _key("A02"))
-    modal.ours = type("F", (), {"value": "500"})()
-    modal.theirs = type("F", (), {"value": "400"})()
-    interaction = _FakeInteraction(user_id=7)
-    interaction.client = None
-    await modal.on_submit(interaction)
-
-    assert modal.view is None
-    assert _captured, "the write still happened"
-
-
 def test_week_two_offers_nothing_until_week_one_is_recorded():
     """With no results to weigh, `compute_week_pairing` scores everyone zero
     and falls back to ranking order, reproducing week 1's pairs. These screens
@@ -1753,18 +1782,19 @@ def test_a_recorded_week_one_unlocks_week_two():
 
 
 def test_your_own_match_shows_even_with_the_opponent_column_blank():
-    """`start_new_league` leaves Opponent blank on the rows it writes. Screen 3
-    read the own matchup from that column alone while excluding the computed
-    one from the rest of the league, so the guild's own match vanished from
-    the screen while still appearing in the box that writes to it."""
+    """`start_new_league` leaves Opponent blank on the rows it writes. The hub
+    read the own matchup from that column alone, so it said "no opponent
+    recorded" all week for an alliance whose pairing the bracket already knew
+    (19 Sep, OGV against FtL)."""
     state = _state(_bracket())
     assert state.own_match(1) is None, "the column really is blank"
 
     opponent = entry.own_opponent(state, 1)
     assert opponent is not None
 
-    text = _text(entry.results_embed(state, 1))
-    assert state.display_name(opponent) in text
+    text = _text(hub.hub_embed(state))
+    assert f"{state.display_name(OWN)} vs {state.display_name(opponent)}" in text
+    assert "no opponent recorded" not in text
 
 
 # -- What `/code-review` found on the rebase, 2026-09-04 ----------------------
@@ -1845,25 +1875,6 @@ async def test_changing_a_prediction_does_not_leave_the_old_winner_picked(_captu
     assert written[match.a] != written[match.b]
 
 
-def test_two_alliances_sharing_a_tag_are_still_two_alliances():
-    """`display_name` is the tag alone and a bracket draws from more than one
-    warzone. A set collapsed the bot's own prefilled `X v X:` line into a single
-    name, matched no pairing, and refused the whole box -- which nobody could
-    fix, because they had not typed the line being refused."""
-    rows = _bracket()
-    match = entry.week_matches(_state(rows), 1)[0]
-    # Give both sides of a real pairing the same display tag.
-    for row in rows:
-        if row.alliance in (match.a, match.b):
-            row.tag_display = "KTI"
-    state = _state(rows)
-
-    found = entry._match_by_label(state, 1, "KTI v KTI")
-
-    assert found is not None, "a same-tag pairing could not be located at all"
-    assert {found.a, found.b} == {match.a, match.b}
-
-
 def test_a_split_typed_with_spaces_round_the_dash_is_read():
     """`9 - 4` is `9-4`. Reading only the last whitespace-delimited token missed
     it, and because one bad line refuses the whole box it threw the rest of the
@@ -1872,8 +1883,8 @@ def test_a_split_typed_with_spaces_round_the_dash_is_read():
     match = entry.week_matches(state, 1)[0]
     a, b = state.display_name(match.a), state.display_name(match.b)
 
-    spaced, problems = entry.parse_results(state, 1, f"{a} v {b}: {a} 9 - 4")
-    tight, _ = entry.parse_results(state, 1, f"{a} v {b}: {a} 9-4")
+    spaced, problems = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 9 - 4")
+    tight, _ = entry.parse_backfill_results(state, 1, f"{a} v {b}: {a} 9-4")
 
     assert problems == []
     assert [(r.alliance, r.week_score) for r in spaced] == [
@@ -1889,7 +1900,7 @@ def test_a_split_still_needs_a_separator():
     a, b = state.display_name(match.a), state.display_name(match.b)
 
     for value in (f"{a} 9 4", f"{a} 94", a):
-        rows, problems = entry.parse_results(state, 1, f"{a} v {b}: {value}")
+        rows, problems = entry.parse_backfill_results(state, 1, f"{a} v {b}: {value}")
         assert rows == [] and len(problems) == 1, f"{value!r} was accepted"
 
 
@@ -2097,3 +2108,102 @@ async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
     await entry.save_rows(state, [_row(OWN_TAG, week=2, week_score=7)])
 
     assert len(_central.weeks_for_league(LEAGUE, week=2)) == 1
+
+
+def test_two_alliances_sharing_a_tag_are_still_two_alliances():
+    """`display_name` is the tag alone and a bracket draws from more than one
+    warzone. The bot's own prefilled `KTI v KTI:` line has to be readable:
+    nobody typed it, so nobody can fix it if it is refused."""
+    rows = _bracket()
+    match = entry.week_matches(_state(rows), 1)[0]
+    for row in rows:
+        if row.alliance in (match.a, match.b):
+            row.tag_display = "KTI"
+    state = _state(rows)
+
+    parsed, problems = entry.parse_backfill_results(state, 1, "KTI v KTI: KTI 9-4")
+
+    assert problems == []
+    assert {r.alliance for r in parsed} == {match.a, match.b}
+
+
+async def test_a_refused_text_box_reopens_holding_what_was_typed_not_the_prefill():
+    state = _state(_bracket(week=3))
+    retry = entry._RetryResultsView(state, 3, 1, "typed")
+    interaction = _FakeInteraction(user_id=1)
+
+    await retry._retry(interaction)
+
+    assert interaction.response.modal.box.default == "typed"
+
+
+def test_the_hub_lists_each_duel_day_under_this_week():
+    """19 Sep: the scores for each day belong on the hub, under This week."""
+    state = _state(
+        _bracket(
+            **{
+                OWN_TAG: {
+                    "opponent": _key("A02"),
+                    "day_scores": {1: 1204000000},
+                    "day_outcomes": {1: "W"},
+                },
+                "A02": {"opponent": OWN, "day_scores": {1: 980000000}},
+            }
+        )
+    )
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert f"{state.display_name(OWN)} vs {state.display_name(_key('A02'))}" in field.value
+    for day in range(1, 7):
+        assert f"Day {day} " in field.value
+    assert "1,204,000,000" in field.value and "980,000,000" in field.value
+
+
+def test_the_day_lines_survive_a_clinch_line_naming_days():
+    """The clinch text builds its own list of days, and reusing the name for
+    the day lines replaced them with it (caught rendering the real hub)."""
+    state = _state(
+        _bracket(
+            **{
+                OWN_TAG: {
+                    "opponent": _key("A02"),
+                    "day_scores": {2: 700, 3: 900, 4: 950, 5: 1500},
+                    "day_outcomes": {2: "L", 3: "L", 4: "W", 5: "W"},
+                },
+                "A02": {"opponent": OWN, "day_scores": {2: 800, 3: 950, 4: 900, 5: 1400}},
+            }
+        )
+    )
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert "clinches it" in field.value, "the scenario must reach the clinch line"
+    for day in range(1, 7):
+        assert f"Day {day} " in field.value
+
+
+def test_the_hub_still_lists_the_days_when_no_opponent_can_be_named():
+    rows = _bracket(week=2)  # week 1 was never recorded, so week 2 has no pairing
+    state = _state(rows)
+    assert entry.own_opponent(state, state.week) is None
+
+    field = next(f for f in hub.hub_embed(state).fields if f.name == "This week")
+
+    assert "no opponent recorded" in field.value
+    assert "Day 1 " in field.value
+
+
+async def test_the_hub_score_button_names_the_worked_out_opponent():
+    """The Opponent column is blank until a week is recorded, so the modal used
+    to say Their score for an opponent the bracket already knew."""
+    state = _state(_bracket())
+    assert state.own_match(1) is None
+    opponent = entry.own_opponent(state, 1)
+    view = hub.VSHubView(None, state, 7)
+    interaction = _FakeInteraction(user_id=7)
+
+    await view._log_score(interaction)
+
+    modal = interaction.response.modal
+    assert modal.children[2].text == f"{state.display_name(opponent)}'s score"

@@ -660,7 +660,8 @@ The full per-release table, from 1.0.0, is `docs/RELEASE_HISTORY.md`;
 `CHANGELOG.md` is the authoritative long form. The three most recent
 entries the table carried when it moved (2026-09-10) are kept here so a
 session has the shape of a recent release in front of it. Production is
-at 1.8.11; the 1.8.1 to 1.8.11 entries live in `CHANGELOG.md`.
+at 1.9.1 plus hotfixes (see Status snapshot); the 1.8.1 to 1.9.1 entries
+live in `CHANGELOG.md`.
 
 | Version | What |
 |---|---|
@@ -782,10 +783,36 @@ support, or hosting.
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. **Production is `1.8.11`** (shipped
-  2026-09-09), `dev` carries `1.9.0`. No release branch is currently
-  open. See `CHANGELOG.md` and `docs/RELEASE_HISTORY.md` for per-release
-  detail.
+- 1.0.0 launched 2026-04-28. **Production is `1.9.1`** (released
+  2026-09-19) **plus three hotfixes** merged straight to `main` on 19 to
+  20 Sep by PR: the VS league-rename crash
+  ([#635](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/635)),
+  the VS score-entry rework
+  ([#644](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/644)),
+  and its first-use follow-ups, which also took the word "clinch" out of
+  everything a user reads
+  ([#646](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/646)),
+  plus an empty commit to force a redeploy
+  ([#637](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/637)).
+  `main` still reads `__version__ = "1.9.1"`; `dev` carries `1.9.2` and
+  was synced with `main` on 2026-09-21
+  ([#636](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/pull/636)).
+  No release branch is currently open. See `CHANGELOG.md` and
+  `docs/RELEASE_HISTORY.md` for per-release detail.
+- **The 1.9.2 entry is owed.** The hotfixes were not release PRs, so they
+  carry no `CHANGELOG.md` or `docs/DISCORD_CHANGELOG.md` lines by design.
+  The release branch writes them: Enter daily score, Enter weekly
+  results, the day scores and recorded opponent on the VS hub, the
+  results screen retired, and "wins the week" replacing "clinch".
+- **1.9.0 brought two new features and a retention rule.** Alliance Duel
+  (VS, Premium) and Champion Duel, both labelled new in their hubs.
+  Champion Duel's engine is a private-repo pip pin
+  (`champion-duel-engine`, installed with `CD_ENGINE_TOKEN`), so a build
+  without that variable fails outright
+  ([#629](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/629)),
+  and the Dependabot PRs refreshed since then fail CI at that clone. Removing the
+  bot from a server now holds its data 30 days and a daily sweep purges it
+  ([#543](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/543)).
 - **Map Manager integration is live in code but invisible.** The
   authenticated bot-side HTTP API (`api_server.py`) + the
   `/map_manager` hub shipped in 1.7.0
@@ -815,7 +842,14 @@ support, or hosting.
   the four `@tasks.loop` background loops (`growth_task`,
   `stats_publish_task`, `shiny_tasks_refresh_task`,
   `shiny_tasks_post_task`) are still in `bot.py`, and `on_ready` is
-  still ~241 lines. Remaining audit items are tracked on the board.
+  still ~241 lines. Splitting `setup_cog.py`
+  ([#368](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/368))
+  ran as round 2 of
+  [#611](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/611):
+  nine wizards moved to their own modules, 10,596 → 1,619 lines, shipped
+  in 1.9.0. The follow-on passes (dry-consolidation across the wizard
+  modules, dead-code, `config.init_db`) had not started as of 2026-09-21.
+  Remaining audit items are tracked on the board.
 - ~5,600 tests pass on the default (non-sheets) lane (31 skipped).
 - Repo tooling (shipping with 1.4.6): pre-commit runs stock
   `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
@@ -836,11 +870,10 @@ support, or hosting.
   **no `outage_catchup` adapter by design** (see the design doc's
   reconciliation note). See `transfer*.py` and
   `notes/DESIGN_transfer_management.md`.
-- **Not yet merged:** `growth-418-identity-matching` carries
-  [#418](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/418)
-  (match growth members by Discord ID so a rename keeps their history).
-  It's pushed to its own remote branch, unmerged to `dev` or `main`,
-  and still needs its own trip through the workflow.
+- **Known open bug in the newest surface:** a VS score prompt posted
+  before a league rename is refused as belonging to an old league
+  ([#634](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/634)).
+  It fails safe.
 
 For per-version detail, see `CHANGELOG.md`. New in-flight work goes
 on a descriptive feature branch (which may bundle several related

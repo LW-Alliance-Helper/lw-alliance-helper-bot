@@ -129,9 +129,9 @@ def clinch_embed(state, week: int) -> discord.Embed | None:
     if remaining:
         embed.add_field(name="Left to play", value=", ".join(remaining), inline=False)
     if clinch.clinching_days:
-        days = ", ".join(f"day {d}" for d in clinch.clinching_days)
+        days = " or ".join(f"day {d}" for d in clinch.clinching_days)
         embed.add_field(
-            name="What settles it", value=f"Winning {days} clinches the week.", inline=False
+            name="What settles it", value=f"Winning {days} wins the week.", inline=False
         )
     return embed
 

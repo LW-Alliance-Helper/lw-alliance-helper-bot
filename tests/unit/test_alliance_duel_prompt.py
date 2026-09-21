@@ -188,7 +188,7 @@ def test_the_view_is_persistent_and_holds_no_state_beyond_its_custom_id():
 
 
 def test_the_button_names_the_day_it_is_asking_about():
-    """ "Log today's score" would be wrong here: by the time an officer reads
+    """ "Enter daily score" would be wrong here: by the time an officer reads
     the prompt, the day it asks about is yesterday."""
     view = ad_views.ScorePromptView(GUILD_ID, 1, 3)
     label = view.children[0].label

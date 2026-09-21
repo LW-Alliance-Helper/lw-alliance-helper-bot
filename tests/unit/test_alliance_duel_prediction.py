@@ -591,3 +591,21 @@ def test_the_estimator_does_not_consult_the_week():
     )
     us, them = ad.AllianceKey.of("US", "1234"), ad.AllianceKey.of("EM", "1234")
     assert {estimate(us, them, week) for week in range(1, ad.LEAGUE_WEEKS + 1)} == {us}
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        ad.CLINCH_BEFORE_ENEMY_BUSTER,
+        ad.CLINCH_CONCEDED,
+        ad.CLINCH_DAY_SIX_DECIDES,
+        ad.CLINCH_OPEN,
+    ],
+)
+def test_no_verdict_line_uses_the_word_clinch(state, monkeypatch):
+    """19 Sep, Kevin: "I don't like the word clinch/es." It is jargon, so the
+    verdict says win the week."""
+    monkeypatch.setattr(ad, "clinch_outlook", lambda low, high: state)
+    week = ad.project_week(_us(power=POWER_SLIGHT), _them(), today=TODAY)
+
+    assert "clinch" not in week.verdict_line.lower()

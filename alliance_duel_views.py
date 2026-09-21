@@ -215,7 +215,7 @@ class ScorePromptView(discord.ui.View):
             return
 
         await interaction.response.send_modal(
-            ad_entry.ScoreModal(state, self.week, self.day, state.own_match(self.week))
+            ad_entry.ScoreModal(state, self.week, self.day, ad_entry.own_opponent(state, self.week))
         )
 
     def _stale_league(self, interaction: discord.Interaction, state: ad_hub.HubState) -> str | None:

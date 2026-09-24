@@ -6606,6 +6606,76 @@ def mark_vs_event_posted(guild_id: int, kind: str, event_key: str) -> None:
         conn.commit()
 
 
+def vs_league_key(season: str, tier: str, group: str) -> str:
+    """The `season|tier|group` string every `vs_event_posts.event_key` is
+    prefixed with (`alliance_duel_events`'s clinch/reveal keys append `|week`
+    or `|week|day`; the recap key is this alone). The one shared builder
+    (#634) so `rename_vs_league` rewrites exactly the prefix
+    `alliance_duel_events._league_key` built, rather than each guessing
+    the other's format independently."""
+    return f"{season}|{tier}|{group}"
+
+
+def rename_vs_league(guild_id: int, old, new) -> bool:
+    """Carry a guild's VS bookkeeping forward when a league is renamed, so a
+    prompt already posted this week isn't refused as belonging to an old
+    league, and a clinch or season-recap doesn't repost under the new
+    identity (#634).
+
+    `old`/`new` are `alliance_duel.LeagueKey`s (or anything with the same
+    three string attributes), taken apart here rather than imported --
+    the same reason `record_vs_score_prompt_post` does, so config stays
+    importable without the feature module.
+
+    Refuses (returns False, writes nothing) if `new` already has rows in
+    either table for this guild, rather than silently pooling two leagues'
+    records together. Call after the sheet write succeeds; a caller that
+    gets False here should log it and leave the sheet rename as the
+    successful action -- not undo it, the same way `_mirror_centrally`
+    logs its own write failures rather than raising.
+    """
+    old_season, old_tier, old_group = old.season, old.tier, old.group
+    new_season, new_tier, new_group = new.season, new.tier, new.group
+    new_prefix = vs_league_key(new_season, new_tier, new_group)
+
+    with _get_conn() as conn:
+        collision = conn.execute(
+            "SELECT 1 FROM vs_score_prompt_posts "
+            "WHERE guild_id = ? AND league_season = ? AND league_tier = ? AND league_group = ? "
+            "LIMIT 1",
+            (guild_id, new_season, new_tier, new_group),
+        ).fetchone()
+        if collision is None:
+            collision = conn.execute(
+                "SELECT 1 FROM vs_event_posts "
+                "WHERE guild_id = ? AND (event_key = ? OR event_key LIKE ?) LIMIT 1",
+                (guild_id, new_prefix, f"{new_prefix}|%"),
+            ).fetchone()
+        if collision is not None:
+            return False
+
+        conn.execute(
+            "UPDATE vs_score_prompt_posts SET league_season = ?, league_tier = ?, league_group = ? "
+            "WHERE guild_id = ? AND league_season = ? AND league_tier = ? AND league_group = ?",
+            (new_season, new_tier, new_group, guild_id, old_season, old_tier, old_group),
+        )
+
+        old_prefix = vs_league_key(old_season, old_tier, old_group)
+        rows = conn.execute(
+            "SELECT rowid, event_key FROM vs_event_posts "
+            "WHERE guild_id = ? AND (event_key = ? OR event_key LIKE ?)",
+            (guild_id, old_prefix, f"{old_prefix}|%"),
+        ).fetchall()
+        for row in rows:
+            suffix = row["event_key"][len(old_prefix) :]
+            conn.execute(
+                "UPDATE vs_event_posts SET event_key = ? WHERE guild_id = ? AND rowid = ?",
+                (new_prefix + suffix, guild_id, row["rowid"]),
+            )
+        conn.commit()
+    return True
+
+
 def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:
     """Prompts recent enough to still be worth re-registering on startup.
 

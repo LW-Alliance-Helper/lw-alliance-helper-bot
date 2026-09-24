@@ -467,6 +467,38 @@ def test_a_prompt_the_bot_has_no_record_of_is_allowed_through():
     assert _stale_check(None, _state()) is None
 
 
+def test_a_rename_carries_a_still_live_prompt_through_the_stale_check(temp_db):
+    """#634 end to end: `rename_league` renamed this league mid-week, after
+    today's prompt already posted. Before the bookkeeping carry-over, the
+    stored post row still named the old league, so this exact click would
+    have been refused as belonging to "a newer one" even though the prompt
+    is still perfectly live -- it just moved identity along with the sheet.
+    Uses the real config tables (not the mocked `_stale_check` helper)
+    since the row the rename touches is exactly what's under test."""
+    import config
+
+    config.init_db()
+    config.record_vs_score_prompt_post(
+        GUILD_ID,
+        channel_id=1,
+        message_id=90210,
+        league=LEAGUE,
+        week=1,
+        duel_day=2,
+        server_date=MONDAY.isoformat(),
+    )
+
+    assert config.rename_vs_league(GUILD_ID, LEAGUE, NEXT_LEAGUE) is True
+
+    rows = [_row(OWN_TAG, ranking=1, league=NEXT_LEAGUE, week_date=MONDAY)]
+    state = _state(rows)
+    view = ad_views.ScorePromptView(GUILD_ID, 1, 2)
+    interaction = MagicMock()
+    interaction.message.id = 90210
+
+    assert view._stale_league(interaction, state) is None
+
+
 # ── Outage catch-up ───────────────────────────────────────────────────────────
 
 

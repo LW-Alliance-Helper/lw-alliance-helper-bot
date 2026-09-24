@@ -25,6 +25,7 @@ import discord
 
 import train_rotation as tr
 import train_rotation_ui as ui
+from time_helpers import server_today
 from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
@@ -265,7 +266,7 @@ async def _render_prompt_log(bot, interaction: discord.Interaction):
     window = (
         await premium.get_limit("train_log_days", guild_id, interaction=interaction, bot=bot) or 30
     )
-    today = date_cls.today()
+    today = server_today()
     cutoff = today - timedelta(days=window)
     recent = []
     for date_str, entry in schedule.items():

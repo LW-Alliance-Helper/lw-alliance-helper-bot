@@ -1001,7 +1001,7 @@ class TestStalePowerDmNudge:
         import config
 
         inter = self._fake_interaction()
-        old = _dt.date.today() - _dt.timedelta(days=30)
+        old = _dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=30)
         with self._patch_roster(
             voter_power=412_000_000,
             voter_last_updated=old,
@@ -1031,7 +1031,7 @@ class TestStalePowerDmNudge:
         import datetime as _dt
 
         inter = self._fake_interaction()
-        fresh = _dt.date.today() - _dt.timedelta(days=2)
+        fresh = _dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=2)
         with self._patch_roster(
             voter_power=412_000_000,
             voter_last_updated=fresh,
@@ -1052,7 +1052,7 @@ class TestStalePowerDmNudge:
         import datetime as _dt
 
         inter = self._fake_interaction()
-        edge = _dt.date.today() - _dt.timedelta(days=7)
+        edge = _dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=7)
         with self._patch_roster(
             voter_power=412_000_000,
             voter_last_updated=edge,
@@ -1104,7 +1104,7 @@ class TestStalePowerDmNudge:
             power_refresh_stale_days=0,  # disabled
         )
         inter = self._fake_interaction()
-        old = _dt.date.today() - _dt.timedelta(days=30)
+        old = _dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=30)
         with self._patch_roster(
             voter_power=412_000_000,
             voter_last_updated=old,
@@ -1126,7 +1126,7 @@ class TestStalePowerDmNudge:
         import datetime as _dt
 
         inter = self._fake_interaction()
-        old = _dt.date.today() - _dt.timedelta(days=30)
+        old = _dt.datetime.now(_dt.timezone.utc).date() - _dt.timedelta(days=30)
         with self._patch_roster(
             voter_power=None,
             voter_last_updated=old,

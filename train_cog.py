@@ -21,6 +21,7 @@ import config_health
 from config import get_config
 from messages import SETUP_POINTER_FOOTER
 from setup_hub import HUB_BTN_BIRTHDAYS, HUB_BTN_TRAIN
+from time_helpers import local_today
 from train import (
     ET,
     active_wizards,
@@ -382,7 +383,11 @@ class TrainCog(commands.Cog):
             )
             return
 
-        today = date.today()
+        # A birthday is a human-calendar date, not a game day (#607) — the
+        # guild's own local date, not the server (UTC-2) one.
+        cfg = get_config(guild_id) if guild_id else None
+        tz = ZoneInfo(cfg.timezone) if cfg and cfg.timezone else None
+        today = local_today(tz)
         upcoming = []
         for m in members:
             try:

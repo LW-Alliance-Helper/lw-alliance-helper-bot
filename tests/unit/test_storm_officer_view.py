@@ -1,12 +1,10 @@
 """
 Tests for storm_officer_view.py (#125).
 
-Pure-function helpers (bucket map, embed rendering, next-event-date
-fallback) are tested here. The slash command + modal are integration
-territory.
+Pure-function helpers (bucket map, embed rendering) are tested here. The
+slash command + modal are integration territory.
 """
 
-import datetime as _dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import storm_officer_view as sov
@@ -48,19 +46,6 @@ class _FakeGuild:
             if m.id == member_id:
                 return m
         return None
-
-
-class TestNextEventDate:
-    def test_returns_next_sunday(self):
-        # Wednesday — next Sunday is 4 days out.
-        wed = _dt.date(2026, 5, 13)
-        next_date = sov._next_event_date(wed)
-        assert next_date == "2026-05-17"
-
-    def test_when_today_is_sunday_returns_next_sunday(self):
-        # The fallback skips "today" and goes to next week's Sunday.
-        sun = _dt.date(2026, 5, 17)
-        assert sov._next_event_date(sun) == "2026-05-24"
 
 
 class TestDiscordMemberPool:

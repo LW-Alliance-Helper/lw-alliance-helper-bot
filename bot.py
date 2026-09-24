@@ -1048,13 +1048,21 @@ async def guild_removal_sweep_task():
     day's granularity on a thirty-day window costs nothing.
     """
     from config import sweep_guild_removals
+    from bot_admin import live_guild_ids
 
     try:
-        # The live membership set, not the hold table alone. `on_guild_join`
-        # is not dispatched for a server re-added while the bot was
-        # disconnected -- that arrives in the READY burst -- so a stale hold
-        # would otherwise delete a live server's data.
-        installed = {g.id for g in bot.guilds}
+        # The live membership set, not the hold table alone, and not
+        # `bot.guilds` alone either (#649): discord.py's 2-second
+        # `guild_ready_timeout` means that cache can still be partial this
+        # soon after startup, and `on_guild_join` is not dispatched for a
+        # server re-added while the bot was disconnected -- that arrives in
+        # the READY burst -- so a stale or partial read would otherwise
+        # delete a live server's data. None means "not safe to answer yet";
+        # skip this tick rather than guess, same as the backfill command.
+        installed = await live_guild_ids()
+        if installed is None:
+            print("[REMOVAL] Not fully connected yet; skipping this sweep")
+            return
         # SQLite writes off the event loop, the pattern `growth_task` adopted
         # under #366 for exactly this shape of work.
         result = await asyncio.to_thread(sweep_guild_removals, apply=True, installed=installed)

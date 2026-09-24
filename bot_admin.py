@@ -644,6 +644,140 @@ async def admin_forget_user_slash(interaction: discord.Interaction, user_id: str
     )
 
 
+# ── Backfilling servers that left before the hold existed (#649) ────────────
+
+
+async def live_guild_ids() -> "set[int] | None":
+    """The bot's actual guild membership right now, or None if it isn't
+    safe to answer yet.
+
+    `bot.guilds` alone can be partial: discord.py's `guild_ready_timeout`
+    is 2 seconds, so a guild list read soon after startup can be missing
+    servers the gateway just hasn't finished delivering. A live
+    `fetch_guilds()` REST call closes that gap. `bot.is_ready()` gates the
+    whole thing so a caller mid-connect gets None -- "don't know yet" --
+    rather than a confident wrong answer; a live server mistaken for a
+    departed one is the one outcome both the backfill command and the
+    daily removal sweep must never produce.
+    """
+    if not bot.is_ready():
+        return None
+    ids = {g.id for g in bot.guilds}
+    async for g in bot.fetch_guilds(limit=None):
+        ids.add(g.id)
+    return ids
+
+
+class _BackfillConfirm(OwnedView):
+    """Two-button confirm for /admin backfill_removed_guilds. Starts a hold
+    for each candidate; deletes nothing itself -- the daily sweep does
+    that once the hold ends, same as any other removal."""
+
+    def __init__(self, candidates: dict, owner_id: int):
+        super().__init__(timeout=120)
+        self._candidates = candidates
+        self.owner_id = owner_id
+
+    @discord.ui.button(label="🗓️ Start 30-day holds", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+
+        from config import record_guild_removal  # noqa: PLC0415
+
+        for gid in self._candidates:
+            record_guild_removal(gid)
+
+        await inter.edit_original_response(
+            content=(
+                f"🗓️ Started a 30-day hold for **{len(self._candidates)}** server(s). "
+                "The daily removal sweep purges each one once its hold ends -- nothing "
+                "was deleted just now."
+            ),
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content="❌ Canceled. No holds started.", embed=None, view=self
+        )
+        self.stop()
+
+
+def _backfill_preview_embed(candidates: dict) -> discord.Embed:
+    lines = []
+    for gid, last_seen in sorted(candidates.items()):
+        seen = f"last seen {last_seen}" if last_seen else "no install record (pre-1.9.0 departure)"
+        lines.append(f"• `{gid}` — {seen}")
+    shown = lines[:40]
+    if len(lines) > 40:
+        shown.append(f"…and {len(lines) - 40} more.")
+    embed = discord.Embed(
+        title=f"🗓️ {len(candidates)} server(s) with stored data and no removal hold",
+        description="\n".join(shown),
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(
+        text=(
+            "These left before 1.9.0's 30-day hold existed, so their data was never "
+            "scheduled for deletion. Confirming starts the same hold a real removal "
+            "would -- nothing is deleted today."
+        )
+    )
+    return embed
+
+
+@admin_group.command(
+    name="backfill_removed_guilds",
+    description=(
+        "(Bot owner only) Preview and start 30-day holds for servers that left "
+        "before 1.9.0's removal hold existed."
+    ),
+)
+async def admin_backfill_removed_guilds_slash(interaction: discord.Interaction):
+    """Servers removed before 1.9.0 never got a hold (`on_guild_remove` just
+    deleted the install-metadata row), so `privacy.html`'s 30-day promise has
+    never been true for them. This finds them by looking for stored data
+    rather than a removal record that was never written, previews the list,
+    and on confirm starts a hold -- dated from now, since nothing recorded
+    when they actually left."""
+    if not await _require_bot_owner(interaction):
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    live = await live_guild_ids()
+    if live is None:
+        await interaction.followup.send(
+            "⚠️ Not fully connected to Discord yet — try again in a moment. "
+            "This command refuses to guess which servers are actually live.",
+            ephemeral=True,
+        )
+        return
+
+    from config import backfill_candidates  # noqa: PLC0415
+
+    candidates = await asyncio.to_thread(backfill_candidates, live=live)
+
+    if not candidates:
+        await interaction.followup.send(
+            "✅ No servers found with stored data that the bot isn't in and doesn't already hold.",
+            ephemeral=True,
+        )
+        return
+
+    view = _BackfillConfirm(candidates, owner_id=interaction.user.id)
+    await interaction.followup.send(
+        embed=_backfill_preview_embed(candidates), view=view, ephemeral=True
+    )
+
+
 @admin_group.command(
     name="shiny_servers",
     description="(Bot owner only) Dump stored shiny_task_servers rows for a server-number range.",

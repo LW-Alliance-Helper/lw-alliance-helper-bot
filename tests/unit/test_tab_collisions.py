@@ -121,6 +121,54 @@ class TestTabsInUse:
         assert "Canyon Storm" in config.tabs_in_use(TEST_GUILD_ID)["cs assignments"]
 
 
+class TestVsTabClaim:
+    """#503/#441: VS was blind to every other feature's tab, and vice versa
+    -- `guild_vs_config` had no `_TAB_OWNERS` entry at all. VS is also the
+    one exception to "claim regardless of on/off": a disabled tracker's old
+    tab name must not go on blocking someone else from picking it up."""
+
+    def test_an_enabled_vs_tracker_claims_its_tab(self, seeded_db):
+        import config
+
+        config.save_vs_config(TEST_GUILD_ID, enabled=1, tab_name="Alliance Duel (VS)")
+
+        assert (
+            config.tabs_in_use(TEST_GUILD_ID)["alliance duel (vs)"]
+            == "your Alliance Duel (VS) tracker"
+        )
+
+    def test_a_disabled_vs_tracker_does_not_claim_its_tab(self, seeded_db):
+        import config
+
+        config.save_vs_config(TEST_GUILD_ID, enabled=0, tab_name="Alliance Duel (VS)")
+
+        assert "alliance duel (vs)" not in config.tabs_in_use(TEST_GUILD_ID)
+
+    def test_vs_is_excluded_from_its_own_check(self, seeded_db):
+        import config
+
+        config.save_vs_config(TEST_GUILD_ID, enabled=1, tab_name="Alliance Duel (VS)")
+
+        claimed = config.tabs_in_use(TEST_GUILD_ID, exclude_field="vs_tab_name")
+        assert "alliance duel (vs)" not in claimed
+
+    def test_vs_sees_other_features_own_tabs(self, seeded_db):
+        import config
+
+        with config._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO guild_birthday_config (guild_id, tab_name) VALUES (?, ?)",
+                (TEST_GUILD_ID, "Birthdays"),
+            )
+            conn.commit()
+
+        from setup_cog import tab_claim_warning
+
+        message = tab_claim_warning(TEST_GUILD_ID, "Birthdays", exclude_field="vs_tab_name")
+        assert message is not None
+        assert "Birthdays" in message
+
+
 class TestWarnIfTabClaimed:
     @pytest.mark.asyncio
     async def test_warns_and_names_the_other_feature(self):

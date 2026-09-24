@@ -14,6 +14,11 @@ table; see `config.py`):
     that user still has an active Discord subscription. The cached result
     (5-minute TTL, keyed by guild_id) absorbs the cost of the per-user
     `bot.entitlements()` lookup.
+  - The pin outlives a lapsed subscription (resubscribing resumes it in the
+    same guild) but not the guild itself being gone thirty days: `config.
+    sweep_guild_removals` releases it, guild_id only, as part of that same
+    purge (#573). The subscription is untouched either way -- releasing
+    just un-pins it, `/premium assign` re-pins.
 
 For development and bypass scenarios (e.g. the bot owner's home alliance),
 two env-var overrides are available and short-circuit before the

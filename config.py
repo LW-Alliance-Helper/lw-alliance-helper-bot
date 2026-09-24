@@ -564,7 +564,10 @@ def init_db():
         # (MEE6 pattern). One row per subscriber: PRIMARY KEY on user_id
         # enforces one-assignment-per-user, UNIQUE on guild_id enforces
         # one-subscriber-per-guild. Rows persist across subscription
-        # lapses so resubscribing auto-resumes Premium in the same guild.
+        # lapses so resubscribing auto-resumes Premium in the same guild --
+        # the one exception is the guild itself being gone thirty days
+        # (#573): the row is released, not the subscription, in the same
+        # sweep that purges everything else about that server.
         # See premium.py and issue #41 for the full model.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_assignments (
@@ -6885,17 +6888,21 @@ def guild_removals_due(
 # events, its sign-ups -- and none of it means anything once the bot is gone
 # from it. Discord's Developer Policy asks for exactly that on `GUILD_DELETE`.
 #
-# Two deliberate exceptions:
+# One deliberate exception: Champion Duel's game records are scrubbed rather
+# than deleted, in `champion_duel_db.purge_guild_data`. They are readings of
+# a tournament other alliances also contributed to, and only the attribution
+# is this server's.
 #
-# - `premium_assignments` is **not touched**. It is keyed on the subscriber,
-#   not the server: the row records that a paying person pinned their one
-#   licence here. Deleting it would take something from someone who did
-#   nothing, and `/premium assign` already copes with a guild it cannot see
-#   (`donate._resolve_guild_name`).
-# - Champion Duel's game records are scrubbed rather than deleted, in
-#   `champion_duel_db.purge_guild_data`. They are readings of a tournament
-#   other alliances also contributed to, and only the attribution is this
-#   server's.
+# `premium_assignments` (#573) is the one row here keyed on a person rather
+# than the server, and it used to be excluded entirely for exactly that
+# reason -- deleting it at *removal* would cost a subscriber who did nothing
+# the moment an admin mis-clicked. It is included now because this purge
+# only ever runs at the end of the thirty-day hold (`sweep_guild_removals`,
+# gated by `guild_removals_due`), never at removal itself, so the reasoning
+# that protected it doesn't apply here: nothing is lost until the server has
+# genuinely been gone a month. Matched by `guild_id` alone, same as every
+# other row below -- the subscription itself is untouched, only which server
+# it points at.
 
 _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     # Configuration, one table per feature.
@@ -6932,6 +6939,9 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("scheduler_pending_warnings", "guild_id = :gid"),
     ("vs_event_posts", "guild_id = :gid"),
     ("vs_score_prompt_posts", "guild_id = :gid"),
+    # A subscriber's licence pointed here, released only because this row
+    # never runs before the thirty-day hold ends -- see the comment above.
+    ("premium_assignments", "guild_id = :gid"),
 )
 
 
@@ -6943,14 +6953,29 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
     removal nobody can trust, and the preview has to run the same predicates
     the real thing does.
 
-    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool}`.
-    `scrubbed` is always empty here and kept only so the two purges return the
-    same shape; the Champion Duel side is where a guild removal scrubs.
+    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool,
+    "freed_premium_user_id": int | None}`. `scrubbed` is always empty here
+    and kept only so the two purges return the same shape; the Champion
+    Duel side is where a guild removal scrubs. `freed_premium_user_id`
+    (#573) is captured before the generic loop below deletes the row, since
+    the row itself is gone by the time this function returns and a caller
+    that wants to tell the freed subscriber has no other way to find them.
     """
     gid = int(guild_id)
-    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    out: dict = {
+        "deleted": {},
+        "scrubbed": {},
+        "applied": bool(apply),
+        "freed_premium_user_id": None,
+    }
     params = {"gid": gid}
     with _get_conn() as conn:
+        held_by = conn.execute(
+            "SELECT user_id FROM premium_assignments WHERE guild_id = ?", (gid,)
+        ).fetchone()
+        if held_by is not None:
+            out["freed_premium_user_id"] = held_by["user_id"]
+
         for table, where in _GUILD_REMOVAL_DELETES:
             if apply:
                 n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
@@ -6998,6 +7023,11 @@ def sweep_guild_removals(
         "alliance_duel": {"deleted": {}, "scrubbed": {}},
         "rejoined": [],
         "failed": [],
+        # #573: guild_id -> freed subscriber user_id, for guilds where the
+        # config purge actually ran and a licence was pinned there. The
+        # caller (bot.py) DMs each one and invalidates their premium cache
+        # -- config.py has no Discord client and no premium cache to touch.
+        "freed_premium": {},
         "applied": bool(apply),
     }
 
@@ -7020,7 +7050,8 @@ def sweep_guild_removals(
         # and because due guilds come oldest first, one deterministic failure
         # would block every other server every day.
         try:
-            _fold(merged["config"], purge_guild_data(gid, apply=apply))
+            config_result = purge_guild_data(gid, apply=apply)
+            _fold(merged["config"], config_result)
             import alliance_duel_db
             import champion_duel_db
 
@@ -7037,6 +7068,9 @@ def sweep_guild_removals(
         # Counted only once it actually happened: reporting a purge that threw
         # would say "purged 1 server" while nothing had moved.
         merged["guilds"].append(gid)
+        freed_user = config_result.get("freed_premium_user_id")
+        if apply and freed_user is not None:
+            merged["freed_premium"][gid] = freed_user
         if apply:
             clear_guild_removal(gid)
     return merged

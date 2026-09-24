@@ -1069,6 +1069,24 @@ async def guild_removal_sweep_task():
             print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")
         if result["failed"]:
             print(f"[REMOVAL] Purge failed, will retry tomorrow: {result['failed']}")
+
+        # #573: a purged guild's Premium pin (if any) is already gone from
+        # the DB by this point -- config.py has no premium cache and no
+        # Discord client to DM with, so both live here instead.
+        for gid, freed_user_id in result.get("freed_premium", {}).items():
+            import premium
+
+            premium._cache_invalidate_guild(gid)  # noqa: SLF001 - config never touches this cache
+            print(f"[REMOVAL] Released Premium pin for guild={gid} (was user={freed_user_id})")
+            try:
+                if await premium.user_has_active_subscription(freed_user_id, bot=bot):
+                    donate_cog = bot.get_cog("DonateCog")
+                    if donate_cog is not None:
+                        await donate_cog.dm_premium_pin_released(freed_user_id, gid)
+            except Exception as e:
+                # A missed DM is a support ticket, not a reason to fail the
+                # sweep -- the pin is already released either way.
+                print(f"[REMOVAL] Could not DM user={freed_user_id} about released pin: {e}")
     except Exception as e:
         # Never let the loop die. A purge that fails today is retried
         # tomorrow, because the hold row is only cleared on success.

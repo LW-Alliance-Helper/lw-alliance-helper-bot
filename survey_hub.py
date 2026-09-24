@@ -31,6 +31,7 @@ import logging
 from typing import Optional
 
 import discord
+import wizard_registry
 from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,9 @@ class _SurveyHubView(OwnedView):
         # it a click in a channel the bot can't post in just hangs.
         if not await _check_wizard_can_run(inter, "survey"):
             return
-        await run_create_new_extra_survey(inter, self.bot)
+        await wizard_registry.guard_wizard_launch(
+            run_create_new_extra_survey(inter, self.bot), inter
+        )
 
     async def _on_edit(self, inter: discord.Interaction):
         # One survey means nothing to pick — go straight into the wizard.
@@ -223,15 +226,17 @@ class _SurveyHubView(OwnedView):
         if not await _check_wizard_can_run(inter, "survey"):
             return
         if self.has_extras:
-            await run_pick_survey_to_edit(inter, self.bot)
+            await wizard_registry.guard_wizard_launch(
+                run_pick_survey_to_edit(inter, self.bot), inter
+            )
         else:
-            await run_survey_setup(inter, self.bot)
+            await wizard_registry.guard_wizard_launch(run_survey_setup(inter, self.bot), inter)
 
     async def _on_remove(self, inter: discord.Interaction):
         from survey_setup import run_remove_extra_survey
 
         await self._close(inter)
-        await run_remove_extra_survey(inter, self.bot)
+        await wizard_registry.guard_wizard_launch(run_remove_extra_survey(inter, self.bot), inter)
 
     # ── Row 1 dispatchers ────────────────────────────────────────────────────
 

@@ -220,7 +220,7 @@ async def _launch_transfer_setup(interaction: discord.Interaction, bot) -> None:
         "⚙️ Starting Transfer Management setup. Check the channel for prompts.",
         ephemeral=True,
     )
-    await run_transfer_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_transfer_setup(interaction, bot), interaction)
 
 
 # ── Sheet entry (a single Sheet ID + tab) ─────────────────────────────────────

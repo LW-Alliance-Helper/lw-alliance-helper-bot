@@ -920,10 +920,21 @@ async def on_app_command_error(
     cmd_name = interaction.command.name if interaction.command else "?"
     print(f"[SLASH] Unhandled error in /{cmd_name}: {actual!r}")
 
-    # Capture to Sentry and grab the event id so the user-facing message
-    # can include a reference for ticket reports. capture_exception()
-    # returns None if Sentry isn't initialised; the formatter handles that.
-    event_id = sentry_sdk.capture_exception(actual)
+    # Missing access (deleted channel, a permission change) is the
+    # alliance's own doing, not a bug — same principle as config_health's
+    # sheet/channel notices and the wizard launch guard (#582). Log it
+    # quietly instead of paging Sentry; the formatter handles event_id=None.
+    missing_access = isinstance(
+        actual, (discord.Forbidden, discord.NotFound)
+    ) and wizard_registry.is_missing_access(actual)
+    if missing_access:
+        print(f"[SLASH] Missing access in /{cmd_name}, not paging Sentry: {actual!r}")
+        event_id = None
+    else:
+        # Capture to Sentry and grab the event id so the user-facing message
+        # can include a reference for ticket reports. capture_exception()
+        # returns None if Sentry isn't initialised; the formatter handles that.
+        event_id = sentry_sdk.capture_exception(actual)
 
     msg = _format_command_error(actual, event_id)
     try:
@@ -1590,7 +1601,7 @@ async def growth_slash(interaction: discord.Interaction):
                 ephemeral=True,
             )
             self.stop()
-            await run_growth_setup(inter, bot)
+            await wizard_registry.guard_wizard_launch(run_growth_setup(inter, bot), inter)
 
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 

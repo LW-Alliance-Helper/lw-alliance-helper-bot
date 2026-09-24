@@ -1294,7 +1294,7 @@ class VSHubView(OwnedView):
     async def _setup(self, interaction: discord.Interaction):
         from alliance_duel_wizard import run_vs_setup
 
-        await run_vs_setup(interaction, self.bot)
+        await wizard_registry.guard_wizard_launch(run_vs_setup(interaction, self.bot), interaction)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

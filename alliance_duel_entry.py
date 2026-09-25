@@ -208,6 +208,17 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     if old_league is None:
         return False, "There's no league running right now to rename."
 
+    # Refuse rather than pool two leagues' rows together under one identity
+    # (#634) -- checked against the rows actually on the sheet, not just
+    # this guild's own bookkeeping, since that's the identity that matters.
+    if any(row.league == new_league for row in state.rows if row.league != old_league):
+        return (
+            False,
+            f"**{new_league.season} · {new_league.tier} {new_league.group}** is already in "
+            "use in your spreadsheet. Pick a different season, tier, or group for this or "
+            "edit the data in your spreadsheet.",
+        )
+
     tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"
 
     def _write() -> int:
@@ -254,9 +265,42 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     if state.live is not None and state.live.league == old_league:
         state.live = dataclasses.replace(state.live, league=new_league)
 
+    await _carry_bookkeeping_forward(state, old_league, new_league)
+
     # No row count here -- that's a fact about their sheet, not about what
     # this action did. Kevin, 19 Sep.
     return True, f"Renamed to **{new_league.season} · {new_league.tier} {new_league.group}**."
+
+
+async def _carry_bookkeeping_forward(
+    state, old_league: ad.LeagueKey, new_league: ad.LeagueKey
+) -> None:
+    """Carry the "already prompted" / "already announced" record forward
+    after a rename (#634), so a score prompt posted earlier this week isn't
+    refused as belonging to an old league, and a clinch or season recap
+    doesn't repost under the new identity.
+
+    Best-effort, same as `_mirror_centrally`: the sheet rename already
+    succeeded and the officer has already been told so. A refusal (the new
+    identity already has rows of its own -- the sheet-level check above
+    should have already caught this, but a stale DB row from outside the
+    current sheet data is not impossible) or a DB error just means the old
+    bookkeeping stays under the old identity; it is not worth interrupting
+    the rename over.
+    """
+    try:
+        carried = await asyncio.to_thread(
+            config.rename_vs_league, state.guild_id, old_league, new_league
+        )
+        if not carried:
+            logger.warning(
+                "[VS] rename bookkeeping skipped for guild=%s: %s already has posts/prompts "
+                "recorded",
+                state.guild_id,
+                new_league,
+            )
+    except Exception as e:  # noqa: BLE001 - best-effort, sheet rename already succeeded
+        logger.warning("[VS] rename bookkeeping failed for guild=%s: %s", state.guild_id, e)
 
 
 def _row_for_write(state, alliance: ad.AllianceKey, week: int) -> ad.AllianceWeek:

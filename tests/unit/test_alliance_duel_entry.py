@@ -1733,6 +1733,119 @@ async def test_rename_league_with_nothing_loaded_is_refused():
     assert ok is False and "no league" in message.lower()
 
 
+@pytest.mark.asyncio
+async def test_rename_league_refuses_a_new_identity_already_on_the_sheet(_rename_sheet):
+    """#634: renaming into a league that already has other rows on this
+    sheet must be refused outright, rather than pooling two leagues'
+    weeks together under one identity."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    new = ad.LeagueKey("S36", "Diamond", "12-2")
+    row_a = _row(OWN_TAG, week=1)
+    row_a.league = old
+    row_b = _row("kTZ", week=1)
+    row_b.league = new
+    state = _state([row_a, row_b])
+    state.league = old
+    fake = _rename_sheet(state.rows)
+
+    ok, message = await entry.rename_league(state, new)
+
+    assert ok is False
+    assert "already in use" in message.lower()
+    assert fake.batch_calls == []  # never reached the sheet write
+    assert state.league == old
+
+
+@pytest.mark.asyncio
+async def test_rename_league_carries_bookkeeping_forward_on_success(_rename_sheet, monkeypatch):
+    """#634: after the sheet write succeeds, the guild's own
+    already-prompted / already-announced record moves to the new identity
+    too, via `config.rename_vs_league`."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    _rename_sheet(state.rows)
+
+    calls = []
+    monkeypatch.setattr(
+        entry.config, "rename_vs_league", lambda gid, o, n: calls.append((gid, o, n)) or True
+    )
+
+    ok, _ = await entry.rename_league(state, new)
+
+    assert ok is True
+    assert calls == [(state.guild_id, old, new)]
+
+
+@pytest.mark.asyncio
+async def test_rename_league_skips_bookkeeping_on_sheet_failure(_rename_sheet, monkeypatch):
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    fake = _rename_sheet(state.rows)
+    fake.batch_update = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sheet unreachable"))
+
+    called = []
+    monkeypatch.setattr(entry.config, "rename_vs_league", lambda *a: called.append(a))
+
+    ok, message = await entry.rename_league(state, new)
+
+    assert ok is False
+    assert called == []
+    assert state.league == old
+
+
+@pytest.mark.asyncio
+async def test_rename_league_skips_bookkeeping_when_nothing_matched(_rename_sheet, monkeypatch):
+    """count == 0: the old identity had no rows on the sheet at all (already
+    stale). Nothing was renamed, so there is nothing to carry forward."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    unrelated = ad.LeagueKey("S99", "Bronze", "1")
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+    row = _row(OWN_TAG, week=1)
+    row.league = unrelated
+    state = _state([row])
+    state.league = old  # stale: no row actually carries `old` any more
+    _rename_sheet(state.rows)
+
+    called = []
+    monkeypatch.setattr(entry.config, "rename_vs_league", lambda *a: called.append(a))
+
+    ok, message = await entry.rename_league(state, new)
+
+    assert ok is False
+    assert "couldn't find anything" in message.lower()
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_rename_league_bookkeeping_error_does_not_fail_the_rename(_rename_sheet, monkeypatch):
+    """#634: the sheet rename already succeeded and the officer has already
+    been told so by the time the bookkeeping carry-over runs -- a DB error
+    there is logged, not surfaced as a failed rename (same principle as
+    `_mirror_centrally`)."""
+    old = ad.LeagueKey("S36", "Diamon", "12-1")
+    new = ad.LeagueKey("S36", "Diamond", "12-1")
+    state = _state([_row(OWN_TAG, week=1)])
+    state.rows[0].league = old
+    state.league = old
+    _rename_sheet(state.rows)
+
+    def _boom(*a):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(entry.config, "rename_vs_league", _boom)
+
+    ok, message = await entry.rename_league(state, new)
+
+    assert ok is True
+    assert state.league == new
+
+
 def test_edit_league_modal_defaults_to_the_current_tier():
     state = _state(_bracket())
     state.league = ad.LeagueKey("S36", "Diamon", "12-1")

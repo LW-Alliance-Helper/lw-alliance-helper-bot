@@ -46,7 +46,10 @@ KIND_RECAP = "recap"  # league
 
 
 def _league_key(league: ad.LeagueKey | None) -> str:
-    return f"{league.season}|{league.tier}|{league.group}" if league else "?"
+    # Shared with config.rename_vs_league (#634), which rewrites exactly
+    # this prefix on a rename -- both build it through config.vs_league_key
+    # so neither has to guess the other's format.
+    return config.vs_league_key(league.season, league.tier, league.group) if league else "?"
 
 
 async def _post(bot, state, kind: str, event_key: str, embed: discord.Embed) -> bool:

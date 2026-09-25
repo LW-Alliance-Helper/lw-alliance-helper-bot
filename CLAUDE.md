@@ -295,7 +295,8 @@ reasoning. Verifying their contents is
 | `storm_roster_post.py` | The roster builder's Approve & Post, split out of `storm_roster_builder.py` in the #589 step 11 refactor: one function per stage in the order they happen (refresh powers, render the image, ask the long-mail format, post in one of three shapes, the officer summary, the confirmation with its fallback, the DM offer, the overflow warning), with a `_PostResult` carrying the outcome from the post to the summary. `storm_roster_builder` imports it back as `_finalize_structured_roster`; the module reaches back at call time for the mail body, the picker and DM views, the sheet write, the embed, the power reader and the size limits, so every `patch("storm_roster_builder.X")` still lands. Characterized by `tests/unit/test_storm_roster_post.py`. | ~540 |
 | `alliance_duel.py` | Alliance Duel (VS) tracker ([#398](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/398), Premium except the member day-theme reminder) — Discord-free core for the `/vs` hub. Fixed game constants (day themes, the 1/2/2/2/2/4 **league** point values, tier ordering), the one-row-per-alliance-per-league-week dataclasses, header-name sheet I/O, server-time league/week/day resolution, and both pairing functions. `compute_week_pairing` re-ranks on the weighted `[8,4,2,1]` score; `project_own_path` walks the bracket lineage instead, and a randomized unit test asserts the two agree — they're deliberately independent derivations. Sheet writes split into a pure `plan_upsert` (unit-testable never-clobber guarantee) and a thin `apply_upsert`. Bracket-dependent calls return `BracketIncomplete` carrying `is_choice`, which separates an own-alliance tracking-mode decision ([#448](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/448)) from genuinely missing data. **Per-action award points are not constants** — Tech research raises them per player, so no surface may print them as fact. Design: `notes/DESIGN_alliance_duel_vs.md`. | ~1K |
 | `survey.py` | Squad-power surveys + scheduled reminders. | ~1.6K |
-| `growth.py` | Growth-tracking snapshots. | ~300 |
+| `growth.py` | Growth-tracking snapshots, the Growth Breakdown, and the readers behind `/member_stats` and the Map Manager API. Both tabs' columns are found through `growth_columns` / `breakdown_columns` (tag first, header text second; see § Patterns to reuse), never by header text directly. | ~1.8K |
+| `sheet_tags.py` | Hidden developer-metadata labels on the columns the bot owns in an alliance's Sheet ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)): `read_column_tags` (one call per spreadsheet), `tag_columns`, and `ensure_columns` (widen a tab before writing past its edge). Owning modules define their tag shapes; the growth tabs are the first user. `tests/unit/test_sheet_tags.py`. | ~140 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
 | `db_timings.py` | Per-helper timing of every config database call, on and off the event loop, recorded by `config._get_conn` and read by `/admin db_timings`. The measurement behind the on-loop-reads rule ([#589](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/589) step 10); one warning per helper per ten minutes for a call over 50 ms. | ~170 |
@@ -467,6 +468,28 @@ Do not write a copy of any of them.
 - Several loops sharing one configured channel share one subject — the
   three train loops all post to `reminder_channel_id`, and three notices
   for one broken channel would be three notices for one fix.
+
+### Finding the bot's own columns in an alliance's Sheet
+- A tab the bot writes finds its columns by a `sheet_tags` developer-metadata
+  tag first and by header text second
+  ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+  A tag survives a person renaming, moving or restyling the column, so the
+  visible header is free to be written for people. Header text is only the
+  fallback for columns written before tags existed.
+- **Tag on write, never on read.** A writer queues every column it found by
+  header text or just added (`to_tag` on `growth.GrowthColumns` /
+  `BreakdownColumns`) and tags them in one call after its header write, so a
+  tab converts itself on its first write. Readers (the Map Manager GETs,
+  `/member_stats`) never write.
+- **Everything is best-effort.** A failed tag search reads as "no tags" and
+  puts readers back on header text; a failed tag write logs and waits for the
+  next write. Neither may fail a snapshot.
+- Read the tags once per spreadsheet (`read_column_tags` covers every tab) and
+  pass the result down, as the growth snapshot does for both of its tabs.
+- Periods sort by calendar date, not column position, so a moved column
+  cannot change which period counts as "previous".
+- Growth is the first user. The other bot-written tabs (storm, train, buddy,
+  survey, VS) still read by header text; #668 audits them.
 
 ### Schema migrations
 - Add ALTER TABLE entries to the for-loop in `init_db()`. Each in

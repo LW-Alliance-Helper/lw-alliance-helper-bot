@@ -81,19 +81,6 @@ _BUCKET_LABELS = {
 }
 
 
-def _next_event_date(today: _dt.date | None = None) -> str:
-    """Back-compat shim — delegates to `storm_date_helpers.next_event_date`
-    without the guild/event-type lookup. Kept on the module surface
-    because at least one stale test patches `_next_event_date` directly.
-    New callers should reach for the helper module.
-    """
-    today = today or _dt.date.today()
-    days_ahead = (6 - today.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7
-    return (today + _dt.timedelta(days=days_ahead)).isoformat()
-
-
 def _resolve_member_name(
     discord_id: str,
     display_value: str,

@@ -11,6 +11,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
+from time_helpers import server_today
 
 
 class TestParseBirthday:
@@ -234,7 +235,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(
@@ -263,7 +264,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
@@ -282,7 +283,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -308,7 +309,7 @@ class TestCheckAndAddBirthdays:
 
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -343,7 +344,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -377,7 +378,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -405,7 +406,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -431,7 +432,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config, mark_conflict_ignored
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -472,7 +473,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=30)  # beyond 14 day lookahead
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
@@ -488,7 +489,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = date.today()
+        today = server_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(

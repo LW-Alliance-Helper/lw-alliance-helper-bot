@@ -129,13 +129,13 @@ def _parse_month_day(raw: str, *, today=None) -> str | None:
     `today` is injectable for tests; production callers omit it.
     """
     import re
-    from datetime import date
 
     from storm_date_helpers import parse_event_date
+    from time_helpers import server_today
 
     if not raw or not raw.strip():
         return None
-    today = today or date.today()
+    today = today or server_today()
     parsed = parse_event_date(raw, today=today)
     if parsed is None:
         return None

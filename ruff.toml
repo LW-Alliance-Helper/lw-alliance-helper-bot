@@ -23,11 +23,16 @@ line-length = 100
 # regressions going forward. For sqlite the rule is measured, not
 # guessed (#589 step 10, CLAUDE.md § Patterns to reuse): config reads stay
 # on the loop, config writes inside a loop tick go through
-# `asyncio.to_thread`. Pure-style pycodestyle rules (E1-E7 spacing/compound-statements)
-# and import sorting (I) are intentionally left off -- whitespace/layout is
-# the formatter's job, and we don't want the linter second-guessing the
-# author's `if x: return` style choices.
-select = ["E9", "F", "ASYNC"]
+# `asyncio.to_thread`. DTZ003/DTZ005/DTZ011 (flake8-datetimez) catch naive
+# `datetime.utcnow()`, tz-less `datetime.now()`, and bare `date.today()` --
+# the class of mistake #607 fixed thirteen live sites of, all of them
+# answering "what day is it" in the container's UTC calendar instead of
+# `time_helpers.server_today()`/`local_today()`. Pure-style pycodestyle
+# rules (E1-E7 spacing/compound-statements) and import sorting (I) are
+# intentionally left off -- whitespace/layout is the formatter's job, and
+# we don't want the linter second-guessing the author's `if x: return`
+# style choices.
+select = ["E9", "F", "ASYNC", "DTZ003", "DTZ005", "DTZ011"]
 
 # F401 (unused import) and F811 (redefinition) are DELIBERATELY OFF. This
 # codebase uses two patterns ruff's autofix actively breaks:
@@ -53,6 +58,9 @@ ignore = ["F401", "F811"]
 # The vulture whitelist is bare names by design (vulture's own --make-whitelist
 # format); every one of them is "undefined" to pyflakes.
 ".vulture-whitelist.py" = ["F821"]
+# Dev-only seed script; its four bare-clock calls generate demo data for a
+# local sheet and have no game-day or human-calendar meaning to get right.
+"scripts/seed_demo.py" = ["DTZ003", "DTZ005", "DTZ011"]
 
 [format]
 # Defaults otherwise (double quotes -- the codebase is already ~95%

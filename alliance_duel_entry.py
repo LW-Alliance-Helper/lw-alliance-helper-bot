@@ -214,8 +214,9 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     if any(row.league == new_league for row in state.rows if row.league != old_league):
         return (
             False,
-            f"**{new_league.season} · {new_league.tier} {new_league.group}** is already "
-            "in use by another league on this sheet. Pick a different season, tier, or group.",
+            f"**{new_league.season} · {new_league.tier} {new_league.group}** is already in "
+            "use in your spreadsheet. Pick a different season, tier, or group for this or "
+            "edit the data in your spreadsheet.",
         )
 
     tab = state.cfg.get("tab_name") or "Alliance Duel (VS)"

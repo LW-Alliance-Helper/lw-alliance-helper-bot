@@ -28,6 +28,7 @@ Usage in a wizard:
 """
 
 import asyncio
+import logging
 import time
 
 import discord
@@ -39,7 +40,10 @@ from messages import (
     DENY_NOT_OWNER,
     VIEW_TIMEOUT,
     VIEW_TIMEOUT_NO_HINT,
+    WIZARD_LOST_ACCESS,
 )
+
+logger = logging.getLogger(__name__)
 
 #: How long after an ephemeral message is sent it can still be edited. The
 #: interaction token lives 15 minutes; a minute is kept back for the timeout
@@ -104,6 +108,57 @@ def cancel_user(user_id: int) -> bool:
 
 def is_active(user_id: int) -> bool:
     return user_id in _active
+
+
+def is_missing_access(exc: Exception) -> bool:
+    """Forbidden/NotFound codes for a channel the bot can no longer reach —
+    deleted, or a permission change made after a wizard started posting to
+    it. Anything else (a real bug's 403/404) is not this. Shared with
+    `bot.on_app_command_error`, which uses the same test to decide whether
+    a slash-command failure is the alliance's own permission change rather
+    than ours to page on (#582)."""
+    if isinstance(exc, discord.Forbidden):
+        return exc.code in (50001, 50013)
+    if isinstance(exc, discord.NotFound):
+        return exc.code == 10003
+    return False
+
+
+async def guard_wizard_launch(coro, interaction: discord.Interaction) -> None:
+    """Await a wizard launcher coroutine (typically a `run_*_setup(interaction,
+    bot)` call), absorbing the one failure mode that isn't a bug: the wizard
+    loses access to the channel it's posting progress in mid-flow (#582).
+
+    Without this, the exception reaches discord.py's default view-error
+    handler, the officer sees the button silently do nothing, and it pages
+    Sentry as if the bot were broken — when it's really the alliance's own
+    permission change or a deleted channel. On a missing-access Forbidden
+    (50001/50013) or channel-gone NotFound (10003), this logs a warning
+    (no Sentry — see `bot.on_app_command_error` for the same call there)
+    and tells the officer with `messages.WIZARD_LOST_ACCESS`. Every other
+    exception propagates unchanged; this is not a general error swallower.
+
+    First written for the root `/setup` button alone (#319); every wizard
+    launcher shares this one now instead of copying its try/except.
+    """
+    try:
+        await coro
+    except (discord.Forbidden, discord.NotFound) as exc:
+        if not is_missing_access(exc):
+            raise
+        logger.warning(
+            "Wizard launch aborted — channel unreachable (guild=%s user=%s): %s",
+            interaction.guild_id,
+            interaction.user.id,
+            exc,
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(WIZARD_LOST_ACCESS, ephemeral=True)
+            else:
+                await interaction.response.send_message(WIZARD_LOST_ACCESS, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 async def wait_or_cancel(awaitable, cancel_event: asyncio.Event):

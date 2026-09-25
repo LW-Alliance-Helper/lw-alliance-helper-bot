@@ -1165,7 +1165,11 @@ async def _launch_member_roster_setup(interaction: discord.Interaction, bot) -> 
         "⚙️ Starting Member Roster Sync setup — check the channel for prompts.",
         ephemeral=True,
     )
-    await run_member_roster_setup(interaction, bot)
+    import wizard_registry
+
+    await wizard_registry.guard_wizard_launch(
+        run_member_roster_setup(interaction, bot), interaction
+    )
 
 
 # ── Wizard ───────────────────────────────────────────────────────────────────

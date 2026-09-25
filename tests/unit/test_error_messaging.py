@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -301,3 +301,75 @@ class TestCheckWizardCanRun:
         # Both remediation paths should be mentioned.
         assert "Edit this channel's permissions" in msg
         assert "Run `/setup_train` from a channel" in msg
+
+
+class TestOnAppCommandErrorSentryFiltering:
+    """#582: a slash command failing with a missing-access Forbidden/NotFound
+    is the alliance's own permission change or a deleted channel, not a bot
+    bug — it should still tell the user, just not page Sentry."""
+
+    def _make_forbidden(self, code: int) -> discord.Forbidden:
+        resp = MagicMock()
+        resp.status = 403
+        return discord.Forbidden(resp, {"message": "Test", "code": code})
+
+    def _make_not_found(self, code: int = 10003) -> discord.NotFound:
+        resp = MagicMock()
+        resp.status = 404
+        return discord.NotFound(resp, {"message": "Unknown Channel", "code": code})
+
+    def _make_interaction(self) -> MagicMock:
+        interaction = MagicMock()
+        interaction.command.name = "setup"
+        interaction.response.is_done = MagicMock(return_value=False)
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        return interaction
+
+    @pytest.mark.asyncio
+    async def test_forbidden_50001_skips_sentry(self):
+        from bot import on_app_command_error
+
+        interaction = self._make_interaction()
+        with patch("bot.sentry_sdk.capture_exception") as mock_capture:
+            await on_app_command_error(interaction, self._make_forbidden(50001))
+        mock_capture.assert_not_called()
+        interaction.response.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forbidden_50013_skips_sentry(self):
+        from bot import on_app_command_error
+
+        interaction = self._make_interaction()
+        with patch("bot.sentry_sdk.capture_exception") as mock_capture:
+            await on_app_command_error(interaction, self._make_forbidden(50013))
+        mock_capture.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_found_10003_skips_sentry(self):
+        from bot import on_app_command_error
+
+        interaction = self._make_interaction()
+        with patch("bot.sentry_sdk.capture_exception") as mock_capture:
+            await on_app_command_error(interaction, self._make_not_found(10003))
+        mock_capture.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_other_forbidden_code_still_captured(self):
+        """A Forbidden that isn't the missing-access shape (e.g. a
+        role-hierarchy 403) is still a real bug and still pages Sentry."""
+        from bot import on_app_command_error
+
+        interaction = self._make_interaction()
+        with patch("bot.sentry_sdk.capture_exception") as mock_capture:
+            await on_app_command_error(interaction, self._make_forbidden(40001))
+        mock_capture.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_still_captured(self):
+        from bot import on_app_command_error
+
+        interaction = self._make_interaction()
+        with patch("bot.sentry_sdk.capture_exception") as mock_capture:
+            await on_app_command_error(interaction, ValueError("boom"))
+        mock_capture.assert_called_once()

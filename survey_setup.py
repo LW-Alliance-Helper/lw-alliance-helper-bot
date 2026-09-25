@@ -1244,12 +1244,15 @@ class SurveyConfiguredView(OwnedView):
     async def _on_edit(self, interaction: discord.Interaction):
         await self._disable(interaction)
         self.stop()
-        await run_survey_setup(
+        await wizard_registry.guard_wizard_launch(
+            run_survey_setup(
+                interaction,
+                self._bot,
+                target_survey_id=self._survey_id,
+                target_survey_name=self._survey_name if self._survey_id else None,
+                template=self._template_key,
+            ),
             interaction,
-            self._bot,
-            target_survey_id=self._survey_id,
-            target_survey_name=self._survey_name if self._survey_id else None,
-            template=self._template_key,
         )
 
 
@@ -1624,13 +1627,16 @@ class _EditPickView(discord.ui.View):
             # Dispatch into the wizard. `target_survey_id=None` means
             # the default survey (run_survey_setup edits guild_survey_config).
             target_id = None if sid == "default" else sid
-            await run_survey_setup(
+            await wizard_registry.guard_wizard_launch(
+                run_survey_setup(
+                    interaction,
+                    bot,
+                    target_survey_id=target_id,
+                    target_survey_name=(target.get("survey_name") if target else None),
+                    # Keep speaking the language this survey was built in.
+                    template=(target.get("template") if target else None),
+                ),
                 interaction,
-                bot,
-                target_survey_id=target_id,
-                target_survey_name=(target.get("survey_name") if target else None),
-                # Keep speaking the language this survey was built in.
-                template=(target.get("template") if target else None),
             )
 
         sel.callback = _cb

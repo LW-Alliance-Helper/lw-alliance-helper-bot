@@ -25,6 +25,7 @@ import discord
 
 import train_rotation as tr
 import train_rotation_ui as ui
+import wizard_registry
 from time_helpers import server_today
 from wizard_registry import OwnedView
 
@@ -185,7 +186,7 @@ class _TrainHubView(OwnedView):
 
         # The wizard talks in-channel via channel.send; ack the button first.
         await inter.response.send_message("⚙️ Opening train setup below…", ephemeral=True)
-        await run_train_setup(inter, self.bot)
+        await wizard_registry.guard_wizard_launch(run_train_setup(inter, self.bot), inter)
 
 
 # ── Rotation dispatch ─────────────────────────────────────────────────────────

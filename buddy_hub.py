@@ -37,6 +37,7 @@ import discord
 
 import buddy
 import buddy_ui as ui
+import wizard_registry
 from wizard_registry import OwnedView
 
 logger = logging.getLogger(__name__)
@@ -428,7 +429,7 @@ class _BuddyHubView(OwnedView):
         from setup_cog import run_buddy_setup
 
         await inter.response.send_message("⚙️ Opening Buddy System setup below…", ephemeral=True)
-        await run_buddy_setup(inter, self.bot)
+        await wizard_registry.guard_wizard_launch(run_buddy_setup(inter, self.bot), inter)
 
     # ── premium leadership ────────────────────────────────────────────────────
 
@@ -726,7 +727,9 @@ async def handle_buddy_hub(bot, interaction: discord.Interaction) -> None:
                 "The Profession Buddy System isn't turned on yet. Opening setup below…",
                 ephemeral=True,
             )
-            await run_buddy_setup(interaction, bot)
+            await wizard_registry.guard_wizard_launch(
+                run_buddy_setup(interaction, bot), interaction
+            )
         else:
             await interaction.response.send_message(
                 "The Profession Buddy System isn't set up for this alliance yet. "

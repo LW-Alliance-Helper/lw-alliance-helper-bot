@@ -45,6 +45,17 @@ GENERIC_CMD_TIMEOUT = "⏰ Timed out. Run `/{cmd}` to start again."
 # leading slash) as {cmd} and a HUB_BTN_* constant as {hub_btn}.
 HUB_TIMEOUT = "⏰ Timed out. Run `/{cmd}` and click **{hub_btn}** to start again."
 
+# A wizard lost access to the channel it was posting progress in mid-flow
+# (a permission change or a deleted channel after the wizard started, not
+# a bug in the wizard). First written for the root `/setup` button (#319);
+# #582 moved every wizard launcher onto the shared guard that shows this,
+# so it's reused verbatim rather than given a per-wizard variant.
+WIZARD_LOST_ACCESS = (
+    "⚠️ I lost access to this channel partway through setup "
+    "(it may have been deleted, or my permissions changed). "
+    "Re-run `/setup` from a channel I can post in."
+)
+
 # A posted view's buttons expired. Appended (in italics) under the original
 # message by `wizard_registry.expire_view_message`, which every view built on
 # `wizard_registry.ExpiringView` calls from `on_timeout`. {hint} is the view's

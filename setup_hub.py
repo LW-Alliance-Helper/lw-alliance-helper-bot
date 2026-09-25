@@ -24,6 +24,7 @@ from typing import Optional
 
 import discord
 
+import wizard_registry
 from messages import DENY_ADMIN_OR_ROLE, NOT_SET_UP_HUB
 
 logger = logging.getLogger(__name__)
@@ -373,27 +374,10 @@ class _SetupHubView(discord.ui.View):
         )
         # The wizard talks in-channel via channel.send; if that channel is
         # deleted or the bot loses send access mid-wizard, the sends raise
-        # (NotFound 10003 / Forbidden 50013). Don't let it bubble to the view
-        # error handler — log it and tell the officer quietly (#319).
-        try:
-            await run_setup(inter, self.bot)
-        except (discord.NotFound, discord.Forbidden) as exc:
-            ch = inter.channel
-            logger.warning(
-                "Setup wizard aborted — channel unreachable (guild=%s channel=%s): %s",
-                inter.guild_id,
-                getattr(ch, "id", None),
-                exc,
-            )
-            try:
-                await inter.followup.send(
-                    "⚠️ I lost access to this channel partway through setup "
-                    "(it may have been deleted, or my permissions changed). "
-                    "Re-run `/setup` from a channel I can post in.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        # (NotFound 10003 / Forbidden 50013). The shared guard (#582) — this
+        # button's own copy, #319's original — absorbs it instead of letting
+        # it bubble to the view error handler.
+        await wizard_registry.guard_wizard_launch(run_setup(inter, self.bot), inter)
 
     @discord.ui.button(label=HUB_BTN_VIEW_CONFIG, style=discord.ButtonStyle.secondary, row=0)
     async def btn_view_config(self, inter: discord.Interaction, _b: discord.ui.Button):
@@ -498,7 +482,7 @@ class _SetupHubView(discord.ui.View):
     async def btn_vs(self, inter: discord.Interaction, _b: discord.ui.Button):
         from alliance_duel_wizard import run_vs_setup
 
-        await run_vs_setup(inter, self.bot)
+        await wizard_registry.guard_wizard_launch(run_vs_setup(inter, self.bot), inter)
 
     # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 

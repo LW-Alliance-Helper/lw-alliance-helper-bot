@@ -191,6 +191,8 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         "guild_info",
         "forget_guild",
         "forget_user",
+        # #649: servers that left before 1.9.0's removal hold existed.
+        "backfill_removed_guilds",
         "shiny_servers",
         "shiny_import",
         "shiny_set",
@@ -248,6 +250,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "guild_info",
             "forget_guild",
             "forget_user",
+            "backfill_removed_guilds",
             "shiny_servers",
             "shiny_import",
             "shiny_set",

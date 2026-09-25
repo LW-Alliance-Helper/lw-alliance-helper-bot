@@ -7146,6 +7146,112 @@ def sweep_guild_removals(
     return merged
 
 
+# ── Backfilling servers that left before the hold existed (#649) ────────────
+#
+# Before 1.9.0, `on_guild_remove` deleted the install-metadata row and
+# nothing else -- no hold, so `guild_removals_due` never sees these servers
+# and their configuration, sign-ups and Champion Duel / VS records (and any
+# stale Premium pin) stay indefinitely. `privacy.html` promises 30-day
+# deletion; for these servers that has never been true.
+#
+# There is no clock to read for "when did this one leave" -- the removal was
+# never recorded. The backfill command starts a hold *now*, the same shape a
+# real removal would have started, so these servers get the same thirty days
+# real removals get, dated from when someone noticed rather than when it
+# happened.
+
+
+def guild_ids_with_stored_data() -> set[int]:
+    """Every guild id with at least one row in a guild-scoped table, across
+    all three databases. The full candidate pool for #649's backfill --
+    still includes currently-installed and already-held servers, which the
+    caller filters out; this only answers "does anything remember this id".
+
+    Champion Duel and VS store `guild_id` as TEXT (`str(int(guild_id))`);
+    normalised to `int` here so the three databases' ids compare and union
+    cleanly. `champion_duel_db`'s cascade-only `pick_meetings` (no `guild_id`
+    of its own) is out of scope -- if `pick_slates` has a candidate row,
+    that guild is already found through it.
+    """
+    ids: set[int] = set()
+
+    def _collect_int_column(conn, table: str, where: str) -> None:
+        column = where.split("=", 1)[0].strip()
+        for row in conn.execute(f"SELECT DISTINCT {column} AS gid FROM {table}"):  # noqa: S608
+            try:
+                ids.add(int(row["gid"]))
+            except (TypeError, ValueError):
+                continue
+
+    with _get_conn() as conn:
+        for table, where in _GUILD_REMOVAL_DELETES:
+            _collect_int_column(conn, table, where)
+
+    import alliance_duel_db
+    import champion_duel_db
+
+    for module in (champion_duel_db, alliance_duel_db):
+        specs = list(module._GUILD_REMOVAL_DELETES) + [
+            (t, w) for t, _sets, w in module._GUILD_REMOVAL_SCRUBS
+        ]
+        with module._get_conn() as conn:
+            for table, where in specs:
+                _collect_int_column(conn, table, where)
+
+    return ids
+
+
+def backfill_candidates(
+    *, live: set[int], recently_seen_days: int = 14, now: "datetime | None" = None
+) -> dict[int, str | None]:
+    """Servers with stored data that the bot is not in and has no hold for
+    yet -- the set #649's owner-only command previews and can start holds
+    for.
+
+    `live` must come from the caller's own union of `bot.guilds` and a live
+    `fetch_guilds()` REST call (see `bot_admin.py`), never from the gateway
+    cache alone -- discord.py's `guild_ready_timeout` (2 seconds) means
+    `bot.guilds` can be partial right after startup, and a live server
+    mistaken for a candidate is the one outcome this command must never
+    produce.
+
+    Maps each candidate to its `guild_install_metadata.last_seen_at`, or
+    None if that row is already gone (the common case for a genuinely
+    pre-1.9.0 departure -- the old `on_guild_remove` deleted it). A
+    candidate seen inside `recently_seen_days` is left out entirely as
+    suspicious: metadata that fresh alongside "the bot isn't in it" reads
+    as a `live` gap, not a real departure, and this command must fail
+    closed rather than hold a server that's actually still installed.
+    """
+    import datetime as _dt
+
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - _dt.timedelta(days=recently_seen_days)
+
+    out: dict[int, str | None] = {}
+    with _get_conn() as conn:
+        for gid in guild_ids_with_stored_data():
+            if gid in live:
+                continue
+            if guild_removal_held_since(gid) is not None:
+                continue  # already has a hold -- nothing for this command to start
+            row = conn.execute(
+                "SELECT last_seen_at FROM guild_install_metadata WHERE guild_id = ?", (gid,)
+            ).fetchone()
+            last_seen = row["last_seen_at"] if row else None
+            if last_seen:
+                try:
+                    stamp = datetime.fromisoformat(last_seen)
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                    if stamp > cutoff:
+                        continue  # suspicious -- leave it out entirely
+                except ValueError:
+                    pass
+            out[gid] = last_seen
+    return out
+
+
 def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
     """Remove one person from the guild-config database.
 

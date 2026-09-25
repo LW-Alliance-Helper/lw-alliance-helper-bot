@@ -1633,7 +1633,9 @@ def week_matches(state, week: int, *, exclude_own: bool = True) -> list[ad.Match
     empty list is honest, and neither is a fabrication.
     """
     league_rows = state.league_rows()
-    if ad.prior_week_decided(league_rows, week):
+    # Bracket pairing is Premium (#667); a lapsed guild's sixteen rows fall
+    # back to the Opponent column like any own-alliance guild's.
+    if state.full_bracket and ad.prior_week_decided(league_rows, week):
         pairing = ad.compute_week_pairing(league_rows, week)
     else:
         pairing = None

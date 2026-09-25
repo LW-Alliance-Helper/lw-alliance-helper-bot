@@ -33,6 +33,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_setup as ads
 import config
+import premium
 from messages import CANCEL_BACKPEDAL_DEFAULT
 from setup_hub import HUB_BTN_VS
 from wizard_registry import expire_view_message, safe_edit_response
@@ -121,6 +122,16 @@ class TrackingModeView(ExpiringView):
 
     @discord.ui.button(label=ads.MODE_BTN_FULL, style=discord.ButtonStyle.secondary)
     async def btn_full(self, inter: discord.Interaction, _b: discord.ui.Button):
+        # Gated here, before anything is saved (#667). The lock goes out as its
+        # own message so this view stays live and "Just my alliance" is one
+        # click away.
+        if not await premium.feature_gate("alliance_duel_vs", inter.guild_id, interaction=inter):
+            await inter.response.send_message(
+                embed=ads.full_bracket_locked_embed(),
+                view=premium.upgrade_view(),
+                ephemeral=True,
+            )
+            return
         await self._parent.show_tab_step(inter, ad.MODE_FULL_BRACKET)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
@@ -263,6 +274,8 @@ EVENT_TOGGLES = (
     ("opponent_reveal_enabled", "Next opponent"),
     ("season_recap_enabled", "Season recap"),
 )
+#: The event posts that need Premium (#667). Mid-week score is free.
+PREMIUM_EVENT_TOGGLES = frozenset({"opponent_reveal_enabled", "season_recap_enabled"})
 
 VS_BTN_POST_ON = "Turn it on"
 VS_BTN_POST_OFF = "Turn it off"
@@ -381,11 +394,19 @@ class ScheduledPostSettingsView(OwnedView):
 
     timeout_hint = ads.VS_SETUP_NAV
 
-    def __init__(self, guild_id: int, owner_user_id: int, surface: ScheduledSurface) -> None:
+    def __init__(
+        self,
+        guild_id: int,
+        owner_user_id: int,
+        surface: ScheduledSurface,
+        *,
+        premium: bool = True,
+    ) -> None:
         super().__init__(timeout=STEP_TIMEOUT)
         self.guild_id = guild_id
         self.owner_id = owner_user_id
         self.surface = surface
+        self.premium = premium
         self.cfg = config.get_vs_config(guild_id)
         self.message: discord.Message | None = None
         self._render()
@@ -433,11 +454,16 @@ class ScheduledPostSettingsView(OwnedView):
 
         if surface.toggles:
             for column, label in surface.toggles:
-                on = bool(self.cfg.get(column))
+                # Without Premium a Premium switch renders off and disabled,
+                # with 💎 in front of its own glyph (DESIGN.md, Premium
+                # presentation). A saved "on" is kept for when Premium is back.
+                locked = column in PREMIUM_EVENT_TOGGLES and not self.premium
+                on = bool(self.cfg.get(column)) and not locked
+                text = f"{'✅' if on else '▫️'} {label}"
                 button = discord.ui.Button(
-                    label=f"{'✅' if on else '▫️'} {label}"[:80],
+                    label=(f"💎 {text}" if locked else text)[:80],
                     style=discord.ButtonStyle.secondary,
-                    disabled=not on and not ready,
+                    disabled=locked or (not on and not ready),
                     row=1,
                 )
                 button.callback = self._make_toggle(column)
@@ -454,7 +480,7 @@ class ScheduledPostSettingsView(OwnedView):
         self.add_item(toggle)
 
     def embed(self) -> discord.Embed:
-        return ads.scheduled_post_embed(self.cfg, self.surface.key)
+        return ads.scheduled_post_embed(self.cfg, self.surface.key, premium=self.premium)
 
     async def _redraw(self, interaction: discord.Interaction) -> None:
         """Re-read config and redraw, so the panel always shows what is saved."""
@@ -682,13 +708,23 @@ class VSSetupView(ExpiringView):
         )
 
     async def _open_panel(self, inter: discord.Interaction, surface: ScheduledSurface) -> None:
-        panel = ScheduledPostSettingsView(self.guild_id, self.owner_user_id, surface)
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", self.guild_id, interaction=inter
+        )
+        panel = ScheduledPostSettingsView(
+            self.guild_id, self.owner_user_id, surface, premium=has_premium
+        )
         await inter.response.send_message(embed=panel.embed(), view=panel, ephemeral=True)
         panel.message = await inter.original_response()
 
     async def show_mode_step(self, interaction: discord.Interaction) -> None:
         view = TrackingModeView(self)
-        await interaction.followup.send(embed=ads.tracking_mode_embed(), view=view, ephemeral=True)
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", self.guild_id, interaction=interaction
+        )
+        await interaction.followup.send(
+            embed=ads.tracking_mode_embed(premium=has_premium), view=view, ephemeral=True
+        )
         view.message = await interaction.original_response()
 
     async def show_tab_step(self, interaction: discord.Interaction, tracking_mode: str) -> None:

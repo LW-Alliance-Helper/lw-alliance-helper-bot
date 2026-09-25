@@ -620,8 +620,8 @@ async def scan_storm_signup(bot, guild, cfg, window: OutageWindow) -> list[Misse
 
 
 async def scan_vs_score_prompt(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
-    """Daily Alliance Duel (VS) score prompt (#405). Premium, re-checked at
-    fire time by the shared post path.
+    """Daily Alliance Duel (VS) score prompt (#405). Free since #667, so there
+    is no Premium re-check at fire time.
 
     Catch-up matters more here than for most surfaces: the prompt exists
     because a day score nobody was asked for is a day score nobody records,

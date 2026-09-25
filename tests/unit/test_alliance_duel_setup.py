@@ -292,17 +292,14 @@ class _FakeWorksheet:
 # ── /setup grid and /help wiring ──────────────────────────────────────────────
 
 
-def test_the_vs_button_is_premium_gated_on_the_free_tier():
+def test_the_vs_button_is_live_on_the_free_tier():
+    """#667: tracking your own alliance is free, so the wizard has to be
+    reachable. Premium is decided inside it, at the whole-bracket choice."""
     import setup_hub
 
     free = setup_hub._SetupHubView(None, 1, 1, is_premium=False)
-    # DESIGN.md: locked controls render disabled, not hidden, so the free tier
-    # can see the shape of the paid product.
-    assert free.btn_vs.disabled is True
-    assert free.btn_vs.label.startswith("💎")
-    # Disabled, but still rendered. Hiding is reserved for deploy-flagged
-    # surfaces, which is a different thing.
-    assert free.btn_vs in free.children
+    assert free.btn_vs.disabled is False
+    assert free.btn_vs.label == setup_hub.HUB_BTN_VS
 
 
 def test_the_vs_button_is_live_on_premium():
@@ -331,9 +328,9 @@ def test_the_setup_grid_reports_vs_state():
     import inspect
 
     source = inspect.getsource(setup_hub)
-    # Shown with the 💎 marker like the other Premium features, so a free-tier
-    # reader sees it exists rather than wondering where it went.
-    assert "_premium(vs_on)} Alliance Duel (VS)" in source
+    # A free feature with a Premium part reads like the Buddy System: no 💎 on
+    # the line, the marker lives on the parts that need it (#667).
+    assert "_free(vs_on)} Alliance Duel (VS)" in source
 
 
 def test_help_has_a_vs_category_using_the_shared_label():
@@ -342,7 +339,9 @@ def test_help_has_a_vs_category_using_the_shared_label():
 
     cat = help_content.HELP_CATEGORIES["alliance_duel"]
     assert cat["emoji"] == "🏆"
-    assert "💎" in cat["label"]
+    # Free to track your own alliance (#667); the 💎 marks the bracket half.
+    assert "💎" not in cat["label"]
+    assert "💎" in cat["description"]
     # The route in is the imported constant, not a retyped string.
     assert any(HUB_BTN_VS in cmd for cmd, _desc in cat["commands"])
 

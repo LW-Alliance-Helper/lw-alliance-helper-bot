@@ -671,6 +671,14 @@ def test_a_recorded_week_does_not_say_recorded_result_twice():
 # -- Timeouts, found by `/code-review` on the rebase, 2026-09-04 --------------
 
 
+def _is_upgrade_view(node) -> bool:
+    """`premium.upgrade_view()` has no timeout, so it has nothing to expire."""
+    return (
+        isinstance(node, __import__("ast").Call)
+        and getattr(node.func, "attr", getattr(node.func, "id", None)) == "upgrade_view"
+    )
+
+
 def test_every_view_the_hub_opens_records_the_message_it_lives_on():
     """`on_timeout` edits `self.message`, so a view that never records it times
     out silently and leaves buttons looking live long after they stopped
@@ -690,7 +698,7 @@ def test_every_view_the_hub_opens_records_the_message_it_lives_on():
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in ("send_message", "send")
-            and any(kw.arg == "view" for kw in node.keywords)
+            and any(kw.arg == "view" and not _is_upgrade_view(kw.value) for kw in node.keywords)
             for node in ast.walk(fn)
         )
         if not sends_a_view:
@@ -1124,3 +1132,163 @@ def test_shareable_hands_back_copies_all_the_way_down():
     assert shared[0].day_scores is not target.day_scores, "the day dict is shared"
     shared[0].day_scores[2] = 999
     assert target.day_scores == {1: 120}, "mutating the copy reached the snapshot"
+
+
+# ── Free and Premium (#667) ───────────────────────────────────────────────────
+#
+# Tracking your own alliance is free. Premium is the bracket logic: the whole-
+# bracket mode, 📇 Bracket, 🔍 Scout and 🛣️ My Path. A lapsed guild reads as
+# own-alliance until it resubscribes.
+
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+
+class _Response:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, *args, **kwargs):
+        self.sent.append(kwargs)
+
+    async def send_modal(self, modal):
+        self.sent.append({"modal": modal})
+
+    async def defer(self, **kwargs):
+        pass
+
+
+def _interaction():
+    inter = MagicMock()
+    inter.response = _Response()
+    inter.followup = MagicMock()
+    inter.followup.send = AsyncMock()
+    inter.original_response = AsyncMock(return_value=MagicMock())
+    inter.guild_id = 1
+    inter.user.id = 7
+    return inter
+
+
+def test_a_lapsed_whole_bracket_guild_reads_as_own_alliance():
+    state = hub.HubState(1, _cfg(), _bracket_rows(), premium=False)
+    assert state.lapsed is True
+    assert state.full_bracket is False
+    assert state.tracking_mode == ad.MODE_OWN_ALLIANCE
+    # Only the reading changes. The saved choice is what comes back with Premium.
+    assert state.configured_mode == ad.MODE_FULL_BRACKET
+
+
+def test_a_free_own_alliance_guild_is_not_lapsed():
+    state = hub.HubState(
+        1, _cfg(tracking_mode=ad.MODE_OWN_ALLIANCE), [_row(OWN_TAG)], premium=False
+    )
+    assert state.lapsed is False
+    assert state.full_bracket is False
+
+
+def test_a_lapsed_guild_gets_no_computed_pairing():
+    """Re-pairing the bracket is the Premium half. Sixteen rows with week 1
+    decided would otherwise hand a lapsed guild week 2's computed matchups."""
+    import alliance_duel_entry as ad_entry
+
+    week_1 = _bracket_rows(week=1)
+    tags = [r.alliance for r in week_1]
+    for a, b in zip(tags[0::2], tags[1::2]):
+        by = {r.alliance: r for r in week_1}
+        by[a].week_outcome, by[a].week_score, by[a].opponent = "W", 9, b
+        by[b].week_outcome, by[b].week_score, by[b].opponent = "L", 4, a
+    rows = week_1 + _bracket_rows(week=2)
+
+    paying = hub.HubState(1, _cfg(), rows, premium=True)
+    lapsed = hub.HubState(1, _cfg(), rows, premium=False)
+    assert ad_entry.all_week_matches(paying, 2)
+    assert ad_entry.all_week_matches(lapsed, 2) == []
+    assert hub.VS_WEEK_NO_RECORDED_OPPONENTS in _text(hub.week_embed(lapsed, 2))
+
+
+def _row0(view):
+    return [c for c in view.children if c.row == 0]
+
+
+def test_this_week_comes_first_then_the_premium_views_together():
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    assert [c.label for c in _row0(view)] == [
+        hub.VS_BTN_WEEK,
+        hub.VS_BTN_BRACKET,
+        hub.VS_BTN_SCOUT,
+        hub.VS_BTN_PATH,
+        ad_ui.VS_BTN_TRENDS,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "rows"),
+    [
+        (ad.MODE_OWN_ALLIANCE, lambda: [_row(OWN_TAG, ranking=3)]),
+        (ad.MODE_FULL_BRACKET, _bracket_rows),  # lapsed
+    ],
+)
+def test_without_premium_the_bracket_views_are_disabled_with_a_leading_diamond(mode, rows):
+    """DESIGN.md, Premium presentation: 💎 in front of the button's own glyph,
+    disabled rather than hidden. The hub's Tracking line says why."""
+    state = hub.HubState(1, _cfg(tracking_mode=mode), rows(), premium=False)
+    by_label = {c.label: c for c in _row0(hub.VSHubView(None, state, owner_id=7))}
+    for label in (hub.VS_BTN_BRACKET, hub.VS_BTN_SCOUT, hub.VS_BTN_PATH):
+        assert by_label[f"💎 {label}"].disabled is True
+    assert by_label[hub.VS_BTN_WEEK].disabled is False
+
+
+def test_a_paying_guild_sees_no_diamond_on_the_hub():
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    assert not any("💎" in (c.label or "") for c in view.children)
+    assert all(not c.disabled for c in _row0(view))
+
+
+async def test_a_paying_own_alliance_guild_gets_the_mode_explanation_not_an_upsell():
+    state = hub.HubState(1, _cfg(tracking_mode=ad.MODE_OWN_ALLIANCE), [_row(OWN_TAG)], premium=True)
+    view = hub.VSHubView(None, state, owner_id=7)
+    inter = _interaction()
+    await view._bracket(inter)
+    embed = inter.response.sent[0]["embed"]
+    assert "Premium" not in embed.title
+    assert "view" not in inter.response.sent[0]
+
+
+async def test_a_paying_own_alliance_guild_can_still_scout():
+    """Scout is Premium, not whole-bracket: a paying guild tracking just itself
+    kept it before #667 and keeps it now."""
+    state = hub.HubState(1, _cfg(tracking_mode=ad.MODE_OWN_ALLIANCE), [_row(OWN_TAG)], premium=True)
+    view = hub.VSHubView(None, state, owner_id=7)
+    with patch("alliance_duel_ui.open_scout_picker", new=AsyncMock()) as opened:
+        await view._scout(_interaction())
+    opened.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("mode", "premium", "expected"),
+    [
+        (ad.MODE_OWN_ALLIANCE, False, "💎 Premium"),
+        (ad.MODE_OWN_ALLIANCE, True, "widen at any time"),
+        (ad.MODE_FULL_BRACKET, False, "Until Premium is back"),
+    ],
+)
+def test_the_hub_says_which_of_three_situations_it_is_in(mode, premium, expected):
+    rows = _bracket_rows() if mode == ad.MODE_FULL_BRACKET else [_row(OWN_TAG, ranking=3)]
+    state = hub.HubState(1, _cfg(tracking_mode=mode), rows, premium=premium)
+    assert expected in _text(hub.hub_embed(state))
+
+
+async def test_a_free_guild_gets_the_hub_rather_than_an_upsell():
+    inter = _interaction()
+    rows = [_row(OWN_TAG, ranking=3)]
+    with (
+        patch("setup_cog._has_leadership_or_admin", return_value=True),
+        patch("config.get_vs_config", return_value=_cfg(tracking_mode=ad.MODE_OWN_ALLIANCE)),
+        patch.object(hub, "read_tab_once", new=AsyncMock(return_value=rows)),
+        patch.object(hub, "attach_shared", new=AsyncMock()),
+        patch.object(hub, "contribute_snapshot", new=AsyncMock()),
+        patch("premium.feature_gate", new=AsyncMock(return_value=False)),
+    ):
+        await hub.handle_vs_hub(None, inter)
+    kwargs = inter.followup.send.await_args.kwargs
+    assert isinstance(kwargs["view"], hub.VSHubView)
+    assert kwargs["view"].state.premium is False

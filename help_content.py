@@ -334,39 +334,41 @@ HELP_CATEGORIES: dict[str, dict] = {
     },
     "alliance_duel": {
         "emoji": "🏆",
-        "label": "Alliance Duel (VS) 💎",
+        "label": "Alliance Duel (VS)",
         "description": (
-            "💎 Premium. Tracks your Alliance Duel league in your own sheet: "
-            "the bracket, each week's day scores and outcomes, and your record "
-            "against the alliances you have faced. Because weekly re-pairing "
-            "follows a fixed rule, the bot can work out your likely path "
-            "through the bracket and name which alliances to scout first."
+            "Tracks your Alliance Duel league in your own sheet: each week's "
+            "day scores and outcomes, your record against the alliances you "
+            "have faced, and which days you win and lose. 💎 Track your whole "
+            "16-alliance League bracket and, because weekly re-pairing follows "
+            "a fixed rule, the bot works out your likely path through it and "
+            "names which alliances to scout first."
         ),
         "commands": [
             (
                 f"/setup → {HUB_BTN_VS}",
-                "💎 Set up the tracker: name your alliance, choose whether to "
-                "track your whole 16-alliance League bracket or just your own "
-                "alliance, and get the tab created and explained. You can "
-                "change either choice later.\n"
+                "Set up the tracker: name your alliance, choose whether to track "
+                "just your own alliance or 💎 your whole League bracket, and get "
+                "the tab created and explained. You can change either choice later.\n"
                 "Also where you switch on the 🔔 Daily score prompt: a post in "
                 "a channel you pick, at a time you pick, asking for the day "
                 "that just finished with a button to record it. Tuesday "
                 "through Sunday, since Sunday is the rest day.\n"
-                "**Free:** 📣 Day theme reminder posts what today rewards for "
-                "your members, Monday to Saturday, and can carry a standing "
-                "note from you. It needs no tracker setup and no sheet.",
+                "📣 Event posts: where the week stands each time a day is "
+                "recorded, plus 💎 your next opponent and 💎 a season recap.\n"
+                "📣 Day theme reminder posts what today rewards for your "
+                "members, Monday to Saturday, and can carry a standing note "
+                "from you. It needs no tracker setup and no sheet.",
             ),
             (
                 "/vs",
-                "💎 **Alliance Duel hub** (leadership). Opens this week's matchup "
+                "**Alliance Duel hub** (leadership). Opens this week's matchup "
                 "with its running league-point split.\n"
-                "**Read row:** 📇 Bracket (all 16 alliances and what you have "
-                "recorded), 🆚 This week (every matchup with the evidence behind "
-                "it), 🔍 Scout (one alliance: your record against them, and how "
-                "the week projects), 🛣️ My path (your route through the bracket, "
-                "and which alliances to scout first when it cannot be worked "
-                "out yet).\n"
+                "**Read row:** 🆚 This week, 🔍 Trends (the days you win and "
+                "lose), and 💎 for the whole bracket: 📇 Bracket (all 16 "
+                "alliances and what you have recorded), 🔍 Scout (one alliance: "
+                "your record against them, and how the week projects), 🛣️ My "
+                "path (your route through the bracket, and which alliances to "
+                "scout first when it cannot be worked out yet).\n"
                 "**Write row:** ✏️ Enter daily score, ➕ Add or edit alliance, "
                 "and setup with a sheet check.",
             ),

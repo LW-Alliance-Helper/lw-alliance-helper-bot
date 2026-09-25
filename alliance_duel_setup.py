@@ -28,6 +28,7 @@ import discord
 
 import alliance_duel as ad
 import config_health
+from premium import PREMIUM_BRAND
 from setup_hub import HUB_BTN_VS
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ MODE_BTN_OWN = "Just my alliance"
 MODE_BTN_FULL = "My whole League bracket"
 
 
-def tracking_mode_embed() -> discord.Embed:
+def tracking_mode_embed(*, premium: bool = True) -> discord.Embed:
     """The mode question, with the upsell sitting on it.
 
     The bracket is exactly what buys My Path and the scouting priority list,
@@ -135,8 +136,11 @@ def tracking_mode_embed() -> discord.Embed:
         ),
         inline=False,
     )
+    # 💎 only on the free tier's view (DESIGN.md, Premium presentation), and on
+    # the field rather than the button: a button answering a question takes no
+    # emoji (see MODE_BTN_*).
     embed.add_field(
-        name=f"{MODE_BTN_FULL}",
+        name=MODE_BTN_FULL if premium else f"💎 {MODE_BTN_FULL}",
         value=(
             "All 16 alliances. Everything above, plus your projected path "
             "through the bracket, who you are likely to face next, and which "
@@ -155,6 +159,25 @@ def tracking_mode_embed() -> discord.Embed:
         )
     )
     return embed
+
+
+def full_bracket_locked_embed() -> discord.Embed:
+    """Picking the whole bracket without Premium (#667).
+
+    Sent beside the mode question rather than replacing it, so "Just my
+    alliance" is still one click away.
+    """
+    return discord.Embed(
+        title="🔒 Tracking your whole League bracket is Premium",
+        description=(
+            "It is what the bracket views are built on: who you are likely to face "
+            "next, your projected path through the bracket, and which alliances to "
+            f"scout first. It is part of {PREMIUM_BRAND}. Run `/upgrade` to unlock it.\n\n"
+            f"**{MODE_BTN_OWN}** still records every score, outcome and head to head "
+            "result for your alliance."
+        ),
+        color=discord.Color.purple(),
+    )
 
 
 def mode_label(tracking_mode: str) -> str:
@@ -374,7 +397,7 @@ _SCHEDULED_COPY = {
 }
 
 
-def scheduled_post_embed(cfg: dict, surface_key: str) -> discord.Embed:
+def scheduled_post_embed(cfg: dict, surface_key: str, *, premium: bool = True) -> discord.Embed:
     """The settings panel for one scheduled VS surface (#405, #406).
 
     States what is saved before it explains what the surface does, because an
@@ -390,14 +413,12 @@ def scheduled_post_embed(cfg: dict, surface_key: str) -> discord.Embed:
     # "on" means any of them is on and the status line never mentions a clock.
     wants_time = "{time}" in copy["on"]
     if surface_key == "event_posts":
-        is_on = any(
-            cfg.get(column)
-            for column in (
-                "clinch_status_enabled",
-                "opponent_reveal_enabled",
-                "season_recap_enabled",
-            )
-        )
+        # A Premium switch left on through a lapse does not fire (#667), so it
+        # does not count towards "on" either.
+        columns = ["clinch_status_enabled"]
+        if premium:
+            columns += ["opponent_reveal_enabled", "season_recap_enabled"]
+        is_on = any(cfg.get(column) for column in columns)
 
     if is_on and channel_id:
         status = copy["on"].format(channel=channel_id, time=_clock(time_saved))
@@ -411,9 +432,13 @@ def scheduled_post_embed(cfg: dict, surface_key: str) -> discord.Embed:
             missing.append("a channel")
         status = copy["off_unset"].format(missing=" and ".join(missing))
 
+    what = copy["what"]
+    if surface_key == "event_posts" and not premium:
+        # 💎 marks the free tier's view only (DESIGN.md, Premium presentation).
+        what = what.removesuffix(".") + ", and the two marked 💎 are Premium."
     embed = discord.Embed(
         title=copy["title"],
-        description=f"{status}\n\n{copy['what']}",
+        description=f"{status}\n\n{what}",
         color=discord.Color.blurple(),
     )
     embed.add_field(name=copy["when_name"], value=copy["when"], inline=False)

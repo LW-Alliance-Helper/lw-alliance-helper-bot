@@ -136,6 +136,11 @@ table; see `premium.py` and issue #41):
 - **Lapse is not destructive.** When a subscription ends, the
   assignment row stays. If the user resubscribes, Premium auto-resumes
   in the same guild without manual reconfiguration.
+- **A guild gone thirty days is the one exception.** The pin is
+  released as part of the same day-30 sweep that purges everything
+  else about that server — the subscriber keeps the subscription and
+  gets a DM if it's still active, and can pin it to a different guild
+  with `/premium assign`.
 
 `PREMIUM_BYPASS_GUILD_IDS` and `FORCE_PREMIUM` short-circuit before
 this assignment check, so the home-alliance bypass and dev-environment

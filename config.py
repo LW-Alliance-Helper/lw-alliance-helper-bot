@@ -5016,6 +5016,20 @@ def tabs_in_use(
             if row:
                 _claim(row[0], label)
 
+        # VS (#503/#441) claims only while enabled, unlike every other entry
+        # in `_TAB_OWNERS` above -- a disabled tracker's old tab name should
+        # not go on blocking other features from picking it up.
+        if "vs_tab_name" != exclude_field:
+            try:
+                row = conn.execute(
+                    "SELECT tab_name FROM guild_vs_config WHERE guild_id = ? AND enabled = 1",
+                    (guild_id,),
+                ).fetchone()
+            except Exception:
+                row = None
+            if row:
+                _claim(row[0], "your Alliance Duel (VS) tracker")
+
         for column, field, label_fmt in _STORM_TAB_OWNERS:
             if field == exclude_field:
                 continue

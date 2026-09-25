@@ -196,6 +196,39 @@ def _locked_types_note(*type_names: str) -> str:
     return f"\n*🔒 {lead} 💎 Premium: {names}. Run `/upgrade` to unlock {obj}.*"
 
 
+def tab_claim_warning(
+    guild_id: int,
+    tab: str,
+    *,
+    exclude_field: str,
+    exclude_survey_id: str | None = None,
+) -> str | None:
+    """The warning text if `tab` already belongs to another feature, else
+    None. Extracted from `warn_if_tab_claimed` (#503) for wizards that
+    cannot `channel.send` it themselves -- VS setup is an ephemeral panel
+    driven by modals, so it sends this text through an interaction
+    followup instead. Never raises; a lookup failure reads as "no claim".
+    """
+    try:
+        from config import tabs_in_use
+
+        owner = tabs_in_use(
+            guild_id, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
+        ).get((tab or "").casefold())
+    except Exception as e:
+        print(f"[SETUP] tab claim check failed guild={guild_id}: {type(e).__name__}: {e}")
+        return None
+
+    if not owner:
+        return None
+
+    return (
+        f"⚠️ Heads up: **{tab}** is also {owner}. Two features writing to one "
+        f"tab will overwrite each other's columns. That's fine if you meant "
+        f"it, otherwise pick a different tab here or in that feature's setup."
+    )
+
+
 async def warn_if_tab_claimed(
     channel,
     guild_id: int,
@@ -215,24 +248,12 @@ async def warn_if_tab_claimed(
     Returns True when a warning was posted, for callers that want to
     know. Never raises — a warning failing must not end a wizard.
     """
-    try:
-        from config import tabs_in_use
-
-        owner = tabs_in_use(
-            guild_id, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
-        ).get((tab or "").casefold())
-    except Exception as e:
-        print(f"[SETUP] tab claim check failed guild={guild_id}: {type(e).__name__}: {e}")
-        return False
-
-    if not owner:
-        return False
-
-    await channel.send(
-        f"⚠️ Heads up: **{tab}** is also {owner}. Two features writing to one "
-        f"tab will overwrite each other's columns. That's fine if you meant "
-        f"it, otherwise pick a different tab here or in that feature's setup."
+    message = tab_claim_warning(
+        guild_id, tab, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
     )
+    if message is None:
+        return False
+    await channel.send(message)
     return True
 
 

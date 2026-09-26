@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.9.2** — 2026-09-26
+- Alliance Duel (VS) tracking for your own alliance is now free for every server
+- Enter a day's VS score or a whole week's results from dropdowns
+- VS setup now asks which sheet tab to use
+- The Growth Breakdown shows No Change as a count and lists unchanged members separately
+- Rename or move your growth tab headers without breaking growth tracking
+
+---
+
 **1.9.1** — 2026-09-19
 - Enter results for a past week of your Alliance Duel league at any time
 - Correct an alliance's rank for a past week once you learn it

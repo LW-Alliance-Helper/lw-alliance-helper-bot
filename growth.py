@@ -64,6 +64,25 @@ DEFAULT_BUCKET_LABELS: dict[str, str] = {
     "decline": "Decline",
 }
 
+# Buckets the breakdown lists by name when an alliance hasn't picked its own
+# (#668). Every bucket but No Change: in a typical month that one holds most of
+# the alliance and names the members who moved least, so it shows as a count.
+DEFAULT_LISTED_BUCKETS: list[str] = [b for b in BUCKET_ORDER if b != "none"]
+
+# Copy on the breakdown embed and its toggle. Constants because the on-demand
+# screen, the auto-post and the tests all name them.
+BREAKDOWN_TITLE = "📊 Growth Breakdown: {prev} to {curr}"
+FIELD_UNCHANGED = "Same numbers as last snapshot"
+UNCHANGED_LEAD = "**{n}** {members}, left out of the buckets below."
+BREAKDOWN_EMPTY_METRIC = "*No members to show for this metric.*"
+BTN_SHOW_ALL = "👀 Show all buckets"
+BTN_SHOW_FILTER = "👀 Show your filter"
+BTN_SHOW_DEFAULT = "👀 Hide No Change"
+FOOTER_COUNTS_TOGGLE = "Buckets with only a count are hidden. Tap Show all buckets to list them."
+FOOTER_COUNTS_SETTINGS = "Buckets with only a count are hidden by your Growth Breakdown settings."
+FOOTER_FULL_LIST = "Every member is listed on the {tab} tab in your Sheet."
+
+
 # Display labels this file used to write, keyed lowercase → canonical bucket.
 # `read_latest_breakdown` folds these into its reverse map so cells written
 # before a rename still classify. Never remove an entry: the sheet is the
@@ -124,6 +143,36 @@ def compute_pct_change(prev: float, curr: float) -> float | None:
     if prev_f <= 0:
         return None
     return round(((curr_f - prev_f) / prev_f) * 100.0, 2)
+
+
+def unchanged_members(pcts_by_member: dict[str, list[float | None]]) -> list[str]:
+    """Members whose every metric is exactly where it was last snapshot.
+
+    Real players don't hold every stat perfectly still for a month, so this
+    almost always means their row on the source tab wasn't updated between
+    snapshots. Counting them as No Change made a stale Sheet read as a
+    stalled alliance (#668). A member missing a percentage for any metric
+    (no baseline yet) isn't here: we can't say their numbers held.
+
+    `pcts_by_member` is `{name: [pct per metric]}`, in the order members
+    should be listed; percentages are the rounded ones the tab stores, so a
+    change smaller than 0.005% on every metric also counts."""
+    return [
+        name
+        for name, pcts in pcts_by_member.items()
+        if pcts and all(p is not None and p == 0 for p in pcts)
+    ]
+
+
+def _parse_pct(cell) -> float | None:
+    """A breakdown tab `%` cell ("12.50%", "-3.00%") as a number, or None."""
+    s = str(cell).strip().rstrip("%").replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def _extract_period_labels(header_row: list[str], metric_labels: list[str]) -> list[str]:
@@ -1346,6 +1395,7 @@ def _write_breakdown_for_snapshot(
     breakdown_summary: dict[str, dict[str, list[str]]] = {
         m: {b: [] for b in BUCKET_ORDER} for m in metric_labels
     }
+    pcts_by_member: dict[str, list[float | None]] = {}
 
     for member in members:
         name = member["name"]
@@ -1397,6 +1447,7 @@ def _write_breakdown_for_snapshot(
 
             pct_val = compute_pct_change(prev_val, curr_val)
             bucket = classify_bucket(prev_val, curr_val, thresholds=thresholds)
+            pcts_by_member.setdefault(name, []).append(pct_val)
 
             pct_cell = "" if pct_val is None else f"{pct_val:.2f}%"
             bucket_cell = "" if bucket is None else _label_for(bucket)
@@ -1439,6 +1490,7 @@ def _write_breakdown_for_snapshot(
                 metric_labels,
                 breakdown_summary,
                 gcfg,
+                unchanged=unchanged_members(pcts_by_member),
             )
         except Exception as e:
             import traceback
@@ -1498,6 +1550,7 @@ def _maybe_post_breakdown(
     metric_labels,
     breakdown_summary,
     gcfg,
+    unchanged: list[str] | None = None,
 ) -> None:
     """Fire the Premium breakdown auto-post. No-op when the guild isn't
     premium at the moment of posting. The bot / channel resolution and
@@ -1545,6 +1598,8 @@ def _maybe_post_breakdown(
             curr_period_label=curr_period_label,
             label_overrides=gcfg.get("breakdown_labels") or {},
             bucket_filter=gcfg.get("breakdown_bucket_filter") or [],
+            unchanged=unchanged or [],
+            tab_name=gcfg.get("tab_breakdown") or "Growth Breakdown",
         )
         try:
             await channel.send(embed=embed)
@@ -1569,6 +1624,10 @@ def read_latest_breakdown(guild_id: int) -> dict:
         transition's labels.
       * ``metric_labels``: list of metric names in transition-column order.
       * ``summary``: ``{metric → {bucket_key → [member names]}}``.
+      * ``unchanged``: members with the same numbers as last snapshot on
+        every metric (see `unchanged_members`). They stay in ``summary``
+        too, so the Map Manager API reads exactly what it always did; the
+        embed is what sets them apart.
 
     The dict's other fields are present-but-empty when ``has_data`` is
     ``False`` so callers can branch cleanly.
@@ -1581,6 +1640,7 @@ def read_latest_breakdown(guild_id: int) -> dict:
         "curr_period_label": "",
         "metric_labels": [],
         "summary": {},
+        "unchanged": [],
     }
 
     gcfg = get_growth_config(guild_id)
@@ -1626,15 +1686,22 @@ def read_latest_breakdown(guild_id: int) -> dict:
         key=lambda m: configured_order.index(m) if m in configured_order else len(configured_order),
     )
     metric_entries = [
-        (m, cols.bucket[(prev_period_label, curr_period_label, m)]) for m in metric_labels
+        (
+            m,
+            cols.pct[(prev_period_label, curr_period_label, m)],
+            cols.bucket[(prev_period_label, curr_period_label, m)],
+        )
+        for m in metric_labels
     ]
 
     summary: dict = {m: {b: [] for b in BUCKET_ORDER} for m in metric_labels}
+    pcts_by_member: dict[str, list[float | None]] = {}
     for row in values[1:]:
         name = _cell(row, cols.name)
         if not name:
             continue
-        for metric, bucket_idx in metric_entries:
+        pcts_by_member[name] = [_parse_pct(_cell(row, pct_idx)) for _, pct_idx, _ in metric_entries]
+        for metric, _, bucket_idx in metric_entries:
             if bucket_idx >= len(row):
                 continue
             cell = row[bucket_idx].strip()
@@ -1650,6 +1717,7 @@ def read_latest_breakdown(guild_id: int) -> dict:
         "curr_period_label": curr_period_label,
         "metric_labels": metric_labels,
         "summary": summary,
+        "unchanged": unchanged_members(pcts_by_member),
     }
 
 
@@ -1672,6 +1740,7 @@ def breakdown_for_range(guild_id: int, from_period: str, to_period: str) -> dict
         "curr_period_label": "",
         "metric_labels": [],
         "summary": {},
+        "unchanged": [],
     }
 
     gcfg = get_growth_config(guild_id)
@@ -1704,16 +1773,20 @@ def breakdown_for_range(guild_id: int, from_period: str, to_period: str) -> dict
         return empty
 
     summary: dict = {m: {b: [] for b in BUCKET_ORDER} for m in metrics_present}
+    pcts_by_member: dict[str, list[float | None]] = {}
     for row in rows[1:]:
         name = _cell(row, cols.name)
         if not name:
             continue
+        pcts = pcts_by_member.setdefault(name, [])
         for label in metrics_present:
             fi, ti = from_cols[label], to_cols[label]
             prev = _parse_growth_cell(row[fi]) if fi < len(row) else None
             curr = _parse_growth_cell(row[ti]) if ti < len(row) else None
             if prev is None or curr is None:
+                pcts.append(None)
                 continue
+            pcts.append(compute_pct_change(prev, curr))
             bucket = classify_bucket(prev, curr, thresholds=thresholds)
             if bucket:
                 summary[label][bucket].append(name)
@@ -1724,7 +1797,74 @@ def breakdown_for_range(guild_id: int, from_period: str, to_period: str) -> dict
         "curr_period_label": to_period,
         "metric_labels": metrics_present,
         "summary": summary,
+        "unchanged": unchanged_members(pcts_by_member),
     }
+
+
+_FIELD_LIMIT = 1024
+_EMBED_LIMIT = 6000
+
+
+def listed_buckets(bucket_filter: list[str] | None, show_all: bool = False) -> list[str]:
+    """The buckets the breakdown lists by name; every other bucket is a count.
+
+    `bucket_filter` is the alliance's saved choice (💎 Premium; pass `[]` for
+    a guild that isn't Premium right now). Empty means the default."""
+    if show_all:
+        return list(BUCKET_ORDER)
+    if bucket_filter:
+        return [b for b in BUCKET_ORDER if b in bucket_filter]
+    return list(DEFAULT_LISTED_BUCKETS)
+
+
+def breakdown_hides_buckets(
+    breakdown_summary: dict,
+    metric_labels: list[str],
+    bucket_filter: list[str] | None,
+    unchanged: list[str] | None = None,
+) -> bool:
+    """Whether the filtered view shows any bucket as a count only, which is
+    when a Show all toggle has something to change."""
+    listed = set(listed_buckets(bucket_filter))
+    gone = set(unchanged or [])
+    for metric in metric_labels:
+        for bucket, names in (breakdown_summary.get(metric) or {}).items():
+            if bucket not in listed and any(n not in gone for n in names):
+                return True
+    return False
+
+
+def _names_within(names: list[str], budget: int) -> tuple[str, bool]:
+    """As many of `names` as fit in `budget` characters, ending "and N more"
+    when some are cut. Returns the text and whether anything was cut."""
+    full = ", ".join(names)
+    if len(full) <= budget:
+        return full, False
+    for keep in range(len(names) - 1, 0, -1):
+        text = ", ".join(names[:keep]) + f", and {len(names) - keep} more"
+        if len(text) <= budget:
+            return text, True
+    return "", True
+
+
+def _sections_value(sections: list[tuple[str, list[str] | None]], limit: int) -> tuple[str, bool]:
+    """Join `(header, names)` sections into one field value under `limit`.
+
+    A section with `names=None` is a count only. Listed sections share what
+    the headers leave, in order, so a long bucket gives way to the ones after
+    it instead of the whole field being cut mid-name."""
+    parts: list[str] = []
+    cut = False
+    for i, (header, names) in enumerate(sections):
+        if names is None:
+            parts.append(header)
+            continue
+        later = sum(len(h) + 2 for h, _ in sections[i + 1 :])
+        used = len("\n\n".join(parts + [header])) + 1
+        text, was_cut = _names_within(names, limit - used - later)
+        cut = cut or was_cut
+        parts.append(header + ("\n" + text if text else ""))
+    return "\n\n".join(parts)[:limit], cut
 
 
 def format_breakdown_embed(
@@ -1735,41 +1875,80 @@ def format_breakdown_embed(
     curr_period_label: str,
     label_overrides: dict | None = None,
     bucket_filter: list[str] | None = None,
+    unchanged: list[str] | None = None,
+    show_all: bool = False,
+    tab_name: str = "Growth Breakdown",
+    with_toggle: bool = False,
 ):
-    """Render the breakdown summary as a Discord embed. Shared by the
-    Premium auto-post, the `/growth overview` "📊 See most recent Breakdown"
-    button, and the standalone `/growth breakdown` leaf so all three views
-    read the same. `bucket_filter` is a list of canonical bucket keys to
-    include; empty list = include every bucket (the typical case).
+    """Render the breakdown as a Discord embed. Shared by the Premium
+    auto-post and the on-demand screen behind `/growth breakdown` and the
+    `/growth overview` button, so every view reads the same.
+
+    Buckets in `listed_buckets(bucket_filter, show_all)` list their members
+    by name; the rest show a count (#668). Members in `unchanged` are pulled
+    out of every bucket into one field of their own. Anything left out or cut
+    for length is on the breakdown tab, and the footer says so.
+    `with_toggle` is for the on-demand screen, whose footer can point at its
+    Show all button.
     """
     import discord
+    from messages import SETUP_POINTER_FOOTER
+    from setup_hub import HUB_BTN_BREAKDOWN
 
     label_overrides = label_overrides or {}
-    bucket_filter = bucket_filter or []
+    listed = listed_buckets(bucket_filter, show_all)
+    gone = list(unchanged or [])
+    gone_set = set(gone)
+    esc = discord.utils.escape_markdown
 
     def _label(bucket: str) -> str:
         return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
 
-    embed = discord.Embed(
-        title=f"📊 Growth Breakdown — {prev_period_label} → {curr_period_label}",
-        color=discord.Color.blue(),
-    )
-
+    counts_only = False
+    per_metric: list[tuple[str, list[tuple[str, list[str] | None]]]] = []
     for metric in metric_labels:
         per_bucket = breakdown_summary.get(metric, {})
-        sections: list[str] = []
+        sections: list[tuple[str, list[str] | None]] = []
         for bucket in BUCKET_ORDER:
-            if bucket_filter and bucket not in bucket_filter:
-                continue
-            names = per_bucket.get(bucket, [])
+            names = [esc(n) for n in per_bucket.get(bucket, []) if n not in gone_set]
             if not names:
                 continue
-            sections.append(f"**{_label(bucket)}** ({len(names)})\n" + ", ".join(names))
-        value = "\n\n".join(sections) if sections else "*No members in the included buckets.*"
-        # Embed field value cap is 1024 chars; truncate with an ellipsis if
-        # a metric has too many members to fit.
-        if len(value) > 1020:
-            value = value[:1017] + "…"
-        embed.add_field(name=metric, value=value, inline=False)
+            header = f"**{_label(bucket)}** ({len(names)})"
+            if bucket in listed:
+                sections.append((header, names))
+            else:
+                sections.append((header, None))
+                counts_only = True
+        per_metric.append((metric, sections))
 
+    title = BREAKDOWN_TITLE.format(prev=prev_period_label, curr=curr_period_label)
+    embed = discord.Embed(title=title[:256], color=discord.Color.blurple())
+
+    # Leave room for the footer and titles, then share the rest out so five
+    # metrics and the unchanged list together stay under Discord's total.
+    field_count = len(per_metric) + (1 if gone else 0)
+    reserved = len(title) + 400 + sum(len(m) for m in metric_labels) + len(FIELD_UNCHANGED)
+    limit = min(_FIELD_LIMIT, (_EMBED_LIMIT - reserved) // max(1, field_count))
+
+    cut = False
+    if gone:
+        lead = UNCHANGED_LEAD.format(n=len(gone), members="member" if len(gone) == 1 else "members")
+        value, was_cut = _sections_value([(lead, [esc(n) for n in gone])], limit)
+        cut = cut or was_cut
+        embed.add_field(name=FIELD_UNCHANGED, value=value, inline=False)
+    for metric, sections in per_metric:
+        if sections:
+            value, was_cut = _sections_value(sections, limit)
+            cut = cut or was_cut
+        else:
+            value = BREAKDOWN_EMPTY_METRIC
+        embed.add_field(name=metric[:256], value=value, inline=False)
+
+    footer: list[str] = []
+    if counts_only:
+        footer.append(FOOTER_COUNTS_TOGGLE if with_toggle else FOOTER_COUNTS_SETTINGS)
+    if counts_only or cut:
+        footer.append(FOOTER_FULL_LIST.format(tab=tab_name))
+    footer.append(SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BREAKDOWN))
+    embed.set_footer(text="\n".join(footer))
     return embed

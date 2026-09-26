@@ -275,6 +275,67 @@ class TestGrowthSnapshotWrites:
         count = header.count(col_name)
         assert count == 1, f"Expected 1 column for {col_name}, got {count}: {header}"
 
+    def test_snapshot_tags_its_columns_and_finds_them_after_a_rename(
+        self, seeded_db, fresh_tab, growth_tab
+    ):
+        """The real Sheets API accepts the column tags, and a second snapshot
+        finds this month's column by its tag after a person renamed its
+        header, instead of adding another one (#668)."""
+        from growth import _run_growth_snapshot_inner
+        from config import save_growth_config
+        from unittest.mock import patch
+        from sheet_tags import read_column_tags, tags_for_sheet
+        from datetime import datetime
+        from growth import ET
+
+        source_ws = fresh_tab
+        growth_ws, g_name = growth_tab
+
+        source_ws.update(
+            "A1", [["Name", "Power"], ["Alice", "43.27"]], value_input_option="USER_ENTERED"
+        )
+        time.sleep(0.5)
+
+        save_growth_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source=source_ws.title,
+            name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth=g_name,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
+            data_start_row=2,
+        )
+
+        sh = get_real_sheet_client()
+        month_label = datetime.now(tz=ET).strftime("%b %Y")
+        with patch("growth._get_spreadsheet", return_value=sh):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+            time.sleep(1)
+
+            tags = tags_for_sheet(read_column_tags(sh), growth_ws)
+            header = growth_ws.row_values(1)
+            month_col = header.index(f"Power ({month_label})")
+            assert tags.get(0) == {"t": "growth", "k": "name"}, tags
+            assert tags.get(month_col) == {
+                "t": "growth",
+                "k": "metric",
+                "m": "Power",
+                "p": month_label,
+            }, tags
+
+            renamed = f"{chr(ord('A') + month_col)}1"
+            growth_ws.update(renamed, [["This month"]], value_input_option="USER_ENTERED")
+            time.sleep(0.5)
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        time.sleep(1)
+        header = growth_ws.row_values(1)
+        assert header[month_col] == "This month", header
+        assert f"Power ({month_label})" not in header, header
+
 
 class TestTrainScheduleSheetReads:
     """Verify train schedule reads from the correct tab."""

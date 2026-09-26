@@ -138,6 +138,25 @@ class TestPowerField:
         with patch("config.get_growth_config", return_value={"enabled": 0}):
             assert ms._power_field(GUILD, target) is None
 
+    def test_a_renamed_member_is_found_by_discord_id(self):
+        """The row still carries the old name; the ID column finds it (#668)."""
+        rows = [
+            ["Name", "THP (May 2026)", "THP (Jun 2026)", "Discord ID"],
+            ["Old Name Tester", "400000000", "412000000", "111"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = rows
+        sh = MagicMock()
+        sh.worksheet.return_value = ws
+        target = ms.Target(name="New Name Tester", discord_id=111, joined="")
+        gcfg = {"enabled": 1, "tab_growth": "G", "metrics": [{"label": "THP"}]}
+        with (
+            patch("config.get_growth_config", return_value=gcfg),
+            patch("growth._get_spreadsheet", return_value=sh),
+        ):
+            val = ms._power_field(GUILD, target)
+        assert val == "**THP:** 412.0M (+12.0M since May 2026)"
+
     def test_member_not_in_growth_tab(self):
         target = ms.Target(name="Nobody", discord_id=1, joined="")
         gcfg = {"enabled": 1, "tab_growth": "G", "metrics": [{"label": "THP"}]}

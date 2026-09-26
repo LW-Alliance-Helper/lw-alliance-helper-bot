@@ -153,10 +153,12 @@ def _tracked_data_names(guild_id: int) -> list[str]:
         if gcfg.get("enabled") and gcfg.get("tab_growth"):
             import growth
 
-            vals = growth._get_spreadsheet(guild_id).worksheet(gcfg["tab_growth"]).get_all_values()
+            labels = [m["label"] for m in (gcfg.get("metrics") or [])]
+            vals, cols = growth.read_growth_tab(guild_id, labels, gcfg["tab_growth"])
             for r in vals[1:]:
-                if r and r[0].strip():
-                    names.add(r[0].strip())
+                name = growth._cell(r, cols.name)
+                if name:
+                    names.add(name)
     except Exception as e:
         logger.warning("[MEMBERSTATS] tracked-names growth read failed guild=%s: %s", guild_id, e)
     try:
@@ -234,10 +236,10 @@ def _birthday_for(guild_id: int, name: str) -> Optional[str]:
 
 
 def _power_field(guild_id: int, target: Target) -> Optional[str]:
-    """Read the existing Growth Tracking tab — each snapshot appends
-    `{metric} ({Mon YYYY})` columns, so a member's row already holds their
-    per-period history. Show each tracked metric's latest value and its
-    change since the previous snapshot."""
+    """Read the existing Growth Tracking tab — each snapshot adds a column
+    per metric, so a member's row already holds their per-period history.
+    Show each tracked metric's latest value and its change since the
+    previous snapshot. The row is found by Discord ID first, then by name."""
     import config
 
     gcfg = config.get_growth_config(guild_id)
@@ -246,39 +248,31 @@ def _power_field(guild_id: int, target: Target) -> Optional[str]:
     metrics = gcfg.get("metrics") or []
     if not metrics:
         return None
+    labels = [m.get("label") for m in metrics if m.get("label")]
     try:
         import growth
 
-        sh = growth._get_spreadsheet(guild_id)
-        ws = sh.worksheet(gcfg["tab_growth"])
-        values = ws.get_all_values()
+        values, gcols = growth.read_growth_tab(guild_id, labels, gcfg["tab_growth"])
     except Exception as e:
         logger.warning("[MEMBERSTATS] growth read failed guild=%s: %s", guild_id, e)
         return None
     if not values:
         return None
-    header = values[0]
-    n = target.name.strip().lower()
-    row = next((r for r in values[1:] if r and r[0].strip().lower() == n), None)
+    row = _growth_row_for(growth, values, gcols, target)
     if row is None:
         return None
 
     lines: list[str] = []
-    for m in metrics:
-        label = m.get("label")
-        if not label:
+    for label in labels:
+        periods = gcols.periods_for(label)
+        if not periods:
             continue
-        # Period columns for this metric, in sheet order (oldest -> newest,
-        # since each snapshot appends to the end of the header).
-        cols = [(i, h) for i, h in enumerate(header) if h.startswith(f"{label} (")]
-        if not cols:
-            continue
-        latest_idx, latest_hdr = cols[-1]
+        period = periods[-1]
+        latest_idx = gcols.metrics[(label, period)]
         latest_val = growth._safe_float(row[latest_idx]) if latest_idx < len(row) else 0.0
-        period = latest_hdr[latest_hdr.find("(") + 1 : latest_hdr.rfind(")")]
-        if len(cols) >= 2:
-            prev_idx, prev_hdr = cols[-2]
-            prev_period = prev_hdr[prev_hdr.find("(") + 1 : prev_hdr.rfind(")")]
+        if len(periods) >= 2:
+            prev_period = periods[-2]
+            prev_idx = gcols.metrics[(label, prev_period)]
             prev_val = growth._safe_float(row[prev_idx]) if prev_idx < len(row) else 0.0
             delta = latest_val - prev_val
             sign = "+" if delta >= 0 else ""
@@ -290,6 +284,17 @@ def _power_field(guild_id: int, target: Target) -> Optional[str]:
     if not lines:
         return None
     return "\n".join(lines)
+
+
+def _growth_row_for(growth, values, gcols, target: Target):
+    """The target's Growth Tracking row: by Discord ID, then by name."""
+    if target.discord_id and gcols.identity >= 0:
+        wanted = str(target.discord_id)
+        row = next((r for r in values[1:] if growth._cell(r, gcols.identity) == wanted), None)
+        if row is not None:
+            return row
+    n = target.name.strip().lower()
+    return next((r for r in values[1:] if growth._cell(r, gcols.name).lower() == n), None)
 
 
 def _train_field(guild_id: int, target: Target, *, leadership_view: bool) -> Optional[str]:
@@ -765,11 +770,13 @@ def _power_values(guild_id: int, target: Target) -> dict:
     if not metric_labels or not tab_growth:
         return {}
     try:
-        rows = growth._get_spreadsheet(guild_id).worksheet(tab_growth).get_all_values()
+        rows, cols = growth.read_growth_tab(guild_id, metric_labels, tab_growth)
     except Exception as e:
         logger.warning("[MEMBERSTATS] profile power read failed guild=%s: %s", guild_id, e)
         return {}
-    return growth.build_member_power_map(metric_labels, rows).get(target.name.strip().lower(), {})
+    return growth.build_member_power_map(metric_labels, rows, cols).get(
+        target.name.strip().lower(), {}
+    )
 
 
 def _storm_profile(

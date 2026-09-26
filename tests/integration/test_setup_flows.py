@@ -1631,7 +1631,7 @@ class TestRunGrowthBreakdownSetup:
                 interaction.channel,
                 view_overrides={
                     "proceed": True,
-                    "selected": [],  # BucketFilterView -> "use all"
+                    "selected": [],  # BucketFilterView -> "use default"
                     "choice": "defaults",  # ThresholdsChoiceView + LabelsChoiceView
                     "cancelled": False,
                 },

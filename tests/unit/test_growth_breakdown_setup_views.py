@@ -56,17 +56,22 @@ def _submit(modal, values: dict):
 
 class TestBucketFilterView:
     def test_fresh_shape(self):
+        """Nothing saved: Use default, then the picker as Define my own."""
         v = gb.BucketFilterView([])
         sel = _select(v)
         assert [o.value for o in sel.options] == ["increased", "steady", "low", "none", "decline"]
-        assert (sel.min_values, sel.max_values, sel.row) == (0, 5, 0)
-        assert [(b.label, b.row) for b in _buttons(v).values()] == [("Use all buckets", 1)]
+        assert (sel.min_values, sel.max_values, sel.row) == (1, 5, 1)
+        assert [(b.label, b.style.name, b.row) for b in _buttons(v).values()] == [
+            ("✅ Use default: All but No Change", "success", 0),
+        ]
 
     def test_saved_filter_shape(self):
+        """A saved filter: Keep current first, Use default beside it, the
+        way `ask_keep_or_change` lays out a saved value."""
         v = gb.BucketFilterView(["low", "decline"])
-        assert [(b.label, b.row) for b in _buttons(v).values()] == [
-            ("Keep current: Low, Decline", 0),
-            ("Use all buckets", 2),
+        assert [(b.label, b.style.name, b.row) for b in _buttons(v).values()] == [
+            ("Keep current: Low, Decline", "success", 0),
+            ("↩️ Use default: All but No Change", "secondary", 0),
         ]
         assert _select(v).row == 1
 
@@ -75,11 +80,14 @@ class TestBucketFilterView:
         v = gb.BucketFilterView(["low"])
         await _click(_buttons(v)["Keep current: Low"])
         assert v.selected == ["low"] and v.is_finished()
+        v = gb.BucketFilterView(["low"])
+        await _click(_buttons(v)["↩️ Use default: All but No Change"])
+        assert v.selected == [] and all(c.disabled for c in v.children)
         v = gb.BucketFilterView([])
         await _click(_select(v), ["none", "decline"])
         assert v.selected == ["none", "decline"]
         v = gb.BucketFilterView([])
-        await _click(_buttons(v)["Use all buckets"])
+        await _click(_buttons(v)["✅ Use default: All but No Change"])
         assert v.selected == [] and all(c.disabled for c in v.children)
 
 

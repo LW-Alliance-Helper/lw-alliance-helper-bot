@@ -239,8 +239,19 @@ CUSTOM_L = {
     "decline": "Going Backwards",
 }
 
-# Auto-post off, defaults for thresholds and labels.
-MINIMAL = [("selected", False), ("choice", "defaults"), ("choice", "defaults")]
+# Auto-post off, the default bucket filter, defaults for thresholds and labels.
+MINIMAL = [
+    ("selected", False),
+    ("selected", []),
+    ("choice", "defaults"),
+    ("choice", "defaults"),
+]
+FILTER_PROMPT = (
+    "**Step 3 of 5 — Bucket Filter**\n"
+    "Which buckets should the breakdown list by name? The others show as a count. "
+    "The default lists every bucket but **No Change**, which usually holds most "
+    "of your alliance."
+)
 
 
 # ── Guard ────────────────────────────────────────────────────────────────────
@@ -282,6 +293,7 @@ class TestFresh:
             "Each time the bot finishes a snapshot, post the breakdown summary "
             "to a channel so leadership doesn't have to run `/growth breakdown` to see "
             "who's slowing down.",
+            FILTER_PROMPT,
             "**Step 4 of 5 — Bucket Thresholds**\n"
             "Defaults: Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%.\n"
             "Customize for stricter (or looser) growth standards — applies to "
@@ -291,9 +303,9 @@ class TestFresh:
             "Rename buckets to match your alliance's voice (e.g. 'Crushing It', "
             "'Stalled', 'Going Backwards').",
         )
-        s.assert_never("Step 3 of 5")
         assert [type(v).__name__ for v in s.views] == [
             "YesNoView",
+            "BucketFilterView",
             "ThresholdsChoiceView",
             "LabelsChoiceView",
         ]
@@ -328,6 +340,7 @@ class TestFresh:
                 "Breakdown) to view on demand.",
                 False,
             ),
+            ("Bucket Filter", "Default: All but No Change", False),
             (
                 "Thresholds",
                 "Defaults (Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%)",
@@ -353,6 +366,7 @@ class TestFresh:
         s, _, _ = await _drive(
             [
                 ("selected", False),
+                ("selected", []),
                 {"choice": "customize", "_modal_values": CUSTOM_T},
                 {"choice": "customize", "_modal_values": CUSTOM_L},
             ]
@@ -375,6 +389,7 @@ class TestFresh:
         s, _, _ = await _drive(
             [
                 ("selected", False),
+                ("selected", []),
                 ("choice", "defaults"),
                 {"choice": "customize", "_modal_values": {"increased": "Up", "decline": ""}},
             ]
@@ -384,6 +399,7 @@ class TestFresh:
             [
                 ("proceed", True),
                 ("selected", False),
+                ("selected", []),
                 ("choice", "defaults"),
                 {"choice": "customize", "_modal_values": {"decline": ""}},
             ]
@@ -413,9 +429,7 @@ class TestAutoPost:
             "**Step 2 of 5",
             PREV_CHANNEL_GONE.format(channel_label="breakdown"),
             "**Auto-Post Channel**\nWhere should the breakdown summaries land?",
-            "**Step 3 of 5 — Bucket Filter**\n"
-            "Pick which buckets fire the auto-post — leave empty (or hit "
-            "**Use all buckets**) to alert on every bucket.",
+            FILTER_PROMPT,
             "**Step 4 of 5",
         )
         assert env.channel_calls[0]["suggested_name"] == "growth-breakdown"
@@ -423,21 +437,24 @@ class TestAutoPost:
         assert env.channel_calls[0]["current_id"] == 0
         bf = s.view_named("BucketFilterView")
         sel = next(c for c in bf.children if hasattr(c, "options"))
-        assert sel.placeholder == "Pick which buckets fire alerts (none = all)"
-        assert (sel.min_values, sel.max_values, sel.row) == (0, 5, 0)
+        assert sel.placeholder == "Or pick the buckets to list by name"
+        assert (sel.min_values, sel.max_values, sel.row) == (1, 5, 1)
         assert [(o.label, o.value, o.description) for o in sel.options] == [
             ("Increased", "increased", "Increased growth bucket"),
             ("Steady", "steady", "Steady growth bucket"),
             ("Low", "low", "Low growth bucket"),
-            ("No Change", "none", "None growth bucket"),
+            ("No Change", "none", "No Change growth bucket"),
             ("Decline", "decline", "Decline growth bucket"),
         ]
         buttons = [c for c in bf.children if getattr(c, "label", None)]
-        assert [(b.label, b.row) for b in buttons] == [("Use all buckets", 1)]
+        assert [(b.label, b.row) for b in buttons] == [("✅ Use default: All but No Change", 0)]
         cfg = _cfg()
         assert cfg["breakdown_post_channel_id"] == 800001 and cfg["breakdown_bucket_filter"] == []
         fields = [(f.name, f.value) for f in s.final_embed.fields]
-        assert fields[1:3] == [("Auto-Post Channel", "<#800001>"), ("Bucket Filter", "All buckets")]
+        assert fields[1:3] == [
+            ("Auto-Post Channel", "<#800001>"),
+            ("Bucket Filter", "Default: All but No Change"),
+        ]
 
     @pytest.mark.asyncio
     async def test_a_filter_is_saved_and_named(self, seeded_db):
@@ -463,14 +480,14 @@ class TestAutoPost:
         assert env.channel_calls[0]["current_id"] == 5
         assert s.sent[s.index_of("Step 3 of 5")] == (
             "**Step 3 of 5 — Bucket Filter**\n"
-            "Currently alerting on: **Low, Decline**. Pick a new set of "
-            "buckets, or hit **Use all buckets** to alert on every bucket."
+            "The breakdown lists **Low, Decline** by name, and shows the "
+            "other buckets as a count. Keep that, go back to the default, or pick again."
         )
         bf = s.view_named("BucketFilterView")
         buttons = [c for c in bf.children if getattr(c, "label", None)]
         assert [(b.label, b.row) for b in buttons] == [
             ("Keep current: Low, Decline", 0),
-            ("Use all buckets", 2),
+            ("↩️ Use default: All but No Change", 0),
         ]
         assert next(c for c in bf.children if hasattr(c, "options")).row == 1
 
@@ -528,7 +545,7 @@ class TestReentry:
         assert [(f.name, f.value) for f in embed.fields] == [
             ("Breakdown Tab", "Growth Breakdown"),
             ("Auto-Post Channel", "<#7>"),
-            ("Bucket Filter", "All buckets"),
+            ("Bucket Filter", "Default: All but No Change"),
         ]
 
     @pytest.mark.asyncio
@@ -540,6 +557,7 @@ class TestReentry:
         assert [(f.name, f.value) for f in embed.fields] == [
             ("Breakdown Tab", "Mine"),
             ("Auto-Post Channel", "❌ Off"),
+            ("Bucket Filter", "Default: All but No Change"),
         ]
 
     @pytest.mark.asyncio
@@ -547,7 +565,13 @@ class TestReentry:
         _save_growth()
         _save_breakdown(breakdown_thresholds=CUSTOM_T, breakdown_labels=CUSTOM_L)
         s, rec, _ = await _drive(
-            [("proceed", True), ("selected", False), ("choice", "keep"), ("choice", "keep")]
+            [
+                ("proceed", True),
+                ("selected", False),
+                ("selected", []),
+                ("choice", "keep"),
+                ("choice", "keep"),
+            ]
         )
         t_view, l_view = s.view_named("ThresholdsChoiceView"), s.view_named("LabelsChoiceView")
         assert [c.label for c in t_view.children] == [
@@ -591,8 +615,10 @@ class TestExits:
         s, _, _ = await _drive(["timeout"])
         assert s.sent[-1] == TIMEOUT
         s, _, _ = await _drive(MINIMAL[:1] + ["timeout"])
-        assert s.sent[-1] == THRESHOLDS_TIMEOUT
+        assert s.sent[-1] == TIMEOUT
         s, _, _ = await _drive(MINIMAL[:2] + ["timeout"])
+        assert s.sent[-1] == THRESHOLDS_TIMEOUT
+        s, _, _ = await _drive(MINIMAL[:3] + ["timeout"])
         assert s.sent[-1] == TIMEOUT
         assert _cfg()["breakdown_thresholds"] == {} and not __import__(
             "config"
@@ -601,10 +627,10 @@ class TestExits:
     @pytest.mark.asyncio
     async def test_a_dismissed_thresholds_modal_reads_as_the_thresholds_timeout(self, seeded_db):
         _save_growth()
-        s, _, _ = await _drive(MINIMAL[:1] + [{"choice": None, "_modal_values": None}])
+        s, _, _ = await _drive(MINIMAL[:2] + [{"choice": None, "_modal_values": None}])
         assert s.sent[-1] == THRESHOLDS_TIMEOUT
 
-    @pytest.mark.parametrize("stop_at", [0, 1, 2])
+    @pytest.mark.parametrize("stop_at", [0, 1, 2, 3])
     @pytest.mark.asyncio
     async def test_cancel_is_silent(self, seeded_db, stop_at):
         _save_growth()

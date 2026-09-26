@@ -1575,31 +1575,20 @@ async def growth_slash(interaction: discord.Interaction):
             # message's own advice and click **Run Snapshot Now**, or
             # re-click Breakdown after a snapshot completes. (#84)
             await inter.response.defer(ephemeral=True)
-            try:
-                from growth import read_latest_breakdown, format_breakdown_embed
+            import growth_breakdown_ui
 
-                data = await asyncio.to_thread(read_latest_breakdown, guild_id)
-            except Exception as e:
-                await inter.followup.send(f"⚠️ Could not load breakdown: {e}", ephemeral=True)
-                return
-            if not data.get("has_data"):
-                await inter.followup.send(
+            await growth_breakdown_ui.send_breakdown(
+                inter,
+                guild_id,
+                gcfg,
+                no_data=(
                     "📊 No breakdown data yet — click **📸 Run Snapshot Now** "
                     "above (or wait for the next scheduled snapshot). The "
                     "breakdown classifies each member's percent change between "
                     "snapshots, so it needs at least two snapshots' worth of "
-                    "data before any classification can render.",
-                    ephemeral=True,
-                )
-                return
-            embed = format_breakdown_embed(
-                metric_labels=data["metric_labels"],
-                breakdown_summary=data["summary"],
-                prev_period_label=data["prev_period_label"],
-                curr_period_label=data["curr_period_label"],
-                label_overrides=gcfg.get("breakdown_labels") or {},
+                    "data before any classification can render."
+                ),
             )
-            await inter.followup.send(embed=embed, ephemeral=True)
 
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -1640,40 +1629,24 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
     if not await guard(interaction):
         return
     from config import get_growth_config
-    from growth import read_latest_breakdown, format_breakdown_embed
+    import growth_breakdown_ui
 
     guild_id = interaction.guild_id
     gcfg = get_growth_config(guild_id)
 
     await interaction.response.defer(ephemeral=True)
-    try:
-        data = await asyncio.to_thread(read_latest_breakdown, guild_id)
-    except Exception as e:
-        await interaction.followup.send(
-            f"⚠️ Could not load breakdown: {e}",
-            ephemeral=True,
-        )
-        return
-
-    if not data.get("has_data"):
-        await interaction.followup.send(
+    await growth_breakdown_ui.send_breakdown(
+        interaction,
+        guild_id,
+        gcfg,
+        no_data=(
             "📊 No breakdown data yet. Run `/growth overview` and click "
             "**📸 Run Snapshot Now** (or wait for the next scheduled "
             "snapshot). The breakdown classifies each member's percent "
             "change between snapshots, so it needs at least two snapshots' "
-            "worth of data before any classification can render.",
-            ephemeral=True,
-        )
-        return
-
-    embed = format_breakdown_embed(
-        metric_labels=data["metric_labels"],
-        breakdown_summary=data["summary"],
-        prev_period_label=data["prev_period_label"],
-        curr_period_label=data["curr_period_label"],
-        label_overrides=gcfg.get("breakdown_labels") or {},
+            "worth of data before any classification can render."
+        ),
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # Register the /growth Group on the tree once every subcommand has

@@ -564,7 +564,10 @@ def init_db():
         # (MEE6 pattern). One row per subscriber: PRIMARY KEY on user_id
         # enforces one-assignment-per-user, UNIQUE on guild_id enforces
         # one-subscriber-per-guild. Rows persist across subscription
-        # lapses so resubscribing auto-resumes Premium in the same guild.
+        # lapses so resubscribing auto-resumes Premium in the same guild --
+        # the one exception is the guild itself being gone thirty days
+        # (#573): the row is released, not the subscription, in the same
+        # sweep that purges everything else about that server.
         # See premium.py and issue #41 for the full model.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_assignments (
@@ -5016,6 +5019,20 @@ def tabs_in_use(
             if row:
                 _claim(row[0], label)
 
+        # VS (#503/#441) claims only while enabled, unlike every other entry
+        # in `_TAB_OWNERS` above -- a disabled tracker's old tab name should
+        # not go on blocking other features from picking it up.
+        if "vs_tab_name" != exclude_field:
+            try:
+                row = conn.execute(
+                    "SELECT tab_name FROM guild_vs_config WHERE guild_id = ? AND enabled = 1",
+                    (guild_id,),
+                ).fetchone()
+            except Exception:
+                row = None
+            if row:
+                _claim(row[0], "your Alliance Duel (VS) tracker")
+
         for column, field, label_fmt in _STORM_TAB_OWNERS:
             if field == exclude_field:
                 continue
@@ -6606,6 +6623,76 @@ def mark_vs_event_posted(guild_id: int, kind: str, event_key: str) -> None:
         conn.commit()
 
 
+def vs_league_key(season: str, tier: str, group: str) -> str:
+    """The `season|tier|group` string every `vs_event_posts.event_key` is
+    prefixed with (`alliance_duel_events`'s clinch/reveal keys append `|week`
+    or `|week|day`; the recap key is this alone). The one shared builder
+    (#634) so `rename_vs_league` rewrites exactly the prefix
+    `alliance_duel_events._league_key` built, rather than each guessing
+    the other's format independently."""
+    return f"{season}|{tier}|{group}"
+
+
+def rename_vs_league(guild_id: int, old, new) -> bool:
+    """Carry a guild's VS bookkeeping forward when a league is renamed, so a
+    prompt already posted this week isn't refused as belonging to an old
+    league, and a clinch or season-recap doesn't repost under the new
+    identity (#634).
+
+    `old`/`new` are `alliance_duel.LeagueKey`s (or anything with the same
+    three string attributes), taken apart here rather than imported --
+    the same reason `record_vs_score_prompt_post` does, so config stays
+    importable without the feature module.
+
+    Refuses (returns False, writes nothing) if `new` already has rows in
+    either table for this guild, rather than silently pooling two leagues'
+    records together. Call after the sheet write succeeds; a caller that
+    gets False here should log it and leave the sheet rename as the
+    successful action -- not undo it, the same way `_mirror_centrally`
+    logs its own write failures rather than raising.
+    """
+    old_season, old_tier, old_group = old.season, old.tier, old.group
+    new_season, new_tier, new_group = new.season, new.tier, new.group
+    new_prefix = vs_league_key(new_season, new_tier, new_group)
+
+    with _get_conn() as conn:
+        collision = conn.execute(
+            "SELECT 1 FROM vs_score_prompt_posts "
+            "WHERE guild_id = ? AND league_season = ? AND league_tier = ? AND league_group = ? "
+            "LIMIT 1",
+            (guild_id, new_season, new_tier, new_group),
+        ).fetchone()
+        if collision is None:
+            collision = conn.execute(
+                "SELECT 1 FROM vs_event_posts "
+                "WHERE guild_id = ? AND (event_key = ? OR event_key LIKE ?) LIMIT 1",
+                (guild_id, new_prefix, f"{new_prefix}|%"),
+            ).fetchone()
+        if collision is not None:
+            return False
+
+        conn.execute(
+            "UPDATE vs_score_prompt_posts SET league_season = ?, league_tier = ?, league_group = ? "
+            "WHERE guild_id = ? AND league_season = ? AND league_tier = ? AND league_group = ?",
+            (new_season, new_tier, new_group, guild_id, old_season, old_tier, old_group),
+        )
+
+        old_prefix = vs_league_key(old_season, old_tier, old_group)
+        rows = conn.execute(
+            "SELECT rowid, event_key FROM vs_event_posts "
+            "WHERE guild_id = ? AND (event_key = ? OR event_key LIKE ?)",
+            (guild_id, old_prefix, f"{old_prefix}|%"),
+        ).fetchall()
+        for row in rows:
+            suffix = row["event_key"][len(old_prefix) :]
+            conn.execute(
+                "UPDATE vs_event_posts SET event_key = ? WHERE guild_id = ? AND rowid = ?",
+                (new_prefix + suffix, guild_id, row["rowid"]),
+            )
+        conn.commit()
+    return True
+
+
 def get_recent_vs_score_prompt_posts(within_days: int = 14) -> list[dict]:
     """Prompts recent enough to still be worth re-registering on startup.
 
@@ -6871,17 +6958,21 @@ def guild_removals_due(
 # events, its sign-ups -- and none of it means anything once the bot is gone
 # from it. Discord's Developer Policy asks for exactly that on `GUILD_DELETE`.
 #
-# Two deliberate exceptions:
+# One deliberate exception: Champion Duel's game records are scrubbed rather
+# than deleted, in `champion_duel_db.purge_guild_data`. They are readings of
+# a tournament other alliances also contributed to, and only the attribution
+# is this server's.
 #
-# - `premium_assignments` is **not touched**. It is keyed on the subscriber,
-#   not the server: the row records that a paying person pinned their one
-#   licence here. Deleting it would take something from someone who did
-#   nothing, and `/premium assign` already copes with a guild it cannot see
-#   (`donate._resolve_guild_name`).
-# - Champion Duel's game records are scrubbed rather than deleted, in
-#   `champion_duel_db.purge_guild_data`. They are readings of a tournament
-#   other alliances also contributed to, and only the attribution is this
-#   server's.
+# `premium_assignments` (#573) is the one row here keyed on a person rather
+# than the server, and it used to be excluded entirely for exactly that
+# reason -- deleting it at *removal* would cost a subscriber who did nothing
+# the moment an admin mis-clicked. It is included now because this purge
+# only ever runs at the end of the thirty-day hold (`sweep_guild_removals`,
+# gated by `guild_removals_due`), never at removal itself, so the reasoning
+# that protected it doesn't apply here: nothing is lost until the server has
+# genuinely been gone a month. Matched by `guild_id` alone, same as every
+# other row below -- the subscription itself is untouched, only which server
+# it points at.
 
 _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     # Configuration, one table per feature.
@@ -6918,6 +7009,9 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("scheduler_pending_warnings", "guild_id = :gid"),
     ("vs_event_posts", "guild_id = :gid"),
     ("vs_score_prompt_posts", "guild_id = :gid"),
+    # A subscriber's licence pointed here, released only because this row
+    # never runs before the thirty-day hold ends -- see the comment above.
+    ("premium_assignments", "guild_id = :gid"),
 )
 
 
@@ -6929,14 +7023,29 @@ def purge_guild_data(guild_id: int, *, apply: bool = False) -> dict:
     removal nobody can trust, and the preview has to run the same predicates
     the real thing does.
 
-    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool}`.
-    `scrubbed` is always empty here and kept only so the two purges return the
-    same shape; the Champion Duel side is where a guild removal scrubs.
+    Returns `{"deleted": {table: rows}, "scrubbed": {}, "applied": bool,
+    "freed_premium_user_id": int | None}`. `scrubbed` is always empty here
+    and kept only so the two purges return the same shape; the Champion
+    Duel side is where a guild removal scrubs. `freed_premium_user_id`
+    (#573) is captured before the generic loop below deletes the row, since
+    the row itself is gone by the time this function returns and a caller
+    that wants to tell the freed subscriber has no other way to find them.
     """
     gid = int(guild_id)
-    out: dict = {"deleted": {}, "scrubbed": {}, "applied": bool(apply)}
+    out: dict = {
+        "deleted": {},
+        "scrubbed": {},
+        "applied": bool(apply),
+        "freed_premium_user_id": None,
+    }
     params = {"gid": gid}
     with _get_conn() as conn:
+        held_by = conn.execute(
+            "SELECT user_id FROM premium_assignments WHERE guild_id = ?", (gid,)
+        ).fetchone()
+        if held_by is not None:
+            out["freed_premium_user_id"] = held_by["user_id"]
+
         for table, where in _GUILD_REMOVAL_DELETES:
             if apply:
                 n = conn.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount  # noqa: S608
@@ -6984,6 +7093,11 @@ def sweep_guild_removals(
         "alliance_duel": {"deleted": {}, "scrubbed": {}},
         "rejoined": [],
         "failed": [],
+        # #573: guild_id -> freed subscriber user_id, for guilds where the
+        # config purge actually ran and a licence was pinned there. The
+        # caller (bot.py) DMs each one and invalidates their premium cache
+        # -- config.py has no Discord client and no premium cache to touch.
+        "freed_premium": {},
         "applied": bool(apply),
     }
 
@@ -7006,7 +7120,8 @@ def sweep_guild_removals(
         # and because due guilds come oldest first, one deterministic failure
         # would block every other server every day.
         try:
-            _fold(merged["config"], purge_guild_data(gid, apply=apply))
+            config_result = purge_guild_data(gid, apply=apply)
+            _fold(merged["config"], config_result)
             import alliance_duel_db
             import champion_duel_db
 
@@ -7023,9 +7138,118 @@ def sweep_guild_removals(
         # Counted only once it actually happened: reporting a purge that threw
         # would say "purged 1 server" while nothing had moved.
         merged["guilds"].append(gid)
+        freed_user = config_result.get("freed_premium_user_id")
+        if apply and freed_user is not None:
+            merged["freed_premium"][gid] = freed_user
         if apply:
             clear_guild_removal(gid)
     return merged
+
+
+# ── Backfilling servers that left before the hold existed (#649) ────────────
+#
+# Before 1.9.0, `on_guild_remove` deleted the install-metadata row and
+# nothing else -- no hold, so `guild_removals_due` never sees these servers
+# and their configuration, sign-ups and Champion Duel / VS records (and any
+# stale Premium pin) stay indefinitely. `privacy.html` promises 30-day
+# deletion; for these servers that has never been true.
+#
+# There is no clock to read for "when did this one leave" -- the removal was
+# never recorded. The backfill command starts a hold *now*, the same shape a
+# real removal would have started, so these servers get the same thirty days
+# real removals get, dated from when someone noticed rather than when it
+# happened.
+
+
+def guild_ids_with_stored_data() -> set[int]:
+    """Every guild id with at least one row in a guild-scoped table, across
+    all three databases. The full candidate pool for #649's backfill --
+    still includes currently-installed and already-held servers, which the
+    caller filters out; this only answers "does anything remember this id".
+
+    Champion Duel and VS store `guild_id` as TEXT (`str(int(guild_id))`);
+    normalised to `int` here so the three databases' ids compare and union
+    cleanly. `champion_duel_db`'s cascade-only `pick_meetings` (no `guild_id`
+    of its own) is out of scope -- if `pick_slates` has a candidate row,
+    that guild is already found through it.
+    """
+    ids: set[int] = set()
+
+    def _collect_int_column(conn, table: str, where: str) -> None:
+        column = where.split("=", 1)[0].strip()
+        for row in conn.execute(f"SELECT DISTINCT {column} AS gid FROM {table}"):  # noqa: S608
+            try:
+                ids.add(int(row["gid"]))
+            except (TypeError, ValueError):
+                continue
+
+    with _get_conn() as conn:
+        for table, where in _GUILD_REMOVAL_DELETES:
+            _collect_int_column(conn, table, where)
+
+    import alliance_duel_db
+    import champion_duel_db
+
+    for module in (champion_duel_db, alliance_duel_db):
+        specs = list(module._GUILD_REMOVAL_DELETES) + [
+            (t, w) for t, _sets, w in module._GUILD_REMOVAL_SCRUBS
+        ]
+        with module._get_conn() as conn:
+            for table, where in specs:
+                _collect_int_column(conn, table, where)
+
+    return ids
+
+
+def backfill_candidates(
+    *, live: set[int], recently_seen_days: int = 14, now: "datetime | None" = None
+) -> dict[int, str | None]:
+    """Servers with stored data that the bot is not in and has no hold for
+    yet -- the set #649's owner-only command previews and can start holds
+    for.
+
+    `live` must come from the caller's own union of `bot.guilds` and a live
+    `fetch_guilds()` REST call (see `bot_admin.py`), never from the gateway
+    cache alone -- discord.py's `guild_ready_timeout` (2 seconds) means
+    `bot.guilds` can be partial right after startup, and a live server
+    mistaken for a candidate is the one outcome this command must never
+    produce.
+
+    Maps each candidate to its `guild_install_metadata.last_seen_at`, or
+    None if that row is already gone (the common case for a genuinely
+    pre-1.9.0 departure -- the old `on_guild_remove` deleted it). A
+    candidate seen inside `recently_seen_days` is left out entirely as
+    suspicious: metadata that fresh alongside "the bot isn't in it" reads
+    as a `live` gap, not a real departure, and this command must fail
+    closed rather than hold a server that's actually still installed.
+    """
+    import datetime as _dt
+
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - _dt.timedelta(days=recently_seen_days)
+
+    out: dict[int, str | None] = {}
+    with _get_conn() as conn:
+        for gid in guild_ids_with_stored_data():
+            if gid in live:
+                continue
+            if guild_removal_held_since(gid) is not None:
+                continue  # already has a hold -- nothing for this command to start
+            row = conn.execute(
+                "SELECT last_seen_at FROM guild_install_metadata WHERE guild_id = ?", (gid,)
+            ).fetchone()
+            last_seen = row["last_seen_at"] if row else None
+            if last_seen:
+                try:
+                    stamp = datetime.fromisoformat(last_seen)
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                    if stamp > cutoff:
+                        continue  # suspicious -- leave it out entirely
+                except ValueError:
+                    pass
+            out[gid] = last_seen
+    return out
 
 
 def purge_user_data(user_id: int, *, apply: bool = False) -> dict:

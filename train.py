@@ -28,6 +28,7 @@ from wizard_registry import ExpiringView
 import config_health
 from config import get_config
 from messages import NOT_SET_UP
+from time_helpers import server_today
 from setup_hub import HUB_BTN_BIRTHDAYS
 
 # Birthday helpers + member-sheet loader live in train_birthdays.py.
@@ -242,28 +243,6 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
             f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
         _note_train_sheet_error(e, guild_id)
-
-
-def blurb_generated_today(guild_id: int = None) -> bool:
-    """Check if today's prompt has been retrieved."""
-    try:
-        today = date.today().isoformat()
-        ws = _get_train_sheet(guild_id)
-        rows = ws.get_all_values()
-        _note_train_sheet_ok(guild_id)
-        for row in rows[1:]:
-            if row and row[0].strip() == today:
-                return len(row) > 5 and row[5].strip().upper() == "TRUE"
-        return False
-    except Exception as e:
-        from config import describe_sheet_error
-
-        print(
-            f"[TRAIN] Error checking blurb log: "
-            f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
-        )
-        _note_train_sheet_error(e, guild_id)
-        return False
 
 
 def load_blurb_log(guild_id: int = None) -> set:
@@ -495,7 +474,7 @@ def build_chatgpt_prompt(
 
 def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     """Build a scannable embed showing the next 14 days of the train schedule."""
-    today = date.today()
+    today = server_today()
 
     embed = discord.Embed(
         title="🚂 Alliance Train Schedule",

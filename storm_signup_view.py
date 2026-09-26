@@ -610,7 +610,13 @@ async def _maybe_send_power_refresh_dm(
             try:
                 import datetime as _dt
 
-                today = _dt.date.today()
+                # Deliberately UTC, not server_today()/local_today(): the
+                # other side of this comparison (`last_updated`) is stamped
+                # in UTC too (`survey.py`'s `datetime.now(timezone.utc)`),
+                # so matching calendars here is correct, not the
+                # date.today() bug this file's siblings were fixed for
+                # (#607) — an explicit call so it reads as intentional.
+                today = _dt.datetime.now(_dt.timezone.utc).date()
                 age_days = (today - last_updated).days
                 if age_days >= stale_days:
                     nudge_reason = "stale"

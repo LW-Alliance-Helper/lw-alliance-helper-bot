@@ -1,7 +1,7 @@
 """
 The Growth Breakdown wizard (`run_growth_breakdown_setup`, 💎 Premium):
 the growth guard, the re-entry summary, the breakdown tab, the auto-post
-toggle with its channel and bucket filter, the custom thresholds and
+toggle with its channel, the bucket filter, the custom thresholds and
 bucket labels, the save and the confirmation embed.
 
 The bucket-classification math itself ships free (`/growth breakdown`,
@@ -9,7 +9,8 @@ and the **📊 See most recent Breakdown** button on `/growth overview`,
 both read the breakdown tab for any guild that's enabled growth
 tracking). This wizard configures the Premium layer: the sheet tab, the
 auto-post channel (premium-gated at post time so a subscription lapse
-stops the alerts without any config change), the bucket filter, custom
+stops the alerts without any config change), the bucket filter (which
+buckets every view of the breakdown lists by name, #668), custom
 thresholds applied to every metric (global, not per-metric) and custom
 labels for each bucket.
 
@@ -21,10 +22,11 @@ shared wizard pieces come from `wizard_steps`; this module reaches into
 the tab-claim warning. The five inline views and modals are module
 classes under their old names.
 
-Every prompt, label, acknowledgement, saved field and summary line is
-unchanged from the function this replaced;
 `tests/integration/test_growth_breakdown_setup.py` was written against
-it and holds this module to it.
+the function this replaced and holds this module to it. The one deliberate
+change since is the bucket filter (#668): it now applies to every view of
+the breakdown rather than only the auto-post, so it is asked whether or not
+the auto-post is on, and it offers the default the other wizards offer.
 """
 
 import asyncio
@@ -59,6 +61,14 @@ def _bucket_names(buckets: list[str]) -> str:
     from growth import DEFAULT_BUCKET_LABELS
 
     return ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in buckets)
+
+
+#: What an empty bucket filter means, on the button and in the summaries.
+FILTER_DEFAULT = "All but No Change"
+
+
+def _filter_text(buckets: list[str]) -> str:
+    return _bucket_names(buckets) if buckets else f"Default: {FILTER_DEFAULT}"
 
 
 def _custom_labels_text(labels: dict) -> str:
@@ -125,8 +135,10 @@ async def _disable_and_stop(view, inter: discord.Interaction) -> None:
 
 
 class BucketFilterView(discord.ui.View):
-    """Step 3: which buckets fire the auto-post. A Keep-current button
-    sits on its own row when leadership previously picked a filter."""
+    """Step 3: which buckets the breakdown lists by name (#668). Laid out
+    the way `wizard_steps.ask_keep_or_change` lays out a saved value: Keep
+    current and Use default on the first row when there is a saved filter,
+    Use default alone when there isn't, and the picker as Define my own."""
 
     def __init__(self, saved_filter: list[str]):
         from growth import DEFAULT_BUCKET_LABELS, BUCKET_ORDER
@@ -134,33 +146,48 @@ class BucketFilterView(discord.ui.View):
         super().__init__(timeout=WIZARD_STEP_TIMEOUT)
         self.selected: list[str] | None = None
 
+        def _choose(value: list[str]):
+            async def _cb(inter: discord.Interaction):
+                self.selected = list(value)
+                await _disable_and_stop(self, inter)
+
+            return _cb
+
         if saved_filter:
             keep_btn = discord.ui.Button(
                 label=f"Keep current: {_bucket_names(saved_filter)}"[:80],
                 style=discord.ButtonStyle.success,
                 row=0,
             )
-
-            async def _keep_cb(inter: discord.Interaction):
-                self.selected = list(saved_filter)
-                await _disable_and_stop(self, inter)
-
-            keep_btn.callback = _keep_cb
+            keep_btn.callback = _choose(saved_filter)
             self.add_item(keep_btn)
+            default_btn = discord.ui.Button(
+                label=f"↩️ Use default: {FILTER_DEFAULT}"[:80],
+                style=discord.ButtonStyle.secondary,
+                row=0,
+            )
+        else:
+            default_btn = discord.ui.Button(
+                label=f"✅ Use default: {FILTER_DEFAULT}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+        default_btn.callback = _choose([])
+        self.add_item(default_btn)
 
         select = discord.ui.Select(
-            placeholder="Pick which buckets fire alerts (none = all)",
+            placeholder="Or pick the buckets to list by name",
             options=[
                 discord.SelectOption(
                     label=DEFAULT_BUCKET_LABELS[b],
                     value=b,
-                    description=f"{b.title()} growth bucket",
+                    description=f"{DEFAULT_BUCKET_LABELS[b]} growth bucket",
                 )
                 for b in BUCKET_ORDER
             ],
-            min_values=0,
+            min_values=1,
             max_values=len(BUCKET_ORDER),
-            row=1 if saved_filter else 0,
+            row=1,
         )
 
         async def _select_cb(inter: discord.Interaction):
@@ -169,19 +196,6 @@ class BucketFilterView(discord.ui.View):
 
         select.callback = _select_cb
         self.add_item(select)
-
-        all_btn = discord.ui.Button(
-            label="Use all buckets",
-            style=discord.ButtonStyle.secondary,
-            row=2 if saved_filter else 1,
-        )
-
-        async def _all_cb(inter: discord.Interaction):
-            self.selected = []
-            await _disable_and_stop(self, inter)
-
-        all_btn.callback = _all_cb
-        self.add_item(all_btn)
 
 
 class ThresholdsModal(discord.ui.Modal):
@@ -351,11 +365,8 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
     fields = [
         ("Breakdown Tab", current.get("tab_breakdown") or "Growth Breakdown"),
         ("Auto-Post Channel", f"<#{post_ch}>" if post_ch else "❌ Off"),
+        ("Bucket Filter", _filter_text(bucket_filter)),
     ]
-    if post_ch and bucket_filter:
-        fields.append(("Bucket Filter", _bucket_names(bucket_filter)))
-    elif post_ch:
-        fields.append(("Bucket Filter", "All buckets"))
     if thresholds:
         fields.append(
             (
@@ -401,9 +412,7 @@ async def _ask_tab(w: _Wizard, s: _Saved, a: _Answers) -> None:
 
 
 async def _ask_auto_post(w: _Wizard, s: _Saved, a: _Answers) -> None:
-    """Steps 2 and 3: the auto-post toggle, its channel, and the bucket
-    filter (which only applies to the auto-post; the on-demand `/growth`
-    button always shows every bucket)."""
+    """Step 2: the auto-post toggle and its channel."""
     on = await w.ask(
         "**Step 2 of 5 — Auto-Post After Snapshots?**\n"
         "Each time the bot finishes a snapshot, post the breakdown summary "
@@ -433,18 +442,24 @@ async def _ask_auto_post(w: _Wizard, s: _Saved, a: _Answers) -> None:
         raise _Abort
     a.post_channel_id = view.selected_channel.id
 
+
+async def _ask_bucket_filter(w: _Wizard, s: _Saved, a: _Answers) -> None:
+    """Step 3: which buckets every view of the breakdown lists by name
+    (#668). The rest show as a count. Asked whether or not the auto-post is
+    on, since `/growth breakdown` reads it too."""
     saved_filter = s.current.get("breakdown_bucket_filter") or []
     if saved_filter:
         prompt = (
             f"**Step 3 of 5 — Bucket Filter**\n"
-            f"Currently alerting on: **{_bucket_names(saved_filter)}**. Pick a new set of "
-            f"buckets, or hit **Use all buckets** to alert on every bucket."
+            f"The breakdown lists **{_bucket_names(saved_filter)}** by name, and shows the "
+            f"other buckets as a count. Keep that, go back to the default, or pick again."
         )
     else:
         prompt = (
             "**Step 3 of 5 — Bucket Filter**\n"
-            "Pick which buckets fire the auto-post — leave empty (or hit "
-            "**Use all buckets**) to alert on every bucket."
+            "Which buckets should the breakdown list by name? The others show as a count. "
+            "The default lists every bucket but **No Change**, which usually holds most "
+            "of your alliance."
         )
     a.bucket_filter = await w.ask(prompt, BucketFilterView(saved_filter), "selected")
 
@@ -526,15 +541,14 @@ def _summary_embed(a: _Answers) -> discord.Embed:
     embed = discord.Embed(title="✅ Growth Breakdown Configured", color=discord.Color.green())
     embed.add_field(name="Breakdown Tab", value=a.tab_breakdown, inline=False)
     if a.post_channel_id:
-        bf_text = _bucket_names(a.bucket_filter) if a.bucket_filter else "All buckets"
         embed.add_field(name="Auto-Post Channel", value=f"<#{a.post_channel_id}>", inline=False)
-        embed.add_field(name="Bucket Filter", value=bf_text, inline=False)
     else:
         embed.add_field(
             name="Auto-Post",
             value="❌ Off — use `/growth breakdown` (or `/growth overview` → 📊 See most recent Breakdown) to view on demand.",
             inline=False,
         )
+    embed.add_field(name="Bucket Filter", value=_filter_text(a.bucket_filter), inline=False)
     if a.thresholds:
         t_text = (
             f"Increased ≥ {a.thresholds['increased']:g}%, "
@@ -586,6 +600,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         await _ask_tab(w, s, a)
         await _ask_auto_post(w, s, a)
+        await _ask_bucket_filter(w, s, a)
         await _ask_thresholds(w, s, a)
         await _ask_labels(w, s, a)
         await _save(w, a)

@@ -155,17 +155,6 @@ class ScorePromptView(discord.ui.View):
             )
             return
 
-        # Re-gated at click time, not just at post time. A guild whose Premium
-        # lapsed overnight still has yesterday's prompt sitting in the channel.
-        if not await premium.feature_gate(
-            "alliance_duel_vs", interaction.guild_id, interaction=interaction
-        ):
-            await interaction.response.send_message(
-                messages.PREMIUM_LOCKED_INLINE.format(feature="Alliance Duel (VS) tracker"),
-                ephemeral=True,
-            )
-            return
-
         vs_cfg = config.get_vs_config(interaction.guild_id)
         if not vs_cfg.get("enabled"):
             await interaction.response.send_message(
@@ -200,7 +189,12 @@ class ScorePromptView(discord.ui.View):
             )
             return
 
-        state = ad_hub.HubState(interaction.guild_id, vs_cfg, rows)
+        # Logging a day is free (#667); Premium only decides whether the save
+        # treats the sheet as a whole bracket.
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", interaction.guild_id, interaction=interaction
+        )
+        state = ad_hub.HubState(interaction.guild_id, vs_cfg, rows, premium=has_premium)
         if state.own is None:
             await interaction.response.send_message(
                 "⚠️ I no longer know which alliance is yours. Set it again in "

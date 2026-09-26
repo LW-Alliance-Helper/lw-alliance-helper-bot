@@ -575,3 +575,146 @@ class TestSafeEditResponse:
         embed = MagicMock()
         await safe_edit_response(inter, embed=embed)
         inter.response.edit_message.assert_awaited_once_with(embed=embed)
+
+
+# ── guard_wizard_launch / is_missing_access ─────────────────────────────────────
+
+
+def _make_forbidden(code: int) -> discord.Forbidden:
+    resp = MagicMock()
+    resp.status = 403
+    return discord.Forbidden(resp, {"message": "Test", "code": code})
+
+
+def _make_gone(code: int = 10003) -> discord.NotFound:
+    resp = MagicMock()
+    resp.status = 404
+    return discord.NotFound(resp, {"message": "Unknown Channel", "code": code})
+
+
+class TestIsMissingAccess:
+    def test_forbidden_50001_is_missing_access(self):
+        assert wizard_registry.is_missing_access(_make_forbidden(50001)) is True
+
+    def test_forbidden_50013_is_missing_access(self):
+        assert wizard_registry.is_missing_access(_make_forbidden(50013)) is True
+
+    def test_not_found_10003_is_missing_access(self):
+        assert wizard_registry.is_missing_access(_make_gone(10003)) is True
+
+    def test_other_forbidden_code_is_not_missing_access(self):
+        assert wizard_registry.is_missing_access(_make_forbidden(40001)) is False
+
+    def test_other_not_found_code_is_not_missing_access(self):
+        assert wizard_registry.is_missing_access(_make_gone(10062)) is False
+
+    def test_unrelated_exception_is_not_missing_access(self):
+        assert wizard_registry.is_missing_access(ValueError("boom")) is False
+
+
+class TestGuardWizardLaunch:
+    """#582: every wizard launcher shares this guard instead of copying the
+    root `/setup` button's own try/except (#319)."""
+
+    def _make_interaction(self, *, response_done=True) -> MagicMock:
+        interaction = MagicMock()
+        interaction.guild_id = 123
+        interaction.user.id = 456
+        interaction.response.is_done = MagicMock(return_value=response_done)
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        return interaction
+
+    @pytest.mark.asyncio
+    async def test_forbidden_50001_is_absorbed_and_notifies(self):
+        interaction = self._make_interaction()
+
+        async def _raise():
+            raise _make_forbidden(50001)
+
+        await wizard_registry.guard_wizard_launch(_raise(), interaction)
+        interaction.followup.send.assert_awaited_once()
+        args, kwargs = interaction.followup.send.await_args
+        sent = args[0] if args else kwargs.get("content")
+        assert sent == wizard_registry.WIZARD_LOST_ACCESS
+
+    @pytest.mark.asyncio
+    async def test_forbidden_50013_is_absorbed(self):
+        interaction = self._make_interaction()
+
+        async def _raise():
+            raise _make_forbidden(50013)
+
+        await wizard_registry.guard_wizard_launch(_raise(), interaction)
+        interaction.followup.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_not_found_10003_is_absorbed(self):
+        interaction = self._make_interaction()
+
+        async def _raise():
+            raise _make_gone(10003)
+
+        await wizard_registry.guard_wizard_launch(_raise(), interaction)
+        interaction.followup.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_uses_response_send_message_when_not_yet_responded(self):
+        interaction = self._make_interaction(response_done=False)
+
+        async def _raise():
+            raise _make_forbidden(50001)
+
+        await wizard_registry.guard_wizard_launch(_raise(), interaction)
+        interaction.response.send_message.assert_awaited_once()
+        interaction.followup.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_other_forbidden_code_propagates(self):
+        """A real bug's 403 is not this — must not be swallowed."""
+        interaction = self._make_interaction()
+
+        async def _raise():
+            raise _make_forbidden(40001)
+
+        with pytest.raises(discord.Forbidden):
+            await wizard_registry.guard_wizard_launch(_raise(), interaction)
+        interaction.followup.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unrelated_exception_propagates(self):
+        interaction = self._make_interaction()
+
+        async def _raise():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError):
+            await wizard_registry.guard_wizard_launch(_raise(), interaction)
+
+    @pytest.mark.asyncio
+    async def test_success_path_untouched(self):
+        interaction = self._make_interaction()
+        result = {}
+
+        async def _ok():
+            result["ran"] = True
+
+        await wizard_registry.guard_wizard_launch(_ok(), interaction)
+        assert result == {"ran": True}
+        interaction.followup.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_followup_failure_does_not_raise(self):
+        """If even the notice fails to send (interaction expired), the
+        guard must not raise — the original problem is already handled."""
+        interaction = self._make_interaction()
+        resp = MagicMock()
+        resp.status = 404
+        interaction.followup.send = AsyncMock(
+            side_effect=discord.HTTPException(resp, {"message": "gone", "code": 10008})
+        )
+
+        async def _raise():
+            raise _make_forbidden(50001)
+
+        await wizard_registry.guard_wizard_launch(_raise(), interaction)  # must not raise

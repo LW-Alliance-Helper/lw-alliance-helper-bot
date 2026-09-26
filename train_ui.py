@@ -17,6 +17,7 @@ from datetime import date, timedelta
 import discord
 
 import wizard_registry
+from time_helpers import server_today
 from train import (
     active_wizards,
     WIZARD_TIMEOUT,
@@ -497,7 +498,7 @@ class TrainActionView(discord.ui.View):
     @discord.ui.button(label="✏️ Update", style=discord.ButtonStyle.primary)
     async def update(self, inter: discord.Interaction, button: discord.ui.Button):
         schedule = await asyncio.to_thread(load_schedule, self.guild_id)
-        today = date.today()
+        today = server_today()
         cutoff = today - timedelta(days=7)
         upper = today + timedelta(days=30)
         entries = []
@@ -523,7 +524,7 @@ class TrainActionView(discord.ui.View):
     @discord.ui.button(label="📋 Generate Prompt", style=discord.ButtonStyle.secondary)
     async def generate(self, inter: discord.Interaction, button: discord.ui.Button):
         schedule = await asyncio.to_thread(load_schedule, self.guild_id)
-        today = date.today()
+        today = server_today()
         upper = today + timedelta(days=14)
         entries = []
         for d_iso, entry in schedule.items():

@@ -32,21 +32,14 @@ extend-select = ["DTZ003", "DTZ005", "DTZ011"]
 #
 # If one of these modules is ever moved onto ET or server time, its entry here
 # is what says the tests have to move with it.
-
-# `train_birthdays.check_and_add_birthdays` resolves its lookahead from a naive
-# `date.today()`, so the test has to build its target dates from the same one.
-"unit/test_train.py" = ["DTZ011"]
+#
+# #607 retired every waiver but this one: `unit/test_train.py`'s waiver
+# described a `check_and_add_birthdays` that had already moved onto
+# `server_today()` back in 1.8.11 (this comment block never caught up), and
+# the other three (`unit/test_storm_signup_view.py`, `unit/test_storm_member_log.py`,
+# `integration/test_draft_flows.py`) turned out to have no bare `date.today()`
+# left to waive at all -- the sites they were matching had already moved onto
+# `server_today()` or an explicit UTC read, and ruff agreed once actually
+# tried without them. Only the sheets suite still reads the naive clock,
+# to match the sheet-side test fixture it's asserting against.
 "sheets/test_live_writes.py" = ["DTZ011"]
-
-# The reminder loop filters on a naive `date.today()` rather than the ET
-# datetime it patches elsewhere; the tests say so at the call site.
-"unit/test_train_reminder_loop.py" = ["DTZ011"]
-
-# `storm_signup_view` ages a member's `last_updated` against a naive
-# `date.today()`.
-"unit/test_storm_signup_view.py" = ["DTZ011"]
-
-# `storm_log` stamps `log_date` from a naive `date.today()`, and its date
-# picker offers `__today__` off the same one.
-"unit/test_storm_member_log.py" = ["DTZ011"]
-"integration/test_draft_flows.py" = ["DTZ011"]

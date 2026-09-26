@@ -52,6 +52,7 @@ Every feature works on the **free tier** with sensible caps for a typical allian
 | Tracked growth metrics | 5 | Unlimited |
 | Channel destinations | Text channels | Text channels and threads |
 | Storm participation lookback | 4 entries | Unlimited |
+| Alliance Duel (VS) | Track your own alliance: day scores, outcomes, head to head, trends | + your whole League bracket: Bracket, Scout, My Path, next-opponent and season-recap posts |
 | Premium-only features | — | Member Roster Sync · role-scoped Conductor Rotation days · birthday DMs · train assignment DMs · DM-based storm reminders · DM-based survey reminders · auto-mentions · customizable DM bodies · Transfer Management |
 
 Full comparison + complete premium-only feature list: [pricing page](https://lw-alliance-helper.github.io/pricing.html).

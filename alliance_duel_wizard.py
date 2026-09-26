@@ -1,17 +1,27 @@
-"""Alliance Duel (VS) setup wizard (#399 / #448).
+"""Alliance Duel (VS) setup wizard (#399 / #448 / #503 / #651).
 
 The interactive half of VS setup: ask which alliance is yours, ask which
-shape they want to track, create the tab, and show the column guide.
+shape they want to track, ask which tab to use, find-or-create it, and show
+the column guide.
 
 `alliance_duel_setup.py` owns the embeds this renders, so everything here is
-flow control. Two steps only, in the order the user thinks rather than the
-order the schema stores: *who are you* then *what do you want to track*.
+flow control. Three steps, in the order the user thinks rather than the
+order the schema stores: *who are you*, *what do you want to track*, then
+*which tab*.
 
 The mode question is step two on purpose. It is the one thing that cannot be
 inferred (skeleton generation is a write, so the shape has to be known before
 there is data to infer it from), and asking it after the alliance identity
 means the upsell lands on someone who has already committed to setting this
 up rather than on a cold open.
+
+The tab question (#503) is step three rather than step one for the same
+reason: every other wizard here is channel-based and asks it through
+`setup_cog.ask_keep_or_change`, but this one is an ephemeral panel driven by
+modals and cannot call that helper, so `TabNameView`/`TabNameModal`
+reimplement its Keep current / Use default / Define my own shape natively.
+Before this, the tab was hardcoded and created silently -- a renamed or
+deleted tab got quietly rebuilt blank with no notice at all.
 """
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_setup as ads
 import config
+import premium
 from messages import CANCEL_BACKPEDAL_DEFAULT
 from setup_hub import HUB_BTN_VS
 from wizard_registry import expire_view_message, safe_edit_response
@@ -107,11 +118,21 @@ class TrackingModeView(ExpiringView):
 
     @discord.ui.button(label=ads.MODE_BTN_OWN, style=discord.ButtonStyle.secondary)
     async def btn_own(self, inter: discord.Interaction, _b: discord.ui.Button):
-        await self._parent.finish(inter, ad.MODE_OWN_ALLIANCE)
+        await self._parent.show_tab_step(inter, ad.MODE_OWN_ALLIANCE)
 
     @discord.ui.button(label=ads.MODE_BTN_FULL, style=discord.ButtonStyle.secondary)
     async def btn_full(self, inter: discord.Interaction, _b: discord.ui.Button):
-        await self._parent.finish(inter, ad.MODE_FULL_BRACKET)
+        # Gated here, before anything is saved (#667). The lock goes out as its
+        # own message so this view stays live and "Just my alliance" is one
+        # click away.
+        if not await premium.feature_gate("alliance_duel_vs", inter.guild_id, interaction=inter):
+            await inter.response.send_message(
+                embed=ads.full_bracket_locked_embed(),
+                view=premium.upgrade_view(),
+                ephemeral=True,
+            )
+            return
+        await self._parent.show_tab_step(inter, ad.MODE_FULL_BRACKET)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
     async def btn_cancel(self, inter: discord.Interaction, _b: discord.ui.Button):
@@ -123,6 +144,95 @@ class TrackingModeView(ExpiringView):
             content=(
                 f"{CANCEL_BACKPEDAL_DEFAULT} Your alliance is still saved. "
                 f"Run `/setup` and click **{HUB_BTN_VS}** to pick a tracking mode."
+            ),
+            embed=None,
+            view=None,
+        )
+
+
+#: `guild_vs_config.tab_name`'s seeded value (#503) -- every row already
+#: holds this by default (`INSERT OR IGNORE`), so an unconfigured guild's
+#: "current" tab already IS the default. Named here rather than repeating
+#: the literal, since `TabNameView` compares against it twice.
+DEFAULT_VS_TAB = "Alliance Duel (VS)"
+
+
+class TabNameModal(discord.ui.Modal, title="Define your own tab name"):
+    """The Define-my-own path off the tab step. A bare text field: the name
+    is validated the same way `ensure_tab` treats any tab name -- created
+    if it does not already exist, used as-is if it does."""
+
+    name = discord.ui.TextInput(
+        label="Sheet tab name",
+        placeholder=DEFAULT_VS_TAB,
+        max_length=90,
+        required=True,
+    )
+
+    def __init__(self, parent: "VSSetupView", tracking_mode: str) -> None:
+        super().__init__()
+        self._parent = parent
+        self._mode = tracking_mode
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        name = str(self.name).strip()
+        if not name:
+            await interaction.response.send_message("⚠️ Enter a tab name.", ephemeral=True)
+            return
+        await self._parent.finish(interaction, self._mode, name)
+
+
+class TabNameView(ExpiringView):
+    """Step 3 (#503): which sheet tab Alliance Duel (VS) should use.
+
+    Keep current / Use default / Define my own -- the same three-way choice
+    every other wizard offers through `setup_cog.ask_keep_or_change`,
+    reimplemented natively here because that helper is channel-based and
+    this wizard is an ephemeral panel driven by modals.
+
+    "Keep current" only appears when the saved tab differs from the
+    default, matching `ask_keep_or_change`'s own rule against showing two
+    buttons that would do the identical thing -- an unconfigured guild's
+    "current" already IS the default.
+    """
+
+    timeout_hint = ads.VS_SETUP_NAV
+
+    def __init__(self, parent: "VSSetupView", tracking_mode: str) -> None:
+        super().__init__(timeout=STEP_TIMEOUT)
+        self._parent = parent
+        self._mode = tracking_mode
+        self.message: discord.Message | None = None
+        current = (parent.cfg.get("tab_name") or "").strip()
+        if not current or current.casefold() == DEFAULT_VS_TAB.casefold():
+            self.remove_item(self.btn_keep)
+        else:
+            self.btn_keep.label = f"Keep current: {current}"[:80]
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self._parent.owns(interaction)
+
+    @discord.ui.button(label="Keep current", style=discord.ButtonStyle.secondary)
+    async def btn_keep(self, inter: discord.Interaction, _b: discord.ui.Button):
+        current = self._parent.cfg.get("tab_name") or DEFAULT_VS_TAB
+        await self._parent.finish(inter, self._mode, current)
+
+    @discord.ui.button(label=f"Use default: {DEFAULT_VS_TAB}", style=discord.ButtonStyle.secondary)
+    async def btn_default(self, inter: discord.Interaction, _b: discord.ui.Button):
+        await self._parent.finish(inter, self._mode, DEFAULT_VS_TAB)
+
+    @discord.ui.button(label="Define my own", style=discord.ButtonStyle.secondary)
+    async def btn_define(self, inter: discord.Interaction, _b: discord.ui.Button):
+        await inter.response.send_modal(TabNameModal(self._parent, self._mode))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_cancel(self, inter: discord.Interaction, _b: discord.ui.Button):
+        self.stop()
+        await safe_edit_response(
+            inter,
+            content=(
+                f"{CANCEL_BACKPEDAL_DEFAULT} Your alliance and tracking mode are still "
+                f"saved. Run `/setup` and click **{HUB_BTN_VS}** to pick a tab."
             ),
             embed=None,
             view=None,
@@ -164,6 +274,8 @@ EVENT_TOGGLES = (
     ("opponent_reveal_enabled", "Next opponent"),
     ("season_recap_enabled", "Season recap"),
 )
+#: The event posts that need Premium (#667). Mid-week score is free.
+PREMIUM_EVENT_TOGGLES = frozenset({"opponent_reveal_enabled", "season_recap_enabled"})
 
 VS_BTN_POST_ON = "Turn it on"
 VS_BTN_POST_OFF = "Turn it off"
@@ -282,11 +394,19 @@ class ScheduledPostSettingsView(OwnedView):
 
     timeout_hint = ads.VS_SETUP_NAV
 
-    def __init__(self, guild_id: int, owner_user_id: int, surface: ScheduledSurface) -> None:
+    def __init__(
+        self,
+        guild_id: int,
+        owner_user_id: int,
+        surface: ScheduledSurface,
+        *,
+        premium: bool = True,
+    ) -> None:
         super().__init__(timeout=STEP_TIMEOUT)
         self.guild_id = guild_id
         self.owner_id = owner_user_id
         self.surface = surface
+        self.premium = premium
         self.cfg = config.get_vs_config(guild_id)
         self.message: discord.Message | None = None
         self._render()
@@ -334,11 +454,16 @@ class ScheduledPostSettingsView(OwnedView):
 
         if surface.toggles:
             for column, label in surface.toggles:
-                on = bool(self.cfg.get(column))
+                # Without Premium a Premium switch renders off and disabled,
+                # with 💎 in front of its own glyph (DESIGN.md, Premium
+                # presentation). A saved "on" is kept for when Premium is back.
+                locked = column in PREMIUM_EVENT_TOGGLES and not self.premium
+                on = bool(self.cfg.get(column)) and not locked
+                text = f"{'✅' if on else '▫️'} {label}"
                 button = discord.ui.Button(
-                    label=f"{'✅' if on else '▫️'} {label}"[:80],
+                    label=(f"💎 {text}" if locked else text)[:80],
                     style=discord.ButtonStyle.secondary,
-                    disabled=not on and not ready,
+                    disabled=locked or (not on and not ready),
                     row=1,
                 )
                 button.callback = self._make_toggle(column)
@@ -355,7 +480,7 @@ class ScheduledPostSettingsView(OwnedView):
         self.add_item(toggle)
 
     def embed(self) -> discord.Embed:
-        return ads.scheduled_post_embed(self.cfg, self.surface.key)
+        return ads.scheduled_post_embed(self.cfg, self.surface.key, premium=self.premium)
 
     async def _redraw(self, interaction: discord.Interaction) -> None:
         """Re-read config and redraw, so the panel always shows what is saved."""
@@ -542,26 +667,99 @@ class VSSetupView(ExpiringView):
         since all three read the sheet."""
         await self._open_panel(inter, EVENT_POSTS_SURFACE)
 
+    @discord.ui.button(label="📖 Column guide", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_column_guide(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """(#651) Previously shown only once, at the end of first-time setup --
+        every hub message that told an officer to come here for it had nothing
+        to send them to."""
+        await inter.response.send_message(
+            embed=ads.column_guide_embed(self.cfg.get("tracking_mode") or ad.MODE_FULL_BRACKET),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="🔍 Check my data for errors", style=discord.ButtonStyle.secondary, row=2
+    )
+    async def btn_check_data(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """(#651) The on-demand full sweep, renamed from "Check my sheet"
+        since every finding now jumps to an in-Discord screen rather than
+        sending anyone to the sheet -- announced in 1.9.0's changelog under
+        the old name for a button that did not yet exist anywhere."""
+        import asyncio
+
+        await inter.response.defer(ephemeral=True, thinking=True)
+        tab_name = self.cfg.get("tab_name") or DEFAULT_VS_TAB
+        rows = await asyncio.to_thread(ads.load_rows, self.guild_id, tab_name)
+        if rows is None:
+            await inter.followup.send(
+                "⚠️ I couldn't reach your sheet just now to check it. Try again in a "
+                f"moment, or run `/setup` → **{HUB_BTN_VS}** if this keeps happening.",
+                ephemeral=True,
+            )
+            return
+        tracking_mode = self.cfg.get("tracking_mode") or ad.MODE_FULL_BRACKET
+        own_alliance = ad.AllianceKey.of(self.cfg.get("own_tag"), self.cfg.get("own_warzone"))
+        findings = ad.validate(rows, tracking_mode=tracking_mode, own_alliance=own_alliance)
+        await inter.followup.send(
+            embed=ads.validation_report_embed(
+                findings, tracking_mode=tracking_mode, rows_checked=len(rows)
+            ),
+            ephemeral=True,
+        )
+
     async def _open_panel(self, inter: discord.Interaction, surface: ScheduledSurface) -> None:
-        panel = ScheduledPostSettingsView(self.guild_id, self.owner_user_id, surface)
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", self.guild_id, interaction=inter
+        )
+        panel = ScheduledPostSettingsView(
+            self.guild_id, self.owner_user_id, surface, premium=has_premium
+        )
         await inter.response.send_message(embed=panel.embed(), view=panel, ephemeral=True)
         panel.message = await inter.original_response()
 
     async def show_mode_step(self, interaction: discord.Interaction) -> None:
         view = TrackingModeView(self)
-        await interaction.followup.send(embed=ads.tracking_mode_embed(), view=view, ephemeral=True)
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", self.guild_id, interaction=interaction
+        )
+        await interaction.followup.send(
+            embed=ads.tracking_mode_embed(premium=has_premium), view=view, ephemeral=True
+        )
         view.message = await interaction.original_response()
 
-    async def finish(self, interaction: discord.Interaction, tracking_mode: str) -> None:
-        """Save the mode, create the tab, and show the column guide."""
+    async def show_tab_step(self, interaction: discord.Interaction, tracking_mode: str) -> None:
+        view = TabNameView(self, tracking_mode)
+        await safe_edit_response(
+            interaction,
+            content="**Which sheet tab should Alliance Duel (VS) use?**",
+            embed=None,
+            view=view,
+        )
+        view.message = await interaction.original_response()
+
+    async def finish(
+        self, interaction: discord.Interaction, tracking_mode: str, tab_name: str
+    ) -> None:
+        """Save the mode and tab, find-or-create the tab, and show the column guide.
+
+        #503: the tab is now a real, asked-for setting rather than a
+        hardcoded name created silently. A tab-name change never moves data
+        -- following the same precedent every other wizard sets (find-or-
+        create the new name, say nothing about the old one) -- except VS
+        says one thing more than they do: that the old tab's data stays
+        put, since VS's silent-recreate failure was worse than theirs.
+        """
         await interaction.response.defer(ephemeral=True)
         was = self.cfg.get("tracking_mode")
-        config.save_vs_config(self.guild_id, tracking_mode=tracking_mode, enabled=1)
+        previous_tab = (self.cfg.get("tab_name") or "").strip()
+        tab_name = tab_name.strip() or DEFAULT_VS_TAB
+        config.save_vs_config(
+            self.guild_id, tracking_mode=tracking_mode, tab_name=tab_name, enabled=1
+        )
         self.cfg = config.get_vs_config(self.guild_id)
 
-        tab_name = self.cfg.get("tab_name") or "Alliance Duel (VS)"
-        created = await _create_tab(self.guild_id, tab_name)
-        if not created:
+        found = await _find_or_create_tab(self.guild_id, tab_name)
+        if found is None:
             await interaction.followup.send(
                 "⚠️ I saved your settings, but could not reach your sheet to "
                 f"create the **{tab_name}** tab. Check the bot still has access, "
@@ -570,11 +768,27 @@ class VSSetupView(ExpiringView):
             )
             return
 
+        # Registered only while enabled (config._TAB_OWNERS' generic entries
+        # claim regardless of an on/off flag; VS's own check in
+        # config.tabs_in_use is the one exception -- #503).
+        from setup_cog import tab_claim_warning
+
+        warning = tab_claim_warning(self.guild_id, tab_name, exclude_field="vs_tab_name")
+
+        lines = [f"✅ {'Found' if found else 'Created'} **{tab_name}** in your sheet."]
+        if previous_tab and previous_tab.casefold() != tab_name.casefold():
+            lines.append(
+                f"Your existing data stays in **{previous_tab}** — it doesn't move automatically."
+            )
+        if warning:
+            lines.append(warning)
+        lines.append(
+            f"Tracking {ads.mode_label(tracking_mode)}. Your **{tab_name}** tab is "
+            "ready to fill in."
+        )
+
         await interaction.followup.send(
-            content=(
-                f"✅ Set up Alliance Duel (VS), tracking {ads.mode_label(tracking_mode)}. "
-                f"Your **{tab_name}** tab is ready to fill in."
-            ),
+            content="\n".join(lines),
             embed=ads.column_guide_embed(tracking_mode),
             ephemeral=True,
         )
@@ -708,16 +922,22 @@ async def _append_blank_rows(guild_id: int, tab_name: str, league, missing) -> i
         return None
 
 
-async def _create_tab(guild_id: int, tab_name: str) -> bool:
-    """Create the tab off the event loop. Returns False if the sheet is
-    unreachable, which `load_rows` will already have reported through
-    `config_health`."""
+async def _find_or_create_tab(guild_id: int, tab_name: str) -> bool | None:
+    """Ensure the tab exists off the event loop, saying whether it was
+    already there (#503, same "Found X" / "Created X" pattern survey
+    setup already uses). None if the sheet is unreachable, which
+    `load_rows` will already have reported through `config_health`."""
     import asyncio
 
-    def _work():
+    def _work() -> bool:
         spreadsheet = config.get_spreadsheet(guild_id)
+        existed = True
+        try:
+            spreadsheet.worksheet(tab_name)
+        except Exception:
+            existed = False
         ads.ensure_tab(spreadsheet, tab_name)
-        return True
+        return existed
 
     try:
         return await asyncio.to_thread(_work)
@@ -726,11 +946,11 @@ async def _create_tab(guild_id: int, tab_name: str) -> bool:
 
         config_health.record_sheet_failure(guild_id, ads.VS_SHEET_SUBJECT, e, tab=tab_name)
         logger.warning(
-            "[VS] could not create tab for guild=%s: %s",
+            "[VS] could not find-or-create tab for guild=%s: %s",
             guild_id,
             config.describe_sheet_error(e, guild_id=guild_id, tab=tab_name),
         )
-        return False
+        return None
 
 
 async def run_vs_setup(interaction: discord.Interaction, bot=None) -> None:
@@ -770,6 +990,10 @@ async def run_vs_setup(interaction: discord.Interaction, bot=None) -> None:
         # so the control is shown disabled rather than left live and inert.
         view.btn_score_prompt.disabled = True
         view.btn_event_posts.disabled = True
+        view.btn_check_data.disabled = True
+        # Column guide reads only the tracking mode, which VSSetupView's own
+        # `__init__` already defaults sensibly -- shown live even before
+        # setup finishes, so an officer can preview what they are choosing.
 
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     view.message = await interaction.original_response()
@@ -779,6 +1003,9 @@ __all__ = [
     "run_vs_setup",
     "VSSetupView",
     "TrackingModeView",
+    "TabNameView",
+    "TabNameModal",
+    "DEFAULT_VS_TAB",
     "OwnAllianceModal",
     "ScheduledPostSettingsView",
     "ScheduledSurface",

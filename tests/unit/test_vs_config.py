@@ -37,6 +37,14 @@ def test_fallback_dict_covers_every_writable_column(db):
     assert missing == [], f"get_vs_config fallback is missing {missing}"
 
 
+def test_tab_name_round_trips(db):
+    """#503: `tab_name` was in the column list from the start but nothing
+    ever wrote it -- the generic partial-update saver already handled it
+    correctly the moment the wizard started calling it."""
+    config.save_vs_config(1234, tab_name="My Custom Tab")
+    assert config.get_vs_config(1234)["tab_name"] == "My Custom Tab"
+
+
 def test_save_then_read_round_trips(db):
     config.save_vs_config(
         1234,

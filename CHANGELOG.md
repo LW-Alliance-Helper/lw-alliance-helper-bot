@@ -9,6 +9,34 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.2] — 2026-09-26
+
+### Added
+- **Enter daily score**: one modal for any day of the current Alliance Duel (VS) week, with both scores named by alliance tag ([#643](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/643)).
+- **Enter weekly results**: build a week's results from dropdowns, with your own match filled in once its score is on record ([#643](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/643), [#645](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/645)).
+- **Check my data for errors** and a **Column guide** on the VS settings panel ([#503](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/503)).
+
+### Changed
+- Alliance Duel (VS) tracking for your own alliance is now free, while the whole-bracket views, Scout, My path and the opponent and recap posts stay 💎 Premium ([#667](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/667)).
+- VS setup now asks which sheet tab to use, and a renamed tab is no longer quietly rebuilt blank ([#503](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/503)).
+- VS now says a decided week was won instead of clinched ([#645](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/645)).
+- The Growth Breakdown shows No Change as a count, lists every other bucket by name, and applies your bucket filter to `/growth breakdown` too ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+- Members whose growth numbers didn't change since the last snapshot now get their own list instead of sitting in No Change ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+- You can rename or move the headers on your growth tabs without breaking growth tracking ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+
+### Fixed
+- Renaming a live VS league no longer shows a failure after the rename already worked ([#633](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/633)).
+- Saving a second VS day no longer drops the days already saved from the card ([#640](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/640)).
+- A VS matchup typed with an uppercase V is now read ([#641](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/641)).
+- The VS hub no longer says no opponent is recorded when the bracket already knows the pairing ([#642](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/642)).
+- A VS score prompt posted before a league rename still works after it ([#634](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/634)).
+- A long Growth Breakdown bucket now ends with a count instead of being cut off mid-name ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+- `/member_stats` now finds a renamed member's growth history ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)).
+- A Premium subscription pinned to a server that removed the bot is released after the 30-day hold, so it can be used elsewhere ([#573](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/573)).
+- Servers that removed the bot before 1.9.0 can now be put on the same 30-day deletion hold as everyone else ([#649](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/649)).
+- A setup wizard that loses access to its channel now says so instead of the button doing nothing ([#582](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/582)).
+- Train and storm dates no longer roll over to the next day two hours before the game's day does ([#607](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/607)).
+
 ## [1.9.1] — 2026-09-19
 
 ### Added

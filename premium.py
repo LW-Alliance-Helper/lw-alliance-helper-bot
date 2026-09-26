@@ -14,6 +14,11 @@ table; see `config.py`):
     that user still has an active Discord subscription. The cached result
     (5-minute TTL, keyed by guild_id) absorbs the cost of the per-user
     `bot.entitlements()` lookup.
+  - The pin outlives a lapsed subscription (resubscribing resumes it in the
+    same guild) but not the guild itself being gone thirty days: `config.
+    sweep_guild_removals` releases it, guild_id only, as part of that same
+    purge (#573). The subscription is untouched either way -- releasing
+    just un-pins it, `/premium assign` re-pins.
 
 For development and bypass scenarios (e.g. the bot owner's home alliance),
 two env-var overrides are available and short-circuit before the
@@ -156,12 +161,12 @@ PREMIUM_FEATURES: set[str] = {
     # day rules — leadership / vs / contest / event days that pick from a Discord
     # role — are Premium, since they need the synced roster's Discord IDs.
     "train_role_days",
-    # Alliance Duel (VS) tracker (#398). Every derived view is Premium: the
-    # alliance types each value by hand, so a free tier that captured the data
-    # but withheld the bracket, projection, My Path and analytics would leave
-    # them with the spreadsheet they already had. The one free surface is the
-    # member day-theme reminder (#406), which reads nothing from the sheet and
-    # is gated separately by not calling this at all.
+    # Alliance Duel (VS) bracket logic (#398, redrawn in #667). Tracking your
+    # own alliance is free: the hub, score entry, the daily score prompt, the
+    # mid-week score post, Trends and the day-theme reminder. Premium is what
+    # is built on the bot's own bracket research: tracking the whole bracket,
+    # 📇 Bracket, 🔍 Scout, 🛣️ My Path, and the Next opponent and Season recap
+    # posts. A lapsed guild reads as own-alliance until it resubscribes.
     "alliance_duel_vs",
     # Champion Duel deliberately has NO write gate. `champion_duel_write` was
     # registered here and came off on 2026-08-17.
@@ -181,7 +186,7 @@ PREMIUM_FEATURES: set[str] = {
     # Champion Duel odds of advancing. The first of those three.
     #
     # It does not break "never take their data and withhold the view of it"
-    # (#398), which is the rule that makes every Alliance Duel view Premium.
+    # (#398), the rule Alliance Duel's Premium line was first drawn on.
     # That rule protects data the alliance TYPED: withholding Alliance Duel's
     # bracket takes from the people who filled it in. These odds are derived
     # from a corpus they did not type and a model built for it, and a free

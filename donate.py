@@ -789,6 +789,25 @@ class DonateCog(commands.Cog):
         )
         await self._dm_user(user_id, embed)
 
+    async def dm_premium_pin_released(self, user_id: int, guild_id: int) -> None:
+        """#573: the day-30 sweep just purged `guild_id` and released the
+        licence pinned there. Public method (unlike its `_dm_*` siblings)
+        since `bot.py`'s sweep loop calls it from outside this cog, the same
+        way it reaches `maybe_post_changelog` and friends."""
+        guild_name = await _resolve_guild_name(self.bot, guild_id)
+        embed = discord.Embed(
+            title="💎 Your Premium subscription is no longer pinned",
+            description=(
+                f"**{guild_name}** removed the bot over 30 days ago, so your "
+                f"Premium subscription is no longer pinned there.\n\n"
+                f"Your subscription itself is still active — nothing was "
+                f"cancelled. Run `/premium assign` from wherever you'd like "
+                f"it applied, or `/premium overview` to check its status."
+            ),
+            color=discord.Color.blue(),
+        )
+        await self._dm_user(user_id, embed)
+
     async def _dm_blocked_assignment(self, user_id: int, guild_id: int, holder_id: int) -> None:
         guild_name = await _resolve_guild_name(self.bot, guild_id)
         holder_label = await _resolve_user_label(self.bot, holder_id)

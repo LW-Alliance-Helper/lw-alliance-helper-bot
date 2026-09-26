@@ -1419,9 +1419,9 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
             )
             return
     else:
-        from datetime import date as date_cls
+        from time_helpers import server_today
 
-        parsed_d = date_cls.today()
+        parsed_d = server_today()
 
     event_label = "Desert Storm" if event == "DS" else "Canyon Storm"
 

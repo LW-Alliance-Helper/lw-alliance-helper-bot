@@ -119,11 +119,30 @@ question to Kevin, and did Kevin actually answer it — not just posed
 and moved past? An open question with no recorded answer is a finding,
 even if it was asked.
 
+## 5. New required environment variables
+
+Grep this branch's diff against its base for anything reading an
+environment variable that didn't exist on the base branch — a new
+`os.getenv`/`os.environ` call, a new required config constant, anything
+a feature now depends on to run in production. 1.9.0's `CD_ENGINE_TOKEN`
+gap ([#629](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/629))
+is the incident this section exists to catch: a genuine new production
+requirement, and nothing ever asked, in as many words, whether it had
+been added to Railway before the merge.
+
+For every new one found, name it explicitly on its own line — never
+folded into a general "environment changes" summary — and ask directly:
+has it been added to the production Railway service, and confirmed by a
+real deploy log, not just added and assumed?
+
+If this release introduces no new required environment variable, say so
+in one line and move to Reporting.
+
 ---
 
 ## Reporting
 
-Four sections, matching the steps above. Each finding: what's missing,
+Five sections, matching the steps above. Each finding: what's missing,
 where (file, PR, or "nobody asked"), and what closes it. End with a
 one-line verdict: ready for the PR into main, or not yet and why.
 

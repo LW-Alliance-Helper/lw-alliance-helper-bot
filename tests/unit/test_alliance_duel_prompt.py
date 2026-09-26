@@ -403,11 +403,12 @@ async def test_an_unidentified_alliance_means_no_post():
     assert posted is False
 
 
-async def test_a_lapsed_premium_guild_is_not_posted_to():
+async def test_the_prompt_posts_without_premium():
+    """#667: the daily score prompt is part of tracking your own alliance."""
     channel = _Channel()
     posted, _ = await _post(_rows(), channel, premium_ok=False)
-    assert posted is False
-    assert channel.sent == []
+    assert posted is True
+    assert isinstance(channel.sent[0]["view"], ad_views.ScorePromptView)
 
 
 async def test_a_broken_channel_is_a_silent_skip_here_and_a_notice_elsewhere():
@@ -465,6 +466,38 @@ def test_a_prompt_the_bot_has_no_record_of_is_allowed_through():
     """A missing row means the table aged out or was lost, which is far likelier
     than a league turning over inside the fortnight it keeps."""
     assert _stale_check(None, _state()) is None
+
+
+def test_a_rename_carries_a_still_live_prompt_through_the_stale_check(temp_db):
+    """#634 end to end: `rename_league` renamed this league mid-week, after
+    today's prompt already posted. Before the bookkeeping carry-over, the
+    stored post row still named the old league, so this exact click would
+    have been refused as belonging to "a newer one" even though the prompt
+    is still perfectly live -- it just moved identity along with the sheet.
+    Uses the real config tables (not the mocked `_stale_check` helper)
+    since the row the rename touches is exactly what's under test."""
+    import config
+
+    config.init_db()
+    config.record_vs_score_prompt_post(
+        GUILD_ID,
+        channel_id=1,
+        message_id=90210,
+        league=LEAGUE,
+        week=1,
+        duel_day=2,
+        server_date=MONDAY.isoformat(),
+    )
+
+    assert config.rename_vs_league(GUILD_ID, LEAGUE, NEXT_LEAGUE) is True
+
+    rows = [_row(OWN_TAG, ranking=1, league=NEXT_LEAGUE, week_date=MONDAY)]
+    state = _state(rows)
+    view = ad_views.ScorePromptView(GUILD_ID, 1, 2)
+    interaction = MagicMock()
+    interaction.message.id = 90210
+
+    assert view._stale_league(interaction, state) is None
 
 
 # ── Outage catch-up ───────────────────────────────────────────────────────────
@@ -581,3 +614,109 @@ def test_the_panel_has_at_most_one_primary_button(monkeypatch):
     view = _panel(monkeypatch)
     primaries = [c for c in view.children if c.style is discord.ButtonStyle.primary]
     assert len(primaries) <= 1
+
+
+# ── Free and Premium in setup (#667) ──────────────────────────────────────────
+
+
+def _event_panel(monkeypatch, *, premium, **cfg_over):
+    cfg = dict(
+        event_posts_channel_id=777,
+        clinch_status_enabled=1,
+        opponent_reveal_enabled=1,
+        season_recap_enabled=1,
+    )
+    cfg.update(cfg_over)
+    monkeypatch.setattr("config.get_vs_config", lambda _gid: _vs_cfg(**cfg))
+    return ad_wizard.ScheduledPostSettingsView(
+        GUILD_ID, 1, ad_wizard.EVENT_POSTS_SURFACE, premium=premium
+    )
+
+
+def _switch(view, name):
+    return next(c for c in view.children if name in (c.label or ""))
+
+
+def test_a_paying_guild_sees_no_diamond_on_the_switches(monkeypatch):
+    view = _event_panel(monkeypatch, premium=True)
+    assert _switch(view, "Mid-week score").label == "✅ Mid-week score"
+    assert _switch(view, "Next opponent").label == "✅ Next opponent"
+    assert _switch(view, "Season recap").label == "✅ Season recap"
+
+
+def test_without_premium_the_premium_switches_are_disabled_with_a_leading_diamond(monkeypatch):
+    """DESIGN.md, Premium presentation: 💎 in front of the control's own glyph,
+    disabled rather than hidden. A saved "on" reads off, since it will not fire."""
+    view = _event_panel(monkeypatch, premium=False)
+    for name in ("Next opponent", "Season recap"):
+        switch = _switch(view, name)
+        assert switch.label == f"💎 ▫️ {name}"
+        assert switch.disabled is True
+    mid = _switch(view, "Mid-week score")
+    assert mid.label == "✅ Mid-week score"
+    assert mid.disabled is False
+
+
+def test_the_diamond_line_on_the_panel_is_for_the_free_tier_only():
+    cfg = _vs_cfg(event_posts_channel_id=777)
+    line = "the two marked 💎 are Premium"
+    assert line in _text(ad_setup.scheduled_post_embed(cfg, "event_posts", premium=False))
+    assert line not in _text(ad_setup.scheduled_post_embed(cfg, "event_posts"))
+
+
+def test_the_panel_status_ignores_premium_switches_that_cannot_fire():
+    cfg = _vs_cfg(
+        event_posts_channel_id=777,
+        clinch_status_enabled=0,
+        opponent_reveal_enabled=1,
+        season_recap_enabled=0,
+    )
+    assert "**On.**" in _text(ad_setup.scheduled_post_embed(cfg, "event_posts"))
+    free = _text(ad_setup.scheduled_post_embed(cfg, "event_posts", premium=False))
+    assert "**Off.**" in free
+
+
+def _mode_view():
+    parent = MagicMock()
+    parent.owns = AsyncMock(return_value=True)
+    parent.show_tab_step = AsyncMock()
+    return ad_wizard.TrackingModeView(parent), parent
+
+
+async def test_the_whole_bracket_needs_premium_and_saves_nothing_without_it():
+    view, parent = _mode_view()
+    inter = MagicMock()
+    inter.guild_id = GUILD_ID
+    inter.response.send_message = AsyncMock()
+    with patch("premium.feature_gate", new=AsyncMock(return_value=False)):
+        await view.btn_full.callback(inter)
+    parent.show_tab_step.assert_not_awaited()
+    kwargs = inter.response.send_message.await_args.kwargs
+    assert "Premium" in kwargs["embed"].title
+    assert ad_setup.MODE_BTN_OWN in kwargs["embed"].description
+    # Sent beside the question, so "Just my alliance" is still there to click.
+    assert not view.is_finished()
+
+
+async def test_the_whole_bracket_goes_straight_on_with_premium():
+    view, parent = _mode_view()
+    inter = MagicMock()
+    with patch("premium.feature_gate", new=AsyncMock(return_value=True)):
+        await view.btn_full.callback(inter)
+    parent.show_tab_step.assert_awaited_once_with(inter, ad.MODE_FULL_BRACKET)
+
+
+async def test_own_alliance_never_asks_about_premium():
+    view, parent = _mode_view()
+    gate = AsyncMock(return_value=False)
+    with patch("premium.feature_gate", new=gate):
+        await view.btn_own.callback(MagicMock())
+    gate.assert_not_awaited()
+    parent.show_tab_step.assert_awaited_once()
+
+
+def test_the_mode_question_marks_the_premium_option_for_the_free_tier_only():
+    free = [f.name for f in ad_setup.tracking_mode_embed(premium=False).fields]
+    paid = [f.name for f in ad_setup.tracking_mode_embed(premium=True).fields]
+    assert free == [ad_setup.MODE_BTN_OWN, f"💎 {ad_setup.MODE_BTN_FULL}"]
+    assert paid == [ad_setup.MODE_BTN_OWN, ad_setup.MODE_BTN_FULL]

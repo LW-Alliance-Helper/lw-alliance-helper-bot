@@ -1631,7 +1631,7 @@ class TestRunGrowthBreakdownSetup:
                 interaction.channel,
                 view_overrides={
                     "proceed": True,
-                    "selected": [],  # BucketFilterView -> "use all"
+                    "selected": [],  # BucketFilterView -> "use default"
                     "choice": "defaults",  # ThresholdsChoiceView + LabelsChoiceView
                     "cancelled": False,
                 },
@@ -1757,6 +1757,57 @@ class TestRunEventSetup:
         assert len(ch_call_kwargs) == 2
         assert ch_call_kwargs[0]["current_id"] == 700001
         assert ch_call_kwargs[1]["current_id"] == 700002
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_wizard_still_unregisters_cancel_event(self, seeded_db):
+        """#582: every early return used to skip the unregister call,
+        leaking the cancel event for this user. A /cancel on step 1 (the
+        earliest early-return path) must still clean it up.
+
+        A distinctive user id avoids colliding with `_active`'s leftover
+        entries from other tests sharing `make_mock_interaction`'s default
+        (a module-level registry, not reset per test)."""
+        import wizard_registry
+        from setup_cog import run_event_setup
+
+        interaction = make_mock_interaction(user_id=582000001)
+        bot = AsyncMock()
+
+        draft_view = MagicMock(
+            confirmed=False,
+            cancelled=True,
+            is_current_stale=False,
+            wait=AsyncMock(),
+        )
+
+        with patch("setup_cog.ChannelSelectStep", return_value=draft_view):
+            make_send_handler(interaction.channel)
+            await run_event_setup(interaction, bot)
+
+        assert wizard_registry.is_active(582000001) is False
+
+    @pytest.mark.asyncio
+    async def test_exception_mid_wizard_still_unregisters_cancel_event(self, seeded_db):
+        """#582's other half: an exception mid-wizard (the wizard losing
+        access to its channel, in production) must not leak the cancel
+        event either, even though it propagates past this call."""
+        import discord
+        import wizard_registry
+        from setup_cog import run_event_setup
+
+        interaction = make_mock_interaction(user_id=582000002)
+        bot = AsyncMock()
+
+        resp = MagicMock()
+        resp.status = 403
+        interaction.channel.send = AsyncMock(
+            side_effect=discord.Forbidden(resp, {"message": "Missing Access", "code": 50001})
+        )
+
+        with pytest.raises(discord.Forbidden):
+            await run_event_setup(interaction, bot)
+
+        assert wizard_registry.is_active(582000002) is False
 
 
 # ── Premium tier caps (Phase 1) ───────────────────────────────────────────────

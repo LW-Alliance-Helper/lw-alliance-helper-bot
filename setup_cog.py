@@ -196,6 +196,39 @@ def _locked_types_note(*type_names: str) -> str:
     return f"\n*🔒 {lead} 💎 Premium: {names}. Run `/upgrade` to unlock {obj}.*"
 
 
+def tab_claim_warning(
+    guild_id: int,
+    tab: str,
+    *,
+    exclude_field: str,
+    exclude_survey_id: str | None = None,
+) -> str | None:
+    """The warning text if `tab` already belongs to another feature, else
+    None. Extracted from `warn_if_tab_claimed` (#503) for wizards that
+    cannot `channel.send` it themselves -- VS setup is an ephemeral panel
+    driven by modals, so it sends this text through an interaction
+    followup instead. Never raises; a lookup failure reads as "no claim".
+    """
+    try:
+        from config import tabs_in_use
+
+        owner = tabs_in_use(
+            guild_id, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
+        ).get((tab or "").casefold())
+    except Exception as e:
+        print(f"[SETUP] tab claim check failed guild={guild_id}: {type(e).__name__}: {e}")
+        return None
+
+    if not owner:
+        return None
+
+    return (
+        f"⚠️ Heads up: **{tab}** is also {owner}. Two features writing to one "
+        f"tab will overwrite each other's columns. That's fine if you meant "
+        f"it, otherwise pick a different tab here or in that feature's setup."
+    )
+
+
 async def warn_if_tab_claimed(
     channel,
     guild_id: int,
@@ -215,24 +248,12 @@ async def warn_if_tab_claimed(
     Returns True when a warning was posted, for callers that want to
     know. Never raises — a warning failing must not end a wizard.
     """
-    try:
-        from config import tabs_in_use
-
-        owner = tabs_in_use(
-            guild_id, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
-        ).get((tab or "").casefold())
-    except Exception as e:
-        print(f"[SETUP] tab claim check failed guild={guild_id}: {type(e).__name__}: {e}")
-        return False
-
-    if not owner:
-        return False
-
-    await channel.send(
-        f"⚠️ Heads up: **{tab}** is also {owner}. Two features writing to one "
-        f"tab will overwrite each other's columns. That's fine if you meant "
-        f"it, otherwise pick a different tab here or in that feature's setup."
+    message = tab_claim_warning(
+        guild_id, tab, exclude_field=exclude_field, exclude_survey_id=exclude_survey_id
     )
+    if message is None:
+        return False
+    await channel.send(message)
     return True
 
 
@@ -542,7 +563,7 @@ async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
     if not await _check_wizard_can_run(interaction, "setup"):
         return
     await _send_ack(interaction, "⚙️ Starting train setup — check the channel for prompts!")
-    await run_train_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_train_setup(interaction, bot), interaction)
 
 
 async def _launch_buddy_setup(interaction: discord.Interaction, bot) -> None:
@@ -556,7 +577,7 @@ async def _launch_buddy_setup(interaction: discord.Interaction, bot) -> None:
     await _send_ack(
         interaction, "⚙️ Starting Profession Buddy System setup — check the channel for prompts!"
     )
-    await run_buddy_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_buddy_setup(interaction, bot), interaction)
 
 
 async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
@@ -570,7 +591,7 @@ async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
     await _send_ack(
         interaction, "⚙️ Starting growth tracking setup — check the channel for prompts!"
     )
-    await run_growth_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_growth_setup(interaction, bot), interaction)
 
 
 async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) -> None:
@@ -594,7 +615,9 @@ async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) 
     await _send_ack(
         interaction, "⚙️ Starting Growth Breakdown setup — check the channel for prompts!"
     )
-    await run_growth_breakdown_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(
+        run_growth_breakdown_setup(interaction, bot), interaction
+    )
 
 
 async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
@@ -606,7 +629,7 @@ async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
     if not await _check_wizard_can_run(interaction, "setup"):
         return
     await _send_ack(interaction, "⚙️ Starting birthday setup — check the channel for prompts!")
-    await run_birthday_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_birthday_setup(interaction, bot), interaction)
 
 
 async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type: str) -> None:
@@ -619,7 +642,9 @@ async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type:
     if not await _check_wizard_can_run(interaction, "setup"):
         return
     await _send_ack(interaction, f"⚙️ Starting {label} setup — check the channel for prompts!")
-    await run_storm_setup(interaction, bot, event_type)
+    await wizard_registry.guard_wizard_launch(
+        run_storm_setup(interaction, bot, event_type), interaction
+    )
 
 
 async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
@@ -631,7 +656,7 @@ async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
     if not await _check_wizard_can_run(interaction, "setup"):
         return
     await _send_ack(interaction, "⚙️ Starting event setup — check the channel for prompts!")
-    await run_event_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_event_setup(interaction, bot), interaction)
 
 
 async def _launch_survey_hub(interaction: discord.Interaction, bot) -> None:
@@ -662,7 +687,7 @@ async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> No
     if not await _check_wizard_can_run(interaction, "setup"):
         return
     await _send_ack(interaction, "⚙️ Starting Shiny Tasks setup — check the channel for prompts!")
-    await run_shiny_tasks_setup(interaction, bot)
+    await wizard_registry.guard_wizard_launch(run_shiny_tasks_setup(interaction, bot), interaction)
 
 
 async def _run_reset_flow(interaction: discord.Interaction) -> None:
@@ -1470,148 +1495,156 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     channel = interaction.channel
     user = interaction.user
     cancel_event = wizard_registry.register(user.id)
+    # Wrapped in try/finally (#582): every early return below used to skip
+    # the unregister call, and so did any exception (a lost-access Forbidden
+    # mid-wizard, for instance) — leaking the cancel event for this user
+    # until the process restarted.
+    try:
+        from config import get_config, get_or_create_config, update_config_field
 
-    from config import get_config, get_or_create_config, update_config_field
+        guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
+        timezone = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
 
-    guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
-    timezone = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
+        draft_channel_id = guild_cfg.event_draft_channel_id or 0
+        announce_channel_id = guild_cfg.event_announce_channel_id or 0
+        draft_time = guild_cfg.event_draft_time or "12:00"
 
-    draft_channel_id = guild_cfg.event_draft_channel_id or 0
-    announce_channel_id = guild_cfg.event_announce_channel_id or 0
-    draft_time = guild_cfg.event_draft_time or "12:00"
+        # Post-#249: this wizard owns only the shared event settings (channels
+        # and draft time). Event creation, editing and deletion moved to the
+        # /events hub, so officers managing individual events go there instead
+        # of crawling through this wizard. The 5-minute warning followed them
+        # in #566: it is per event, so a server-wide question could not answer
+        # it.
 
-    # Post-#249: this wizard owns only the shared event settings (channels
-    # and draft time). Event creation, editing and deletion moved to the
-    # /events hub, so officers managing individual events go there instead
-    # of crawling through this wizard. The 5-minute warning followed them
-    # in #566: it is per event, so a server-wide question could not answer
-    # it.
-
-    await channel.send(
-        "⚙️ **Event Setup**\n"
-        "Configure your alliance event channels and draft cadence. "
-        "All events share these four settings. To add, edit, or remove "
-        "individual events, run `/events` after this wizard completes."
-    )
-
-    # ── Steps 1-4: Channel/time settings ──────────────────────────────────────
-    is_premium_flag = await premium.is_premium(
-        guild_id, interaction=interaction, bot=interaction.client
-    )
-    current_draft_id = guild_cfg.event_draft_channel_id or 0
-    draft_ch_view = ChannelSelectStep(
-        "Select the draft channel...",
-        suggested_name="event-drafts",
-        include_threads=is_premium_flag,
-        guild=interaction.guild,
-        current_id=current_draft_id,
-    )
-    if draft_ch_view.is_current_stale:
-        await channel.send(PREV_CHANNEL_GONE.format(channel_label="draft"))
-    await channel.send(
-        "**Step 1 of 3 — Draft Channel**\n"
-        "Which channel should the bot post event announcement drafts for leadership to review?\n"
-        "*(This applies to all events)*",
-        view=draft_ch_view,
-    )
-    await wait_view_or_cancel(draft_ch_view, cancel_event)
-    if draft_ch_view.cancelled:
-        return
-    if not draft_ch_view.confirmed:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
-        return
-    draft_channel_id = draft_ch_view.selected_channel.id
-
-    current_ann_id = guild_cfg.event_announce_channel_id or 0
-    ann_ch_view = ChannelSelectStep(
-        "Select the announcement channel...",
-        suggested_name="announcements",
-        include_threads=is_premium_flag,
-        guild=interaction.guild,
-        current_id=current_ann_id,
-    )
-    if ann_ch_view.is_current_stale:
-        await channel.send(PREV_CHANNEL_GONE.format(channel_label="announcement"))
-    await channel.send(
-        "**Step 2 of 3 — Announcement Channel**\n"
-        "Which channel should approved announcements be posted to?\n"
-        "*(This applies to all events)*",
-        view=ann_ch_view,
-    )
-    await wait_view_or_cancel(ann_ch_view, cancel_event)
-    if ann_ch_view.cancelled:
-        return
-    if not ann_ch_view.confirmed:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
-        return
-    announce_channel_id = ann_ch_view.selected_channel.id
-
-    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
-    # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
-    # default button label, but accept either format from user input.
-    # Re-prompt up to 3 times on unparseable input before bailing out.
-    attempts_left = 3
-    while True:
-        draft_time_raw = await ask_keep_or_change(
-            channel,
-            f"**Step 3 of 3 — Draft Posting Time**\n"
-            f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
-            f"*(e.g. `12:00pm` for noon)*",
-            default="12:00",
-            current=draft_time or "",
-            modal_title="Draft Posting Time",
-            modal_label="Time",
-            timeout_cmd="setup_events",
-            cancel_event=cancel_event,
+        await channel.send(
+            "⚙️ **Event Setup**\n"
+            "Configure your alliance event channels and draft cadence. "
+            "All events share these four settings. To add, edit, or remove "
+            "individual events, run `/events` after this wizard completes."
         )
-        if not draft_time_raw:
+
+        # ── Steps 1-4: Channel/time settings ──────────────────────────────────
+        is_premium_flag = await premium.is_premium(
+            guild_id, interaction=interaction, bot=interaction.client
+        )
+        current_draft_id = guild_cfg.event_draft_channel_id or 0
+        draft_ch_view = ChannelSelectStep(
+            "Select the draft channel...",
+            suggested_name="event-drafts",
+            include_threads=is_premium_flag,
+            guild=interaction.guild,
+            current_id=current_draft_id,
+        )
+        if draft_ch_view.is_current_stale:
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="draft"))
+        await channel.send(
+            "**Step 1 of 3 — Draft Channel**\n"
+            "Which channel should the bot post event announcement drafts for leadership to review?\n"
+            "*(This applies to all events)*",
+            view=draft_ch_view,
+        )
+        await wait_view_or_cancel(draft_ch_view, cancel_event)
+        if draft_ch_view.cancelled:
             return
-        parsed_draft = _parse_12h_time(draft_time_raw)
-        if parsed_draft:
-            draft_time = parsed_draft
-            break
-        if (
-            len(draft_time_raw) == 5
-            and draft_time_raw[2] == ":"
-            and draft_time_raw.replace(":", "").isdigit()
-        ):
-            draft_time = draft_time_raw  # already 24h
-            break
-        attempts_left -= 1
-        if attempts_left <= 0:
-            await channel.send(
-                TIME_PARSE_GIVE_UP.format(
-                    recovery=f"`/setup` → {HUB_BTN_EVENTS}",
-                )
+        if not draft_ch_view.confirmed:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
+            return
+        draft_channel_id = draft_ch_view.selected_channel.id
+
+        current_ann_id = guild_cfg.event_announce_channel_id or 0
+        ann_ch_view = ChannelSelectStep(
+            "Select the announcement channel...",
+            suggested_name="announcements",
+            include_threads=is_premium_flag,
+            guild=interaction.guild,
+            current_id=current_ann_id,
+        )
+        if ann_ch_view.is_current_stale:
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="announcement"))
+        await channel.send(
+            "**Step 2 of 3 — Announcement Channel**\n"
+            "Which channel should approved announcements be posted to?\n"
+            "*(This applies to all events)*",
+            view=ann_ch_view,
+        )
+        await wait_view_or_cancel(ann_ch_view, cancel_event)
+        if ann_ch_view.cancelled:
+            return
+        if not ann_ch_view.confirmed:
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
+            return
+        announce_channel_id = ann_ch_view.selected_channel.id
+
+        tz_label = TIMEZONE_LABELS.get(timezone, timezone)
+        # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
+        # default button label, but accept either format from user input.
+        # Re-prompt up to 3 times on unparseable input before bailing out.
+        attempts_left = 3
+        while True:
+            draft_time_raw = await ask_keep_or_change(
+                channel,
+                f"**Step 3 of 3 — Draft Posting Time**\n"
+                f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
+                f"*(e.g. `12:00pm` for noon)*",
+                default="12:00",
+                current=draft_time or "",
+                modal_title="Draft Posting Time",
+                modal_label="Time",
+                timeout_cmd="setup_events",
+                cancel_event=cancel_event,
             )
-            return
-        await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
+            if not draft_time_raw:
+                return
+            parsed_draft = _parse_12h_time(draft_time_raw)
+            if parsed_draft:
+                draft_time = parsed_draft
+                break
+            if (
+                len(draft_time_raw) == 5
+                and draft_time_raw[2] == ":"
+                and draft_time_raw.replace(":", "").isdigit()
+            ):
+                draft_time = draft_time_raw  # already 24h
+                break
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    TIME_PARSE_GIVE_UP.format(
+                        recovery=f"`/setup` → {HUB_BTN_EVENTS}",
+                    )
+                )
+                return
+            await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
 
-    # There is no 5-minute warning step here any more (#566). It asked one
-    # question for every event at once, which is not how the warning works:
-    # the scheduler reads each event's own `five_min_warning` column and
-    # never the server field, so this step could only ever seed new events
-    # while claiming more. The question now belongs to the event, and the
-    # events wizard asks it per event.
-    #
-    # `guild_configs.event_five_min_warning` is left in place, unread and
-    # unwritten. Dropping it would break importing a config exported before
-    # this, for a column nothing consults.
+        # There is no 5-minute warning step here any more (#566). It asked one
+        # question for every event at once, which is not how the warning works:
+        # the scheduler reads each event's own `five_min_warning` column and
+        # never the server field, so this step could only ever seed new events
+        # while claiming more. The question now belongs to the event, and the
+        # events wizard asks it per event.
+        #
+        # `guild_configs.event_five_min_warning` is left in place, unread and
+        # unwritten. Dropping it would break importing a config exported before
+        # this, for a column nothing consults.
 
-    update_config_field(guild_id, "event_draft_channel_id", draft_channel_id)
-    update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
-    update_config_field(guild_id, "event_draft_time", draft_time)
+        update_config_field(guild_id, "event_draft_channel_id", draft_channel_id)
+        update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
+        update_config_field(guild_id, "event_draft_time", draft_time)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
-    embed = discord.Embed(title="✅ Event Settings Saved", color=discord.Color.green())
-    embed.add_field(name="Draft Channel", value=f"<#{draft_channel_id}>", inline=False)
-    embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-    embed.add_field(
-        name="Draft Time", value=_format_time_with_tz(draft_time, timezone), inline=False
-    )
-    embed.set_footer(text="Run /events to add, edit, or remove individual events.")
-    await channel.send(embed=embed)
-    wizard_registry.unregister(user.id, cancel_event)
+        # ── Summary ────────────────────────────────────────────────────────────
+        embed = discord.Embed(title="✅ Event Settings Saved", color=discord.Color.green())
+        embed.add_field(name="Draft Channel", value=f"<#{draft_channel_id}>", inline=False)
+        embed.add_field(
+            name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False
+        )
+        embed.add_field(
+            name="Draft Time", value=_format_time_with_tz(draft_time, timezone), inline=False
+        )
+        embed.set_footer(text="Run /events to add, edit, or remove individual events.")
+        await channel.send(embed=embed)
+        print(f"[SETUP] Event settings saved for guild {guild_id}")
+    finally:
+        wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Event settings saved for guild {guild_id}")
 
 

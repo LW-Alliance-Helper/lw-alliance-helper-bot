@@ -174,11 +174,22 @@ class HubState:
     sheet for it.
     """
 
-    def __init__(self, guild_id: int, cfg: dict, rows: list[ad.AllianceWeek]):
+    def __init__(
+        self, guild_id: int, cfg: dict, rows: list[ad.AllianceWeek], *, premium: bool = True
+    ):
         self.guild_id = guild_id
         self.cfg = cfg
         self.rows = rows
-        self.tracking_mode = cfg.get("tracking_mode") or ad.MODE_FULL_BRACKET
+        self.premium = premium
+        self.configured_mode = cfg.get("tracking_mode") or ad.MODE_FULL_BRACKET
+        # A lapsed guild reads as own-alliance until it resubscribes (#667), the
+        # 1.5.10 Conductor Rotation shape: degrade, never strand. The sheet keeps
+        # every row; only the bracket views and bracket writes stand down.
+        self.tracking_mode = (
+            self.configured_mode
+            if premium or self.configured_mode != ad.MODE_FULL_BRACKET
+            else ad.MODE_OWN_ALLIANCE
+        )
         self.own = ad.AllianceKey.of(cfg.get("own_tag"), cfg.get("own_warzone"))
         self.profiles = ad.build_profiles(rows)
         self.live = ad.resolve_live_week(rows)
@@ -198,6 +209,11 @@ class HubState:
     @property
     def full_bracket(self) -> bool:
         return self.tracking_mode == ad.MODE_FULL_BRACKET
+
+    @property
+    def lapsed(self) -> bool:
+        """Set up for the whole bracket, reading as own-alliance for want of Premium."""
+        return self.configured_mode != self.tracking_mode
 
     def shared_only(self, alliance: ad.AllianceKey):
         """What other alliances recorded about `alliance`, when we have not.
@@ -304,20 +320,43 @@ def hub_embed(state: HubState) -> discord.Embed:
     embed.add_field(name="This week", value=_own_matchup_line(state), inline=False)
 
     if not state.full_bracket:
-        embed.add_field(
-            name="Tracking",
-            value=(
-                f"You are tracking {ad_setup.mode_label(state.tracking_mode)}. "
-                f"The bracket views need all 16 alliances; you can widen at any "
-                f"time from {ad_setup.VS_SETUP_NAV}."
-            ),
-            inline=False,
-        )
+        embed.add_field(name="Tracking", value=_tracking_line(state), inline=False)
 
     _add_sheet_problem_field(embed, state.guild_id)
     embed.set_footer(text="Your sheet is the source. Anything you type there wins.")
     _add_new_feature_field(embed)
     return embed
+
+
+#: The week view for a lapsed guild with no Opponent column filled in: the
+#: computed pairing is the Premium half, so there is nothing else to show.
+VS_WEEK_NO_RECORDED_OPPONENTS = (
+    "No matchups recorded for this week yet. Add them in the Opponent column of your sheet."
+)
+
+
+def _tracking_line(state: HubState) -> str:
+    """The hub's note when it is not showing the whole bracket, in one of three
+    situations: lapsed, free by choice or default, or paying and chose to track
+    only their own alliance."""
+    if state.lapsed:
+        return (
+            "Your sheet is set up for your whole League bracket, and the bracket "
+            "views are 💎 Premium. Until Premium is back I read it as just your "
+            "alliance. Nothing in your sheet changes."
+        )
+    if not state.premium:
+        # Kevin's wording, 25 Sep sign-off (#667).
+        return (
+            "You are tracking just your alliance.\n\n"
+            "Upgrade to 💎 Premium to start tracking your whole League 📇 Bracket, "
+            "🔍 Scout opponents and see 🛣️ My path for league trajectory."
+        )
+    return (
+        f"You are tracking {ad_setup.mode_label(state.tracking_mode)}. "
+        f"The bracket views need all 16 alliances; you can widen at any "
+        f"time from {ad_setup.VS_SETUP_NAV}."
+    )
 
 
 def _add_new_feature_field(embed: discord.Embed) -> None:
@@ -465,7 +504,14 @@ def week_embed(state: HubState, week: int) -> discord.Embed:
     # confirmed results at all, scores everyone zero, and falls back to ranking
     # order, which reproduces week 1's matchups for every week of the league.
     league_rows = state.league_rows()
-    if ad.prior_week_decided(league_rows, week):
+    if state.lapsed:
+        # Re-pairing the bracket is the Premium half (#667). A lapsed guild
+        # still has sixteen rows, so without this it would keep getting the
+        # computed pairing; it reads the recorded opponents instead.
+        pairing = ad.BracketIncomplete(
+            reason="own_alliance_mode", detail=VS_WEEK_NO_RECORDED_OPPONENTS
+        )
+    elif ad.prior_week_decided(league_rows, week):
         pairing = ad.compute_week_pairing(league_rows, week)
     else:
         # The same guard `next_week_rows` holds: with the previous week
@@ -1026,17 +1072,10 @@ class VSHubView(OwnedView):
         self.message: discord.Message | None = None
 
         has_league = state.league is not None
-        bracket = discord.ui.Button(
-            label=VS_BTN_BRACKET,
-            style=discord.ButtonStyle.secondary,
-            disabled=not has_league,
-            row=0,
-        )
-        bracket.callback = self._bracket
-        self.add_item(bracket)
 
-        # The one recommended action on this surface, so the only `primary`.
-        # Mid-week, the week's own matchups are what /vs was opened for.
+        # The one recommended action on this surface, so the only `primary`,
+        # and first (Kevin, 25 Sep, #667): mid-week, the week's own matchups
+        # are what /vs was opened for.
         week = discord.ui.Button(
             label=VS_BTN_WEEK,
             style=discord.ButtonStyle.primary,
@@ -1046,23 +1085,23 @@ class VSHubView(OwnedView):
         week.callback = self._week
         self.add_item(week)
 
-        scout = discord.ui.Button(
-            label=VS_BTN_SCOUT,
-            style=discord.ButtonStyle.secondary,
-            disabled=not has_league,
-            row=0,
-        )
-        scout.callback = self._scout
-        self.add_item(scout)
-
-        path = discord.ui.Button(
-            label=VS_BTN_PATH,
-            style=discord.ButtonStyle.secondary,
-            disabled=not has_league,
-            row=0,
-        )
-        path.callback = self._path
-        self.add_item(path)
+        # The three Premium views, together. Without Premium they render
+        # disabled with 💎 in front of their own glyph (DESIGN.md, Premium
+        # presentation); the hub's Tracking line says why.
+        locked = not state.premium
+        for label, callback in (
+            (VS_BTN_BRACKET, self._bracket),
+            (VS_BTN_SCOUT, self._scout),
+            (VS_BTN_PATH, self._path),
+        ):
+            button = discord.ui.Button(
+                label=f"💎 {label}" if locked else label,
+                style=discord.ButtonStyle.secondary,
+                disabled=locked or not has_league,
+                row=0,
+            )
+            button.callback = callback
+            self.add_item(button)
 
         # Trends (#408) reads only the guild's own rows, so unlike its
         # neighbours it works in own-alliance tracking mode and needs no
@@ -1188,20 +1227,27 @@ class VSHubView(OwnedView):
         )
         view.message = await interaction.original_response()
 
+    async def _own_alliance_only(self, interaction: discord.Interaction, detail: str) -> bool:
+        """Explain a whole-bracket view to a paying guild tracking just itself.
+
+        Without Premium these buttons are disabled, so only a paying guild gets
+        here, and what it is missing is the mode, not the tier.
+        """
+        if self.state.full_bracket:
+            return False
+        await interaction.response.send_message(
+            embed=ad_setup.upsell_embed(
+                ad.BracketIncomplete(reason="own_alliance_mode", detail=detail)
+            ),
+            ephemeral=True,
+        )
+        return True
+
     async def _bracket(self, interaction: discord.Interaction):
-        if not self.state.full_bracket:
-            await interaction.response.send_message(
-                embed=ad_setup.upsell_embed(
-                    ad.BracketIncomplete(
-                        reason="own_alliance_mode",
-                        detail=(
-                            "The bracket view shows all 16 alliances, and you are "
-                            "tracking just your own."
-                        ),
-                    )
-                ),
-                ephemeral=True,
-            )
+        if await self._own_alliance_only(
+            interaction,
+            "The bracket view shows all 16 alliances, and you are tracking just your own.",
+        ):
             return
         await interaction.response.send_message(
             embed=bracket_embed(self.state, self.state.week), ephemeral=True
@@ -1218,19 +1264,11 @@ class VSHubView(OwnedView):
         await open_scout_picker(interaction, self.state)
 
     async def _path(self, interaction: discord.Interaction):
-        if not self.state.full_bracket:
-            await interaction.response.send_message(
-                embed=ad_setup.upsell_embed(
-                    ad.BracketIncomplete(
-                        reason="own_alliance_mode",
-                        detail=(
-                            "Working out your path needs every alliance in the bracket, "
-                            "and you are tracking just your own."
-                        ),
-                    )
-                ),
-                ephemeral=True,
-            )
+        if await self._own_alliance_only(
+            interaction,
+            "Working out your path needs every alliance in the bracket, "
+            "and you are tracking just your own.",
+        ):
             return
         view = VSPathView(self.state, interaction.user.id)
         await interaction.response.send_message(
@@ -1294,7 +1332,7 @@ class VSHubView(OwnedView):
     async def _setup(self, interaction: discord.Interaction):
         from alliance_duel_wizard import run_vs_setup
 
-        await run_vs_setup(interaction, self.bot)
+        await wizard_registry.guard_wizard_launch(run_vs_setup(interaction, self.bot), interaction)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -1314,11 +1352,12 @@ async def read_tab_once(guild_id: int, vs_cfg: dict):
 
 
 async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
-    """Top-level handler for `/vs`. Leadership plus Premium gated.
+    """Top-level handler for `/vs`. Leadership gated; Premium is per screen.
 
-    The whole tracker is Premium, so free tier gets the upsell rather than a
-    half-open hub. Everything derived from the sheet is what the alliance is
-    paying for; they typed the raw values themselves.
+    Tracking your own alliance is free (#667). What Premium buys is the
+    bracket logic: the whole-bracket mode, 📇 Bracket, 🔍 Scout and 🛣️ My
+    Path. Premium is looked up once here and carried on the state, so each
+    of those screens answers from it rather than asking again.
     """
     from setup_cog import _has_leadership_or_admin
 
@@ -1327,24 +1366,6 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
         role = (cfg.leadership_role_name if cfg else None) or "Leadership"
         await interaction.response.send_message(
             f"⛔ You need the **{role}** role (or admin) to use the Alliance Duel tracker.",
-            ephemeral=True,
-        )
-        return
-
-    if not await premium.feature_gate(
-        "alliance_duel_vs", interaction.guild_id, interaction=interaction, bot=bot
-    ):
-        await interaction.response.send_message(
-            embed=premium.premium_locked_embed(
-                feature_label="Alliance Duel (VS) tracker",
-                description=(
-                    "The VS tracker turns the league data you type into your sheet into a "
-                    "readable bracket, a per-week projection, your path through the bracket, "
-                    "and your record against every alliance you have faced. It's part of "
-                    "LW Alliance Helper Premium. Run `/upgrade` to unlock it."
-                ),
-            ),
-            view=premium.upgrade_view(),
             ephemeral=True,
         )
         return
@@ -1391,7 +1412,10 @@ async def handle_vs_hub(bot, interaction: discord.Interaction) -> None:
         )
         return
 
-    state = HubState(interaction.guild_id, vs_cfg, rows)
+    has_premium = await premium.feature_gate(
+        "alliance_duel_vs", interaction.guild_id, interaction=interaction, bot=bot
+    )
+    state = HubState(interaction.guild_id, vs_cfg, rows, premium=has_premium)
     # Read before write. What this guild contributes is its own, and
     # `shared_only` ignores it anyway, so reading first saves the store handing
     # us back an echo of the tab we just read.

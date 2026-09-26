@@ -10,6 +10,8 @@ Three announcements, each independently opt-in, all sharing one channel:
   go and look them up.
 - **Season recap**, when the last week of a league is recorded.
 
+The first is free; the other two are Premium, checked here at fire time (#667).
+
 Two properties hold across all three, and both come from the same fact: these
 fire off a *write*, and a write can happen twice. An officer correcting a
 mistyped score re-saves the same day.
@@ -46,7 +48,21 @@ KIND_RECAP = "recap"  # league
 
 
 def _league_key(league: ad.LeagueKey | None) -> str:
-    return f"{league.season}|{league.tier}|{league.group}" if league else "?"
+    # Shared with config.rename_vs_league (#634), which rewrites exactly
+    # this prefix on a rename -- both build it through config.vs_league_key
+    # so neither has to guess the other's format.
+    return config.vs_league_key(league.season, league.tier, league.group) if league else "?"
+
+
+async def _has_premium(bot, state) -> bool:
+    """Checked at fire time rather than trusted from the toggle (#667).
+
+    Mid-week score is free; Next opponent and Season recap are Premium. The
+    toggles survive a lapse, so a saved "on" is not proof of a subscription.
+    """
+    import premium
+
+    return await premium.feature_gate("alliance_duel_vs", state.guild_id, bot=bot)
 
 
 async def _post(bot, state, kind: str, event_key: str, embed: discord.Embed) -> bool:
@@ -214,8 +230,10 @@ def reveal_embed(state, week: int) -> discord.Embed | None:
 
 
 async def after_pairing_known(bot, state, week: int) -> bool:
-    """Post next week's matchup, once per week, if the alliance opted in."""
+    """Post next week's matchup, once per week, if the alliance opted in. Premium."""
     if not state.cfg.get("opponent_reveal_enabled"):
+        return False
+    if not await _has_premium(bot, state):
         return False
     embed = reveal_embed(state, week)
     if embed is None:
@@ -286,8 +304,10 @@ def recap_embed(state) -> discord.Embed | None:
 
 
 async def after_league_complete(bot, state) -> bool:
-    """Post the recap, once per league, if the alliance opted in."""
+    """Post the recap, once per league, if the alliance opted in. Premium."""
     if not state.cfg.get("season_recap_enabled"):
+        return False
+    if not await _has_premium(bot, state):
         return False
     if state.league is None or not ad.is_league_complete(state.rows, state.league):
         return False

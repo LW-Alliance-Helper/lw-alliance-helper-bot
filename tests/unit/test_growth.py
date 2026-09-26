@@ -825,7 +825,9 @@ class TestFormatBreakdownEmbed:
         assert "Low" not in power_field
         assert "No Change" not in power_field
 
-    def test_bucket_filter_omits_unselected_buckets(self):
+    def test_bucket_filter_shows_unselected_buckets_as_a_count(self):
+        """A bucket the filter leaves out still shows its count, so nothing
+        vanishes without a trace (#668)."""
         from growth import format_breakdown_embed
 
         summary = {
@@ -847,7 +849,7 @@ class TestFormatBreakdownEmbed:
         value = embed.fields[0].value
         assert "Carol" in value
         assert "Alice" not in value
-        assert "Increased" not in value
+        assert "**Increased** (1)" in value
 
     def test_custom_labels_used_in_render(self):
         from growth import format_breakdown_embed

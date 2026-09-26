@@ -39,7 +39,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.9.1"
+__version__ = "1.9.2"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -920,10 +920,21 @@ async def on_app_command_error(
     cmd_name = interaction.command.name if interaction.command else "?"
     print(f"[SLASH] Unhandled error in /{cmd_name}: {actual!r}")
 
-    # Capture to Sentry and grab the event id so the user-facing message
-    # can include a reference for ticket reports. capture_exception()
-    # returns None if Sentry isn't initialised; the formatter handles that.
-    event_id = sentry_sdk.capture_exception(actual)
+    # Missing access (deleted channel, a permission change) is the
+    # alliance's own doing, not a bug — same principle as config_health's
+    # sheet/channel notices and the wizard launch guard (#582). Log it
+    # quietly instead of paging Sentry; the formatter handles event_id=None.
+    missing_access = isinstance(
+        actual, (discord.Forbidden, discord.NotFound)
+    ) and wizard_registry.is_missing_access(actual)
+    if missing_access:
+        print(f"[SLASH] Missing access in /{cmd_name}, not paging Sentry: {actual!r}")
+        event_id = None
+    else:
+        # Capture to Sentry and grab the event id so the user-facing message
+        # can include a reference for ticket reports. capture_exception()
+        # returns None if Sentry isn't initialised; the formatter handles that.
+        event_id = sentry_sdk.capture_exception(actual)
 
     msg = _format_command_error(actual, event_id)
     try:
@@ -1048,13 +1059,21 @@ async def guild_removal_sweep_task():
     day's granularity on a thirty-day window costs nothing.
     """
     from config import sweep_guild_removals
+    from bot_admin import live_guild_ids
 
     try:
-        # The live membership set, not the hold table alone. `on_guild_join`
-        # is not dispatched for a server re-added while the bot was
-        # disconnected -- that arrives in the READY burst -- so a stale hold
-        # would otherwise delete a live server's data.
-        installed = {g.id for g in bot.guilds}
+        # The live membership set, not the hold table alone, and not
+        # `bot.guilds` alone either (#649): discord.py's 2-second
+        # `guild_ready_timeout` means that cache can still be partial this
+        # soon after startup, and `on_guild_join` is not dispatched for a
+        # server re-added while the bot was disconnected -- that arrives in
+        # the READY burst -- so a stale or partial read would otherwise
+        # delete a live server's data. None means "not safe to answer yet";
+        # skip this tick rather than guess, same as the backfill command.
+        installed = await live_guild_ids()
+        if installed is None:
+            print("[REMOVAL] Not fully connected yet; skipping this sweep")
+            return
         # SQLite writes off the event loop, the pattern `growth_task` adopted
         # under #366 for exactly this shape of work.
         result = await asyncio.to_thread(sweep_guild_removals, apply=True, installed=installed)
@@ -1069,6 +1088,24 @@ async def guild_removal_sweep_task():
             print(f"[REMOVAL] Cancelled stale holds for live servers: {result['rejoined']}")
         if result["failed"]:
             print(f"[REMOVAL] Purge failed, will retry tomorrow: {result['failed']}")
+
+        # #573: a purged guild's Premium pin (if any) is already gone from
+        # the DB by this point -- config.py has no premium cache and no
+        # Discord client to DM with, so both live here instead.
+        for gid, freed_user_id in result.get("freed_premium", {}).items():
+            import premium
+
+            premium._cache_invalidate_guild(gid)  # noqa: SLF001 - config never touches this cache
+            print(f"[REMOVAL] Released Premium pin for guild={gid} (was user={freed_user_id})")
+            try:
+                if await premium.user_has_active_subscription(freed_user_id, bot=bot):
+                    donate_cog = bot.get_cog("DonateCog")
+                    if donate_cog is not None:
+                        await donate_cog.dm_premium_pin_released(freed_user_id, gid)
+            except Exception as e:
+                # A missed DM is a support ticket, not a reason to fail the
+                # sweep -- the pin is already released either way.
+                print(f"[REMOVAL] Could not DM user={freed_user_id} about released pin: {e}")
     except Exception as e:
         # Never let the loop die. A purge that fails today is retried
         # tomorrow, because the hold row is only cleared on success.
@@ -1538,31 +1575,20 @@ async def growth_slash(interaction: discord.Interaction):
             # message's own advice and click **Run Snapshot Now**, or
             # re-click Breakdown after a snapshot completes. (#84)
             await inter.response.defer(ephemeral=True)
-            try:
-                from growth import read_latest_breakdown, format_breakdown_embed
+            import growth_breakdown_ui
 
-                data = await asyncio.to_thread(read_latest_breakdown, guild_id)
-            except Exception as e:
-                await inter.followup.send(f"⚠️ Could not load breakdown: {e}", ephemeral=True)
-                return
-            if not data.get("has_data"):
-                await inter.followup.send(
+            await growth_breakdown_ui.send_breakdown(
+                inter,
+                guild_id,
+                gcfg,
+                no_data=(
                     "📊 No breakdown data yet — click **📸 Run Snapshot Now** "
                     "above (or wait for the next scheduled snapshot). The "
                     "breakdown classifies each member's percent change between "
                     "snapshots, so it needs at least two snapshots' worth of "
-                    "data before any classification can render.",
-                    ephemeral=True,
-                )
-                return
-            embed = format_breakdown_embed(
-                metric_labels=data["metric_labels"],
-                breakdown_summary=data["summary"],
-                prev_period_label=data["prev_period_label"],
-                curr_period_label=data["curr_period_label"],
-                label_overrides=gcfg.get("breakdown_labels") or {},
+                    "data before any classification can render."
+                ),
             )
-            await inter.followup.send(embed=embed, ephemeral=True)
 
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -1590,7 +1616,7 @@ async def growth_slash(interaction: discord.Interaction):
                 ephemeral=True,
             )
             self.stop()
-            await run_growth_setup(inter, bot)
+            await wizard_registry.guard_wizard_launch(run_growth_setup(inter, bot), inter)
 
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 
@@ -1603,40 +1629,24 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
     if not await guard(interaction):
         return
     from config import get_growth_config
-    from growth import read_latest_breakdown, format_breakdown_embed
+    import growth_breakdown_ui
 
     guild_id = interaction.guild_id
     gcfg = get_growth_config(guild_id)
 
     await interaction.response.defer(ephemeral=True)
-    try:
-        data = await asyncio.to_thread(read_latest_breakdown, guild_id)
-    except Exception as e:
-        await interaction.followup.send(
-            f"⚠️ Could not load breakdown: {e}",
-            ephemeral=True,
-        )
-        return
-
-    if not data.get("has_data"):
-        await interaction.followup.send(
+    await growth_breakdown_ui.send_breakdown(
+        interaction,
+        guild_id,
+        gcfg,
+        no_data=(
             "📊 No breakdown data yet. Run `/growth overview` and click "
             "**📸 Run Snapshot Now** (or wait for the next scheduled "
             "snapshot). The breakdown classifies each member's percent "
             "change between snapshots, so it needs at least two snapshots' "
-            "worth of data before any classification can render.",
-            ephemeral=True,
-        )
-        return
-
-    embed = format_breakdown_embed(
-        metric_labels=data["metric_labels"],
-        breakdown_summary=data["summary"],
-        prev_period_label=data["prev_period_label"],
-        curr_period_label=data["curr_period_label"],
-        label_overrides=gcfg.get("breakdown_labels") or {},
+            "worth of data before any classification can render."
+        ),
     )
-    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # Register the /growth Group on the tree once every subcommand has

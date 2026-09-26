@@ -20,6 +20,8 @@ import logging
 import re
 from typing import Optional
 
+from time_helpers import server_today
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,7 +145,7 @@ def parse_event_date(
     """
     if not raw:
         return None
-    today = today or _dt.date.today()
+    today = today or server_today()
     s = raw.strip().rstrip(",.;:")
     if not s:
         return None
@@ -261,7 +263,7 @@ def next_event_date(
     event day is game-defined, not per-alliance.
     """
     del guild_id  # signature-only; event day is fixed per Rule H.
-    today = today or _dt.date.today()
+    today = today or server_today()
     dow = _FIXED_EVENT_DOW.get(event_type.upper(), 6)
     return _next_weekday(today, dow, same_day_rolls=True).isoformat()
 
@@ -453,7 +455,7 @@ def most_recent_event_date(
     attendance is recorded after-the-fact, so the right default is the
     last event that actually happened.
     """
-    today = today or _dt.date.today()
+    today = today or server_today()
     try:
         import config
 

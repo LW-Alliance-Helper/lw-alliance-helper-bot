@@ -174,6 +174,41 @@ class TestAssignmentHelpers:
         assert fresh_premium.unassign(99999) is None
 
 
+class TestSecondSubscriberAfterSweepRelease:
+    """#573: a purged guild's pin blocked every future subscriber from that
+    guild before this — the row's `UNIQUE(guild_id)` constraint had no way
+    out. `config.sweep_guild_removals` releasing it, not `premium.unassign`,
+    is what a second subscriber's `/premium assign` actually depends on."""
+
+    def test_a_second_subscriber_can_assign_after_the_sweep_frees_it(self, fresh_premium):
+        import config
+
+        # This test is about the config-side release and its knock-on effect
+        # on `premium.assign`, not the other two databases -- they're
+        # exercised end to end in test_guild_removal.py's own fixtures.
+        with (
+            patch(
+                "champion_duel_db.purge_guild_data", return_value={"deleted": {}, "scrubbed": {}}
+            ),
+            patch(
+                "alliance_duel_db.purge_guild_data", return_value={"deleted": {}, "scrubbed": {}}
+            ),
+        ):
+            config.set_premium_assignment(111, TEST_GUILD_ID)
+            config.record_guild_removal(
+                TEST_GUILD_ID,
+                when="2020-01-01T00:00:00+00:00",  # long past any hold window
+            )
+
+            result = config.sweep_guild_removals(apply=True)
+        assert result["freed_premium"] == {TEST_GUILD_ID: 111}
+
+        # Before the release this raced `UNIQUE(guild_id)` and returned False.
+        assert fresh_premium.assign(user_id=999, guild_id=TEST_GUILD_ID) is True
+        assert config.get_premium_assignment_for_guild(TEST_GUILD_ID) == 999
+        assert config.get_premium_assignment_for_user(111) is None
+
+
 # ── Cache invalidation on assignment changes ──────────────────────────────────
 
 

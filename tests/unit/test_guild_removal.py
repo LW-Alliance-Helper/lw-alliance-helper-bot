@@ -111,12 +111,13 @@ def test_the_spec_covers_every_guild_scoped_table(temp_db):
         ]
     guild_scoped = {t for t in live if "guild_id" in columns_of(t)}
     named = {t for t, _ in config._GUILD_REMOVAL_DELETES}
-    # Two deliberate exclusions. `premium_assignments` belongs to the
-    # subscriber, not the server. `guild_removals` is the hold record itself:
-    # the sweep clears it after the purge, so putting it in the spec would
-    # have the purge delete its own bookkeeping mid-run.
+    # One deliberate exclusion: `guild_removals` is the hold record itself.
+    # The sweep clears it after the purge, so putting it in the spec would
+    # have the purge delete its own bookkeeping mid-run. `premium_assignments`
+    # (#573) used to be excluded here too -- it is in `named` now, released
+    # only at the end of the thirty-day hold, never at removal.
     # Anything else appearing here is a table nobody sorted.
-    missed = guild_scoped - named - {"premium_assignments", "guild_removals"}
+    missed = guild_scoped - named - {"guild_removals"}
     assert not missed, f"guild-scoped tables the removal ignores: {sorted(missed)}"
 
 
@@ -151,23 +152,54 @@ def test_the_dry_run_counts_and_changes_nothing(temp_db):
     assert rows("guild_configs", "guild_id = ?", (GUILD,)), "a preview must not write"
 
 
-# ── What stays ────────────────────────────────────────────────────────────────
+# ── The Premium pin (#573) ──────────────────────────────────────────────────
+#
+# Reversed from the original rule (`test_a_paid_licence_survives_the_server_
+# dropping_the_bot`, this test's old name): a pin now outlives a *lapsed
+# subscription* but not the *server being gone thirty days*. The purge that
+# releases it only ever runs at the end of the hold (`sweep_guild_removals`,
+# gated by `guild_removals_due`), never at removal itself, so a mistaken
+# kick-and-forget still costs nothing for thirty days.
 
 
-def test_a_paid_licence_survives_the_server_dropping_the_bot(temp_db):
-    """The row is keyed on the subscriber. Deleting it would take a licence
-    from someone who did nothing, and `/premium assign` already copes with a
-    guild it cannot see."""
+def test_a_licence_is_released_when_its_guild_is_purged(temp_db):
     config.set_premium_assignment(SUBSCRIBER, GUILD)
+
+    result = config.purge_guild_data(GUILD, apply=True)
+
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) is None
+    assert result["freed_premium_user_id"] == SUBSCRIBER
+    assert result["deleted"].get("premium_assignments") == 1
+
+
+def test_another_users_licence_for_a_different_guild_is_untouched(temp_db):
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    other_subscriber = SUBSCRIBER + 1
+    config.set_premium_assignment(other_subscriber, OTHER_GUILD)
 
     config.purge_guild_data(GUILD, apply=True)
 
+    assert config.get_premium_assignment_for_user(other_subscriber) == OTHER_GUILD
+
+
+def test_a_preview_reports_the_freed_user_but_writes_nothing(temp_db):
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+
+    preview = config.purge_guild_data(GUILD, apply=False)
+
+    assert preview["freed_premium_user_id"] == SUBSCRIBER
     assert config.get_premium_assignment_for_user(SUBSCRIBER) == GUILD
 
 
-def test_premium_is_not_even_named_in_the_spec(temp_db):
+def test_a_guild_with_no_pin_frees_nothing(temp_db):
+    result = config.purge_guild_data(GUILD, apply=True)
+    assert result["freed_premium_user_id"] is None
+    assert "premium_assignments" not in result["deleted"]
+
+
+def test_premium_is_named_in_the_spec(temp_db):
     named = {t for t, _ in config._GUILD_REMOVAL_DELETES}
-    assert "premium_assignments" not in named
+    assert "premium_assignments" in named
 
 
 # ── The Champion Duel side scrubs rather than deletes ─────────────────────────
@@ -537,3 +569,98 @@ def test_the_sweep_scrubs_the_vs_scores_and_keeps_them(temp_db, cd_db, vs_db):
     stored = vsdb.weeks_for_alliance(ad.AllianceKey.of("QQQ", "1234"))
     assert stored[0]["week_score"] == 7, "the league went with the attribution"
     assert stored[0]["actor_guild_id"] is None
+
+
+# ── The sweep and the Premium pin (#573) ────────────────────────────────────
+
+
+def test_the_sweep_releases_a_pin_past_its_window(temp_db, cd_db, vs_db):
+    seed_config(GUILD)
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == [GUILD]
+    assert result["freed_premium"] == {GUILD: SUBSCRIBER}
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) is None
+
+
+def test_the_sweep_leaves_a_pin_alone_inside_the_window(temp_db, cd_db, vs_db):
+    seed_config(GUILD)
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    config.record_guild_removal(GUILD)  # just now -- well inside the 30 days
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == []
+    assert result["freed_premium"] == {}
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) == GUILD
+
+
+def test_a_rejoined_guild_keeps_its_pin(temp_db, cd_db, vs_db):
+    """A server that came back before the sweep ran must not lose its
+    subscriber's pin any more than it loses its configuration."""
+    seed_config(GUILD)
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True, installed={GUILD})
+
+    assert result["rejoined"] == [GUILD]
+    assert result["freed_premium"] == {}
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) == GUILD
+
+
+def test_a_dry_sweep_reports_the_pin_but_keeps_it(temp_db, cd_db, vs_db):
+    seed_config(GUILD)
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    preview = config.sweep_guild_removals(apply=False)
+
+    assert preview["guilds"] == [GUILD]
+    # A dry run reports through the same `config` counts every other table
+    # does, not through `freed_premium` -- that dict is populated only on a
+    # real run (`apply=True`), same as the hold only clearing on one.
+    assert preview["config"]["deleted"].get("premium_assignments") == 1
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) == GUILD
+
+
+def test_a_failing_alliance_duel_purge_does_not_undo_the_released_pin(
+    temp_db, cd_db, vs_db, monkeypatch
+):
+    """The pin lives in the config database, in the same spec-list mechanism
+    and the same transaction as guild_configs and every other table there.
+    A *later* database failing (alliance_duel here) doesn't roll config's
+    own purge back -- config_test's `test_a_failing_second_database_keeps_
+    the_hold_for_a_retry` already pins that for guild_configs, and the pin
+    is not special-cased against it. The guild still reports as failed and
+    retries tomorrow; what's already gone from config does not come back."""
+    import alliance_duel_db
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("alliance duel database is unreachable")
+
+    monkeypatch.setattr(alliance_duel_db, "purge_guild_data", _boom)
+    seed_config(GUILD)
+    config.set_premium_assignment(SUBSCRIBER, GUILD)
+    config.record_guild_removal(
+        GUILD, when=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    )
+
+    result = config.sweep_guild_removals(apply=True)
+
+    assert result["guilds"] == []
+    assert result["failed"] == [GUILD]
+    assert config.guild_removal_held_since(GUILD) is not None, "retry on the next sweep"
+    # This IS the one nuance worth Kevin's own eyes on staging: config's own
+    # purge already committed before alliance_duel raised, so the pin is
+    # already released even though the guild overall reports as failed.
+    assert config.get_premium_assignment_for_user(SUBSCRIBER) is None

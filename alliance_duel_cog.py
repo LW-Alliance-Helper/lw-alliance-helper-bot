@@ -57,12 +57,12 @@ class AllianceDuelCog(commands.Cog):
         Every surface is gated on its own opt-in, so a guild that wants one and
         not the other gets exactly that.
 
-        **The two surfaces gate differently on the tracker itself.** The score
-        prompt reads the sheet, so it needs the tracker set up and Premium. The
-        member day-theme reminder (#406) reads nothing at all: it renders from
-        the fixed day table, ships free, and is available to an alliance that
-        has never opened the tracker. Requiring `enabled` for it would be
-        gating a free surface behind a Premium one.
+        **The two surfaces gate differently on the tracker itself.** Both are
+        free (#667). The score prompt reads the sheet, so it needs the tracker
+        set up. The member day-theme reminder (#406) reads nothing at all: it
+        renders from the fixed day table and is available to an alliance that
+        has never opened the tracker, so requiring `enabled` for it would gate
+        one free surface behind another's setup.
         """
         import config
 
@@ -183,9 +183,6 @@ async def post_score_prompt(bot, guild, vs_cfg, day_date, day: int, *, force: bo
     import config_health
     import premium
 
-    if not await premium.feature_gate("alliance_duel_vs", guild.id, bot=bot):
-        return False
-
     try:
         rows = await ad_hub.read_tab_once(guild.id, vs_cfg)
     except Exception as e:  # noqa: BLE001 - a bot bug, not the alliance's to fix
@@ -194,7 +191,8 @@ async def post_score_prompt(bot, guild, vs_cfg, day_date, day: int, *, force: bo
     if not rows:
         return False
 
-    state = ad_hub.HubState(guild.id, vs_cfg, rows)
+    has_premium = await premium.feature_gate("alliance_duel_vs", guild.id, bot=bot)
+    state = ad_hub.HubState(guild.id, vs_cfg, rows, premium=has_premium)
     if state.own is None:
         return False
 

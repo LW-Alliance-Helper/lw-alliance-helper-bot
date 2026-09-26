@@ -96,7 +96,15 @@ def _no_config_health_db(monkeypatch):
 
 
 @pytest.fixture
-def posted(monkeypatch):
+def premium_ok(monkeypatch):
+    """Whether the guild has Premium, for the two posts that need it (#667)."""
+    gate = AsyncMock(return_value=True)
+    monkeypatch.setattr("premium.feature_gate", gate)
+    return gate
+
+
+@pytest.fixture
+def posted(monkeypatch, premium_ok):
     """A fake channel plus a fake dedup store, so these run with no DB."""
     channel = _Channel()
     marked: set[tuple] = set()
@@ -284,3 +292,36 @@ def test_the_event_posts_carry_no_em_dashes():
     ):
         assert embed is not None
         assert "—" not in _text(embed)
+
+
+# ── Free and Premium (#667) ───────────────────────────────────────────────────
+#
+# Mid-week score is free; Next opponent and Season recap are Premium. The
+# toggles survive a lapse, so the gate is checked when the post would fire.
+
+
+async def test_the_mid_week_score_posts_without_premium(posted, premium_ok):
+    premium_ok.return_value = False
+    rows = [_row(OWN_TAG, opponent=THEM, day_outcomes={1: "W"}), _row("A02")]
+    assert await events.after_day_recorded(MagicMock(), _state(rows), 1, 1) is True
+
+
+async def test_next_opponent_needs_premium_even_when_switched_on(posted, premium_ok):
+    premium_ok.return_value = False
+    rows = [_row(OWN_TAG, opponent=THEM), _row("A02", opponent=OWN)]
+    assert await events.after_pairing_known(MagicMock(), _state(rows), 1) is False
+    assert posted.sent == []
+
+
+async def test_season_recap_needs_premium_even_when_switched_on(posted, premium_ok):
+    premium_ok.return_value = False
+    assert await events.after_league_complete(MagicMock(), _state(_finished_league())) is False
+    assert posted.sent == []
+
+
+async def test_a_switched_off_premium_post_never_asks_about_premium(posted, premium_ok):
+    """The toggle is read first, so a guild that never wanted the post costs no
+    entitlement lookup on every score save."""
+    rows = [_row(OWN_TAG, opponent=THEM), _row("A02", opponent=OWN)]
+    await events.after_pairing_known(MagicMock(), _state(rows, opponent_reveal_enabled=0), 1)
+    premium_ok.assert_not_awaited()

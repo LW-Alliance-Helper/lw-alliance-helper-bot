@@ -426,9 +426,23 @@ class PresetsManageView(OwnedView):
 
         async def _pick(i: discord.Interaction, name: str):
             await i.response.defer()
-            preset = await asyncio.to_thread(
-                tr.load_preset, self.guild_id, self.day_rules_tab, name
-            ) or tr.SchedulePreset.default(name)
+            try:
+                preset = await asyncio.to_thread(
+                    tr.load_preset, self.guild_id, self.day_rules_tab, name
+                ) or tr.SchedulePreset.default(name)
+            except Exception as e:
+                # The alliance's own Sheet: tell them, keep it out of Sentry
+                # (#677). load_preset has already recorded it.
+                from config import describe_sheet_error, is_user_config_sheet_error
+
+                if not is_user_config_sheet_error(e):
+                    raise
+                await i.followup.send(
+                    "⚠️ Couldn't load your saved pattern to open the editor: "
+                    f"{describe_sheet_error(e, guild_id=self.guild_id, tab=self.day_rules_tab)}",
+                    ephemeral=True,
+                )
+                return
             await ui.post_preset_editor(
                 i.channel, self.guild_id, i.user.id, preset, self.day_rules_tab
             )

@@ -165,22 +165,37 @@ def _rules_tab_name(guild_id: int, event_type: str) -> str:
 
 def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
     """Returns the worksheet, creating it (with header) if missing.
-    Returns None if no Sheet is configured."""
+    Returns None if no Sheet is configured, or if the alliance's Sheet can't
+    be opened for a reason that is theirs to fix (deleted, unshared, rate
+    limited). Anything else still raises, so a bot bug still pages."""
     import config
 
-    sh = config.get_spreadsheet(guild_id)
-    if sh is None:
-        return None
     tab_name = _rules_tab_name(guild_id, event_type)
     if not tab_name:
         return None
-    return config.get_or_create_worksheet(
-        sh,
-        tab_name,
-        header_row=_HEADER,
-        rows=500,
-        cols=max(8, len(_HEADER)),
-    )
+    try:
+        sh = config.get_spreadsheet(guild_id)
+        if sh is None:
+            return None
+        return config.get_or_create_worksheet(
+            sh,
+            tab_name,
+            header_row=_HEADER,
+            rows=500,
+            cols=max(8, len(_HEADER)),
+        )
+    except Exception as e:
+        # Same treatment as the strategy presets beside it (#677): the
+        # alliance's own Sheet problem is logged, not raised to Sentry.
+        if not config.is_user_config_sheet_error(e):
+            raise
+        logger.warning(
+            "[STORM RULES] can't open the rules tab for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            config.describe_sheet_error(e, tab=tab_name),
+        )
+        return None
 
 
 class Rule:

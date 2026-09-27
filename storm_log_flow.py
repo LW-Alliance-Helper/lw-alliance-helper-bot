@@ -424,9 +424,27 @@ async def _q_derived_count(w: _Walk, q: _Question) -> str | None:
         )
         return None
     await w.ensure_roster()
-    counts = await asyncio.get_event_loop().run_in_executor(
-        None, _log().count_member_flags_in_window, w.guild_id, w.event_type, lookback, source_key
-    )
+    try:
+        counts = await asyncio.get_event_loop().run_in_executor(
+            None,
+            _log().count_member_flags_in_window,
+            w.guild_id,
+            w.event_type,
+            lookback,
+            source_key,
+        )
+    except Exception as e:
+        # The alliance's own Sheet: say so and skip the question rather
+        # than ending the walk silently and paging Sentry (#677).
+        import config
+
+        if not config.is_user_config_sheet_error(e):
+            raise
+        await w.channel.send(
+            f"⚠️ Couldn't read past events for `{q.label}`: "
+            f"{config.describe_sheet_error(e, guild_id=w.guild_id)}. Skipping."
+        )
+        return None
     # Every roster member gets a row, 0 for those never seen in the source.
     w.record_per_member(q.key, lambda name: str(counts.get(name, 0)))
     if q.raw.get("show_during_log"):

@@ -377,7 +377,7 @@ class _WriteConfirmView(discord.ui.View):
                 "(the bot's service account needs edit access).",
                 ephemeral=True,
             )
-            _capture(e)
+            _capture_unless_alliance_owned(e, interaction.guild_id, "status write-back failed")
             return
         await interaction.followup.send(
             f"✅ Set **{self.status_col}** to **{label}** for **{self.name}**.", ephemeral=True

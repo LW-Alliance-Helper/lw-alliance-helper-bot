@@ -49,6 +49,7 @@ import itertools
 import os
 from datetime import datetime, timedelta, timezone
 
+import examples
 import discord
 
 import champion_duel_claim as claim_lib
@@ -1796,7 +1797,10 @@ class _PredictModal(discord.ui.Modal, title=CD_SIMULATE_TITLE):
     )
     player_b = discord.ui.TextInput(label="Second player", max_length=64)
     server_b = discord.ui.TextInput(
-        label="Second player's server", required=False, max_length=10, placeholder="e.g. 1042"
+        label="Second player's server",
+        required=False,
+        max_length=10,
+        placeholder=f"e.g. {examples.WARZONE}",
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -2146,7 +2150,7 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         placeholder="As it's spelled in the roster",
     )
     your_server = discord.ui.TextInput(
-        label="Your server", required=False, max_length=10, placeholder="e.g. 1042"
+        label="Your server", required=False, max_length=10, placeholder=f"e.g. {examples.WARZONE}"
     )
 
     def __init__(
@@ -3960,7 +3964,10 @@ def build_edits_embed(result: dict, shown: int) -> discord.Embed:
 class _EditsFilterModal(discord.ui.Modal, title="Filter Champion Duel edits"):
     player = discord.ui.TextInput(label="Player name", required=False, max_length=64)
     actor = discord.ui.TextInput(
-        label="Actor's Discord ID", required=False, max_length=32, placeholder="e.g. 461845428…"
+        label="Actor's Discord ID",
+        required=False,
+        max_length=32,
+        placeholder=f"e.g. {examples.DISCORD_ID}",
     )
     limit = discord.ui.TextInput(
         label=f"How many (max {BROWSE_MAX})", required=False, max_length=3, placeholder="10"
@@ -4742,7 +4749,7 @@ class _AddGroupingModal(discord.ui.Modal, title="Add your Participating Warzones
         label="The participating warzones, all 16",
         style=discord.TextStyle.paragraph,
         max_length=200,
-        placeholder="#773, #800, #744, ...",
+        placeholder=", ".join(f"#{n}" for n in examples.WARZONE_LIST) + ", ...",
     )
     started_on = discord.ui.TextInput(
         label="Sign-up stage start date",
@@ -5433,7 +5440,10 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
         component=discord.ui.TextInput(
             style=discord.TextStyle.paragraph,
             max_length=4000,
-            placeholder="[OGV]Kestrel, 738, 1, 325.8M, 33,500,000\nWren, 744, 25",
+            placeholder=(
+                f"[{examples.OWN_TAG}]{examples.PLAYERS[0]}, {examples.OWN_WARZONE}, 1, "
+                f"325.8M, 33,500,000\n{examples.PLAYERS[1]}, {examples.WARZONE}, 25"
+            ),
         ),
     )
 

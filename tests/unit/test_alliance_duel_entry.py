@@ -684,11 +684,11 @@ def test_the_retry_modal_still_holds_what_was_typed():
         "tier": "Diamond",
         "group": "12 - 1",
         "week_date": "8/24",
-        "bracket": "kTZ 714",
+        "bracket": "ABC 999",
     }
     modal = entry.NewLeagueModal(_state([]), defaults=typed)
     assert modal.season.default == "S36"
-    assert modal.bracket.default == "kTZ 714"
+    assert modal.bracket.default == "ABC 999"
 
 
 def test_the_bracket_format_survives_typing():
@@ -707,8 +707,8 @@ def test_the_bracket_format_survives_typing():
     # submit -- `_value`, mirroring a real interaction -- reaches it the same
     # way it always did.
     assert modal._bracket_label.component is modal.bracket
-    modal.bracket._value = "kTZ 714 26.8b 25 100"
-    assert modal._typed()["bracket"] == "kTZ 714 26.8b 25 100"
+    modal.bracket._value = "ABC 999 26.8b 25 100"
+    assert modal._typed()["bracket"] == "ABC 999 26.8b 25 100"
 
 
 def test_own_alliance_mode_keeps_its_plain_ranking_field():
@@ -1742,7 +1742,7 @@ async def test_rename_league_refuses_a_new_identity_already_on_the_sheet(_rename
     new = ad.LeagueKey("S36", "Diamond", "12-2")
     row_a = _row(OWN_TAG, week=1)
     row_a.league = old
-    row_b = _row("kTZ", week=1)
+    row_b = _row("XYZ", week=1)
     row_b.league = new
     state = _state([row_a, row_b])
     state.league = old

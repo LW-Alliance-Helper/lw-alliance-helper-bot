@@ -364,6 +364,17 @@ Do not write a copy of any of them.
   a new copy is `scripts/quality/ast-grep/view-handlers.yml`; its
   preserved set is on the issue.
 
+### Examples in copy come from `examples.py`
+- A placeholder or worked example that shows an alliance, a warzone or a
+  player draws from `examples.py`
+  ([#654](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/654)):
+  the owner's own `OGV` / `738`, or the invented tags, warzones and
+  players there. Examples used to borrow other alliances' tags, warzone
+  numbers and player names from real leagues, in front of every alliance.
+- `scripts/quality/invented_examples.py` finds one that doesn't, and
+  `tests/unit/test_invented_examples.py` runs it in CI. Player names
+  can't be found by pattern, so a new one is a review item.
+
 ### Wizard "Use default vs Keep current vs Define my own"
 - `wizard_steps.ask_keep_or_change(default=, current=, ...)` — pass the
   hardcoded baseline as `default=` and the saved guild value as

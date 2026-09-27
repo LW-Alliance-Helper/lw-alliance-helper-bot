@@ -6,9 +6,9 @@ never entered data has to be shown the screen, not told the field name. This is
 the same thing `qualifier_data/capture_guide/` does for the simulator's manual
 entry process, aimed at the two fields the hub actually asks for.
 
-**Sources are consented captures.** Both players shown (`pinkcatboi` and
-`PlumpNSupple`, both #738 OGV) gave permission for their battle report to be
-used here. That matters because this repo is public: nothing about Champion
+**Sources are consented captures.** Both players shown (members of #738
+OGV, the owner's own alliance) gave permission for their battle report to be
+used here. Their names stay out of this public repo (#654). That matters because this repo is public: nothing about Champion
 Duel roster or scouting data goes in it otherwise, and these images are an
 exception granted per-person rather than a relaxation of the rule.
 

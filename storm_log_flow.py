@@ -442,7 +442,7 @@ async def _q_derived_count(w: _Walk, q: _Question) -> str | None:
             raise
         await w.channel.send(
             f"⚠️ Couldn't read past events for `{q.label}`: "
-            f"{config.describe_sheet_error(e, guild_id=w.guild_id)}. Skipping."
+            f"{config.describe_sheet_error(e)}. Skipping."
         )
         return None
     # Every roster member gets a row, 0 for those never seen in the source.

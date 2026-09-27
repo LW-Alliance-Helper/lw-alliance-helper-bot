@@ -109,7 +109,10 @@ class TestTrainPresetEditPicker:
 
     async def test_missing_tab_is_explained(self):
         inter, post = await self._pick(_raises(gspread.exceptions.WorksheetNotFound("Day Rules")))
-        assert "Couldn't load your saved pattern" in _followup_text(inter)
+        text = _followup_text(inter)
+        assert text.startswith("⚠️ Couldn't load your saved pattern to open the editor: ")
+        # The approved copy carries the diagnosis without the internal guild tag.
+        assert "guild=" not in text
         post.assert_not_awaited()
 
     async def test_a_bug_still_raises(self):
@@ -213,7 +216,9 @@ class TestDerivedCountQuestion:
             result = await storm_log_flow._q_derived_count(w, self._question())
         assert result is None
         note = w.channel.send.await_args.args[0]
-        assert "Couldn't read past events for `Missed events`" in note
+        assert note.startswith("⚠️ Couldn't read past events for `Missed events`: ")
+        assert note.endswith(". Skipping.")
+        assert "guild=" not in note
         w.record_per_member.assert_not_called()
 
     async def test_a_bug_still_raises(self):

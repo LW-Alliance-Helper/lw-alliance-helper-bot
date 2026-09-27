@@ -439,7 +439,7 @@ class PresetsManageView(OwnedView):
                     raise
                 await i.followup.send(
                     "⚠️ Couldn't load your saved pattern to open the editor: "
-                    f"{describe_sheet_error(e, guild_id=self.guild_id, tab=self.day_rules_tab)}",
+                    f"{describe_sheet_error(e, tab=self.day_rules_tab)}",
                     ephemeral=True,
                 )
                 return

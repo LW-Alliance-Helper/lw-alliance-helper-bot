@@ -1,4 +1,4 @@
-"""Sentry noise filter (#377, #378, #416).
+"""Sentry noise filter (#377, #378, #416, #677).
 
 The point of these is that the filter stays *narrow*. Dropping too much is a
 silent failure mode nobody notices until a real regression goes unreported, so
@@ -8,6 +8,7 @@ roughly half of these assert that ordinary errors still get through.
 from __future__ import annotations
 
 import discord
+import gspread
 import pytest
 
 import sentry_filter
@@ -36,6 +37,19 @@ def _connection_closed(code: int) -> discord.ConnectionClosed:
     return exc
 
 
+def _gspread_api_error(status: int) -> gspread.exceptions.APIError:
+    """A gspread APIError carrying ``status``, built the way gspread builds one."""
+
+    class _Response:
+        status_code = status
+        text = ""
+
+        def json(self):
+            return {"error": {"code": status, "message": "x", "status": "X"}}
+
+    return gspread.exceptions.APIError(_Response())
+
+
 class TestDropped:
     def test_login_failure_is_dropped(self):
         """#377: a rejected token is a deploy problem, not a code bug."""
@@ -50,6 +64,16 @@ class TestDropped:
         resp = type("R", (), {"status": 503, "reason": "Service Unavailable"})()
         exc = discord.DiscordServerError(resp, "upstream connect error")
         assert sentry_filter.drop_reason(exc) == "discord-5xx"
+
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    def test_google_5xx_is_dropped(self, status):
+        """#492 / #507 / #540: Google's outage, in paths that run again on their own."""
+        assert sentry_filter.drop_reason(_gspread_api_error(status)) == "google-5xx"
+
+    def test_google_5xx_found_through_the_cause_chain(self):
+        wrapper = RuntimeError("roster sync failed")
+        wrapper.__cause__ = _gspread_api_error(503)
+        assert sentry_filter.drop_reason(wrapper) == "google-5xx"
 
     def test_login_failure_found_through_the_cause_chain(self):
         """discord.py raises LoginFailure *from* the 401, and which one the SDK
@@ -87,6 +111,15 @@ class TestKept:
         else is a real problem, so matching on status alone would over-drop."""
         resp = type("R", (), {"status": 401, "reason": "Unauthorized"})()
         assert sentry_filter.drop_reason(discord.HTTPException(resp, "401: Unauthorized")) is None
+
+    @pytest.mark.parametrize("status", [400, 403, 404, 429])
+    def test_google_4xx_is_kept(self, status):
+        """A 4xx is the alliance's Sheet or our request, never Google's outage.
+        The alliance-owned ones are kept out of Sentry at the call site."""
+        assert sentry_filter.drop_reason(_gspread_api_error(status)) is None
+
+    def test_other_gspread_errors_are_kept(self):
+        assert sentry_filter.drop_reason(gspread.exceptions.WorksheetNotFound("Roster")) is None
 
     def test_not_found_is_kept(self):
         resp = type("R", (), {"status": 404, "reason": "Not Found"})()

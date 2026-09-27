@@ -59,6 +59,11 @@ def _make_interaction(
     inter.response = MagicMock()
     inter.response.send_message = AsyncMock()
     inter.response.is_done = MagicMock(return_value=response_done)
+    # A defer consumes the response, as it does on Discord, so the code
+    # under test sees `is_done()` flip and follows up.
+    inter.response.defer = AsyncMock(
+        side_effect=lambda **_: inter.response.is_done.configure_mock(return_value=True)
+    )
     inter.followup = MagicMock()
     inter.followup.send = AsyncMock(return_value=MagicMock())
     inter.original_response = AsyncMock(return_value=MagicMock())
@@ -694,6 +699,7 @@ class TestHandleEventHubGates:
         ):
             await seh.handle_event_hub(bot, inter, "DS")
         denier.assert_awaited_once_with(inter)
+        inter.response.defer.assert_not_called()
         # No hub embed sent.
         inter.response.send_message.assert_not_called()
         inter.followup.send.assert_not_called()
@@ -723,6 +729,31 @@ class TestHandleEventHubGates:
 
 class TestHandleEventHubRender:
     @pytest.mark.asyncio
+    async def test_defers_before_the_premium_check_and_sheet_read(self, seeded_db):
+        """#677: a slow Sheet read used to outlast Discord's 3-second window.
+        The defer has to land before either slow call starts."""
+        bot = MagicMock()
+        inter = _make_interaction()
+        order = []
+
+        async def premium_check(*_a, **_k):
+            order.append(("premium", inter.response.defer.await_count))
+            return True
+
+        def build_embed(*_a, **_k):
+            order.append(("sheet", inter.response.defer.await_count))
+            return discord.Embed()
+
+        with (
+            patch("storm_permissions.is_leader_or_admin", return_value=True),
+            patch("premium.is_premium", new=premium_check),
+            patch.object(seh, "_build_event_hub_embed", new=build_embed),
+            patch("storm_walkthrough.maybe_offer_storm_hub_tour", new=AsyncMock()),
+        ):
+            await seh.handle_event_hub(bot, inter, "DS")
+        assert order == [("premium", 1), ("sheet", 1)]
+
+    @pytest.mark.asyncio
     async def test_render_sends_ephemeral_embed_with_view(self, seeded_db):
         bot = MagicMock()
         inter = _make_interaction()
@@ -741,8 +772,10 @@ class TestHandleEventHubRender:
             ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
-        inter.response.send_message.assert_awaited_once()
-        kwargs = inter.response.send_message.await_args.kwargs
+        inter.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        inter.response.send_message.assert_not_called()
+        inter.followup.send.assert_awaited_once()
+        kwargs = inter.followup.send.await_args.kwargs
         assert kwargs.get("ephemeral") is True
         assert isinstance(kwargs.get("embed"), discord.Embed)
         view = kwargs.get("view")
@@ -750,7 +783,7 @@ class TestHandleEventHubRender:
         assert view.owner_id == inter.user.id
         assert view.is_premium is True
         # The hub captures the sent message for `on_timeout` cleanup.
-        assert view.message is inter.original_response.return_value
+        assert view.message is inter.followup.send.return_value
 
     @pytest.mark.asyncio
     async def test_render_uses_followup_when_response_already_done(
@@ -774,6 +807,7 @@ class TestHandleEventHubRender:
             ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
+        inter.response.defer.assert_not_called()
         inter.response.send_message.assert_not_called()
         inter.followup.send.assert_awaited_once()
         followup_kwargs = inter.followup.send.await_args.kwargs
@@ -807,7 +841,7 @@ class TestHandleEventHubRender:
             ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
-        view = inter.response.send_message.await_args.kwargs["view"]
+        view = inter.followup.send.await_args.kwargs["view"]
         assert view.is_premium is False
 
     @pytest.mark.asyncio
@@ -857,7 +891,7 @@ class TestHandleEventHubRender:
             # Must not raise.
             await seh.handle_event_hub(bot, inter, "DS")
         # Hub still rendered.
-        inter.response.send_message.assert_awaited_once()
+        inter.followup.send.assert_awaited_once()
 
 
 class TestTourOfferSuppression:

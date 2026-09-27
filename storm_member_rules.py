@@ -693,6 +693,10 @@ async def open_member_rule_list(
     """
     if not await _deny_if_not_leader(interaction):
         return
+    # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+    # Public, like the list it opens; the send below follows up when done.
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True)
     # gspread off the event loop.
     rules = await asyncio.to_thread(
         list_rules,
@@ -790,6 +794,8 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
+        # Defer before the Sheet write, or a slow Sheet times the modal out (#677).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         ok, msg = await asyncio.to_thread(
             save_rule,
             interaction.guild_id,
@@ -797,14 +803,14 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
             Rule(rule_type=_RULE_TYPE_POWER_BAND, subject=str(int(n)), value=self.zone),
         )
         if ok:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ Saved rule for **{self.zone}**: members ≥ "
                 f"{format_power(int(n))} are eligible.\n"
                 f"Add more rules later via `{hub_cmd}` → **{HUB_BTN_RULES}**.",
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⚠️ {msg}",
                 ephemeral=True,
             )

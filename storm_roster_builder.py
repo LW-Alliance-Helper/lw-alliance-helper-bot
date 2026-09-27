@@ -2978,6 +2978,8 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
             faction=s.preset.faction,
             phase_count=s.preset.phase_count,
         )
+        # Defer before the Sheet write, or a slow Sheet times the modal out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         ok = await asyncio.to_thread(
             ss.save_preset,
             s.guild_id,
@@ -2985,12 +2987,12 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
             buf,
         )
         if ok:
-            await inter.response.send_message(
+            await inter.followup.send(
                 f"✅ Saved roster as preset **{name}**.",
                 ephemeral=True,
             )
         else:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "⚠️ Couldn't save preset. Check that your Sheet is configured "
                 "and the bot has edit access.",
                 ephemeral=True,

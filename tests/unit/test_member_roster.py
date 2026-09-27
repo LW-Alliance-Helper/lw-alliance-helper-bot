@@ -201,7 +201,7 @@ class TestBuildRosterRows:
 
 
 class TestWriteRoster:
-    def test_clears_then_writes_header_plus_members(self, seeded_db):
+    def test_writes_header_plus_members_in_one_update(self, seeded_db):
         from member_roster import write_roster
         import config
 
@@ -220,7 +220,9 @@ class TestWriteRoster:
             count, _report = write_roster(guild, _default_cfg())
 
         assert count == 2
-        ws.clear.assert_called_once()
+        # #678: one write, never clear() first, so a failure can't leave the
+        # tab empty.
+        ws.clear.assert_not_called()
         ws.update.assert_called_once()
         rows = ws.update.call_args.args[1]  # ("A1", rows, ...)
         assert rows[0][0] == "Discord ID"  # header
@@ -361,7 +363,10 @@ class TestPreserveUnknownColumns:
         assert len(rows[0]) == 6
         assert rows[0][5] == "Is this user in Discord?"
 
-    def test_get_all_values_failure_does_not_block_sync(self, seeded_db):
+    def test_get_all_values_failure_writes_nothing(self, seeded_db):
+        """#678: a failed read used to be treated as an empty tab, so the
+        rewrite dropped every alliance-owned column. Now nothing is written
+        and the caller hears about it."""
         from member_roster import write_roster
 
         guild = MagicMock()
@@ -374,11 +379,39 @@ class TestPreserveUnknownColumns:
         with (
             patch("member_roster.get_member_roster_sheet", return_value=ws),
             patch("member_roster.get_spreadsheet", return_value=None),
+            pytest.raises(RuntimeError),
         ):
-            count, _report = write_roster(guild, _default_cfg())
-        # Falls through to writing just the bot-managed columns; the
-        # write isn't blocked by a read failure.
-        assert count == 1
+            write_roster(guild, _default_cfg())
+        ws.update.assert_not_called()
+        ws.clear.assert_not_called()
+
+    def test_a_shrunken_roster_blanks_the_rows_it_no_longer_reaches(self, seeded_db):
+        """One write replaces the old contents: rows and columns the new
+        roster doesn't reach are written blank rather than left stale."""
+        from member_roster import write_roster
+
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles", "Is this user in Discord?"],
+            ["100", "Alice", "Alice", "", "", "Yes"],
+            ["200", "Bob", "Bob", "", "", "Yes"],
+            ["300", "Cara", "Cara", "", "", "Yes"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        with (
+            patch("member_roster.get_member_roster_sheet", return_value=ws),
+            patch("member_roster.get_spreadsheet", return_value=None),
+        ):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        assert len(rows) >= len(existing)
+        names = [r[1] for r in rows if any(r)]
+        assert "Bob" not in names and "Cara" not in names
+        assert all(len(r) == len(rows[0]) for r in rows)
 
 
 class TestNonDiscordRowPreservation:

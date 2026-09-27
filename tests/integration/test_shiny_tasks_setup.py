@@ -8,9 +8,9 @@ dict. These drive the views one at a time, in order, and hold the prompts,
 the button labels, the saved row, the final-review embed and the
 acknowledgement. `ask_keep_or_change`, `ChannelSelectStep` and
 `ask_disable_with_clear` are patched in whichever homes hold them so the
-same file holds before and after the move. The server-range step's
-`ModalLaunchView` is real; a callable answer fills its modal before
-confirming, the way a submitted modal would.
+same file holds before and after the move. Step 3's `WarzoneGroupView`
+(#604) is real and answered by attribute; its clicks are in
+`tests/unit/test_shiny_tasks_setup_views.py`.
 """
 
 import importlib
@@ -37,10 +37,6 @@ from defaults import DEFAULT_SHINY_TASKS_MESSAGE
 
 TIMEOUT = WIZARD_TIMEOUT.format(wizard="🌟 Shiny Tasks")
 RECOVERY = "`/setup` → 🌟 Shiny Tasks"
-RANGE_GIVE_UP = (
-    "⚠️ Could not read those server numbers after a few tries. "
-    "Run `/setup` → 🌟 Shiny Tasks to start over."
-)
 CONFIRM_CANCEL = f"{CANCEL_PLAIN} Run `/setup` → 🌟 Shiny Tasks to start again."
 TZ_LABEL = "(UTC-5) Eastern (New York, Toronto, Miami)"
 G = TEST_GUILD_ID
@@ -71,15 +67,9 @@ def _both(name):
     return targets
 
 
-def _range(lo, hi):
-    """Answer the server-range launcher the way a submitted modal would."""
-
-    def _fill(view):
-        view.modal.min_value = lo
-        view.modal.max_value = hi
-        view.confirmed = True
-
-    return _fill
+def _group(lo, hi):
+    """Answer the warzone-group picker the way a confirmed pick would."""
+    return {"selected": (lo, hi), "confirmed": True}
 
 
 class Script:
@@ -260,7 +250,7 @@ def _save(**over):
     config.save_shiny_tasks_config(G, **kw)
 
 
-MINIMAL = [("selected", True), _range("677", "804"), ("confirmed", True)]
+MINIMAL = [("selected", True), _group(677, 804), ("confirmed", True)]
 
 
 # ── Fresh ────────────────────────────────────────────────────────────────────
@@ -272,37 +262,29 @@ class TestFresh:
         s, rec, env = await _drive(MINIMAL)
         s.assert_order(
             "🌟 **Daily Shiny Tasks Setup**\n"
-            "Each day, the bot can post the list of Last War servers where "
-            "shiny tasks are available, filtered to the servers your alliance "
-            "can reach.",
+            "Each day, the bot can post the list of Last War warzones where "
+            "shiny tasks are available, filtered to your alliance's warzone "
+            "group.",
             "**Step 1 of 6 — Enable daily shiny tasks announcement?**",
             "**Step 2 of 6 — Announcement Channel**\n"
             "Pick the channel where the daily shiny tasks post should be posted.",
             "​",
-            "**Step 3 of 6 — Server Range**\n"
-            "Enter the lowest and highest server numbers your alliance can "
-            "reach. Typically your transfer range.",
+            "**Step 3 of 6 — Warzone Group**\n"
+            "Pick your alliance's warzone group. The daily post lists the warzones in it "
+            "that have shiny tasks that day.",
             "✅ Shiny-tasks announcement saved! The first post will fire at " + _t("09:00") + ".",
         )
         assert [type(v).__name__ for v in s.views] == [
             "YesNoView",
             "MagicMock",
-            "ModalLaunchView",
+            "WarzoneGroupView",
             "ConfirmView",
         ]
         assert env.channel_calls[0]["suggested_name"] == "shiny-tasks"
         assert env.channel_calls[0]["include_threads"] is False
         assert env.channel_calls[0]["current_id"] == 0
-        launcher = s.view_named("ModalLaunchView")
-        assert [c.label for c in launcher.children] == ["✏️ Enter Server Numbers"]
-        assert launcher.modal.title == "Server Range"
-        assert [
-            (c.label, c.placeholder, c.default, c.max_length) for c in launcher.modal.children
-        ] == [
-            ("Lowest reachable server number", "e.g. 677", "", 5),
-            ("Highest reachable server number", "e.g. 804", "", 5),
-        ]
-        assert launcher.modal.value == "677 – 804"
+        picker = s.view_named("WarzoneGroupView")
+        assert picker.current is None
         assert rec.prompt(0) == (
             f"**Step 4 of 6 — Post Time**\n"
             f"What time of day should the announcement post? "
@@ -320,7 +302,7 @@ class TestFresh:
         assert rec.prompt(1) == (
             "**Step 5 of 6 — Announcement Message**\n"
             "Customize the announcement body, or use the default. "
-            "Placeholders: `{servers}` and `{date}`."
+            "Placeholders: `{warzones}` and `{date}`."
         )
         assert rec.kw(1)["default"] == DEFAULT_SHINY_TASKS_MESSAGE and rec.kw(1)["current"] is None
         assert rec.kw(1)["modal_title"] == "Shiny Tasks Message"
@@ -331,7 +313,7 @@ class TestFresh:
         assert [(f.name, f.value, f.inline) for f in embed.fields] == [
             ("Status", "✅ Enabled", True),
             ("Channel", "<#900001>", True),
-            ("Server Range", "677 – 804", True),
+            ("Warzones", "677 – 804", True),
             ("Post Time", _t("09:00"), True),
             ("Message", DEFAULT_SHINY_TASKS_MESSAGE, False),
         ]
@@ -386,92 +368,51 @@ class TestFresh:
         assert len(rec.calls) == 3 and not _has()
 
 
-class TestServerRange:
+class TestWarzoneGroup:
     @pytest.mark.asyncio
-    async def test_unreadable_numbers_are_retried_with_the_typed_values(self, seeded_db):
-        s, _, _ = await _drive(
-            [("selected", True), _range("abc", "804"), _range("677", "804"), ("confirmed", True)]
-        )
-        assert s.sent[s.index_of("Could not read")] == (
-            "⚠️ Could not read **`abc`** / **`804`** as whole "
-            "numbers. Try something like `677` and `804`. Let's try once more."
-        )
-        first, second = [v for v in s.views if type(v).__name__ == "ModalLaunchView"]
-        assert [c.default for c in second.modal.children] == ["abc", "804"]
-        assert [c.label for c in second.children] == ["✏️ Enter Server Numbers"]
-        assert _cfg()["server_min"] == 677
-
-    @pytest.mark.asyncio
-    async def test_a_backwards_range_is_retried(self, seeded_db):
-        s, _, _ = await _drive(
-            [
-                ("selected", True),
-                _range("900", "800"),
-                _range("0", "5"),
-                _range("1", "5"),
-                ("confirmed", True),
-            ]
-        )
-        assert s.sent[s.index_of("must be ≥ 1")] == (
-            "⚠️ The lowest server (**`900`**) must be ≥ 1 and "
-            "≤ the highest (**`800`**). Let's try once more."
-        )
-        assert "(**`0`**) must be ≥ 1" in s.sent[s.index_of("(**`0`**)")]
-        assert _cfg()["server_min"] == 1 and _cfg()["server_max"] == 5
-
-    @pytest.mark.asyncio
-    async def test_three_bad_ranges_give_up(self, seeded_db):
-        s, _, _ = await _drive(
-            [("selected", True), _range("x", "y"), _range("x", "y"), _range("x", "y")]
-        )
-        assert s.sent[-1] == RANGE_GIVE_UP and not _has()
-
-    @pytest.mark.asyncio
-    async def test_a_saved_range_gets_keep_current(self, seeded_db):
+    async def test_a_saved_group_gets_keep_current(self, seeded_db):
         _save(server_min=677, server_max=804)
         s, _, _ = await _drive(
-            [("proceed", True), ("selected", True), _range("677", "804"), ("confirmed", True)]
+            [("proceed", True), ("selected", True), _group(677, 804), ("confirmed", True)]
         )
-        launcher = s.view_named("ModalLaunchView")
-        # discord.py adds the decorated Enter button before the added Keep one.
-        assert [c.label for c in launcher.children] == [
-            "✏️ Enter Server Numbers",
-            "Keep current: 677 – 804",
-        ]
-        assert [c.default for c in launcher.modal.children] == ["677", "804"]
+        picker = s.view_named("WarzoneGroupView")
+        assert picker.current == (677, 804)
+        assert "Keep current: 677 – 804" in [getattr(c, "label", None) for c in picker.children]
 
     @pytest.mark.asyncio
-    async def test_a_launcher_confirmed_with_nothing_typed_re_asks(self, seeded_db):
+    async def test_a_slice_from_before_the_groups_is_replaced_by_a_group(self, seeded_db):
+        """A narrower range saved before #604 keeps posting until the step is
+        re-run; re-running it picks a group, so there is no Keep current."""
+        _save(server_min=700, server_max=760)
         s, _, _ = await _drive(
-            [("selected", True), ("confirmed", True), _range("1", "2"), ("confirmed", True)]
+            [("proceed", True), ("selected", True), _group(677, 804), ("confirmed", True)]
         )
-        assert "Could not read **``** / **``**" in s.sent[s.index_of("Could not read")]
-        assert _cfg()["server_min"] == 1
+        assert s.view_named("WarzoneGroupView").current is None
+        assert (_cfg()["server_min"], _cfg()["server_max"]) == (677, 804)
 
     @pytest.mark.asyncio
-    async def test_keep_current_fills_the_modal(self, seeded_db):
-        _save(server_min=677, server_max=804)
-
-        def _keep(view):
-            view.children[0]  # the Keep current button is first
-            view.modal.min_value, view.modal.max_value = "677", "804"
-            view.confirmed = True
-
-        await _drive([("proceed", True), ("selected", True), _keep, ("confirmed", True)])
-        assert _cfg()["server_min"] == 677 and _cfg()["server_max"] == 804
-
-    @pytest.mark.asyncio
-    async def test_an_unusable_saved_range_gets_no_keep_button(self, seeded_db):
-        _save(server_min=900, server_max=800)
+    async def test_a_too_wide_range_gets_no_keep_button(self, seeded_db):
+        _save(server_min=1, server_max=2308)
         s, _, _ = await _drive(
-            [("proceed", True), ("selected", True), _range("1", "2"), ("confirmed", True)]
+            [("proceed", True), ("selected", True), _group(2213, 2308), ("confirmed", True)]
         )
-        launcher = s.view_named("ModalLaunchView")
-        assert [c.label for c in launcher.children] == ["✏️ Enter Server Numbers"]
-        assert [c.default for c in launcher.modal.children] == ["900", "800"]
+        assert s.view_named("WarzoneGroupView").current is None
+        assert (_cfg()["server_min"], _cfg()["server_max"]) == (2213, 2308)
 
     @pytest.mark.asyncio
-    async def test_range_launcher_timeout_and_cancel(self, seeded_db):
+    async def test_saving_a_group_resolves_the_too_wide_notice(self, seeded_db):
+        import config_health
+        import shiny_tasks
+
+        _save(server_min=1, server_max=2308)
+        config_health.record(
+            G, shiny_tasks.SHINY_WARZONE_RANGE_SUBJECT, config_health.WARZONE_RANGE_TOO_WIDE, ""
+        )
+        await _drive([("proceed", True), ("selected", True), _group(1, 164), ("confirmed", True)])
+        assert not config_health.problems_for_subjects(G, [shiny_tasks.SHINY_WARZONE_RANGE_SUBJECT])
+
+    @pytest.mark.asyncio
+    async def test_picker_timeout_and_cancel(self, seeded_db):
         s, _, _ = await _drive([("selected", True), "timeout"])
         assert s.sent[-1] == TIMEOUT and not _has()
         s, _, _ = await _drive([("selected", True), "cancel"])
@@ -511,15 +452,14 @@ class TestDisable:
     async def test_a_disabled_row_gets_no_summary_but_keeps_currents(self, seeded_db):
         _save(enabled=0, message_template="Custom", post_time="21:00")
         s, rec, env = await _drive(
-            [("selected", True), _range("677", "804"), ("confirmed", True)],
+            [("selected", True), _group(677, 804), ("confirmed", True)],
             keep=["9:00pm", "Custom"],
         )
         embeds = [e for e in s.embeds if e is not None]
         assert [e.title for e in embeds] == ["🌟 Shiny Tasks — Final Review"]
         assert env.channel_calls[0]["current_id"] == 900100
         assert rec.kw(0)["current"] == "9:00pm" and rec.kw(1)["current"] == "Custom"
-        labels = [c.label for c in s.view_named("ModalLaunchView").children]
-        assert "Keep current: 677 – 804" in labels
+        assert s.view_named("WarzoneGroupView").current == (677, 804)
 
 
 # ── Re-entry ─────────────────────────────────────────────────────────────────
@@ -538,7 +478,7 @@ class TestReentry:
         )
         assert [(f.name, f.value) for f in embed.fields] == [
             ("Channel", "<#900100>"),
-            ("Server Range", "677 – 804"),
+            ("Warzones", "677 – 804"),
             ("Post Time", _t("20:30")),
             ("Message", "Custom"),
         ]
@@ -552,7 +492,7 @@ class TestReentry:
         embed = [e for e in s.embeds if e is not None][0]
         assert [(f.name, f.value) for f in embed.fields] == [
             ("Channel", "*not set*"),
-            ("Server Range", "? – ?"),
+            ("Warzones", "? – ?"),
             ("Post Time", "*not set*"),
             ("Message", "Default"),
         ]

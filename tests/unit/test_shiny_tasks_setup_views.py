@@ -1,8 +1,11 @@
-"""The Shiny Tasks wizard's server-range modal and its launcher.
+"""The Shiny Tasks wizard's warzone-group picker (#604).
 
-`tests/integration/test_shiny_tasks_setup.py` fills the modal by
-attribute; before the move to `shiny_tasks_setup.py` (#611 round 2) the
-class was inline and could not be constructed alone.
+Step 3 was a two-field modal for the lowest and highest server number
+until one alliance typed 1-2308 and its post outgrew what Discord will
+send. It is a pick from the game's warzone groups now: a select plus a
+confirm button, with Keep current when the saved range is one of the
+groups. `tests/integration/test_shiny_tasks_setup.py` answers it by
+attribute; these click it.
 """
 
 from __future__ import annotations
@@ -16,67 +19,83 @@ import pytest
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import shiny_tasks  # noqa: E402
 import shiny_tasks_setup as ss  # noqa: E402
 
 
-class TestServerRangeModal:
-    def test_shape_and_prefill(self):
-        m = ss.ServerRangeModal()
-        assert m.title == "Server Range"
-        assert [
-            (c.label, c.placeholder, c.default, c.max_length, c.required) for c in m.children
-        ] == [
-            ("Lowest reachable server number", "e.g. 677", "", 5, True),
-            ("Highest reachable server number", "e.g. 804", "", 5, True),
-        ]
-        assert (m.min_value, m.max_value, m.value) == (None, None, "")
-        m = ss.ServerRangeModal("677", "804")
-        assert [c.default for c in m.children] == ["677", "804"]
+def _inter():
+    inter = MagicMock()
+    inter.response = AsyncMock()
+    inter.response.is_done = MagicMock(return_value=False)
+    return inter
 
-    def test_value_renders_what_is_known(self):
-        m = ss.ServerRangeModal()
-        m.min_value = "681"
-        assert m.value == "681 – ?"
-        m.max_value = "799"
-        assert m.value == "681 – 799"
+
+def _buttons(view):
+    return [c for c in view.children if hasattr(c, "label") and not hasattr(c, "options")]
+
+
+class TestShape:
+    def test_every_group_is_an_option_with_its_size(self):
+        v = ss.WarzoneGroupView(42)
+        select = v._select
+        assert select.placeholder == "Pick your warzone group..."
+        assert len(select.options) == len(shiny_tasks.WARZONE_GROUPS) == 18
+        first, sixth, last = select.options[0], select.options[5], select.options[-1]
+        assert (first.label, first.description) == ("Warzones 1 – 164", "164 warzones")
+        assert (sixth.label, sixth.description) == ("Warzones 677 – 804", "128 warzones")
+        assert (last.label, last.description) == ("Warzones 2213 – 2308", "96 warzones")
+
+    def test_fresh_has_no_keep_button_and_confirm_starts_disabled(self):
+        v = ss.WarzoneGroupView(42)
+        assert [b.label for b in _buttons(v)] == ["✅ Use this group"]
+        assert _buttons(v)[0].disabled is True
+
+    def test_a_saved_group_gets_keep_current(self):
+        v = ss.WarzoneGroupView(42, current=(677, 804))
+        assert [b.label for b in _buttons(v)] == ["Keep current: 677 – 804", "✅ Use this group"]
+
+    def test_only_the_person_who_ran_the_wizard_can_use_it(self):
+        assert ss.WarzoneGroupView(42).owner_id == 42
+
+
+class TestClicks:
+    @pytest.mark.asyncio
+    async def test_pick_then_confirm(self):
+        v = ss.WarzoneGroupView(42)
+        v._select._values = ["805-932"]
+        await v._select.callback(_inter())
+        confirm = _buttons(v)[0]
+        assert confirm.disabled is False and not v.is_finished()
+        inter = _inter()
+        await confirm.callback(inter)
+        assert v.selected == (805, 932) and v.confirmed is True and v.is_finished()
+        assert all(c.disabled for c in v.children)
+        assert inter.response.edit_message.await_args.kwargs["content"] == (
+            "✅ Warzone group: **805 – 932**"
+        )
 
     @pytest.mark.asyncio
-    async def test_submit_strips_both_fields(self):
-        m = ss.ServerRangeModal()
-        m.children[0]._value = " 677 "
-        m.children[1]._value = "804\n"
-        inter = MagicMock()
-        inter.response.defer = AsyncMock()
-        await m.on_submit(inter)
-        assert (m.min_value, m.max_value, m.value) == ("677", "804", "677 – 804")
-        assert m.is_finished()
+    async def test_keep_current(self):
+        v = ss.WarzoneGroupView(42, current=(677, 804))
+        inter = _inter()
+        await _buttons(v)[0].callback(inter)
+        assert v.selected == (677, 804) and v.confirmed is True and v.is_finished()
+        assert inter.response.edit_message.await_args.kwargs["content"] == (
+            "✅ Keeping warzones: **677 – 804**"
+        )
 
 
-class TestRangeLauncher:
-    def test_fresh_has_only_the_renamed_enter_button(self):
-        v = ss._range_launcher(0, 0)
-        assert [c.label for c in v.children] == ["✏️ Enter Server Numbers"]
-        assert [c.default for c in v.modal.children] == ["", ""]
-
-    def test_saved_range_adds_keep_current(self):
-        v = ss._range_launcher(677, 804)
-        assert [c.label for c in v.children] == [
-            "✏️ Enter Server Numbers",
-            "Keep current: 677 – 804",
-        ]
-        assert [c.default for c in v.modal.children] == ["677", "804"]
-
-    @pytest.mark.parametrize("lo, hi", [(900, 800), (0, 5), ("abc", "804"), ("", "")])
-    def test_an_unusable_saved_range_gets_no_keep_button(self, lo, hi):
-        v = ss._range_launcher(lo, hi)
-        assert [c.label for c in v.children] == ["✏️ Enter Server Numbers"]
-
-    @pytest.mark.asyncio
-    async def test_keep_current_fills_the_modal(self):
-        v = ss._range_launcher(677, 804)
-        keep = next(c for c in v.children if c.label.startswith("Keep current"))
-        inter = MagicMock()
-        inter.response = AsyncMock()
-        await keep.callback(inter)
-        assert (v.modal.min_value, v.modal.max_value) == ("677", "804")
-        assert v.confirmed is True and v.is_finished()
+class TestSavedRange:
+    @pytest.mark.parametrize(
+        "lo, hi, expected",
+        [
+            (677, 804, (677, 804)),
+            ("677", "804", (677, 804)),
+            (700, 760, None),  # a narrower slice from before the groups
+            (1, 2308, None),
+            (0, 0, None),
+            ("", "", None),
+        ],
+    )
+    def test_group_for_range(self, lo, hi, expected):
+        assert shiny_tasks.group_for_range(lo, hi) == expected

@@ -1219,6 +1219,34 @@ config_health.register(
     )
 )
 
+# #604: a range saved wider than one warzone group, whose post Discord would
+# reject for length. The key lives in shiny_tasks.py beside the check.
+from shiny_tasks import SHINY_WARZONE_RANGE_SUBJECT  # noqa: E402
+
+config_health.register(
+    config_health.Subject(
+        key=SHINY_WARZONE_RANGE_SUBJECT,
+        label="your Daily Shiny Tasks warzones",
+        fix_hub="/setup",
+        fix_btn=_HUB_BTN_SHINY,
+    )
+)
+
+SHINY_RANGE_TOO_WIDE_DETAIL = (
+    "It's set to warzones **{lo} – {hi}**. That's more than one warzone group, so the "
+    "daily post would be too long for Discord to send, and it isn't being posted."
+)
+
+
+def _note_shiny_range_too_wide(gid: int, lo: int, hi: int) -> None:
+    config_health.record(
+        gid,
+        SHINY_WARZONE_RANGE_SUBJECT,
+        config_health.WARZONE_RANGE_TOO_WIDE,
+        SHINY_RANGE_TOO_WIDE_DETAIL.format(lo=lo, hi=hi),
+        discriminator=f"{lo}-{hi}",
+    )
+
 
 @tasks.loop(minutes=1)
 async def shiny_tasks_post_task():
@@ -1233,7 +1261,7 @@ async def shiny_tasks_post_task():
         stamp_loop_heartbeat,
     )
     from time_helpers import server_date_for
-    from shiny_tasks import build_announcement_for_guild
+    from shiny_tasks import build_announcement_for_guild, range_too_wide
 
     try:
         enabled_ids = list_shiny_enabled_guild_ids()
@@ -1285,6 +1313,19 @@ async def shiny_tasks_post_task():
                 # configured minute, or the loop somehow ran twice.
                 continue
 
+            server_min = int(scfg.get("server_min") or 0)
+            server_max = int(scfg.get("server_max") or 0)
+            # #604: one alliance saved 1-2308, every warzone in the game, and
+            # its post was rejected for length every night, retried for two
+            # hours, and paged Sentry each time. A range wider than one warzone
+            # group isn't sent: leadership is told through config health, and
+            # the day is marked handled so it isn't retried every few minutes.
+            if range_too_wide(server_min, server_max):
+                await asyncio.to_thread(_note_shiny_range_too_wide, gid, server_min, server_max)
+                mark_shiny_tasks_posted(gid, today_iso)
+                continue
+            await asyncio.to_thread(config_health.clear, gid, SHINY_WARZONE_RANGE_SUBJECT)
+
             # #379: this is the branch that started the ticket. Several
             # alliances had their configured channel go unreachable in a
             # channel reorg, and the loop skipped them silently for days with
@@ -1313,14 +1354,11 @@ async def shiny_tasks_post_task():
             # would list yesterday's shiny servers (#330). Same class of bug as
             # the train "day behind" fix (#318). See time_helpers.
             shiny_today = server_date_for(guild_now)
-            rows = get_shiny_task_servers_in_range(
-                int(scfg.get("server_min") or 0),
-                int(scfg.get("server_max") or 0),
-            )
+            rows = get_shiny_task_servers_in_range(server_min, server_max)
             body = build_announcement_for_guild(
                 server_rows=rows,
-                server_min=int(scfg.get("server_min") or 0),
-                server_max=int(scfg.get("server_max") or 0),
+                server_min=server_min,
+                server_max=server_max,
                 today=shiny_today,
                 template=scfg.get("message_template") or "",
             )

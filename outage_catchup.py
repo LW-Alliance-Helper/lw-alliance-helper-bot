@@ -244,6 +244,14 @@ async def scan_shiny(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
     server_max = int(scfg.get("server_max") or 0)
     channel_id = int(scfg.get("channel_id") or 0)
 
+    # #604: the live loop doesn't send a range wider than one warzone group
+    # (Discord rejects the post for length) and tells leadership instead, so
+    # there is nothing here to recover.
+    from shiny_tasks import range_too_wide
+
+    if range_too_wide(server_min, server_max):
+        return []
+
     # Resolve the shiny cycle against the Last War in-game (server, UTC-2)
     # date, not the guild-local date `scheduled` carries — same #330 fix as
     # the live loop (bot.py's shiny_tasks_post_task); the dedup key above

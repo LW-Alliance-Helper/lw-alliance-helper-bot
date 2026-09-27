@@ -285,6 +285,24 @@ class TestScanShiny:
         build_mock.assert_called_once()
         assert build_mock.call_args.kwargs["today"] == date(2026, 6, 6)
 
+    @pytest.mark.asyncio
+    async def test_a_range_wider_than_one_warzone_group_is_not_offered(self):
+        """#604: the live loop doesn't send it (Discord rejects it for length),
+        so there is nothing for the catch-up digest to recover."""
+        bot = MagicMock()
+        guild = MagicMock(id=1)
+        build_mock = MagicMock(return_value="✨ body")
+        with (
+            patch(
+                "config.get_shiny_tasks_config",
+                return_value=self._scfg(post_time="07:00", server_min=1, server_max=2308),
+            ),
+            patch("shiny_tasks.build_announcement_for_guild", build_mock),
+        ):
+            items = await oc.scan_shiny(bot, guild, _cfg(), _window_friday())
+        assert items == []
+        build_mock.assert_not_called()
+
 
 def _window_friday():
     # 02:30 -> 08:10 EDT on Fri 2026-06-05

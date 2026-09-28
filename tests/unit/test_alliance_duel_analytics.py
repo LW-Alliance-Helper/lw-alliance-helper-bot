@@ -261,6 +261,62 @@ def test_a_league_with_nothing_recorded_is_left_out():
     assert an.season_trajectory([_row(OWN_TAG)], OWN) == ()
 
 
+def test_a_reused_league_label_does_not_merge_two_runs():
+    """The game reuses a league label over time (#658). Two runs under the
+    same label, weeks apart, must not average into one W-L record -- that
+    would hide exactly the history someone is asking to see."""
+    early = [
+        _row(OWN_TAG, week=w, league=LEAGUE, week_date=MONDAY, week_outcome="W")
+        for w in range(1, 3)
+    ]
+    between = [_row(OWN_TAG, week=1, league=OLD_LEAGUE, week_date=MONDAY, week_outcome="W")]
+    much_later = MONDAY + _dt.timedelta(weeks=10)
+    reused = [_row(OWN_TAG, week=1, league=LEAGUE, week_date=much_later, week_outcome="L")]
+
+    seasons = an.season_trajectory(early + between + reused, OWN)
+
+    assert [s.record for s in seasons] == ["2-0", "1-0", "0-1"]
+    assert [s.league for s in seasons] == [LEAGUE, OLD_LEAGUE, LEAGUE]
+
+
+def test_season_trajectory_sorts_by_date_not_by_the_label_text():
+    """S9 sorts after S35 alphabetically but happened first. The old
+    implementation sorted on the label string and got this backwards."""
+    league_9 = ad.LeagueKey("S9", "Gold", "1 - 1")
+    league_35 = ad.LeagueKey("S35", "Gold", "1 - 1")
+    rows = [
+        _row(OWN_TAG, week=1, league=league_35, week_date=MONDAY, week_outcome="W"),
+        _row(
+            OWN_TAG,
+            week=1,
+            league=league_9,
+            week_date=MONDAY - _dt.timedelta(weeks=52),
+            week_outcome="L",
+        ),
+    ]
+    seasons = an.season_trajectory(rows, OWN)
+    assert [s.league for s in seasons] == [league_9, league_35]
+
+
+def test_season_trajectory_reports_when_each_league_started():
+    rows = [_row(OWN_TAG, week=w, week_date=MONDAY + _dt.timedelta(weeks=w - 1)) for w in (1, 2)]
+    rows[0].week_outcome = "W"
+    seasons = an.season_trajectory(rows, OWN)
+    assert seasons[0].started == MONDAY
+
+
+def test_a_row_with_no_date_never_forces_a_split():
+    """No date to measure a gap against, so it stays with the rest of its
+    label rather than becoming a false second instance."""
+    rows = [
+        _row(OWN_TAG, week=1, week_date=None, week_outcome="W"),
+        _row(OWN_TAG, week=2, week_date=MONDAY, week_outcome="W"),
+    ]
+    seasons = an.season_trajectory(rows, OWN)
+    assert len(seasons) == 1
+    assert seasons[0].record == "2-0"
+
+
 # ── Pick accuracy ─────────────────────────────────────────────────────────────
 
 

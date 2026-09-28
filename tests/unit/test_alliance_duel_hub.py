@@ -283,7 +283,66 @@ def test_the_scout_profile_orders_facts_before_inference():
     )
     embed = ad_ui.scout_embed(_state(rows), _key("A02"))
     names = [f.name for f in embed.fields]
-    assert names.index("Recorded") < names.index("Head to head") < names.index("Projection")
+    assert (
+        names.index("Recorded")
+        < names.index("Head to head")
+        < names.index("Past leagues")
+        < names.index("Projection")
+    )
+
+
+# ── Past leagues (#659) ─────────────────────────────────────────────────────
+
+
+def test_past_leagues_lists_every_league_newest_first_with_dates():
+    rows = [
+        _row("A02", week=1, league=OLD_LEAGUE, week_date=MONDAY - _dt.timedelta(weeks=10)),
+        _row(OWN_TAG, week=1, league=OLD_LEAGUE, week_date=MONDAY - _dt.timedelta(weeks=10)),
+    ]
+    rows[0].week_outcome, rows[1].week_outcome = "L", "W"
+    rows += _bracket_rows()  # A02 also plays in the live LEAGUE
+    by = {r.alliance: r for r in rows if r.league == LEAGUE}
+    by[_key("A02")].week_outcome = "W"
+
+    text = _text(ad_ui.scout_embed(_state(rows), _key("A02")))
+    past = next(
+        f.value
+        for f in ad_ui.scout_embed(_state(rows), _key("A02")).fields
+        if f.name == "Past leagues"
+    )
+    assert past.index(LEAGUE.season) < past.index(OLD_LEAGUE.season), "newest league should lead"
+    assert "started" in past
+    assert text  # sanity: the embed still renders
+
+
+def test_past_leagues_says_so_when_theres_nothing_beyond_the_live_league():
+    rows = _bracket_rows()  # no week_outcome anywhere yet
+    past = next(
+        f.value
+        for f in ad_ui.scout_embed(_state(rows), _key("A02")).fields
+        if f.name == "Past leagues"
+    )
+    assert past == "Nothing else recorded for **A02** yet."
+
+
+@pytest.mark.asyncio
+async def test_past_leagues_draws_on_the_shared_store_too(shared_store):
+    """An alliance we have never played can still have a past-leagues line,
+    the same way its Recorded numbers already can (#544). Scoped the same way
+    the rest of the shared store is: `attach_shared` only ever loads the
+    currently loaded league, so this reaches a stranger alliance's current
+    league and not (yet) their older ones -- the same limit `state.shared`
+    already has everywhere else it's read."""
+    state = _state([_row(OWN_TAG, week=1)])
+    _record_shared(shared_store, state, "ZZZ", week_outcome="W")
+    await hub.attach_shared(state)
+
+    past = next(
+        f.value
+        for f in ad_ui.scout_embed(state, ad.AllianceKey.of("ZZZ", "1234")).fields
+        if f.name == "Past leagues"
+    )
+    assert LEAGUE.season in past
 
 
 def test_the_scout_projection_carries_the_capacity_ceiling_caveat():
@@ -1261,6 +1320,86 @@ async def test_a_paying_own_alliance_guild_can_still_scout():
     with patch("alliance_duel_ui.open_scout_picker", new=AsyncMock()) as opened:
         await view._scout(_interaction())
     opened.assert_awaited_once()
+
+
+# ── League history (#659) ───────────────────────────────────────────────────
+
+
+def _row2(view):
+    return [c for c in view.children if c.row == 2]
+
+
+def test_league_history_sits_in_row_2_beside_its_siblings():
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    assert [c.label for c in _row2(view)] == [
+        "Enter weekly results",
+        "🔢 Set an alliance's rank",
+        "✏️ Edit league details",
+        hub.VS_BTN_HISTORY,
+    ]
+
+
+def test_league_history_follows_the_same_premium_gate_as_its_siblings():
+    """Same whole-bracket shape as Bracket/Scout/Path, so the same lock."""
+    state = hub.HubState(1, _cfg(), _bracket_rows(), premium=False)
+    by_label = {c.label: c for c in _row2(hub.VSHubView(None, state, owner_id=7))}
+    assert by_label[f"💎 {hub.VS_BTN_HISTORY}"].disabled is True
+
+
+async def test_league_history_routes_a_paying_own_alliance_guild_to_the_upsell():
+    """Same `_own_alliance_only` helper Bracket and Path use, so the same
+    generic "needs the full bracket" copy renders (its `is_choice` branch
+    does not use the per-call `detail` text -- true for all three callers,
+    not new here)."""
+    state = hub.HubState(1, _cfg(tracking_mode=ad.MODE_OWN_ALLIANCE), [_row(OWN_TAG)], premium=True)
+    view = hub.VSHubView(None, state, owner_id=7)
+    inter = _interaction()
+    await view._league_history(inter)
+    embed = inter.response.sent[0]["embed"]
+    assert embed.title == "🏆 This view needs the full bracket"
+
+
+async def test_league_history_opens_the_picker_for_a_full_bracket_guild():
+    state = _state(_bracket_rows())
+    view = hub.VSHubView(None, state, owner_id=7)
+    with patch("alliance_duel_hub.open_league_history_picker", new=AsyncMock()) as opened:
+        await view._league_history(_interaction())
+    opened.assert_awaited_once()
+
+
+def test_leagues_for_history_lists_newest_first_and_splits_a_reused_label():
+    early = _bracket_rows(week=1)
+    later_same_label = _bracket_rows(week=1, **{})
+    for row in later_same_label:
+        row.week_date = MONDAY + _dt.timedelta(weeks=10)
+    leagues = hub._leagues_for_history(_state(early + later_same_label))
+    assert len(leagues) == 2
+    assert leagues[0][1] == MONDAY + _dt.timedelta(weeks=10)  # newest first
+    assert leagues[1][1] == MONDAY
+
+
+def test_league_history_embed_sorts_by_ranking_and_shows_every_week():
+    rows = _bracket_rows(week=1) + _bracket_rows(week=2)
+    by_week1 = {r.alliance: r for r in rows if r.week == 1}
+    by_week1[_key(OWN_TAG)].week_score = 9
+    by_week1[_key("A02")].week_score = 4
+
+    embed = hub.league_history_embed(_state(rows), LEAGUE)
+    text = _text(embed)
+    assert text.index(f"`{1:>2}`") < text.index(f"`{2:>2}`"), "ranked order, not insertion order"
+    assert "W1: 9-4" in text
+    assert "W2: ?" in text  # week 2 never got a score
+    assert "⬅️" in text  # own alliance marked
+
+
+def test_league_history_footer_explains_the_marker():
+    embed = hub.league_history_embed(_state(_bracket_rows()), LEAGUE)
+    assert "no score recorded that week" in embed.footer.text
+
+
+def test_league_history_says_so_with_nothing_recorded():
+    embed = hub.league_history_embed(_state([_row(OWN_TAG, league=OLD_LEAGUE)]), LEAGUE)
+    assert "No rows recorded" in _text(embed)
 
 
 @pytest.mark.parametrize(

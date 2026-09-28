@@ -1800,7 +1800,7 @@ class _PredictModal(discord.ui.Modal, title=CD_SIMULATE_TITLE):
         label="Second player's server",
         required=False,
         max_length=10,
-        placeholder=f"e.g. {examples.WARZONE}",
+        placeholder=f"e.g. {examples.NEIGHBOR_WARZONE}",
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -2150,7 +2150,10 @@ class _IntelModal(discord.ui.Modal, title="Head to head"):
         placeholder="As it's spelled in the roster",
     )
     your_server = discord.ui.TextInput(
-        label="Your server", required=False, max_length=10, placeholder=f"e.g. {examples.WARZONE}"
+        label="Your server",
+        required=False,
+        max_length=10,
+        placeholder=f"e.g. {examples.NEIGHBOR_WARZONE}",
     )
 
     def __init__(
@@ -5442,7 +5445,7 @@ class _RecordGroupModal(discord.ui.Modal, title="Record a group"):
             max_length=4000,
             placeholder=(
                 f"[{examples.OWN_TAG}]{examples.PLAYERS[0]}, {examples.OWN_WARZONE}, 1, "
-                f"325.8M, 33,500,000\n{examples.PLAYERS[1]}, {examples.WARZONE}, 25"
+                f"325.8M, 33,500,000\n{examples.PLAYERS[1]}, {examples.NEIGHBOR_WARZONE}, 25"
             ),
         ),
     )

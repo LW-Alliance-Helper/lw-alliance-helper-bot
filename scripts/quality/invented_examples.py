@@ -53,6 +53,7 @@ _ABOUT_WARZONES = re.compile(r"warzone|server", re.IGNORECASE)
 _ALLOWED_WARZONES = {
     examples.OWN_WARZONE,
     examples.WARZONE_PLACEHOLDER,
+    examples.NEIGHBOR_WARZONE,
     *examples.WARZONES,
     *examples.WARZONE_LIST,
 }

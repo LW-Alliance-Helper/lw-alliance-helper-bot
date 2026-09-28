@@ -17,15 +17,20 @@ from __future__ import annotations
 OWN_TAG = "OGV"
 OWN_WARZONE = 738
 
-#: Other alliances. Obviously placeholders, the way the sign-off pages write them.
-TAG = "ABC"
-TAGS = ("ABC", "XYZ", "DEF")
+#: Other alliances. Made up, three or four characters, in the shapes real tags
+#: take (Kevin, sign-off 2026-09-27: "if you just make them up, we are less
+#: likely to get actual ones"). A real word landing on a real tag is harmless.
+TAG = "Glo"
+TAGS = ("Glo", "Fre3", "LION")
 
 #: Other warzones. Every number from 1 to 2308 is a real warzone, so the
 #: invented ones are patterned, and a list of them can't be mistaken for a
 #: real grouping.
 WARZONE = 999
 WARZONES = (999, 998, 997)
+#: A second warzone in the owner's own warzone group (677 - 804), for examples
+#: that pair two players who could actually meet in a Champion Duel.
+NEIGHBOR_WARZONE = 760
 #: The bare placeholder in a box that asks for the alliance's own warzone:
 #: a digit run, so it reads as "type your number here", not as an example.
 WARZONE_PLACEHOLDER = 1234

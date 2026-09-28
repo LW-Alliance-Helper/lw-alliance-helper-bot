@@ -263,7 +263,7 @@ class HubState:
     def display_name(self, alliance: ad.AllianceKey) -> str:
         """How an alliance reads on screen: its tag, as the game prints it.
 
-        **No brackets.** The game shows `ABC`, so we do. They were decoration
+        **No brackets.** The game shows `Glo`, so we do. They were decoration
         around an identifier that is already unambiguous, and on a path screen
         listing eight of them in a column they were eight rows of noise.
 

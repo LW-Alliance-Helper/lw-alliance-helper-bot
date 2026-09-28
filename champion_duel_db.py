@@ -1632,7 +1632,7 @@ def parse_placement_line(line: str, *, warzone=None, known_warzones=None) -> dic
         Name,738,5,325800000,33500000                  (no separators at all)
         [OGV]Kestrel,738,1,325.8M,33,500,000
         Name<TAB>738<TAB>5<TAB>327,159,292<TAB>33,500,000
-        Wren,999,25                                    (stops early)
+        Wren,760,25                                    (stops early)
 
     Hero power is **fourth, before score**, which is what lets the score keep
     the tail of the line. The commas inside these numbers are why the old

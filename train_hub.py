@@ -393,13 +393,14 @@ class PresetsManageView(OwnedView):
 
     async def _create(self, inter: discord.Interaction):
         async def _make(i: discord.Interaction, name: str):
+            # Defer before the Sheet read, or a slow Sheet times the modal out (#677).
+            await i.response.defer(ephemeral=True, thinking=True)
             existing = await asyncio.to_thread(tr.list_presets, self.guild_id, self.day_rules_tab)
             if any(n.lower() == name.lower() for n in existing):
-                await i.response.send_message(
+                await i.followup.send(
                     f"⚠️ A preset named **{name}** already exists.", ephemeral=True
                 )
                 return
-            await i.response.defer()
             await ui.post_preset_editor(
                 i.channel,
                 self.guild_id,
@@ -407,36 +408,57 @@ class PresetsManageView(OwnedView):
                 tr.SchedulePreset.default(name),
                 self.day_rules_tab,
             )
+            # The editor lands in the channel; clear the "thinking..." placeholder.
+            try:
+                await i.delete_original_response()
+            except discord.HTTPException:
+                pass
 
         await inter.response.send_modal(_PresetNameModal(_make))
 
     async def _edit(self, inter: discord.Interaction):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         names = await asyncio.to_thread(tr.list_presets, self.guild_id, self.day_rules_tab)
         if not names:
-            await inter.response.send_message(
-                "ℹ️ No presets yet. Hit **➕ Create**.", ephemeral=True
-            )
+            await inter.followup.send("ℹ️ No presets yet. Hit **➕ Create**.", ephemeral=True)
             return
 
         async def _pick(i: discord.Interaction, name: str):
             await i.response.defer()
-            preset = await asyncio.to_thread(
-                tr.load_preset, self.guild_id, self.day_rules_tab, name
-            ) or tr.SchedulePreset.default(name)
+            try:
+                preset = await asyncio.to_thread(
+                    tr.load_preset, self.guild_id, self.day_rules_tab, name
+                ) or tr.SchedulePreset.default(name)
+            except Exception as e:
+                # The alliance's own Sheet: tell them, keep it out of Sentry
+                # (#677). load_preset has already recorded it.
+                from config import describe_sheet_error, is_user_config_sheet_error
+
+                if not is_user_config_sheet_error(e):
+                    raise
+                await i.followup.send(
+                    "⚠️ Couldn't load your saved pattern to open the editor: "
+                    f"{describe_sheet_error(e, tab=self.day_rules_tab)}",
+                    ephemeral=True,
+                )
+                return
             await ui.post_preset_editor(
                 i.channel, self.guild_id, i.user.id, preset, self.day_rules_tab
             )
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick a preset to edit:",
             view=_PresetPickerView(names, self.owner_id, _pick),
             ephemeral=True,
         )
 
     async def _set_active(self, inter: discord.Interaction):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         names = await asyncio.to_thread(tr.list_presets, self.guild_id, self.day_rules_tab)
         if not names:
-            await inter.response.send_message("ℹ️ No presets yet.", ephemeral=True)
+            await inter.followup.send("ℹ️ No presets yet.", ephemeral=True)
             return
 
         async def _pick(i: discord.Interaction, name: str):
@@ -450,31 +472,34 @@ class PresetsManageView(OwnedView):
                 ephemeral=True,
             )
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick the preset to make active:",
             view=_PresetPickerView(names, self.owner_id, _pick),
             ephemeral=True,
         )
 
     async def _delete(self, inter: discord.Interaction):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         names = await asyncio.to_thread(tr.list_presets, self.guild_id, self.day_rules_tab)
         active = self._active()
         deletable = [n for n in names if n != active]
         if not deletable:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "⚠️ Nothing to delete. You can't delete the active preset or your only one.",
                 ephemeral=True,
             )
             return
 
         async def _pick(i: discord.Interaction, name: str):
+            await i.response.defer(ephemeral=True, thinking=True)
             ok = await asyncio.to_thread(tr.delete_preset, self.guild_id, self.day_rules_tab, name)
-            await i.response.send_message(
+            await i.followup.send(
                 f"🗑️ Deleted **{name}**." if ok else "⚠️ Couldn't delete that preset.",
                 ephemeral=True,
             )
 
-        await inter.response.send_message(
+        await inter.followup.send(
             "Pick a preset to delete (the active preset is excluded):",
             view=_PresetPickerView(deletable, self.owner_id, _pick),
             ephemeral=True,
@@ -581,6 +606,8 @@ class MemberRulesManageView(OwnedView):
                         "⚠️ skip-until needs a date like `2026-07-01`.", ephemeral=True
                     )
                     return
+                # Defer before the Sheet write, or a slow Sheet times the modal out (#677).
+                await i.response.defer(ephemeral=True, thinking=True)
                 await asyncio.to_thread(
                     tr.set_member_rule,
                     self.guild_id,
@@ -592,6 +619,7 @@ class MemberRulesManageView(OwnedView):
                 )
                 msg = f"✅ **{member}** skipped until **{parsed.isoformat()}**."
             else:
+                await i.response.defer(ephemeral=True, thinking=True)
                 await asyncio.to_thread(
                     tr.set_member_rule,
                     self.guild_id,
@@ -602,12 +630,14 @@ class MemberRulesManageView(OwnedView):
                     "",
                 )
                 msg = f"✅ **{member}** opted out of the rotation."
-            await i.response.send_message(msg, ephemeral=True)
+            await i.followup.send(msg, ephemeral=True)
             await self._refresh_message()
 
         await inter.response.send_modal(_AddMemberRuleModal(_save))
 
     async def _remove_rule(self, inter: discord.Interaction):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         rules = await asyncio.to_thread(tr.load_member_rules, self.guild_id, self.tab)
         members = []
         seen = set()
@@ -617,7 +647,7 @@ class MemberRulesManageView(OwnedView):
                 seen.add(key)
                 members.append(r.member)
         if not members:
-            await inter.response.send_message("ℹ️ No member rules to remove.", ephemeral=True)
+            await inter.followup.send("ℹ️ No member rules to remove.", ephemeral=True)
             return
         opts = [discord.SelectOption(label=m[:100], value=m) for m in members[:25]]
         sel = discord.ui.Select(placeholder="Pick a member to clear…", options=opts)
@@ -626,16 +656,18 @@ class MemberRulesManageView(OwnedView):
 
         async def _on_pick(i: discord.Interaction):
             name = sel.values[0]
+            # Acknowledge before the Sheet write (#677); the edit follows it.
+            await i.response.defer()
             await asyncio.to_thread(tr.clear_member_rule, self.guild_id, self.tab, name, None)
             sel.disabled = True
-            await i.response.edit_message(
+            await i.edit_original_response(
                 content=f"🗑️ Cleared all rules for **{name}**.", view=picker
             )
             await self._refresh_message()
 
         sel.callback = _on_pick
         picker.add_item(sel)
-        await inter.response.send_message("Pick a member to clear:", view=picker, ephemeral=True)
+        await inter.followup.send("Pick a member to clear:", view=picker, ephemeral=True)
 
 
 def _build_member_rules_embed(guild_id: int, tab: str) -> discord.Embed:

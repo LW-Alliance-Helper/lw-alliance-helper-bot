@@ -26,6 +26,7 @@ Sheet structure:
 import asyncio
 import json
 import os
+import re
 import discord
 import config_health
 from config import get_config
@@ -162,6 +163,96 @@ config_health.register(
 )
 
 
+# The assignments tab holds up to six sections, in this order. Desert Storm
+# and Canyon Storm share it; each save rewrites only its own team's sections.
+_SECTION_HEADER_RE = re.compile(r"^(DS|CS)_[AB]_(ZONES|SUBS)$")
+_SECTION_ORDER = (
+    "DS_A_ZONES",
+    "DS_A_SUBS",
+    "DS_B_ZONES",
+    "DS_B_SUBS",
+    "CS_A_ZONES",
+    "CS_B_ZONES",
+)
+
+
+def _is_section_header(key: str) -> bool:
+    return bool(_SECTION_HEADER_RE.match(key))
+
+
+def _split_sections(rows: list[list[str]]) -> dict[str, list[list[str]]]:
+    """The tab's rows grouped under their section header, blank rows dropped.
+    Rows keep every cell as read, so a section nobody is saving is written
+    back exactly as it was."""
+    sections: dict[str, list[list[str]]] = {}
+    current = None
+    for row in rows:
+        key = row[0].strip() if row else ""
+        if _is_section_header(key):
+            current = key
+            sections[current] = []
+            continue
+        if current and any(str(c).strip() for c in row):
+            sections[current].append(list(row))
+    return sections
+
+
+def _ds_zone_rows(zones: dict) -> list[list[str]]:
+    return [[zone, members] for zone, members in zones.items()]
+
+
+def _ds_sub_rows(subs: list) -> list[list[str]]:
+    rows = []
+    for sub in subs:
+        # Flatten any transitional `(starter, sub)` tuple to the sub name only.
+        name = str(sub[1]) if isinstance(sub, tuple) and len(sub) >= 2 else str(sub)
+        if name:
+            rows.append([name])
+    return rows
+
+
+def _cs_zone_rows(zones: dict) -> list[list[str]]:
+    rows = []
+    for zone, members in zones.items():
+        if isinstance(members, list):
+            members = ", ".join(str(x) for x in members if x)
+        rows.append([zone, members])
+    return rows
+
+
+def _fill_missing_ds_team(sections: dict, team: str) -> None:
+    """A DS team with nothing saved is written with its defaults, as the
+    saves always have. A saved one is left exactly as it was."""
+    if not sections.get(f"DS_{team}_ZONES"):
+        default_zones, default_subs = DEFAULTS[team]
+        sections[f"DS_{team}_ZONES"] = _ds_zone_rows(dict(default_zones))
+        sections[f"DS_{team}_SUBS"] = _ds_sub_rows(list(default_subs))
+    sections.setdefault(f"DS_{team}_SUBS", [])
+
+
+def _write_sections(ws, previous: list[list[str]], sections: dict) -> None:
+    """Write the sections back in their fixed order, in one update that covers
+    the old contents: no clear() first, so a failed write can't leave the tab
+    empty (#678)."""
+    from config import cover_previous_extent
+
+    rows: list[list[str]] = []
+    for key in _SECTION_ORDER:
+        if key in sections:
+            rows.append([key, ""])
+            rows.extend(sections[key])
+            rows.append(["", ""])
+    ws.update("A1", cover_previous_extent(rows, previous), value_input_option="USER_ENTERED")
+
+
+def _assignments_worksheet(guild_id: int = None):
+    from config import get_config
+
+    cfg = get_config(guild_id) if guild_id else None
+    sh = _get_spreadsheet(guild_id)
+    return sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+
+
 def _assignments_tab_name(guild_id: int = None) -> str:
     cfg = get_config(guild_id) if guild_id else None
     return (cfg.tab_ds_assignments if cfg else "") or "DS Assignments"
@@ -226,8 +317,10 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
             if key == sub_key:
                 section = "subs"
                 continue
-            # Stop reading this team's section when hitting another team's header
-            if key.startswith("DS_") and key not in (zone_key, sub_key):
+            # Stop at any other section's header, Canyon Storm's included:
+            # Team B's subs come last among the DS sections, and without the
+            # CS headers here they ran on into the CS rows below (#683).
+            if _is_section_header(key) and key not in (zone_key, sub_key):
                 section = None
                 continue
 
@@ -272,8 +365,13 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
 
 def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None):
     """
-    Save DS assignments for one team without affecting the other team's data.
-    Reads the full sheet, replaces this team's sections, and rewrites.
+    Save DS assignments for one team without affecting anything else on the
+    tab: the other DS team and both Canyon Storm teams are written back
+    exactly as they were read (#683).
+
+    The tab is read once, and a failed read writes nothing (#678). The
+    loaders fall back to defaults when a read fails, which is right for a
+    draft and wrong for a rewrite: it overwrote the other team with them.
 
     `guild_id` resolves the per-guild spreadsheet + tab name; when
     omitted, falls back to env-var SPREADSHEET_ID and tab "DS Assignments".
@@ -281,41 +379,13 @@ def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None
     other = "B" if team == "A" else "A"
 
     try:
-        from config import get_config
-
-        cfg = get_config(guild_id) if guild_id else None
-        sh = _get_spreadsheet(guild_id)
-        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
-
-        # Load the other team's current data so we don't lose it
-        other_zones, other_subs = load_ds_assignments(other, guild_id=guild_id)
-
-        # Rebuild the full sheet with both teams
-        rows = []
-
-        # Team A first, then Team B — alphabetical for consistency
-        for t, t_zones, t_subs in [
-            ("A", zones if team == "A" else other_zones, subs if team == "A" else other_subs),
-            ("B", zones if team == "B" else other_zones, subs if team == "B" else other_subs),
-        ]:
-            rows.append([f"DS_{t}_ZONES", ""])
-            for zone, members in t_zones.items():
-                rows.append([zone, members])
-            rows.append(["", ""])
-            rows.append([f"DS_{t}_SUBS", ""])
-            for sub in t_subs:
-                # Flatten any transitional `(starter, sub)` tuple to the
-                # sub name only; otherwise emit the sub string as-is.
-                if isinstance(sub, tuple) and len(sub) >= 2:
-                    name = str(sub[1])
-                else:
-                    name = str(sub)
-                if name:
-                    rows.append([name])
-            rows.append(["", ""])  # blank separator between teams
-
-        ws.clear()
-        ws.update("A1", rows, value_input_option="USER_ENTERED")
+        ws = _assignments_worksheet(guild_id)
+        previous = ws.get_all_values()
+        sections = _split_sections(previous)
+        _fill_missing_ds_team(sections, other)
+        sections[f"DS_{team}_ZONES"] = _ds_zone_rows(zones)
+        sections[f"DS_{team}_SUBS"] = _ds_sub_rows(subs)
+        _write_sections(ws, previous, sections)
         print(f"[STORM] Team {team} assignments saved ({len(zones)} zones, {len(subs)} sub pairs)")
         _note_assignments_ok(guild_id)
 
@@ -1188,49 +1258,20 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
 
 
 def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
-    """Save CS assignments for one team without affecting DS or the other CS team."""
+    """Save CS assignments for one team without affecting DS or the other CS
+    team: both are written back exactly as they were read. The tab is read
+    once, and a failed read writes nothing (#678, #683)."""
+    other = "B" if team == "A" else "A"
     try:
-        from config import get_config
-
-        cfg = get_config(guild_id) if guild_id else None
-        sh = _get_spreadsheet(guild_id)
-        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
-
-        # Rebuild full sheet: preserve all DS and CS rows, replace this team's CS section
-        other_cs = "B" if team == "A" else "A"
-        other_cs_zones = load_cs_assignments(other_cs, guild_id=guild_id)
-        ds_a_zones, ds_a_subs = load_ds_assignments("A", guild_id=guild_id)
-        ds_b_zones, ds_b_subs = load_ds_assignments("B", guild_id=guild_id)
-
-        rows = []
-        for t, t_zones, t_subs in [("A", ds_a_zones, ds_a_subs), ("B", ds_b_zones, ds_b_subs)]:
-            rows.append([f"DS_{t}_ZONES", ""])
-            for z, m in t_zones.items():
-                rows.append([z, m])
-            rows.append(["", ""])
-            rows.append([f"DS_{t}_SUBS", ""])
-            for sub in t_subs:
-                if isinstance(sub, tuple) and len(sub) >= 2:
-                    name = str(sub[1])
-                else:
-                    name = str(sub)
-                if name:
-                    rows.append([name])
-            rows.append(["", ""])
-
-        for t, t_zones in [
-            ("A", zones if team == "A" else other_cs_zones),
-            ("B", zones if team == "B" else other_cs_zones),
-        ]:
-            rows.append([f"CS_{t}_ZONES", ""])
-            for z, m in t_zones.items():
-                if isinstance(m, list):
-                    m = ", ".join(str(x) for x in m if x)
-                rows.append([z, m])
-            rows.append(["", ""])
-
-        ws.clear()
-        ws.update("A1", rows, value_input_option="USER_ENTERED")
+        ws = _assignments_worksheet(guild_id)
+        previous = ws.get_all_values()
+        sections = _split_sections(previous)
+        _fill_missing_ds_team(sections, "A")
+        _fill_missing_ds_team(sections, "B")
+        if not sections.get(f"CS_{other}_ZONES"):
+            sections[f"CS_{other}_ZONES"] = _cs_zone_rows(dict(CS_DEFAULTS[other]))
+        sections[f"CS_{team}_ZONES"] = _cs_zone_rows(zones)
+        _write_sections(ws, previous, sections)
         print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
         _note_assignments_ok(guild_id)
     except Exception as e:

@@ -2025,6 +2025,22 @@ def get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
+def cover_previous_extent(rows: list[list], previous: list[list]) -> list[list]:
+    """``rows`` padded with blanks to cover everything ``previous`` occupied,
+    so one ``ws.update("A1", ...)`` replaces a tab's old contents outright.
+
+    For rewriting a whole tab without ``ws.clear()`` first: a failure between
+    a clear and the write that follows it left the tab empty (#678). A write
+    only touches the cells it covers, so without the padding a shorter or
+    narrower rewrite would leave stale cells behind.
+    """
+    height = max(len(rows), len(previous))
+    width = max((len(r) for r in [*rows, *previous]), default=0)
+    padded = [list(r) + [""] * (width - len(r)) for r in rows]
+    padded.extend([[""] * width for _ in range(height - len(rows))])
+    return padded
+
+
 def get_spreadsheet_by_id(sheet_id: str):
     """Return an authenticated gspread Spreadsheet for an arbitrary sheet ID.
 

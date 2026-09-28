@@ -104,8 +104,8 @@ def train_tab(test_spreadsheet):
 
 @pytest.fixture
 def roster_tab(test_spreadsheet):
-    """Fresh Member Roster tab per test. write_roster does its own
-    ws.clear() + writes header + rows, so we don't pre-seed anything."""
+    """Fresh Member Roster tab per test. write_roster writes the header and
+    rows itself in one update, so we don't pre-seed anything."""
     name = f"_test_roster_{random.randint(100000, 999999)}"
     ws = test_spreadsheet.add_worksheet(title=name, rows=200, cols=10)
     yield ws, name
@@ -441,7 +441,7 @@ class TestTrainScheduleWrite:
 
 class TestMemberRosterWrite:
     """write_roster builds rows from a discord.Guild's members list and
-    rewrites the configured roster tab from scratch (clear + update).
+    rewrites the configured roster tab in one update (#678).
     This is the function that powers Member Roster Sync (Premium)."""
 
     def test_write_roster_writes_header_and_member_rows(

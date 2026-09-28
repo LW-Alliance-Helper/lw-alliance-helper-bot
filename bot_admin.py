@@ -736,10 +736,9 @@ def _backfill_preview_embed(candidates: dict) -> discord.Embed:
 
 @admin_group.command(
     name="backfill_removed_guilds",
-    description=(
-        "(Bot owner only) Preview and start 30-day holds for servers that left "
-        "before 1.9.0's removal hold existed."
-    ),
+    # Discord's limit is 100 characters, and one over it fails the whole
+    # /admin sync (#677). tests/unit/test_command_tree_limits.py checks it.
+    description="(Bot owner only) Start 30-day holds for servers that left before 1.9.0.",
 )
 async def admin_backfill_removed_guilds_slash(interaction: discord.Interaction):
     """Servers removed before 1.9.0 never got a hold (`on_guild_remove` just

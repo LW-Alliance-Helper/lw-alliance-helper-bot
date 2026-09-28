@@ -333,6 +333,72 @@ class TestGrowthTaskSheetErrorSentryNoise:
         sentry.capture_exception.assert_called_once()
 
 
+class TestGrowthSheetNotice:
+    """#652: an alliance-owned Sheet failure is recorded so leadership is
+    told, and a clean snapshot clears it."""
+
+    def _setup(self):
+        import config
+
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = 1
+        config.save_config(cfg)
+        _save_growth(TEST_GUILD_ID, frequency="monthly", snapshot_day=15)
+
+    async def _run(self, side_effect=None):
+        import bot as bot_mod
+
+        fake_dt = _frozen_datetime(datetime(2026, 5, 15, 22, 0, tzinfo=ET))
+        with (
+            patch("bot.datetime", fake_dt),
+            patch("growth._run_growth_snapshot_inner", side_effect=side_effect),
+            patch("bot.sentry_sdk"),
+        ):
+            await bot_mod.growth_task.coro()
+
+    @pytest.mark.asyncio
+    async def test_renamed_source_tab_is_recorded(self, seeded_db):
+        import gspread
+        import config_health
+        from growth import GROWTH_SHEET_SUBJECT
+
+        self._setup()
+        await self._run(gspread.exceptions.WorksheetNotFound("Squad Powers"))
+        problems = config_health.problems_for_subjects(TEST_GUILD_ID, [GROWTH_SHEET_SUBJECT])
+        assert [p.kind for p in problems] == [config_health.MISSING_TAB]
+
+    @pytest.mark.asyncio
+    async def test_a_clean_snapshot_clears_it(self, seeded_db):
+        import gspread
+        import config_health
+        from growth import GROWTH_SHEET_SUBJECT
+
+        self._setup()
+        await self._run(PermissionError())
+        assert config_health.problems_for_subjects(TEST_GUILD_ID, [GROWTH_SHEET_SUBJECT])
+        await self._run(None)
+        assert not config_health.problems_for_subjects(TEST_GUILD_ID, [GROWTH_SHEET_SUBJECT])
+
+    @pytest.mark.asyncio
+    async def test_a_bug_is_not_recorded(self, seeded_db):
+        import config_health
+        from growth import GROWTH_SHEET_SUBJECT
+
+        self._setup()
+        await self._run(RuntimeError("bug"))
+        assert not config_health.problems_for_subjects(TEST_GUILD_ID, [GROWTH_SHEET_SUBJECT])
+
+    def test_the_subject_is_registered_with_the_growth_button(self):
+        import bot  # noqa: F401 (registers the subject)
+        import config_health
+        from growth import GROWTH_SHEET_SUBJECT
+        from setup_hub import HUB_BTN_GROWTH
+
+        subject = config_health.get_subject(GROWTH_SHEET_SUBJECT)
+        assert subject.label == "your growth member data tab"
+        assert (subject.fix_hub, subject.fix_btn) == ("/setup", HUB_BTN_GROWTH)
+
+
 # ── Test helpers ─────────────────────────────────────────────────────────────
 
 

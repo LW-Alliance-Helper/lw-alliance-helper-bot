@@ -497,6 +497,8 @@ class TrainActionView(discord.ui.View):
 
     @discord.ui.button(label="✏️ Update", style=discord.ButtonStyle.primary)
     async def update(self, inter: discord.Interaction, button: discord.ui.Button):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         schedule = await asyncio.to_thread(load_schedule, self.guild_id)
         today = server_today()
         cutoff = today - timedelta(days=7)
@@ -512,17 +514,19 @@ class TrainActionView(discord.ui.View):
         entries.sort(key=lambda t: t[0])
 
         if not entries:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "ℹ️ No entries to update in the past 7 / next 30 days. Use **➕ Add** to create one.",
                 ephemeral=True,
             )
             return
 
         view = UpdateSelectView(self.bot, self.guild_id, self.blurbs_enabled, entries)
-        await inter.response.send_message("Select an entry to update:", view=view, ephemeral=True)
+        await inter.followup.send("Select an entry to update:", view=view, ephemeral=True)
 
     @discord.ui.button(label="📋 Generate Prompt", style=discord.ButtonStyle.secondary)
     async def generate(self, inter: discord.Interaction, button: discord.ui.Button):
+        # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+        await inter.response.defer(ephemeral=True, thinking=True)
         schedule = await asyncio.to_thread(load_schedule, self.guild_id)
         today = server_today()
         upper = today + timedelta(days=14)
@@ -537,7 +541,7 @@ class TrainActionView(discord.ui.View):
         entries.sort(key=lambda t: t[0])
 
         if not entries:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "ℹ️ No filled entries in the next 14 days. Use **➕ Add** or **✏️ Update**, "
                 "then run the blurb wizard to fill in theme/tone/notes first.",
                 ephemeral=True,
@@ -545,7 +549,7 @@ class TrainActionView(discord.ui.View):
             return
 
         view = GeneratePromptSelectView(self.bot, self.guild_id, entries)
-        await inter.response.send_message(
+        await inter.followup.send(
             "Select an entry to generate a prompt for:", view=view, ephemeral=True
         )
 

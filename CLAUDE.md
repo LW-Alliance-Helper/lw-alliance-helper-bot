@@ -122,8 +122,11 @@ reasoning. Verifying their contents is
   walks `Up Next → In progress → In review → Ready for Release →
   Shipped` based on where its linked PR lives (PR opened → In progress;
   push to `dev` → In review; push to `release/*` → Ready for Release;
-  push to `main` → Shipped). Manual statuses still work for `Backlog`,
-  `Up Next`, and `Canceled`. Driver: the PR body — the script merges
+  push to `main` → Shipped). It never moves an issue backwards, so
+  fast-forwarding `dev` to `main` after a release leaves shipped issues
+  alone ([#676](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/676));
+  `--issue` is the manual override and can set anything. Manual statuses
+  still work for `Backlog`, `Up Next`, and `Canceled`. Driver: the PR body — the script merges
   GitHub's `closingIssuesReferences` (which only auto-populates for
   PRs into `main`) with a direct regex scan for `Closes / Fixes /
   Resolves #N` and markdown-linked variants. The body has to contain

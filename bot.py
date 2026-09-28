@@ -948,6 +948,32 @@ async def on_app_command_error(
         pass
 
 
+# #652: the growth snapshot's Sheet, as a config-health subject, so leadership
+# hears when a deleted, unshared or renamed tab stops growth tracking. The key
+# lives in growth.py (Discord-free); the copy lives here with the loop.
+from growth import GROWTH_SHEET_SUBJECT  # noqa: E402
+from setup_hub import HUB_BTN_GROWTH as _HUB_BTN_GROWTH  # noqa: E402
+
+config_health.register(
+    config_health.Subject(
+        key=GROWTH_SHEET_SUBJECT,
+        label="your growth member data tab",
+        fix_hub="/setup",
+        fix_btn=_HUB_BTN_GROWTH,
+    )
+)
+
+
+def _note_growth_sheet_failure(gid: int, e: Exception) -> bool:
+    """Record an alliance-fixable growth Sheet failure; False when it isn't
+    one. The source tab is the discriminator: the growth tab is created by
+    the snapshot itself when it's missing, so a missing tab is the source."""
+    from config import get_growth_config
+
+    tab = (get_growth_config(gid) or {}).get("tab_source") or ""
+    return config_health.record_sheet_failure(gid, GROWTH_SHEET_SUBJECT, e, tab=tab)
+
+
 @tasks.loop(hours=1)
 async def growth_task():
     """Check every hour — run snapshots for guilds whose schedule is due."""
@@ -1003,13 +1029,17 @@ async def growth_task():
                 await asyncio.get_event_loop().run_in_executor(
                     None, _run_growth_snapshot_inner, gid
                 )
+                await asyncio.to_thread(config_health.clear, gid, GROWTH_SHEET_SUBJECT)
             except Exception as e:
                 from config import describe_sheet_error, is_user_config_sheet_error
 
                 if is_user_config_sheet_error(e):
                     # Deleted sheet / revoked access / missing tab is the
                     # alliance's to fix — log it with guild context, but don't
-                    # page Sentry (regressions of #285 / #286).
+                    # page Sentry (regressions of #285 / #286). Recorded so
+                    # leadership is told (#652); a monthly snapshot that fails
+                    # silently isn't noticed for weeks.
+                    await asyncio.to_thread(_note_growth_sheet_failure, gid, e)
                     print(f"[GROWTH] Skipping guild {gid}: {describe_sheet_error(e, guild_id=gid)}")
                     sentry_sdk.add_breadcrumb(
                         category="growth",
@@ -1558,11 +1588,16 @@ async def growth_slash(interaction: discord.Interaction):
                 from growth import _run_growth_snapshot_inner
 
                 await asyncio.to_thread(_run_growth_snapshot_inner, guild_id)
+                await asyncio.to_thread(config_health.clear, guild_id, GROWTH_SHEET_SUBJECT)
                 await inter.followup.send(
                     f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
                     ephemeral=True,
                 )
             except Exception as e:
+                # Recorded as well as shown, as /members sync does: the reply
+                # is ephemeral, and the scheduled snapshot will hit the same
+                # problem with nobody watching (#652).
+                await asyncio.to_thread(_note_growth_sheet_failure, guild_id, e)
                 await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
             self.stop()
 

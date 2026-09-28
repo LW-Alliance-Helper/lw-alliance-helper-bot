@@ -133,6 +133,31 @@ class TestLoadMemberData:
         members = load_member_data(TEST_GUILD_ID)
         assert members == []
 
+    def test_a_failed_read_raises_instead_of_reading_as_empty(self, seeded_db):
+        """#652: an empty list made the snapshot return quietly, so a renamed
+        source tab stopped growth tracking with nobody told."""
+        import gspread
+        from growth import load_member_data
+        from config import save_growth_config
+
+        save_growth_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Roster",
+            name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth",
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
+            data_start_row=2,
+        )
+        mock_sh = MagicMock()
+        mock_sh.worksheet.side_effect = gspread.exceptions.WorksheetNotFound("Roster")
+        with patch("growth._get_spreadsheet", return_value=mock_sh):
+            with pytest.raises(gspread.exceptions.WorksheetNotFound):
+                load_member_data(TEST_GUILD_ID)
+
     def test_custom_column_letters(self, seeded_db):
         from growth import load_member_data
         from config import save_growth_config

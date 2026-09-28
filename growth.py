@@ -988,6 +988,12 @@ def _safe_float(val) -> float:
         return 0.0
 
 
+# #652: the config-health subject for the growth snapshot's Sheet. Defined
+# here, next to the code that fails, and registered in bot.py beside the loop
+# that records it, so this module stays free of Discord types.
+GROWTH_SHEET_SUBJECT = "growth.sheet"
+
+
 def load_member_data(guild_id: int = None) -> list[dict]:
     """
     Load member data from the configured source tab for growth tracking.
@@ -1041,8 +1047,11 @@ def load_member_data(guild_id: int = None) -> list[dict]:
         print(f"[GROWTH] Loaded {len(members)} members from '{tab_source}' for guild {guild_id}")
         return members
     except Exception as e:
+        # Raised, not swallowed (#652). An empty list here made the snapshot
+        # return quietly, so a renamed or unshared source tab stopped growth
+        # tracking with nobody told, and "Run Snapshot Now" reported success.
         print(f"[GROWTH] Error loading member data for guild {guild_id}: {e}")
-        return []
+        raise
 
 
 def run_growth_snapshot():

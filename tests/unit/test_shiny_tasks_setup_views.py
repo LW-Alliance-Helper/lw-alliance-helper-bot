@@ -35,15 +35,17 @@ def _buttons(view):
 
 
 class TestShape:
-    def test_every_group_is_an_option_with_its_size(self):
+    def test_every_group_is_an_option(self):
         v = ss.WarzoneGroupView(42)
         select = v._select
         assert select.placeholder == "Pick your warzone group..."
         assert len(select.options) == len(shiny_tasks.WARZONE_GROUPS) == 18
-        first, sixth, last = select.options[0], select.options[5], select.options[-1]
-        assert (first.label, first.description) == ("Warzones 1 – 164", "164 warzones")
-        assert (sixth.label, sixth.description) == ("Warzones 677 – 804", "128 warzones")
-        assert (last.label, last.description) == ("Warzones 2213 – 2308", "96 warzones")
+        labels = [o.label for o in select.options]
+        assert labels[0] == "Warzones 1 – 164"
+        assert labels[5] == "Warzones 677 – 804"
+        assert labels[-1] == "Warzones 2213 – 2308"
+        # The size line was left out on sign-off (2026-09-27): not needed.
+        assert all(o.description is None for o in select.options)
 
     def test_fresh_has_no_keep_button_and_confirm_starts_disabled(self):
         v = ss.WarzoneGroupView(42)

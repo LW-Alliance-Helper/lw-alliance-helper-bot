@@ -163,11 +163,7 @@ class WarzoneGroupView(OwnedView):
         self._select = discord.ui.Select(
             placeholder=GROUP_PLACEHOLDER,
             options=[
-                discord.SelectOption(
-                    label=f"Warzones {_span(lo, hi)}",
-                    value=f"{lo}-{hi}",
-                    description=f"{hi - lo + 1} warzones",
-                )
+                discord.SelectOption(label=f"Warzones {_span(lo, hi)}", value=f"{lo}-{hi}")
                 for lo, hi in shiny_tasks.WARZONE_GROUPS
             ],
             row=row,

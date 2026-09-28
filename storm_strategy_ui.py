@@ -830,6 +830,9 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
                 ephemeral=True,
             )
             return
+        # Acknowledge before the Sheet read (#677). `refresh` edits the
+        # editor message itself once the response is done.
+        await interaction.response.defer()
         # Uniqueness check excluding the current name. gspread off the
         # event loop — `ss.list_presets` reads the whole presets tab.
         all_presets = await asyncio.to_thread(
@@ -839,7 +842,7 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
         )
         existing = [p.lower() for p in all_presets if p.lower() != self._view.buf.name.lower()]
         if new.lower() in existing:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⚠️ A preset named **{new}** already exists. Pick a different name.",
                 ephemeral=True,
             )
@@ -1109,16 +1112,6 @@ async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
     return False
 
 
-async def _open_editor(interaction: discord.Interaction, event_type: str, buf: ss.PresetBuffer):
-    view = _PresetEditorView(interaction.guild_id, interaction.user.id, buf)
-    embed = _build_editor_embed(buf, teams=view.teams)
-    await interaction.response.send_message(embed=embed, view=view)
-    try:
-        view.message = await interaction.original_response()
-    except discord.HTTPException:
-        view.message = None
-
-
 async def open_editor_followup(
     interaction: discord.Interaction,
     event_type: str,
@@ -1127,7 +1120,8 @@ async def open_editor_followup(
     """Open the preset editor via the interaction's followup (rather than
     the initial response). Used by the setup wizard's `_offer_inline_create`
     branch — the button click already consumed `interaction.response`, so
-    the editor has to land as a followup.
+    the editor has to land as a followup — and by the list view's Create
+    modal, which defers before its Sheet read (#677).
     """
     view = _PresetEditorView(interaction.guild_id, interaction.user.id, buf)
     embed = _build_editor_embed(buf, teams=view.teams)
@@ -1167,6 +1161,9 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
                 ephemeral=True,
             )
             return
+        # Defer before the Sheet read, or a slow Sheet times the modal out
+        # (#677). Public, because the editor it opens is public.
+        await interaction.response.defer(thinking=True)
         existing = [
             p.lower()
             for p in await asyncio.to_thread(
@@ -1176,7 +1173,12 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
             )
         ]
         if name.lower() in existing:
-            await interaction.response.send_message(
+            # The placeholder is public; the warning shouldn't be.
+            try:
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                pass
+            await interaction.followup.send(
                 f"⚠️ A preset named **{name}** already exists. Use the "
                 f"Edit button on the list to modify it.",
                 ephemeral=True,
@@ -1184,7 +1186,7 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
             return
         buf = ss.seed_default_preset(name, self.event_type)
         buf.dirty = True
-        await _open_editor(interaction, self.event_type, buf)
+        await open_editor_followup(interaction, self.event_type, buf)
 
 
 class _ConfirmDeleteView(OwnedView):
@@ -1280,6 +1282,10 @@ async def open_strategy_list(
     per Rule M / #169."""
     if not await _deny_if_not_leader(interaction):
         return
+    # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+    # Public, like the list it opens; the send below follows up when done.
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True)
     names = await asyncio.to_thread(
         ss.list_presets,
         interaction.guild_id,

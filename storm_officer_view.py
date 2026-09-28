@@ -2391,12 +2391,16 @@ async def _open_team_setup(
 
     import storm_strategy as ss
 
+    # Defer before the Sheet read, or a slow Sheet times the click out (#677).
+    # The picker below already follows up once the response is done.
+    if not inter.response.is_done():
+        await inter.response.defer(ephemeral=True, thinking=True)
     preset_names = await asyncio.to_thread(
         ss.list_presets, officer_view.guild_id, officer_view.event_type
     )
     if not preset_names:
         hub_cmd = HUB_COMMAND[officer_view.event_type]
-        await inter.response.send_message(
+        await inter.followup.send(
             f"⚠️ No strategy presets defined yet for "
             f"{'Desert Storm' if officer_view.event_type == 'DS' else 'Canyon Storm'}. "
             f"Run `{hub_cmd}` and click **{HUB_BTN_PRESETS}** first.",

@@ -143,9 +143,26 @@ class WeeklyDraftView(ExpiringView):
             await interaction.response.send_message(ui.DENY_NOT_LEADER, ephemeral=True)
             return
         await interaction.response.defer()
-        self.week_start = self.week_start + timedelta(days=days)
+        week_start = self.week_start + timedelta(days=days)
+        try:
+            draft = await ui.load_week_draft_async(self.bot, self.guild_id, week_start)
+        except Exception as e:
+            # The alliance's own Sheet (deleted, unshared, tab renamed) is
+            # theirs to fix, so tell them instead of paging Sentry (#677).
+            # load_preset has already recorded it for the setup notice.
+            from config import describe_sheet_error, is_user_config_sheet_error
+
+            if not is_user_config_sheet_error(e):
+                raise
+            await interaction.followup.send(
+                f"⚠️ Couldn't load this week's draft: "
+                f"{describe_sheet_error(e, guild_id=self.guild_id)}",
+                ephemeral=True,
+            )
+            return
+        self.week_start = week_start
         self.selected_iso = None
-        self.draft = await ui.load_week_draft_async(self.bot, self.guild_id, self.week_start)
+        self.draft = draft
         await self._rerender(interaction)
 
     async def _guard_day(self, interaction: discord.Interaction) -> tr.DraftDay | None:

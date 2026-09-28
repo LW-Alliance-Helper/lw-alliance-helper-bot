@@ -38,7 +38,7 @@ OLD_LEAGUE = ad.LeagueKey("S34", "Gold", "9 - 1")
 # rollover, and on the Sunday/Monday one that disagreement is a whole week,
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 THEM = ad.AllianceKey.of("A02", OWN_WZ)
 

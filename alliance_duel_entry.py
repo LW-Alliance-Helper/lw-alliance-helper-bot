@@ -2244,7 +2244,7 @@ def _resolve_pair(state, week: int, roster: dict, names: list[str]):
     A bracket can draw from more than one warzone, so two alliances can share a
     tag and one name can point at several. The pairing the bracket already
     knows settles which; failing that, the first two that differ. The bot's own
-    prefilled `KTI v KTI:` line has to be readable, since nobody typed it.
+    prefilled `LION v LION:` line has to be readable, since nobody typed it.
     """
     choices = [roster.get(name.casefold(), []) for name in names]
     for name, options in zip(names, choices):

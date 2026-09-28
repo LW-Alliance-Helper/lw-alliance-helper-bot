@@ -38,7 +38,7 @@ LEAGUE = ad.LeagueKey("S35", "Diamond", "12 - 2")
 # rollover, and on the Sunday/Monday one that disagreement is a whole week,
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 
 
@@ -195,7 +195,7 @@ def test_the_save_consequence_names_actual_opponents():
 
 
 def test_an_existing_declaration_is_read_back():
-    rows = _bracket(US={"intent": ad.INTENT_SAVE})
+    rows = _bracket(Fre3={"intent": ad.INTENT_SAVE})
     text = _text(entry.declaration_embed(_state(rows), 1))
     assert "saving for a later week" in text
 
@@ -226,7 +226,7 @@ def test_neither_call_is_presented_as_the_recommended_one():
 
 
 def test_the_declaration_already_recorded_is_disabled():
-    rows = _bracket(US={"intent": ad.INTENT_PUSH})
+    rows = _bracket(Fre3={"intent": ad.INTENT_PUSH})
     view = entry.DeclarationView(_state(rows), 1, owner_id=7)
     push = next(c for c in view.children if c.label == entry.VS_BTN_PUSH)
     save = next(c for c in view.children if c.label == entry.VS_BTN_SAVE)
@@ -248,13 +248,13 @@ def test_the_announce_button_is_absent_with_nothing_to_announce():
 def test_the_announce_button_is_absent_without_a_members_channel():
     """A control that could not post anywhere is a control that cannot change
     anything."""
-    rows = _bracket(US={"intent": ad.INTENT_SAVE})
+    rows = _bracket(Fre3={"intent": ad.INTENT_SAVE})
     view = entry.DeclarationView(_state(rows, day_theme_channel_id=0), 1, owner_id=7)
     assert entry.VS_BTN_ANNOUNCE not in {c.label for c in view.children}
 
 
 def test_the_announce_button_appears_once_both_exist():
-    rows = _bracket(US={"intent": ad.INTENT_SAVE})
+    rows = _bracket(Fre3={"intent": ad.INTENT_SAVE})
     view = entry.DeclarationView(_state(rows), 1, owner_id=7)
     assert entry.VS_BTN_ANNOUNCE in {c.label for c in view.children}
 

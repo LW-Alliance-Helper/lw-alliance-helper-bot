@@ -46,11 +46,11 @@ def _profile(tag, power=POWER_BASE, members=MEMBERS_BASE, gift=GIFT_BASE, **kw):
 
 
 def _us(**kw):
-    return _profile("US", **kw)
+    return _profile("Fre3", **kw)
 
 
 def _them(**kw):
-    return _profile("EM", **kw)
+    return _profile("Glo", **kw)
 
 
 def _buckets(projection):
@@ -550,7 +550,7 @@ def test_the_estimator_declines_rather_than_flipping_a_coin():
     estimate = ad.make_estimator(
         {p.alliance: p for p in (_us(), _them(), _profile("XX", power=None))}, today=TODAY
     )
-    a, b, x = (ad.AllianceKey.of(t, "1234") for t in ("US", "EM", "XX"))
+    a, b, x = (ad.AllianceKey.of(t, "1234") for t in ("Fre3", "Glo", "XX"))
     assert estimate(a, b, 1) is None  # identical stats — a toss-up
     assert estimate(a, x, 1) is None  # short of Tier 1
     assert estimate(a, ad.AllianceKey.of("ZZ", "1234"), 1) is None  # no profile at all
@@ -559,7 +559,7 @@ def test_the_estimator_declines_rather_than_flipping_a_coin():
 def test_the_estimator_calls_the_side_the_vote_favours():
     profiles = {p.alliance: p for p in (_us(power=POWER_STRONG), _them())}
     estimate = ad.make_estimator(profiles, today=TODAY)
-    us, them = ad.AllianceKey.of("US", "1234"), ad.AllianceKey.of("EM", "1234")
+    us, them = ad.AllianceKey.of("Fre3", "1234"), ad.AllianceKey.of("Glo", "1234")
     assert estimate(us, them, 1) == us
     assert estimate(them, us, 1) == us  # argument order must not decide it
 
@@ -589,7 +589,7 @@ def test_the_estimator_does_not_consult_the_week():
     estimate = ad.make_estimator(
         {p.alliance: p for p in (_us(power=POWER_STRONG), _them())}, today=TODAY
     )
-    us, them = ad.AllianceKey.of("US", "1234"), ad.AllianceKey.of("EM", "1234")
+    us, them = ad.AllianceKey.of("Fre3", "1234"), ad.AllianceKey.of("Glo", "1234")
     assert {estimate(us, them, week) for week in range(1, ad.LEAGUE_WEEKS + 1)} == {us}
 
 

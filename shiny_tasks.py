@@ -63,6 +63,11 @@ WARZONE_GROUPS: tuple[tuple[int, int], ...] = (
 # before the groups existed; its post would be too long for Discord to send.
 MAX_RANGE_WIDTH = max(hi - lo + 1 for lo, hi in WARZONE_GROUPS)
 
+# Warzones the game has closed. Still inside the first group's range, but gone,
+# so `/admin shiny_gaps` doesn't report them missing (Kevin, 2026-09-28: "1 and
+# 2 no longer exist").
+RETIRED_WARZONES = frozenset({1, 2})
+
 # The config-health subject for a saved range that is too wide to post.
 # Registered in bot.py beside the post loop that records it.
 SHINY_WARZONE_RANGE_SUBJECT = "shiny.warzone_range"

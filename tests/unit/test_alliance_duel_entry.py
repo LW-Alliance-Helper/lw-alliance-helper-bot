@@ -30,7 +30,7 @@ LEAGUE = ad.LeagueKey("S35", "Diamond", "12 - 2")
 # rollover, and on the Sunday/Monday one that disagreement is a whole week,
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 
 
@@ -2232,16 +2232,16 @@ async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
 
 def test_two_alliances_sharing_a_tag_are_still_two_alliances():
     """`display_name` is the tag alone and a bracket draws from more than one
-    warzone. The bot's own prefilled `KTI v KTI:` line has to be readable:
+    warzone. The bot's own prefilled `LION v LION:` line has to be readable:
     nobody typed it, so nobody can fix it if it is refused."""
     rows = _bracket()
     match = entry.week_matches(_state(rows), 1)[0]
     for row in rows:
         if row.alliance in (match.a, match.b):
-            row.tag_display = "KTI"
+            row.tag_display = "LION"
     state = _state(rows)
 
-    parsed, problems = entry.parse_backfill_results(state, 1, "KTI v KTI: KTI 9-4")
+    parsed, problems = entry.parse_backfill_results(state, 1, "LION v LION: LION 9-4")
 
     assert problems == []
     assert {r.alliance for r in parsed} == {match.a, match.b}

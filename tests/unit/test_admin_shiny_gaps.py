@@ -23,15 +23,16 @@ def test_runs_are_compressed():
 
 def test_the_production_gap_is_reported_by_group():
     """The shape found while planning #604: 3 to 2285 stored, a few missing
-    near the start, and 2286 to 2308 never imported."""
+    near the start, and 2286 to 2308 never imported. Warzones 1 and 2 are
+    closed, so they don't count as missing."""
     present = set(range(3, 2286)) - {17, 90}
     report = bot_admin.shiny_gap_report(present)
-    assert "`   1 – 164 ` 4 missing: 1–2, 17, 90" in report
+    assert "`   1 – 164 ` 2 missing: 17, 90" in report
     assert "`2213 – 2308` 23 missing: 2286–2308" in report
     assert "` 677 – 804 `" not in report  # complete groups aren't listed
     assert len(report) < 1900
 
 
 def test_a_complete_table_says_so():
-    report = bot_admin.shiny_gap_report(set(range(1, 2309)))
+    report = bot_admin.shiny_gap_report(set(range(3, 2309)))
     assert report == "✅ Every warzone from 1 to 2308 is in the Shiny Tasks table."

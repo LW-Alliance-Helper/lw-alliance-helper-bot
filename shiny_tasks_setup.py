@@ -1,8 +1,9 @@
 """
 The Shiny Tasks wizard (`run_shiny_tasks_setup`): the re-entry summary,
 enable or disable (with the saved settings kept), the announcement
-channel, the server range through its two-field modal, the post time,
-the message template, the final review and the save. Free for all tiers.
+channel, the warzone group from the game's fixed list (#604), the post
+time, the message template, the final review and the save. Free for all
+tiers.
 
 Moved out of `setup_cog.py` in round 2 of the skills walkthrough (#611),
 in the shape `storm_setup.py` set: `setup_cog` imports
@@ -10,13 +11,13 @@ in the shape `storm_setup.py` set: `setup_cog` imports
 launcher and the tests; the shared wizard pieces come from
 `wizard_steps` and the clock text from `wizard_time`; this module
 reaches into `setup_cog` at call time (`_setup()`) only for the re-entry
-summary and the disable-with-clear helper. `ServerRangeModal` is a
-module class under its old name.
+summary and the disable-with-clear helper.
 
-Every prompt, label, acknowledgement, saved field and summary line is
-unchanged from the function this replaced;
-`tests/integration/test_shiny_tasks_setup.py` was written against it and
-holds this module to it.
+Step 3 was a two-field modal for the lowest and highest server number
+until #604, when one alliance typed 1-2308 and its post outgrew what
+Discord will send. It is a pick from the game's warzone groups now.
+`tests/integration/test_shiny_tasks_setup.py` holds the prompts, labels,
+acknowledgements, saved fields and summary lines.
 """
 
 import asyncio
@@ -24,7 +25,9 @@ from dataclasses import dataclass
 
 import discord
 
+import config_health
 import premium
+import shiny_tasks
 import wizard_registry
 import wizard_steps
 from messages import (
@@ -35,7 +38,7 @@ from messages import (
     WIZARD_TIMEOUT,
 )
 from setup_hub import HUB_BTN_SHINY
-from wizard_registry import wait_view_or_cancel
+from wizard_registry import OwnedView, wait_view_or_cancel
 from wizard_time import _format_24h_to_12h, _format_time_with_tz, _parse_12h_time
 
 
@@ -118,46 +121,92 @@ class _Answers:
 # ── Views ────────────────────────────────────────────────────────────────────
 
 
-class ServerRangeModal(discord.ui.Modal):
-    """Step 3: the lowest and highest reachable server numbers in one modal."""
+def _span(lo, hi) -> str:
+    """A range the way every Shiny surface shows it."""
+    return f"{lo} – {hi}"
 
-    def __init__(self, min_default: str = "", max_default: str = ""):
-        super().__init__(title="Server Range")
-        self.min_value = None
-        self.max_value = None
-        self._min = discord.ui.TextInput(
-            label="Lowest reachable server number",
-            placeholder="e.g. 677",
-            default=min_default,
-            required=True,
-            max_length=5,
+
+GROUP_STEP_TEXT = (
+    "**Step 3 of 6 — Warzone Group**\n"
+    "Pick your alliance's warzone group. The daily post lists the warzones in it "
+    "that have shiny tasks that day."
+)
+GROUP_PLACEHOLDER = "Pick your warzone group..."
+GROUP_CONFIRM = "✅ Use this group"
+
+
+class WarzoneGroupView(OwnedView):
+    """Step 3 (#604): the warzone group, from the game's fixed list.
+
+    A select plus a confirm button rather than a select that acts on change:
+    a mis-tap on a phone is otherwise unrecoverable (DESIGN.md, Selects).
+    Keep current is offered when the saved range is exactly one of the
+    groups; a narrower slice saved before the groups existed keeps posting
+    until the step is re-run, and then a group is picked. No timeout hint:
+    the wizard posts its own timeout line, as every other step does.
+    """
+
+    def __init__(self, owner_id: int, *, current: tuple[int, int] | None = None):
+        super().__init__(timeout=wizard_steps.WIZARD_STEP_TIMEOUT)
+        self.owner_id = owner_id
+        self.current = current
+        self.selected: tuple[int, int] | None = None
+        self.confirmed = False
+        self._pick: tuple[int, int] | None = None
+
+        row = 0
+        if current:
+            self.add_button(
+                f"Keep current: {_span(*current)}", discord.ButtonStyle.success, self._keep, row=0
+            )
+            row = 1
+        self._select = discord.ui.Select(
+            placeholder=GROUP_PLACEHOLDER,
+            options=[
+                discord.SelectOption(label=f"Warzones {_span(lo, hi)}", value=f"{lo}-{hi}")
+                for lo, hi in shiny_tasks.WARZONE_GROUPS
+            ],
+            row=row,
         )
-        self._max = discord.ui.TextInput(
-            label="Highest reachable server number",
-            placeholder="e.g. 804",
-            default=max_default,
-            required=True,
-            max_length=5,
+        self._select.callback = self._on_select
+        self.add_item(self._select)
+        self._confirm = self.add_button(
+            GROUP_CONFIRM,
+            discord.ButtonStyle.primary,
+            self._on_confirm,
+            row=row + 1,
+            disabled=True,
         )
-        self.add_item(self._min)
-        self.add_item(self._max)
 
-    @property
-    def value(self) -> str:
-        """Display string consumed by `ModalLaunchView` after submit.
-        That view formats `✅ Entered: **{self.modal.value}**`, so
-        this property has to exist on every modal it wraps — without
-        it, the post-submit edit raises `AttributeError` and the
-        wizard step appears to hang."""
-        if self.min_value is None and self.max_value is None:
-            return ""
-        return f"{self.min_value or '?'} – {self.max_value or '?'}"
-
-    async def on_submit(self, inter: discord.Interaction):
-        self.min_value = self._min.value.strip()
-        self.max_value = self._max.value.strip()
-        await inter.response.defer()
+    def _finish(self) -> None:
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
         self.stop()
+
+    async def _keep(self, interaction: discord.Interaction):
+        self.selected = self.current
+        self._finish()
+        await wizard_registry.safe_edit_response(
+            interaction, content=f"✅ Keeping warzones: **{_span(*self.current)}**", view=self
+        )
+
+    async def _on_select(self, interaction: discord.Interaction):
+        lo, hi = (int(n) for n in self._select.values[0].split("-"))
+        self._pick = (lo, hi)
+        for option in self._select.options:
+            option.default = option.value == f"{lo}-{hi}"
+        self._confirm.disabled = False
+        await wizard_registry.safe_edit_response(interaction, view=self)
+
+    async def _on_confirm(self, interaction: discord.Interaction):
+        if self._pick is None:
+            return
+        self.selected = self._pick
+        self._finish()
+        await wizard_registry.safe_edit_response(
+            interaction, content=f"✅ Warzone group: **{_span(*self.selected)}**", view=self
+        )
 
 
 # ── Steps ────────────────────────────────────────────────────────────────────
@@ -172,7 +221,7 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
     fields = [
         ("Channel", f"<#{ch_id}>" if ch_id else "*not set*"),
         (
-            "Server Range",
+            "Warzones",
             f"{current.get('server_min') or '?'} – {current.get('server_max') or '?'}",
         ),
         ("Post Time", _format_time_with_tz(current.get("post_time"), s.guild_tz) or "*not set*"),
@@ -250,99 +299,16 @@ async def _ask_channel(w: _Wizard, s: _Saved, a: _Answers) -> None:
     a.channel_id = view.selected_channel.id
 
 
-def _range_launcher(saved_min, saved_max) -> wizard_steps.ModalLaunchView:
-    """The server-range modal behind a launcher, with Keep current when a
-    usable range is saved. `ServerRangeModal.value` is a read-only
-    property derived from min_value + max_value, so the launcher's
-    default `modal.value = current_value` path won't work; the
-    `on_keep_current` callback populates the underlying attributes."""
-    modal = ServerRangeModal(
-        min_default=str(saved_min) if saved_min else "",
-        max_default=str(saved_max) if saved_max else "",
-    )
-    try:
-        has_saved_range = int(saved_min) >= 1 and int(saved_max) >= int(saved_min)
-    except (TypeError, ValueError):
-        has_saved_range = False
-    if has_saved_range:
-        keep_min, keep_max = int(saved_min), int(saved_max)
-
-        def _keep_range(m, _min=keep_min, _max=keep_max):
-            m.min_value = str(_min)
-            m.max_value = str(_max)
-
-        launcher = wizard_steps.ModalLaunchView(
-            modal,
-            current_value=f"{keep_min} – {keep_max}",
-            current_display=f"{keep_min} – {keep_max}",
-            on_keep_current=_keep_range,
-        )
-    else:
-        launcher = wizard_steps.ModalLaunchView(modal)
-    # Override the generic "Enter Value" button label so leadership sees
-    # domain wording. Found by label because the Keep-current button
-    # (when present) is not at a fixed index.
-    for child in launcher.children:
-        if isinstance(child, discord.ui.Button) and child.label == "✏️ Enter Value":
-            child.label = "✏️ Enter Server Numbers"
-            break
-    return launcher
-
-
-async def _ask_server_range(w: _Wizard, s: _Saved, a: _Answers) -> None:
-    """Step 3. Re-prompts up to 3 times; the retry modal is pre-filled
-    with whatever the officer typed, so the correction is one tap away
-    instead of re-entering both fields."""
-    saved_min = s.current.get("server_min") or 0
-    saved_max = s.current.get("server_max") or 0
-    attempts_left = 3
-    while True:
-        launcher = _range_launcher(saved_min, saved_max)
-        await w.channel.send(
-            "**Step 3 of 6 — Server Range**\n"
-            "Enter the lowest and highest server numbers your alliance can "
-            "reach. Typically your transfer range.",
-            view=launcher,
-        )
-        await w.wait(launcher)
-        if not launcher.confirmed:
-            await w.channel.send(TIMEOUT_MSG)
-            raise _Abort
-
-        min_raw = (launcher.modal.min_value or "").strip()
-        max_raw = (launcher.modal.max_value or "").strip()
-        try:
-            candidate_min = int(min_raw)
-            candidate_max = int(max_raw)
-            valid_numbers = True
-        except (TypeError, ValueError):
-            valid_numbers = False
-
-        if valid_numbers and candidate_min >= 1 and candidate_min <= candidate_max:
-            a.server_min = candidate_min
-            a.server_max = candidate_max
-            return
-
-        attempts_left -= 1
-        if attempts_left <= 0:
-            await w.channel.send(
-                "⚠️ Could not read those server numbers after a few tries. "
-                "Run `/setup` → 🌟 Shiny Tasks to start over."
-            )
-            raise _Abort
-
-        saved_min = min_raw
-        saved_max = max_raw
-        if not valid_numbers:
-            await w.channel.send(
-                f"⚠️ Could not read **`{min_raw}`** / **`{max_raw}`** as whole "
-                f"numbers. Try something like `677` and `804`. Let's try once more."
-            )
-        else:
-            await w.channel.send(
-                f"⚠️ The lowest server (**`{min_raw}`**) must be ≥ 1 and "
-                f"≤ the highest (**`{max_raw}`**). Let's try once more."
-            )
+async def _ask_warzone_group(w: _Wizard, s: _Saved, a: _Answers) -> None:
+    """Step 3: pick a warzone group (#604)."""
+    current = shiny_tasks.group_for_range(s.current.get("server_min"), s.current.get("server_max"))
+    view = WarzoneGroupView(w.user.id, current=current)
+    view.message = await w.channel.send(GROUP_STEP_TEXT, view=view)
+    await w.wait(view)
+    if not view.confirmed or view.selected is None:
+        await w.channel.send(TIMEOUT_MSG)
+        raise _Abort
+    a.server_min, a.server_max = view.selected
 
 
 async def _ask_post_time(w: _Wizard, s: _Saved, a: _Answers) -> None:
@@ -388,7 +354,7 @@ async def _ask_message(w: _Wizard, s: _Saved, a: _Answers) -> None:
     picked = await w.keep_or_change(
         "**Step 5 of 6 — Announcement Message**\n"
         "Customize the announcement body, or use the default. "
-        "Placeholders: `{servers}` and `{date}`.",
+        "Placeholders: `{warzones}` and `{date}`.",
         default=DEFAULT_SHINY_TASKS_MESSAGE,
         current=saved or None,
         modal_title="Shiny Tasks Message",
@@ -411,7 +377,7 @@ async def _confirm(w: _Wizard, s: _Saved, a: _Answers) -> None:
     )
     embed.add_field(name="Status", value="✅ Enabled", inline=True)
     embed.add_field(name="Channel", value=f"<#{a.channel_id}>", inline=True)
-    embed.add_field(name="Server Range", value=f"{a.server_min} – {a.server_max}", inline=True)
+    embed.add_field(name="Warzones", value=_span(a.server_min, a.server_max), inline=True)
     embed.add_field(
         name="Post Time", value=_format_time_with_tz(a.post_time, s.guild_tz), inline=True
     )
@@ -440,6 +406,9 @@ def _save(w: _Wizard, a: _Answers) -> None:
         server_max=a.server_max,
         message_template=a.message_template,
     )
+    # A group always fits in one post, so a too-wide notice is resolved now
+    # rather than at the next post time (#604).
+    config_health.clear(w.guild_id, shiny_tasks.SHINY_WARZONE_RANGE_SUBJECT)
 
 
 # ── The wizard ───────────────────────────────────────────────────────────────
@@ -447,7 +416,7 @@ def _save(w: _Wizard, a: _Answers) -> None:
 
 async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     """Walk leadership through configuring the daily shiny-tasks
-    announcement. Six steps: enable → channel → server range → post
+    announcement. Six steps: enable → channel → warzone group → post
     time → message template → confirm. Free for all tiers."""
     from config import get_config, get_shiny_tasks_config, has_shiny_tasks_config
 
@@ -469,13 +438,13 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         await _confirm_reentry(w, s)
         await w.channel.send(
             "🌟 **Daily Shiny Tasks Setup**\n"
-            "Each day, the bot can post the list of Last War servers where "
-            "shiny tasks are available, filtered to the servers your alliance "
-            "can reach."
+            "Each day, the bot can post the list of Last War warzones where "
+            "shiny tasks are available, filtered to your alliance's warzone "
+            "group."
         )
         await _ask_enable(w, s)
         await _ask_channel(w, s, a)
-        await _ask_server_range(w, s, a)
+        await _ask_warzone_group(w, s, a)
         await _ask_post_time(w, s, a)
         await _ask_message(w, s, a)
         await _confirm(w, s, a)

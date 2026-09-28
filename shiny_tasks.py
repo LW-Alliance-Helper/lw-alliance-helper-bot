@@ -31,6 +31,58 @@ import aiohttp
 
 from time_helpers import SERVER_TZ
 
+# ── Warzone groups (#604) ─────────────────────────────────────────────────────
+#
+# The game's own warzone groups: 1-164, then 128 wide each, ending at 2308, the
+# announced final warzone, so there is no growth rule to maintain. The Shiny
+# Tasks wizard offers exactly these; a daily post can't outgrow one message by
+# construction (the longest list on any day in any group is 306 characters).
+# tests/unit/test_shiny_tasks.py checks they run 1 to 2308 with no gaps.
+WARZONE_GROUPS: tuple[tuple[int, int], ...] = (
+    (1, 164),
+    (165, 292),
+    (293, 420),
+    (421, 548),
+    (549, 676),
+    (677, 804),
+    (805, 932),
+    (933, 1060),
+    (1061, 1188),
+    (1189, 1316),
+    (1317, 1444),
+    (1445, 1572),
+    (1573, 1700),
+    (1701, 1828),
+    (1829, 1956),
+    (1957, 2084),
+    (2085, 2212),
+    (2213, 2308),
+)
+
+# The widest group. A saved range wider than this can only have been typed
+# before the groups existed; its post would be too long for Discord to send.
+MAX_RANGE_WIDTH = max(hi - lo + 1 for lo, hi in WARZONE_GROUPS)
+
+# The config-health subject for a saved range that is too wide to post.
+# Registered in bot.py beside the post loop that records it.
+SHINY_WARZONE_RANGE_SUBJECT = "shiny.warzone_range"
+
+
+def range_too_wide(server_min: int, server_max: int) -> bool:
+    """True when a saved range spans more warzones than any one group, which
+    is what made one alliance's 1-2308 post too long to send (#604). Narrower
+    slices saved before the groups existed keep posting as they are."""
+    return (int(server_max) - int(server_min) + 1) > MAX_RANGE_WIDTH
+
+
+def group_for_range(server_min, server_max) -> tuple[int, int] | None:
+    """The group a saved range is exactly, or None for any other range."""
+    try:
+        key = (int(server_min), int(server_max))
+    except (TypeError, ValueError):
+        return None
+    return key if key in WARZONE_GROUPS else None
+
 
 # Last War's in-game day rolls over at 00:00 server time (UTC-2, no DST), so the
 # launch *date* that anchors the 3-day shiny cycle is the server-time date of
@@ -170,15 +222,20 @@ def render_announcement(
     servers: list[int],
     today: date,
 ) -> str:
-    """Substitute `{servers}` and `{date}` into the configured template.
+    """Substitute `{warzones}` and `{date}` into the configured template.
+
+    `{servers}` renders the same list: it was the placeholder's name before
+    the copy said warzones (#604), and templates saved with it keep working.
 
     `template` is the guild's saved `message_template` or, if empty,
     `DEFAULT_SHINY_TASKS_MESSAGE` from defaults.py — resolve the
     fallback via `resolve_announcement_template` before calling.
     """
+    listed = format_server_list(servers)
     return template.format_map(
         _SafeDict(
-            servers=format_server_list(servers),
+            warzones=listed,
+            servers=listed,
             date=_format_date_for_template(today),
         )
     )

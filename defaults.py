@@ -420,7 +420,7 @@ DEFAULT_TRANSFER_TEMPLATES = {
 # e.g. "Monday, May 11". Unknown placeholders render literally via
 # SafeDict so a typo doesn't crash the scheduler loop.
 
-DEFAULT_SHINY_TASKS_MESSAGE = "🌟 Daily shiny tasks are available on servers: {servers}."
+DEFAULT_SHINY_TASKS_MESSAGE = "🌟 Daily shiny tasks are available on warzones: {warzones}."
 
 
 # ── Storm participation question presets (#247) ─────────────────────────────

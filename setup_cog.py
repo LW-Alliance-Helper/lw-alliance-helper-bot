@@ -965,8 +965,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         st_lines += [
             f"**Channel:** {_channel(shiny.get('channel_id'))}",
             f"**Post Time:** {_format_time_with_tz(shiny.get('post_time'), cfg.timezone) or '*not set*'}",
-            f"**Server Range:** "
-            f"{shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
+            f"**Warzones:** {shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
             f"**Custom Message:** {_yn(shiny.get('message_template'))}",
         ]
     embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)

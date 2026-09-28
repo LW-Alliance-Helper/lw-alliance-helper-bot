@@ -292,13 +292,12 @@ HELP_CATEGORIES: dict[str, dict] = {
         "emoji": "🌟",
         "label": "Shiny Tasks",
         "description": (
-            "Daily auto-post of the Last War servers in your transfer range "
-            "that have shiny tasks today."
+            "Daily auto-post of the warzones in your warzone group that have shiny tasks today."
         ),
         "commands": [
             (
                 f"/setup → {HUB_BTN_SHINY}",
-                "Configure the announcement channel, server range, post time, and message body.",
+                "Configure the announcement channel, warzone group, post time, and message body.",
             ),
         ],
     },

@@ -552,51 +552,6 @@ async def _run_loop_at(now_dt: datetime, *, send_ok: bool = True):
     return sent
 
 
-class TestServerRangeModalValueProperty:
-    """`ModalLaunchView.open_modal` formats `self.modal.value` into a
-    post-submit confirmation message. Any modal it wraps must expose
-    `value` or the view raises AttributeError mid-step — see the bug
-    that landed in dev shortly after the first wizard ship. This test
-    pins the contract so the regression can't slip back in."""
-
-    def test_value_returns_display_string_after_submit(self):
-        """Direct attribute set mirrors what `on_submit` does in prod;
-        instantiating the modal isn't safe outside an interaction
-        context so we sidestep `__init__` and exercise the property."""
-        from setup_cog import run_shiny_tasks_setup  # noqa: F401 — imports the inner class
-        from setup_cog import SetupCog  # noqa: F401
-
-        # The class is local to `run_shiny_tasks_setup`. Build the
-        # bare-minimum stand-in here so the property contract is tested
-        # without spinning up discord.ui machinery.
-        class _Stub:
-            min_value = "681"
-            max_value = "799"
-
-            # Inline-copy the property body to assert the contract:
-            @property
-            def value(self):
-                if self.min_value is None and self.max_value is None:
-                    return ""
-                return f"{self.min_value or '?'} – {self.max_value or '?'}"
-
-        stub = _Stub()
-        assert stub.value == "681 – 799"
-
-    def test_modal_launch_view_format_string_compiles(self):
-        """Smoke check the f-string pattern in ModalLaunchView still
-        relies on a single `.value` attribute (if this changes, the
-        ServerRangeModal.value property may need to change too)."""
-        import inspect
-        from setup_cog import ModalLaunchView
-
-        src = inspect.getsource(ModalLaunchView)
-        assert "self.modal.value" in src, (
-            "ModalLaunchView no longer references self.modal.value — "
-            "ServerRangeModal.value may need to be removed or renamed."
-        )
-
-
 class TestShinyTasksPostTask:
     @pytest.mark.asyncio
     async def test_fires_when_time_matches(self, temp_db):
@@ -928,3 +883,94 @@ class TestRefreshDisabled:
             n = await shiny_tasks.refresh_servers()
         assert n == 1
         mock_upsert.assert_called_once()
+
+
+# ── Warzone groups (#604) ────────────────────────────────────────────────────
+
+
+class TestWarzoneGroups:
+    def test_the_groups_run_1_to_2308_with_no_gaps(self):
+        from shiny_tasks import WARZONE_GROUPS
+
+        assert len(WARZONE_GROUPS) == 18
+        assert WARZONE_GROUPS[0] == (1, 164)
+        assert WARZONE_GROUPS[-1] == (2213, 2308)
+        for (_, hi), (lo, _) in zip(WARZONE_GROUPS, WARZONE_GROUPS[1:]):
+            assert lo == hi + 1
+        for lo, hi in WARZONE_GROUPS[1:-1]:
+            assert hi - lo + 1 == 128
+
+    def test_no_group_can_outgrow_one_message(self):
+        """Every warzone in the widest group shiny on the same day, which
+        can't happen, still fits well under Discord's 2,000."""
+        from datetime import date as _date
+        from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+        from shiny_tasks import WARZONE_GROUPS, render_announcement
+
+        for lo, hi in WARZONE_GROUPS:
+            body = render_announcement(
+                DEFAULT_SHINY_TASKS_MESSAGE,
+                servers=list(range(lo, hi + 1)),
+                today=_date(2026, 9, 27),
+            )
+            assert len(body) < 2000, (lo, hi, len(body))
+
+    @pytest.mark.parametrize(
+        "lo, hi, too_wide",
+        [(1, 164, False), (677, 804, False), (700, 760, False), (1, 165, True), (1, 2308, True)],
+    )
+    def test_range_too_wide(self, lo, hi, too_wide):
+        from shiny_tasks import range_too_wide
+
+        assert range_too_wide(lo, hi) is too_wide
+
+    def test_both_placeholders_render_the_list(self):
+        from datetime import date as _date
+        from shiny_tasks import render_announcement
+
+        body = render_announcement(
+            "{warzones} | {servers}", servers=[681, 682], today=_date(2026, 9, 27)
+        )
+        assert body == "681 and 682 | 681 and 682"
+
+    def test_the_default_message_says_warzones(self):
+        from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+
+        assert "{warzones}" in DEFAULT_SHINY_TASKS_MESSAGE
+        assert "server" not in DEFAULT_SHINY_TASKS_MESSAGE
+
+
+class TestTooWideRangeInTheLoop:
+    """#604: a range wider than one group isn't sent. Leadership is told
+    through config health, the day is marked handled so nothing retries,
+    and nothing reaches Sentry."""
+
+    @pytest.mark.asyncio
+    async def test_not_sent_recorded_and_marked(self, temp_db):
+        import config_health
+        from config import get_shiny_tasks_config
+        from shiny_tasks import SHINY_WARZONE_RANGE_SUBJECT
+
+        _seed_complete(TEST_GUILD_ID)
+        _seed_servers([(2264, "2026-04-29", "global")])
+        _enable_shiny(
+            TEST_GUILD_ID, post_time="09:00", channel_id=123, server_min=1, server_max=2308
+        )
+        with patch("bot.sentry_sdk") as sentry:
+            sent = await _run_loop_at(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        assert sent == []
+        sentry.capture_exception.assert_not_called()
+        assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == "2026-05-11"
+        problems = config_health.problems_for_subjects(TEST_GUILD_ID, [SHINY_WARZONE_RANGE_SUBJECT])
+        assert [p.kind for p in problems] == [config_health.WARZONE_RANGE_TOO_WIDE]
+        assert "1 – 2308" in problems[0].detail
+
+    @pytest.mark.asyncio
+    async def test_a_narrower_slice_from_before_the_groups_still_posts(self, temp_db):
+        _seed_complete(TEST_GUILD_ID)
+        _seed_servers([(2264, "2026-04-29", "global")])
+        _enable_shiny(
+            TEST_GUILD_ID, post_time="09:00", channel_id=123, server_min=2200, server_max=2300
+        )
+        sent = await _run_loop_at(datetime(2026, 5, 11, 9, 0, tzinfo=ET))
+        assert len(sent) == 1 and "2264" in sent[0]

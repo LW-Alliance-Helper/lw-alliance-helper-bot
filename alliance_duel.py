@@ -232,6 +232,27 @@ _KNOWN_ALIASES: dict[str, str] = {
 #: call site is unchanged.
 NOT_ENTERED = "?"
 
+
+def pretty_date(d: _dt.date) -> str:
+    """A short, absolute date for user copy: `storm_date_helpers`'s short form
+    (`%a %b %d`) with a year added, since VS history can span more than one.
+
+    Lives here rather than in `alliance_duel_ui` or `alliance_duel_hub` because
+    both need it (#659): a league's history reads league by league in Scout
+    and league by league again in the League history grid.
+    """
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
+
+
+def league_label(league: "LeagueKey") -> str:
+    """`{season} · {tier} {group}`, collapsing the middot when tier is blank.
+
+    The header format `hub_embed` and `bracket_embed` already build inline;
+    pulled out because #659 adds a third and fourth call site.
+    """
+    return f"{league.season} · {league.tier} {league.group}".replace(" ·  ", " · ")
+
+
 #: Values accepted in the Intent column. Held out of / partitioned in the
 #: backtest — see the design doc's four-case table.
 INTENT_PUSH = "push"

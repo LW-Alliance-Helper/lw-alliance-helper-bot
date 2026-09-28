@@ -5,10 +5,10 @@ matching `/buddy`, `/train`, `/events`, `/transfers` and `/map_manager`. Not an
 `app_commands.Group` with named subcommands. This repo's convention for a
 feature this stateful is the hub pattern, and the design doc settles it.
 
-This module owns the hub embed, the button grid, and the two whole-bracket
-reads (Bracket and This week). The per-alliance scout profile lives in
-`alliance_duel_ui.py`, which is where its read buttons and note modal land in
-#404.
+This module owns the hub embed, the button grid, and the three whole-bracket
+reads (Bracket, This week, and League history). The per-alliance scout profile
+lives in `alliance_duel_ui.py`, which is where its read buttons and note modal
+land in #404.
 
 **The sheet is read exactly once per `/vs` invocation.** 1.5.1 had to fix storm
 screens blowing the Sheets read limit on quick click-through (#269), and this
@@ -21,11 +21,13 @@ only thing that re-reads.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 
 import discord
 
 import alliance_duel as ad
+import alliance_duel_analytics as an
 import alliance_duel_entry as ad_entry
 import alliance_duel_setup as ad_setup
 import alliance_duel_ui as ad_ui
@@ -53,6 +55,12 @@ VS_BTN_WEEK = "🆚 This week"
 VS_BTN_SCOUT = "🔍 Scout"
 VS_BTN_PATH = "🛣️ My path"
 VS_BTN_SETUP = "⚙️ Sheet setup and check"
+
+#: 📜 is this bot's existing "view past X" glyph (Events, Storm, Champion
+#: Duel), not a new one. Named for the screen's own scope, one league's whole
+#: four weeks, distinct from Scout's per-alliance "Past leagues" field (#659,
+#: signed off 2026-09-27).
+VS_BTN_HISTORY = "📜 League history"
 
 #: The path screen's own title. "My path" on the button that opens it, "Your
 #: path" once open: the button is the reader picking a thing off a menu, the
@@ -580,6 +588,150 @@ def _match_status(state: HubState, left, right, week: int, estimate) -> str:
     if projection.outlook == ad.OUTLOOK_TOSSUP:
         return f"{label}: too close to call."
     return f"{label}: {state.display_name(favoured)} favored ({projection.outlook})."
+
+
+# ── League history (#659) ───────────────────────────────────────────────────
+#
+# The third whole-bracket read, beside Bracket and This week. Neither of those
+# answers "the whole league, all four weeks, side by side": Bracket is one
+# week deep and This week is one match at a time. Built to let leadership
+# eyeball a season for something that does not add up, entirely by reading
+# plain recorded scores -- there is no bot-generated flag or highlighting
+# here. That is Kevin's call and Principle 6 (`UX.md`): the bot does not grade
+# or editorialize about an alliance's play.
+
+
+def _leagues_for_history(state: HubState) -> list[tuple[ad.LeagueKey, _dt.date | None, int]]:
+    """Every league instance this guild's own tab has recorded, newest first.
+
+    `(league, started date, weeks recorded)`. Clustered the same way
+    `alliance_duel_analytics.season_trajectory` clusters one alliance's
+    leagues (same label, no wide date gap -- #658's mitigation until the
+    central store gets real league identity): every alliance in one real
+    instance shares its week dates, so clustering the whole tab this way
+    finds the same instances `season_trajectory` would find alliance by
+    alliance.
+    """
+    out = []
+    for weeks in an.cluster_by_league(state.rows):
+        started = next((r.week_date for r in weeks if r.week_date is not None), None)
+        out.append((weeks[0].league, started, len({r.week for r in weeks})))
+    out.sort(key=lambda t: (t[1] is None, t[1] or _dt.date.min), reverse=True)
+    return out
+
+
+def league_history_embed(state: HubState, league: ad.LeagueKey) -> discord.Embed:
+    """Every alliance in `league`, their league-point split each recorded
+    week, side by side. Sorted by ranking, the same order the in-game League
+    screen uses.
+
+    No opponent shown: sixteen rows times four opponents runs long on a
+    phone, and Kevin's call on the sign-off page was scores only.
+    """
+    embed = discord.Embed(
+        title=VS_BTN_HISTORY,
+        color=discord.Color.blurple(),
+        description=f"**{ad.league_label(league)}**",
+    )
+
+    by_alliance: dict[ad.AllianceKey, dict[int, ad.AllianceWeek]] = {}
+    rankings: dict[ad.AllianceKey, int] = {}
+    for row in state.rows:
+        if row.league != league:
+            continue
+        by_alliance.setdefault(row.alliance, {})[row.week] = row
+        if row.ranking is not None:
+            rankings.setdefault(row.alliance, row.ranking)
+
+    if not by_alliance:
+        embed.description += "\n\n*No rows recorded for this league.*"
+        return embed
+
+    alliances = sorted(by_alliance, key=lambda a: (rankings.get(a, ad.BRACKET_SIZE + 1), a))
+
+    lines = []
+    for alliance in alliances:
+        ranking = rankings.get(alliance)
+        chip = f"`{ranking:>2}`" if ranking is not None else "` ?`"
+        weeks = by_alliance[alliance]
+        cells = []
+        for w in range(1, ad.LEAGUE_WEEKS + 1):
+            row = weeks.get(w)
+            if row is None or row.week_score is None:
+                cells.append(f"W{w}: {NOT_ENTERED}")
+            else:
+                cells.append(f"W{w}: {row.week_score}-{ad.WEEK_POINTS_TOTAL - row.week_score}")
+        mine = " ⬅️" if alliance == state.own else ""
+        lines.append(f"{chip} **{state.display_name(alliance)}** · {' · '.join(cells)}{mine}")
+    embed.description += "\n\n" + "\n".join(lines)[:3800]
+    embed.set_footer(
+        text=f"{len(alliances)} of {ad.BRACKET_SIZE} alliances · "
+        f"{NOT_ENTERED} means no score recorded that week"
+    )
+    return embed
+
+
+class LeagueHistoryPickerView(OwnedView):
+    """Choose a past league to see its four-week grid.
+
+    Same shape as `alliance_duel_ui.ScoutPickerView`: renders from the loaded
+    snapshot only, acts on change rather than pairing with a confirm button,
+    since a mis-tap reopens a read-only screen rather than losing anything.
+    """
+
+    timeout_hint = f"`{VS_HUB_CMD}`"
+
+    def __init__(
+        self,
+        state: HubState,
+        owner_id: int,
+        leagues: list[tuple[ad.LeagueKey, _dt.date | None, int]],
+    ):
+        super().__init__(timeout=ad_ui.PICKER_TIMEOUT)
+        self.state = state
+        self.owner_id = owner_id
+        self.leagues = leagues
+
+        options = [
+            discord.SelectOption(
+                label=ad.league_label(league)[:100],
+                value=str(i),
+                description=(
+                    f"{weeks} of {ad.LEAGUE_WEEKS} weeks"
+                    + (f" · started {ad.pretty_date(started)}" if started else "")
+                )[:100],
+            )
+            for i, (league, started, weeks) in enumerate(leagues[: ad_ui.MAX_SELECT_OPTIONS])
+        ]
+        select = discord.ui.Select(
+            placeholder="Pick a league", options=options, disabled=not options
+        )
+        select.callback = self._picked
+        self.add_item(select)
+
+    async def _picked(self, interaction: discord.Interaction):
+        league, _started, _weeks = self.leagues[int(interaction.data["values"][0])]
+        await interaction.response.send_message(
+            embed=league_history_embed(self.state, league), ephemeral=True
+        )
+
+
+async def open_league_history_picker(interaction: discord.Interaction, state: HubState) -> None:
+    """Open the league picker for League history."""
+    leagues = _leagues_for_history(state)
+    if not leagues:
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title=VS_BTN_HISTORY,
+                description="No leagues recorded for this bracket yet.",
+                color=discord.Color.blurple(),
+            ),
+            ephemeral=True,
+        )
+        return
+    view = LeagueHistoryPickerView(state, interaction.user.id, leagues)
+    await interaction.response.send_message("Which league?", view=view, ephemeral=True)
+    view.message = await interaction.original_response()
 
 
 # ── My path (#403) ────────────────────────────────────────────────────────────
@@ -1209,6 +1361,26 @@ class VSHubView(OwnedView):
         )
         edit_league.callback = self._edit_league
         self.add_item(edit_league)
+
+        # The fourth of row 2's five slots. Same whole-bracket shape as
+        # Bracket/Scout/Path, so it carries the same Premium lock (#667).
+        history = discord.ui.Button(
+            label=f"💎 {VS_BTN_HISTORY}" if locked else VS_BTN_HISTORY,
+            style=discord.ButtonStyle.secondary,
+            disabled=locked or not has_league,
+            row=2,
+        )
+        history.callback = self._league_history
+        self.add_item(history)
+
+    async def _league_history(self, interaction: discord.Interaction):
+        if await self._own_alliance_only(
+            interaction,
+            "League history compares every alliance in a league, and you are "
+            "tracking just your own.",
+        ):
+            return
+        await open_league_history_picker(interaction, self.state)
 
     async def _edit_league(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ad_entry.EditLeagueModal(self.state))

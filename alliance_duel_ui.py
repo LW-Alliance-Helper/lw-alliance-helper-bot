@@ -80,6 +80,7 @@ def scout_embed(state, target: ad.AllianceKey) -> discord.Embed:
     if state.own is not None and target != state.own:
         history = ad.head_to_head(state.rows, state.own, target)
         embed.add_field(name="Head to head", value=_history_block(state, history), inline=False)
+        embed.add_field(name="Past leagues", value=_past_leagues_block(state, target), inline=False)
         embed.add_field(name="Projection", value=_projection_block(state, target), inline=False)
     elif target == state.own:
         embed.set_footer(text="This is your alliance.")
@@ -171,6 +172,59 @@ def _trajectory_line(profile) -> str:
     if direction == "flat":
         return f"Power flat across {days} days of recorded rows."
     return f"Power {direction} {abs(change)}% across {days} days of recorded rows."
+
+
+#: The empty state mirrors Head to head's own "never faced" line -- this
+#: field always shows, and this is what it says with nothing beyond the live
+#: league (#659, Kevin's call on the sign-off page).
+VS_PAST_LEAGUES_EMPTY = "Nothing else recorded for **{name}** yet."
+#: Capped the same way Head to head is, and reuses its exact wording.
+VS_PAST_LEAGUES_MORE = "*…and {n} earlier league(s).*"
+
+
+def _rows_for_history(state, alliance: ad.AllianceKey) -> list[ad.AllianceWeek]:
+    """Every row on file for `alliance`: this guild's own tab first, then
+    anything the shared store (#544) has that isn't already covered.
+
+    **`state.shared` only ever holds the currently loaded league** --
+    `attach_shared` reads `vsdb.rows_for_league(state.league)`, not a
+    per-alliance history, the same scope every other shared-store field on
+    this card already lives with. So a stranger alliance's *current* league
+    can show up here even when we have never played them, but their older
+    leagues only appear when our own tab recorded them. Reaching further
+    would mean a fresh database read per Scout pick rather than the one this
+    hub already does per `/vs` open, which is a bigger change than this field
+    asked for.
+
+    Own rows win on a (league, week) collision, the same precedence
+    `HubState.shared_only` uses for a profile: the guild's own sheet is never
+    overridden by what someone else recorded.
+    """
+    own = [r for r in state.rows if r.alliance == alliance]
+    have = {(r.league, r.week) for r in own}
+    theirs = [r for r in state.shared if r.alliance == alliance and (r.league, r.week) not in have]
+    return own + theirs
+
+
+def _past_leagues_block(state, target: ad.AllianceKey) -> str:
+    """Every league `target` has a recorded row in, newest first (#659).
+
+    Separate from Head to head, which is only the meetings against *us*: this
+    is `target`'s own record whoever they played, which the shared store can
+    carry even for an alliance we have never faced ourselves.
+    """
+    seasons = an.season_trajectory(_rows_for_history(state, target), target)
+    if not seasons:
+        return VS_PAST_LEAGUES_EMPTY.format(name=state.display_name(target))
+
+    newest_first = list(reversed(seasons))
+    lines = []
+    for season in newest_first[:5]:
+        when = f" · started {ad.pretty_date(season.started)}" if season.started else ""
+        lines.append(f"**{ad.league_label(season.league)}**: {season.record}{when}")
+    if len(newest_first) > 5:
+        lines.append(VS_PAST_LEAGUES_MORE.format(n=len(newest_first) - 5))
+    return "\n".join(lines)[:1024]
 
 
 def _history_block(state, history: ad.HeadToHead) -> str:

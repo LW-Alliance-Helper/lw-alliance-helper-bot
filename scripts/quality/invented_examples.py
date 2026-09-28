@@ -58,6 +58,9 @@ _ALLOWED_WARZONES = {
     *examples.WARZONE_LIST,
 }
 _ALLOWED_TAGS = {examples.OWN_TAG, *examples.TAGS, "Tag", "TAG", "tag"}
+# Bracketed field names in a format line ("[tag] [warzone] [power] ..."),
+# which are the shape of a tag but name a column.
+_FORMAT_WORDS = {"power", "gift", "level", "rank", "name", "score"}
 
 
 def _bot_modules():
@@ -90,7 +93,7 @@ def problems_in(texts: list[str]) -> list[str]:
         for m in _MATCHUP.finditer(text):
             tags += [m.group(1), m.group(2)]
         for tag in tags:
-            if not tag.isdigit() and tag not in _ALLOWED_TAGS:
+            if not tag.isdigit() and tag not in _ALLOWED_TAGS and tag not in _FORMAT_WORDS:
                 found.append(f"alliance tag {tag} in {text[:70]!r}")
     return found
 

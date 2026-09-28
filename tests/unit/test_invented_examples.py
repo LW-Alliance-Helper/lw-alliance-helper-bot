@@ -44,6 +44,8 @@ def test_no_shipped_example_borrows_a_real_value(check):
         (["Name, Warzone, Rank", "[OGV]Kestrel, 738, 1, 325.8M, 33,500,000\nWren, 999, 25"], False),
         (["Squad 1 power", "e.g. 325.8M, or 2026-08-04"], False),
         (["Drone level", "e.g. 150"], False),  # not about a warzone
+        (["[tag] [warzone] [power] [gift level] [members]", "e.g.: Glo 999 26.8b 25 100"], False),
+        (["The bracket", "[Nwx] 999 26.8b"], True),
     ],
 )
 def test_what_counts(check, texts, flagged):

@@ -39,6 +39,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import examples
 import discord
 from discord import app_commands
 
@@ -1055,7 +1056,7 @@ async def admin_shiny_import_slash(interaction: discord.Interaction, file: disco
     description="(Bot owner only) Add or correct one server's creation date in the shiny snapshot.",
 )
 @app_commands.describe(
-    server="Server number (e.g. 2286)",
+    server=f"Server number (e.g. {examples.WARZONE})",
     creation_date="Creation date in YYYY-MM-DD (server time) — match the date the source shows",
     region="Region label (optional; defaults to global)",
 )

@@ -20,6 +20,7 @@ PY=/c/Users/Kevin/Documents/GitHub/lw-alliance-helper/lw-alliance-helper-bot/.ve
 | `complexity_map.py [prefix] [--since DATE] [--json PATH]` | `code-complexity` | Functions ranked by cyclomatic complexity, with nesting depth, parameter count, branch density and per-file churn, then a suggested order with a reason per target | ~25 s whole repo, ~3 s per family |
 | `blocking_io.py [--json PATH]` | `ast-grep-search` | Blocking gspread and sqlite calls inside coroutines: direct calls, and coroutines calling the bot's own sync helpers without a thread hand-off, split by network versus local | ~35 s |
 | `dead_code.py [prefix] [--json PATH]` | `code-dead-code` | Vulture at the band that finds functions, after `.vulture-whitelist.py`, with every hit bucketed by where the repo references it | ~12 s per family |
+| `invented_examples.py` | (none; CI runs it via `tests/unit/test_invented_examples.py`) | Placeholders and worked examples with a real-looking warzone number or another alliance's tag that don't draw from `examples.py` (#654) | ~1 s |
 
 The `ast-grep/` folder holds the rule files the scripts and the skills use:
 

@@ -29,6 +29,7 @@ import datetime as _dt
 import logging
 import re
 
+import examples
 import discord
 
 import alliance_duel as ad
@@ -544,7 +545,7 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         )
         self.warzone = discord.ui.TextInput(
             label="Warzone",
-            placeholder="1234",
+            placeholder=str(examples.WARZONE_PLACEHOLDER),
             default=(existing.warzone_display if existing else "") or None,
             required=True,
             max_length=12,
@@ -955,16 +956,19 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             # don't need to know it's wrapped.
             self.bracket = discord.ui.TextInput(
                 style=discord.TextStyle.paragraph,
-                placeholder="kTZ 714 26.8b 25 100",
+                placeholder=f"{examples.TAG} {examples.WARZONE} 26.8b 25 100",
                 max_length=1800,
                 required=True,
                 default=d.get("bracket"),
             )
             self._bracket_label = discord.ui.Label(
                 text="The bracket, in League order",
+                # Worded on sign-off (2026-09-27); 99 of the 100 characters a
+                # Label description holds.
                 description=(
-                    "tag warzone power gift members, e.g. kTZ 714 26.8b 25 100. "
-                    "All 16, one per line."
+                    "[tag] [warzone] [power] [gift level] [members]\n"
+                    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
+                    "Add all 16, one per line."
                 ),
                 component=self.bracket,
             )
@@ -2402,16 +2406,17 @@ class OtherResultsModal(discord.ui.Modal):
         # `label=` of its own once a `Label` wraps it.
         self.box = discord.ui.TextInput(
             style=discord.TextStyle.paragraph,
-            placeholder="OGV v nWA: OGV 7-6",
+            placeholder=f"{examples.OWN_TAG} v {examples.TAG}: {examples.OWN_TAG} 7-6",
             default=default,
             required=False,
             max_length=1500,
         )
         self._box_label = discord.ui.Label(
             text=VS_BACKFILL_FIELD_LABEL[:45],
-            description="One match per line: Tag v Tag: Tag score-score, e.g. OGV v nWA: OGV 7-6."[
-                :100
-            ],
+            description=(
+                "One match per line: Tag v Tag: Tag score-score, "
+                f"e.g. {examples.OWN_TAG} v {examples.TAG}: {examples.OWN_TAG} 7-6."
+            )[:100],
             component=self.box,
         )
         self.add_item(self._box_label)

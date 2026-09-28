@@ -78,8 +78,8 @@ CASES = {
         "round metadata, so the header's right box is deliberately empty.",
         lambda: (
             _player(
-                "MangowhiskY 망고",
-                "1042",
+                "AlphaBravoCharlie 망고",
+                "999",
                 (28_000_000, 26_500_000, 24_100_000),
                 orders=[("Aircraft", "Tank", "Missile")],
             ),

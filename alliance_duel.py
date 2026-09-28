@@ -3197,8 +3197,8 @@ def validate(
 # ── Reading a typed-in bracket ────────────────────────────────────────────────
 
 #: What a bracket line may be separated by. Officers copy from several places
-#: and the game renders a tag in brackets, so `[kTZ] 714`, `kTZ,714` and
-#: `kTZ 714` all arrive rather than being retyped into one shape.
+#: and the game renders a tag in brackets, so `[Glo] 999`, `Glo,999` and
+#: `Glo 999` all arrive rather than being retyped into one shape.
 _BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
 
 
@@ -3271,7 +3271,7 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
 
         # A leading ranking number is allowed but never trusted. It is told apart
         # from a power figure by what follows it: a tag carries at least one
-        # non-digit, so `1 kTZ 714` is a numbered line and `1 714 26.8b` is an
+        # non-digit, so `1 Glo 999` is a numbered line and `1 999 26.8b` is an
         # alliance whose tag happens to be "1".
         if len(parts) >= 3 and parts[0].isdigit() and not parts[1].isdigit():
             stated = int(parts[0])

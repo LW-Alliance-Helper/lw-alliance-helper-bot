@@ -963,9 +963,12 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
             self._bracket_label = discord.ui.Label(
                 text="The bracket, in League order",
+                # Worded on sign-off (2026-09-27); 99 of the 100 characters a
+                # Label description holds.
                 description=(
-                    f"tag warzone power gift members, e.g. {examples.TAG} "
-                    f"{examples.WARZONE} 26.8b 25 100. All 16, one per line."
+                    "[tag] [warzone] [power] [gift level] [members]\n"
+                    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
+                    "Add all 16, one per line."
                 ),
                 component=self.bracket,
             )

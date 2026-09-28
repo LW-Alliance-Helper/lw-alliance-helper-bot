@@ -3967,7 +3967,7 @@ def build_edits_embed(result: dict, shown: int) -> discord.Embed:
 class _EditsFilterModal(discord.ui.Modal, title="Filter Champion Duel edits"):
     player = discord.ui.TextInput(label="Player name", required=False, max_length=64)
     actor = discord.ui.TextInput(
-        label="Actor's Discord ID",
+        label="Edited by (Discord ID)",
         required=False,
         max_length=32,
         placeholder=f"e.g. {examples.DISCORD_ID}",

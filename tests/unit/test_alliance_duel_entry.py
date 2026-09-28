@@ -702,6 +702,13 @@ def test_the_bracket_format_survives_typing():
     description = modal._bracket_label.description
     assert "tag" in description and "warzone" in description
     assert "power" in description and "gift" in description and "members" in description
+    # The wording signed off on 2026-09-27, inside Discord's 100 characters.
+    assert description == (
+        "[tag] [warzone] [power] [gift level] [members]\n"
+        "e.g.: Glo 999 26.8b 25 100\n"
+        "Add all 16, one per line."
+    )
+    assert len(description) <= 100
     # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
     # go through `self.bracket`, not the Label, so what Discord fills in on
     # submit -- `_value`, mirroring a real interaction -- reaches it the same

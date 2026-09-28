@@ -36,7 +36,7 @@ OLD_LEAGUE = ad.LeagueKey("S34", "Gold", "9 - 1")
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())
 
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 
 
@@ -146,7 +146,7 @@ def test_the_hub_leads_with_the_matchup_someone_opened_it_for():
     rows[0].opponent = _key("A02")
     state = _state(rows)
     text = _text(hub.hub_embed(state))
-    assert "US" in text and "A02" in text
+    assert "Fre3" in text and "A02" in text
     assert "S35" in text and "Diamond" in text
 
 
@@ -225,7 +225,7 @@ def test_the_bracket_marks_which_row_is_yours():
 def test_the_week_view_puts_your_own_matchup_first():
     rows = _bracket_rows()
     text = _text(hub.week_embed(_state(rows), 1))
-    assert text.index("US") < text.index("A03")
+    assert text.index("Fre3") < text.index("A03")
 
 
 def test_a_confirmed_result_outranks_every_projection():
@@ -241,7 +241,7 @@ def test_a_confirmed_result_outranks_every_projection():
     text = _text(hub.week_embed(_state(rows), 1))
     # The stats say we walk it; the recorded result says we lost. Result wins.
     assert "✅ A02 took it (5-8)" in text
-    assert "Estimated: US" not in text
+    assert "Estimated: Fre3" not in text
 
 
 def test_an_unassessed_matchup_never_reads_like_a_call():
@@ -259,7 +259,7 @@ def test_a_projected_matchup_names_the_evidence_it_rests_on():
         }
     )
     text = _text(hub.week_embed(_state(rows), 1))
-    assert "Estimated: US favored" in text
+    assert "Estimated: Fre3 favored" in text
 
 
 def test_own_alliance_mode_still_shows_the_matchup_it_recorded():
@@ -268,7 +268,7 @@ def test_own_alliance_mode_still_shows_the_matchup_it_recorded():
     rows = [_row(OWN_TAG, ranking=1, opponent=_key("A02")), _row("A02", ranking=2)]
     state = _state(rows, tracking_mode=ad.MODE_OWN_ALLIANCE)
     text = _text(hub.week_embed(state, 1))
-    assert "US" in text and "A02" in text
+    assert "Fre3" in text and "A02" in text
 
 
 # ── Scout profile ─────────────────────────────────────────────────────────────
@@ -748,7 +748,7 @@ def _record_shared(vsdb, state, tag, **kw):
 
 @pytest.mark.asyncio
 async def test_a_scout_card_falls_back_to_what_other_alliances_recorded(shared_store):
-    state = _state([_row("US", week=1)])
+    state = _state([_row("Fre3", week=1)])
     _record_shared(shared_store, state, "ZZZ", power=5_000_000, members=100, gift_level=40)
     await hub.attach_shared(state)
 
@@ -762,7 +762,7 @@ async def test_a_scout_card_falls_back_to_what_other_alliances_recorded(shared_s
 async def test_a_borrowed_record_says_so(shared_store):
     """A number another alliance recorded must never read as though this
     alliance recorded it."""
-    state = _state([_row("US", week=1)])
+    state = _state([_row("Fre3", week=1)])
     _record_shared(shared_store, state, "ZZZ", power=5_000_000)
     await hub.attach_shared(state)
 
@@ -792,7 +792,7 @@ async def test_shared_rows_never_reach_the_rows_a_write_reads(shared_store):
     """`row_for` feeds `_row_for_write`, which builds what goes back to this
     guild's own tab. A shared row reaching it would copy another alliance's
     record into this alliance's sheet as though they had typed it."""
-    state = _state([_row("US", week=1)])
+    state = _state([_row("Fre3", week=1)])
     _record_shared(shared_store, state, "ZZZ", power=5_000_000)
     await hub.attach_shared(state)
 
@@ -809,7 +809,7 @@ async def test_an_unreadable_store_costs_a_card_and_not_the_hub(monkeypatch):
     import alliance_duel_db as vsdb
 
     monkeypatch.setattr(vsdb, "DB_PATH", "/nowhere/that/exists/x.sqlite3")
-    state = _state([_row("US", week=1)])
+    state = _state([_row("Fre3", week=1)])
 
     await hub.attach_shared(state)
 
@@ -819,7 +819,7 @@ async def test_an_unreadable_store_costs_a_card_and_not_the_hub(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_nothing_anywhere_still_says_so(shared_store):
-    state = _state([_row("US", week=1)])
+    state = _state([_row("Fre3", week=1)])
     await hub.attach_shared(state)
 
     text = _text(ad_ui.scout_embed(state, ad.AllianceKey.of("NOPE", "1234")))

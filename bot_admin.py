@@ -959,11 +959,11 @@ def shiny_gap_report(present: set[int]) -> str:
     """Which warzones each warzone group is missing from the Shiny Tasks table
     (#653). The table is refreshed by hand, and a group missing warzones posts
     without them, with nothing to say so."""
-    from shiny_tasks import WARZONE_GROUPS  # noqa: PLC0415
+    from shiny_tasks import RETIRED_WARZONES, WARZONE_GROUPS  # noqa: PLC0415
 
     lines = []
     for lo, hi in WARZONE_GROUPS:
-        missing = [n for n in range(lo, hi + 1) if n not in present]
+        missing = [n for n in range(lo, hi + 1) if n not in present and n not in RETIRED_WARZONES]
         if missing:
             lines.append(f"`{lo:>4} – {hi:<4}` {len(missing)} missing: {_compress_runs(missing)}")
     last = WARZONE_GROUPS[-1][1]

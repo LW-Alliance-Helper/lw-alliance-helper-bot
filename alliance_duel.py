@@ -3012,7 +3012,7 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
 
     Too many is a different thing: sixteen is the shape of the competition, so
     a seventeenth alliance is always a mistake. The one that matters in
-    practice is a **near-duplicate tag** (`KTI` typed once as a capital i and
+    practice is a **near-duplicate tag** (`LION` typed once as a capital i and
     once as a lowercase L), which :func:`compute_week_pairing` cannot see,
     because seventeen alliances still clears its ``< BRACKET_SIZE`` guard and
     it simply pairs the wrong sixteen.

@@ -666,10 +666,11 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     _warn_if_cache_looks_thin(guild)
     new_rows = _build_roster_rows(guild, cfg)
     ws = get_member_roster_sheet(guild.id, cfg["tab_name"])
-    try:
-        existing = ws.get_all_values()
-    except Exception:
-        existing = []
+    # No fallback on a failed read (#678). The existing rows are where the
+    # alliance's own columns come from, so treating a failed read as an empty
+    # tab rewrote the tab without them, and the next sync read that back.
+    # Every caller catches the error and tells someone; the next sync retries.
+    existing = ws.get_all_values()
     merged, name_match_report = _merge_with_existing(
         new_rows,
         existing,
@@ -680,9 +681,14 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     # sheet and is filled with bot-derived Yes/No values. Returns the
     # final column index so the data-validation request can target it.
     flag_col_idx = _ensure_discord_flag_column(merged, guild, cfg)
-    ws.clear()
-    if merged:
-        ws.update("A1", merged, value_input_option="USER_ENTERED")
+    # One write covering the old extent, instead of clear() then update():
+    # a failure between those two calls left the tab empty until the next
+    # sync (#678). Cells the new roster doesn't reach are written blank.
+    from config import cover_previous_extent
+
+    grid = cover_previous_extent(merged, existing)
+    if grid:
+        ws.update("A1", grid, value_input_option="USER_ENTERED")
     # Apply the Yes/No dropdown data-validation rule on the new column.
     # Best-effort — a Sheets API failure here doesn't roll back the row
     # write (the column's values are correct either way).

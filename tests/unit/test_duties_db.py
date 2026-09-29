@@ -260,3 +260,48 @@ def test_a_person_purge_leaves_their_positions_open(temp_db):
     assert result["scrubbed"].get("guild_duty_holders") == 2
     assert db.get_duty(G, one).primaries == (A, d.OPEN)
     assert db.get_duty(OTHER_G, other).backups == (d.OPEN,)
+
+
+# ── Departures ───────────────────────────────────────────────────────────────
+
+
+def test_a_departure_remembers_who_left_until_the_duty_is_saved(temp_db):
+    one = db.save_duty(new_duty("One", primaries=(A, B), sort_order=0))
+    db.save_duty(new_duty("Two", backups=(B,), sort_order=1))
+    db.save_duty(new_duty("Three", primaries=(C,), sort_order=2))
+
+    assert db.vacate_holder(G, B, "Bravo") == ["One", "Two"]
+    assert db.departures(G) == [db.Departure(B, "Bravo", ("One", "Two"))]
+
+    # Saving One (even without filling it) is leadership having been back.
+    db.save_duty(db.get_duty(G, one))
+    assert db.departures(G) == [db.Departure(B, "Bravo", ("Two",))]
+    assert db.get_duty(G, one).primaries == (A, d.OPEN)
+
+
+def test_departures_list_each_person_once_in_duty_order(temp_db):
+    db.save_duty(new_duty("One", primaries=(A,), backups=(A,), sort_order=0))
+    db.save_duty(new_duty("Two", primaries=(C,), sort_order=1))
+    db.vacate_holder(G, C, "Charlie")
+    db.vacate_holder(G, A, "Alpha")
+    assert db.departures(G) == [
+        db.Departure(A, "Alpha", ("One",)),
+        db.Departure(C, "Charlie", ("Two",)),
+    ]
+    assert db.departures(OTHER_G) == []
+
+
+def test_a_person_purge_also_forgets_that_they_left_a_position(temp_db):
+    db.save_duty(new_duty("One", primaries=(A,), backups=(B,)))
+    db.vacate_holder(G, A, "Alpha")
+
+    result = config.purge_user_data(A, apply=True)
+
+    assert result["scrubbed"].get("guild_duty_holders") == 1
+    assert db.departures(G) == []
+
+
+def test_a_reminder_without_a_time_is_refused(temp_db):
+    duty_id = db.save_duty(new_duty())
+    with pytest.raises(ValueError):
+        db.save_reminder(new_reminder(duty_id, at=None))

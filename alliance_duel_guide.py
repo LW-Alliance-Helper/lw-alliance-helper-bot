@@ -27,7 +27,7 @@ import game_guide
 
 _GUIDE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "alliance_duel")
 
-# Drafts, for sign-off.
+# Signed off 29 Sep (#655); step 2's first line is Kevin's wording.
 VS_BTN_LEAGUE_GUIDE = "📖 Where to find each alliance's details"
 
 _EXAMPLE_LINE = f"<{examples.TAG}> #{examples.WARZONE} 26,800,000,000 Lv.25 95/100"
@@ -56,7 +56,7 @@ GUIDE_STEPS = (
         title="2. An alliance's page",
         body=(
             "Tap an alliance in the list.\n"
-            "1. Its tag.\n"
+            "1. The alliance tag\n"
             "2. Power, gift level and members. These are optional, and you can add them "
             "later.\n"
             "3. Tap **Members** to find its warzone."

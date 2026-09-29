@@ -902,11 +902,13 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
 
 VS_BTN_NEW_LEAGUE = "➕ Start a new league"
 
-#: Under the bracket box's label. Draft for sign-off (#655).
+#: Under the bracket box's label: the order, and which fields are required.
+#: Kevin's wording, 29 Sep (#655); 99 of the 100 characters a description
+#: holds. The count is not repeated here: the box refuses anything but 16 with
+#: its own message.
 VS_BRACKET_DESCRIPTION = (
-    "Tag and warzone; power, gift, members optional\n"
-    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
-    "All 16, one per line."
+    "Tag and warzone (required) then power, gift level and members (optional)\n"
+    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100"
 )
 
 #: The tiers the game has, as far as Kevin's alliance has seen them (19 Sep).
@@ -1006,8 +1008,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 text="The bracket, in League order",
                 # Says what is required and what is not (#655): only the tag
                 # and warzone are, and the old "[tag] [warzone] [power] ..."
-                # read as five required fields. Draft, for sign-off; a Label
-                # description holds 100 characters.
+                # read as five required fields.
                 description=VS_BRACKET_DESCRIPTION,
                 component=self.bracket,
             )

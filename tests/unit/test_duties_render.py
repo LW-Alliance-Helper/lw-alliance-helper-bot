@@ -209,22 +209,36 @@ def test_my_duties_none():
         ({"weekdays": frozenset({3, 0})}, "Mondays and Thursdays at 9:00pm"),
         ({"weekdays": frozenset(range(7))}, "Every day at 9:00pm"),
         ({"weekdays": frozenset()}, c.WHEN_UNSET),
+        ({"schedule_type": d.SCHEDULE_DAILY}, "Every day at 9:00pm"),
         (
-            {
-                "schedule_type": d.SCHEDULE_INTERVAL,
-                "anchor_date": date(2026, 9, 1),
-                "interval_days": 3,
-            },
+            {"schedule_type": d.SCHEDULE_EVERY_2_DAYS, "anchor_date": date(2026, 9, 1)},
+            "Every other day from Sep 1 at 9:00pm",
+        ),
+        (
+            {"schedule_type": d.SCHEDULE_EVERY_3_DAYS, "anchor_date": date(2026, 9, 1)},
             "Every 3 days from Sep 1 at 9:00pm",
         ),
         (
-            {
-                "schedule_type": d.SCHEDULE_INTERVAL,
-                "anchor_date": date(2026, 9, 1),
-                "interval_days": 1,
-            },
-            "Every day from Sep 1 at 9:00pm",
+            {"schedule_type": d.SCHEDULE_WEEKLY, "weekdays": frozenset({2})},
+            "Every Wednesday at 9:00pm",
         ),
+        (
+            {"schedule_type": d.SCHEDULE_EVERY_2_WEEKS, "anchor_date": date(2026, 9, 7)},
+            "Every 2 weeks from Sep 7 at 9:00pm",
+        ),
+        (
+            {"schedule_type": d.SCHEDULE_MONTHLY, "anchor_date": date(2026, 9, 1)},
+            "Every month on the 1st at 9:00pm",
+        ),
+        (
+            {"schedule_type": d.SCHEDULE_MONTHLY, "anchor_date": date(2026, 9, 22)},
+            "Every month on the 22nd at 9:00pm",
+        ),
+        (
+            {"schedule_type": d.SCHEDULE_MONTHLY, "anchor_date": date(2026, 8, 31)},
+            "Every month on the 31st, or the last day of shorter months, at 9:00pm",
+        ),
+        ({"schedule_type": d.SCHEDULE_MONTHLY}, c.WHEN_UNSET),
         ({"at": None, "weekdays": frozenset({0})}, c.WHEN_UNSET),
     ],
 )

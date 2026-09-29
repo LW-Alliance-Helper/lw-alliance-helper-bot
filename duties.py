@@ -16,6 +16,7 @@ The design walkthrough that settled every rule here is recorded on the issue.
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from typing import Callable, Iterable
@@ -232,11 +233,32 @@ def open_slots(duties: Iterable[Duty]) -> list[OpenSlot]:
 
 # ── Reminders ────────────────────────────────────────────────────────────────
 
-#: Every N days from an anchor date, the `/events` shape.
-SCHEDULE_INTERVAL = "interval"
-#: Chosen weekdays at a time, the storm sign-up shape.
+# How often a reminder repeats. Fixed choices rather than "every N days":
+# Kevin, 2026-09-30, on "every few days": "not precise enough, it could mean
+# 3 days, maybe 4, who knows". Listed in the order the picker shows them.
+SCHEDULE_DAILY = "daily"
+SCHEDULE_EVERY_2_DAYS = "every_2_days"
+SCHEDULE_EVERY_3_DAYS = "every_3_days"
+#: Chosen weekdays, several allowed (the storm sign-up shape).
 SCHEDULE_WEEKDAYS = "weekdays"
-SCHEDULE_TYPES = (SCHEDULE_INTERVAL, SCHEDULE_WEEKDAYS)
+#: One day of the week.
+SCHEDULE_WEEKLY = "weekly"
+SCHEDULE_EVERY_2_WEEKS = "every_2_weeks"
+#: The start date's day of the month, every month.
+SCHEDULE_MONTHLY = "monthly"
+SCHEDULE_TYPES = (
+    SCHEDULE_DAILY,
+    SCHEDULE_EVERY_2_DAYS,
+    SCHEDULE_EVERY_3_DAYS,
+    SCHEDULE_WEEKDAYS,
+    SCHEDULE_WEEKLY,
+    SCHEDULE_EVERY_2_WEEKS,
+    SCHEDULE_MONTHLY,
+)
+#: Fixed cycles counted from the start date, the `/events` arithmetic.
+CYCLE_DAYS = {SCHEDULE_EVERY_2_DAYS: 2, SCHEDULE_EVERY_3_DAYS: 3, SCHEDULE_EVERY_2_WEEKS: 14}
+#: Schedules that need a start date to know which days they land on.
+NEEDS_START = frozenset({*CYCLE_DAYS, SCHEDULE_MONTHLY})
 
 SEND_PRIMARIES = "primaries"
 SEND_BACKUPS = "backups"
@@ -266,9 +288,10 @@ class DutyReminder:
     #: None only on a draft the officer hasn't given a time yet; a stored
     #: reminder always has one.
     at: time | None
+    #: The start date, for the schedules in `NEEDS_START`.
     anchor_date: date | None = None
-    interval_days: int = 1
-    #: Monday = 0, as `date.weekday()`.
+    #: Monday = 0, as `date.weekday()`. Several for `SCHEDULE_WEEKDAYS`, one
+    #: for `SCHEDULE_WEEKLY`.
     weekdays: frozenset[int] = field(default_factory=frozenset)
     send_to: str = SEND_PRIMARIES
     #: The channel or thread for a post, and where the "anyone in
@@ -284,17 +307,29 @@ class DutyReminder:
     last_fired_on: date | None = None
 
 
+def monthly_day(anchor: date, year: int, month: int) -> int:
+    """The day a monthly reminder lands on in a given month: the start
+    date's day, or the month's last day when the month is shorter (a start
+    on the 31st fires on 30 April and 28 February)."""
+    return min(anchor.day, calendar.monthrange(year, month)[1])
+
+
 def occurs_on(reminder: DutyReminder, day: date) -> bool:
     """Whether `reminder`'s schedule lands on `day`."""
-    if reminder.schedule_type == SCHEDULE_WEEKDAYS:
+    kind = reminder.schedule_type
+    if kind == SCHEDULE_DAILY:
+        return True
+    if kind in (SCHEDULE_WEEKDAYS, SCHEDULE_WEEKLY):
         return day.weekday() in reminder.weekdays
-    if reminder.schedule_type == SCHEDULE_INTERVAL:
-        if reminder.anchor_date is None or reminder.interval_days < 1:
-            return False
-        delta = (day - reminder.anchor_date).days
-        # Same arithmetic as `scheduler.next_event_dates`: the anchor and
-        # every interval after it, never the days before the anchor.
-        return delta >= 0 and delta % reminder.interval_days == 0
+    anchor = reminder.anchor_date
+    if anchor is None or day < anchor:
+        # Never before the start: "from Sep 1" means Sep 1 is the first.
+        return False
+    if kind in CYCLE_DAYS:
+        # Same arithmetic as `scheduler.next_event_dates`.
+        return (day - anchor).days % CYCLE_DAYS[kind] == 0
+    if kind == SCHEDULE_MONTHLY:
+        return day.day == monthly_day(anchor, day.year, day.month)
     return False
 
 

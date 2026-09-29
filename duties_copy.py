@@ -219,9 +219,20 @@ REMINDER_PLACEHOLDER_HELP = (
     "Write `{primary}`, `{backup}` or `{duty}` and I'll fill in whoever holds it when it sends."
 )
 
-SCHEDULE_WEEKDAYS = "On chosen weekdays"
-SCHEDULE_INTERVAL = "Every few days"
+#: The schedule choices, in Kevin's words (2026-09-30), keyed by
+#: `duties.SCHEDULE_*`.
+SCHEDULE_LABELS = {
+    "daily": "Daily",
+    "every_2_days": "Every other day",
+    "every_3_days": "Every 3 days",
+    "weekdays": "Selected days only",
+    "weekly": "Weekly",
+    "every_2_weeks": "Every 2 weeks",
+    "monthly": "Every month",
+}
+SCHEDULE_PH = "How often?"
 WEEKDAYS_PH = "Which days?"
+WEEKLY_PH = "Which day of the week?"
 WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 WEEKDAY_PLURALS = (
     "Mondays",
@@ -232,10 +243,14 @@ WEEKDAY_PLURALS = (
     "Saturdays",
     "Sundays",
 )
+WHEN_DAILY = "Every day at {time}"
+WHEN_EVERY_OTHER_DAY = "Every other day from {date} at {time}"
+WHEN_EVERY_3_DAYS = "Every 3 days from {date} at {time}"
 WHEN_WEEKDAYS = "{days} at {time}"
-WHEN_EVERY_DAY = "Every day at {time}"
-WHEN_INTERVAL = "Every {n} days from {date} at {time}"
-WHEN_INTERVAL_DAILY = "Every day from {date} at {time}"
+WHEN_WEEKLY = "Every {day} at {time}"
+WHEN_EVERY_2_WEEKS = "Every 2 weeks from {date} at {time}"
+WHEN_MONTHLY = "Every month on the {nth} at {time}"
+WHEN_MONTHLY_LATE = "Every month on the {nth}, or the last day of shorter months, at {time}"
 WHEN_UNSET = "*not set yet*"
 
 SEND_PRIMARIES = "DM the primaries"
@@ -260,18 +275,16 @@ FIELD_MESSAGE = "Message"
 FIELD_MESSAGE_PLACEHOLDER = "e.g. {primary}, time to post today's schedule."
 FIELD_TIME = "Time ({tz})"
 FIELD_TIME_PLACEHOLDER = "e.g. 9:00pm"
-FIELD_EVERY = "Every how many days"
-FIELD_EVERY_PLACEHOLDER = "e.g. 3"
 FIELD_START = "Starting on"
 FIELD_START_PLACEHOLDER = "e.g. 9/30 or today"
 
 TIME_UNREADABLE = "⚠️ I couldn't read `{raw}` as a time. Try `9:00pm` or `21:00`."
-EVERY_UNREADABLE = "⚠️ I couldn't read `{raw}` as a number of days. Try a number like `3`."
 START_UNREADABLE = "⚠️ I couldn't read `{raw}` as a date. Try `9/30` or `today`."
 NEEDS_MESSAGE = f"⚠️ The reminder needs a message. Click **{BTN_MESSAGE_AND_TIME}** to write one."
 NEEDS_TIME = f"⚠️ The reminder needs a time. Click **{BTN_MESSAGE_AND_TIME}** to set one."
 NEEDS_DAYS = "⚠️ Pick at least one weekday."
-NEEDS_INTERVAL = f"⚠️ Set how often and from when with **{BTN_MESSAGE_AND_TIME}**."
+NEEDS_WEEKDAY = "⚠️ Pick the day of the week."
+NEEDS_START = f"⚠️ Set a starting date with **{BTN_MESSAGE_AND_TIME}**."
 NEEDS_CHANNEL = "⚠️ Pick a channel to post in."
 NEEDS_THREAD = "⚠️ Pick a thread to post in."
 REMINDER_SAVED = "✅ Saved the reminder for **{name}**."
@@ -388,7 +401,7 @@ HELP_COMMANDS = (
     (
         f"{DUTIES_CMD} → {BTN_REMINDERS}",
         "Reminders you write yourself for each duty, sent by DM, in a channel or "
-        "in a thread, on the weekdays you pick or every few days.",
+        "in a thread, on a schedule you pick, from daily to monthly.",
     ),
     (
         f"{DUTIES_CMD} → {BTN_CONTACT}",

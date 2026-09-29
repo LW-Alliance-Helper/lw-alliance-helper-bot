@@ -201,9 +201,8 @@ def test_reminder_round_trip(temp_db):
     duty_id = db.save_duty(new_duty())
     r = new_reminder(
         duty_id,
-        schedule_type=d.SCHEDULE_INTERVAL,
+        schedule_type=d.SCHEDULE_EVERY_3_DAYS,
         anchor_date=date(2026, 9, 1),
-        interval_days=3,
         weekdays=frozenset(),
         send_to=d.SEND_CHANNEL,
         channel_id=777,

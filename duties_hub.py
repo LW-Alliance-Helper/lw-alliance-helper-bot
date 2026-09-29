@@ -1004,7 +1004,7 @@ class ReminderListView(OwnedView):
             guild_id=self.hub.guild.id,
             duty_id=self.duty.id,
             message="",
-            schedule_type=d.SCHEDULE_WEEKDAYS,
+            schedule_type=d.SCHEDULE_DAILY,
             at=None,
         )
         editor = self._open_editor(draft)
@@ -1117,32 +1117,33 @@ class ReminderEditorView(OwnedView):
 
     def _build(self) -> None:
         self.clear_items()
-        weekdays_mode = self.draft.schedule_type == d.SCHEDULE_WEEKDAYS
-
+        kind = self.draft.schedule_type
         schedule = discord.ui.Select(
+            placeholder=c.SCHEDULE_PH,
             options=[
-                discord.SelectOption(
-                    label=c.SCHEDULE_WEEKDAYS, value=d.SCHEDULE_WEEKDAYS, default=weekdays_mode
-                ),
-                discord.SelectOption(
-                    label=c.SCHEDULE_INTERVAL, value=d.SCHEDULE_INTERVAL, default=not weekdays_mode
-                ),
+                discord.SelectOption(label=c.SCHEDULE_LABELS[key], value=key, default=key == kind)
+                for key in d.SCHEDULE_TYPES
             ],
             row=0,
         )
 
         async def _schedule(inter: discord.Interaction):
-            self.draft = replace(self.draft, schedule_type=schedule.values[0])
+            new = schedule.values[0]
+            changes = {"schedule_type": new}
+            if new == d.SCHEDULE_WEEKLY and len(self.draft.weekdays) > 1:
+                changes["weekdays"] = frozenset()  # one day, so the pick starts over
+            self.draft = replace(self.draft, **changes)
             await self._redraw(inter)
 
         schedule.callback = _schedule
         self.add_item(schedule)
 
-        if weekdays_mode:
+        if kind in (d.SCHEDULE_WEEKDAYS, d.SCHEDULE_WEEKLY):
+            weekly = kind == d.SCHEDULE_WEEKLY
             days = discord.ui.Select(
-                placeholder=c.WEEKDAYS_PH,
-                min_values=0,
-                max_values=7,
+                placeholder=c.WEEKLY_PH if weekly else c.WEEKDAYS_PH,
+                min_values=1 if weekly else 0,
+                max_values=1 if weekly else 7,
                 options=[
                     discord.SelectOption(label=name, value=str(i), default=i in self.draft.weekdays)
                     for i, name in enumerate(c.WEEKDAY_NAMES)
@@ -1273,12 +1274,13 @@ class ReminderEditorView(OwnedView):
             out.append(c.NEEDS_MESSAGE)
         if self.draft.at is None:
             out.append(c.NEEDS_TIME)
-        if self.draft.schedule_type == d.SCHEDULE_WEEKDAYS and not self.draft.weekdays:
+        kind = self.draft.schedule_type
+        if kind == d.SCHEDULE_WEEKDAYS and not self.draft.weekdays:
             out.append(c.NEEDS_DAYS)
-        if self.draft.schedule_type == d.SCHEDULE_INTERVAL and (
-            self.draft.anchor_date is None or self.draft.interval_days < 1
-        ):
-            out.append(c.NEEDS_INTERVAL)
+        if kind == d.SCHEDULE_WEEKLY and not self.draft.weekdays:
+            out.append(c.NEEDS_WEEKDAY)
+        if kind in d.NEEDS_START and self.draft.anchor_date is None:
+            out.append(c.NEEDS_START)
         if self.draft.send_to == d.SEND_CHANNEL and not self.draft.channel_id:
             out.append(c.NEEDS_CHANNEL)
         if self.draft.send_to == d.SEND_THREAD and not self.draft.channel_id:
@@ -1330,14 +1332,6 @@ def parse_start_date(raw: str, today: date) -> date | None:
     return min(candidates, key=lambda x: abs((x - today).days)) if candidates else parsed
 
 
-def parse_interval(raw: str) -> int | None:
-    try:
-        n = int(str(raw).strip())
-    except ValueError:
-        return None
-    return n if 1 <= n <= 365 else None
-
-
 class ReminderTextModal(discord.ui.Modal):
     def __init__(self, editor: ReminderEditorView):
         super().__init__(title=c.MODAL_REMINDER_TITLE)
@@ -1363,15 +1357,8 @@ class ReminderTextModal(discord.ui.Modal):
         )
         self.add_item(self.message_input)
         self.add_item(self.time_input)
-        self.every_input = self.start_input = None
-        if draft.schedule_type == d.SCHEDULE_INTERVAL:
-            self.every_input = discord.ui.TextInput(
-                label=c.FIELD_EVERY,
-                placeholder=c.FIELD_EVERY_PLACEHOLDER,
-                default=str(draft.interval_days) if draft.anchor_date else None,
-                max_length=3,
-                required=True,
-            )
+        self.start_input = None
+        if draft.schedule_type in d.NEEDS_START:
             self.start_input = discord.ui.TextInput(
                 label=c.FIELD_START,
                 placeholder=c.FIELD_START_PLACEHOLDER,
@@ -1379,7 +1366,6 @@ class ReminderTextModal(discord.ui.Modal):
                 max_length=20,
                 required=True,
             )
-            self.add_item(self.every_input)
             self.add_item(self.start_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -1397,13 +1383,7 @@ class ReminderTextModal(discord.ui.Modal):
             hh, mm = (int(p) for p in hhmm.split(":"))
             changes["at"] = time(hh, mm)
 
-        if self.every_input is not None:
-            raw_every = (self.every_input.value or "").strip()
-            every = parse_interval(raw_every)
-            if every is None:
-                errors.append(c.EVERY_UNREADABLE.format(raw=raw_every))
-            else:
-                changes["interval_days"] = every
+        if self.start_input is not None:
             raw_start = (self.start_input.value or "").strip()
             start = parse_start_date(raw_start, editor.today())
             if start is None:

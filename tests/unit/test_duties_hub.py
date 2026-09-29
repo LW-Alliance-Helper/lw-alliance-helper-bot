@@ -56,13 +56,6 @@ def test_merge_order_keeps_the_order_leadership_set():
     assert h.merge_order((), [C, A]) == (C, A)
 
 
-@pytest.mark.parametrize(
-    ("raw", "n"), [("3", 3), (" 1 ", 1), ("0", None), ("x", None), ("400", None)]
-)
-def test_parse_interval(raw, n):
-    assert h.parse_interval(raw) == n
-
-
 # ── The hub's controls by state ──────────────────────────────────────────────
 
 
@@ -269,8 +262,39 @@ class _nullctx:
 def test_a_blank_reminder_lists_what_it_needs():
     view = _reminder_editor(send_to=d.SEND_CHANNEL)
     assert view.problems() == [c.NEEDS_MESSAGE, c.NEEDS_TIME, c.NEEDS_DAYS, c.NEEDS_CHANNEL]
-    interval = _reminder_editor(schedule_type=d.SCHEDULE_INTERVAL, message="x", at=time(9))
-    assert interval.problems() == [c.NEEDS_INTERVAL]
+    for kind in d.NEEDS_START:
+        dated = _reminder_editor(schedule_type=kind, message="x", at=time(9))
+        assert dated.problems() == [c.NEEDS_START], kind
+    weekly = _reminder_editor(schedule_type=d.SCHEDULE_WEEKLY, message="x", at=time(9))
+    assert weekly.problems() == [c.NEEDS_WEEKDAY]
+    daily = _reminder_editor(schedule_type=d.SCHEDULE_DAILY, message="x", at=time(9))
+    assert daily.problems() == []
+
+
+def test_the_schedule_picker_offers_the_seven_choices_in_order():
+    view = _reminder_editor(schedule_type=d.SCHEDULE_DAILY)
+    schedule = next(x for x in view.children if getattr(x, "placeholder", None) == c.SCHEDULE_PH)
+    assert [o.label for o in schedule.options] == [
+        "Daily",
+        "Every other day",
+        "Every 3 days",
+        "Selected days only",
+        "Weekly",
+        "Every 2 weeks",
+        "Every month",
+    ]
+
+
+def test_the_day_pickers_match_the_schedule():
+    def pickers(view):
+        return {getattr(x, "placeholder", None): x for x in view.children}
+
+    many = pickers(_reminder_editor(schedule_type=d.SCHEDULE_WEEKDAYS))
+    assert many[c.WEEKDAYS_PH].max_values == 7
+    one = pickers(_reminder_editor(schedule_type=d.SCHEDULE_WEEKLY))
+    assert one[c.WEEKLY_PH].max_values == 1
+    none = pickers(_reminder_editor(schedule_type=d.SCHEDULE_MONTHLY))
+    assert c.WEEKDAYS_PH not in none and c.WEEKLY_PH not in none
 
 
 def test_the_channel_picker_shows_only_when_it_is_used():
@@ -320,20 +344,19 @@ async def test_save_with_problems_says_what_and_saves_nothing(temp_db):
 
 
 async def test_the_modal_keeps_what_parsed_and_reports_the_rest():
-    view = _reminder_editor(schedule_type=d.SCHEDULE_INTERVAL)
+    view = _reminder_editor(schedule_type=d.SCHEDULE_EVERY_2_WEEKS)
     with patch("config.get_config", return_value=None):
         modal = h.ReminderTextModal(view)
     modal.message_input._value = "{primary}, go"
-    modal.time_input._value = "9pm"
-    modal.every_input._value = "soon"
+    modal.time_input._value = "9ish"
     modal.start_input._value = "2026-09-01"
     inter = _inter()
     with patch("config.get_config", return_value=None):
         await modal.on_submit(inter)
     assert view.draft.message == "{primary}, go"
-    assert view.draft.at == time(21, 0)
+    assert view.draft.at is None
     assert view.draft.anchor_date == date(2026, 9, 1)
-    assert inter.followup.send.await_args.args[0] == c.EVERY_UNREADABLE.format(raw="soon")
+    assert inter.followup.send.await_args.args[0] == c.TIME_UNREADABLE.format(raw="9ish")
 
 
 async def test_a_weekday_reminder_modal_asks_only_for_message_and_time():

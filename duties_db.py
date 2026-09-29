@@ -114,7 +114,6 @@ def create_tables(conn: sqlite3.Connection) -> None:
             schedule_type TEXT    NOT NULL,
             at_time       TEXT    NOT NULL,
             anchor_date   TEXT    NOT NULL DEFAULT '',
-            interval_days INTEGER NOT NULL DEFAULT 1,
             weekdays      TEXT    NOT NULL DEFAULT '',
             send_to       TEXT    NOT NULL DEFAULT 'primaries',
             channel_id    INTEGER NOT NULL DEFAULT 0,
@@ -442,7 +441,6 @@ def _reminder_from_row(row: sqlite3.Row) -> DutyReminder:
         schedule_type=row["schedule_type"],
         at=time(hh, mm),
         anchor_date=date.fromisoformat(row["anchor_date"]) if row["anchor_date"] else None,
-        interval_days=row["interval_days"],
         weekdays=weekdays,
         send_to=row["send_to"],
         channel_id=row["channel_id"],
@@ -487,7 +485,6 @@ def save_reminder(reminder: DutyReminder) -> int:
         reminder.schedule_type,
         reminder.at.strftime("%H:%M"),
         reminder.anchor_date.isoformat() if reminder.anchor_date else "",
-        int(reminder.interval_days),
         ",".join(str(d) for d in sorted(reminder.weekdays)),
         reminder.send_to,
         int(reminder.channel_id),
@@ -498,7 +495,7 @@ def save_reminder(reminder: DutyReminder) -> int:
         if reminder.id:
             cur = conn.execute(
                 "UPDATE guild_duty_reminders SET message = ?, schedule_type = ?, at_time = ?, "
-                "anchor_date = ?, interval_days = ?, weekdays = ?, send_to = ?, channel_id = ?, "
+                "anchor_date = ?, weekdays = ?, send_to = ?, channel_id = ?, "
                 "ping_holders = ?, enabled = ? WHERE guild_id = ? AND id = ?",
                 (*values, reminder.guild_id, reminder.id),
             )
@@ -508,8 +505,8 @@ def save_reminder(reminder: DutyReminder) -> int:
         else:
             cur = conn.execute(
                 "INSERT INTO guild_duty_reminders (message, schedule_type, at_time, anchor_date, "
-                "interval_days, weekdays, send_to, channel_id, ping_holders, enabled, "
-                "guild_id, duty_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "weekdays, send_to, channel_id, ping_holders, enabled, "
+                "guild_id, duty_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*values, reminder.guild_id, reminder.duty_id),
             )
             rid = int(cur.lastrowid)

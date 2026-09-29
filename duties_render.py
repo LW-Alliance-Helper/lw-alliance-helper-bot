@@ -283,24 +283,45 @@ def _short_date(day: date) -> str:
     return f"{day.strftime('%b')} {day.day}"
 
 
+def ordinal(n: int) -> str:
+    """1st, 2nd, 3rd, 4th, 11th, 21st."""
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def reminder_when(reminder: d.DutyReminder, tz_name: str | None) -> str:
     """The schedule in words: `Mondays and Thursdays at 9:00pm EDT`."""
     if reminder.at is None:
         return c.WHEN_UNSET
     clock = _clock(reminder.at, tz_name)
-    if reminder.schedule_type == d.SCHEDULE_WEEKDAYS:
+    kind = reminder.schedule_type
+    if kind == d.SCHEDULE_DAILY:
+        return c.WHEN_DAILY.format(time=clock)
+    if kind == d.SCHEDULE_WEEKDAYS:
         if not reminder.weekdays:
             return c.WHEN_UNSET
         if len(reminder.weekdays) == 7:
-            return c.WHEN_EVERY_DAY.format(time=clock)
+            return c.WHEN_DAILY.format(time=clock)
         days = _join([c.WEEKDAY_PLURALS[i] for i in sorted(reminder.weekdays)])
         return c.WHEN_WEEKDAYS.format(days=days, time=clock)
-    if reminder.anchor_date is None or reminder.interval_days < 1:
+    if kind == d.SCHEDULE_WEEKLY:
+        if not reminder.weekdays:
+            return c.WHEN_UNSET
+        return c.WHEN_WEEKLY.format(day=c.WEEKDAY_NAMES[min(reminder.weekdays)], time=clock)
+    anchor = reminder.anchor_date
+    if anchor is None:
         return c.WHEN_UNSET
-    start = _short_date(reminder.anchor_date)
-    if reminder.interval_days == 1:
-        return c.WHEN_INTERVAL_DAILY.format(date=start, time=clock)
-    return c.WHEN_INTERVAL.format(n=reminder.interval_days, date=start, time=clock)
+    start = _short_date(anchor)
+    if kind == d.SCHEDULE_EVERY_2_DAYS:
+        return c.WHEN_EVERY_OTHER_DAY.format(date=start, time=clock)
+    if kind == d.SCHEDULE_EVERY_3_DAYS:
+        return c.WHEN_EVERY_3_DAYS.format(date=start, time=clock)
+    if kind == d.SCHEDULE_EVERY_2_WEEKS:
+        return c.WHEN_EVERY_2_WEEKS.format(date=start, time=clock)
+    if kind == d.SCHEDULE_MONTHLY:
+        template = c.WHEN_MONTHLY_LATE if anchor.day > 28 else c.WHEN_MONTHLY
+        return template.format(nth=ordinal(anchor.day), time=clock)
+    return c.WHEN_UNSET
 
 
 _SEND_LABELS = {

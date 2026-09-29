@@ -157,20 +157,51 @@ def test_weekday_schedule():
     assert d.occurs_on(r, date(2026, 10, 1))  # Thursday
 
 
-def test_interval_schedule_counts_from_the_anchor_and_not_before():
-    r = reminder(schedule_type=d.SCHEDULE_INTERVAL, anchor_date=date(2026, 9, 1), interval_days=3)
-    assert d.occurs_on(r, date(2026, 9, 1))
-    assert not d.occurs_on(r, date(2026, 9, 2))
-    assert d.occurs_on(r, date(2026, 9, 4))
-    assert not d.occurs_on(r, date(2026, 8, 29))  # before the anchor
+def test_daily_is_every_day():
+    r = reminder(schedule_type=d.SCHEDULE_DAILY)
+    assert all(d.occurs_on(r, date(2026, 9, n)) for n in range(1, 31))
+
+
+@pytest.mark.parametrize(
+    ("kind", "hits", "misses"),
+    [
+        (d.SCHEDULE_EVERY_2_DAYS, (1, 3, 5, 29), (2, 4, 30)),
+        (d.SCHEDULE_EVERY_3_DAYS, (1, 4, 7, 28), (2, 3, 29)),
+        (d.SCHEDULE_EVERY_2_WEEKS, (1, 15, 29), (8, 22, 2)),
+    ],
+)
+def test_fixed_cycles_count_from_the_start_and_not_before(kind, hits, misses):
+    r = reminder(schedule_type=kind, anchor_date=date(2026, 9, 1))
+    assert all(d.occurs_on(r, date(2026, 9, n)) for n in hits)
+    assert not any(d.occurs_on(r, date(2026, 9, n)) for n in misses)
+    assert not d.occurs_on(r, date(2026, 8, 30))  # before the start
+
+
+def test_weekly_is_one_day_of_the_week():
+    r = reminder(schedule_type=d.SCHEDULE_WEEKLY, weekdays=frozenset({2}))  # Wednesday
+    assert d.occurs_on(r, date(2026, 9, 30))
+    assert not d.occurs_on(r, date(2026, 10, 1))
+
+
+def test_monthly_uses_the_start_day_or_the_last_day_of_a_shorter_month():
+    r = reminder(schedule_type=d.SCHEDULE_MONTHLY, anchor_date=date(2026, 1, 31))
+    assert d.occurs_on(r, date(2026, 1, 31))
+    assert d.occurs_on(r, date(2026, 2, 28))
+    assert d.occurs_on(r, date(2026, 4, 30))
+    assert not d.occurs_on(r, date(2026, 4, 29))
+    assert not d.occurs_on(r, date(2025, 12, 31))  # before the start
+    mid = reminder(schedule_type=d.SCHEDULE_MONTHLY, anchor_date=date(2026, 9, 15))
+    assert d.occurs_on(mid, date(2026, 10, 15))
+    assert not d.occurs_on(mid, date(2026, 10, 16))
 
 
 @pytest.mark.parametrize(
     "kw",
     [
-        {"schedule_type": d.SCHEDULE_INTERVAL, "anchor_date": None},
-        {"schedule_type": d.SCHEDULE_INTERVAL, "anchor_date": date(2026, 9, 1), "interval_days": 0},
-        {"schedule_type": "monthly"},
+        {"schedule_type": d.SCHEDULE_EVERY_2_DAYS, "anchor_date": None},
+        {"schedule_type": d.SCHEDULE_MONTHLY, "anchor_date": None},
+        {"schedule_type": d.SCHEDULE_WEEKLY},
+        {"schedule_type": "fortnightly-ish"},
     ],
 )
 def test_an_incomplete_schedule_never_fires(kw):

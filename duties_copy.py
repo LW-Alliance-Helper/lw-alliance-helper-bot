@@ -39,11 +39,6 @@ BTN_CONTACT = "⚙️ Contact settings"
 HUB_ROUTE = f"`{DUTIES_CMD}`"
 
 
-def route(btn: str) -> str:
-    """`/duties` → **button**, the path expression (UX.md, Voice)."""
-    return f"`{DUTIES_CMD}` → **{btn}**"
-
-
 # ── Hub ──────────────────────────────────────────────────────────────────────
 
 HUB_INTRO = "The standing duties your leadership team splits between you, and who holds each one."
@@ -271,7 +266,6 @@ BTN_POST_AGAIN = "📣 Post them again"
 CONTACT_SAVED = "✅ Saved the contact settings."
 CONTACT_PICK_CHANNEL_FIRST = "⚠️ Pick a channel for the contact buttons first."
 CONTACT_POSTED_ACK = "📣 Posted the contact buttons in {channel}."
-CONTACT_UPDATED_ACK = "✅ Updated the contact buttons in {channel}."
 CONTACT_POST_FAILED = (
     "⚠️ I couldn't post in {channel}. Check I can **View Channel** and **Send Messages** there."
 )

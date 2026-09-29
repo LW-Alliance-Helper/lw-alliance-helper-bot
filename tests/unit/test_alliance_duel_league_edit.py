@@ -6,6 +6,7 @@ alliance, never a row another server recorded, and a pairing that still names
 the removed alliance only cleared when the officer asks for it.
 """
 
+import datetime as _dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,12 +27,14 @@ def _key(tag: str) -> ad.AllianceKey:
 
 
 def _row(tag, week=1, ranking=None, league=LEAGUE, **kw):
+    # A league's weeks are a week apart, and the earlier league two months back.
+    start = MONDAY if league == LEAGUE else MONDAY - _dt.timedelta(weeks=8)
     return ad.AllianceWeek(
         league=league,
         week=week,
         alliance=_key(tag),
         ranking=ranking,
-        week_date=MONDAY,
+        week_date=start + _dt.timedelta(weeks=week - 1),
         tag_display=tag,
         **kw,
     )
@@ -151,7 +154,7 @@ def test_clearing_takes_this_servers_pairing_only(central):
     central.record_weeks([_row("A03", opponent=_key("LlON"))], actor={"guild_id": 1})
     central.record_weeks([_row("A03", week=2, opponent=_key("LlON"))], actor={"guild_id": 2})
 
-    pairs = [(_key("A03"), 1), (_key("A03"), 2)]
+    pairs = [(_key("A03"), 1, MONDAY), (_key("A03"), 2, MONDAY + _dt.timedelta(weeks=1))]
     assert central.clear_opponent(pairs, LEAGUE, _key("LlON"), guild_id=1) == 1
 
     by_week = {r["week"]: r["opponent_tag"] for r in central.weeks_for_alliance(_key("A03"))}

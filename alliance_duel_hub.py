@@ -21,6 +21,7 @@ only thing that re-reads.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as _dt
 import logging
 
@@ -109,21 +110,31 @@ async def attach_shared(state: "HubState") -> None:
     button that went back to a database would put the read-quota rule (#269)
     back where it started.
 
+    **Found by who is in the league and when, not by its label** (#658). The
+    game reuses a label for a later set of warzones, so the store is asked for
+    the league these alliance-weeks belong to, and what comes back is shown
+    under this guild's own label: it is the same league whatever another
+    server called it, and the screens match rows on `(league, week)`.
+
     Never raises. The store is a second copy; a guild's own sheet is unaffected
     by it being unreadable, and a scouting card with less on it is not worth
     interrupting somebody for.
     """
     if state.league is None:
         return
+    pairs = [(r.alliance, r.week_date) for r in state.league_rows() if r.week_date]
+    if not pairs:
+        return
     try:
         import alliance_duel_db as vsdb
 
         # SQLite blocks, and this runs on the gateway thread (#366).
-        shared = await asyncio.to_thread(vsdb.rows_for_league, state.league)
+        shared = await asyncio.to_thread(vsdb.rows_for_bracket, pairs)
     except Exception as e:  # noqa: BLE001 - the sheet is unaffected
         logger.warning("[VS] shared scouting unavailable for guild=%s: %s", state.guild_id, e)
         return
 
+    shared = [dataclasses.replace(r, league=state.league) for r in shared]
     state.shared = shared
     state.shared_profiles = ad.build_profiles(shared)
 

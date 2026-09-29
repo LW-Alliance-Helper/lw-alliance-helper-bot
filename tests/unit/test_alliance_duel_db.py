@@ -49,7 +49,8 @@ def _row(tag, week=1, league=LEAGUE, **kw):
         league=league,
         week=week,
         alliance=_key(tag),
-        week_date=kw.pop("week_date", MONDAY),
+        # A league's weeks are a week apart, as the game runs them.
+        week_date=kw.pop("week_date", MONDAY + _dt.timedelta(weeks=week - 1)),
         tag_display=kw.pop("tag_display", tag),
         **kw,
     )
@@ -140,7 +141,11 @@ def test_a_later_reading_replaces_an_earlier_one_for_the_same_field():
 def test_each_league_week_is_its_own_row():
     for week in (1, 2, 3):
         vsdb.record_weeks([_row("QQQ", week=week, week_score=week)], actor=_actor())
-    vsdb.record_weeks([_row("QQQ", week=1, league=OTHER_LEAGUE, week_score=9)], actor=_actor())
+    # The next season: a later league, so later weeks.
+    later = _row(
+        "QQQ", week=1, league=OTHER_LEAGUE, week_score=9, week_date=MONDAY + _dt.timedelta(weeks=8)
+    )
+    vsdb.record_weeks([later], actor=_actor())
 
     found = vsdb.weeks_for_alliance(_key("QQQ"))
     assert len(found) == 4
@@ -200,13 +205,14 @@ def test_a_league_reads_back_every_alliance_in_it():
         actor=_actor(),
     )
 
-    found = vsdb.weeks_for_league(LEAGUE, week=1)
+    found = vsdb.weeks_for_bracket([(_key("AAA"), MONDAY)])
     assert [r["tag"] for r in found] == ["aaa", "bbb", "ccc"]
 
 
 def test_an_alliance_nobody_recorded_reads_as_nothing_rather_than_an_error():
     assert vsdb.weeks_for_alliance(_key("NOPE")) == []
-    assert vsdb.weeks_for_league(OTHER_LEAGUE) == []
+    assert vsdb.weeks_for_bracket([(_key("NOPE"), MONDAY)]) == []
+    assert vsdb.weeks_for_bracket([]) == []
 
 
 # ── Guild removal (#543) ──────────────────────────────────────────────────────
@@ -444,7 +450,7 @@ def test_a_read_back_row_builds_a_profile():
     profile, because that is what the scout card renders."""
     vsdb.record_weeks([_row("QQQ", power=5_000_000, members=100)], actor=_actor())
 
-    profiles = ad.build_profiles(vsdb.rows_for_league(LEAGUE))
+    profiles = ad.build_profiles(vsdb.rows_for_bracket([(_key("QQQ"), MONDAY)]))
 
     assert profiles[_key("QQQ")].power == 5_000_000
     assert profiles[_key("QQQ")].members == 100

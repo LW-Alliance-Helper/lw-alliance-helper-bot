@@ -1682,7 +1682,7 @@ async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename
     # Row 2 -- the header is row 1, the one alliance is the only data row.
     assert values[f"{transfer_col(ad.COL_TIER)}2"] == "Diamond"
     assert values[f"{transfer_col(ad.COL_SEASON)}2"] == "S36"
-    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12-1"
+    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12 - 1"
 
 
 def transfer_col(name: str) -> str:
@@ -1859,7 +1859,7 @@ def test_edit_league_modal_defaults_to_the_current_tier():
     modal = entry.EditLeagueModal(state)
 
     assert modal.season.default == "S36"
-    assert modal.group.default == "12-1"
+    assert modal.group.default == "12 - 1"
     # "Diamon" is not one of the three real tiers, so nothing is pre-selected
     # -- there is no honest default for a typo.
     assert not any(opt.default for opt in modal.tier.options)
@@ -2202,6 +2202,12 @@ async def test_a_tab_missing_a_column_still_contributes_to_the_shared_record(
     assert _central.weeks_for_alliance(OWN)[0]["week_score"] == 7
 
 
+def _stored_week(vsdb, week: int) -> list:
+    """Every stored row for this week number, whoever recorded it."""
+    with vsdb._get_conn() as conn:
+        return conn.execute("SELECT * FROM alliance_weeks WHERE week = ?", (week,)).fetchall()
+
+
 @pytest.mark.asyncio
 async def test_a_predicted_pairing_never_reaches_the_shared_record(_sheet_takes_it, _central):
     """The bot writes next week's *expected* opponents forward. That belongs in
@@ -2216,7 +2222,7 @@ async def test_a_predicted_pairing_never_reaches_the_shared_record(_sheet_takes_
     ok, message = await entry.generate_next_week(state, 1)
 
     assert ok, message
-    assert _central.weeks_for_league(LEAGUE, week=2) == [], "a guess was shared as fact"
+    assert _stored_week(_central, 2) == [], "a guess was shared as fact"
 
 
 @pytest.mark.asyncio
@@ -2227,7 +2233,7 @@ async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
 
     await entry.save_rows(state, [_row(OWN_TAG, week=2, week_score=7)])
 
-    assert len(_central.weeks_for_league(LEAGUE, week=2)) == 1
+    assert len(_stored_week(_central, 2)) == 1
 
 
 def test_two_alliances_sharing_a_tag_are_still_two_alliances():

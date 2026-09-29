@@ -49,6 +49,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, Mapping, Sequence
 
 import transfer
+import vs_labels
 from storm_date_helpers import parse_event_date
 
 logger = logging.getLogger(__name__)
@@ -196,7 +197,7 @@ WEEK_WEIGHTS: tuple[int, ...] = (8, 4, 2, 1)
 
 #: Tiers in ascending competitive order. Promotion and relegation are real, so
 #: tier is not decoration: it qualifies every historical record.
-TIER_ORDER: tuple[str, ...] = ("Silver", "Gold", "Diamond")
+TIER_ORDER: tuple[str, ...] = vs_labels.TIERS
 
 #: Ordered vocabulary for the human "Known" read, weakest first. Used to
 #: compare two alliances when neither has a confirmed result or an explicit
@@ -529,25 +530,35 @@ class AllianceKey:
 
 @dataclass(frozen=True, order=True)
 class LeagueKey:
-    """A single 16-alliance bracket: season, tier and group.
+    """A league's label: season, tier and group.
 
-    Game-supplied identity from the league start screen ("Alliance Duel League
-    S35", "Diamond Tier 12 - 2"), not derived from dates. Many brackets run in
-    parallel each season, so all three parts are needed.
+    As the game names it on the league start screen ("Alliance Duel League
+    S37", "Diamond Tier 12 - 1"). **A label, not an identity** (#658): the game
+    reuses the same label for a later set of warzones, and possibly for two
+    brackets at once, so the shared store never joins on it. What makes two
+    stored rows the same league is `alliance_duel_db`'s league id.
+
+    **Standardized on construction**, however it was typed (`vs_labels`):
+    `s37`, `37` and `Season 37` are `S37`, and `12-1` is `12 - 1`. In
+    `__post_init__` rather than only in :meth:`of`, so every path that builds
+    one (the Sheet, the league forms, stored score prompts, the shared store)
+    agrees, and two spellings of one league can never read as two.
     """
 
     season: str
     tier: str
     group: str
 
+    def __post_init__(self):
+        object.__setattr__(self, "season", vs_labels.standard_season(self.season))
+        object.__setattr__(self, "tier", vs_labels.standard_tier(self.tier))
+        object.__setattr__(self, "group", vs_labels.standard_group(self.group))
+
     @staticmethod
     def of(season, tier, group) -> "LeagueKey | None":
-        se = re.sub(r"\s+", " ", str(season or "").strip())
-        ti = re.sub(r"\s+", " ", str(tier or "").strip())
-        gr = re.sub(r"\s+", " ", str(group or "").strip())
-        if not se:
-            return None
-        return LeagueKey(se, ti, gr)
+        """The league, or None when there is no season to name it by."""
+        key = LeagueKey(str(season or ""), str(tier or ""), str(group or ""))
+        return key if key.season else None
 
     @property
     def rank(self) -> int | None:

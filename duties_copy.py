@@ -337,6 +337,33 @@ SUBJECT_TICKET_CHANNEL = "the channel Leadership Duties threads open under"
 SUBJECT_HOLDERS = "your Leadership Duties"
 HOLDER_LEFT_DETAIL = "**{name}** left the server. {their} {duties} now {have} an open position."
 
+# ── /help ────────────────────────────────────────────────────────────────────
+
+HELP_EMOJI = "🪪"
+HELP_LABEL = FEATURE_NAME
+HELP_DESCRIPTION = (
+    "💎 Premium. Record the standing duties your leadership team splits between "
+    "you, who holds each one, and how evenly they're spread. Remind holders in "
+    "your own words, and let members open a private thread with the right people."
+)
+HELP_COMMANDS = (
+    (
+        DUTIES_CMD,
+        "**Duties hub.** Add and edit duties (primary and backup holders, open "
+        "positions), pause one for Season, and see the workload and your own duties.",
+    ),
+    (
+        f"{DUTIES_CMD} → {BTN_REMINDERS}",
+        "Reminders you write yourself for each duty, by DM or in a channel, on "
+        "chosen weekdays or every few days.",
+    ),
+    (
+        f"{DUTIES_CMD} → {BTN_CONTACT}",
+        "Post contact buttons for members. Each click opens a private thread with "
+        "that member and the duty's holders.",
+    ),
+)
+
 # ── Outage catch-up digest ───────────────────────────────────────────────────
 
 CATCHUP_TITLE = "Leadership Duties reminder: {duty}"

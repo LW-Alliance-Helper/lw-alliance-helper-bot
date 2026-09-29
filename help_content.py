@@ -36,6 +36,7 @@ from survey_hub import (
     SURVEY_HUB_BTN_REMOVE,
     SURVEY_HUB_BTN_TRANSLATE,
 )
+import duties_copy as _duties_copy
 from wizard_registry import ExpiringView
 
 
@@ -261,6 +262,13 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "anytime, auto re-pairing with leadership alerts, and buddy DMs.",
             ),
         ],
+    },
+    # Leadership Duties (#687). The copy lives with the feature's own.
+    "duties": {
+        "emoji": _duties_copy.HELP_EMOJI,
+        "label": _duties_copy.HELP_LABEL,
+        "description": _duties_copy.HELP_DESCRIPTION,
+        "commands": list(_duties_copy.HELP_COMMANDS),
     },
     "growth": {
         "emoji": "📈",

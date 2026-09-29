@@ -60,13 +60,20 @@ def create_tables(conn: sqlite3.Connection) -> None:
     # holder leaving turns their row open in place and the position keeps
     # its order. `guild_id` is repeated here so the server removal and the
     # guild-scoped-table schema test reach it without a join.
+    #
+    # `vacated_user_id` / `vacated_name` say who left a slot open by leaving
+    # the server, so the notice can still name them once they're gone. Any
+    # save of the duty rewrites its rows without them: leadership has been
+    # back to that duty, which is what the notice was asking for.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS guild_duty_holders (
-            guild_id INTEGER NOT NULL,
-            duty_id  INTEGER NOT NULL,
-            slot     TEXT    NOT NULL,
-            position INTEGER NOT NULL,
-            user_id  INTEGER NOT NULL DEFAULT 0,
+            guild_id        INTEGER NOT NULL,
+            duty_id         INTEGER NOT NULL,
+            slot            TEXT    NOT NULL,
+            position        INTEGER NOT NULL,
+            user_id         INTEGER NOT NULL DEFAULT 0,
+            vacated_user_id INTEGER NOT NULL DEFAULT 0,
+            vacated_name    TEXT    NOT NULL DEFAULT '',
             PRIMARY KEY (duty_id, slot, position)
         )
     """)
@@ -262,10 +269,11 @@ def delete_duty(guild_id: int, duty_id: int) -> bool:
     return n > 0
 
 
-def vacate_holder(guild_id: int, user_id: int) -> list[str]:
-    """Turn every slot `user_id` held in this server open, in place. Returns
-    the names of the duties that changed, for the config-health notice that
-    names them. An empty list means they held nothing."""
+def vacate_holder(guild_id: int, user_id: int, name: str = "") -> list[str]:
+    """Turn every slot `user_id` held in this server open, in place, noting
+    who left it (`name` is how they were known, since they can't be looked
+    up once gone). Returns the names of the duties that changed. An empty
+    list means they held nothing."""
     if user_id == OPEN:
         return []
     with config._get_conn() as conn:
@@ -277,11 +285,40 @@ def vacate_holder(guild_id: int, user_id: int) -> list[str]:
         ).fetchall()
         if rows:
             conn.execute(
-                "UPDATE guild_duty_holders SET user_id = ? WHERE guild_id = ? AND user_id = ?",
-                (OPEN, guild_id, user_id),
+                "UPDATE guild_duty_holders SET user_id = ?, vacated_user_id = ?, "
+                "vacated_name = ? WHERE guild_id = ? AND user_id = ?",
+                (OPEN, user_id, name, guild_id, user_id),
             )
             conn.commit()
     return [r["name"] for r in rows]
+
+
+@dataclass(frozen=True)
+class Departure:
+    """Someone who left the server holding duties nobody has revisited yet."""
+
+    user_id: int
+    name: str
+    duty_names: tuple[str, ...]
+
+
+def departures(guild_id: int) -> list[Departure]:
+    """Everyone whose leaving still has an open slot nobody has been back
+    to, in the order they appear on the duty list."""
+    with config._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT h.vacated_user_id, h.vacated_name, d.name FROM guild_duty_holders h "
+            "JOIN guild_duties d ON d.id = h.duty_id "
+            "WHERE h.guild_id = ? AND h.vacated_user_id <> 0 "
+            "ORDER BY d.sort_order, d.id, h.slot, h.position",
+            (guild_id,),
+        ).fetchall()
+    people: dict[int, tuple[str, list[str]]] = {}
+    for row in rows:
+        name, duties_ = people.setdefault(row["vacated_user_id"], (row["vacated_name"], []))
+        if row["name"] not in duties_:
+            duties_.append(row["name"])
+    return [Departure(uid, name, tuple(ds)) for uid, (name, ds) in people.items()]
 
 
 # ── Reminders ────────────────────────────────────────────────────────────────
@@ -336,6 +373,8 @@ def save_reminder(reminder: DutyReminder) -> int:
 
     Saving never touches `last_fired_on`: editing the text or time of a
     reminder that already fired today must not make it fire again."""
+    if reminder.at is None:
+        raise ValueError("a reminder needs a time before it can be saved")
     values = (
         reminder.message,
         reminder.schedule_type,

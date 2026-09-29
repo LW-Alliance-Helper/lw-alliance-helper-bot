@@ -22,6 +22,9 @@ from typing import Callable, Iterable
 
 import template_render
 
+#: The `premium.PREMIUM_FEATURES` name the whole feature is gated on.
+PREMIUM_FEATURE = "leadership_duties"
+
 # ── Holders ──────────────────────────────────────────────────────────────────
 
 SLOT_PRIMARY = "primary"
@@ -241,7 +244,9 @@ class DutyReminder:
     duty_id: int
     message: str
     schedule_type: str
-    at: time
+    #: None only on a draft the officer hasn't given a time yet; a stored
+    #: reminder always has one.
+    at: time | None
     anchor_date: date | None = None
     interval_days: int = 1
     #: Monday = 0, as `date.weekday()`.
@@ -281,11 +286,13 @@ def due_occurrence(reminder: DutyReminder, now_local: datetime) -> date | None:
     `now_local` is the current time in the guild's timezone. Fires at or
     past the set time rather than on an exact minute, so a tick that runs
     late doesn't skip the day (#365); `last_fired_on` stops the ticks after
-    it from firing again. Only today's occurrence is considered: one missed
-    to downtime is the outage catch-up digest's to offer, not this loop's to
-    send late.
+    it from firing again. That includes the first tick after a restart, so a
+    reminder due during a short outage goes out as soon as the bot is back.
+    Only today's occurrence is considered: one whose whole day passed while
+    the bot was down is the outage catch-up digest's to offer, not this
+    loop's to send a day late.
     """
-    if not reminder.enabled:
+    if not reminder.enabled or reminder.at is None:
         return None
     today = now_local.date()
     if not occurs_on(reminder, today):

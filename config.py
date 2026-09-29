@@ -6798,8 +6798,16 @@ _REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
     ),
     ("storm_roster_images", "posted_by_user_id = 0", "posted_by_user_id = :uid"),
     # Leadership Duties (#687): the person goes, the position stays, open,
-    # the same as when a holder leaves the server.
-    ("guild_duty_holders", "user_id = 0", "user_id = :uid"),
+    # the same as when a holder leaves the server. The note of who left a
+    # slot open goes too. One statement, as above, so a row naming them in
+    # both columns counts once.
+    (
+        "guild_duty_holders",
+        "user_id = CASE WHEN user_id = :uid THEN 0 ELSE user_id END, "
+        "vacated_name = CASE WHEN vacated_user_id = :uid THEN '' ELSE vacated_name END, "
+        "vacated_user_id = CASE WHEN vacated_user_id = :uid THEN 0 ELSE vacated_user_id END",
+        "user_id = :uid OR vacated_user_id = :uid",
+    ),
     # One statement rather than two so a person who is both the owner and the
     # installer of a guild counts as one row touched instead of two.
     (

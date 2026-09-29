@@ -59,6 +59,7 @@ HEARTBEAT_LOOPS = (
     "train_reminder",
     "storm_signup",
     "vs_score_prompt",
+    "duty_reminder",
 )
 
 # Every loop that stamps a heartbeat, including the ones HEARTBEAT_LOOPS
@@ -76,6 +77,7 @@ ALL_HEARTBEAT_LOOPS: tuple[tuple[str, timedelta, bool], ...] = (
     ("survey_reminder", timedelta(minutes=1), True),
     ("train_reminder", timedelta(minutes=1), True),
     ("storm_signup", timedelta(minutes=1), True),
+    ("duty_reminder", timedelta(minutes=1), True),
     ("transfer_poll", timedelta(minutes=1), False),
     ("config_health", timedelta(minutes=15), False),
     ("scheduler", timedelta(hours=1), False),
@@ -801,6 +803,95 @@ async def scan_event_draft(bot, guild, cfg, window: OutageWindow) -> list[Missed
     return items
 
 
+async def scan_duty_reminders(bot, guild, cfg, window: OutageWindow) -> list[MissedItem]:
+    """Leadership Duties reminders (#687) whose whole day passed while the
+    bot was down. Premium, re-checked here and again at fire time.
+
+    Today's occurrences are not offered: the live loop fires at or past the
+    set time, so a reminder due earlier today goes out on its own first tick
+    back. What it can't do is send yesterday's, which is what this lists,
+    one per reminder (the latest missed day, not every day of a long
+    outage).
+    """
+    import duties as d
+    import duties_copy
+    import duties_db
+    import duties_reminders
+    import premium
+
+    reminders = [x for x in duties_db.list_reminders(guild.id) if x.enabled and x.at is not None]
+    if not reminders:
+        return []
+    if not await premium.feature_gate(d.PREMIUM_FEATURE, guild.id, bot=bot):
+        return []
+    tz = _guild_tz(cfg)
+    today = window.end.astimezone(tz).date()
+    first = window.start.astimezone(tz).date()
+    duties_by_id = {x.id: x for x in duties_db.list_duties(guild.id)}
+    leadership_channel_id = getattr(cfg, "leadership_channel_id", 0) or 0
+
+    items: list[MissedItem] = []
+    for reminder in reminders:
+        duty = duties_by_id.get(reminder.duty_id)
+        if duty is None or duty.paused:
+            continue
+        day = today - timedelta(days=1)
+        while day >= first:
+            scheduled = datetime(
+                day.year, day.month, day.day, reminder.at.hour, reminder.at.minute, tzinfo=tz
+            )
+            already = reminder.last_fired_on is not None and reminder.last_fired_on >= day
+            if d.occurs_on(reminder, day) and _was_missed(scheduled, window) and not already:
+                items.append(
+                    _duty_reminder_item(
+                        bot, guild, duty, reminder, day, scheduled, leadership_channel_id
+                    )
+                )
+                break
+            day -= timedelta(days=1)
+    return items
+
+
+def _duty_reminder_item(bot, guild, duty, reminder, day, scheduled, leadership_channel_id):
+    import duties as d
+    import duties_copy
+    import duties_db
+    import duties_reminders
+    import premium
+
+    plan = d.plan_delivery(duty, reminder, leadership_channel_id=leadership_channel_id)
+    if plan.channel_id:
+        channel = bot.get_channel(plan.channel_id)
+        destination = duties_copy.CATCHUP_TO_CHANNEL.format(
+            channel=getattr(channel, "name", "the channel")
+        )
+    else:
+        destination = duties_copy.CATCHUP_TO_DMS
+
+    async def _fire() -> bool:
+        if not await premium.feature_gate(d.PREMIUM_FEATURE, guild.id, bot=bot):
+            return False
+        # Re-read at click: the duty may have changed hands, paused or gone
+        # since the digest was posted.
+        fresh = duties_db.get_duty(guild.id, duty.id)
+        if fresh is None or fresh.paused:
+            return False
+        reached = await duties_reminders.deliver(
+            bot, guild, config.get_config(guild.id), fresh, reminder
+        )
+        if reached:
+            duties_db.mark_reminder_fired(guild.id, reminder.id, day)
+        return reached
+
+    return MissedItem(
+        surface="duty_reminder",
+        title=duties_copy.CATCHUP_TITLE.format(duty=duty.name),
+        scheduled_local=scheduled,
+        destination=destination,
+        fire=_fire,
+    )
+
+
 # Registry of surface adapters.
 SURFACE_ADAPTERS: tuple[Callable[..., Awaitable[list[MissedItem]]], ...] = (
     scan_event_draft,
@@ -811,6 +902,7 @@ SURFACE_ADAPTERS: tuple[Callable[..., Awaitable[list[MissedItem]]], ...] = (
     scan_storm_signup,
     scan_vs_score_prompt,
     scan_vs_day_theme,
+    scan_duty_reminders,
 )
 
 

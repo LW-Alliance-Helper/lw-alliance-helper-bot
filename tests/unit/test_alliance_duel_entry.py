@@ -675,7 +675,12 @@ def test_a_refusal_hands_back_a_retry_rather_than_a_command_to_re_run():
     assert "Run `/vs`" not in source, "a refusal must not send them back to the command"
 
     view = entry._RetryNewLeagueView(_state([]), 1, {"season": "S36"})
-    assert [b.label for b in view.children] == [entry.VS_BTN_RETRY_NEW_LEAGUE]
+    # The guide sits beside the retry: a refused paste is where somebody who
+    # did not know where the game shows a warzone finds out (#655).
+    assert [b.label for b in view.children] == [
+        entry.VS_BTN_RETRY_NEW_LEAGUE,
+        entry.ad_guide.VS_BTN_LEAGUE_GUIDE,
+    ]
 
 
 def test_the_retry_modal_still_holds_what_was_typed():
@@ -700,14 +705,11 @@ def test_the_bracket_format_survives_typing():
 
     assert modal._bracket_label.text == "The bracket, in League order"
     description = modal._bracket_label.description
-    assert "tag" in description and "warzone" in description
+    assert "tag" in description.lower() and "warzone" in description
     assert "power" in description and "gift" in description and "members" in description
-    # The wording signed off on 2026-09-27, inside Discord's 100 characters.
-    assert description == (
-        "[tag] [warzone] [power] [gift level] [members]\n"
-        "e.g.: Glo 999 26.8b 25 100\n"
-        "Add all 16, one per line."
-    )
+    # Says which fields are required (#655), inside Discord's 100 characters.
+    assert "optional" in description
+    assert description == entry.VS_BRACKET_DESCRIPTION
     assert len(description) <= 100
     # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
     # go through `self.bracket`, not the Label, so what Discord fills in on

@@ -379,6 +379,21 @@ Do not write a copy of any of them.
   `tests/unit/test_invented_examples.py` runs it in CI. Player names
   can't be found by pattern, so a new one is a review item.
 
+### "Where do I find this in the game" guides
+- `game_guide.build_guide(image_dir, steps, footer=None)` turns a list of
+  `GuideStep(title, body, image, alt)` into one embed per step, each with its
+  annotated screenshot beneath its words, and degrades to words alone when an
+  image is missing. Champion Duel's capture guide and the VS "Start a new
+  league" guide (`alliance_duel_guide.py`, #655) both use it. The images come
+  from `scripts/make_capture_guide.annotate(..., out_dir=)`: numbered markers,
+  no words baked in, contrast-checked. A new guide adds a steps list, a build
+  script beside `make_vs_league_guide.py`, and a 📖 button at the point of
+  need, never only in `/help` ("nobody reads documentation").
+- Real game screenshots are used unredacted; the examples we write are always
+  invented, from `examples.py` (Kevin, 29 Sep).
+- Discord first. The website's guides repository (#656) reuses the same
+  screens and words later.
+
 ### Wizard "Use default vs Keep current vs Define my own"
 - `wizard_steps.ask_keep_or_change(default=, current=, ...)` — pass the
   hardcoded baseline as `default=` and the saved guild value as

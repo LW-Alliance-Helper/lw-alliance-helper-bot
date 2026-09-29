@@ -34,6 +34,7 @@ import discord
 
 import alliance_duel as ad
 import alliance_duel_fixes as ad_fixes
+import alliance_duel_guide as ad_guide
 import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import config
@@ -901,6 +902,13 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
 
 VS_BTN_NEW_LEAGUE = "➕ Start a new league"
 
+#: Under the bracket box's label. Draft for sign-off (#655).
+VS_BRACKET_DESCRIPTION = (
+    "Tag and warzone; power, gift, members optional\n"
+    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
+    "All 16, one per line."
+)
+
 #: The tiers the game has, as far as Kevin's alliance has seen them (19 Sep).
 #: Shared with `EditLeagueModal` so both surfaces offer the same list.
 VS_TIER_OPTIONS = ("Diamond", "Gold", "Silver")
@@ -996,13 +1004,11 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             )
             self._bracket_label = discord.ui.Label(
                 text="The bracket, in League order",
-                # Worded on sign-off (2026-09-27); 99 of the 100 characters a
-                # Label description holds.
-                description=(
-                    "[tag] [warzone] [power] [gift level] [members]\n"
-                    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
-                    "Add all 16, one per line."
-                ),
+                # Says what is required and what is not (#655): only the tag
+                # and warzone are, and the old "[tag] [warzone] [power] ..."
+                # read as five required fields. Draft, for sign-off; a Label
+                # description holds 100 characters.
+                description=VS_BRACKET_DESCRIPTION,
                 component=self.bracket,
             )
         else:
@@ -1107,8 +1113,19 @@ class _RetryNewLeagueView(OwnedView):
         button.callback = self._retry
         self.add_item(button)
 
+        # A refused paste is where somebody who does not know where the game
+        # shows a warzone finds out they needed to (#655).
+        guide = discord.ui.Button(
+            label=ad_guide.VS_BTN_LEAGUE_GUIDE, style=discord.ButtonStyle.secondary
+        )
+        guide.callback = self._guide
+        self.add_item(guide)
+
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(NewLeagueModal(self.state, defaults=self.defaults))
+
+    async def _guide(self, interaction: discord.Interaction):
+        await ad_guide.send_guide(interaction)
 
 
 def _parse_new_league_bracket(state, text) -> ad.BracketParse:

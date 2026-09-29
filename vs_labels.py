@@ -1,9 +1,9 @@
 """How a VS League's label is written down, whoever typed it (#658).
 
-The game names a league "Alliance Duel League S37" and "Diamond Tier 12-1".
+The game names a league "Alliance Duel League S37" and "Diamond Tier 12 - 1".
 Officers type the season and group by hand, into the new-league form or
 straight into their Sheet, so the same league arrived as `S37`, `s37`, `37`
-and `Season 37`, and as `12-1`, `12 - 1` and `12 – 1`. Each spelling read as
+and `Season 37`, and as `12 - 1`, `12-1` and `12–1`. Each spelling read as
 a different league: two servers in one bracket never saw each other's data in
 the shared store, and a server's own rows split in two after a correction.
 
@@ -11,8 +11,9 @@ So every label is standardized on the way in, to the form the game shows:
 
 - **Season:** `S` and the number. Anything that is not a number with an
   optional `S` or `Season` in front is kept as typed rather than guessed at.
-- **Group:** no spaces around the dash, and any dash-like character is a
-  hyphen.
+- **Group:** one space either side of the dash, as the League screen writes
+  it ("Diamond Tier 12 - 4"), and any dash-like character is a hyphen.
+  Kevin, 29 Sep: match the game.
 - **Tier:** one of the game's tier names, capitalized as the game writes it,
   when it matches one; otherwise as typed.
 
@@ -54,8 +55,8 @@ def standard_tier(text) -> str:
 
 
 def standard_group(text) -> str:
-    """`12-1`, from `12 - 1`, `12 – 1` or `12-1`."""
-    return _DASH.sub("-", _squash(text))
+    """`12 - 1`, from `12-1`, `12–1`, `12 -1` or `12 - 1`."""
+    return _DASH.sub(" - ", _squash(text))
 
 
 def standard_key(key: str) -> str:

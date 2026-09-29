@@ -16,7 +16,7 @@ ground truth for this feature):
   weeks is 64 rows per league, and everything the feature stores lives on
   that grain, which is why it collapses to a single tab.
 - **League identity is game-supplied** — season (``S35``), tier (Diamond /
-  Gold / Silver, ordered) and group (``12-2``). Not date-derived. Many
+  Gold / Silver, ordered) and group (``12 - 2``). Not date-derived. Many
   brackets run in parallel per season, and promotion/relegation moves
   alliances between tiers, so tier travels with every record.
 - **Ranking is per league, not per alliance.** It is constant across that
@@ -533,13 +533,13 @@ class LeagueKey:
     """A league's label: season, tier and group.
 
     As the game names it on the league start screen ("Alliance Duel League
-    S37", "Diamond Tier 12-1"). **A label, not an identity** (#658): the game
+    S37", "Diamond Tier 12 - 1"). **A label, not an identity** (#658): the game
     reuses the same label for a later set of warzones, and possibly for two
     brackets at once, so the shared store never joins on it. What makes two
     stored rows the same league is `alliance_duel_db`'s league id.
 
     **Standardized on construction**, however it was typed (`vs_labels`):
-    `s37`, `37` and `Season 37` are `S37`, and `12 - 1` is `12-1`. In
+    `s37`, `37` and `Season 37` are `S37`, and `12-1` is `12 - 1`. In
     `__post_init__` rather than only in :meth:`of`, so every path that builds
     one (the Sheet, the league forms, stored score prompts, the shared store)
     agrees, and two spellings of one league can never read as two.

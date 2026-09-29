@@ -1,11 +1,12 @@
 """League identity in the shared store (#658).
 
-The game reuses a league's label: "S36 Diamond 12-1" is this bracket now and
+The game reuses a league's label: "S36 Diamond 12 - 1" is this bracket now and
 a later set of warzones' bracket a month on, and two brackets may carry it at
 once. So the store never joins on the label. These pin the rules Kevin settled
 on 28 Sep:
 
-- labels are standardized however they were typed (`S37`, `12-1`);
+- labels are standardized however they were typed, to the game's form
+  (`S37`, `12 - 1`);
 - a stored row is one alliance's one week, whatever label it came under;
 - rows are the same league when they share a label within one league's four
   weeks and one server recorded them together, or a reported pairing joins
@@ -30,7 +31,7 @@ import vs_labels
 
 MONDAY = _dt.date(2026, 9, 7)
 LATER = MONDAY + _dt.timedelta(weeks=9)  # the next set of warzones' turn
-LABEL = ad.LeagueKey("S36", "Diamond", "12-1")
+LABEL = ad.LeagueKey("S36", "Diamond", "12 - 1")
 
 
 @pytest.fixture(autouse=True)
@@ -77,9 +78,10 @@ def test_every_way_of_typing_a_season_is_the_one_the_game_shows(typed):
     assert vs_labels.standard_season(typed) == "S37"
 
 
-@pytest.mark.parametrize("typed", ["12-1", "12 - 1", "12 -1", "12– 1", "12 — 1"])
-def test_a_group_has_no_spaces_around_its_dash(typed):
-    assert vs_labels.standard_group(typed) == "12-1"
+@pytest.mark.parametrize("typed", ["12-1", "12 - 1", "12 -1", "12– 1", "12—1"])
+def test_a_group_is_written_as_the_league_screen_writes_it(typed):
+    # "Diamond Tier 12 - 4" on the League screen. Kevin, 29 Sep: match the game.
+    assert vs_labels.standard_group(typed) == "12 - 1"
 
 
 def test_a_tier_takes_the_games_capitalization():
@@ -92,13 +94,13 @@ def test_anything_unrecognised_is_kept_as_typed_rather_than_guessed_at():
 
 
 def test_two_spellings_are_one_league():
-    assert ad.LeagueKey("s36", "diamond", "12 - 1") == LABEL
+    assert ad.LeagueKey("s36", "diamond", "12-1") == LABEL
     assert ad.LeagueKey.of("Season 36", "Diamond", "12–1") == LABEL
 
 
 def test_a_stored_event_key_keeps_its_week_and_day():
-    assert vs_labels.standard_key("S36|Diamond|12 - 1|2|3") == "S36|Diamond|12-1|2|3"
-    assert vs_labels.standard_key("S36|Diamond|12 - 1") == "S36|Diamond|12-1"
+    assert vs_labels.standard_key("S36|Diamond|12-1|2|3") == "S36|Diamond|12 - 1|2|3"
+    assert vs_labels.standard_key("S36|Diamond|12-1") == "S36|Diamond|12 - 1"
 
 
 # ── One row per alliance per week ─────────────────────────────────────────────
@@ -146,7 +148,7 @@ def test_a_new_leagues_skeleton_is_one_league_before_anyone_plays():
 
 
 def test_the_same_label_a_month_later_is_a_different_league():
-    """Kevin's case: the next set of warzones reaches S36 12-1."""
+    """Kevin's case: the next set of warzones reaches S36 12 - 1."""
     vsdb.record_weeks(_bracket(["ABC", "DEF"]), actor={"guild_id": 1})
     vsdb.record_weeks(_bracket(["GHI", "JKL"], start=LATER, warzone="1500"), actor={"guild_id": 2})
 
@@ -265,13 +267,13 @@ def label_keyed_store(tmp_path, monkeypatch):
     conn.execute(_V1_TABLE)
     conn.execute(_V1_DAYS)
     rows = [
-        # id 1: server 1, the old spelling, the earlier write.
+        # id 1: server 1, another spelling, the earlier write.
         (
             "abc",
             "999",
             "S36",
             "Diamond",
-            "12 - 1",
+            "12-1",
             1,
             MONDAY.isoformat(),
             100,
@@ -286,7 +288,7 @@ def label_keyed_store(tmp_path, monkeypatch):
             "999",
             "S36",
             "Diamond",
-            "12-1",
+            "12 - 1",
             1,
             MONDAY.isoformat(),
             None,
@@ -330,7 +332,7 @@ def test_the_rebuild_merges_what_the_label_split_and_keeps_the_days(label_keyed_
 
     assert _count() == 2
     abc = vsdb.weeks_for_alliance(_key("ABC"))[0]
-    assert (abc["grp"], abc["power"], abc["members"]) == ("12-1", 100, 90)
+    assert (abc["grp"], abc["power"], abc["members"]) == ("12 - 1", 100, 90)
     # The first server to record it keeps the attribution.
     assert abc["actor_guild_id"] == "1"
     assert abc["day_scores"] == {1: 500, 2: 700}
@@ -364,9 +366,9 @@ def test_stored_prompts_and_announcements_take_the_standard_spelling(temp_db):
         conn.execute(
             "INSERT INTO vs_score_prompt_posts (guild_id, channel_id, message_id, league_season, "
             "league_tier, league_group, week, duel_day, server_date, posted_at) "
-            "VALUES (1, 2, 3, 's36', 'Diamond', '12 - 1', 1, 1, '2026-09-07', 'x')"
+            "VALUES (1, 2, 3, 's36', 'Diamond', '12-1', 1, 1, '2026-09-07', 'x')"
         )
-        for key in ("S36|Diamond|12 - 1|1|2", "S36|Diamond|12 - 1", "S36|Diamond|12-1"):
+        for key in ("S36|Diamond|12-1|1|2", "S36|Diamond|12-1", "S36|Diamond|12 - 1"):
             conn.execute(
                 "INSERT INTO vs_event_posts (guild_id, kind, event_key, posted_at) "
                 "VALUES (1, 'recap', ?, 'x')",
@@ -379,7 +381,7 @@ def test_stored_prompts_and_announcements_take_the_standard_spelling(temp_db):
     with config._get_conn() as conn:
         prompt = conn.execute("SELECT * FROM vs_score_prompt_posts").fetchone()
         keys = sorted(r[0] for r in conn.execute("SELECT event_key FROM vs_event_posts"))
-    assert (prompt["league_season"], prompt["league_group"]) == ("S36", "12-1")
+    assert (prompt["league_season"], prompt["league_group"]) == ("S36", "12 - 1")
     # The old spelling of an already-recorded announcement is dropped, not
     # renamed into a collision.
-    assert keys == ["S36|Diamond|12-1", "S36|Diamond|12-1|1|2"]
+    assert keys == ["S36|Diamond|12 - 1", "S36|Diamond|12 - 1|1|2"]

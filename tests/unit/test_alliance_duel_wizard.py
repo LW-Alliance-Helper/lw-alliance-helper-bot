@@ -344,7 +344,7 @@ class TestCheckDataButton:
         kwargs = await self._press(parent, self._mismatched_week())
 
         embed = kwargs["embed"]
-        assert embed.fields[0].name == "S36 Diamond 12-1"
+        assert embed.fields[0].name == "S36 Diamond 12 - 1"
         assert "⚠️ **Week 1, ABC**: The two scores in this match add up to **14**" in (
             embed.fields[0].value
         )

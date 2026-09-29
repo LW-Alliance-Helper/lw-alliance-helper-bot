@@ -395,7 +395,7 @@ def _merge_record(conn, record: dict) -> int:
 
 # ── Leagues (#658) ────────────────────────────────────────────────────────────
 #
-# A league label is not an identity: the game hands "S36 Diamond 12-1" to a
+# A league label is not an identity: the game hands "S36 Diamond 12 - 1" to a
 # later set of warzones a month on, and nobody on this side can rule out two
 # brackets carrying it at once. So which real bracket a row belongs to is
 # worked out from what the rows themselves say, and recorded as `league_id`.

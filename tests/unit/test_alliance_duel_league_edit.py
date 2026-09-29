@@ -184,7 +184,7 @@ def test_weeks_read_as_a_phrase(weeks, said):
 
 def test_the_confirm_step_warns_about_a_pairing_before_anything_happens():
     embed = edit.confirm_embed(_state(_typo_league()), _key("LlON"))
-    assert embed.title == "🗑️ Remove LlON from S35 Diamond 12-2?"
+    assert embed.title == "🗑️ Remove LlON from S35 Diamond 12 - 2?"
     assert "for weeks 1 and 2 of this League" in embed.description
     assert embed.fields[0].name == "Still paired with LlON"
     assert "**A03** is recorded against **LlON** in weeks 1 and 2." in embed.fields[0].value
@@ -215,7 +215,7 @@ async def test_the_picker_says_so_when_there_is_nobody_to_remove():
     inter.response.send_message = AsyncMock()
     await edit.open_remove_picker(inter, _state([_row(OWN_TAG, ranking=1)]))
     assert inter.response.send_message.call_args.args[0] == (
-        "There's no other alliance in **S35 Diamond 12-2** to remove."
+        "There's no other alliance in **S35 Diamond 12 - 2** to remove."
     )
 
 
@@ -245,7 +245,7 @@ async def test_a_removal_offers_to_repair_the_pairing_it_leaves():
 
     inter.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     text = inter.followup.send.call_args.args[0]
-    assert text.startswith("✅ Removed **LlON** from **S35 Diamond 12-2**.")
+    assert text.startswith("✅ Removed **LlON** from **S35 Diamond 12 - 2**.")
     assert "**A03** still has **LlON** as their opponent in weeks 1 and 2." in text
     repair = inter.followup.send.call_args.kwargs["view"]
     assert [c.label for c in repair.children] == [

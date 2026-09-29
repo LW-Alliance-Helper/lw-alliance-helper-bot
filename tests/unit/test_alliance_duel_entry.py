@@ -1682,7 +1682,7 @@ async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename
     # Row 2 -- the header is row 1, the one alliance is the only data row.
     assert values[f"{transfer_col(ad.COL_TIER)}2"] == "Diamond"
     assert values[f"{transfer_col(ad.COL_SEASON)}2"] == "S36"
-    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12-1"
+    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12 - 1"
 
 
 def transfer_col(name: str) -> str:
@@ -1859,7 +1859,7 @@ def test_edit_league_modal_defaults_to_the_current_tier():
     modal = entry.EditLeagueModal(state)
 
     assert modal.season.default == "S36"
-    assert modal.group.default == "12-1"
+    assert modal.group.default == "12 - 1"
     # "Diamon" is not one of the three real tiers, so nothing is pre-selected
     # -- there is no honest default for a typo.
     assert not any(opt.default for opt in modal.tier.options)

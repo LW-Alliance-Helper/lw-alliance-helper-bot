@@ -6644,7 +6644,7 @@ def _standardize_vs_labels(conn) -> None:
     """Bring stored VS league labels to the standardized form (#658).
 
     `alliance_duel.LeagueKey` standardizes every label it is built from
-    (`S37`, `12-1`), so a score prompt posted this week under `12 - 1`, or an
+    (`S37`, `12 - 1`), so a score prompt posted this week under `12-1`, or an
     announcement recorded under it, would no longer match the league the
     Sheet now reads as: the prompt refused as belonging to an old league
     (#634's refusal), the announcement sent a second time. Run at every

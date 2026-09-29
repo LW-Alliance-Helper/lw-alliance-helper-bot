@@ -961,7 +961,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
         self._tier_label = discord.ui.Label(text="Tier", component=self.tier)
         self.group = discord.ui.TextInput(
             label="Group",
-            placeholder="12-1",
+            placeholder="12 - 1",
             max_length=24,
             required=False,
             default=d.get("group"),
@@ -1280,7 +1280,7 @@ class EditLeagueModal(discord.ui.Modal, title="Edit league details"):
         )
         self.group = discord.ui.TextInput(
             label="Group",
-            placeholder="12-1",
+            placeholder="12 - 1",
             default=league.group if league else None,
             required=False,
             max_length=24,

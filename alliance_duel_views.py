@@ -17,7 +17,7 @@ Custom-id schema:
     vsprompt:{guild_id}:{week}:{day}
 
 The league is deliberately *not* in there. Its three parts are free text off
-the alliance's own sheet ("Alliance Duel League S35", "Diamond Tier 12-2"),
+the alliance's own sheet ("Alliance Duel League S35", "Diamond Tier 12 - 2"),
 which neither fits Discord's 100-character cap reliably nor round-trips through
 a colon-separated encoding. It comes from `vs_score_prompt_posts` instead,
 which is also the row that survives a restart.

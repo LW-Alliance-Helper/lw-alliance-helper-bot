@@ -3904,46 +3904,38 @@ GUIDE_SECTIONS = (
 GUIDE_FOOTER = "Screens shown with permission from the players in them."
 
 
+def _guide_steps() -> list:
+    """This guide's steps in the shared shape (`game_guide`, #655)."""
+    import game_guide
+
+    return [
+        game_guide.GuideStep(
+            title=section["title"],
+            body=section["body"],
+            image=section["image"],
+            alt=GUIDE_IMAGES.get(section["image"], ""),
+        )
+        for section in GUIDE_SECTIONS
+    ]
+
+
 def guide_files() -> list[discord.File]:
     """The annotated screenshots, or an empty list if they aren't deployed.
 
-    Missing assets degrade to the words alone rather than failing the button —
-    the text carries the answer and the pictures make it fast, which is the
-    right way round for something that must not break.
+    Built by the shared `game_guide`, which the VS league guide uses too.
+    Reads `_GUIDE_DIR` at call time, so a test can point it elsewhere.
     """
-    files = []
-    for name, description in GUIDE_IMAGES.items():
-        path = os.path.join(_GUIDE_DIR, name)
-        if os.path.isfile(path):
-            files.append(discord.File(path, filename=name, description=description))
-    return files
+    import game_guide
+
+    return game_guide.guide_files(_GUIDE_DIR, _guide_steps())
 
 
 def build_guide() -> tuple[list[discord.Embed], list[discord.File]]:
-    """One embed per step, each with its own image directly beneath its words.
+    """One embed per step, each with its own image directly beneath its words
+    (`game_guide.build_guide`)."""
+    import game_guide
 
-    Two embeds rather than one message with both pictures at the bottom: a
-    numbered list is useless if the thing it numbers is two screens away, and
-    Discord stacks attachments after all the text.
-
-    An embed whose image is missing still renders its instructions, so a
-    partial deployment loses the picture and keeps the guide.
-    """
-    files = guide_files()
-    present = {file.filename for file in files}
-
-    embeds = []
-    for section in GUIDE_SECTIONS:
-        embed = discord.Embed(
-            title=section["title"],
-            description=section["body"],
-            colour=discord.Colour.blurple(),
-        )
-        if section["image"] in present:
-            embed.set_image(url=f"attachment://{section['image']}")
-        embeds.append(embed)
-    embeds[-1].set_footer(text=GUIDE_FOOTER)
-    return embeds, files
+    return game_guide.build_guide(_GUIDE_DIR, _guide_steps(), footer=GUIDE_FOOTER)
 
 
 # ── Admin: browse, revert, export ─────────────────────────────────────────────

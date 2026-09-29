@@ -790,7 +790,14 @@ def shared_store(tmp_path, monkeypatch):
 
 
 def _record_shared(vsdb, state, tag, **kw):
-    """Somebody else's guild recorded this alliance."""
+    """Somebody else's guild recorded this alliance, in our league.
+
+    As it would: its own copy of the bracket, which has our alliance in it
+    too, in the same week. That shared week is how the store knows the two
+    are one league (#658); a row with nothing tying it to ours is somebody
+    else's league, and must not load.
+    """
+    week_date = next(r.week_date for r in state.league_rows())
     vsdb.record_weeks(
         [
             ad.AllianceWeek(
@@ -798,8 +805,16 @@ def _record_shared(vsdb, state, tag, **kw):
                 week=1,
                 alliance=ad.AllianceKey.of(tag, "1234"),
                 tag_display=tag,
+                week_date=week_date,
                 **kw,
-            )
+            ),
+            ad.AllianceWeek(
+                league=state.league,
+                week=1,
+                alliance=OWN,
+                tag_display=OWN_TAG,
+                week_date=week_date,
+            ),
         ],
         actor={"guild_id": 999999},
     )
@@ -1090,6 +1105,7 @@ def test_the_callers_snapshot_is_not_modified():
 async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
     """The whole migration story: no script, no button, no marker."""
     rows = []
+    starts = {"S33": MONDAY - _dt.timedelta(weeks=16), "S34": MONDAY - _dt.timedelta(weeks=8)}
     for season in ("S33", "S34"):
         league = ad.LeagueKey(season, "Diamond", "12 - 2")
         for tag in (OWN_TAG, "A02", "A03"):
@@ -1099,7 +1115,7 @@ async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
                     week=1,
                     alliance=ad.AllianceKey.of(tag, "1234"),
                     tag_display=tag,
-                    week_date=MONDAY,
+                    week_date=starts[season],
                     week_score=7,
                     week_outcome="W",
                 )
@@ -1109,7 +1125,7 @@ async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
     await hub.contribute_snapshot(state)
 
     for season in ("S33", "S34"):
-        stored = shared_store.weeks_for_league(ad.LeagueKey(season, "Diamond", "12 - 2"))
+        stored = shared_store.weeks_for_bracket([(OWN, starts[season])])
         assert len(stored) == 3, f"{season} did not reach the store"
     assert shared_store.weeks_for_alliance(ad.AllianceKey.of("A03", "1234"))[0]["week_score"] == 7
 
@@ -1334,9 +1350,23 @@ def test_league_history_sits_in_row_2_beside_its_siblings():
     assert [c.label for c in _row2(view)] == [
         "Enter weekly results",
         "🔢 Set an alliance's rank",
-        "✏️ Edit league details",
+        "✏️ Edit league",
         hub.VS_BTN_HISTORY,
     ]
+
+
+def test_add_or_edit_alliance_lives_under_edit_league_not_on_the_hub():
+    # Kevin, 28 Sep (#651): adding and removing an alliance sit together,
+    # under Edit league.
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    assert "➕ Add or edit alliance" not in [c.label for c in view.children]
+
+
+async def test_edit_league_opens_its_screen_rather_than_the_form():
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    with patch("alliance_duel_league_edit.open_edit_league", new=AsyncMock()) as opened:
+        await view._edit_league(_interaction())
+    opened.assert_awaited_once()
 
 
 def test_league_history_follows_the_same_premium_gate_as_its_siblings():

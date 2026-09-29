@@ -33,6 +33,8 @@ import examples
 import discord
 
 import alliance_duel as ad
+import alliance_duel_fixes as ad_fixes
+import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import config
 import config_health
@@ -126,8 +128,35 @@ async def save_rows(state, rows: list[ad.AllianceWeek], *, actor=None, observed=
             f"**{ad_setup.VS_SETUP_NAV}** for the column guide."
         )
 
-    _patch_snapshot(state, rows)
+    _patch_and_check(state, rows)
     return ""
+
+
+def _patch_and_check(state, rows: list[ad.AllianceWeek]) -> None:
+    """Patch the snapshot, and keep what the patch newly got wrong (#651).
+
+    Validated before and after, both in memory with no Sheet read, and only the
+    difference is kept on `state.new_findings` for the screen that saved to
+    post under its confirmation (`alliance_duel_fixes.send_new_findings`).
+    Everything that changed between the two runs is this save's doing, so the
+    difference is exactly "what the save wrote", whoever's alliance it was.
+
+    A failing check costs the officer the warning, never the save: the rows are
+    already in their tab.
+    """
+    try:
+        before = ad_fixes.state_findings(state)
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("[VS] check before save failed for guild=%s", state.guild_id)
+        before = None
+    _patch_snapshot(state, rows)
+    state.new_findings = []
+    if before is None:
+        return
+    try:
+        state.new_findings = ad.new_findings(before, ad_fixes.state_findings(state))
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("[VS] check after save failed for guild=%s", state.guild_id)
 
 
 async def _mirror_centrally(state, rows: list[ad.AllianceWeek], *, actor=None) -> None:
@@ -457,6 +486,7 @@ class ScoreModal(discord.ui.Modal):
             return
 
         await interaction.followup.send(embed=_score_ack(state, self.week, day), ephemeral=True)
+        await ad_fixes.send_new_findings(interaction, state)
 
         # The officer already has their answer, so anything the alliance opted
         # into is announced afterwards and cannot delay or break the save.
@@ -572,8 +602,9 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         alliance = ad.AllianceKey.of(self.tag.value, self.warzone.value)
         if alliance is None:
             await interaction.followup.send(
-                "⚠️ An alliance needs both a tag and a warzone. Run `/vs` and click "
-                f"**{VS_BTN_ADD_ALLIANCE}** to try again.",
+                "⚠️ An alliance needs both a tag and a warzone. Run `/vs` → "
+                f"**{ad_edit.VS_BTN_EDIT_LEAGUE_MENU}** → **{VS_BTN_ADD_ALLIANCE}** "
+                "to try again.",
                 ephemeral=True,
             )
             return
@@ -615,6 +646,7 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         await interaction.followup.send(
             embed=embed, view=DetailsLaunchView(state, alliance, self.week), ephemeral=True
         )
+        await ad_fixes.send_new_findings(interaction, state)
 
 
 class AllianceDetailsModal(discord.ui.Modal, title="Notes on this alliance"):
@@ -800,6 +832,7 @@ class ScoutActionsView(OwnedView):
             await interaction.followup.send(
                 f"✅ Picked **{side}** for week {self.week}.", ephemeral=True
             )
+            await ad_fixes.send_new_findings(interaction, self.state)
 
         return _pick
 
@@ -1052,6 +1085,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             await self._refuse(interaction, f"⚠️ {message}")
             return
         await interaction.followup.send(f"✅ {message}", ephemeral=True)
+        await ad_fixes.send_new_findings(interaction, state)
 
 
 VS_BTN_RETRY_NEW_LEAGUE = "✏️ Edit and try again"
@@ -2008,6 +2042,7 @@ class PredictionsView(OwnedView):
             PREDICT_SAVED.format(n=saved, s="" if saved == 1 else "s", matches=", ".join(called)),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)
 
     async def _cancel(self, interaction: discord.Interaction):
         self.staged.clear()
@@ -2453,6 +2488,7 @@ class OtherResultsModal(discord.ui.Modal):
             + ", ".join(said),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)
 
 
 class _RetryResultsView(OwnedView):
@@ -2653,3 +2689,4 @@ class AllianceRankModal(discord.ui.Modal):
             ),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)

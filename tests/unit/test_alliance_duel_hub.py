@@ -1334,9 +1334,23 @@ def test_league_history_sits_in_row_2_beside_its_siblings():
     assert [c.label for c in _row2(view)] == [
         "Enter weekly results",
         "🔢 Set an alliance's rank",
-        "✏️ Edit league details",
+        "✏️ Edit league",
         hub.VS_BTN_HISTORY,
     ]
+
+
+def test_add_or_edit_alliance_lives_under_edit_league_not_on_the_hub():
+    # Kevin, 28 Sep (#651): adding and removing an alliance sit together,
+    # under Edit league.
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    assert "➕ Add or edit alliance" not in [c.label for c in view.children]
+
+
+async def test_edit_league_opens_its_screen_rather_than_the_form():
+    view = hub.VSHubView(None, _state(_bracket_rows()), owner_id=7)
+    with patch("alliance_duel_league_edit.open_edit_league", new=AsyncMock()) as opened:
+        await view._edit_league(_interaction())
+    opened.assert_awaited_once()
 
 
 def test_league_history_follows_the_same_premium_gate_as_its_siblings():

@@ -497,6 +497,61 @@ def rows_for_league(league, *, week: int | None = None) -> list:
     return [_to_row(r) for r in weeks_for_league(league, week=week)]
 
 
+# ── Removing an alliance from a league (#651) ─────────────────────────────────
+#
+# Both are scoped to **this server's own copies**. A row another server
+# recorded is that server's reading of the game, and an alliance that typed a
+# tag wrong has no business deleting it; the removal cleans their league, not
+# anybody else's. `actor_guild_id` is the column the uninstall scrub already
+# trusts for exactly this question.
+
+
+def remove_alliance_from_league(alliance, league, *, guild_id) -> int:
+    """Delete this server's rows for `alliance` in `league`. Returns the count.
+
+    Days go with them through the foreign key's CASCADE.
+    """
+    key = _key_parts(alliance)
+    parts = _league_parts(league)
+    if key is None or parts is None or guild_id is None:
+        return 0
+    with _get_conn() as conn:
+        n = conn.execute(
+            "DELETE FROM alliance_weeks WHERE tag = ? AND warzone = ? AND season = ? "
+            "AND tier = ? AND grp = ? AND actor_guild_id = ?",
+            (*key, *parts, str(guild_id)),
+        ).rowcount
+        conn.commit()
+    return n
+
+
+def clear_opponent(pairs, league, opponent, *, guild_id) -> int:
+    """Blank the opponent on this server's rows that still name `opponent`.
+
+    `pairs` is `(alliance, week)` for each row to clear. The opponent is
+    matched as well as the row, so a row already re-paired keeps its new one.
+    """
+    parts = _league_parts(league)
+    theirs = _key_parts(opponent)
+    if parts is None or theirs is None or guild_id is None:
+        return 0
+    n = 0
+    with _get_conn() as conn:
+        for alliance, week in pairs:
+            key = _key_parts(alliance)
+            if key is None or not week:
+                continue
+            n += conn.execute(
+                "UPDATE alliance_weeks SET opponent_tag = NULL, opponent_warzone = NULL, "
+                "updated_at = ? WHERE tag = ? AND warzone = ? AND season = ? AND tier = ? "
+                "AND grp = ? AND week = ? AND opponent_tag = ? AND opponent_warzone = ? "
+                "AND actor_guild_id = ?",
+                (_now(), *key, *parts, int(week), *theirs, str(guild_id)),
+            ).rowcount
+        conn.commit()
+    return n
+
+
 # ── Guild removal (#543) ──────────────────────────────────────────────────────
 #
 # Nothing here is deleted. A score is a reading of what the game showed sixteen

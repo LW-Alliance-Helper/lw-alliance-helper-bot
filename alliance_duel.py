@@ -423,8 +423,8 @@ def parse_score(value) -> int | None:
     ``230000`` on a day, so there is no floor below which a small number is
     safely assumed to be shorthand. Scaling it would silently multiply a real
     score by a million, which is worse than making a big-alliance user type a
-    unit. Anything ambiguous is caught by "Check my sheet" (#399) rather than
-    guessed at here.
+    unit. Anything ambiguous is caught by "Check my data for errors" (#399,
+    #651) rather than guessed at here.
     """
     return _parse_magnitude(value, None)
 
@@ -437,7 +437,7 @@ def parse_outcome(value) -> str | None:
     """Read a W/L cell into ``"W"`` / ``"L"``, or ``None`` when blank or
     unrecognised. Deliberately permissive about what leadership types into a
     spreadsheet, and deliberately silent about anything else — a typo is caught
-    by "Check my sheet" (#399), not coerced into a result here."""
+    by "Check my data for errors" (#399, #651), not coerced into a result here."""
     if value is None:
         return None
     s = str(value).strip().casefold()
@@ -1006,6 +1006,91 @@ def apply_upsert(worksheet, plan: UpsertPlan) -> None:
             [list(r) for r in plan.appends],
             value_input_option="USER_ENTERED",
         )
+
+
+# ── Removing an alliance (#651) ───────────────────────────────────────────────
+#
+# The only deletes this feature makes, and both are narrow on purpose. Every
+# other write goes through `plan_upsert`, which never writes a blank; these two
+# exist because an alliance typed wrong (a capital i for a lowercase L) can
+# otherwise only be taken out of a league by opening the Sheet, and the check
+# that finds it is meant to fix it from Discord.
+
+
+def plan_remove_alliance(
+    values: Sequence[Sequence], league: LeagueKey, alliance: AllianceKey
+) -> tuple[int, ...]:
+    """Sheet row numbers holding `alliance` in `league`, in every week.
+
+    Pure, like :func:`plan_upsert`, and read against the tab as it is at the
+    moment of the delete rather than the hub's snapshot: a row number from a
+    snapshot taken ten minutes ago would delete whatever has moved into it.
+    Only this league: the same tag in an earlier league is most likely the real
+    alliance, and the mistake being fixed happened here.
+    """
+    return tuple(
+        r.row_number
+        for r in parse_rows(values)
+        if r.row_number and r.league == league and r.alliance == alliance
+    )
+
+
+def apply_row_deletes(worksheet, row_numbers: Iterable[int]) -> None:
+    """Delete these sheet rows in one request.
+
+    Bottom-up, so each deletion leaves the row numbers above it where they
+    were, and contiguous runs collapse into one range. One `batch_update` for
+    the lot, the same quota reasoning as :func:`apply_upsert`.
+    """
+    numbers = sorted(set(row_numbers), reverse=True)
+    if not numbers:
+        return
+    runs: list[list[int]] = []
+    for n in numbers:
+        if runs and runs[-1][0] == n + 1:
+            runs[-1][0] = n
+        else:
+            runs.append([n, n])
+    requests = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "dimension": "ROWS",
+                    # Zero-based and end-exclusive, so sheet row n is [n-1, n).
+                    "startIndex": first - 1,
+                    "endIndex": last,
+                }
+            }
+        }
+        for first, last in runs
+    ]
+    worksheet.spreadsheet.batch_update({"requests": requests})
+
+
+def plan_clear_opponent(
+    values: Sequence[Sequence], keys: Iterable[RowKey], opponent: AllianceKey
+) -> UpsertPlan:
+    """Blank the opponent on these rows, where it still names `opponent`.
+
+    The one place a blank is written on purpose: "leave them unpaired" after
+    an alliance is removed. Re-checked against the live tab, so a row somebody
+    has already re-paired in the meantime keeps its new opponent.
+    """
+    header = list(values[0]) if values else []
+    hidx = transfer.header_index(header)
+    wanted = set(keys)
+    updates: list[CellUpdate] = []
+    for row in parse_rows(values):
+        if row.key not in wanted or row.opponent != opponent or not row.row_number:
+            continue
+        for name in (COL_OPPONENT_TAG, COL_OPPONENT_WARZONE):
+            idx = hidx.get(transfer.norm_header(name))
+            if idx is not None:
+                updates.append(
+                    CellUpdate(f"{transfer.col_index_to_letter(idx)}{row.row_number}", "")
+                )
+    return UpsertPlan(tuple(updates))
 
 
 def _row_sort_key(row: AllianceWeek) -> tuple:
@@ -2818,17 +2903,21 @@ def partition_by_intent(rows: Iterable[AllianceWeek]) -> IntentPartition:
     )
 
 
-# ── Validation ("Check my sheet") ─────────────────────────────────────────────
+# ── Validation ("Check my data for errors", #651) ─────────────────────────────
 #
 # Manual entry with no external source makes errors inevitable and silent, so
-# validation is a feature rather than a nicety. Every finding names the row and
-# the column, because "something is wrong somewhere in 64 rows" is not
-# actionable.
+# validation is a feature rather than a nicety. Every finding carries the
+# league, week and alliance it concerns, because "something is wrong somewhere
+# in 64 rows" is not actionable, and because each one is fixed from the Discord
+# screen that wrote it rather than by sending the officer to their Sheet (#651).
 #
 # Rules 4, 5 and 6 assume a full 16-alliance bracket and run **only in
 # full-bracket mode** (#448). Fired against an own-alliance sheet they would
 # flag a deliberate choice as an error, which is the opposite of what the
 # validation is for.
+#
+# The messages are signed-off copy (#651, 28 Sep). They say what is wrong in the
+# words the entry screens use, never the Sheet's column names.
 
 #: How much a finding should worry the reader. `error` is a contradiction in
 #: the data; `warning` is a value that looks wrong but might not be.
@@ -2838,7 +2927,7 @@ SEVERITY_WARNING = "warning"
 
 @dataclass(frozen=True)
 class Finding:
-    """One validation problem, addressed to a specific cell."""
+    """One validation problem, and enough about where it is to fix it."""
 
     rule: int
     severity: str
@@ -2848,16 +2937,47 @@ class Finding:
     row_number: int | None = None
     column: str = ""
     alliance: AllianceKey | None = None
+    #: Where the problem lives, for the report's League heading and for the
+    #: jump-to-fix button that opens the right screen already on it.
+    league: LeagueKey | None = None
+    week: int | None = None
+    #: Rule 8 only: which duel day's score looks wrong.
+    day: int | None = None
+    #: The alliance as the officer typed it, for the report line. The key's
+    #: normalised tag would read as a correction of their spelling.
+    alliance_display: str = ""
 
     @property
-    def where(self) -> str:
-        """Human-readable location, for the report embed."""
-        parts = []
-        if self.row_number:
-            parts.append(f"row {self.row_number}")
-        if self.column:
-            parts.append(f"column {self.column}")
-        return ", ".join(parts)
+    def identity(self) -> tuple:
+        """What makes two findings the same problem.
+
+        The message is deliberately not part of it: a pair of scores that goes
+        from 12 to 14 is the same problem with a different number, and the
+        after-save check (#651) must not announce it as new.
+        """
+        return (self.rule, self.league, self.week, self.alliance, self.column, self.day)
+
+
+def _shown(row: AllianceWeek) -> str:
+    """An alliance as its row displays it, falling back to the key's tag."""
+    return row.tag_display or row.alliance.tag.upper()
+
+
+def _shown_key(alliance: AllianceKey, by_alliance: dict) -> str:
+    row = by_alliance.get(alliance)
+    return _shown(row) if row is not None else alliance.tag.upper()
+
+
+def _at(row: AllianceWeek, **kw) -> dict:
+    """The location fields every per-row finding carries."""
+    return {
+        "row_number": row.row_number,
+        "alliance": row.alliance,
+        "league": row.league,
+        "week": row.week,
+        "alliance_display": _shown(row),
+        **kw,
+    }
 
 
 def _league_weeks(rows: Sequence[AllianceWeek]) -> dict[tuple, list[AllianceWeek]]:
@@ -2890,12 +3010,11 @@ def _check_week_score_pairs(group: Sequence[AllianceWeek]) -> list[Finding]:
                     rule=1,
                     severity=SEVERITY_ERROR,
                     message=(
-                        f"Week Scores for this matchup add up to {total}, not "
-                        f"{WEEK_POINTS_TOTAL} ({row.week_score} + {other.week_score})."
+                        f"The two scores in this match add up to **{total}** "
+                        f"({row.week_score} + {other.week_score}), but a week is worth "
+                        f"{WEEK_POINTS_TOTAL} points."
                     ),
-                    row_number=row.row_number,
-                    column=COL_WEEK_SCORE,
-                    alliance=row.alliance,
+                    **_at(row, column=COL_WEEK_SCORE),
                 )
             )
     return out
@@ -2912,12 +3031,10 @@ def _check_day_outcomes_sum(row: AllianceWeek) -> list[Finding]:
             rule=2,
             severity=SEVERITY_ERROR,
             message=(
-                f"The six Day Outcomes add up to {row.day_points_total} league points, "
-                f"but Week Score says {row.week_score}."
+                f"The six days add up to **{row.day_points_total}** points, but the "
+                f"week's score says **{row.week_score}**."
             ),
-            row_number=row.row_number,
-            column=COL_WEEK_SCORE,
-            alliance=row.alliance,
+            **_at(row, column=COL_WEEK_SCORE),
         )
     ]
 
@@ -2929,17 +3046,17 @@ def _check_outcome_agrees(row: AllianceWeek) -> list[Finding]:
     expected = "W" if row.week_score * 2 > WEEK_POINTS_TOTAL else "L"
     if row.week_outcome == expected:
         return []
+    said = "win" if row.week_outcome == "W" else "loss"
+    is_ = "win" if expected == "W" else "loss"
     return [
         Finding(
             rule=3,
             severity=SEVERITY_ERROR,
             message=(
-                f"Week Outcome says {row.week_outcome}, but a Week Score of "
-                f"{row.week_score} of {WEEK_POINTS_TOTAL} is a {expected}."
+                f"This week is marked as a **{said}**, but **{row.week_score}** of "
+                f"{WEEK_POINTS_TOTAL} points is a **{is_}**."
             ),
-            row_number=row.row_number,
-            column=COL_WEEK_OUTCOME,
-            alliance=row.alliance,
+            **_at(row, column=COL_WEEK_OUTCOME),
         )
     ]
 
@@ -2952,29 +3069,31 @@ def _check_reciprocal_opponents(group: Sequence[AllianceWeek]) -> list[Finding]:
         if row.opponent is None:
             continue
         other = by_alliance.get(row.opponent)
+        opponent = _shown_key(row.opponent, by_alliance)
         if other is None:
             out.append(
                 Finding(
                     rule=4,
                     severity=SEVERITY_ERROR,
-                    message="This row's opponent has no row of their own this week.",
-                    row_number=row.row_number,
-                    column=COL_OPPONENT_TAG,
-                    alliance=row.alliance,
+                    message=(
+                        f"**{opponent}** is down as their opponent, but nothing is "
+                        f"recorded for **{opponent}** this week."
+                    ),
+                    **_at(row, column=COL_OPPONENT_TAG),
                 )
             )
         elif other.opponent is not None and other.opponent != row.alliance:
+            # Kevin's wording, 28 Sep sign-off.
+            third = _shown_key(other.opponent, by_alliance)
             out.append(
                 Finding(
                     rule=4,
                     severity=SEVERITY_ERROR,
                     message=(
-                        "Opponents disagree: this row faces that alliance, but their "
-                        "row names someone else."
+                        f"This has **{_shown(row)}** playing **{opponent}**, but "
+                        f"**{opponent}** is already recorded against **{third}**."
                     ),
-                    row_number=row.row_number,
-                    column=COL_OPPONENT_TAG,
-                    alliance=row.alliance,
+                    **_at(row, column=COL_OPPONENT_TAG),
                 )
             )
     return out
@@ -2999,10 +3118,11 @@ def _check_rankings(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Fin
                 Finding(
                     rule=5,
                     severity=SEVERITY_ERROR,
-                    message=f"Ranking {ranking} is outside 1-{BRACKET_SIZE}.",
-                    row_number=first_row[alliance].row_number,
-                    column=COL_RANKING,
-                    alliance=alliance,
+                    message=(
+                        f"Rank **{ranking}** isn't possible. A League's ranks run from 1 "
+                        f"to {BRACKET_SIZE}."
+                    ),
+                    **_at(first_row[alliance], column=COL_RANKING),
                 )
             )
     for ranking, holders in counts.items():
@@ -3013,11 +3133,10 @@ def _check_rankings(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[Fin
                         rule=5,
                         severity=SEVERITY_ERROR,
                         message=(
-                            f"Ranking {ranking} is used by {len(holders)} alliances in this league."
+                            f"Rank **{ranking}** is given to **{len(holders)}** alliances "
+                            "in this League."
                         ),
-                        row_number=first_row[alliance].row_number,
-                        column=COL_RANKING,
-                        alliance=alliance,
+                        **_at(first_row[alliance], column=COL_RANKING),
                     )
                 )
     return out
@@ -3029,7 +3148,7 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
     **Only ever fires on too many**, never on too few. A part-filled sheet is
     the normal state during entry, and the bracket and path surfaces already
     say so through :class:`BracketIncomplete`. Repeating it here would turn
-    "Check my sheet" into a nag about work in progress.
+    the check into a nag about work in progress.
 
     Too many is a different thing: sixteen is the shape of the competition, so
     a seventeenth alliance is always a mistake. The one that matters in
@@ -3045,7 +3164,8 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
     likeliest to be the extra (a unranked one, usually), but it cannot know,
     and pointing at a row would be the bot having an opinion about which of the
     alliance's own entries is the wrong one (`UX.md` principle 6). One finding
-    per league, and the reader does the picking.
+    per league, and the reader does the picking, on the remove screen the
+    report's button opens (#651).
     """
     alliances = {row.alliance for row in rows if row.league == league}
     if len(alliances) <= BRACKET_SIZE:
@@ -3060,6 +3180,7 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
                 f"entered {len(alliances)}. Please review and remove the extra alliance."
             ),
             column=COL_TAG,
+            league=league,
         )
     ]
 
@@ -3075,11 +3196,13 @@ def _check_own_alliance_present(
             rule=6,
             severity=SEVERITY_WARNING,
             message=(
-                f"Your alliance doesn't appear anywhere in league {league}. "
-                "Check the Tag and Warzone on those rows match your setup."
+                "Your alliance isn't in this League. Check that the tag and warzone "
+                "entered for it match your setup."
             ),
             column=COL_TAG,
             alliance=own,
+            league=league,
+            alliance_display=own.tag.upper(),
         )
     ]
 
@@ -3107,11 +3230,10 @@ def _check_picked_agreement(group: Sequence[AllianceWeek]) -> list[Finding]:
                     rule=7,
                     severity=SEVERITY_WARNING,
                     message=(
-                        f"Both sides of this matchup are picked to {verb}. One of them is wrong."
+                        f"Both alliances in this match are predicted to {verb}. "
+                        "Only one of them can."
                     ),
-                    row_number=row.row_number,
-                    column=COL_PICKED,
-                    alliance=row.alliance,
+                    **_at(row, column=COL_PICKED),
                 )
             )
     return out
@@ -3145,7 +3267,7 @@ def _check_day_score_magnitude(rows: Sequence[AllianceWeek]) -> list[Finding]:
         if row.day_scores:
             by_alliance.setdefault(row.alliance, []).append(row)
 
-    for alliance, own_rows in by_alliance.items():
+    for _alliance, own_rows in by_alliance.items():
         scores = [s for r in own_rows for s in r.day_scores.values() if s > 0]
         if len(scores) < SUSPECT_SCORE_MIN_SAMPLES:
             continue
@@ -3160,13 +3282,11 @@ def _check_day_score_magnitude(rows: Sequence[AllianceWeek]) -> list[Finding]:
                             rule=8,
                             severity=SEVERITY_WARNING,
                             message=(
-                                f"Day {day} Score of {score:,} is far below this "
-                                f"alliance's usual (about {typical:,}). "
-                                f"Did you mean {score:,}m?"
+                                f"Day {day}'s score of **{score:,}** is far below this "
+                                f"alliance's usual (about **{typical:,}**). "
+                                f"Did you mean **{score:,}m**?"
                             ),
-                            row_number=row.row_number,
-                            column=day_score_col(day),
-                            alliance=alliance,
+                            **_at(row, column=day_score_col(day), day=day),
                         )
                     )
     return out
@@ -3213,6 +3333,17 @@ def validate(
     out += _check_day_score_magnitude(rows)
 
     return sorted(out, key=lambda f: (f.rule, f.row_number or 0, f.column))
+
+
+def new_findings(before: Iterable[Finding], after: Iterable[Finding]) -> list[Finding]:
+    """What `after` holds that `before` did not, by :attr:`Finding.identity`.
+
+    The after-save check (#651) shows only the problems a save created. A
+    warning the officer has already looked at and left alone, a genuinely low
+    day for instance, would otherwise come back on every save to that week.
+    """
+    seen = {f.identity for f in before}
+    return [f for f in after if f.identity not in seen]
 
 
 # ── Reading a typed-in bracket ────────────────────────────────────────────────

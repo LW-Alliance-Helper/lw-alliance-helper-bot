@@ -30,6 +30,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_analytics as an
 import alliance_duel_entry as ad_entry
+import alliance_duel_guide as ad_guide
 import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import alliance_duel_ui as ad_ui
@@ -1335,6 +1336,15 @@ class VSHubView(OwnedView):
             fresh.callback = self._new_league
             self.add_item(fresh)
 
+            # Beside the button it explains, and only while that button is
+            # there (#655): the modal cannot say where the tags and warzones
+            # are in the game, and this is the moment somebody needs to know.
+            guide = discord.ui.Button(
+                label=ad_guide.VS_BTN_LEAGUE_GUIDE, style=discord.ButtonStyle.secondary, row=1
+            )
+            guide.callback = self._league_guide
+            self.add_item(guide)
+
         setup = discord.ui.Button(label=VS_BTN_SETUP, style=discord.ButtonStyle.secondary, row=1)
         setup.callback = self._setup
         self.add_item(setup)
@@ -1388,6 +1398,9 @@ class VSHubView(OwnedView):
         ):
             return
         await open_league_history_picker(interaction, self.state)
+
+    async def _league_guide(self, interaction: discord.Interaction):
+        await ad_guide.send_guide(interaction)
 
     async def _edit_league(self, interaction: discord.Interaction):
         await ad_edit.open_edit_league(interaction, self.state)

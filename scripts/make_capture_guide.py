@@ -94,7 +94,7 @@ def check_contrast() -> None:
         raise SystemExit("contrast check failed:\n  " + "\n  ".join(failures))
 
 
-def annotate(src_path: str, out_name: str, boxes: list) -> str:
+def annotate(src_path: str, out_name: str, boxes: list, out_dir: str = OUT_DIR) -> str:
     """A cropped screenshot with numbered markers. No words baked in.
 
     The first version burned a title, a subtitle and a legend into the picture.
@@ -107,6 +107,9 @@ def annotate(src_path: str, out_name: str, boxes: list) -> str:
     crop is converted here so changing it cannot silently move every marker,
     which is how an earlier build put a box over the score bar instead of the
     player names.
+
+    `out_dir` lets another feature's guide share this (the VS league guide,
+    #655) rather than copy it.
     """
     image = Image.open(src_path).convert("RGB")
     original_h = image.height
@@ -147,8 +150,8 @@ def annotate(src_path: str, out_name: str, boxes: list) -> str:
         )
         draw.line([cx + r + 2, cy, x0 - 7, cy], fill=colour, width=3)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, out_name)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, out_name)
     canvas.save(out_path, optimize=True)
     return out_path
 

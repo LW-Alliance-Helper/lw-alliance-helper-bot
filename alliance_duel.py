@@ -3364,6 +3364,34 @@ def new_findings(before: Iterable[Finding], after: Iterable[Finding]) -> list[Fi
 #: `Glo 999` all arrive rather than being retyped into one shape.
 _BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
 
+#: The game's own formatting, which the separators above would otherwise cut
+#: into extra fields (#655). An officer copies what the screen shows, or pastes
+#: what an AI tool read off their screenshots, and neither should have to be
+#: retyped: `<ToWR> #723 26,677,744,044 Lv.30 95/100` is one alliance.
+#:
+#: Two of these are read narrowly on purpose, because a comma and a slash are
+#: also separators (`Glo,999` has always been accepted):
+#:
+#: - a comma-grouped number counts only with **at least two groups**, a
+#:   million or more, which alliance power always is, so `999,100` stays a
+#:   warzone and a number;
+#: - a slash pair counts as members only as **the last thing on the line**,
+#:   where the alliance page's `Ppl 95/100` sits.
+_GAME_TAG_BRACKETS = re.compile(r"[\[\]<>]")
+_GAME_THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?:,\d{3}){2,}(?![\d,])")
+_GAME_GIFT_LEVEL = re.compile(r"\blv\.?\s*(\d+)", re.IGNORECASE)
+_GAME_WARZONE = re.compile(r"#\s*(\d+)")
+_GAME_MEMBERS = re.compile(r"(\d+)\s*/\s*\d+\s*$")
+
+
+def _game_formatting(line: str) -> str:
+    """A bracket line with the game's printed formats read as plain values."""
+    line = _GAME_TAG_BRACKETS.sub(" ", line)
+    line = _GAME_THOUSANDS.sub(lambda m: m.group(0).replace(",", ""), line)
+    line = _GAME_GIFT_LEVEL.sub(r"\1", line)
+    line = _GAME_WARZONE.sub(r"\1", line)
+    return _GAME_MEMBERS.sub(r"\1", line.strip())
+
 
 @dataclass(frozen=True)
 class BracketEntry:
@@ -3417,6 +3445,11 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
     at or above a million is read as already-raw), because these are the same
     numbers :func:`parse_power` reads everywhere else.
 
+    **A line may be exactly what the game prints** (#655): the tag in ``<>``
+    or ``[]``, the warzone as ``#723``, power with thousands separators, the
+    gift level as ``Lv.30`` and members as ``95/100``. See
+    :func:`_game_formatting` for how the comma and slash stay unambiguous.
+
     Problems are collected rather than raised, and each names the line it came
     from, because the caller renders them into a reply where "line 7" is the
     only route back to the typo.
@@ -3430,7 +3463,7 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
     shape = "a tag and a warzone, then power, gift level and members if you have them"
 
     for index, line in enumerate(lines, start=1):
-        parts = [p for p in _BRACKET_SPLIT.split(line.replace("[", " ").replace("]", " ")) if p]
+        parts = [p for p in _BRACKET_SPLIT.split(_game_formatting(line)) if p]
 
         # A leading ranking number is allowed but never trusted. It is told apart
         # from a power figure by what follows it: a tag carries at least one

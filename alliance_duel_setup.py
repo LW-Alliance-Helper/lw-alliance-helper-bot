@@ -268,7 +268,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
         value=(
             "Straight off the in-game League screen.\n"
             f"**{ad.COL_SEASON}** `S35` · **{ad.COL_TIER}** `Diamond` · "
-            f"**{ad.COL_GROUP}** `12 - 2`\n"
+            f"**{ad.COL_GROUP}** `12-2`\n"
             f"**{ad.COL_RANKING}** `1` to `16`, fixed for the whole league.\n"
             f"**{ad.COL_TAG}** and **{ad.COL_WARZONE}** identify an alliance."
         ),

@@ -6,6 +6,7 @@ alliance, never a row another server recorded, and a pairing that still names
 the removed alliance only cleared when the officer asks for it.
 """
 
+import datetime as _dt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,12 +27,14 @@ def _key(tag: str) -> ad.AllianceKey:
 
 
 def _row(tag, week=1, ranking=None, league=LEAGUE, **kw):
+    # A league's weeks are a week apart, and the earlier league two months back.
+    start = MONDAY if league == LEAGUE else MONDAY - _dt.timedelta(weeks=8)
     return ad.AllianceWeek(
         league=league,
         week=week,
         alliance=_key(tag),
         ranking=ranking,
-        week_date=MONDAY,
+        week_date=start + _dt.timedelta(weeks=week - 1),
         tag_display=tag,
         **kw,
     )
@@ -151,7 +154,7 @@ def test_clearing_takes_this_servers_pairing_only(central):
     central.record_weeks([_row("A03", opponent=_key("LlON"))], actor={"guild_id": 1})
     central.record_weeks([_row("A03", week=2, opponent=_key("LlON"))], actor={"guild_id": 2})
 
-    pairs = [(_key("A03"), 1), (_key("A03"), 2)]
+    pairs = [(_key("A03"), 1, MONDAY), (_key("A03"), 2, MONDAY + _dt.timedelta(weeks=1))]
     assert central.clear_opponent(pairs, LEAGUE, _key("LlON"), guild_id=1) == 1
 
     by_week = {r["week"]: r["opponent_tag"] for r in central.weeks_for_alliance(_key("A03"))}
@@ -181,7 +184,7 @@ def test_weeks_read_as_a_phrase(weeks, said):
 
 def test_the_confirm_step_warns_about_a_pairing_before_anything_happens():
     embed = edit.confirm_embed(_state(_typo_league()), _key("LlON"))
-    assert embed.title == "🗑️ Remove LlON from S35 Diamond 12 - 2?"
+    assert embed.title == "🗑️ Remove LlON from S35 Diamond 12-2?"
     assert "for weeks 1 and 2 of this League" in embed.description
     assert embed.fields[0].name == "Still paired with LlON"
     assert "**A03** is recorded against **LlON** in weeks 1 and 2." in embed.fields[0].value
@@ -212,7 +215,7 @@ async def test_the_picker_says_so_when_there_is_nobody_to_remove():
     inter.response.send_message = AsyncMock()
     await edit.open_remove_picker(inter, _state([_row(OWN_TAG, ranking=1)]))
     assert inter.response.send_message.call_args.args[0] == (
-        "There's no other alliance in **S35 Diamond 12 - 2** to remove."
+        "There's no other alliance in **S35 Diamond 12-2** to remove."
     )
 
 
@@ -242,7 +245,7 @@ async def test_a_removal_offers_to_repair_the_pairing_it_leaves():
 
     inter.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     text = inter.followup.send.call_args.args[0]
-    assert text.startswith("✅ Removed **LlON** from **S35 Diamond 12 - 2**.")
+    assert text.startswith("✅ Removed **LlON** from **S35 Diamond 12-2**.")
     assert "**A03** still has **LlON** as their opponent in weeks 1 and 2." in text
     repair = inter.followup.send.call_args.kwargs["view"]
     assert [c.label for c in repair.children] == [

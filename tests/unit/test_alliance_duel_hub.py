@@ -790,7 +790,14 @@ def shared_store(tmp_path, monkeypatch):
 
 
 def _record_shared(vsdb, state, tag, **kw):
-    """Somebody else's guild recorded this alliance."""
+    """Somebody else's guild recorded this alliance, in our league.
+
+    As it would: its own copy of the bracket, which has our alliance in it
+    too, in the same week. That shared week is how the store knows the two
+    are one league (#658); a row with nothing tying it to ours is somebody
+    else's league, and must not load.
+    """
+    week_date = next(r.week_date for r in state.league_rows())
     vsdb.record_weeks(
         [
             ad.AllianceWeek(
@@ -798,8 +805,16 @@ def _record_shared(vsdb, state, tag, **kw):
                 week=1,
                 alliance=ad.AllianceKey.of(tag, "1234"),
                 tag_display=tag,
+                week_date=week_date,
                 **kw,
-            )
+            ),
+            ad.AllianceWeek(
+                league=state.league,
+                week=1,
+                alliance=OWN,
+                tag_display=OWN_TAG,
+                week_date=week_date,
+            ),
         ],
         actor={"guild_id": 999999},
     )
@@ -1090,6 +1105,7 @@ def test_the_callers_snapshot_is_not_modified():
 async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
     """The whole migration story: no script, no button, no marker."""
     rows = []
+    starts = {"S33": MONDAY - _dt.timedelta(weeks=16), "S34": MONDAY - _dt.timedelta(weeks=8)}
     for season in ("S33", "S34"):
         league = ad.LeagueKey(season, "Diamond", "12 - 2")
         for tag in (OWN_TAG, "A02", "A03"):
@@ -1099,7 +1115,7 @@ async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
                     week=1,
                     alliance=ad.AllianceKey.of(tag, "1234"),
                     tag_display=tag,
-                    week_date=MONDAY,
+                    week_date=starts[season],
                     week_score=7,
                     week_outcome="W",
                 )
@@ -1109,7 +1125,7 @@ async def test_opening_the_hub_backfills_every_season_in_the_tab(shared_store):
     await hub.contribute_snapshot(state)
 
     for season in ("S33", "S34"):
-        stored = shared_store.weeks_for_league(ad.LeagueKey(season, "Diamond", "12 - 2"))
+        stored = shared_store.weeks_for_bracket([(OWN, starts[season])])
         assert len(stored) == 3, f"{season} did not reach the store"
     assert shared_store.weeks_for_alliance(ad.AllianceKey.of("A03", "1234"))[0]["week_score"] == 7
 

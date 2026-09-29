@@ -328,6 +328,8 @@ async def remove_alliance(state, alliance: ad.AllianceKey) -> str:
     """
     league = state.league
     tab = _tab(state)
+    # Before the snapshot drops them: the store keys rows by week date (#658).
+    dates = {r.week_date for r in state.league_rows() if r.alliance == alliance and r.week_date}
 
     def _delete():
         spreadsheet = config.get_spreadsheet(state.guild_id)
@@ -347,7 +349,11 @@ async def remove_alliance(state, alliance: ad.AllianceKey) -> str:
 
         # SQLite blocks, and this runs on the gateway thread (#366).
         await asyncio.to_thread(
-            vsdb.remove_alliance_from_league, alliance, league, guild_id=state.guild_id
+            vsdb.remove_alliance_from_league,
+            alliance,
+            league,
+            guild_id=state.guild_id,
+            week_dates=sorted(dates),
         )
     except Exception as e:  # noqa: BLE001 - the Sheet has it; this is the copy
         logger.warning("[VS] central remove failed for guild=%s: %s", state.guild_id, e)
@@ -378,7 +384,10 @@ async def unpair(state, league, opponent: ad.AllianceKey, paired) -> str:
     try:
         import alliance_duel_db as vsdb
 
-        pairs = [(key.alliance, key.week) for key in keys]
+        pairs = []
+        for key in keys:
+            row = state.row_for(key.alliance, key.week)
+            pairs.append((key.alliance, key.week, row.week_date if row else None))
         await asyncio.to_thread(
             vsdb.clear_opponent, pairs, league, opponent, guild_id=state.guild_id
         )

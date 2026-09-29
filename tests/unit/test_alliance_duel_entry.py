@@ -703,7 +703,7 @@ def test_the_bracket_format_survives_typing():
     and isn't cleared by anything the user types."""
     modal = entry.NewLeagueModal(_state([]))
 
-    assert modal._bracket_label.text == "The bracket, in League order"
+    assert modal._bracket_label.text == "The bracket, one per line, in League order"
     description = modal._bracket_label.description
     assert "tag" in description.lower() and "warzone" in description
     assert "power" in description and "gift" in description and "members" in description

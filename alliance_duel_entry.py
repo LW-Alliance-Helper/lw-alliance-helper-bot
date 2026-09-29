@@ -1005,7 +1005,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 default=d.get("bracket"),
             )
             self._bracket_label = discord.ui.Label(
-                text="The bracket, in League order",
+                text="The bracket, one per line, in League order",
                 # Says what is required and what is not (#655): only the tag
                 # and warzone are, and the old "[tag] [warzone] [power] ..."
                 # read as five required fields.

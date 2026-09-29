@@ -218,15 +218,15 @@ def test_rule_4_flags_a_one_sided_opponent_reference():
     rows[1].opponent = _key(5)  # points somewhere else
     findings = [f for f in ad.validate(rows) if f.rule == 4]
     assert findings
-    assert any("disagree" in f.message or "no row of their own" in f.message for f in findings)
+    assert any("is already recorded against" in f.message for f in findings)
 
 
 def test_rule_5_flags_duplicate_and_out_of_range_rankings():
     rows = [_row(1, 0, 3), _row(1, 1, 3), _row(1, 2, 99)]
     findings = [f for f in ad.validate(rows) if f.rule == 5]
     messages = " ".join(f.message for f in findings)
-    assert "used by 2 alliances" in messages
-    assert f"outside 1-{ad.BRACKET_SIZE}" in messages
+    assert "Rank **3** is given to **2** alliances in this League." in messages
+    assert "Rank **99** isn't possible." in messages
 
 
 def test_rule_5_is_skipped_in_own_alliance_mode():
@@ -240,7 +240,8 @@ def test_rule_6_flags_a_league_your_alliance_is_missing_from():
     findings = ad.validate(rows, own_alliance=_key(0))
     finding = next(f for f in findings if f.rule == 6)
     assert finding.severity == ad.SEVERITY_WARNING
-    assert "doesn't appear" in finding.message
+    assert finding.message.startswith("Your alliance isn't in this League.")
+    assert finding.league == LEAGUE
 
 
 def test_rule_6_needs_a_configured_own_alliance():
@@ -269,10 +270,14 @@ def test_findings_come_back_in_reading_order():
     assert [f.rule for f in findings] == sorted(f.rule for f in findings)
 
 
-def test_a_finding_names_where_to_look():
-    rows = [_row(1, 0, 1, week_score=9, week_outcome="L")]
+def test_a_finding_carries_where_it_is():
+    # The report heads it with its League and leads with week and alliance;
+    # the fix button opens the screen on the same week (#651).
+    rows = [_row(2, 0, 1, week_score=9, week_outcome="L", tag_display="Al00")]
     finding = ad.validate(rows)[0]
-    assert finding.where == f"row 100, column {ad.COL_WEEK_OUTCOME}"
+    assert (finding.league, finding.week, finding.alliance) == (LEAGUE, 2, _key(0))
+    assert finding.alliance_display == "Al00"
+    assert finding.row_number == 100
 
 
 def test_a_clean_sheet_produces_nothing():
@@ -645,3 +650,143 @@ def test_a_numbered_line_still_reads_when_it_carries_the_extras():
     parse = ad.parse_bracket("1 AL00 1234 26.8b 25 100\n" + _bracket_text(15, start=1))
     assert parse.ok, parse.problems
     assert parse.entries[0].members == 100
+
+
+# ── The signed-off wording (#651, 28 Sep) ─────────────────────────────────────
+#
+# Pinned verbatim: each was approved on its own, and a reworded message is a
+# copy change that needs sign-off again, not a refactor.
+
+
+def _message(rows, rule, **kw):
+    return next(f for f in ad.validate(rows, **kw) if f.rule == rule).message
+
+
+def test_rule_1_wording():
+    rows = _matched_pair()
+    rows[0].week_score, rows[1].week_score = 9, 5
+    assert _message(rows, 1) == (
+        "The two scores in this match add up to **14** (9 + 5), but a week is worth 13 points."
+    )
+
+
+def test_rule_2_wording():
+    days = {1: "W", 2: "W", 3: "W", 4: "L", 5: "L", 6: "L"}  # 1+2+2 = 5
+    rows = [_row(1, 0, 1, week_score=8, day_outcomes=days)]
+    assert _message(rows, 2) == (
+        "The six days add up to **5** points, but the week's score says **8**."
+    )
+
+
+def test_rule_3_wording_names_the_mistake_in_words():
+    rows = [_row(1, 0, 1, week_score=5, week_outcome="W")]
+    assert _message(rows, 3) == (
+        "This week is marked as a **win**, but **5** of 13 points is a **loss**."
+    )
+
+
+def test_rule_4_wording_when_the_opponent_has_nothing_recorded():
+    rows = [_row(1, 0, 1, opponent=_key(7))]
+    assert _message(rows, 4) == (
+        "**AL07** is down as their opponent, but nothing is recorded for **AL07** this week."
+    )
+
+
+def test_rule_4_wording_when_two_alliances_disagree():
+    # Kevin's own wording.
+    rows = _matched_pair()
+    rows.append(_row(1, 2, 3))
+    rows[1].opponent = _key(2)
+    expected = (
+        "This has **AL00** playing **AL01**, but **AL01** is already recorded against **AL02**."
+    )
+    assert expected in [f.message for f in ad.validate(rows) if f.rule == 4]
+
+
+def test_rule_4_uses_the_tag_as_typed():
+    rows = [_row(1, 0, 1, opponent=_key(1)), _row(1, 1, 2, tag_display="Al01", opponent=_key(5))]
+    assert "**Al01**" in " ".join(f.message for f in ad.validate(rows) if f.rule == 4)
+
+
+def test_rule_5_wording():
+    rows = [_row(1, 0, 17)]
+    assert _message(rows, 5) == "Rank **17** isn't possible. A League's ranks run from 1 to 16."
+
+
+def test_rule_6_wording():
+    rows = [_row(1, 5, 6)]
+    assert _message(rows, 6, own_alliance=_key(0)) == (
+        "Your alliance isn't in this League. Check that the tag and warzone entered for it "
+        "match your setup."
+    )
+
+
+def test_rule_7_wording():
+    rows = _matched_pair()
+    rows[0].picked = rows[1].picked = "W"
+    assert _message(rows, 7) == (
+        "Both alliances in this match are predicted to win. Only one of them can."
+    )
+
+
+def test_rule_8_wording_and_which_day():
+    rows = [
+        _row(1, 0, 1, day_scores={1: 1_200_000_000, 2: 1_210_000_000, 3: 1_300_000_000}),
+        _row(2, 0, 1, day_scores={3: 500}),
+    ]
+    finding = next(f for f in ad.validate(rows) if f.rule == 8)
+    assert finding.message == (
+        "Day 3's score of **500** is far below this alliance's usual (about "
+        "**1,210,000,000**). Did you mean **500m**?"
+    )
+    assert (finding.week, finding.day) == (2, 3)
+
+
+def test_rule_9_wording_is_kept_as_shipped():
+    rows = [_row(1, i, i + 1) for i in range(ad.BRACKET_SIZE + 1)]
+    finding = next(f for f in ad.validate(rows) if f.rule == 9)
+    assert finding.message == (
+        "An Alliance Duel (VS) League has 16 alliances and you have entered 17. "
+        "Please review and remove the extra alliance."
+    )
+    # Names nobody (UX.md principle 6), but knows its league for the button.
+    assert finding.alliance is None and finding.league == LEAGUE
+
+
+def test_no_message_speaks_in_sheet_column_names():
+    rows = _matched_pair()
+    rows[0].picked = rows[1].picked = "W"
+    rows[0].week_score, rows[1].week_score = 9, 9
+    rows[0].week_outcome = "L"
+    text = " ".join(f.message for f in ad.validate(rows))
+    for column in ("Week Score", "Week Outcome", "Day Outcomes", "Picked", "Ranking"):
+        assert column not in text
+
+
+# ── What a save created (#651) ────────────────────────────────────────────────
+
+
+def test_a_changed_number_is_not_a_new_problem():
+    before_rows = _matched_pair()
+    before_rows[0].week_score, before_rows[1].week_score = 7, 5
+    after_rows = _matched_pair()
+    after_rows[0].week_score, after_rows[1].week_score = 9, 5
+    before, after = ad.validate(before_rows), ad.validate(after_rows)
+    assert before and after and before[0].message != after[0].message
+    assert ad.new_findings(before, after) == []
+
+
+def test_a_problem_the_save_introduced_is_new():
+    rows = _matched_pair()
+    before = ad.validate(rows)
+    rows[0].week_score, rows[1].week_score = 9, 5
+    fresh = ad.new_findings(before, ad.validate(rows))
+    assert [f.rule for f in fresh] == [1]
+
+
+def test_a_problem_the_save_fixed_is_not_reported():
+    rows = _matched_pair()
+    rows[0].week_score, rows[1].week_score = 9, 5
+    before = ad.validate(rows)
+    rows[0].week_score = 8
+    assert ad.new_findings(before, ad.validate(rows)) == []

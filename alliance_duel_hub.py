@@ -29,6 +29,7 @@ import discord
 import alliance_duel as ad
 import alliance_duel_analytics as an
 import alliance_duel_entry as ad_entry
+import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import alliance_duel_ui as ad_ui
 import config
@@ -1279,14 +1280,8 @@ class VSHubView(OwnedView):
         log.callback = self._log_score
         self.add_item(log)
 
-        add = discord.ui.Button(
-            label=ad_entry.VS_BTN_ADD_ALLIANCE,
-            style=discord.ButtonStyle.secondary,
-            disabled=not has_league,
-            row=1,
-        )
-        add.callback = self._add_alliance
-        self.add_item(add)
+        # "Add or edit alliance" lives under Edit league on row 2 (#651), with
+        # removing one: that is where an officer changes what is in the league.
 
         # Push or save (#407). Needs a live week to declare anything about, so
         # between leagues it renders disabled rather than opening a view that
@@ -1333,8 +1328,9 @@ class VSHubView(OwnedView):
         setup.callback = self._setup
         self.add_item(setup)
 
-        # Row 1 is full at five. Backfilling a week is its own row rather than
-        # a corner of another screen, since it is reached by week, not by "today".
+        # Row 2 is the league-maintenance row. Backfilling a week is its own
+        # button rather than a corner of another screen, since it is reached by
+        # week, not by "today".
         backfill = discord.ui.Button(
             label=ad_entry.VS_BTN_BACKFILL_RESULTS,
             style=discord.ButtonStyle.secondary,
@@ -1354,7 +1350,7 @@ class VSHubView(OwnedView):
         self.add_item(rank)
 
         edit_league = discord.ui.Button(
-            label=ad_entry.VS_BTN_EDIT_LEAGUE,
+            label=ad_edit.VS_BTN_EDIT_LEAGUE_MENU,
             style=discord.ButtonStyle.secondary,
             disabled=not has_league,
             row=2,
@@ -1383,7 +1379,7 @@ class VSHubView(OwnedView):
         await open_league_history_picker(interaction, self.state)
 
     async def _edit_league(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(ad_entry.EditLeagueModal(self.state))
+        await ad_edit.open_edit_league(interaction, self.state)
 
     async def _set_rank(self, interaction: discord.Interaction):
         view = ad_entry.AllianceRankWeekPickerView(self.state, interaction.user.id)
@@ -1465,10 +1461,6 @@ class VSHubView(OwnedView):
         await interaction.response.send_modal(
             ad_entry.ScoreModal(self.state, week, day, ad_entry.own_opponent(self.state, week))
         )
-
-    async def _add_alliance(self, interaction: discord.Interaction):
-        week = self.state.week or 1
-        await interaction.response.send_modal(ad_entry.AllianceModal(self.state, week))
 
     async def _trends(self, interaction: discord.Interaction):
         await interaction.response.send_message(

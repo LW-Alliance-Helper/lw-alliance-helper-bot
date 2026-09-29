@@ -698,15 +698,33 @@ class VSSetupView(ExpiringView):
                 ephemeral=True,
             )
             return
-        tracking_mode = self.cfg.get("tracking_mode") or ad.MODE_FULL_BRACKET
-        own_alliance = ad.AllianceKey.of(self.cfg.get("own_tag"), self.cfg.get("own_warzone"))
-        findings = ad.validate(rows, tracking_mode=tracking_mode, own_alliance=own_alliance)
-        await inter.followup.send(
-            embed=ads.validation_report_embed(
-                findings, tracking_mode=tracking_mode, rows_checked=len(rows)
-            ),
-            ephemeral=True,
+        # The hub's own state, so the fix buttons open the same screens the hub
+        # would, on the same snapshot, and the check runs in the effective
+        # tracking mode (a lapsed guild reads as own-alliance, #667).
+        import alliance_duel_fixes as ad_fixes
+        import alliance_duel_hub as ad_hub
+
+        has_premium = await premium.feature_gate(
+            "alliance_duel_vs", self.guild_id, interaction=inter
         )
+        state = ad_hub.HubState(self.guild_id, self.cfg, rows, premium=has_premium)
+        findings = ad_fixes.state_findings(state)
+        view = ad_fixes.FindingsFixView(state, findings[: ads.MAX_FINDINGS_SHOWN], inter.user.id)
+        kwargs = {
+            "embed": ads.validation_report_embed(
+                findings,
+                rows=rows,
+                has_buttons=bool(view.targets),
+                current_league=state.league,
+                tab_name=tab_name,
+            ),
+            "ephemeral": True,
+        }
+        if view.targets:
+            kwargs["view"] = view
+        message = await inter.followup.send(**kwargs)
+        if view.targets:
+            view.message = message
 
     async def _open_panel(self, inter: discord.Interaction, surface: ScheduledSurface) -> None:
         has_premium = await premium.feature_gate(

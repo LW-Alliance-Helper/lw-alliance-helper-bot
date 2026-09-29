@@ -6,6 +6,9 @@ ones: terminology, the choice-versus-missing-data distinction, and the
 clamping that keeps a systematic sheet mistake from blowing Discord's limits.
 """
 
+import dataclasses
+import datetime as _dt
+
 import discord
 import pytest
 
@@ -16,6 +19,28 @@ import alliance_duel_setup as ads
 def _finding(rule=1, severity=ad.SEVERITY_ERROR, row=5, message="Something is off."):
     return ad.Finding(
         rule=rule, severity=severity, message=message, row_number=row, column=ad.COL_WEEK_SCORE
+    )
+
+
+_LEAGUE = ad.LeagueKey("S36", "Diamond", "12 - 1")
+_OLD_LEAGUE = ad.LeagueKey("S35", "Gold", "4 - 2")
+
+
+def _week_row(league, week, date=None):
+    return ad.AllianceWeek(
+        league=league, week=week, alliance=ad.AllianceKey.of("ABC", 999), week_date=date
+    )
+
+
+def _located(week=2, tag="ABC", league=_LEAGUE, message="Something is off."):
+    return ad.Finding(
+        rule=1,
+        severity=ad.SEVERITY_ERROR,
+        message=message,
+        alliance=ad.AllianceKey.of(tag, 999),
+        league=league,
+        week=week,
+        alliance_display=tag,
     )
 
 
@@ -124,23 +149,85 @@ def test_the_two_cases_do_not_share_wording():
 # ── Validation report ─────────────────────────────────────────────────────────
 
 
-def test_a_clean_sheet_says_the_check_actually_ran():
-    embed = ads.validation_report_embed([], rows_checked=64)
+def test_a_clean_check_says_what_it_checked_in_weeks_and_leagues():
+    rows = [_week_row(_LEAGUE, 1), _week_row(_LEAGUE, 2), _week_row(_OLD_LEAGUE, 4)]
+    embed = ads.validation_report_embed([], rows=rows)
     assert embed.color == discord.Color.green()
-    assert "64 rows" in _all_text(embed)
+    assert embed.title == "✅ No errors found"
+    assert embed.description == (
+        "I checked **3 weeks** across **2 Leagues** and found nothing to fix."
+    )
 
 
-def test_a_clean_own_alliance_sheet_says_which_checks_were_skipped():
-    embed = ads.validation_report_embed([], tracking_mode=ad.MODE_OWN_ALLIANCE, rows_checked=4)
-    text = _all_text(embed)
-    assert "skipped" in text
-    # It must read as a consequence of their choice, not as a gap.
-    assert "Tracking just your alliance" in text
+def test_a_clean_check_counts_in_the_singular():
+    embed = ads.validation_report_embed([], rows=[_week_row(_LEAGUE, 1)])
+    assert "**1 week** across **1 League**" in embed.description
 
 
-def test_findings_name_where_to_look():
-    embed = ads.validation_report_embed([_finding(row=42)])
-    assert f"row 42, column {ad.COL_WEEK_SCORE}" in _all_text(embed)
+def test_a_clean_check_says_nothing_about_what_it_skipped():
+    # Kevin, 28 Sep sign-off: the officer does not care which checks an
+    # own-alliance sheet skips, so the old footer went entirely.
+    embed = ads.validation_report_embed([], rows=[_week_row(_LEAGUE, 1)])
+    assert not (embed.footer and embed.footer.text)
+
+
+def test_findings_name_the_week_and_alliance_under_their_league():
+    embed = ads.validation_report_embed([_located(week=2, tag="ABC")], rows=[])
+    assert embed.title == "⚠️ Some of your data needs a look"
+    assert embed.fields[0].name == str(_LEAGUE)
+    assert embed.fields[0].value == "⚠️ **Week 2, ABC**: Something is off."
+
+
+def test_findings_never_point_at_the_sheet():
+    # #651: every finding is fixed from Discord, so the report no longer
+    # speaks in Sheet rows and column names.
+    text = _all_text(ads.validation_report_embed([_located(week=2, tag="ABC")], rows=[]))
+    assert "row " not in text.lower()
+    assert "column" not in text.lower()
+    assert "sheet" not in text.lower()
+
+
+def test_a_finding_with_no_week_or_alliance_is_just_its_message():
+    finding = ad.Finding(rule=9, severity=ad.SEVERITY_ERROR, message="Too many.", league=_LEAGUE)
+    assert ads.finding_line(finding) == "⚠️ Too many."
+
+
+def test_leagues_are_listed_newest_first():
+    rows = [_week_row(_OLD_LEAGUE, 1, date=_dt.date(2026, 1, 5))]
+    rows += [_week_row(_LEAGUE, 1, date=_dt.date(2026, 9, 7))]
+    findings = [_located(league=_OLD_LEAGUE), _located(league=_LEAGUE)]
+    embed = ads.validation_report_embed(findings, rows=rows)
+    assert [f.name for f in embed.fields] == [str(_LEAGUE), str(_OLD_LEAGUE)]
+
+
+def test_the_closing_line_only_appears_with_buttons_to_press():
+    # It tells the reader what the buttons do; a report whose findings are
+    # all in an earlier league has none, and the line would be false.
+    with_buttons = ads.validation_report_embed([_located()], rows=[], has_buttons=True)
+    without = ads.validation_report_embed([_located()], rows=[])
+    assert with_buttons.footer.text == ads.VS_CHECK_FOOTER
+    assert not (without.footer and without.footer.text)
+
+
+def test_an_earlier_league_points_to_the_sheet_and_the_row():
+    # Kevin, 28 Sep: no screen edits an earlier league, so say where it can
+    # be edited rather than leaving the officer with no way at all.
+    old = dataclasses.replace(_located(league=_OLD_LEAGUE), row_number=42)
+    embed = ads.validation_report_embed(
+        [old], rows=[], current_league=_LEAGUE, tab_name="VS Scores"
+    )
+    assert embed.fields[0].value == (
+        "This League is over, so fix these in your Sheet, on the **VS Scores** tab.\n"
+        "⚠️ **Week 2, ABC** (row 42): Something is off."
+    )
+
+
+def test_the_current_league_never_points_at_the_sheet():
+    current = dataclasses.replace(_located(league=_LEAGUE), row_number=42)
+    embed = ads.validation_report_embed(
+        [current], rows=[], current_league=_LEAGUE, tab_name="VS Scores"
+    )
+    assert embed.fields[0].value == "⚠️ **Week 2, ABC**: Something is off."
 
 
 def test_errors_render_red_and_warnings_orange():

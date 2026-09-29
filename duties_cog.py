@@ -46,10 +46,24 @@ class DutiesCog(commands.Cog):
     async def reminder_loop(self):
         import config
 
-        await duties_reminders.run_reminder_tick(self.bot)
-        # Stamped after the pass (the pass isolates each server's failures),
-        # so the outage catch-up can see downtime.
-        await asyncio.to_thread(config.stamp_loop_heartbeat, duties_reminders.HEARTBEAT)
+        # An exception out of a `tasks.loop` body stops the loop until the
+        # next restart. Each server's failures are already isolated inside
+        # the pass; this catches the rest (a locked database on the read).
+        try:
+            await duties_reminders.run_reminder_tick(self.bot)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[DUTIES] reminder pass failed: %s", e)
+            try:
+                import sentry_sdk
+
+                sentry_sdk.capture_exception(e)
+            except Exception:  # noqa: BLE001
+                pass
+            return  # no heartbeat: this tick wasn't clean
+        try:
+            await asyncio.to_thread(config.stamp_loop_heartbeat, duties_reminders.HEARTBEAT)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[DUTIES] heartbeat stamp failed: %s", e)
 
     @reminder_loop.before_loop
     async def _before_reminder_loop(self):

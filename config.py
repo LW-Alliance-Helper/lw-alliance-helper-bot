@@ -7340,6 +7340,20 @@ def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
             out["scrubbed"]["storm_roster_drafts"] = draft_scrubbed
         if draft_deleted:
             out["deleted"]["storm_roster_drafts"] = draft_deleted
+        noticed = [
+            r["guild_id"]
+            for r in conn.execute(
+                "SELECT guild_id FROM guild_config_health WHERE subject = 'duties.holders'"
+            ).fetchall()
+        ]
         if apply:
             conn.commit()
+    if apply and noticed:
+        # Leadership Duties (#687): a "left the server" notice copied their
+        # name into its text. Rebuilt from the scrubbed rows, it no longer
+        # does, and goes entirely if they were the only one.
+        import duties_health
+
+        for gid in noticed:
+            duties_health.sync_departures(gid)
     return out

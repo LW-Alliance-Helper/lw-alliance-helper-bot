@@ -92,3 +92,11 @@ async def test_a_duty_paused_since_the_digest_is_not_sent(seeded_db, premium_on)
 def test_the_loop_is_an_outage_signal():
     assert "duty_reminder" in oc.HEARTBEAT_LOOPS
     assert oc.scan_duty_reminders in oc.SURFACE_ADAPTERS
+
+
+async def test_yesterday_is_offered_even_after_today_went_out(seeded_db, premium_on):
+    _setup(weekdays=frozenset({6, 0}))
+    rid = db.list_reminders(G)[0].id
+    db.mark_reminder_fired(G, rid, date(2026, 9, 28))  # the live loop sent Monday's
+    (item,) = await oc.scan_duty_reminders(MagicMock(), _guild(), config.get_config(G), WINDOW)
+    assert item.scheduled_local.date() == date(2026, 9, 27)

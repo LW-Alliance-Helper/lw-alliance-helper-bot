@@ -91,9 +91,8 @@ async def deliver(bot, guild: discord.Guild, cfg, duty: d.Duty, reminder: d.Duty
                 failed.append(uid)
 
     if plan.channel_id:
-        channel = config_health.resolve_configured_channel(
-            bot, guild.id, duties_health.REMINDER_CHANNEL, plan.channel_id
-        )
+        subject = duties_health.reminder_channel_subject(plan.channel_id)
+        channel = config_health.resolve_configured_channel(bot, guild.id, subject, plan.channel_id)
         if channel is not None:
             text = r.reminder_text(duty, reminder, r.mention, server=guild.name, dm=False)
             pings = [r.mention(uid) for uid in plan.ping_user_ids]
@@ -115,7 +114,7 @@ async def deliver(bot, guild: discord.Guild, cfg, duty: d.Duty, reminder: d.Duty
             except discord.Forbidden:
                 config_health.record(
                     guild.id,
-                    duties_health.REMINDER_CHANNEL,
+                    subject,
                     config_health.CHANNEL_NO_SEND,
                     "",
                     discriminator=str(plan.channel_id),

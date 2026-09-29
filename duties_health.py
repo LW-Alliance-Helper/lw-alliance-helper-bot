@@ -13,10 +13,23 @@ import duties_db
 import duties_render
 
 #: The channel a reminder posts in, or the leadership channel standing in
-#: for it when the backup is "anyone in leadership". One subject for every
-#: reminder in the server, per #379's rule that one broken channel is one
-#: notice.
+#: for it when the backup is "anyone in leadership". The base of one subject
+#: per channel (`reminder_channel_subject`): several reminders sharing a
+#: channel still share one notice, per #379, but two channels never do.
 REMINDER_CHANNEL = "duties.reminder_channel"
+
+
+def reminder_channel_subject(channel_id: int) -> str:
+    """The subject for one reminder channel.
+
+    Per channel, because reminders in one server can post to different
+    channels: under one shared subject, a working channel's clean post would
+    clear a broken one's problem before anyone was told about it. The copy
+    is the base subject's (`config_health.get_subject`).
+    """
+    return f"{REMINDER_CHANNEL}:{int(channel_id)}"
+
+
 #: Where the contact buttons are posted.
 PANEL_CHANNEL = "duties.panel_channel"
 #: Where ticket threads open: the bot can't open threads there, or members

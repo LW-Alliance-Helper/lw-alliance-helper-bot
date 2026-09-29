@@ -198,7 +198,11 @@ async def test_a_channel_the_bot_cannot_see_is_recorded(seeded_db, premium_on):
     await rem.run_reminder_tick(w.bot, MONDAY_9PM)
 
     (problem,) = config_health.problems(G)
-    assert (problem.subject, problem.kind) == (dh.REMINDER_CHANNEL, config_health.CHANNEL_GONE)
+    assert (problem.subject, problem.kind) == (
+        dh.reminder_channel_subject(POST_CH),
+        config_health.CHANNEL_GONE,
+    )
+    assert problem.label == config_health.get_subject(dh.REMINDER_CHANNEL).label
 
 
 async def test_one_broken_server_does_not_stop_the_others(seeded_db, premium_on):
@@ -231,3 +235,15 @@ async def test_someone_holding_nothing_leaving_changes_nothing(seeded_db):
         assert await rem.handle_departure(w.bot, leaving) == []
     refresh.assert_not_awaited()
     assert config_health.problems(G) == []
+
+
+async def test_a_working_channel_does_not_clear_a_broken_one(seeded_db, premium_on):
+    w = World()
+    duty_id = _duty(primaries=(A,))
+    _reminder(duty_id, send_to=d.SEND_CHANNEL, channel_id=POST_CH)
+    _reminder(duty_id, send_to=d.SEND_CHANNEL, channel_id=999)  # doesn't exist
+
+    await rem.run_reminder_tick(w.bot, MONDAY_9PM)
+
+    (problem,) = config_health.problems(G)
+    assert problem.subject == dh.reminder_channel_subject(999)

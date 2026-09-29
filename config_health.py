@@ -129,7 +129,13 @@ def get_subject(key: str) -> Subject:
     and a vague notice is better than a notifier pass that dies and takes
     every other guild's digest with it.
     """
-    return _SUBJECTS.get(key) or Subject(key=key, label="part of your setup")
+    # A per-instance key (`base:discriminator`, e.g. one reminder channel of
+    # several) takes the copy registered for its base.
+    return (
+        _SUBJECTS.get(key)
+        or _SUBJECTS.get(key.split(":", 1)[0])
+        or Subject(key=key, label="part of your setup")
+    )
 
 
 # ── Records ──────────────────────────────────────────────────────────────────

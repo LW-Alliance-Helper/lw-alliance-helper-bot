@@ -27,6 +27,7 @@ def _inter():
         setattr(inter.response, name, AsyncMock())
     inter.followup = MagicMock()
     inter.followup.send = AsyncMock()
+    inter.original_response = AsyncMock(return_value=MagicMock())
     return inter
 
 
@@ -35,6 +36,7 @@ def _fake_hub():
     hub.guild = MagicMock()
     hub.guild.id = G
     hub.guild.get_member = lambda uid: None
+    hub.guild.chunked = False  # no departure reconcile unless a test asks
     hub.owner_id = OWNER
     hub.bot = MagicMock()
     hub.after_change = AsyncMock()
@@ -122,7 +124,7 @@ async def test_picking_holders_keeps_open_positions_and_skips_bots():
         MagicMock(id=A, bot=False),
     ]
     await primary.callback(_inter())
-    assert view.draft.primaries == (A, B, d.OPEN)
+    assert view.draft.primaries == (A, d.OPEN, B)  # the open position keeps its place
 
 
 async def test_setting_open_positions():
@@ -339,7 +341,8 @@ async def test_leadership_opens_the_hub(seeded_db):
         patch("premium.feature_gate", AsyncMock(return_value=True)),
     ):
         await h.open_hub(MagicMock(), inter)
-    kwargs = inter.response.send_message.await_args.kwargs
+    inter.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    kwargs = inter.followup.send.await_args.kwargs
     assert kwargs["ephemeral"] is True
     assert kwargs["embed"].title == c.HUB_TITLE
     assert isinstance(kwargs["view"], h.DutiesHubView)
@@ -366,3 +369,95 @@ def test_reconcile_never_guesses_on_a_partial_member_list(temp_db):
     guild.get_member = lambda uid: None
     assert not h.reconcile_departed(MagicMock(), guild)
     assert db.get_duty(G, duty_id).primaries == (A,)
+
+
+# ── Review fixes ─────────────────────────────────────────────────────────────
+
+
+def test_open_positions_keep_their_place_through_an_edit():
+    assert h.place_holders((A, d.OPEN, B), (A, B, C), 1) == (A, d.OPEN, B, C)
+    assert h.place_holders((A, d.OPEN, B), (B,), 1) == (d.OPEN, B)
+    assert h.place_holders((A,), (A,), 2) == (A, d.OPEN, d.OPEN)
+    assert h.place_holders((d.OPEN, d.OPEN, A), (A,), 1) == (d.OPEN, A)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("9/1", date(2026, 9, 1)),  # recent past: this year
+        ("12/1", date(2026, 12, 1)),  # coming up: this year, not last
+        ("1/5", date(2027, 1, 5)),  # early next year is nearer than last January
+        ("2025-12-01", date(2025, 12, 1)),  # an explicit year as typed
+        ("nonsense", None),
+    ],
+)
+def test_start_date_takes_the_nearest_year(raw, expected):
+    assert h.parse_start_date(raw, date(2026, 9, 29)) == expected
+
+
+async def test_a_new_reminder_for_a_time_already_passed_waits_for_tomorrow(seeded_db):
+    duty_id = db.save_duty(d.Duty(id=0, guild_id=G, name="X", primaries=(A,)))
+    rid = db.save_reminder(
+        d.DutyReminder(
+            id=0,
+            guild_id=G,
+            duty_id=duty_id,
+            message="m",
+            schedule_type=d.SCHEDULE_WEEKDAYS,
+            at=time(0, 0),
+            weekdays=frozenset(range(7)),
+        )
+    )
+    h.skip_today_if_passed(G, rid)
+    (saved,) = db.list_reminders(G)
+    assert saved.last_fired_on is not None  # today's 00:00 counts as done
+
+
+async def test_the_reminder_list_stops_when_it_hands_over_and_back_is_fresh(temp_db):
+    duty_id = db.save_duty(d.Duty(id=0, guild_id=G, name="X"))
+    hub = _fake_hub()
+    view = h.ReminderListView(hub, db.get_duty(G, duty_id))
+    with patch("config.get_config", return_value=None):
+        view.render()
+        inter = _inter()
+        await _buttons(view)[c.BTN_REMINDER_ADD].callback(inter)
+    assert view.is_finished()
+    editor = inter.response.edit_message.await_args.kwargs["view"]
+    assert isinstance(editor, h.ReminderEditorView)
+    assert editor.message is inter.original_response.return_value
+
+    back = _inter()
+    with patch("config.get_config", return_value=None):
+        await view.back(back, None)
+    fresh = back.response.edit_message.await_args.kwargs["view"]
+    assert isinstance(fresh, h.ReminderListView) and fresh is not view
+    assert not fresh.is_finished()
+
+
+async def test_saving_a_new_buttons_channel_moves_the_post(temp_db):
+    db.save_settings(db.DutiesSettings(guild_id=G, panel_channel_id=600, panel_message_id=55))
+    hub = _fake_hub()
+    hub.guild.get_channel = lambda cid: None
+    view = h.ContactSettingsView(hub)
+    view.panel_channel_id = 700
+    view.render()
+    inter = _inter()
+    inter.edit_original_response = AsyncMock()
+    with patch("duties_panel.post_panel", AsyncMock(return_value=MagicMock())) as post:
+        await _buttons(view)[c.BTN_SAVE].callback(inter)
+    post.assert_awaited_once_with(hub.bot, G, 700)
+    # The stored channel is still the old one when post_panel reads it, so it
+    # can delete the old post there.
+    assert db.get_settings(G).panel_channel_id == 600
+
+
+async def test_saving_without_a_post_just_saves(temp_db):
+    hub = _fake_hub()
+    hub.guild.get_channel = lambda cid: None
+    view = h.ContactSettingsView(hub)
+    view.panel_channel_id = 700
+    view.render()
+    with patch("duties_panel.post_panel", AsyncMock()) as post:
+        await _buttons(view)[c.BTN_SAVE].callback(_inter())
+    post.assert_not_awaited()
+    assert db.get_settings(G).panel_channel_id == 700

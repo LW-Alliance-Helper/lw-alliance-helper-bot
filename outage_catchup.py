@@ -840,7 +840,9 @@ async def scan_duty_reminders(bot, guild, cfg, window: OutageWindow) -> list[Mis
             scheduled = datetime(
                 day.year, day.month, day.day, reminder.at.hour, reminder.at.minute, tzinfo=tz
             )
-            already = reminder.last_fired_on is not None and reminder.last_fired_on >= day
+            # Equal, not at-or-after: the live loop's first tick back has
+            # usually sent today's already, which says nothing about this day.
+            already = reminder.last_fired_on == day
             if d.occurs_on(reminder, day) and _was_missed(scheduled, window) and not already:
                 items.append(
                     _duty_reminder_item(

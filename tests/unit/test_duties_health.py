@@ -120,3 +120,24 @@ def test_the_broken_only_digest_is_unchanged():
         "that depend on them aren't running."
     )
     assert embed.color == discord.Color.red()
+
+
+def test_a_person_purge_rewrites_the_notice_that_named_them(temp_db):
+    _duty("One", primaries=(A,))
+    _duty("Two", primaries=(B,))
+    db.vacate_holder(G, A, "Alpha")
+    db.vacate_holder(G, B, "Bravo")
+    dh.note_departures(G)
+
+    config.purge_user_data(A, apply=True)
+    assert "Alpha" not in _row()["detail"] and "Bravo" in _row()["detail"]
+
+    config.purge_user_data(B, apply=True)
+    assert _row() is None
+
+
+def test_a_per_channel_subject_takes_its_base_copy():
+    assert (
+        ch.get_subject(dh.reminder_channel_subject(55)).label
+        == ch.get_subject(dh.REMINDER_CHANNEL).label
+    )

@@ -118,16 +118,19 @@ async def premium_state(bot, guild_id: int, has_duties: bool) -> str:
 # ── Small shared views ───────────────────────────────────────────────────────
 
 
-def adopt(view: OwnedView, source: OwnedView) -> None:
-    """Hand `source`'s message to `view`, which is taking it over.
+async def hand_over(view: OwnedView, inter: discord.Interaction) -> None:
+    """Give `view` the message `inter` just edited it onto.
 
-    The message keeps the interaction token it was sent under, so the send
-    time goes with it: `ExpiringView` counts the 15-minute edit window from
-    there, and restarting the count on a hand-over would let a timeout fire
-    after the notice could no longer land.
+    Fetched under `inter`'s own token rather than borrowed from the view
+    that had the message before: that token is fresh, so the 15-minute edit
+    window `ExpiringView` guards starts now, and the message comes back with
+    its current text for the timeout notice to append to. The same shape as
+    `alliance_duel_entry`'s builder hand-off.
     """
-    view._message = source._message
-    view._sent_at = source._sent_at
+    try:
+        view.message = await inter.original_response()
+    except discord.HTTPException:
+        pass  # the notice can't land; the view still works until it times out
 
 
 class _ConfirmView(OwnedView):
@@ -311,7 +314,7 @@ class DutiesHubView(OwnedView):
             await i.response.edit_message(
                 content=None, embed=r.editor_embed(duty, r.mention), view=editor
             )
-            adopt(editor, picker)
+            await hand_over(editor, i)
 
         await self._pick(inter, _picked)
 
@@ -324,6 +327,9 @@ class DutiesHubView(OwnedView):
                 await i.response.edit_message(content=c.PICK_GONE, view=None)
                 return
             duties_db.set_duty_paused(self.guild.id, duty_id, not duty.paused)
+            if duty.paused:  # resuming: today's passed times don't all fire at once
+                for reminder in duties_db.list_reminders(self.guild.id, duty_id):
+                    skip_today_if_passed(self.guild.id, reminder.id)
             ack = (c.RESUMED if duty.paused else c.PAUSED).format(name=duty.name)
             await i.response.edit_message(content=ack, view=None)
             await self.after_change()
@@ -360,7 +366,7 @@ class DutiesHubView(OwnedView):
             await i.response.edit_message(
                 content=c.DELETE_CONFIRM.format(name=duty.name, reminders=reminders), view=confirm
             )
-            adopt(confirm, picker)
+            await hand_over(confirm, i)
 
         await self._pick(inter, _picked)
 
@@ -406,7 +412,7 @@ class DutiesHubView(OwnedView):
                 return
             view = ReminderListView(self, duty)
             await i.response.edit_message(content=None, embed=view.render(), view=view)
-            adopt(view, picker)
+            await hand_over(view, i)
 
         await self._pick(inter, _picked)
 
@@ -472,6 +478,28 @@ def merge_order(old: tuple[int, ...], picked: list[int]) -> tuple[int, ...]:
     return tuple(kept + [uid for uid in picked if uid not in kept])
 
 
+def place_holders(old: tuple[int, ...], named: tuple[int, ...], open_n: int) -> tuple[int, ...]:
+    """The new slot list, keeping every position where it was.
+
+    People still named and open positions still wanted stay in place;
+    people removed drop out; newcomers and any extra open positions go at
+    the end. A holder leaving opens their slot where it was (`duties.vacate`),
+    and an unrelated edit must not then shuffle it to the bottom.
+    """
+    out: list[int] = []
+    opens_left = open_n
+    for uid in old:
+        if uid == d.OPEN:
+            if opens_left:
+                out.append(d.OPEN)
+                opens_left -= 1
+        elif uid in named:
+            out.append(uid)
+    out += [uid for uid in named if uid not in out]
+    out += [d.OPEN] * opens_left
+    return tuple(out)
+
+
 class DutyEditorView(OwnedView):
     """One duty, held as a draft until 💾 Save."""
 
@@ -493,9 +521,9 @@ class DutyEditorView(OwnedView):
         return sum(1 for uid in ids if uid == d.OPEN)
 
     def _set(self, kind: str, named: tuple[int, ...], open_n: int) -> None:
-        ids = named + (d.OPEN,) * open_n
+        old = self.draft.primaries if kind == d.SLOT_PRIMARY else self.draft.backups
         field = "primaries" if kind == d.SLOT_PRIMARY else "backups"
-        self.draft = replace(self.draft, **{field: ids})
+        self.draft = replace(self.draft, **{field: place_holders(old, named, open_n)})
 
     def _build(self) -> None:
         self.clear_items()
@@ -607,6 +635,10 @@ class DutyEditorView(OwnedView):
             return
         self.draft = replace(self.draft, id=duty_id)
         duties_health.sync_departures(guild_id)
+        # The draft was loaded when the editor opened. Anyone it names who
+        # has left since is opened again, with the notice, rather than saved
+        # back as a holder.
+        reconcile_departed(self.hub.bot, self.hub.guild)
         ack = (c.ADDED if is_new else c.SAVED).format(name=self.draft.name)
         self.stop()
         await inter.response.edit_message(content=ack, embed=None, view=None)
@@ -618,6 +650,28 @@ class DutyEditorView(OwnedView):
 
 
 # ── Reminders ────────────────────────────────────────────────────────────────
+
+
+def skip_today_if_passed(guild_id: int, reminder_id: int) -> None:
+    """Count today's occurrence as done when its time has already passed.
+
+    The loop fires at or past the set time so a late tick or a restart
+    doesn't lose a reminder. The same rule would otherwise send one the
+    moment it is created, switched on, retimed earlier, or its duty resumed,
+    in the afternoon, for a morning time. Setting a reminder up is not the
+    reminder being missed.
+    """
+    from datetime import datetime
+
+    from duties_reminders import guild_tz
+
+    reminder = next((x for x in duties_db.list_reminders(guild_id) if x.id == reminder_id), None)
+    if reminder is None:
+        return
+    now_local = datetime.now(guild_tz(config.get_config(guild_id)))
+    occurrence = d.due_occurrence(reminder, now_local)
+    if occurrence is not None:
+        duties_db.mark_reminder_fired(guild_id, reminder_id, occurrence)
 
 
 def _guild_tz_name(guild_id: int) -> str | None:
@@ -690,8 +744,18 @@ class ReminderListView(OwnedView):
         self.add_button(c.BTN_REMINDER_DELETE, sec, self._delete, row=1, disabled=current is None)
 
     async def back(self, inter: discord.Interaction, ack: str | None) -> None:
-        """Return to this list, from the editor or a confirm."""
-        await inter.response.edit_message(content=ack, embed=self.render(), view=self)
+        """Return to the list, from the editor, a confirm, or a toggle.
+
+        Always a fresh list view: this one stopped when it handed its message
+        on (a stopped view is never listened to again), and a view left
+        running would time out and strip whatever screen now holds the
+        message.
+        """
+        self.stop()
+        fresh = ReminderListView(self.hub, self.duty)
+        fresh.selected = self.selected
+        await inter.response.edit_message(content=ack, embed=fresh.render(), view=fresh)
+        await hand_over(fresh, inter)
 
     def _open_editor(self, draft: d.DutyReminder) -> "ReminderEditorView":
         return ReminderEditorView(self, draft)
@@ -706,8 +770,10 @@ class ReminderListView(OwnedView):
             at=None,
         )
         editor = self._open_editor(draft)
+        self.stop()
+        self.stop()
         await inter.response.edit_message(content=None, embed=editor.render(), view=editor)
-        adopt(editor, self)
+        await hand_over(editor, inter)  # stopped
 
     async def _edit(self, inter: discord.Interaction) -> None:
         current = self._current()
@@ -715,13 +781,15 @@ class ReminderListView(OwnedView):
             return
         editor = self._open_editor(current)
         await inter.response.edit_message(content=None, embed=editor.render(), view=editor)
-        adopt(editor, self)
+        await hand_over(editor, inter)
 
     async def _toggle(self, inter: discord.Interaction) -> None:
         current = self._current()
         if current is None:
             return
         duties_db.save_reminder(replace(current, enabled=not current.enabled))
+        if not current.enabled:
+            skip_today_if_passed(self.hub.guild.id, current.id)
         ack = c.REMINDER_TURNED_OFF if current.enabled else c.REMINDER_TURNED_ON
         await self.back(inter, ack)
 
@@ -741,13 +809,14 @@ class ReminderListView(OwnedView):
             await self.back(i, CANCEL_BACKPEDAL_DEFAULT)
 
         confirm = _ConfirmView(self.owner_id, c.BTN_DELETE_YES, _yes, _no)
+        self.stop()
         tz = _guild_tz_name(self.hub.guild.id)
         await inter.response.edit_message(
             content=c.REMINDER_DELETE_CONFIRM.format(when=r.reminder_when(current, tz)),
             embed=None,
             view=confirm,
         )
-        adopt(confirm, self)
+        await hand_over(confirm, inter)
 
 
 _SEND_ORDER = (d.SEND_PRIMARIES, d.SEND_BACKUPS, d.SEND_BOTH, d.SEND_CHANNEL)
@@ -776,6 +845,14 @@ class ReminderEditorView(OwnedView):
     @property
     def duty(self) -> d.Duty:
         return self.parent.duty
+
+    def today(self) -> date:
+        """Today in the server's own calendar, which the schedule runs on."""
+        from datetime import datetime
+
+        from duties_reminders import guild_tz
+
+        return datetime.now(guild_tz(config.get_config(self.parent.hub.guild.id))).date()
 
     def _wants_channel(self) -> bool:
         if self.draft.send_to == d.SEND_CHANNEL:
@@ -920,13 +997,44 @@ class ReminderEditorView(OwnedView):
         if problems:
             await inter.response.send_message("\n".join(problems), ephemeral=True)
             return
-        duties_db.save_reminder(self.draft)
+        rid = duties_db.save_reminder(self.draft)
+        skip_today_if_passed(self.draft.guild_id, rid)
         self.stop()
         await self.parent.back(inter, c.REMINDER_SAVED.format(name=self.duty.name))
 
     async def _cancel(self, inter: discord.Interaction) -> None:
         self.stop()
         await self.parent.back(inter, CANCEL_BACKPEDAL_DEFAULT)
+
+
+def parse_start_date(raw: str, today: date) -> date | None:
+    """An every-few-days reminder's start date, in whichever year puts it
+    nearest `today`.
+
+    A start can be in the past (lining up with a cycle already running) or
+    the future (starting next month), so neither of the bot's two date
+    readers fits: `parse_event_date` always looks ahead and
+    `wizard_time._parse_month_day` looks back past 31 days. An explicit
+    four-digit year is taken as typed.
+    """
+    import re
+
+    from storm_date_helpers import parse_event_date
+
+    if not raw or not raw.strip():
+        return None
+    parsed = parse_event_date(raw, today=today)
+    if parsed is None:
+        return None
+    if re.search(r"\d{4}", raw):
+        return parsed
+    candidates = []
+    for year in (today.year - 1, today.year, today.year + 1):
+        try:
+            candidates.append(parsed.replace(year=year))
+        except ValueError:
+            continue  # 29 Feb outside a leap year
+    return min(candidates, key=lambda x: abs((x - today).days)) if candidates else parsed
 
 
 def parse_interval(raw: str) -> int | None:
@@ -983,7 +1091,6 @@ class ReminderTextModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from config import parse_storm_signup_time
-        from wizard_time import _parse_month_day
 
         editor = self.editor
         errors: list[str] = []
@@ -1005,11 +1112,11 @@ class ReminderTextModal(discord.ui.Modal):
             else:
                 changes["interval_days"] = every
             raw_start = (self.start_input.value or "").strip()
-            start = _parse_month_day(raw_start)
+            start = parse_start_date(raw_start, editor.today())
             if start is None:
                 errors.append(c.START_UNREADABLE.format(raw=raw_start))
             else:
-                changes["anchor_date"] = date.fromisoformat(start)
+                changes["anchor_date"] = start
 
         # What did parse is kept, so a typo in one field costs only that
         # field (UX.md, Wizards).
@@ -1126,7 +1233,15 @@ class ContactSettingsView(OwnedView):
         self.ticket_channel_id = 0
         await inter.response.edit_message(embed=self.render(), view=self)
 
-    def _persist(self) -> None:
+    def _persist(self, *, panel_channel: bool) -> None:
+        """Save the threads channel, and the buttons channel only when told.
+
+        The stored buttons channel is where the posted message lives, and
+        `duties_panel` finds the message by it. Changing it without moving
+        the message would leave the old post behind, still clickable and
+        never updated again, so only `post_panel` changes it once a post
+        exists.
+        """
         guild_id = self.hub.guild.id
         settings = duties_db.get_settings(guild_id)
         ticket = self.ticket_channel_id
@@ -1135,21 +1250,34 @@ class ContactSettingsView(OwnedView):
         duties_db.save_settings(
             duties_db.DutiesSettings(
                 guild_id=guild_id,
-                panel_channel_id=self.panel_channel_id,
+                panel_channel_id=self.panel_channel_id
+                if panel_channel
+                else settings.panel_channel_id,
                 panel_message_id=settings.panel_message_id,
                 ticket_channel_id=ticket,
             )
         )
 
     async def _save(self, inter: discord.Interaction) -> None:
-        self._persist()
+        settings = duties_db.get_settings(self.hub.guild.id)
+        moved = (
+            bool(settings.panel_message_id) and self.panel_channel_id != settings.panel_channel_id
+        )
+        if moved and self.panel_channel_id:
+            # The buttons are posted and their channel changed: saving moves
+            # the post, which is what "Buttons posted in" now promises.
+            await self._post(inter)
+            return
+        self._persist(panel_channel=True)
         await inter.response.edit_message(content=c.CONTACT_SAVED, embed=self.render(), view=self)
 
     async def _post(self, inter: discord.Interaction) -> None:
         if not self.panel_channel_id:
             await inter.response.send_message(c.CONTACT_PICK_CHANNEL_FIRST, ephemeral=True)
             return
-        self._persist()
+        # `post_panel` reads the old channel and message before replacing
+        # them, deletes the old post, and saves the new channel with it.
+        self._persist(panel_channel=False)
         await inter.response.defer()
         channel = f"<#{self.panel_channel_id}>"
         message = await duties_panel.post_panel(
@@ -1181,11 +1309,16 @@ async def open_hub(bot, interaction: discord.Interaction) -> None:
     if not is_leader_or_admin(interaction):
         await deny_non_leader(interaction)
         return
+    # Before anything that can wait on the network: the Premium lookup can
+    # miss its cache and the post refresh is a request. Discord allows three
+    # seconds for the first response.
+    await interaction.response.defer(ephemeral=True, thinking=True)
     guild = interaction.guild
     if reconcile_departed(bot, guild):
         await duties_panel.refresh_panel(bot, guild.id)
     has = bool(duties_db.list_duties(guild.id))
     state = await premium_state(bot, guild.id, has)
     view = DutiesHubView(bot, guild, interaction.user.id, state=state)
-    await interaction.response.send_message(embed=view.render(), view=view, ephemeral=True)
-    view.message = await interaction.original_response()
+    view.message = await interaction.followup.send(
+        embed=view.render(), view=view, ephemeral=True, wait=True
+    )

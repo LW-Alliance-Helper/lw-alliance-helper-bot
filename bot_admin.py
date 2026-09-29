@@ -39,6 +39,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import examples
 import discord
 from discord import app_commands
 
@@ -735,10 +736,9 @@ def _backfill_preview_embed(candidates: dict) -> discord.Embed:
 
 @admin_group.command(
     name="backfill_removed_guilds",
-    description=(
-        "(Bot owner only) Preview and start 30-day holds for servers that left "
-        "before 1.9.0's removal hold existed."
-    ),
+    # Discord's limit is 100 characters, and one over it fails the whole
+    # /admin sync (#677). tests/unit/test_command_tree_limits.py checks it.
+    description="(Bot owner only) Start 30-day holds for servers that left before 1.9.0.",
 )
 async def admin_backfill_removed_guilds_slash(interaction: discord.Interaction):
     """Servers removed before 1.9.0 never got a hold (`on_guild_remove` just
@@ -939,6 +939,64 @@ async def admin_db_timings_slash(interaction: discord.Interaction, reset: bool =
         )
 
 
+def _compress_runs(numbers: list[int]) -> str:
+    """``[1, 2, 17, 90, 91, 92]`` → ``"1–2, 17, 90–92"``."""
+    runs: list[str] = []
+    start = prev = None
+    for n in numbers:
+        if prev is not None and n == prev + 1:
+            prev = n
+            continue
+        if start is not None:
+            runs.append(str(start) if start == prev else f"{start}–{prev}")
+        start = prev = n
+    if start is not None:
+        runs.append(str(start) if start == prev else f"{start}–{prev}")
+    return ", ".join(runs)
+
+
+def shiny_gap_report(present: set[int]) -> str:
+    """Which warzones each warzone group is missing from the Shiny Tasks table
+    (#653). The table is refreshed by hand, and a group missing warzones posts
+    without them, with nothing to say so."""
+    from shiny_tasks import RETIRED_WARZONES, WARZONE_GROUPS  # noqa: PLC0415
+
+    lines = []
+    for lo, hi in WARZONE_GROUPS:
+        missing = [n for n in range(lo, hi + 1) if n not in present and n not in RETIRED_WARZONES]
+        if missing:
+            lines.append(f"`{lo:>4} – {hi:<4}` {len(missing)} missing: {_compress_runs(missing)}")
+    last = WARZONE_GROUPS[-1][1]
+    if not lines:
+        return f"✅ Every warzone from 1 to {last} is in the Shiny Tasks table."
+    return (
+        f"**Shiny Tasks table: warzones missing, by warzone group** (1 to {last})\n"
+        + "\n".join(lines)
+        + "\nEvery other group is complete. Add the missing ones with `/admin shiny_import`."
+    )
+
+
+@admin_group.command(
+    name="shiny_gaps",
+    description="(Bot owner only) Warzones missing from the Shiny Tasks table, by warzone group.",
+)
+async def admin_shiny_gaps_slash(interaction: discord.Interaction):
+    """Compare the frozen ``shiny_task_servers`` table against the game's
+    warzone groups, so a gap shows up here before an alliance picks a group
+    and its post quietly leaves warzones out (#653)."""
+    if not await _require_bot_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    from config import get_shiny_task_servers_in_range  # noqa: PLC0415
+    from shiny_tasks import WARZONE_GROUPS  # noqa: PLC0415
+
+    # The daily post's own query, so a row it would skip counts as missing.
+    rows = await asyncio.to_thread(get_shiny_task_servers_in_range, 1, WARZONE_GROUPS[-1][1])
+    present = {int(r["server_number"]) for r in rows}
+    await _send_long(interaction, shiny_gap_report(present), "shiny_gaps.txt")
+
+
 @admin_group.command(
     name="shiny_import",
     description="(Bot owner only) Bulk-replace the shiny server snapshot from an attached JSON export.",
@@ -998,7 +1056,7 @@ async def admin_shiny_import_slash(interaction: discord.Interaction, file: disco
     description="(Bot owner only) Add or correct one server's creation date in the shiny snapshot.",
 )
 @app_commands.describe(
-    server="Server number (e.g. 2286)",
+    server=f"Server number (e.g. {examples.WARZONE})",
     creation_date="Creation date in YYYY-MM-DD (server time) — match the date the source shows",
     region="Region label (optional; defaults to global)",
 )

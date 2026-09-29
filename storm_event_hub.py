@@ -452,6 +452,13 @@ async def handle_event_hub(
         )
         return
 
+    # The premium check and the Sheet read below can together outlast
+    # Discord's 3-second window, and a slow Sheet used to leave the officer
+    # on "The application did not respond" (#677). Defer first so they see
+    # "thinking..." instead; the send below already follows up when done.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
     # Premium flag drives button disable state. Read it before we
     # build the view; cache on the view instance so callbacks don't
     # re-check.

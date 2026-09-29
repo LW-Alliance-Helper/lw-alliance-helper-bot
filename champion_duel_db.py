@@ -282,7 +282,7 @@ EVENT_DAYS = PHASES[-1][2]
 MAX_WARZONE = 2308
 
 # A grouping is exactly this many warzones. The game shows them as one line
-# ("Participating Warzone: #773, #800, ...") and the set is the grouping's
+# ("Participating Warzone: #101, #102, ...") and the set is the grouping's
 # identity -- the order the game lists them in is arbitrary.
 GROUPING_SIZE = 16
 
@@ -1352,7 +1352,7 @@ def _migrate_stages_to_groupings(conn) -> None:
 def parse_warzones(text, *, unique: bool = True) -> list[str]:
     """The Participating Warzone line, as a sorted set of warzone numbers.
 
-    The game renders it `#773 , #800 , #744 , ...` and the order it lists them
+    The game renders it `#101 , #102 , #103 , ...` and the order it lists them
     in is arbitrary, so this returns them sorted: the *set* is the grouping's
     identity, and two people typing the same sixteen in different orders must
     produce the same grouping.
@@ -1625,14 +1625,14 @@ def parse_placement_line(line: str, *, warzone=None, known_warzones=None) -> dic
     **No format is imposed on the user.** Every one of these parses, and the
     first two differ only in whether the warzone carries its own separator:
 
-        pincatboiiii,2308,225,10,200,000,436,873
-        pincatboiiii,2,308,225,10,200,000,436,873
+        Alpha,2308,225,10,200,000,436,873
+        Alpha,2,308,225,10,200,000,436,873
         Kevin,738,5,327,159,292,33,500,000
-        Deep,738,1,103,327,159,292,33,500,000          (a rank past a thousand)
+        Bravo,738,1,103,327,159,292,33,500,000         (a rank past a thousand)
         Name,738,5,325800000,33500000                  (no separators at all)
         [OGV]Kestrel,738,1,325.8M,33,500,000
         Name<TAB>738<TAB>5<TAB>327,159,292<TAB>33,500,000
-        Wren,744,25                                    (stops early)
+        Wren,760,25                                    (stops early)
 
     Hero power is **fourth, before score**, which is what lets the score keep
     the tail of the line. The commas inside these numbers are why the old

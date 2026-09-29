@@ -387,11 +387,15 @@ def power_jump(rows: Iterable[ad.AllianceWeek], alliance: ad.AllianceKey) -> Pow
 
 @dataclass(frozen=True)
 class SeasonRecord:
-    """One league's record for the guild, with the tier it was earned in."""
+    """One league's record for one alliance, with the tier it was earned in."""
 
     league: ad.LeagueKey
     wins: int
     losses: int
+    #: The earliest recorded week's date in this instance, or ``None`` when
+    #: nothing here carries a date. Not the same as "when it happened" for a
+    #: reused label -- see `cluster_by_league`.
+    started: _dt.date | None = None
 
     @property
     def record(self) -> str:
@@ -402,30 +406,79 @@ class SeasonRecord:
         return ad.tier_rank(self.league.tier)
 
 
+#: A league label is reused by the game over time (#658 tracks giving it real
+#: identity). Until that lands, two runs under the same label more than this
+#: many days apart are treated as separate instances rather than one
+#: continuing run: a real league is four weeks at roughly seven days apart, so
+#: a gap this wide is a repeat, not a skipped week.
+_LEAGUE_LABEL_GAP_DAYS = 21
+
+
+def cluster_by_league(
+    rows: Iterable[ad.AllianceWeek],
+) -> list[list[ad.AllianceWeek]]:
+    """Group rows into league instances: same label, and no wide date gap.
+
+    Grouped by label first, then split on an internal date gap, rather than
+    interleaving every row across labels by date -- rows sharing an
+    unrecorded or identical date should not sort against each other by
+    week number alone. A row with no recorded date never starts a split,
+    since there is no gap to measure.
+    """
+    by_label: dict[ad.LeagueKey, list[ad.AllianceWeek]] = {}
+    for row in rows:
+        by_label.setdefault(row.league, []).append(row)
+
+    clusters: list[list[ad.AllianceWeek]] = []
+    for weeks in by_label.values():
+        ordered = sorted(
+            weeks, key=lambda r: (r.week_date is None, r.week_date or _dt.date.min, r.week)
+        )
+        current: list[ad.AllianceWeek] = []
+        previous_date: _dt.date | None = None
+        for row in ordered:
+            if (
+                current
+                and row.week_date is not None
+                and previous_date is not None
+                and (row.week_date - previous_date).days > _LEAGUE_LABEL_GAP_DAYS
+            ):
+                clusters.append(current)
+                current = []
+            current.append(row)
+            if row.week_date is not None:
+                previous_date = row.week_date
+        if current:
+            clusters.append(current)
+    return clusters
+
+
 def season_trajectory(
-    rows: Iterable[ad.AllianceWeek], own: ad.AllianceKey
+    rows: Iterable[ad.AllianceWeek], alliance: ad.AllianceKey
 ) -> tuple[SeasonRecord, ...]:
-    """The guild's record league by league, oldest first.
+    """One alliance's record league by league, oldest first.
 
     Tier travels with each league rather than being flattened, because a 3-1 in
     Gold and a 3-1 in Diamond are not the same season and averaging them would
     hide the only movement that is game-adjudicated rather than inferred.
+
+    Sorted and clustered by date, not by the label text: see
+    `cluster_by_league` for why a repeated label does not merge two
+    genuinely different runs into one record.
     """
-    by_league: dict[ad.LeagueKey, list[ad.AllianceWeek]] = {}
-    for row in rows:
-        if row.alliance == own and row.league is not None:
-            by_league.setdefault(row.league, []).append(row)
+    filtered = [r for r in rows if r.alliance == alliance and r.league is not None]
 
     records = [
         SeasonRecord(
-            league=league,
+            league=weeks[0].league,
             wins=sum(1 for r in weeks if r.week_outcome == "W"),
             losses=sum(1 for r in weeks if r.week_outcome == "L"),
+            started=next((r.week_date for r in weeks if r.week_date is not None), None),
         )
-        for league, weeks in by_league.items()
+        for weeks in cluster_by_league(filtered)
     ]
     records = [r for r in records if r.wins or r.losses]
-    records.sort(key=lambda r: (r.league.season, r.league.tier, r.league.group))
+    records.sort(key=lambda r: (r.started is None, r.started or _dt.date.min))
     return tuple(records)
 
 

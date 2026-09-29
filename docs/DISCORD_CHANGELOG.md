@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.9.3** — 2026-09-28
+- New VS League history shows every alliance's scores across a past league
+- Shiny Tasks setup now picks a warzone group instead of a typed server range
+- Member roster sync no longer wipes your own columns when Google has a hiccup
+- Saving a Desert Storm draft no longer overwrites the Canyon Storm draft on the same tab
+- Leadership is now told when the growth snapshot's sheet stops working
+
+---
+
 **1.9.2** — 2026-09-26
 - Alliance Duel (VS) tracking for your own alliance is now free for every server
 - Enter a day's VS score or a whole week's results from dropdowns

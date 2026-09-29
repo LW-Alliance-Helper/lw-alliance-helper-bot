@@ -520,10 +520,10 @@ def test_a_pasted_bracket_takes_its_rankings_from_line_order():
 
 def test_the_shapes_an_officer_actually_pastes_all_read():
     parse = ad.parse_bracket(
-        "[kTZ] 714\nIMI,685\nRudi\t716\n" + "\n".join(f"AL{i:02d} 1234" for i in range(13))
+        "[aBc] 999\nxYz,998\nDeFg\t997\n" + "\n".join(f"AL{i:02d} 1234" for i in range(13))
     )
     assert parse.ok, parse.problems
-    assert [e.tag_display for e in parse.entries[:3]] == ["KTZ", "IMI", "RUDI"]
+    assert [e.tag_display for e in parse.entries[:3]] == ["ABC", "XYZ", "DEFG"]
 
 
 def test_blank_lines_between_alliances_are_not_rankings():
@@ -633,11 +633,11 @@ def test_a_sixth_field_is_refused_rather_than_ignored():
 
 
 def test_a_numeric_tag_is_not_mistaken_for_a_ranking_number():
-    # `1 714 26.8b` is an alliance whose tag is "1", not line 1 of a numbered
+    # `1 999 26.8b` is an alliance whose tag is "1", not line 1 of a numbered
     # paste. A tag carries at least one non-digit, which is what tells them apart.
-    parse = ad.parse_bracket("1 714 26853240157\n" + _bracket_text(15, start=1))
+    parse = ad.parse_bracket("1 999 26853240157\n" + _bracket_text(15, start=1))
     assert parse.ok, parse.problems
-    assert parse.entries[0].alliance == ad.AllianceKey.of("1", "714")
+    assert parse.entries[0].alliance == ad.AllianceKey.of("1", "999")
     assert parse.entries[0].power == 26853240157
 
 

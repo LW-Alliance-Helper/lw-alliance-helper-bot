@@ -39,7 +39,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.9.2"
+__version__ = "1.9.3"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -948,6 +948,32 @@ async def on_app_command_error(
         pass
 
 
+# #652: the growth snapshot's Sheet, as a config-health subject, so leadership
+# hears when a deleted, unshared or renamed tab stops growth tracking. The key
+# lives in growth.py (Discord-free); the copy lives here with the loop.
+from growth import GROWTH_SHEET_SUBJECT  # noqa: E402
+from setup_hub import HUB_BTN_GROWTH as _HUB_BTN_GROWTH  # noqa: E402
+
+config_health.register(
+    config_health.Subject(
+        key=GROWTH_SHEET_SUBJECT,
+        label="your growth member data tab",
+        fix_hub="/setup",
+        fix_btn=_HUB_BTN_GROWTH,
+    )
+)
+
+
+def _note_growth_sheet_failure(gid: int, e: Exception) -> bool:
+    """Record an alliance-fixable growth Sheet failure; False when it isn't
+    one. The source tab is the discriminator: the growth tab is created by
+    the snapshot itself when it's missing, so a missing tab is the source."""
+    from config import get_growth_config
+
+    tab = (get_growth_config(gid) or {}).get("tab_source") or ""
+    return config_health.record_sheet_failure(gid, GROWTH_SHEET_SUBJECT, e, tab=tab)
+
+
 @tasks.loop(hours=1)
 async def growth_task():
     """Check every hour — run snapshots for guilds whose schedule is due."""
@@ -1003,13 +1029,17 @@ async def growth_task():
                 await asyncio.get_event_loop().run_in_executor(
                     None, _run_growth_snapshot_inner, gid
                 )
+                await asyncio.to_thread(config_health.clear, gid, GROWTH_SHEET_SUBJECT)
             except Exception as e:
                 from config import describe_sheet_error, is_user_config_sheet_error
 
                 if is_user_config_sheet_error(e):
                     # Deleted sheet / revoked access / missing tab is the
                     # alliance's to fix — log it with guild context, but don't
-                    # page Sentry (regressions of #285 / #286).
+                    # page Sentry (regressions of #285 / #286). Recorded so
+                    # leadership is told (#652); a monthly snapshot that fails
+                    # silently isn't noticed for weeks.
+                    await asyncio.to_thread(_note_growth_sheet_failure, gid, e)
                     print(f"[GROWTH] Skipping guild {gid}: {describe_sheet_error(e, guild_id=gid)}")
                     sentry_sdk.add_breadcrumb(
                         category="growth",
@@ -1219,6 +1249,34 @@ config_health.register(
     )
 )
 
+# #604: a range saved wider than one warzone group, whose post Discord would
+# reject for length. The key lives in shiny_tasks.py beside the check.
+from shiny_tasks import SHINY_WARZONE_RANGE_SUBJECT  # noqa: E402
+
+config_health.register(
+    config_health.Subject(
+        key=SHINY_WARZONE_RANGE_SUBJECT,
+        label="your Daily Shiny Tasks warzones",
+        fix_hub="/setup",
+        fix_btn=_HUB_BTN_SHINY,
+    )
+)
+
+SHINY_RANGE_TOO_WIDE_DETAIL = (
+    "It's set to warzones **{lo} – {hi}**. That's more than one warzone group, so the "
+    "daily post would be too long for Discord to send, and it isn't being posted."
+)
+
+
+def _note_shiny_range_too_wide(gid: int, lo: int, hi: int) -> None:
+    config_health.record(
+        gid,
+        SHINY_WARZONE_RANGE_SUBJECT,
+        config_health.WARZONE_RANGE_TOO_WIDE,
+        SHINY_RANGE_TOO_WIDE_DETAIL.format(lo=lo, hi=hi),
+        discriminator=f"{lo}-{hi}",
+    )
+
 
 @tasks.loop(minutes=1)
 async def shiny_tasks_post_task():
@@ -1233,7 +1291,7 @@ async def shiny_tasks_post_task():
         stamp_loop_heartbeat,
     )
     from time_helpers import server_date_for
-    from shiny_tasks import build_announcement_for_guild
+    from shiny_tasks import build_announcement_for_guild, range_too_wide
 
     try:
         enabled_ids = list_shiny_enabled_guild_ids()
@@ -1285,6 +1343,19 @@ async def shiny_tasks_post_task():
                 # configured minute, or the loop somehow ran twice.
                 continue
 
+            server_min = int(scfg.get("server_min") or 0)
+            server_max = int(scfg.get("server_max") or 0)
+            # #604: one alliance saved 1-2308, every warzone in the game, and
+            # its post was rejected for length every night, retried for two
+            # hours, and paged Sentry each time. A range wider than one warzone
+            # group isn't sent: leadership is told through config health, and
+            # the day is marked handled so it isn't retried every few minutes.
+            if range_too_wide(server_min, server_max):
+                await asyncio.to_thread(_note_shiny_range_too_wide, gid, server_min, server_max)
+                mark_shiny_tasks_posted(gid, today_iso)
+                continue
+            await asyncio.to_thread(config_health.clear, gid, SHINY_WARZONE_RANGE_SUBJECT)
+
             # #379: this is the branch that started the ticket. Several
             # alliances had their configured channel go unreachable in a
             # channel reorg, and the loop skipped them silently for days with
@@ -1313,14 +1384,11 @@ async def shiny_tasks_post_task():
             # would list yesterday's shiny servers (#330). Same class of bug as
             # the train "day behind" fix (#318). See time_helpers.
             shiny_today = server_date_for(guild_now)
-            rows = get_shiny_task_servers_in_range(
-                int(scfg.get("server_min") or 0),
-                int(scfg.get("server_max") or 0),
-            )
+            rows = get_shiny_task_servers_in_range(server_min, server_max)
             body = build_announcement_for_guild(
                 server_rows=rows,
-                server_min=int(scfg.get("server_min") or 0),
-                server_max=int(scfg.get("server_max") or 0),
+                server_min=server_min,
+                server_max=server_max,
                 today=shiny_today,
                 template=scfg.get("message_template") or "",
             )
@@ -1558,11 +1626,16 @@ async def growth_slash(interaction: discord.Interaction):
                 from growth import _run_growth_snapshot_inner
 
                 await asyncio.to_thread(_run_growth_snapshot_inner, guild_id)
+                await asyncio.to_thread(config_health.clear, guild_id, GROWTH_SHEET_SUBJECT)
                 await inter.followup.send(
                     f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
                     ephemeral=True,
                 )
             except Exception as e:
+                # Recorded as well as shown, as /members sync does: the reply
+                # is ephemeral, and the scheduled snapshot will hit the same
+                # problem with nobody watching (#652).
+                await asyncio.to_thread(_note_growth_sheet_failure, guild_id, e)
                 await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
             self.stop()
 

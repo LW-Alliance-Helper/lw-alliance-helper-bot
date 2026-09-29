@@ -36,6 +36,10 @@ over time, which is what caused the #330/#331 drift):
    so they match the source and the 3-day cycle lines up.
 5. Spot-check with **`/admin shiny_servers <min> <max>`**; fix one-offs with
    **`/admin shiny_set <server> <YYYY-MM-DD>`**.
+6. Run **`/admin shiny_gaps`** to confirm every warzone group is complete
+   (#653). Alliances pick one of the game's 18 warzone groups (1-164, then 128
+   wide, ending at 2308, the announced final warzone), and a group missing
+   warzones posts without them, with nothing to say so.
 
 ## Endpoint discovery
 

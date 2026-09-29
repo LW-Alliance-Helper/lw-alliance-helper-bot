@@ -185,7 +185,7 @@ async def test_an_ambiguous_name_offers_the_servers_and_no_group(client, cd_db):
     stopped filling this in", and neither value helps a human pick.
     """
     db.upsert_registrant("Twinned", server="738", origin="imported")
-    db.upsert_registrant("Twinned", server="1042", origin="imported")
+    db.upsert_registrant("Twinned", server="999", origin="imported")
     token = await _session()
 
     resp = await client.get(f"{P}/player/Twinned", headers=_auth(token))
@@ -193,7 +193,7 @@ async def test_an_ambiguous_name_offers_the_servers_and_no_group(client, cd_db):
 
     assert resp.status == 409
     assert body["error"] == "ambiguous_player"
-    assert sorted(c["server"] for c in body["candidates"]) == ["1042", "738"]
+    assert sorted(c["server"] for c in body["candidates"]) == ["738", "999"]
     assert all("group" not in c for c in body["candidates"]), "the dead column stays out"
 
 
@@ -234,7 +234,7 @@ async def test_a_writer_can_add_a_player_we_dont_have(client, cd_db):
     token = await _session(can_write=True)
     resp = await client.post(
         f"{P}/players",
-        json={"name": "Newcomer", "server": "1042", "group": "N", "alliance": "OGV"},
+        json={"name": "Newcomer", "server": "999", "group": "N", "alliance": "OGV"},
         headers=_auth(token),
     )
     assert resp.status == 200
@@ -242,8 +242,8 @@ async def test_a_writer_can_add_a_player_we_dont_have(client, cd_db):
     # The flag is the whole point: a community guess must never read as an
     # official record.
     assert body["origin"] == "self_reported"
-    assert body["server"] == "1042"
-    # 1042 is in no grouping we hold, so the letter had nothing to belong to.
+    assert body["server"] == "999"
+    # 999 is in no grouping we hold, so the letter had nothing to belong to.
     # The player still lands -- they are a real fact -- and the response says
     # which part did not, rather than failing a call that already wrote a row.
     assert body["group_recorded"] is False
@@ -301,17 +301,17 @@ async def test_adding_a_player_is_idempotent(client, cd_db):
     token = await _session(can_write=True)
     for _ in range(2):
         resp = await client.post(
-            f"{P}/players", json={"name": "Newcomer", "server": "1042"}, headers=_auth(token)
+            f"{P}/players", json={"name": "Newcomer", "server": "999"}, headers=_auth(token)
         )
         assert resp.status == 200
-    assert len(db.find_registrants("Newcomer", "1042")) == 1
+    assert len(db.find_registrants("Newcomer", "999")) == 1
 
 
 async def test_adding_a_player_requires_premium(client, cd_db):
     """Same gate as every other write — logged in isn't enough."""
     token = await _session(can_write=False)
     resp = await client.post(
-        f"{P}/players", json={"name": "Newcomer", "server": "1042"}, headers=_auth(token)
+        f"{P}/players", json={"name": "Newcomer", "server": "999"}, headers=_auth(token)
     )
     assert resp.status == 403
 

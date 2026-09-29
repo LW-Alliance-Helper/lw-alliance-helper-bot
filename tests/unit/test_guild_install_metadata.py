@@ -194,6 +194,8 @@ def test_admin_group_registers_globally_when_env_unset(monkeypatch):
         # #649: servers that left before 1.9.0's removal hold existed.
         "backfill_removed_guilds",
         "shiny_servers",
+        # #653: warzones missing from the table, by warzone group.
+        "shiny_gaps",
         "shiny_import",
         "shiny_set",
         "shiny_dump",
@@ -252,6 +254,7 @@ def test_admin_group_restricted_to_env_guilds(monkeypatch):
             "forget_user",
             "backfill_removed_guilds",
             "shiny_servers",
+            "shiny_gaps",
             "shiny_import",
             "shiny_set",
             "shiny_dump",

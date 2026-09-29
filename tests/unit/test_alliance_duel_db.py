@@ -81,14 +81,14 @@ def test_the_same_tag_in_two_warzones_is_two_alliances():
     no way to unpick it afterwards."""
     vsdb.record_weeks(
         [
-            _row("KTI", week_score=7),
-            ad.AllianceWeek(league=LEAGUE, week=1, alliance=_key("KTI", "5678"), week_score=6),
+            _row("LION", week_score=7),
+            ad.AllianceWeek(league=LEAGUE, week=1, alliance=_key("LION", "5678"), week_score=6),
         ],
         actor=_actor(),
     )
 
-    assert _stored("KTI", "1234")["week_score"] == 7
-    assert _stored("KTI", "5678")["week_score"] == 6
+    assert _stored("LION", "1234")["week_score"] == 7
+    assert _stored("LION", "5678")["week_score"] == 6
 
 
 def test_a_tag_written_any_of_the_ways_the_game_prints_it_is_one_alliance():

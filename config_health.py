@@ -57,6 +57,9 @@ NO_ACCESS = "no_access"
 CHANNEL_GONE = "channel_gone"
 CHANNEL_NO_VIEW = "channel_no_view"
 CHANNEL_NO_SEND = "channel_no_send"
+# #604: a Shiny Tasks range saved wider than one warzone group, whose post
+# would be too long for Discord to send.
+WARZONE_RANGE_TOO_WIDE = "warzone_range_too_wide"
 
 SHEET_KINDS = frozenset({MISSING_TAB, MISSING_SHEET, NO_ACCESS})
 CHANNEL_KINDS = frozenset({CHANNEL_GONE, CHANNEL_NO_VIEW, CHANNEL_NO_SEND})
@@ -523,6 +526,10 @@ _REASONS = {
         "there, which happens easily during a channel reorg."
     ),
     CHANNEL_NO_SEND: "I can see that channel but I'm not allowed to post in it.",
+    WARZONE_RANGE_TOO_WIDE: (
+        "That covers more than one warzone group, so the daily post would be too long "
+        "for Discord to send, and it isn't being posted."
+    ),
 }
 
 _FIXES = {
@@ -544,6 +551,7 @@ _FIXES = {
         "Give my role **Send Messages** there in the channel's permission settings, "
         "or pick a different channel in setup."
     ),
+    WARZONE_RANGE_TOO_WIDE: "Pick your alliance's warzone group in setup.",
 }
 
 

@@ -49,7 +49,7 @@ NEXT_LEAGUE = ad.LeagueKey("S36", "Diamond", "12 - 2")
 # rollover, and on the Sunday/Monday one that disagreement is a whole week,
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())  # week 1 of the league under test
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 ET = ZoneInfo("America/New_York")
 

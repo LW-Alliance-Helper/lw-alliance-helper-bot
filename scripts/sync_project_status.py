@@ -15,6 +15,13 @@ branch flow (CLAUDE.md):
 The script is idempotent: setting an item to the status it's already at
 is a no-op, and issues not in the project are skipped silently.
 
+It never moves an issue backwards along that lifecycle (#676). Fast-forwarding
+`dev` to `main` after a release pushes the release's merge commit to `dev`,
+which used to walk every shipped issue back to In review. An item already at
+or past the target is skipped with a log line. Backlog and Canceled are set by
+hand and sit outside the ordering, and `--issue` is a manual board correction,
+so it can set any status.
+
 Reads `GH_TOKEN` (a PAT with org-project read/write — the auto-injected
 GITHUB_TOKEN can't touch org Project v2). Issue references come from
 two sources, merged:
@@ -60,6 +67,20 @@ STATUS_OPTIONS = {
     "Shipped": "1c9d5aae",
     "Canceled": "6e1f842d",
 }
+
+# The automatic lifecycle, in order. Backlog and Canceled are hand-set and
+# deliberately absent: neither blocks a move, and the sync never lands on them.
+LIFECYCLE = ["Up Next", "In progress", "In review", "Ready for Release", "Shipped"]
+
+
+def is_backwards(current, target):
+    """True when moving from ``current`` to ``target`` would not advance the
+    issue: it already sits at or past the target. False when either status is
+    outside the lifecycle (Backlog, Canceled, or no status yet)."""
+    if current not in LIFECYCLE or target not in LIFECYCLE:
+        return False
+    return LIFECYCLE.index(current) >= LIFECYCLE.index(target)
+
 
 # GitHub's close keywords (close/closes/closed, fix/fixes/fixed,
 # resolve/resolves/resolved), optionally followed by an `owner/repo`
@@ -203,15 +224,23 @@ def get_closing_issues(pr_number):
     return issues
 
 
-def get_project_item_id(issue_node_id):
-    """Find the issue's item ID inside our project, or None."""
+def get_project_item(issue_node_id):
+    """Find the issue's item inside our project: ``(item_id, status_name)``,
+    or ``(None, None)`` when it isn't on the board. ``status_name`` is None
+    when the item has no Status set yet."""
     data = gql(
         """
         query($id: ID!) {
           node(id: $id) {
             ... on Issue {
               projectItems(first: 20) {
-                nodes { id project { number } }
+                nodes {
+                  id
+                  project { number }
+                  fieldValueByName(name: "Status") {
+                    ... on ProjectV2ItemFieldSingleSelectValue { name }
+                  }
+                }
               }
             }
           }
@@ -222,8 +251,9 @@ def get_project_item_id(issue_node_id):
     items = ((data.get("node") or {}).get("projectItems") or {}).get("nodes") or []
     for item in items:
         if item.get("project", {}).get("number") == PROJECT_NUMBER:
-            return item["id"]
-    return None
+            status = (item.get("fieldValueByName") or {}).get("name")
+            return item["id"], status
+    return None, None
 
 
 def set_status(item_id, option_id):
@@ -307,9 +337,14 @@ def main():
         print(f"PR #{pr_number} closes {len(issues)} issue(s); target: {args.status!r}")
 
     for issue in issues:
-        item_id = get_project_item_id(issue["id"])
+        item_id, current = get_project_item(issue["id"])
         if item_id is None:
             print(f"  #{issue['number']}: not in project, skipped")
+            continue
+        # A manual --issue correction may set anything; the automatic path
+        # only ever moves forward.
+        if not args.issue and is_backwards(current, args.status):
+            print(f"  #{issue['number']}: already at {current}, not moving back to {args.status}")
             continue
         if set_status(item_id, option_id):
             print(f"  #{issue['number']}: -> {args.status}")

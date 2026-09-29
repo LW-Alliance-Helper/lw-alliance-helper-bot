@@ -232,6 +232,27 @@ _KNOWN_ALIASES: dict[str, str] = {
 #: call site is unchanged.
 NOT_ENTERED = "?"
 
+
+def pretty_date(d: _dt.date) -> str:
+    """A short, absolute date for user copy: `storm_date_helpers`'s short form
+    (`%a %b %d`) with a year added, since VS history can span more than one.
+
+    Lives here rather than in `alliance_duel_ui` or `alliance_duel_hub` because
+    both need it (#659): a league's history reads league by league in Scout
+    and league by league again in the League history grid.
+    """
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
+
+
+def league_label(league: "LeagueKey") -> str:
+    """`{season} · {tier} {group}`, collapsing the middot when tier is blank.
+
+    The header format `hub_embed` and `bracket_embed` already build inline;
+    pulled out because #659 adds a third and fourth call site.
+    """
+    return f"{league.season} · {league.tier} {league.group}".replace(" ·  ", " · ")
+
+
 #: Values accepted in the Intent column. Held out of / partitioned in the
 #: backtest — see the design doc's four-case table.
 INTENT_PUSH = "push"
@@ -3012,7 +3033,7 @@ def _check_roster_size(rows: Sequence[AllianceWeek], league: LeagueKey) -> list[
 
     Too many is a different thing: sixteen is the shape of the competition, so
     a seventeenth alliance is always a mistake. The one that matters in
-    practice is a **near-duplicate tag** (`KTI` typed once as a capital i and
+    practice is a **near-duplicate tag** (`LION` typed once as a capital i and
     once as a lowercase L), which :func:`compute_week_pairing` cannot see,
     because seventeen alliances still clears its ``< BRACKET_SIZE`` guard and
     it simply pairs the wrong sixteen.
@@ -3197,8 +3218,8 @@ def validate(
 # ── Reading a typed-in bracket ────────────────────────────────────────────────
 
 #: What a bracket line may be separated by. Officers copy from several places
-#: and the game renders a tag in brackets, so `[kTZ] 714`, `kTZ,714` and
-#: `kTZ 714` all arrive rather than being retyped into one shape.
+#: and the game renders a tag in brackets, so `[Glo] 999`, `Glo,999` and
+#: `Glo 999` all arrive rather than being retyped into one shape.
 _BRACKET_SPLIT = re.compile(r"[\s,;/|]+")
 
 
@@ -3271,7 +3292,7 @@ def parse_bracket(text, *, expect: int = BRACKET_SIZE) -> BracketParse:
 
         # A leading ranking number is allowed but never trusted. It is told apart
         # from a power figure by what follows it: a tag carries at least one
-        # non-digit, so `1 kTZ 714` is a numbered line and `1 714 26.8b` is an
+        # non-digit, so `1 Glo 999` is a numbered line and `1 999 26.8b` is an
         # alliance whose tag happens to be "1".
         if len(parts) >= 3 and parts[0].isdigit() and not parts[1].isdigit():
             stated = int(parts[0])

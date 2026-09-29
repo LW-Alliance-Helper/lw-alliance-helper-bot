@@ -9,6 +9,25 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.3] — 2026-09-28
+
+### Added
+- **League history** (💎 Premium): every alliance's scores across all four weeks of a past VS league ([#659](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/659)).
+- Scout now lists every league an alliance has played in ([#659](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/659)).
+
+### Changed
+- Shiny Tasks setup now has you pick a warzone group instead of typing a server range ([#604](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/604)).
+- Examples in the bot's text boxes now use made-up alliance tags, warzones and player names ([#654](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/654)).
+
+### Fixed
+- A Shiny Tasks range too wide to post now gives leadership a setup notice instead of posting nothing ([#604](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/604)).
+- Member roster sync no longer wipes your own roster columns when Google fails to read the tab ([#678](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/678)).
+- Saving a Desert Storm draft no longer overwrites the Canyon Storm draft on the same tab ([#683](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/683)).
+- Leadership is now told when the growth snapshot's sheet stops working ([#652](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/652)).
+- `/desertstorm`, `/canyonstorm` and the train and storm preset buttons no longer time out while a slow sheet loads ([#677](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/677)).
+- Train, storm and transfer buttons now explain a sheet problem you can fix instead of failing ([#677](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/677)).
+- VS Trends now lists past leagues in date order ([#659](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/659)).
+
 ## [1.9.2] — 2026-09-26
 
 ### Added

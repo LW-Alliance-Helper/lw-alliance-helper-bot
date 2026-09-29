@@ -11,15 +11,21 @@ real regressions. Six auto-filed issues were exactly that:
   side, and discord.py does not retry a 503 the way it retries 500/502/504.
 * #382 / #383 the stats publisher's GitHub 503, handled in
   :mod:`stats_publisher` by retrying instead of filtering.
+* #492 / #507 / #540 a Google Sheets 5xx (mostly 503) in the transfer source
+  copy and the member roster auto-sync (#677). Google's side, and both paths
+  run again on their own: the transfer poll next minute, the roster sync on
+  the next member change.
 
-``before_send`` drops the first three and logs them instead, so the Railway
+``before_send`` drops the first three and the Google 5xx and logs them instead, so the Railway
 log still shows what happened. A rejected token is logged at CRITICAL because
 the bot is down when it happens: dropping the Sentry event is a statement that
 it is not a *bug*, not that it is unimportant.
 
 Deliberately narrow. Only the exact upstream shapes above are dropped, so a
 401 raised anywhere other than login, or an ``HTTPException`` we caused
-ourselves, still pages normally.
+ourselves, still pages normally. The Google rule is a gspread ``APIError``
+with a 5xx status and nothing else: a 4xx is either the alliance's own Sheet
+(kept out of Sentry at the call site, where it can be told to them) or ours.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import logging
 
 import discord
+import gspread
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +59,19 @@ def _exception_chain(exc: BaseException | None):
         exc = exc.__cause__ or exc.__context__
 
 
+def _google_status(exc: BaseException) -> int | None:
+    """The HTTP status of a gspread ``APIError``, or ``None`` for anything else.
+
+    Read the way ``config.is_user_config_sheet_error`` reads it: the response's
+    status first, then the code gspread parsed out of the error body.
+    """
+    if not isinstance(exc, gspread.exceptions.APIError):
+        return None
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    status = status or getattr(exc, "code", None)
+    return status if isinstance(status, int) else None
+
+
 def drop_reason(exc: BaseException | None) -> str | None:
     """Why this exception should not reach Sentry, or ``None`` to send it.
 
@@ -68,6 +88,9 @@ def drop_reason(exc: BaseException | None) -> str | None:
             return "gateway-auth-rejected"
         if isinstance(item, discord.DiscordServerError):
             return "discord-5xx"
+        status = _google_status(item)
+        if status is not None and 500 <= status <= 599:
+            return "google-5xx"
     return None
 
 
@@ -87,6 +110,9 @@ _REASON_DETAIL = {
         "Developer Portal."
     ),
     "discord-5xx": "Discord returned a server error. Transient, nothing to fix on our side.",
+    "google-5xx": (
+        "Google Sheets returned a server error. Transient; the path runs again on its own."
+    ),
 }
 
 

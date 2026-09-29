@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 
+import examples
 import discord
 
 import alliance_duel as ad
@@ -60,7 +61,7 @@ class OwnAllianceModal(discord.ui.Modal, title="Your alliance"):
     )
     warzone = discord.ui.TextInput(
         label="Warzone",
-        placeholder="1234",
+        placeholder=str(examples.WARZONE_PLACEHOLDER),
         max_length=10,
         required=True,
     )

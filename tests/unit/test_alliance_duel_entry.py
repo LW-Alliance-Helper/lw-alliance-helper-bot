@@ -30,7 +30,7 @@ LEAGUE = ad.LeagueKey("S35", "Diamond", "12 - 2")
 # rollover, and on the Sunday/Monday one that disagreement is a whole week,
 # because `week_monday` sends Sunday back rather than forward.
 MONDAY = ad.week_monday(ad.server_today())
-OWN_TAG, OWN_WZ = "US", "1234"
+OWN_TAG, OWN_WZ = "Fre3", "1234"
 OWN = ad.AllianceKey.of(OWN_TAG, OWN_WZ)
 
 
@@ -684,11 +684,11 @@ def test_the_retry_modal_still_holds_what_was_typed():
         "tier": "Diamond",
         "group": "12 - 1",
         "week_date": "8/24",
-        "bracket": "kTZ 714",
+        "bracket": "ABC 999",
     }
     modal = entry.NewLeagueModal(_state([]), defaults=typed)
     assert modal.season.default == "S36"
-    assert modal.bracket.default == "kTZ 714"
+    assert modal.bracket.default == "ABC 999"
 
 
 def test_the_bracket_format_survives_typing():
@@ -702,13 +702,20 @@ def test_the_bracket_format_survives_typing():
     description = modal._bracket_label.description
     assert "tag" in description and "warzone" in description
     assert "power" in description and "gift" in description and "members" in description
+    # The wording signed off on 2026-09-27, inside Discord's 100 characters.
+    assert description == (
+        "[tag] [warzone] [power] [gift level] [members]\n"
+        "e.g.: Glo 999 26.8b 25 100\n"
+        "Add all 16, one per line."
+    )
+    assert len(description) <= 100
     # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
     # go through `self.bracket`, not the Label, so what Discord fills in on
     # submit -- `_value`, mirroring a real interaction -- reaches it the same
     # way it always did.
     assert modal._bracket_label.component is modal.bracket
-    modal.bracket._value = "kTZ 714 26.8b 25 100"
-    assert modal._typed()["bracket"] == "kTZ 714 26.8b 25 100"
+    modal.bracket._value = "ABC 999 26.8b 25 100"
+    assert modal._typed()["bracket"] == "ABC 999 26.8b 25 100"
 
 
 def test_own_alliance_mode_keeps_its_plain_ranking_field():
@@ -1742,7 +1749,7 @@ async def test_rename_league_refuses_a_new_identity_already_on_the_sheet(_rename
     new = ad.LeagueKey("S36", "Diamond", "12-2")
     row_a = _row(OWN_TAG, week=1)
     row_a.league = old
-    row_b = _row("kTZ", week=1)
+    row_b = _row("XYZ", week=1)
     row_b.league = new
     state = _state([row_a, row_b])
     state.league = old
@@ -2225,16 +2232,16 @@ async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
 
 def test_two_alliances_sharing_a_tag_are_still_two_alliances():
     """`display_name` is the tag alone and a bracket draws from more than one
-    warzone. The bot's own prefilled `KTI v KTI:` line has to be readable:
+    warzone. The bot's own prefilled `LION v LION:` line has to be readable:
     nobody typed it, so nobody can fix it if it is refused."""
     rows = _bracket()
     match = entry.week_matches(_state(rows), 1)[0]
     for row in rows:
         if row.alliance in (match.a, match.b):
-            row.tag_display = "KTI"
+            row.tag_display = "LION"
     state = _state(rows)
 
-    parsed, problems = entry.parse_backfill_results(state, 1, "KTI v KTI: KTI 9-4")
+    parsed, problems = entry.parse_backfill_results(state, 1, "LION v LION: LION 9-4")
 
     assert problems == []
     assert {r.alliance for r in parsed} == {match.a, match.b}
